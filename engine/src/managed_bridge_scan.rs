@@ -10,16 +10,14 @@
 //! reaper needs (`active_turn_id`, `last_turn_status`,
 //! `has_tui_attachment`, app-server pid/pgid).
 
+use std::collections::HashMap;
 use std::fs;
 use std::fs::OpenOptions;
 use std::path::Path;
 use std::path::PathBuf;
-use std::collections::HashMap;
 
 use crate::codex_bridge::BridgeStateFile;
-use crate::process_identity::{
-    command_contains_basename, parse_rfc3339, started_before_or_near_recorded, ProcessFact,
-};
+use crate::process_identity::{command_contains_basename, lstart_matches_recorded, ProcessFact};
 
 /// Raw, per-bridge signals captured by a single scan pass.
 #[derive(Debug, Clone)]
@@ -132,21 +130,25 @@ pub fn collect_observations_from(
             continue;
         }
         let bridge_alive = bridge_lock_is_held(&path);
-        let has_tui_attachment = state
-            .ws_url
-            .as_deref()
-            .is_some_and(|ws| {
-                process_facts.values().any(|fact| {
-                    fact.command.contains(ws) && fact.command.contains("--remote")
-                })
-            });
+        let has_tui_attachment = state.ws_url.as_deref().is_some_and(|ws| {
+            process_facts
+                .values()
+                .any(|fact| fact.command.contains(ws) && fact.command.contains("--remote"))
+        });
         let app_server_alive = state
             .app_server_pid
             .and_then(|pid| process_facts.get(&pid))
             .is_some_and(|fact| {
                 command_contains_basename(&fact.command, "codex")
-                    && fact.command.split_whitespace().any(|part| part == "app-server")
-                    && started_before_or_near_recorded(fact, parse_rfc3339(&state.updated_at))
+                    && fact
+                        .command
+                        .split_whitespace()
+                        .any(|part| part == "app-server")
+                    && state
+                        .app_server_process_start_time
+                        .as_deref()
+                        .filter(|recorded| !recorded.trim().is_empty())
+                        .is_some_and(|recorded| lstart_matches_recorded(fact, recorded))
             });
 
         out.push(CodexBridgeObservation {
@@ -233,6 +235,7 @@ mod tests {
                 "pid": 111,
                 "app_server_pid": 4242,
                 "app_server_pgid": 4242,
+                "app_server_process_start_time": "Tue Jun 30 00:00:00 2026",
                 "status": "ready",
                 "log_file": "/tmp/codex.log",
                 "active_turn_id": null,
@@ -251,12 +254,43 @@ mod tests {
             command: "codex app-server".to_string(),
             start_time: None,
         };
-        fact.start_time = parse_rfc3339("2026-07-01T00:00:00Z");
+        fact.start_time = crate::process_identity::parse_rfc3339("2026-07-01T00:00:00Z");
 
-        let observations = collect_observations_from(
-            tmp.path(),
-            &HashMap::from([(4242, fact)]),
-        );
+        let observations = collect_observations_from(tmp.path(), &HashMap::from([(4242, fact)]));
+
+        assert_eq!(observations.len(), 1);
+        assert!(!observations[0].app_server_alive);
+    }
+
+    #[test]
+    fn app_server_without_recorded_process_start_is_not_alive() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join("session.json"),
+            serde_json::json!({
+                "schema_version": 1,
+                "session_id": "managed-codex",
+                "cwd": "/tmp",
+                "codex_bin": "codex",
+                "pid": 111,
+                "app_server_pid": 4242,
+                "status": "ready",
+                "log_file": "/tmp/codex.log",
+                "updated_at": "2026-06-30T00:00:00Z"
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let fact = ProcessFact {
+            pid: 4242,
+            tty: "??".to_string(),
+            stat: "S".to_string(),
+            lstart: "Tue Jun 30 00:00:00 2026".to_string(),
+            command: "codex app-server".to_string(),
+            start_time: crate::process_identity::parse_rfc3339("2026-06-30T00:00:00Z"),
+        };
+
+        let observations = collect_observations_from(tmp.path(), &HashMap::from([(4242, fact)]));
 
         assert_eq!(observations.len(), 1);
         assert!(!observations[0].app_server_alive);

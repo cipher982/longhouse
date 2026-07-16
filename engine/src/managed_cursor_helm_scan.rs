@@ -8,17 +8,15 @@
 //! detached -> attached and the UI offers send/interrupt/terminate. Dead state
 //! (launcher pid gone or socket missing) is omitted so the server detaches.
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
-use std::collections::HashMap;
 use std::path::PathBuf;
 
 use serde::Deserialize;
 
 pub use crate::cursor_helm_control::default_cursor_helm_state_dir;
-use crate::process_identity::{
-    parse_rfc3339, started_before_or_near_recorded, ProcessFact,
-};
+use crate::process_identity::{parse_rfc3339, started_before_or_near_recorded, ProcessFact};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CursorHelmObservation {
@@ -94,16 +92,22 @@ pub(crate) fn collect_observations_from_processes(
                     || (fact.command.contains("longhouse") && fact.command.contains("cursor")))
                     && started_before_or_near_recorded(fact, recorded_start)
             });
+        let cursor_pid = state.cursor_pid.filter(|pid| {
+            process_facts.get(pid).is_some_and(|fact| {
+                fact.command.contains("cursor-agent")
+                    && started_before_or_near_recorded(fact, recorded_start)
+            })
+        });
         let socket_present = socket_path.as_ref().map(|p| p.exists()).unwrap_or(false);
         let ready = state.ready.unwrap_or(false);
-        let live = launcher_alive && socket_present && ready;
+        let live = launcher_alive && cursor_pid.is_some() && socket_present && ready;
         out.push(CursorHelmObservation {
             session_id,
             state_file: path,
             socket_path,
             cwd: state.cwd.filter(|value| !value.trim().is_empty()),
             launcher_pid: state.launcher_pid,
-            cursor_pid: state.cursor_pid,
+            cursor_pid,
             started_at: state.started_at.unwrap_or_default(),
             updated_at: state.updated_at.unwrap_or_default(),
             live,
@@ -124,17 +128,30 @@ mod tests {
     }
 
     fn launcher_facts(pid: u32) -> HashMap<u32, ProcessFact> {
-        HashMap::from([(
-            pid,
-            ProcessFact {
+        HashMap::from([
+            (
                 pid,
-                tty: "ttys001".to_string(),
-                stat: "S+".to_string(),
-                lstart: String::new(),
-                command: "python -m zerg.cli longhouse cursor".to_string(),
-                start_time: None,
-            },
-        )])
+                ProcessFact {
+                    pid,
+                    tty: "ttys001".to_string(),
+                    stat: "S+".to_string(),
+                    lstart: String::new(),
+                    command: "python -m zerg.cli longhouse cursor".to_string(),
+                    start_time: None,
+                },
+            ),
+            (
+                99999,
+                ProcessFact {
+                    pid: 99999,
+                    tty: "ttys001".to_string(),
+                    stat: "S+".to_string(),
+                    lstart: String::new(),
+                    command: "/usr/local/bin/cursor-agent".to_string(),
+                    start_time: None,
+                },
+            ),
+        ])
     }
 
     fn write_state(dir: &Path, session_id: &str, socket: &Path, launcher_pid: Option<u32>) {
@@ -177,10 +194,8 @@ mod tests {
         fs::File::create(&socket).unwrap();
         // use this process's pid as the "launcher" so pid_alive is true
         write_state(dir.path(), "sess-live", &socket, Some(std::process::id()));
-        let obs = collect_observations_from_processes(
-            dir.path(),
-            &launcher_facts(std::process::id()),
-        );
+        let obs =
+            collect_observations_from_processes(dir.path(), &launcher_facts(std::process::id()));
         let live = obs.iter().find(|o| o.session_id == "sess-live").unwrap();
         assert!(live.live);
     }
@@ -226,10 +241,8 @@ mod tests {
             &socket,
             Some(std::process::id()),
         );
-        let obs = collect_observations_from_processes(
-            dir.path(),
-            &launcher_facts(std::process::id()),
-        );
+        let obs =
+            collect_observations_from_processes(dir.path(), &launcher_facts(std::process::id()));
         let no_sock = obs.iter().find(|o| o.session_id == "sess-no-sock").unwrap();
         assert!(!no_sock.live);
     }
@@ -246,10 +259,8 @@ mod tests {
             Some(std::process::id()),
             false,
         );
-        let obs = collect_observations_from_processes(
-            dir.path(),
-            &launcher_facts(std::process::id()),
-        );
+        let obs =
+            collect_observations_from_processes(dir.path(), &launcher_facts(std::process::id()));
         let pending = obs
             .iter()
             .find(|o| o.session_id == "sess-not-ready")

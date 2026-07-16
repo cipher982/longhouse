@@ -48,11 +48,13 @@ pub fn try_collect_process_facts_by_pid() -> Option<HashMap<u32, ProcessFact>> {
     if !output.status.success() {
         return None;
     }
-    let facts = String::from_utf8_lossy(&output.stdout)
-            .lines()
-            .filter_map(parse_process_fact)
-            .collect::<HashMap<_, _>>();
-    if !output.stdout.is_empty() && facts.is_empty() {
+    let text = String::from_utf8_lossy(&output.stdout);
+    let line_count = text.lines().filter(|line| !line.trim().is_empty()).count();
+    let facts = text
+        .lines()
+        .filter_map(parse_process_fact)
+        .collect::<HashMap<_, _>>();
+    if facts.len() != line_count || !facts.contains_key(&std::process::id()) {
         return None;
     }
     Some(facts)

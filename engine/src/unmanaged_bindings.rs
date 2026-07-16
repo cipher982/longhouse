@@ -68,8 +68,7 @@ pub fn collect_unmanaged_session_bindings_with_store(
 ) -> Result<Vec<UnmanagedSessionBinding>, String> {
     let scanner = SystemScanner;
     let processes = scanner.list_processes()?;
-    let provider_processes =
-        unresolved_unmanaged_processes(processes, excluded_managed_pids);
+    let provider_processes = unresolved_unmanaged_processes(processes, excluded_managed_pids);
     let store = UnmanagedProcessBindingStore::new(conn);
     if let Err(err) = store.prune_older_than(now - chrono::Duration::days(30)) {
         tracing::warn!("pruning unmanaged process binding state failed: {err}");
@@ -201,7 +200,16 @@ fn run_ps() -> Result<Vec<ProcessInfo>, String> {
         ));
     }
     let text = String::from_utf8_lossy(&output.stdout);
-    Ok(parse_ps(&text))
+    let line_count = text.lines().filter(|line| !line.trim().is_empty()).count();
+    let processes = parse_ps(&text);
+    if processes.len() != line_count
+        || !processes
+            .iter()
+            .any(|process| process.pid == std::process::id())
+    {
+        return Err("unmanaged process inventory was incomplete or unparsable".to_string());
+    }
+    Ok(processes)
 }
 
 fn run_lsof(pid: u32) -> Result<Vec<PathBuf>, String> {
@@ -661,12 +669,7 @@ mod tests {
             process: proc_info(1234, "2026-04-27T10:00:00Z", "/usr/local/bin/codex"),
         };
 
-        let result = collect_from_transcripts(
-            "mac",
-            &[(transcript, "codex")],
-            &scanner,
-            now,
-        );
+        let result = collect_from_transcripts("mac", &[(transcript, "codex")], &scanner, now);
 
         assert_eq!(result.unwrap_err(), "fixture lsof failure");
     }

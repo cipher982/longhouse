@@ -57,6 +57,18 @@ def test_state_file_round_trip(monkeypatch, tmp_path):
     assert state["ready"] is True
     assert state["registration"] == "registered"
 
+    started_at = state["started_at"]
+    cursor_helm._write_state(
+        session_id,
+        socket_path=sock,
+        cursor_pid=123,
+        cwd=tmp_path,
+        ready=False,
+        registration="pending",
+    )
+    refreshed = json.loads(cursor_helm._state_file_path(session_id).read_text())
+    assert refreshed["started_at"] == started_at
+
     cursor_helm._remove_state(session_id, sock)
     assert not cursor_helm._state_file_path(session_id).exists()
     assert not sock.exists()

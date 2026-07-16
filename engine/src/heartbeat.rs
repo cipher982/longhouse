@@ -317,12 +317,13 @@ impl HeartbeatPayload {
         let spool_pending_count = stats.spool.pending_count().unwrap_or(0);
         let spool_dead_count = stats.spool.dead_count().unwrap_or(0);
         let archive_backlog = stats.spool.archive_backlog_snapshot().unwrap_or_default();
-        let storage_v2_outbox = pending_source_envelope::snapshot(stats.conn).unwrap_or_else(|error| {
-            StorageV2OutboxSnapshot {
-                error: Some(error.to_string()),
-                ..StorageV2OutboxSnapshot::default()
-            }
-        });
+        let storage_v2_outbox =
+            pending_source_envelope::snapshot(stats.conn).unwrap_or_else(|error| {
+                StorageV2OutboxSnapshot {
+                    error: Some(error.to_string()),
+                    ..StorageV2OutboxSnapshot::default()
+                }
+            });
         let parse_error_count_1h = stats.parse_tracker.count_last_hour();
         let consecutive_ship_failures = stats.tracker.consecutive_count();
         let disk_free_bytes = get_disk_free();
@@ -546,11 +547,10 @@ pub fn leases_from_claude_channel_observations(
     let mut leases = Vec::with_capacity(observations.len());
 
     for obs in observations {
-        if !obs.claude_alive {
-            continue;
-        }
         let overlay = phase_overlay.get(&obs.session_id);
-        let lease_state = if obs.ready && obs.bridge_alive {
+        let lease_state = if !obs.claude_alive {
+            "detached"
+        } else if obs.ready && obs.bridge_alive {
             "attached"
         } else {
             "degraded"
@@ -571,7 +571,9 @@ pub fn leases_from_claude_channel_observations(
                 _ => None,
             },
             tool_name: overlay.and_then(|row| row.tool_name.clone()),
-            bridge_status: Some(if obs.ready && obs.bridge_alive {
+            bridge_status: Some(if !obs.claude_alive {
+                "process_gone_pending_confirmation".to_string()
+            } else if obs.ready && obs.bridge_alive {
                 "ready".to_string()
             } else if obs.bridge_alive {
                 "not_ready".to_string()
@@ -613,7 +615,11 @@ pub fn leases_from_opencode_server_observations(
             continue;
         }
         let overlay = phase_overlay.get(&obs.session_id);
-        let state = if obs.health_ready { "attached" } else { "degraded" };
+        let state = if obs.health_ready {
+            "attached"
+        } else {
+            "degraded"
+        };
         leases.push(ManagedSessionLease {
             session_id: obs.session_id.clone(),
             provider: "opencode".to_string(),
@@ -626,7 +632,14 @@ pub fn leases_from_opencode_server_observations(
                     .unwrap_or_else(|| "idle".to_string()),
             ),
             tool_name: overlay.and_then(|row| row.tool_name.clone()),
-            bridge_status: Some(if obs.health_ready { "ready" } else { "health_unavailable" }.to_string()),
+            bridge_status: Some(
+                if obs.health_ready {
+                    "ready"
+                } else {
+                    "health_unavailable"
+                }
+                .to_string(),
+            ),
             thread_subscription_status: None,
             observed_at: overlay
                 .and_then(|row| row.observed_at.clone())
@@ -1610,9 +1623,7 @@ pub fn write_status_file(
 
     let now_utc = chrono::Utc::now();
     let now = now_utc.to_rfc3339();
-    let daemon_started_at = DAEMON_STARTED_AT
-        .get_or_init(|| now.clone())
-        .clone();
+    let daemon_started_at = DAEMON_STARTED_AT.get_or_init(|| now.clone()).clone();
     let (binary_path, binary_mtime) = inspect_current_exe();
     let status = StatusFile {
         payload: &projection.payload,
@@ -2118,7 +2129,10 @@ mod tests {
 
         assert_eq!(leases.len(), 1);
         assert_eq!(leases[0].state, "degraded");
-        assert_eq!(leases[0].bridge_status.as_deref(), Some("health_unavailable"));
+        assert_eq!(
+            leases[0].bridge_status.as_deref(),
+            Some("health_unavailable")
+        );
     }
 
     #[test]
@@ -2309,14 +2323,26 @@ mod tests {
 
         let leases = leases_from_claude_channel_observations(&conn, "cinder", &[live, dead], now);
 
-        assert_eq!(leases.len(), 1);
-        let lease = &leases[0];
+        assert_eq!(leases.len(), 2);
+        let lease = leases
+            .iter()
+            .find(|lease| lease.session_id == session_id)
+            .unwrap();
         assert_eq!(lease.session_id, session_id);
         assert_eq!(lease.provider, "claude");
         assert_eq!(lease.state, "attached");
         assert_eq!(lease.phase.as_deref(), Some("needs_user"));
         assert_eq!(lease.bridge_status.as_deref(), Some("ready"));
         assert_eq!(lease.lease_ttl_ms, 900_000);
+        let pending = leases
+            .iter()
+            .find(|lease| lease.session_id == "19b68f98-1e31-458e-b78a-6dfd062ead75")
+            .unwrap();
+        assert_eq!(pending.state, "detached");
+        assert_eq!(
+            pending.bridge_status.as_deref(),
+            Some("process_gone_pending_confirmation")
+        );
     }
 
     fn test_binding(
@@ -2356,8 +2382,13 @@ mod tests {
             test_binding("codex", "thread-unmanaged", 789),
         ];
 
-        let filtered =
-            filter_unmanaged_bindings_owned_by_managed_observations(bindings, &[obs], &[], &[], &[]);
+        let filtered = filter_unmanaged_bindings_owned_by_managed_observations(
+            bindings,
+            &[obs],
+            &[],
+            &[],
+            &[],
+        );
 
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].provider_session_id, "thread-unmanaged");
@@ -2374,8 +2405,13 @@ mod tests {
 
         let bindings = vec![test_binding("codex", "thread-stopped", 123)];
 
-        let filtered =
-            filter_unmanaged_bindings_owned_by_managed_observations(bindings.clone(), &[obs], &[], &[], &[]);
+        let filtered = filter_unmanaged_bindings_owned_by_managed_observations(
+            bindings.clone(),
+            &[obs],
+            &[],
+            &[],
+            &[],
+        );
 
         assert_eq!(filtered, bindings);
     }
@@ -2401,8 +2437,13 @@ mod tests {
             test_binding("codex", "real-unmanaged", u32::MAX),
         ];
 
-        let filtered =
-            filter_unmanaged_bindings_owned_by_managed_observations(bindings, &[obs], &[], &[], &[]);
+        let filtered = filter_unmanaged_bindings_owned_by_managed_observations(
+            bindings,
+            &[obs],
+            &[],
+            &[],
+            &[],
+        );
 
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].provider_session_id, "real-unmanaged");
@@ -2426,8 +2467,13 @@ mod tests {
 
         let bindings = vec![test_binding("codex", "real-unmanaged", current_pid)];
 
-        let filtered =
-            filter_unmanaged_bindings_owned_by_managed_observations(bindings.clone(), &[obs], &[], &[], &[]);
+        let filtered = filter_unmanaged_bindings_owned_by_managed_observations(
+            bindings.clone(),
+            &[obs],
+            &[],
+            &[],
+            &[],
+        );
 
         assert_eq!(filtered, bindings);
     }
@@ -2456,8 +2502,13 @@ mod tests {
             test_binding("claude", "real-unmanaged", 987),
         ];
 
-        let filtered =
-            filter_unmanaged_bindings_owned_by_managed_observations(bindings, &[], &[obs], &[], &[]);
+        let filtered = filter_unmanaged_bindings_owned_by_managed_observations(
+            bindings,
+            &[],
+            &[obs],
+            &[],
+            &[],
+        );
 
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].provider_session_id, "real-unmanaged");
@@ -2960,12 +3011,8 @@ mod tests {
         };
 
         let status_path = dir.path().join("agent").join("engine-status.json");
-        let projection = build_status_file_projection(
-            payload,
-            &stats,
-            Vec::new(),
-            PhaseLedgerStatus::Ok,
-        );
+        let projection =
+            build_status_file_projection(payload, &stats, Vec::new(), PhaseLedgerStatus::Ok);
         write_status_file(
             &projection,
             Some(serde_json::json!({
@@ -3002,7 +3049,10 @@ mod tests {
         assert!(build["dirty"].is_boolean());
         assert_eq!(parsed["control_channel"]["status"], "connected");
         assert_eq!(parsed["control_channel"]["supports"][0], "codex.launch");
-        assert_eq!(parsed["local_projection"]["reconciliation"]["state"], "idle");
+        assert_eq!(
+            parsed["local_projection"]["reconciliation"]["state"],
+            "idle"
+        );
         assert!(parsed["local_projection"]["engine_pulse_at"].is_string());
 
         let generated_at = parsed["local_projection"]["generated_at"].clone();
@@ -3033,7 +3083,10 @@ mod tests {
         let pulsed: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&status_path).unwrap()).unwrap();
         assert_eq!(pulsed["local_projection"]["generated_at"], generated_at);
-        assert_eq!(pulsed["local_projection"]["reconciliation"]["reason"], "wake");
+        assert_eq!(
+            pulsed["local_projection"]["reconciliation"]["reason"],
+            "wake"
+        );
         assert_eq!(pulsed["daemon_pid"], std::process::id());
     }
 
@@ -3122,12 +3175,8 @@ mod tests {
             .expect("fresh_rows should succeed on a live DB");
 
         let status_path = dir.path().join("agent").join("engine-status.json");
-        let projection = build_status_file_projection(
-            payload,
-            &stats,
-            phase_ledger,
-            PhaseLedgerStatus::Ok,
-        );
+        let projection =
+            build_status_file_projection(payload, &stats, phase_ledger, PhaseLedgerStatus::Ok);
         write_status_file(
             &projection,
             None,

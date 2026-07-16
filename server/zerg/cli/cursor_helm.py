@@ -146,6 +146,14 @@ def _write_state(
 ) -> None:
     state_dir = _state_dir()
     state_dir.mkdir(parents=True, exist_ok=True)
+    started_at = _now_iso()
+    existing_path = _state_file_path(session_id)
+    try:
+        existing = json.loads(existing_path.read_text())
+        if isinstance(existing.get("started_at"), str) and existing["started_at"].strip():
+            started_at = existing["started_at"]
+    except (OSError, ValueError, TypeError):
+        pass
     payload = {
         "schema_version": 1,
         "session_id": session_id,
@@ -158,7 +166,7 @@ def _write_state(
         "ready": ready,
         "registration": registration,
         "registration_error": registration_error,
-        "started_at": _now_iso(),
+        "started_at": started_at,
         "updated_at": _now_iso(),
     }
     tmp = _state_file_path(session_id).with_suffix(".json.tmp")

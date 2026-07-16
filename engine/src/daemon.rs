@@ -318,6 +318,7 @@ struct ClaudeTerminalPostResult {
 
 struct UnmanagedBindingRefreshResult {
     reason: &'static str,
+    full_reconciliation_candidate: bool,
     result: Result<Vec<heartbeat::UnmanagedSessionBinding>, String>,
     elapsed_ms: u64,
 }
@@ -374,6 +375,7 @@ struct ManagedObservationSnapshot {
 }
 
 struct ProjectionBuildInput {
+    generation: u64,
     db_path: PathBuf,
     tracker: ConsecutiveErrorTracker,
     parse_tracker: RecentIssueTracker,
@@ -391,6 +393,7 @@ struct ProjectionBuildInput {
 }
 
 struct ProjectionBuildResult {
+    generation: u64,
     result: Result<(heartbeat::StatusFileProjection, SessionSnapshotState), String>,
     elapsed_ms: u64,
 }
@@ -801,15 +804,14 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut runtime_truth_bootstrapped = false;
     let mut session_snapshot_state = SessionSnapshotState::default();
     let mut last_status_projection: Option<heartbeat::StatusFileProjection> = None;
-    let mut managed_reconciliation = heartbeat::ProjectionReconciliation::running(
-        "startup",
-        chrono::Utc::now().to_rfc3339(),
-    );
+    let mut managed_reconciliation =
+        heartbeat::ProjectionReconciliation::running("startup", chrono::Utc::now().to_rfc3339());
     let mut wake_gap_detector = WakeGapDetector::new();
     let mut pending_wake_reconciliation = false;
     let mut pending_full_reconciliation = false;
     let mut pending_periodic_observation = false;
     let mut projection_build_pending = false;
+    let mut projection_generation = 0_u64;
     let mut last_full_reconciled_at: Option<String> = None;
     let mut last_managed_scan_partial = false;
     let mut last_unmanaged_session_bindings: Option<Vec<heartbeat::UnmanagedSessionBinding>> = None;
@@ -1279,7 +1281,12 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 }
                                 last_unmanaged_session_bindings = Some(bindings);
                                 last_unmanaged_session_bindings_refreshed_at = Some(Instant::now());
+                                if result.full_reconciliation_candidate {
+                                    last_full_reconciled_at = Some(chrono::Utc::now().to_rfc3339());
+                                }
+                                projection_generation = projection_generation.saturating_add(1);
                                 let input = ProjectionBuildInput {
+                                    generation: projection_generation,
                                     db_path: projection_db_path.clone(),
                                     tracker: tracker.clone(),
                                     parse_tracker: parse_tracker.clone(),
@@ -1300,6 +1307,9 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 }
                             }
                             Err(err) => {
+                                projection_generation = projection_generation.saturating_add(1);
+                                managed_reconciliation =
+                                    heartbeat::ProjectionReconciliation::failed("unmanaged_binding");
                                 tracing::warn!(
                                     reason = result.reason,
                                     elapsed_ms = result.elapsed_ms,
@@ -1310,6 +1320,9 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         }
                     }
                     Some(Err(err)) => {
+                        projection_generation = projection_generation.saturating_add(1);
+                        managed_reconciliation =
+                            heartbeat::ProjectionReconciliation::failed("unmanaged_binding");
                         tracing::warn!("Unmanaged binding refresh task failed: {}", err);
                     }
                     None => {}
@@ -1357,6 +1370,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             );
                         }
                         if !result.process_inventory_valid {
+                            projection_generation = projection_generation.saturating_add(1);
                             tracing::warn!(
                                 reason = result.reason,
                                 "Managed observation scan retained prior truth because process inventory failed"
@@ -1388,9 +1402,6 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         last_managed_observations =
                             ManagedObservationSnapshot::from_result(&result);
                         last_managed_scan_partial = result.retained_stale_rows > 0;
-                        if result.full_reconciliation {
-                            last_full_reconciled_at = Some(chrono::Utc::now().to_rfc3339());
-                        }
                         refresh_managed_codex_transcript_paths(
                             &mut managed_codex_transcript_paths,
                             &result.codex_observations,
@@ -1429,13 +1440,16 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             managed_process_pids.clone(),
                             Instant::now(),
                             result.reason,
+                            result.full_reconciliation && result.retained_stale_rows == 0,
                         );
                         maybe_start_opencode_title_refresh(
                             &mut opencode_title_refresh_tasks,
                             config.shipper_config.db_path.clone(),
                             result.opencode_observations.clone(),
                         );
+                        projection_generation = projection_generation.saturating_add(1);
                         let projection_input = ProjectionBuildInput {
+                            generation: projection_generation,
                             db_path: projection_db_path.clone(),
                             tracker: tracker.clone(),
                             parse_tracker: parse_tracker.clone(),
@@ -1495,6 +1509,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         }
                     }
                     Some(Err(err)) => {
+                        projection_generation = projection_generation.saturating_add(1);
                         tracing::warn!("Managed observation scan task failed: {}", err);
                         managed_reconciliation = heartbeat::ProjectionReconciliation::failed(
                             managed_reconciliation
@@ -1517,7 +1532,9 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
 
             projection_build_result = projection_build_tasks.join_next(), if !projection_build_tasks.is_empty() => {
                 match projection_build_result {
-                    Some(Ok(result)) => match result.result {
+                    Some(Ok(result)) => {
+                        let is_current = result.generation == projection_generation;
+                        match result.result {
                         Ok((projection, next_snapshot_state)) => {
                             if result.elapsed_ms > 50 {
                                 tracing::warn!(
@@ -1526,6 +1543,13 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 );
                             }
                             session_snapshot_state = next_snapshot_state;
+                            if !is_current {
+                                tracing::debug!(
+                                    generation = result.generation,
+                                    latest_generation = projection_generation,
+                                    "Discarded stale local status projection"
+                                );
+                            } else {
                             if last_managed_scan_partial {
                                 managed_reconciliation =
                                     heartbeat::ProjectionReconciliation::failed("provider_state_partial");
@@ -1562,17 +1586,23 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                     last_runtime_truth_signature = None;
                                 }
                             }
+                            }
                         }
                         Err(error) => {
                             tracing::warn!(error = %error, "Local status projection build failed");
-                            managed_reconciliation =
-                                heartbeat::ProjectionReconciliation::failed("projection_build");
+                            if is_current {
+                                managed_reconciliation =
+                                    heartbeat::ProjectionReconciliation::failed("projection_build");
+                            }
                         }
+                    }
                     },
                     Some(Err(error)) => {
                         tracing::warn!(error = %error, "Local status projection task failed");
-                        managed_reconciliation =
-                            heartbeat::ProjectionReconciliation::failed("projection_build");
+                        if !projection_build_pending {
+                            managed_reconciliation =
+                                heartbeat::ProjectionReconciliation::failed("projection_build");
+                        }
                     }
                     None => {}
                 }
@@ -1580,6 +1610,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 if projection_build_pending {
                     projection_build_pending = false;
                     let input = ProjectionBuildInput {
+                        generation: projection_generation,
                         db_path: projection_db_path.clone(),
                         tracker: tracker.clone(),
                         parse_tracker: parse_tracker.clone(),
@@ -1792,6 +1823,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         managed_process_pids.clone(),
                         Instant::now(),
                         "wake",
+                        false,
                     );
                 }
                 if let Some(projection) = last_status_projection.as_ref() {
@@ -1865,6 +1897,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     managed_process_pids.clone(),
                     Instant::now(),
                     "heartbeat",
+                    false,
                 );
                 if let Some(projection) = last_status_projection.as_ref() {
                     heartbeat::write_status_file(
@@ -1917,6 +1950,7 @@ fn maybe_start_projection_build(
     tasks.spawn_blocking(move || {
         let started = Instant::now();
         let ProjectionBuildInput {
+            generation,
             db_path,
             tracker,
             parse_tracker,
@@ -1957,6 +1991,7 @@ fn maybe_start_projection_build(
                 (projection, session_snapshot_state)
             });
         ProjectionBuildResult {
+            generation,
             result,
             elapsed_ms: started.elapsed().as_millis() as u64,
         }
@@ -2069,12 +2104,7 @@ fn build_local_status_projection(
                 )
             }
         };
-    heartbeat::build_status_file_projection(
-        payload,
-        &stats,
-        phase_ledger,
-        ledger_status,
-    )
+    heartbeat::build_status_file_projection(payload, &stats, phase_ledger, ledger_status)
 }
 
 fn observe_active_opencode_titles(
@@ -2419,6 +2449,7 @@ fn maybe_start_unmanaged_binding_refresh(
     excluded_managed_pids: HashSet<u32>,
     now: Instant,
     reason: &'static str,
+    full_reconciliation_candidate: bool,
 ) {
     if !refresh_tasks.is_empty() {
         return;
@@ -2443,6 +2474,7 @@ fn maybe_start_unmanaged_binding_refresh(
             });
         UnmanagedBindingRefreshResult {
             reason,
+            full_reconciliation_candidate,
             result,
             elapsed_ms: started.elapsed().as_millis() as u64,
         }
@@ -2515,25 +2547,26 @@ fn maybe_start_managed_observation_scan(
         let claude_started = Instant::now();
         let mut claude_observations = managed_claude_scan::default_claude_channel_state_dir()
             .map(|state_dir| {
-                managed_claude_scan::collect_observations_from_processes(
-                    &state_dir,
-                    &process_facts,
-                )
+                managed_claude_scan::collect_observations_from_processes(&state_dir, &process_facts)
             })
             .unwrap_or_default();
-        let retained_codex = retain_existing_observations(
-            &mut codex_observations,
-            &previous.codex,
-            |observation| &observation.state_file,
-        );
+        let retained_codex =
+            retain_existing_observations(&mut codex_observations, &previous.codex, |observation| {
+                &observation.state_file
+            });
         let retained_claude = retain_existing_observations(
             &mut claude_observations,
             &previous.claude,
             |observation| &observation.state_file,
         );
         if full_reconciliation {
+            let reap_candidates = claude_observations
+                .iter()
+                .filter(|observation| !retained_claude.contains(&observation.state_file))
+                .cloned()
+                .collect::<Vec<_>>();
             managed_claude_scan::reap_dead_state_files(
-                &claude_observations,
+                &reap_candidates,
                 process_inventory_valid,
                 chrono::Utc::now(),
             );
@@ -2584,10 +2617,10 @@ fn maybe_start_managed_observation_scan(
             claude_elapsed_ms,
             opencode_elapsed_ms,
             cursor_elapsed_ms,
-            retained_stale_rows: retained_codex
-                + retained_claude
-                + retained_opencode
-                + retained_cursor,
+            retained_stale_rows: retained_codex.len()
+                + retained_claude.len()
+                + retained_opencode.len()
+                + retained_cursor.len(),
             elapsed_ms: started.elapsed().as_millis() as u64,
         }
     });
@@ -2598,18 +2631,24 @@ fn retain_existing_observations<T: Clone>(
     current: &mut Vec<T>,
     previous: &[T],
     state_file: impl Fn(&T) -> &Path,
-) -> usize {
+) -> HashSet<PathBuf> {
     let current_paths = current
         .iter()
         .map(|observation| state_file(observation).to_path_buf())
         .collect::<HashSet<_>>();
-    let retained = previous.iter().filter_map(|observation| {
-        let path = state_file(observation);
-        (path.exists() && !current_paths.contains(path)).then(|| observation.clone())
-    }).collect::<Vec<_>>();
-    let retained_count = retained.len();
+    let retained = previous
+        .iter()
+        .filter_map(|observation| {
+            let path = state_file(observation);
+            (path.exists() && !current_paths.contains(path)).then(|| observation.clone())
+        })
+        .collect::<Vec<_>>();
+    let retained_paths = retained
+        .iter()
+        .map(|observation| state_file(observation).to_path_buf())
+        .collect();
     current.extend(retained);
-    retained_count
+    retained_paths
 }
 
 #[cfg(unix)]
@@ -2719,6 +2758,10 @@ fn reconcile_claude_terminal_signals(
     for obs in observations {
         observed_session_ids.insert(obs.session_id.clone());
         if obs.claude_alive {
+            pending_signals.retain(|_, signal| {
+                signal.event.get("session_id").and_then(Value::as_str)
+                    != Some(obs.session_id.as_str())
+            });
             live_channels.insert(
                 obs.session_id.clone(),
                 ClaudeLiveChannelSession {
@@ -2727,48 +2770,7 @@ fn reconcile_claude_terminal_signals(
                     claude_pid: obs.claude_pid,
                 },
             );
-            continue;
         }
-
-        let previous = live_channels.remove(&obs.session_id);
-        let should_close = previous.is_some()
-            || obs.claude_pid.is_some()
-            || obs.ready
-            || obs.bridge_alive
-            || obs.bridge_pid.is_some();
-        if !should_close {
-            continue;
-        }
-        let provider_session_id = obs
-            .provider_session_id
-            .clone()
-            .or_else(|| {
-                previous
-                    .as_ref()
-                    .and_then(|seen| seen.provider_session_id.clone())
-            })
-            .unwrap_or_else(|| obs.session_id.clone());
-        let pid = obs
-            .claude_pid
-            .or_else(|| previous.as_ref().and_then(|seen| seen.claude_pid));
-        let dedupe_key = claude_terminal_dedupe_key(&obs.session_id, pid, "process_gone");
-        pending_signals
-            .entry(dedupe_key.clone())
-            .or_insert_with(|| ClaudeTerminalSignal {
-                dedupe_key: dedupe_key.clone(),
-                observed_at,
-                event: claude_terminal_event(
-                    machine_name,
-                    &obs.session_id,
-                    &provider_session_id,
-                    "process_gone",
-                    "process_gone",
-                    pid,
-                    "process_gone",
-                    observed_at,
-                    &dedupe_key,
-                ),
-            });
     }
 
     let disappeared: Vec<ClaudeLiveChannelSession> = live_channels
@@ -3716,9 +3718,9 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
                 }
             }
             Err(error) => {
-                if let Some(blocked) = error.downcast_ref::<
-                    crate::storage_v2_shipper::StorageV2SourceBlocked,
-                >() {
+                if let Some(blocked) =
+                    error.downcast_ref::<crate::storage_v2_shipper::StorageV2SourceBlocked>()
+                {
                     task_context.ship_stats.record_with_lane_detail_and_stages(
                         stats_lane,
                         ShipAttemptOutcome::PayloadRejected,
@@ -4046,8 +4048,14 @@ mod tests {
         let removed = temp.path().join("removed.json");
         std::fs::write(&existing, "{}").unwrap();
         let previous = vec![
-            RetainedFixtureRow { path: existing, value: 1 },
-            RetainedFixtureRow { path: removed, value: 2 },
+            RetainedFixtureRow {
+                path: existing,
+                value: 1,
+            },
+            RetainedFixtureRow {
+                path: removed,
+                value: 2,
+            },
         ];
         let mut current = Vec::new();
 
@@ -4418,10 +4426,16 @@ mod tests {
             &mut session_snapshot_state,
         );
 
-        assert_eq!(first.payload.sessions_digest, second.payload.sessions_digest);
+        assert_eq!(
+            first.payload.sessions_digest,
+            second.payload.sessions_digest
+        );
         assert_eq!(first.payload.sessions_sequence, Some(1));
         assert_eq!(second.payload.sessions_sequence, Some(1));
-        assert_ne!(second.payload.sessions_digest, third.payload.sessions_digest);
+        assert_ne!(
+            second.payload.sessions_digest,
+            third.payload.sessions_digest
+        );
         assert_eq!(third.payload.sessions_sequence, Some(2));
     }
 
@@ -4489,7 +4503,7 @@ mod tests {
     }
 
     #[test]
-    fn test_claude_terminal_signal_generated_when_seen_process_dies() {
+    fn test_claude_terminal_signal_waits_for_channel_state_removal() {
         let mut live = HashMap::new();
         let mut pending = HashMap::new();
         let observed_at = chrono::DateTime::parse_from_rfc3339("2026-05-12T20:00:00Z")
@@ -4520,7 +4534,7 @@ mod tests {
             &mut live,
             &mut pending,
             "cinder",
-            &[live_obs],
+            &[live_obs.clone()],
             observed_at,
         );
         assert!(pending.is_empty());
@@ -4533,17 +4547,11 @@ mod tests {
             observed_at,
         );
 
+        assert!(pending.is_empty());
+        assert!(live.contains_key("session-123"));
+
+        reconcile_claude_terminal_signals(&mut live, &mut pending, "cinder", &[], observed_at);
         assert_eq!(pending.len(), 1);
-        let signal = pending.values().next().unwrap();
-        assert_eq!(signal.event["runtime_key"], "claude:provider-123");
-        assert_eq!(signal.event["source"], CLAUDE_TERMINAL_EVENT_SOURCE);
-        assert_eq!(signal.event["kind"], "terminal_signal");
-        assert_eq!(signal.event["payload"]["terminal_state"], "process_gone");
-        assert_eq!(signal.event["payload"]["terminal_reason"], "process_gone");
-        assert_eq!(
-            signal.event["payload"]["terminal_source"],
-            CLAUDE_TERMINAL_EVENT_SOURCE
-        );
         assert!(live.is_empty());
     }
 
@@ -4573,7 +4581,7 @@ mod tests {
             &mut live,
             &mut pending,
             "cinder",
-            &[live_obs],
+            &[live_obs.clone()],
             observed_at,
         );
         reconcile_claude_terminal_signals(&mut live, &mut pending, "cinder", &[], observed_at);
@@ -4586,10 +4594,19 @@ mod tests {
         );
         assert_eq!(signal.event["payload"]["terminal_state"], "process_gone");
         assert!(live.is_empty());
+
+        reconcile_claude_terminal_signals(
+            &mut live,
+            &mut pending,
+            "cinder",
+            &[live_obs],
+            observed_at,
+        );
+        assert!(pending.is_empty());
     }
 
     #[test]
-    fn test_claude_terminal_signal_generated_from_dead_channel_file_without_live_cache() {
+    fn test_dead_channel_file_without_live_cache_is_not_terminal_authority() {
         let mut live = HashMap::new();
         let mut pending = HashMap::new();
         let observed_at = chrono::DateTime::parse_from_rfc3339("2026-05-12T20:00:00Z")
@@ -4618,13 +4635,8 @@ mod tests {
             observed_at,
         );
 
-        assert_eq!(pending.len(), 1);
-        let signal = pending.values().next().unwrap();
-        assert_eq!(
-            signal.dedupe_key,
-            "claude-channel-scan:terminal:session-123:123:process_gone"
-        );
-        assert_eq!(signal.event["payload"]["terminal_reason"], "process_gone");
+        assert!(pending.is_empty());
+        assert!(live.is_empty());
     }
 
     #[test]

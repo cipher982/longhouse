@@ -253,6 +253,8 @@ pub struct BridgeStateFile {
     #[serde(default)]
     pub app_server_pid: Option<u32>,
     #[serde(default)]
+    pub app_server_process_start_time: Option<String>,
+    #[serde(default)]
     pub app_server_pgid: Option<i32>,
     #[serde(default)]
     pub app_server_ws_url: Option<String>,
@@ -720,6 +722,7 @@ pub async fn cmd_codex_bridge_start(config: BridgeStartConfig) -> Result<BridgeS
         thread_path: resume_thread_path.clone(),
         pid: 0,
         app_server_pid: None,
+        app_server_process_start_time: None,
         app_server_pgid: None,
         app_server_ws_url: None,
         status: "starting".to_string(),
@@ -904,6 +907,7 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
         thread_path: resume_thread_path.clone(),
         pid,
         app_server_pid: None,
+        app_server_process_start_time: None,
         app_server_pgid: None,
         app_server_ws_url: None,
         status: "starting".to_string(),
@@ -935,10 +939,16 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
     acquire_bridge_lock(&bridge_lock_path(&config.state_file))?;
 
     let mut client = spawn_app_server_client(&config).await?;
+    let app_server_process_start_time = client.child_pid.and_then(|pid| {
+        crate::process_identity::collect_process_facts_by_pid()
+            .get(&pid)
+            .map(|fact| fact.lstart.clone())
+    });
     let ws_url = client.ws_url.clone();
     let mut starting_state = initial_state.clone();
     starting_state.ws_url = Some(ws_url.clone());
     starting_state.app_server_pid = client.child_pid;
+    starting_state.app_server_process_start_time = app_server_process_start_time.clone();
     starting_state.app_server_pgid = client.child_pgid;
     starting_state.app_server_ws_url = client.child_ws_url.clone();
     write_state_file(&config.state_file, &starting_state)?;
@@ -1098,6 +1108,7 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
             thread_path: initial_thread_path.clone(),
             pid,
             app_server_pid: client.child_pid,
+            app_server_process_start_time,
             app_server_pgid: client.child_pgid,
             app_server_ws_url: client.child_ws_url.clone(),
             status: "ready".to_string(),
@@ -5294,6 +5305,7 @@ mod tests {
                 thread_path: None,
                 pid: 42,
                 app_server_pid: None,
+                app_server_process_start_time: None,
                 app_server_pgid: None,
                 app_server_ws_url: None,
                 status: "ready".to_string(),
@@ -5387,6 +5399,7 @@ mod tests {
             thread_path: None,
             pid: 42,
             app_server_pid: None,
+            app_server_process_start_time: None,
             app_server_pgid: None,
             app_server_ws_url: None,
             status: "starting".to_string(),
@@ -5441,6 +5454,7 @@ mod tests {
             thread_path: None,
             pid: 42,
             app_server_pid: None,
+            app_server_process_start_time: None,
             app_server_pgid: None,
             app_server_ws_url: None,
             status: "ready".to_string(),
@@ -5509,6 +5523,7 @@ mod tests {
             thread_path: None,
             pid: 42,
             app_server_pid: None,
+            app_server_process_start_time: None,
             app_server_pgid: None,
             app_server_ws_url: None,
             status: "ready".to_string(),
@@ -5862,6 +5877,7 @@ mod tests {
             thread_path: Some(rollout.display().to_string()),
             pid: 42,
             app_server_pid: None,
+            app_server_process_start_time: None,
             app_server_pgid: None,
             app_server_ws_url: None,
             status: "ready".to_string(),
@@ -5908,6 +5924,7 @@ mod tests {
             thread_path: Some(primary.display().to_string()),
             pid: 42,
             app_server_pid: None,
+            app_server_process_start_time: None,
             app_server_pgid: None,
             app_server_ws_url: None,
             status: "degraded".to_string(),
@@ -6873,6 +6890,7 @@ mod tests {
             thread_path: None,
             pid: 42,
             app_server_pid: None,
+            app_server_process_start_time: None,
             app_server_pgid: None,
             app_server_ws_url: None,
             status: "ready".to_string(),
