@@ -5112,6 +5112,7 @@ class CatalogStore:
                     .where(
                         table.c.user_messages > 0,
                         or_(table.c.anchor_title.is_(None), table.c.anchor_title == ""),
+                        or_(table.c.title_last_error.is_(None), table.c.title_last_error != "no_meaningful_user_text"),
                         or_(table.c.title_retry_at.is_(None), table.c.title_retry_at <= observed_at),
                         table.c.environment.notin_(("test", "e2e")),
                     )
@@ -5185,7 +5186,7 @@ class CatalogStore:
             if row is None or row.anchor_title:
                 return {"changed": False, "commit_seq": str(_current_commit_seq(connection))}
             attempts = int(row.title_attempt_count or 0) + 1
-            retry_at = failed_at + timedelta(seconds=min(30, 2 ** min(attempts, 5)))
+            retry_at = None if reason == "no_meaningful_user_text" else failed_at + timedelta(seconds=min(30, 2 ** min(attempts, 5)))
             commit_seq = _advance_commit_seq(connection, failed_at)
             connection.execute(
                 update(table)

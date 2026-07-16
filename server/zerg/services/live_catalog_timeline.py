@@ -147,6 +147,8 @@ def _title_source(session: LiveSessionCatalog, card: LiveTimelineCard) -> str:
 def _title_state(session: LiveSessionCatalog, card: LiveTimelineCard) -> str:
     if sanitize_title(session.anchor_title, max_words=6):
         return "ready"
+    if session.title_last_error == "no_meaningful_user_text":
+        return "exempt"
     if session.title_retry_at is not None:
         return "degraded"
     if card.first_user_message_preview or session.first_user_message_preview:

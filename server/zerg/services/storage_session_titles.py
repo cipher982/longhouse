@@ -36,13 +36,16 @@ async def generate_storage_session_title(candidate: dict[str, Any]) -> bool:
     try:
         if get_settings().llm_disabled:
             return False
+        first_user_message = str(candidate.get("first_user_message") or "")
+        if sanitize_title(first_user_message) is None:
+            raise ValueError("no_meaningful_user_text")
         from zerg.models_config import get_llm_client_for_use_case
         from zerg.services.title_generator import generate_initial_session_title
 
         client, model, _provider = get_llm_client_for_use_case("session_title")
         started = datetime.now(UTC)
         raw_title = await generate_initial_session_title(
-            first_user_message=str(candidate.get("first_user_message") or ""),
+            first_user_message=first_user_message,
             client=client,
             model=model,
             metadata={
