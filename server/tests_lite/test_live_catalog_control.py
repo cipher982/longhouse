@@ -288,7 +288,7 @@ async def test_catalog_input_dispatches_and_projects_live_receipt_only(tmp_path,
     monkeypatch.setattr("zerg.services.catalogd_supervisor.get_catalogd_client", lambda: _CatalogClient())
     monkeypatch.setattr(
         "zerg.services.catalog_read_gateway.session_snapshot",
-        lambda value: catalog_store.read_session(session_id=value),
+        lambda value, *, owner_id=None: catalog_store.read_session(session_id=value, owner_id=owner_id),
     )
 
     from zerg.services.live_control_catalog import load_live_control_session_snapshot

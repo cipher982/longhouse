@@ -89,14 +89,14 @@ def load_live_control_session(db: Session, session_id: UUID | str) -> LiveContro
     )
 
 
-def load_live_control_session_snapshot(session_id: UUID | str) -> LiveControlSession | None:
+def load_live_control_session_snapshot(session_id: UUID | str, *, owner_id: int | None = None) -> LiveControlSession | None:
     """Load bounded control facts through catalogd without opening SQLite."""
 
     from zerg.services.catalog_read_gateway import CatalogReadError
     from zerg.services.catalog_read_gateway import session_snapshot
 
     try:
-        result = session_snapshot(str(session_id))
+        result = session_snapshot(str(session_id), owner_id=owner_id)
     except CatalogReadError:
         logger.warning("Catalog control snapshot failed for session %s", session_id, exc_info=True)
         return None

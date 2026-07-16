@@ -1309,7 +1309,7 @@ async def send_to_live_session(
 ):
     """Send text into the live managed-local session and return a fast JSON ack."""
     request_id = str(uuid.uuid4())[:8]
-    source_session = _load_session_for_continuation(db, session_id)
+    source_session = _load_session_for_continuation(db, session_id, owner_id=current_user.id)
     logger.info(f"[{request_id}] Live session send request for session {source_session.id}")
     _assert_live_session_send_available(db, source_session, owner_id=current_user.id)
     lock_scope_id = await _acquire_session_lock_or_raise(source_session=source_session, request_id=request_id)
@@ -3029,7 +3029,7 @@ async def create_session_input_endpoint(
     db: Session = Depends(_catalog_control_db_dependency),
     current_user: User = Depends(get_current_browser_route_user),
 ) -> SessionInputResponse:
-    source_session = _load_session_for_continuation(db, session_id)
+    source_session = _load_session_for_continuation(db, session_id, owner_id=current_user.id)
     return await _create_session_input_response(
         source_session=source_session,
         owner_id=current_user.id,

@@ -505,7 +505,7 @@ def _session_chat_streaming_response(stream: AsyncIterator[str]) -> StreamingRes
     )
 
 
-def _load_session_for_continuation(db: Session, session_id: str):
+def _load_session_for_continuation(db: Session, session_id: str, *, owner_id: int | None = None):
     try:
         source_session_uuid = UUID(session_id)
     except ValueError as exc:
@@ -517,7 +517,7 @@ def _load_session_for_continuation(db: Session, session_id: str):
     if database_module.live_catalog_enabled() and db is None:
         from zerg.services.live_control_catalog import load_live_control_session_snapshot
 
-        source_session = load_live_control_session_snapshot(source_session_uuid)
+        source_session = load_live_control_session_snapshot(source_session_uuid, owner_id=owner_id)
     elif database_module.live_catalog_enabled():
         from zerg.services.live_control_catalog import load_live_control_session
 

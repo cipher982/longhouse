@@ -12,6 +12,7 @@ from zerg.models.live_store import LiveSessionCatalog
 from zerg.models.live_store import LiveSessionLaunchAttempt
 from zerg.models.live_store import LiveSessionRun
 from zerg.models.live_store import LiveSessionThread
+from zerg.models.live_store import LiveUser
 
 
 def test_catalog_console_session_is_idle_identity_not_launch(tmp_path):
@@ -55,6 +56,14 @@ def test_catalog_console_turns_claim_and_wake_fifo(tmp_path):
     store = CatalogStore(engine)
     session_id = uuid4()
     thread_id = uuid4()
+    with Session(engine) as db:
+        db.add_all(
+            [
+                LiveUser(id=1, email="owner@example.com", is_active=True),
+                LiveUser(id=42, email="other@example.com", is_active=True),
+            ]
+        )
+        db.commit()
     store.create_console_session(
         data={
             "session_id": str(session_id),
@@ -68,6 +77,16 @@ def test_catalog_console_turns_claim_and_wake_fifo(tmp_path):
             "started_at": datetime.now(UTC),
         }
     )
+    unauthorized = store.enqueue_console_turn(
+        data={
+            "session_id": str(session_id),
+            "owner_id": 42,
+            "message": "not yours",
+            "client_request_id": "wrong-owner",
+            "created_at": datetime.now(UTC),
+        }
+    )
+    assert unauthorized == {"found": False}
     first = store.enqueue_console_turn(
         data={
             "session_id": str(session_id),

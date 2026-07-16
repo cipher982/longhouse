@@ -2481,6 +2481,13 @@ class CatalogStore:
                 if session is None or not session.primary_thread_id:
                     orm.rollback()
                     return {"found": False}
+                if not self._session_belongs_to_owner(
+                    connection,
+                    session_id=str(data["session_id"]),
+                    owner_id=int(data["owner_id"]),
+                ):
+                    orm.rollback()
+                    return {"found": False}
                 thread = orm.get(LiveSessionThread, str(session.primary_thread_id))
                 if thread is None or not thread.device_id or not thread.cwd:
                     orm.rollback()
