@@ -204,12 +204,17 @@ async fn read_stdout_jsonl(stream: tokio::process::ChildStdout, sink: CodexExecR
             continue;
         }
         seq += 1;
-        let payload = serde_json::from_str::<Value>(trimmed)
-            .map(|value| json!({"progress_kind": "codex_exec_jsonl", "seq": seq, "event": value}))
-            .unwrap_or_else(
-                |_| json!({"progress_kind": "codex_exec_stdout", "seq": seq, "line": trimmed}),
-            );
-        sink.post_progress(seq, payload).await;
+        match serde_json::from_str::<Value>(trimmed) {
+            Ok(event) => sink.post_provider_event(seq, event).await,
+            Err(_) => {
+                sink.post_progress(
+                    seq,
+                    json!({"progress_kind": "codex_exec_stdout", "seq": seq, "line": trimmed}),
+                    None,
+                )
+                .await
+            }
+        }
     }
 }
 
@@ -269,12 +274,28 @@ impl CodexExecRuntimeSink {
         .await;
     }
 
-    async fn post_progress(&self, seq: u64, mut payload: Value) {
-        let provider_thread_id = payload
+    async fn post_provider_event(&self, seq: u64, event: Value) {
+        // Inspect the decoded provider record before adding Longhouse's transport
+        // envelope. Looking for thread_id on the envelope silently loses binding.
+        let provider_thread_id = event
             .get("thread_id")
             .and_then(Value::as_str)
-            .filter(|_| payload.get("type").and_then(Value::as_str) == Some("thread.started"))
+            .filter(|_| event.get("type").and_then(Value::as_str) == Some("thread.started"))
             .map(str::to_string);
+        self.post_progress(
+            seq,
+            json!({"progress_kind": "codex_exec_jsonl", "seq": seq, "event": event}),
+            provider_thread_id,
+        )
+        .await;
+    }
+
+    async fn post_progress(
+        &self,
+        seq: u64,
+        mut payload: Value,
+        provider_thread_id: Option<String>,
+    ) {
         if let Some(obj) = payload.as_object_mut() {
             obj.insert(
                 "managed_transport".to_string(),
@@ -565,5 +586,29 @@ mod tests {
         );
         assert_eq!(obj["managed_transport"], "codex_exec");
         assert_eq!(obj["execution_lifetime"], "one_shot");
+    }
+
+    #[test]
+    fn decoded_thread_started_record_exposes_provider_binding() {
+        let event = json!({
+            "type": "thread.started",
+            "thread_id": "019f6b93-edf6-7bd0-a757-b5195a61abdd"
+        });
+        let provider_thread_id = event
+            .get("thread_id")
+            .and_then(Value::as_str)
+            .filter(|_| event.get("type").and_then(Value::as_str) == Some("thread.started"));
+
+        assert_eq!(
+            provider_thread_id,
+            Some("019f6b93-edf6-7bd0-a757-b5195a61abdd")
+        );
+        let envelope = json!({
+            "progress_kind": "codex_exec_jsonl",
+            "seq": 1,
+            "event": event,
+        });
+        assert_eq!(envelope["event"]["type"], "thread.started");
+        assert!(envelope.get("thread_id").is_none());
     }
 }
