@@ -2140,12 +2140,11 @@ final class SessionViewModel: ObservableObject {
                         || caps.hostReattachAvailable == true
                         || caps.inputMode == "console"
                 }
-                // Fast fallback when SSE is down. When SSE is up, the server
-                // flips unpaired tool calls to "dropped" lazily on read, so
-                // re-ask every ~60s while a running tool exists to keep
-                // tool_call_state honest if the stream stays quiet. Managed
-                // visible sessions also get a low-rate correctness poll because
-                // SSE is an invalidation path, not the transcript source of truth.
+                // Polling is a correctness fallback, not a second live lane.
+                // A healthy stream applies provisional transcript patches
+                // directly and later emits a durable revision wake. Polling
+                // while that stream is healthy amplifies every pending turn
+                // into repeated full-tail rebuilds.
                 if Self.shouldPollVisibleSession(
                     connected: connected,
                     hasRunningTool: hasRunningTool,
@@ -2168,12 +2167,12 @@ final class SessionViewModel: ObservableObject {
         pendingInput: Bool = false,
         ticks: Int
     ) -> Bool {
-        if ticks <= 3 { return true }
-        if pendingInput { return true }
+        if ticks <= 3 { return !connected }
+        if pendingInput { return !connected }
         if setupPending { return true }
         if !connected { return true }
         if hasRunningTool, ticks % 12 == 0 { return true }
-        if managed, ticks % 3 == 0 { return true }
+        _ = managed
         return false
     }
 
@@ -2261,6 +2260,11 @@ final class SessionViewModel: ObservableObject {
             )
             if let transcriptPreview = change.transcript_preview?.sessionTranscriptPreview {
                 applyRealtimeTranscriptPreview(transcriptPreview, sessionId: sessionId)
+                openWaterfall?.mark(
+                    "stream_preview_applied",
+                    "seq=\(change.pubsub_seq ?? 0) no_tail_fetch=true"
+                )
+                return
             }
             guard let api = apiFactory(appState.serverURL) else { return }
             await refreshTailAfterRealtimeWake(api: api, sessionId: sessionId)

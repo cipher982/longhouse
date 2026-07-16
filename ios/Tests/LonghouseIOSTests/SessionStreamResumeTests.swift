@@ -223,16 +223,47 @@ struct SessionStreamResumeTests {
     }
 
     @Test
+    func healthyPreviewBurstRendersWithoutTailRequestAmplification() async throws {
+        let workspace = try TestWorkspaceFactory.make(eventId: 10, content: "Before live preview")
+        let api = FakeStreamResumeClient(workspaces: [workspace])
+        let recorder = StreamFactoryRecorder()
+        let appState = AppState()
+        appState.serverURL = serverURL
+        let model = SessionViewModel(
+            apiFactory: { _ in api },
+            streamFactory: { _, _, sinceSeq, fingerprint in
+                recorder.make(sinceSeq: sinceSeq, knownWorkspaceFingerprint: fingerprint)
+            },
+            enableRealtime: true,
+            transcriptCache: SessionTranscriptCache(maxBytes: 0),
+            snapshotStore: nil
+        )
+
+        await model.start(sessionId: "session-1", appState: appState)
+        await waitForStartCount(recorder, atLeast: 1)
+        recorder.emitConnected()
+        let baseline = await api.tailRequestCount()
+        for seq in 1...100 {
+            recorder.emitPreview(text: "token \(seq)", pubsubSeq: seq)
+        }
+        try? await Task.sleep(nanoseconds: 100_000_000)
+
+        #expect(await api.tailRequestCount() == baseline)
+        #expect(model.items.last?.id == "prose:synthetic:preview:100")
+        model.stop()
+    }
+
+    @Test
     func visiblePollPolicyCoversDisconnectedRunningToolAndManagedBackstop() {
         #expect(SessionViewModel.visiblePollDelayNanoseconds(completedTicks: 0) == 750_000_000)
         #expect(SessionViewModel.visiblePollDelayNanoseconds(completedTicks: 3) == 5_000_000_000)
-        #expect(SessionViewModel.shouldPollVisibleSession(connected: true, hasRunningTool: false, managed: false, ticks: 1))
-        #expect(SessionViewModel.shouldPollVisibleSession(connected: true, hasRunningTool: false, managed: false, ticks: 3))
+        #expect(!SessionViewModel.shouldPollVisibleSession(connected: true, hasRunningTool: false, managed: false, ticks: 1))
+        #expect(!SessionViewModel.shouldPollVisibleSession(connected: true, hasRunningTool: false, managed: false, ticks: 3))
         #expect(SessionViewModel.shouldPollVisibleSession(connected: false, hasRunningTool: false, managed: false, ticks: 1))
         #expect(SessionViewModel.shouldPollVisibleSession(connected: true, hasRunningTool: false, managed: false, setupPending: true, ticks: 30))
-        #expect(SessionViewModel.shouldPollVisibleSession(connected: true, hasRunningTool: false, managed: false, pendingInput: true, ticks: 30))
+        #expect(!SessionViewModel.shouldPollVisibleSession(connected: true, hasRunningTool: false, managed: false, pendingInput: true, ticks: 30))
         #expect(SessionViewModel.shouldPollVisibleSession(connected: true, hasRunningTool: true, managed: false, ticks: 12))
-        #expect(SessionViewModel.shouldPollVisibleSession(connected: true, hasRunningTool: false, managed: true, ticks: 6))
+        #expect(!SessionViewModel.shouldPollVisibleSession(connected: true, hasRunningTool: false, managed: true, ticks: 6))
         #expect(!SessionViewModel.shouldPollVisibleSession(connected: true, hasRunningTool: false, managed: false, ticks: 30))
         #expect(!SessionViewModel.shouldPollVisibleSession(connected: true, hasRunningTool: true, managed: false, ticks: 11))
         #expect(!SessionViewModel.shouldPollVisibleSession(connected: true, hasRunningTool: false, managed: true, ticks: 5))
@@ -372,6 +403,36 @@ private final class StreamFactoryRecorder: Sendable {
             server_now_ms: nil,
             pubsub_seq: pubsubSeq,
             transcript_preview: nil
+        )))
+    }
+
+    func emitPreview(text: String, pubsubSeq: Int) {
+        let c = state.withLock { $0.continuation }
+        c?.yield(.changed(SessionWorkspaceStream.WorkspaceChanged(
+            session_id: "session-1",
+            latest_event_id: pubsubSeq,
+            thread_session_count: 1,
+            latest_event_emitted_at_ms: nil,
+            server_fanout_at_ms: Int64(Date().timeIntervalSince1970 * 1000),
+            server_now_ms: nil,
+            pubsub_seq: pubsubSeq,
+            transcript_preview: SessionWorkspaceStream.WorkspaceChanged.TranscriptPreview(
+                event_id: pubsubSeq,
+                text: text,
+                role: "assistant",
+                tool_name: nil,
+                tool_input_json: nil,
+                tool_output_text: nil,
+                tool_call_id: nil,
+                tool_call_state: nil,
+                event_origin: "live_provisional",
+                timestamp: "2026-07-16T22:57:28Z",
+                is_provisional: true,
+                is_complete: false,
+                content_cursor: "preview-\(pubsubSeq)",
+                is_stale: false,
+                stale_reason: nil
+            )
         )))
     }
 }
