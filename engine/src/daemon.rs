@@ -389,6 +389,25 @@ impl ManagedObservationSnapshot {
             cursor: result.cursor_observations.clone(),
         }
     }
+
+    fn contains_state_file(&self, path: &Path) -> bool {
+        self.codex.iter().any(|row| row.state_file == path)
+            || self.claude.iter().any(|row| row.state_file == path)
+            || self.opencode.iter().any(|row| row.state_file == path)
+            || self.cursor.iter().any(|row| row.state_file == path)
+    }
+}
+
+fn managed_provider_state_dirs() -> Vec<PathBuf> {
+    [
+        managed_bridge_scan::default_codex_bridge_state_dir(),
+        managed_claude_scan::default_claude_channel_state_dir(),
+        managed_opencode_scan::default_opencode_server_state_dir(),
+        managed_cursor_helm_scan::default_cursor_helm_state_dir(),
+    ]
+    .into_iter()
+    .flatten()
+    .collect()
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -663,7 +682,11 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     };
 
     // 6. Start file watcher before catch-up work so live changes queue immediately.
-    let mut watcher = SessionWatcher::new(&providers)?;
+    let managed_state_dirs = managed_provider_state_dirs();
+    for state_dir in &managed_state_dirs {
+        std::fs::create_dir_all(state_dir)?;
+    }
+    let mut watcher = SessionWatcher::new(&providers, &managed_state_dirs)?;
     tracing::info!(
         "Daemon ready — watching for file changes (flush interval: {:?})",
         WATCHER_FLUSH_INTERVAL
@@ -1660,10 +1683,11 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             // WorkPriority::Live. Managed wake signals can pre-empt the small
             // filesystem coalescing window.
             Some(first_event) = watcher.next_event() => {
-                handle_live_transcript_file_events(
+                let managed_state_changes = handle_live_transcript_file_events(
                     &mut watcher,
                     first_event,
                     &providers,
+                    &managed_state_dirs,
                     &mut transcript_wake_rx,
                     &mut scheduler,
                     &mut latest_transcript_wake_observed,
@@ -1673,6 +1697,32 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     &task_context,
                     offline.is_offline,
                 ).await;
+                if !managed_state_changes.is_empty() {
+                    let full_reconciliation = managed_state_changes_require_full_reconciliation(
+                        &last_managed_observations,
+                        &managed_state_changes,
+                    );
+                    let reason = if full_reconciliation {
+                        "managed_state_discovery"
+                    } else {
+                        "managed_state_change"
+                    };
+                    if maybe_start_managed_observation_scan(
+                        &mut managed_observation_scan_tasks,
+                        reason,
+                        full_reconciliation,
+                        &last_managed_observations,
+                    ) {
+                        managed_reconciliation = heartbeat::ProjectionReconciliation::running(
+                            reason,
+                            chrono::Utc::now().to_rfc3339(),
+                        );
+                    } else if full_reconciliation {
+                        pending_full_reconciliation = true;
+                    } else {
+                        pending_periodic_observation = true;
+                    }
+                }
             }
 
             // Periodic reconciliation scan — repair missed file-watch work after
@@ -2290,6 +2340,7 @@ async fn handle_live_transcript_file_events(
     watcher: &mut SessionWatcher,
     first_event: WatcherEvent,
     providers: &[ProviderConfig],
+    managed_state_dirs: &[PathBuf],
     transcript_wake_rx: &mut mpsc::UnboundedReceiver<TranscriptWakeSignal>,
     scheduler: &mut PathScheduler,
     latest_transcript_wake_observed: &mut HashMap<PathBuf, i64>,
@@ -2298,7 +2349,7 @@ async fn handle_live_transcript_file_events(
     in_flight: &mut JoinSet<PathTaskResult>,
     task_context: &PathTaskContext,
     offline: bool,
-) {
+) -> Vec<PathBuf> {
     // Keep the coalescing wait cancellable by transcript wakes. The wake socket
     // is the managed-session completion lane, so it should not sit behind
     // filesystem batching.
@@ -2330,7 +2381,9 @@ async fn handle_live_transcript_file_events(
     }
 
     let events = watcher.collect_ready_batch(first_event);
-    for event in events {
+    let (managed_state_changes, transcript_events) =
+        partition_managed_state_events(events, managed_state_dirs);
+    for event in transcript_events {
         let Some((session_path, provider)) =
             discovery::session_path_for_watcher_event(&event.path, providers)
         else {
@@ -2396,6 +2449,35 @@ async fn handle_live_transcript_file_events(
             session_event.latest_observed_at_ms,
         );
     }
+    managed_state_changes
+}
+
+fn partition_managed_state_events(
+    events: Vec<WatcherEvent>,
+    managed_state_dirs: &[PathBuf],
+) -> (Vec<PathBuf>, Vec<WatcherEvent>) {
+    let mut managed = Vec::new();
+    let mut transcripts = Vec::new();
+    for event in events {
+        if managed_state_dirs
+            .iter()
+            .any(|state_dir| event.path.starts_with(state_dir))
+        {
+            managed.push(event.path);
+        } else {
+            transcripts.push(event);
+        }
+    }
+    (managed, transcripts)
+}
+
+fn managed_state_changes_require_full_reconciliation(
+    observations: &ManagedObservationSnapshot,
+    paths: &[PathBuf],
+) -> bool {
+    paths
+        .iter()
+        .any(|path| !observations.contains_state_file(path))
 }
 
 fn maybe_start_unmanaged_binding_refresh(
@@ -3850,6 +3932,54 @@ mod tests {
     struct RetainedFixtureRow {
         path: PathBuf,
         value: u32,
+    }
+
+    #[test]
+    fn watcher_batch_separates_managed_state_from_transcript_events() {
+        let managed_root = PathBuf::from("/tmp/managed/codex-bridge");
+        let managed = WatcherEvent {
+            path: managed_root.join("new-session.json"),
+            observed_at_ms: 1,
+            latest_observed_at_ms: 1,
+        };
+        let transcript = WatcherEvent {
+            path: PathBuf::from("/tmp/transcripts/session.jsonl"),
+            observed_at_ms: 2,
+            latest_observed_at_ms: 2,
+        };
+
+        let (managed_paths, transcript_events) = partition_managed_state_events(
+            vec![transcript.clone(), managed.clone()],
+            &[managed_root],
+        );
+
+        assert_eq!(managed_paths, vec![managed.path]);
+        assert_eq!(transcript_events, vec![transcript]);
+    }
+
+    #[test]
+    fn unknown_managed_state_path_requires_full_reconciliation() {
+        let observation = codex_bridge_observation(
+            Path::new("/tmp/transcript.jsonl"),
+            None,
+            None,
+            "2026-07-16T00:00:00Z",
+            true,
+        );
+        let known_path = observation.state_file.clone();
+        let snapshot = ManagedObservationSnapshot {
+            codex: vec![observation],
+            ..ManagedObservationSnapshot::default()
+        };
+
+        assert!(!managed_state_changes_require_full_reconciliation(
+            &snapshot,
+            &[known_path],
+        ));
+        assert!(managed_state_changes_require_full_reconciliation(
+            &snapshot,
+            &[PathBuf::from("/tmp/new-managed-session.json")],
+        ));
     }
 
     #[test]

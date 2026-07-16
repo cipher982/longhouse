@@ -6,7 +6,7 @@
 //! without starving.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -59,7 +59,7 @@ pub struct WatcherEvent {
 
 impl SessionWatcher {
     /// Start watching all provider directories.
-    pub fn new(providers: &[ProviderConfig]) -> Result<Self> {
+    pub fn new(providers: &[ProviderConfig], managed_state_dirs: &[PathBuf]) -> Result<Self> {
         let (tx, rx) = mpsc::channel(WATCHER_CHANNEL_CAPACITY);
         let dropped_events = Arc::new(std::sync::atomic::AtomicU64::new(0));
         let dropped_clone = dropped_events.clone();
@@ -132,6 +132,15 @@ impl SessionWatcher {
                 );
             }
         }
+        for state_dir in managed_state_dirs {
+            if state_dir.exists() && !provider_owns_root(providers, state_dir) {
+                watcher.watch(state_dir, RecursiveMode::Recursive)?;
+                tracing::info!(
+                    path = %state_dir.display(),
+                    "Watching managed provider state"
+                );
+            }
+        }
 
         Ok(Self {
             _watcher: watcher,
@@ -168,6 +177,10 @@ impl SessionWatcher {
 
         coalesced_batch_to_events(batch)
     }
+}
+
+fn provider_owns_root(providers: &[ProviderConfig], path: &Path) -> bool {
+    providers.iter().any(|provider| path.starts_with(&provider.root))
 }
 
 fn coalesced_batch_to_events(batch: HashMap<PathBuf, (i64, i64)>) -> Vec<WatcherEvent> {
