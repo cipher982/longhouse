@@ -156,7 +156,10 @@ impl AppServerProjection {
                 }]
             }
             "item/completed"
-                if json_string(params, &["item", "type"]).as_deref() == Some("agentMessage") =>
+                if matches!(
+                    json_string(params, &["item", "type"]).as_deref(),
+                    Some("agentMessage" | "assistantMessage")
+                ) =>
             {
                 let Some(item_id) = json_string(params, &["item", "id"]).or_else(|| {
                     params
@@ -166,9 +169,21 @@ impl AppServerProjection {
                 }) else {
                     return Vec::new();
                 };
-                let Some(text) = self.item_text.get(&item_id).cloned() else {
-                    return Vec::new();
-                };
+                let text = self
+                    .item_text
+                    .get(&item_id)
+                    .cloned()
+                    .or_else(|| json_string(params, &["item", "text"]))
+                    .or_else(|| {
+                        params
+                            .get("item")?
+                            .get("content")?
+                            .as_array()?
+                            .iter()
+                            .find_map(|part| part.get("text").and_then(Value::as_str))
+                            .map(str::to_string)
+                    });
+                let Some(text) = text else { return Vec::new() };
                 let item_seq = self.item_seq.entry(item_id.clone()).or_default();
                 *item_seq += 1;
                 self.transcript_seq += 1;
@@ -331,7 +346,7 @@ pub async fn start_codex_exec_once(config: CodexExecRunConfig) -> Result<CodexEx
                 read_stderr_tail(stream, monitor_tail).await;
             })
         });
-        let run_result = match (stdin, stdout) {
+        let mut run_result = match (stdin, stdout) {
             (Some(stdin), Some(stdout)) => {
                 run_app_server_turn(
                     &mut child,
@@ -348,14 +363,27 @@ pub async fn start_codex_exec_once(config: CodexExecRunConfig) -> Result<CodexEx
             }
             _ => Err(anyhow::anyhow!("Codex app-server stdio was unavailable")),
         };
+        if run_result.is_err() {
+            if let Err(kill_error) = stop_failed_child(&mut child).await {
+                let original = run_result.unwrap_err();
+                run_result = Err(original.context(format!(
+                    "also failed to stop Codex app-server: {kill_error}"
+                )));
+            }
+        }
         if let Some(task) = stderr_task {
             let _ = task.await;
         }
         let (terminal_state, exit_code, detail) = match run_result {
-            Ok(exit_code) => (
+            Ok(exit_code) if exit_code == Some(0) => (
                 "run_completed",
                 exit_code,
                 stderr_tail_snapshot(&stderr_tail),
+            ),
+            Ok(exit_code) => (
+                "run_failed",
+                exit_code,
+                Some(format!("Codex app-server exited with code {exit_code:?}")),
             ),
             Err(err) => (
                 "run_failed",
@@ -447,6 +475,7 @@ async fn run_app_server_turn(
     let expected_turn_id = json_string(&turn_response, &["turn", "id"])
         .context("Codex app-server turn/start omitted turn.id")?;
     sink.post_phase("thinking", None).await;
+    sink.post_live_user_item(prompt).await;
 
     tokio::time::timeout(APP_SERVER_TURN_TIMEOUT, async {
         loop {
@@ -460,14 +489,19 @@ async fn run_app_server_turn(
                 .await;
             if value.get("method").and_then(Value::as_str) == Some("turn/completed") {
                 let completed_turn_id = json_string(&value, &["params", "turn", "id"]);
-                if completed_turn_id.as_deref() == Some(expected_turn_id.as_str()) {
-                    let status = json_string(&value, &["params", "turn", "status"])
-                        .unwrap_or_else(|| "completed".to_string());
-                    if status != "completed" {
-                        anyhow::bail!("Codex turn ended with status {status}");
-                    }
-                    break;
+                let completed_turn_id = completed_turn_id
+                    .context("Codex turn/completed omitted params.turn.id")?;
+                if completed_turn_id != expected_turn_id {
+                    anyhow::bail!(
+                        "Codex completed unexpected turn {completed_turn_id}; expected {expected_turn_id}"
+                    );
                 }
+                let status = json_string(&value, &["params", "turn", "status"])
+                    .unwrap_or_else(|| "completed".to_string());
+                if status != "completed" {
+                    anyhow::bail!("Codex turn ended with status {status}");
+                }
+                break;
             }
         }
         Ok::<(), anyhow::Error>(())
@@ -481,10 +515,21 @@ async fn run_app_server_turn(
         Ok(status) => status?,
         Err(_) => {
             child.kill().await?;
-            child.wait().await?
+            let status = child.wait().await?;
+            anyhow::bail!(
+                "Codex app-server did not exit after turn completion; killed with status {status}"
+            );
         }
     };
     Ok(status.code())
+}
+
+async fn stop_failed_child(child: &mut Child) -> Result<()> {
+    if child.try_wait()?.is_none() {
+        child.kill().await?;
+    }
+    let _ = child.wait().await?;
+    Ok(())
 }
 
 impl AppServerRpc {
@@ -605,6 +650,11 @@ fn normalized_optional(value: &Option<String>) -> Option<String> {
 impl CodexExecRuntimeSink {
     async fn post_phase(&self, phase: &str, tool_name: Option<String>) {
         let observed_at = Utc::now();
+        let phase_identity = if phase == "tool" {
+            format!("tool:{}", uuid::Uuid::new_v4())
+        } else {
+            phase.to_string()
+        };
         self.persist_local_phase(phase, tool_name.clone(), observed_at);
         self.post_events(vec![json!({
             "runtime_key": format!("codex:{}", self.session_id),
@@ -618,12 +668,42 @@ impl CodexExecRuntimeSink {
             "phase": phase,
             "tool_name": tool_name,
             "occurred_at": observed_at.to_rfc3339(),
-            "dedupe_key": format!("codex-exec:{}:{}:phase:{}", self.session_id, self.run_id, phase),
+            "dedupe_key": format!("codex-app-server:{}:{}:phase:{}", self.session_id, self.run_id, phase_identity),
             "payload": {
                 "managed_transport": CODEX_EXEC_RUNTIME_SOURCE,
                 "execution_lifetime": "one_shot",
                 "turn_id": self.turn_id,
                 "client_request_id": self.client_request_id,
+            }
+        })])
+        .await;
+    }
+
+    async fn post_live_user_item(&self, text: &str) {
+        self.post_events(vec![json!({
+            "runtime_key": format!("codex:{}", self.session_id),
+            "session_id": self.session_id,
+            "run_id": self.run_id,
+            "thread_id": self.thread_id,
+            "provider": "codex",
+            "device_id": self.machine_name,
+            "source": "codex_console_live",
+            "kind": "progress_signal",
+            "occurred_at": Utc::now().to_rfc3339(),
+            "dedupe_key": format!("console:user:{}", self.run_id),
+            "payload": {
+                "progress_kind": "console_live_user_item",
+                "managed_transport": "codex_app_server",
+                "execution_lifetime": "one_shot",
+                "turn_id": self.turn_id,
+                "client_request_id": self.client_request_id,
+                "text": text,
+                "input_origin": {
+                    "authored_via": "longhouse",
+                    "client_request_id": self.client_request_id,
+                    "turn_id": self.turn_id,
+                    "run_id": self.run_id,
+                },
             }
         })])
         .await;
@@ -1139,6 +1219,7 @@ mod tests {
             json!({"method":"item/agentMessage/delta","params":{"itemId":"msg_a","delta":"First"}}),
             json!({"method":"item/completed","params":{"item":{"id":"msg_a","type":"agentMessage"}}}),
             json!({"method":"item/agentMessage/delta","params":{"itemId":"msg_b","delta":"Second"}}),
+            json!({"method":"item/completed","params":{"item":{"id":"msg_c","type":"assistantMessage","text":"Completed without delta"}}}),
             json!({"method":"item/started","params":{"item":{"id":"exec_a","type":"commandExecution","command":"printf ok","status":"inProgress"}}}),
             json!({"method":"item/completed","params":{"item":{"id":"exec_a","type":"commandExecution","command":"printf ok","aggregatedOutput":"parse error\n","status":"failed","exitCode":1}}}),
         ];
@@ -1171,6 +1252,14 @@ mod tests {
             seq: 2,
             completed: true,
         }));
+        assert!(projected.contains(&ProjectedAppServerEvent::AssistantItem {
+            item_id: "msg_c".to_string(),
+            item_seq: 1,
+            seq: 4,
+            delta: String::new(),
+            text: "Completed without delta".to_string(),
+            completed: true,
+        }));
     }
 
     #[tokio::test]
@@ -1190,7 +1279,9 @@ for line in sys.stdin:
         emit({"id": msg["id"], "result": {"userAgent": "fake/1"}})
     elif method == "initialized":
         pass
-    elif method == "thread/start":
+    elif method == "thread/resume":
+        if msg.get("params", {}).get("threadId") != "provider-thread":
+            sys.exit(8)
         emit({"id": msg["id"], "result": {"thread": {"id": "provider-thread", "path": "/tmp/rollout-provider-thread.jsonl"}}})
     elif method == "turn/start":
         emit({"id": msg["id"], "result": {"turn": {"id": "provider-turn", "status": "inProgress"}}})
@@ -1213,6 +1304,7 @@ for line in sys.stdin:
         fs::create_dir_all(&run_config.cwd).unwrap();
         run_config.codex_bin = fake_codex.display().to_string();
         run_config.api_url = api_url;
+        run_config.resume_thread_id = Some("provider-thread".to_string());
         let summary = start_codex_exec_once(run_config).await.unwrap();
 
         let mut events = Vec::new();
@@ -1234,6 +1326,12 @@ for line in sys.stdin:
             event.get("kind").and_then(Value::as_str) == Some("binding_signal")
                 && json_string(event, &["payload", "provider_thread_id"]).as_deref()
                     == Some("provider-thread")
+        }));
+        assert!(events.iter().any(|event| {
+            json_string(event, &["payload", "progress_kind"]).as_deref()
+                == Some("console_live_user_item")
+                && json_string(event, &["payload", "input_origin", "authored_via"]).as_deref()
+                    == Some("longhouse")
         }));
         assert!(events.iter().any(|event| {
             json_string(event, &["payload", "progress_kind"]).as_deref()
