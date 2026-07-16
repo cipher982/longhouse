@@ -236,6 +236,33 @@ struct SessionStreamResumeTests {
         #expect(!SessionViewModel.shouldPollVisibleSession(connected: true, hasRunningTool: false, managed: false, ticks: 30))
         #expect(!SessionViewModel.shouldPollVisibleSession(connected: true, hasRunningTool: true, managed: false, ticks: 11))
         #expect(!SessionViewModel.shouldPollVisibleSession(connected: true, hasRunningTool: false, managed: true, ticks: 5))
+
+        let createdAt = Date()
+        let working = SubmittedInput(
+            id: "pending",
+            clientRequestId: "pending",
+            text: "continue",
+            intent: "auto",
+            phase: .working,
+            serverInputId: nil,
+            lastError: nil,
+            createdAt: createdAt
+        )
+        let failed = SubmittedInput(
+            id: "failed",
+            clientRequestId: "failed",
+            text: "continue",
+            intent: "auto",
+            phase: .failed,
+            serverInputId: nil,
+            lastError: "failed",
+            createdAt: createdAt
+        )
+        #expect(SessionViewModel.pendingInputPollDelay(submittedInputs: [working], now: createdAt) == 750_000_000)
+        #expect(SessionViewModel.pendingInputPollDelay(submittedInputs: [working], now: createdAt.addingTimeInterval(20)) == 2_000_000_000)
+        #expect(SessionViewModel.pendingInputPollDelay(submittedInputs: [working], now: createdAt.addingTimeInterval(60)) == 5_000_000_000)
+        #expect(SessionViewModel.pendingInputPollDelay(submittedInputs: [working], now: createdAt.addingTimeInterval(121)) == nil)
+        #expect(SessionViewModel.pendingInputPollDelay(submittedInputs: [failed], now: createdAt) == nil)
     }
 
     private func waitForItemIds(_ model: SessionViewModel, _ expected: [String]) async {

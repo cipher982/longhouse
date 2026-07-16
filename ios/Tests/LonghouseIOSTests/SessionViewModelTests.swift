@@ -843,6 +843,36 @@ struct SessionViewModelTests {
     }
 
     @Test
+    func repeatedPromptDoesNotReconcileAgainstEventVisibleBeforeSend() async throws {
+        let now = Date()
+        let before = try makeWorkspace(
+            eventId: 10,
+            content: "continue",
+            timestamp: ISO8601DateFormatter().string(from: now)
+        )
+        let after = try makeWorkspace(
+            eventId: 11,
+            content: "continue",
+            timestamp: ISO8601DateFormatter().string(from: now.addingTimeInterval(2))
+        )
+        let api = FakeSessionWorkspaceClient(workspaces: [before, before, after])
+        let appState = AppState()
+        appState.serverURL = "https://example.longhouse.ai"
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+
+        await model.start(sessionId: "session-1", appState: appState)
+        let sent = await model.send(text: "continue", sessionId: "session-1", appState: appState)
+        await waitForWorkspaceRequestCount(api, atLeast: 2)
+
+        #expect(sent)
+        #expect(model.submittedInputs.count == 1)
+
+        await model.reload(sessionId: "session-1", appState: appState)
+        #expect(model.submittedInputs.isEmpty)
+        #expect(model.items.map(\.id).contains("user:11"))
+    }
+
+    @Test
     func unconfirmedSubmittedInputReconcilesByClientRequestIdAfterTailRefresh() async throws {
         let before = try makeWorkspace(eventId: 10, content: "Before send")
         let api = FakeSessionWorkspaceClient(

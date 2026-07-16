@@ -1552,6 +1552,7 @@ struct SubmittedInput: Identifiable, Sendable {
     var runId: String?
     var lastError: String?
     let createdAt: Date
+    let baselineEventIds: Set<String>
 
     init(
         id: String,
@@ -1563,7 +1564,8 @@ struct SubmittedInput: Identifiable, Sendable {
         turnId: String? = nil,
         runId: String? = nil,
         lastError: String?,
-        createdAt: Date
+        createdAt: Date,
+        baselineEventIds: Set<String> = []
     ) {
         self.id = id
         self.clientRequestId = clientRequestId
@@ -1575,6 +1577,7 @@ struct SubmittedInput: Identifiable, Sendable {
         self.runId = runId
         self.lastError = lastError
         self.createdAt = createdAt
+        self.baselineEventIds = baselineEventIds
     }
 }
 
@@ -1899,7 +1902,8 @@ final class SessionViewModel: ObservableObject {
             phase: .submitting,
             serverInputId: nil,
             lastError: nil,
-            createdAt: Date()
+            createdAt: Date(),
+            baselineEventIds: Set(lastWorkspaceEvents.map(\.id))
         )
         submittedInputs.append(localInput)
         guard let api = apiFactory(appState.serverURL) else {
@@ -2114,10 +2118,10 @@ final class SessionViewModel: ObservableObject {
             var ticks = 0
             while !Task.isCancelled {
                 guard let self = self else { break }
-                let hasPendingInput = await MainActor.run { !self.submittedInputs.isEmpty }
-                let delay = hasPendingInput
-                    ? 750_000_000
-                    : Self.visiblePollDelayNanoseconds(completedTicks: ticks)
+                let pendingPollDelay = await MainActor.run {
+                    Self.pendingInputPollDelay(submittedInputs: self.submittedInputs, now: Date())
+                }
+                let delay = pendingPollDelay ?? Self.visiblePollDelayNanoseconds(completedTicks: ticks)
                 try? await Task.sleep(nanoseconds: delay)
                 if Task.isCancelled { break }
                 ticks += 1
@@ -2126,7 +2130,7 @@ final class SessionViewModel: ObservableObject {
                         self.streamConnected,
                         self.lastWorkspaceEvents.contains { $0.toolCallState == .running },
                         self.detail?.canDraftBeforeSendReady == true,
-                        !self.submittedInputs.isEmpty
+                        Self.pendingInputPollDelay(submittedInputs: self.submittedInputs, now: Date()) != nil
                     )
                 }
                 let managed = await MainActor.run {
@@ -2175,6 +2179,17 @@ final class SessionViewModel: ObservableObject {
 
     static func visiblePollDelayNanoseconds(completedTicks: Int) -> UInt64 {
         completedTicks < 3 ? 750_000_000 : 5_000_000_000
+    }
+
+    static func pendingInputPollDelay(submittedInputs: [SubmittedInput], now: Date) -> UInt64? {
+        let activeAges = submittedInputs.compactMap { input -> TimeInterval? in
+            guard input.phase == .submitting || input.phase == .working || input.phase == .sent else { return nil }
+            return max(0, now.timeIntervalSince(input.createdAt))
+        }
+        guard let youngest = activeAges.min(), youngest <= 120 else { return nil }
+        if youngest <= 15 { return 750_000_000 }
+        if youngest <= 45 { return 2_000_000_000 }
+        return 5_000_000_000
     }
 
     private func startStream(sessionId: String, appState: AppState) {
@@ -2781,6 +2796,7 @@ final class SessionViewModel: ObservableObject {
                 guard event.role == "user",
                       event.isHeadBranch,
                       !matchedEventIds.contains(event.id),
+                      !input.baselineEventIds.contains(event.id),
                       event.contentText == input.text,
                       let eventAt = LonghouseDateParser.parse(event.timestamp)
                 else { return false }
