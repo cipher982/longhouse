@@ -308,6 +308,13 @@ async def lifespan(app: FastAPI):
                 logger.info("Live catalog input recovery loop started")
             except Exception:
                 logger.exception("Failed to start live catalog input recovery loop")
+            try:
+                from zerg.services.storage_session_titles import run_storage_title_reconciler
+
+                asyncio.create_task(run_storage_title_reconciler())
+                logger.info("Storage-v2 AI title reconciler started")
+            except Exception:
+                logger.exception("Failed to start storage-v2 AI title reconciler")
 
         # Core background services
         if not catalog_mode and not _settings.testing:
@@ -404,16 +411,6 @@ async def lifespan(app: FastAPI):
             except Exception as e:  # noqa: BLE001
                 failed.append(f"summary_reconciler ({e})")
                 logger.exception("Failed to start summary_reconciler")
-
-            if live_catalog_enabled():
-                try:
-                    from zerg.services.storage_session_titles import run_storage_title_reconciler
-
-                    asyncio.create_task(run_storage_title_reconciler())
-                    started.append("storage_title_reconciler")
-                except Exception as e:  # noqa: BLE001
-                    failed.append(f"storage_title_reconciler ({e})")
-                    logger.exception("Failed to start storage_title_reconciler")
 
             # Archive ingest can skip expensive derived projections on the hot
             # shipping path; this reconciler catches those sessions up later.

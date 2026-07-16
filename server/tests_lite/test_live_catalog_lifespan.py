@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 from fastapi import FastAPI
 
@@ -88,6 +90,9 @@ async def test_production_live_catalog_lifespan_delegates_schema_to_catalogd(mon
     async def completed_loop():
         return None
 
+    async def title_loop():
+        calls.append("title_reconciler_start")
+
     async def noop_async(*_args, **_kwargs):
         return None
 
@@ -121,6 +126,7 @@ async def test_production_live_catalog_lifespan_delegates_schema_to_catalogd(mon
     )
     monkeypatch.setattr("zerg.services.render_object_workers.close_render_object_worker_pool", stop_render_workers)
     monkeypatch.setattr("zerg.services.live_control_catalog.run_live_catalog_input_recovery_loop", completed_loop)
+    monkeypatch.setattr("zerg.services.storage_session_titles.run_storage_title_reconciler", title_loop)
     monkeypatch.setattr("zerg.services.maintenance.stop_maintenance_loop", noop_async)
     monkeypatch.setattr("zerg.services.retrieval_index_jobs.stop_recall_index_worker", noop_async)
     monkeypatch.setattr("zerg.utils.async_runner.get_shared_runner", lambda: Runner())
@@ -130,6 +136,7 @@ async def test_production_live_catalog_lifespan_delegates_schema_to_catalogd(mon
 
     app = FastAPI()
     async with lifespan_module.lifespan(app):
+        await asyncio.sleep(0)
         assert calls[:6] == [
             "catalogd_start",
             "searchd_start",
@@ -138,6 +145,7 @@ async def test_production_live_catalog_lifespan_delegates_schema_to_catalogd(mon
             "search_projector_start",
             "runner_start",
         ]
+        assert "title_reconciler_start" in calls
         assert app.state.catalogd_ping["ready"] is True
         assert app.state.searchd_ping is None
 
