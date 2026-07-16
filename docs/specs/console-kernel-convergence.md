@@ -5,8 +5,16 @@ Owner: Runtime Host session kernel
 Related:
 - `VISION.md`
 - `docs/specs/turn-scoped-console-execution.md`
+- `docs/specs/console-turn-transcript-convergence.md`
 - `docs/specs/session-identity-kernel.md`
 - `docs/contracts/truth-plane.md`
+
+> **Follow-up correction (2026-07-16):** The catalog/workspace convergence in
+> this document does not by itself guarantee that provider transcript ingest
+> binds back to the Console thread. `console-turn-transcript-convergence.md`
+> owns that missing binding, live-event, optimistic-input, and terminal-turn
+> seam. This plan is not complete in production until that acceptance gate
+> passes.
 
 ## Problem
 

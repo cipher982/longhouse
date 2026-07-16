@@ -8,6 +8,13 @@ Related:
 - `docs/specs/session-identity-kernel.md`
 - `docs/specs/machine-directory-and-console-launch.md`
 - `docs/specs/agents-machine-surface.md`
+- `docs/specs/console-turn-transcript-convergence.md`
+
+> **Transcript convergence correction (2026-07-16):**
+> `console-turn-transcript-convergence.md` defines the required binding from a
+> Console turn/run to provider live events and durable transcript discovery.
+> Turn-scoped execution is not complete when process lifecycle works but the
+> resulting transcript can reappear as a Shadow session.
 
 ## Decision
 
