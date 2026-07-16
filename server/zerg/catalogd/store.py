@@ -4192,6 +4192,7 @@ class CatalogStore:
         raw = LiveRawObject.__table__
         tombstone = LiveSessionTombstone.__table__
         storage_session = StorageSession.__table__
+        live_session_catalog = LiveSessionCatalog.__table__
         render_generation = RenderGeneration.__table__
         render_object = RenderObject.__table__
         media_object = MediaObject.__table__
@@ -4308,6 +4309,16 @@ class CatalogStore:
 
             existing_session = (
                 connection.execute(select(storage_session).where(storage_session.c.session_id == session_key)).mappings().first()
+            )
+            live_console_session = (
+                connection.execute(
+                    select(live_session_catalog).where(
+                        live_session_catalog.c.session_id == session_key,
+                        live_session_catalog.c.origin_kind == "console",
+                    )
+                )
+                .mappings()
+                .first()
             )
             if existing_session is not None and any(
                 (
@@ -4652,6 +4663,16 @@ class CatalogStore:
                 "commit_seq": commit_seq,
                 "updated_at": commit_time,
             }
+            if live_console_session is not None:
+                # A Console session outlives each bounded provider process. The
+                # provider transcript does not carry the Console launch
+                # provenance and its ended_at closes only that one process, not
+                # the reusable Longhouse session.
+                session_values["origin_kind"] = "console"
+                session_values["launch_actor"] = live_console_session["launch_actor"]
+                session_values["launch_surface"] = live_console_session["launch_surface"]
+                session_values["hidden_from_default_timeline"] = int(live_console_session["hidden_from_default_timeline"] or 0)
+                session_values["ended_at"] = None
             if existing_session is None:
                 connection.execute(
                     insert(storage_session).values(

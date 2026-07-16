@@ -243,6 +243,60 @@ async def test_ready_render_manifest_switches_generation_with_raw_receipt(daemon
 
 
 @pytest.mark.asyncio
+async def test_console_provenance_survives_first_archived_provider_transcript(daemon_paths):
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    session_id = uuid4()
+    thread_id = uuid4()
+    epoch = uuid4()
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        await client.call(
+            "session.console.create.v2",
+            {
+                "session": {
+                    "session_id": str(session_id),
+                    "thread_id": str(thread_id),
+                    "owner_id": 42,
+                    "provider": "codex",
+                    "device_id": "cinder",
+                    "cwd": "/workspace/longhouse",
+                    "project": "longhouse",
+                    "launch_surface": "ios",
+                    "started_at": now.isoformat(),
+                }
+            },
+        )
+        raw = _raw_params(
+            epoch=epoch,
+            session_id=session_id,
+            start=0,
+            end=6,
+            records=(b"hello\n",),
+            sealed_at=now + timedelta(seconds=1),
+        )
+        raw["session_facts"].update(
+            origin_kind=None,
+            launch_actor=None,
+            launch_surface=None,
+            ended_at=(now + timedelta(seconds=2)).isoformat(),
+        )
+
+        await client.call("storage.raw_object.commit.v2", raw)
+        stored = await client.call("storage.session.read.v2", {"session_id": str(session_id)})
+
+        assert stored["session"]["origin_kind"] == "console"
+        assert stored["session"]["launch_actor"] == "user"
+        assert stored["session"]["launch_surface"] == "ios"
+        assert stored["session"]["ended_at"] is None
+    finally:
+        await client.close()
+        await daemon.close()
+
+
+@pytest.mark.asyncio
 async def test_storage_title_is_immediate_sanitized_and_write_once(daemon_paths):
     database_path, socket_path = daemon_paths
     now = datetime.now(UTC).replace(microsecond=0)
