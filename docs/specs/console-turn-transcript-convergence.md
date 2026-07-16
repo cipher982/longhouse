@@ -8,6 +8,8 @@ Related:
 - `docs/specs/console-kernel-convergence.md`
 - `docs/specs/session-identity-kernel.md`
 - `docs/specs/runtime-display-contract.md`
+- `docs/specs/immutable-source-outbox.md`
+- `docs/specs/cursor-storage-v2-source-fidelity.md`
 
 ## Outcome
 
@@ -19,31 +21,10 @@ During a turn, web and iOS show immediate, truthful progress and the complete
 transcript, including tool calls. Optimistic user input converges with the
 durable event exactly once.
 
-## Incident That Exposed the Missing Seam
+## Concrete Contract Breaks
 
-The 2026-07-16 iOS Codex turn had four symptoms:
-
-1. the submitted message appeared, but there was no visible starting or working
-   state;
-2. the assistant transcript appeared only after the turn had completed;
-3. the original user message remained as both a durable event and an optimistic
-   `Sent` row;
-4. the completed thread rendered as read-only.
-
-The provider evidence is unambiguous:
-
-- the invocation was stock `codex exec` (`originator=codex_exec`);
-- it emitted a provider thread id and a normal bounded task lifecycle;
-- it emitted `custom_tool_call` and `custom_tool_call_output` records for the
-  actual repository search;
-- `task_complete` ended the invocation after about 18 seconds.
-
-The archived Longhouse projection contained the user and assistant prose but no
-tool rows, no Longhouse input origin, and no surviving Console ownership. The
-client therefore had no exact identity with which to reconcile its optimistic
-row and was handed a Shadow/read-only capability projection after process exit.
-
-The current engine code explains the identity loss directly. `read_stdout_jsonl`
+The 2026-07-16 iOS Codex incident reduced to two code defects. First,
+`read_stdout_jsonl`
 wraps each decoded Codex record as:
 
 ```json
@@ -55,7 +36,9 @@ the outer object instead of `event`. The provider-thread binding branch is
 therefore unreachable for valid wrapped records. The same raw event is sent as
 a generic runtime progress payload rather than a transcript event, while the
 later filesystem parser drops `custom_tool_call` records. These are concrete
-contract breaks, not merely slow polling.
+contract breaks, not merely slow polling. Together they produced a transcript
+with prose but no tools or Longhouse input origin, followed by a Shadow/read-only
+projection after the bounded invocation exited.
 
 This is not a reason to keep provider processes alive. It is an identity and
 event-convergence failure between the Console turn, the provider invocation,
@@ -81,53 +64,26 @@ existing Longhouse thread; it never creates another product session.
 `source_path` is useful archive evidence. It is not identity and never selects
 Console versus Shadow.
 
-## Product Invariants
+## Convergence Invariants
 
-1. Creating a Console session starts no provider process.
-2. A normal message creates one turn; a claimed turn creates one run.
-3. `task_complete`, `end_turn`, process exit, or a terminal runtime signal ends
-   the run and settles the turn. It does not close the session.
-4. Only an explicit user close action closes a Console session.
-5. Idle Console sendability derives from its durable execution target and the
-   current Machine Agent adapter proof. It does not require a live
-   `SessionConnection` or provider process.
-6. Provider transcript discovery can add evidence to an existing Console
-   thread. It cannot demote, replace, close, or reclassify that thread.
-7. A provider thread alias bound to a Console thread routes all matching
-   transcript evidence to that thread.
-8. User input is reconciled only by exact identity. Clients do not deduplicate
-   by matching text.
-9. Tool calls are raw transcript evidence and remain visible even when the
-   provider invents a new tool record variant.
-10. Live output may be provisional; durable archive output is canonical. The
-    two lanes converge to one visible event sequence.
+`turn-scoped-console-execution.md` owns process and turn lifecycle;
+`console-kernel-convergence.md` owns mode, actions, and workspace projection.
+This correction uniquely adds these invariants:
 
-## One Ownership Model
-
-```text
-Console session/thread
-        |
-        | submit(client_request_id, message)
-        v
-SessionTurn queued -> starting -> active -> draining -> terminal
-                         |
-                         v
-                    SessionRun
-                         |
-                         v
-              Machine Agent invocation
-                         |
-                         +-- live provider event lane
-                         |
-                         +-- durable provider transcript lane
-                                      |
-                                      v
-                         same session/thread/turn/run
-```
-
-There is no Console `SessionConnection` between turns. A temporary process or
-transport record may exist for diagnostics while a run is active, but it is
-not the source of composer availability.
+1. Provider transcript discovery can add evidence to a bound Console thread.
+   It cannot create a second product session or change that thread's mode,
+   disposition, owner, or execution target.
+2. A managed invocation's source evidence always carries its Longhouse
+   session/thread/turn/run binding. Binding is not a racing side-channel.
+3. Live output is provisional and the durable provider transcript is
+   canonical; both lanes converge to one visible event sequence in either
+   arrival order.
+4. User input reconciliation uses run/request/turn identity. Text comparison is
+   never an identity or dedupe key.
+5. Tool calls and unknown provider records remain raw source evidence even
+   when the current transcript projector cannot decode them.
+6. Provider run completion settles the turn. Provider ingest cannot write the
+   Console session's explicit closed disposition in either direction.
 
 ## Machine Agent Contract
 
@@ -165,8 +121,11 @@ The source envelope itself carries the known Longhouse binding. The Runtime
 Host validates it against the claimed run and owner before accepting it.
 
 If a managed source envelope arrives before its Runtime Host binding is
-materialized, it remains pending for that binding. It must not create a Shadow
-session as a fallback.
+materialized, it enters a durable pending-binding queue that survives Runtime
+Host restart. Pending count, oldest age, run id, provider id, and last error are
+visible in ingest health and repair diagnostics. A bounded retry window may
+move the envelope to a diagnostic terminal state, but never turns it into an
+unmanaged session. Operators can replay it after repairing the binding.
 
 Provider adapters decode their provider record before adding Longhouse
 transport metadata. A transport wrapper must never hide fields required for
@@ -203,14 +162,31 @@ order:
 
 1. provider event/item id;
 2. provider turn id + call id for tool calls/results;
-3. provider thread id + provider sequence where supplied.
+3. provider thread id + provider sequence where supplied;
+4. within one exactly bound run, `(run_id, role, ordinal_within_run)` when
+   neither lane provides a shared provider event id.
+
+The fourth key is positional identity within a run that executes exactly one
+turn; it is not content matching. The reducer records the ordinal for both
+lanes. Whichever form arrives second resolves to the existing key: durable
+evidence supersedes provisional evidence, while a late provisional event is
+dropped when durable evidence already owns the key.
+
+The first user-role record of the bound provider turn is the accepted turn
+input. If a provider emits multiple user-role records in one turn, their
+ordinal under the run disambiguates them. The accepted input's
+`client_request_id` and `turn_id` are copied from the run binding, never
+inferred from text.
 
 Source path and byte offset remain archive cursors, not cross-lane event
 identity. When durable evidence arrives, it supersedes its provisional row in
 place. The UI never displays both.
 
-Unknown provider records remain stored as raw evidence. A parser upgrade can
-rebuild their transcript projection without rerunning the agent.
+`immutable-source-outbox.md` and `cursor-storage-v2-source-fidelity.md` own raw
+durable source retention. A skipped/unknown projector record still retains its
+raw source line. For the live lane, the run-scoped raw provider event is stored
+as a runtime observation until durable evidence supersedes it. A parser upgrade
+can rebuild the durable transcript projection without rerunning the agent.
 
 ## Codex Tool Event Contract
 
@@ -230,6 +206,9 @@ For `custom_tool_call`:
 - `input` is preserved verbatim and decoded as JSON only when it is valid JSON;
 - the complete raw source record is retained.
 
+The Rust `CodexPayload` model gains the upstream `input` field; adding match
+arms without extending that raw payload model is incomplete.
+
 For `custom_tool_call_output`:
 
 - output text blocks are joined without discarding provider metadata;
@@ -240,30 +219,13 @@ Longhouse does not rename `exec` to `Read` because the shell command happened
 to read a file. The UI may summarize the raw command, but the stored tool name
 remains provider truth.
 
-## Runtime and Capability Projection
+## Runtime and Capability Boundary
 
-Console presentation derives from the latest nonterminal turn plus adapter
-availability:
-
-| Turn/target state | Primary status | Composer |
-| --- | --- | --- |
-| idle + adapter ready | Ready | enabled |
-| queued | Queued | enabled for another FIFO turn if policy allows |
-| starting | Starting | enabled for FIFO queueing |
-| active | Working / current tool | enabled for FIFO queueing |
-| draining | Finishing | enabled for FIFO queueing |
-| idle + machine offline | Machine offline | disabled with typed reason |
-| idle + adapter unavailable | Console unavailable | disabled with typed reason |
-| explicitly closed | Closed | disabled |
-
-The active run's terminal signal changes `turn_state` back to `idle` after
-drain. It may update run history and runtime diagnostics. It cannot set the
-Console session disposition to closed or change its mode to Shadow.
-
-`session_state.mode=console` and `control.actions.start_turn` are catalog facts.
-Archive convergence cannot overwrite them. `runtime_display` and compatibility
-composer fields derive from those facts once; clients do not reinterpret
-process death.
+The existing kernel specs own the Console state/composer truth table. This
+correction requires only that `starting`, `active`, and `draining` transitions
+from the bound run reach that projection, and that a terminal run returns the
+open thread to its canonical idle state. Transcript ingest cannot promote or
+demote kernel actions and cannot close or reclassify the session.
 
 ## Submit and Reconciliation API
 
@@ -279,14 +241,16 @@ For Console, the response includes a turn receipt:
   "client_request_id": "ios-...",
   "turn": {
     "turn_id": "...",
-    "run_id": "...",
-    "state": "starting"
+    "run_id": null,
+    "state": "queued"
   }
 }
 ```
 
 The response is idempotent for `client_request_id`. Repeating the request
-returns the same turn and run assignment.
+returns the same turn identity plus its current state and current nullable run
+assignment. A queued turn has no `run_id` until dispatch claims it; an
+idempotent replay may therefore show a later state and newly assigned run.
 
 The normalized durable user event carries:
 
@@ -302,8 +266,8 @@ The normalized durable user event carries:
 
 The Machine Agent knows the submitted prompt and binding before launch, so the
 live user event can carry this origin directly. The durable reducer copies it
-when the provider user event converges. No client or server text heuristic is
-required.
+onto the first user-role record of that exactly bound run. No client or server
+text heuristic is required.
 
 ## iOS and Web Contract
 
@@ -324,15 +288,15 @@ canonical workspace. A completed turn renders `Ready · Send`, not read-only.
 
 ## Immutable Catalog Facts
 
-These facts are created with the Console shell and cannot be nulled or changed
-by provider transcript ingest:
+Provider transcript ingest cannot null or change these catalog-owned facts:
 
 - session owner;
 - `origin_kind=console` / `session_state.mode=console`;
 - session and primary thread ids;
-- provider;
-- durable execution target;
-- explicit closed disposition.
+- thread-owned provider and durable execution target.
+
+Explicit closed disposition is owned only by the user close action. Provider
+ingest may neither close nor reopen the session.
 
 Archive projection may add transcript evidence, provider aliases, titles,
 summaries, counters, timestamps, and run history. It may not overwrite the
@@ -371,9 +335,14 @@ diagnostic conflict and preserves the catalog fact.
 
 - Add `turn_id` and `client_request_id` to `session.turn.start` and the durable
   Machine Agent claim.
+- Change the Codex sink boundary to accept the decoded provider event, derive
+  binding/phase/transcript facts, and only then wrap it with Longhouse transport
+  metadata. A one-line nested-field lookup inside the current wrapper is not
+  the intended fix.
 - Persist provider-thread bindings in the local invocation registry.
 - Attach the binding to live events and storage-v2 source envelopes.
-- Validate managed bindings on ingest and defer unresolved managed envelopes.
+- Validate managed bindings on ingest and route unresolved managed envelopes
+  through durable `pending_binding -> blocked_binding` diagnostics.
 - Prevent provider source projection from overwriting immutable Console facts.
 
 ### 3. Complete provider event projection
@@ -394,7 +363,8 @@ diagnostic conflict and preserves the catalog fact.
 
 - Render receipt-backed starting/queued state immediately.
 - Animate canonical active/draining state.
-- Reconcile optimistic rows by request/turn identity.
+- Add `turn_id` to submitted-input identity and workspace stream projections;
+  reconcile optimistic rows by request/turn identity.
 - Add iOS previews for Ready, Starting, Working, Finishing, Offline, and Closed.
 
 ### 6. Delete compatibility paths
@@ -402,8 +372,8 @@ diagnostic conflict and preserves the catalog fact.
 - Remove Console capability promotion/demotion based on `SessionConnection`.
 - Remove Console classification from provider process/session endedness.
 - Remove any text-based optimistic reconciliation fallback.
-- Remove any source-ingest path that can silently create a Shadow sibling for
-  an explicitly bound Console invocation.
+- Enforce the convergence invariant that bound source ingest cannot create a
+  second product session.
 
 ## Acceptance Gate
 
@@ -421,10 +391,15 @@ One real Codex Console canary must prove all of the following:
 7. A second send launches a new run and resumes the same provider thread.
 8. Session id, thread id, mode, owner, and execution target are identical
    before and after durable archive convergence.
-9. Delaying the binding event or durable transcript cannot create a Shadow
-   sibling or alter capabilities.
+9. Delaying the binding event or durable transcript exercises the durable
+   pending/blocked binding diagnostic without creating a second session or
+   altering capabilities.
 10. Duplicate submit and duplicate Machine Agent command delivery each execute
     the prompt at most once.
+11. Durable-before-live and live-before-durable arrival orders produce the
+    same ordered event identities, including user and assistant prose.
+12. An unknown provider record retains its raw durable source line even when it
+    has no current transcript projection.
 
 Automated coverage includes backend contract tests, engine parser/binding
 tests, iOS unit and preview rendering, web tests, and a remote real-provider
