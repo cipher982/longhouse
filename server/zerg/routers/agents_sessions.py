@@ -51,6 +51,7 @@ from zerg.services.console_sessions import create_empty_console_session
 from zerg.services.console_turns import ConsoleTurnConflict
 from zerg.services.console_turns import ConsoleTurnUnavailable
 from zerg.services.console_turns import dispatch_next_console_turn
+from zerg.services.console_turns import enqueue_catalog_console_turn
 from zerg.services.console_turns import enqueue_console_turn
 from zerg.services.live_catalog_timeline import list_live_catalog_sessions
 from zerg.services.live_catalog_timeline import read_live_catalog_session
@@ -181,7 +182,7 @@ class ConsoleTurnCreate(UTCBaseModel):
 
 
 class ConsoleTurnCreateResponse(UTCBaseModel):
-    turn_id: int
+    turn_id: int | UUID
     run_id: UUID | None = None
     state: str
     created: bool
@@ -1087,16 +1088,44 @@ async def create_console_session(
 async def create_console_turn(
     session_id: UUID,
     body: ConsoleTurnCreate,
-    db: Session = Depends(get_db),
+    db: Session | None = Depends(_console_write_db),
     auth: object = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> ConsoleTurnCreateResponse:
     """Accept one normal Console message and start or queue its turn."""
 
+    owner_id = _resolve_agents_owner_id(db, auth)
+    if database_module.live_catalog_enabled():
+        try:
+            turn = await enqueue_catalog_console_turn(
+                owner_id=owner_id,
+                session_id=session_id,
+                message=body.message,
+                client_request_id=body.client_request_id,
+            )
+        except ConsoleTurnUnavailable as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"code": exc.code, "message": str(exc)},
+            ) from exc
+        except ConsoleTurnConflict as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        if turn.error:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail={"code": "provider_launch_failed", "message": turn.error},
+            )
+        return ConsoleTurnCreateResponse(
+            turn_id=turn.turn_id,
+            run_id=turn.run_id,
+            state=turn.state,
+            created=turn.created,
+        )
+
+    assert db is not None
     session = AgentsStore(db).get_session(session_id)
     if session is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Session {session_id} not found")
-    owner_id = _resolve_agents_owner_id(db, auth)
     try:
         queued = enqueue_console_turn(
             db,

@@ -1,7 +1,9 @@
 from datetime import UTC
 from datetime import datetime
+from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
 from sqlalchemy.orm import Session
 
 from zerg.catalogd.schema import create_catalog_engine
@@ -13,6 +15,7 @@ from zerg.models.live_store import LiveSessionLaunchAttempt
 from zerg.models.live_store import LiveSessionRun
 from zerg.models.live_store import LiveSessionThread
 from zerg.models.live_store import LiveUser
+from zerg.services.console_turns import CatalogConsoleTurn
 
 
 def test_catalog_console_session_is_idle_identity_not_launch(tmp_path):
@@ -109,7 +112,6 @@ def test_catalog_console_turns_claim_and_wake_fifo(tmp_path):
     assert first["turn"]["run_id"]
     assert second["turn"]["state"] == "queued"
     assert second["turn"]["run_id"] is None
-
     active = store.update_console_turn(
         data={
             "turn_id": first["turn"]["turn_id"],
@@ -130,3 +132,43 @@ def test_catalog_console_turns_claim_and_wake_fifo(tmp_path):
     assert settled["next_turn"]["turn_id"] == second["turn"]["turn_id"]
     assert settled["next_turn"]["state"] == "starting"
     assert settled["next_turn"]["run_id"]
+
+
+@pytest.mark.asyncio
+async def test_agents_console_turn_uses_catalog_without_cold_session(monkeypatch):
+    from zerg.routers import agents_sessions
+
+    session_id = uuid4()
+    turn_id = uuid4()
+    run_id = uuid4()
+    dispatched = {}
+
+    async def enqueue(**kwargs):
+        dispatched.update(kwargs)
+        return CatalogConsoleTurn(
+            turn_id=turn_id,
+            run_id=run_id,
+            state="active",
+            created=True,
+        )
+
+    monkeypatch.setattr(agents_sessions.database_module, "live_catalog_enabled", lambda: True)
+    monkeypatch.setattr(agents_sessions, "enqueue_catalog_console_turn", enqueue)
+
+    response = await agents_sessions.create_console_turn(
+        session_id=session_id,
+        body=agents_sessions.ConsoleTurnCreate(message="first message", client_request_id="request-1"),
+        db=None,
+        auth=SimpleNamespace(owner_id=1),
+        _single=None,
+    )
+
+    assert response.turn_id == turn_id
+    assert response.run_id == run_id
+    assert response.state == "active"
+    assert dispatched == {
+        "owner_id": 1,
+        "session_id": session_id,
+        "message": "first message",
+        "client_request_id": "request-1",
+    }
