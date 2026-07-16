@@ -319,6 +319,7 @@ struct DiscoveryTaskResult {
     reason: &'static str,
 }
 
+#[derive(Clone)]
 struct ManagedObservationScanResult {
     reason: &'static str,
     codex_observations: Vec<managed_bridge_scan::CodexBridgeObservation>,
@@ -705,6 +706,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut last_runtime_truth_signature: Option<String> = None;
     let mut runtime_truth_bootstrapped = false;
     let mut session_snapshot_state = SessionSnapshotState::default();
+    let mut last_managed_observations: Option<ManagedObservationScanResult> = None;
     let mut last_unmanaged_session_bindings: Option<Vec<heartbeat::UnmanagedSessionBinding>> = None;
     let mut last_unmanaged_session_bindings_refreshed_at: Option<Instant> = None;
     let mut latest_transcript_wake_observed: HashMap<PathBuf, i64> = HashMap::new();
@@ -1271,12 +1273,13 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             &result.opencode_observations,
                             &result.cursor_observations,
                             serde_json::to_value(control_channel_status.snapshot()).ok(),
-                            Some(unmanaged_binding_override),
+                            unmanaged_binding_override,
                             Some(adaptive_limiter.as_ref()),
                             Some(&scheduler),
                             config.archive_repair_mode,
                             &mut session_snapshot_state,
                         );
+                        last_managed_observations = Some(result.clone());
                         let signature = runtime_truth_signature(&payload);
                         if !runtime_truth_bootstrapped {
                             last_runtime_truth_signature = Some(signature);
@@ -1474,6 +1477,31 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             // Frequent local status file refresh for ambient UX and debugging
             _ = local_status_timer.tick() => {
                 maybe_start_managed_observation_scan(&mut managed_observation_scan_tasks, "local_status");
+                if let Some(observations) = last_managed_observations.as_ref() {
+                    let empty_unmanaged_bindings: &[heartbeat::UnmanagedSessionBinding] = &[];
+                    let unmanaged_binding_override =
+                        last_unmanaged_session_bindings.as_deref().unwrap_or(empty_unmanaged_bindings);
+                    write_local_status_snapshot(
+                        &conn,
+                        &tracker,
+                        &parse_tracker,
+                        &ship_stats,
+                        offline.is_offline,
+                        &last_ship_at,
+                        &config.shipper_config.machine_name,
+                        &status_path,
+                        &observations.codex_observations,
+                        &observations.claude_observations,
+                        &observations.opencode_observations,
+                        &observations.cursor_observations,
+                        serde_json::to_value(control_channel_status.snapshot()).ok(),
+                        unmanaged_binding_override,
+                        Some(adaptive_limiter.as_ref()),
+                        Some(&scheduler),
+                        config.archive_repair_mode,
+                        &mut session_snapshot_state,
+                    );
+                }
             }
 
             _ = machine_presence_timer.tick() => {
@@ -1491,34 +1519,6 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
 
             // Periodic server heartbeat
             _ = heartbeat_timer.tick() => {
-                let observations = managed_bridge_scan::collect_observations();
-                refresh_managed_codex_transcript_paths(
-                    &mut managed_codex_transcript_paths,
-                    &observations,
-                );
-                let claude_observations = managed_claude_scan::collect_observations();
-                let opencode_observations = managed_opencode_scan::collect_observations();
-                let cursor_observations = managed_cursor_helm_scan::collect_observations();
-                reconcile_claude_terminal_signals(
-                    &mut live_claude_channels,
-                    &mut pending_claude_terminal_signals,
-                    &config.shipper_config.machine_name,
-                    &claude_observations,
-                    chrono::Utc::now(),
-                );
-                maybe_spawn_claude_terminal_post(
-                    &mut claude_terminal_post_tasks,
-                    client.clone(),
-                    &pending_claude_terminal_signals,
-                    offline.is_offline,
-                );
-                pump_ready_local_work(
-                    &mut scheduler,
-                    &mut in_flight,
-                    &task_context,
-                    &mut deferred_retries,
-                    offline.is_offline,
-                );
                 maybe_start_unmanaged_binding_refresh(
                     &mut unmanaged_binding_refresh_tasks,
                     config.shipper_config.db_path.clone(),
@@ -1530,41 +1530,45 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 let empty_unmanaged_bindings: &[heartbeat::UnmanagedSessionBinding] = &[];
                 let unmanaged_binding_override =
                     last_unmanaged_session_bindings.as_deref().unwrap_or(empty_unmanaged_bindings);
-                let payload = write_local_status_snapshot(
-                    &conn,
-                    &tracker,
-                    &parse_tracker,
-                    &ship_stats,
-                    offline.is_offline,
-                    &last_ship_at,
-                    &config.shipper_config.machine_name,
-                    &status_path,
-                    &observations,
-                    &claude_observations,
-                    &opencode_observations,
-                    &cursor_observations,
-                    serde_json::to_value(control_channel_status.snapshot()).ok(),
-                    Some(unmanaged_binding_override),
-                    Some(adaptive_limiter.as_ref()),
-                    Some(&scheduler),
-                    config.archive_repair_mode,
-                    &mut session_snapshot_state,
-                );
-                if !offline.is_offline {
-                    runtime_truth_bootstrapped = true;
-                    if heartbeat_post_tasks.is_empty() {
-                        let signature = runtime_truth_signature(&payload);
-                        spawn_heartbeat_post(
-                            &mut heartbeat_post_tasks,
-                            client.clone(),
-                            payload,
-                            signature,
-                            "periodic_heartbeat",
-                        );
-                    } else {
-                        last_runtime_truth_signature = None;
-                        tracing::debug!("Skipping periodic heartbeat while a heartbeat POST is still in flight");
+                if let Some(observations) = last_managed_observations.as_ref() {
+                    let payload = write_local_status_snapshot(
+                        &conn,
+                        &tracker,
+                        &parse_tracker,
+                        &ship_stats,
+                        offline.is_offline,
+                        &last_ship_at,
+                        &config.shipper_config.machine_name,
+                        &status_path,
+                        &observations.codex_observations,
+                        &observations.claude_observations,
+                        &observations.opencode_observations,
+                        &observations.cursor_observations,
+                        serde_json::to_value(control_channel_status.snapshot()).ok(),
+                        unmanaged_binding_override,
+                        Some(adaptive_limiter.as_ref()),
+                        Some(&scheduler),
+                        config.archive_repair_mode,
+                        &mut session_snapshot_state,
+                    );
+                    if !offline.is_offline {
+                        runtime_truth_bootstrapped = true;
+                        if heartbeat_post_tasks.is_empty() {
+                            let signature = runtime_truth_signature(&payload);
+                            spawn_heartbeat_post(
+                                &mut heartbeat_post_tasks,
+                                client.clone(),
+                                payload,
+                                signature,
+                                "periodic_heartbeat",
+                            );
+                        } else {
+                            last_runtime_truth_signature = None;
+                            tracing::debug!("Skipping periodic heartbeat while a heartbeat POST is still in flight");
+                        }
                     }
+                } else {
+                    tracing::debug!("Skipping periodic heartbeat until the startup managed observation scan completes");
                 }
             }
         }
@@ -1595,7 +1599,7 @@ fn write_local_status_snapshot(
     opencode_observations: &[managed_opencode_scan::OpenCodeServerObservation],
     cursor_observations: &[managed_cursor_helm_scan::CursorHelmObservation],
     control_channel: Option<Value>,
-    unmanaged_session_binding_override: Option<&[heartbeat::UnmanagedSessionBinding]>,
+    unmanaged_session_bindings: &[heartbeat::UnmanagedSessionBinding],
     limiter: Option<&crate::scheduler::AdaptiveLimiter>,
     scheduler: Option<&PathScheduler>,
     archive_repair_mode: ArchiveRepairMode,
@@ -1649,19 +1653,9 @@ fn write_local_status_snapshot(
             .cmp(&b.provider)
             .then_with(|| a.session_id.cmp(&b.session_id))
     });
-    let unmanaged_session_bindings =
-        if let Some(cached_bindings) = unmanaged_session_binding_override {
-            cached_bindings.to_vec()
-        } else {
-            heartbeat::collect_unmanaged_session_bindings_with_store(
-                conn,
-                machine_id,
-                chrono::Utc::now(),
-            )
-        };
     payload.unmanaged_session_bindings =
         heartbeat::filter_unmanaged_bindings_owned_by_managed_observations(
-            unmanaged_session_bindings,
+            unmanaged_session_bindings.to_vec(),
             observations,
             claude_observations,
         );
@@ -3753,7 +3747,7 @@ mod tests {
             &[],
             &[],
             None,
-            Some(&cached),
+            &cached,
             None,
             None,
             ArchiveRepairMode::Drain,
@@ -3788,7 +3782,7 @@ mod tests {
             &[],
             &[],
             None,
-            Some(&cached),
+            &cached,
             None,
             None,
             ArchiveRepairMode::Drain,
@@ -3808,7 +3802,7 @@ mod tests {
             &[],
             &[],
             None,
-            Some(&cached),
+            &cached,
             None,
             None,
             ArchiveRepairMode::Drain,
@@ -3829,7 +3823,7 @@ mod tests {
             &[],
             &[],
             None,
-            Some(&changed),
+            &changed,
             None,
             None,
             ArchiveRepairMode::Drain,
