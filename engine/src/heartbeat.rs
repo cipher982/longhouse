@@ -1449,6 +1449,14 @@ impl ProjectionReconciliation {
             started_at: Some(started_at.into()),
         }
     }
+
+    pub fn failed(reason: impl Into<String>) -> Self {
+        Self {
+            state: "failed".to_string(),
+            reason: Some(reason.into()),
+            started_at: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -2856,7 +2864,7 @@ mod tests {
             &status_path,
         );
 
-        let json = std::fs::read_to_string(status_path).unwrap();
+        let json = std::fs::read_to_string(&status_path).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed["spool_dead_count"], 3);
         assert_eq!(parsed["recent_dead_letters"][0]["provider"], "codex");

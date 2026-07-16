@@ -25,9 +25,10 @@ use chrono::Utc;
 use serde::Deserialize;
 
 use crate::process_identity::{
-    collect_process_facts_by_pid, command_contains_basename, parse_rfc3339,
-    started_before_or_near_recorded, ProcessFact,
+    command_contains_basename, parse_rfc3339, started_before_or_near_recorded, ProcessFact,
 };
+#[cfg(test)]
+use crate::process_identity::collect_process_facts_by_pid;
 
 /// Grace period before reaping a state file whose process is gone. Protects a
 /// just-launched session from being reaped if it is momentarily missing from
@@ -65,18 +66,6 @@ struct ClaudeChannelStateFile {
     updated_at: Option<String>,
 }
 
-pub fn collect_observations() -> Vec<ClaudeChannelObservation> {
-    let Some(state_dir) = default_claude_channel_state_dir() else {
-        return Vec::new();
-    };
-    let process_facts = collect_process_facts_by_pid();
-    let observations = collect_observations_from_with_processes(&state_dir, &process_facts);
-    // The process scan is the source of truth; only reap when it actually
-    // returned something, so a transient `ps` failure never deletes live state.
-    reap_dead_state_files(&observations, !process_facts.is_empty(), Utc::now());
-    observations
-}
-
 pub fn default_claude_channel_state_dir() -> Option<PathBuf> {
     let home = std::env::var_os("HOME")?;
     Some(
@@ -91,10 +80,10 @@ pub fn default_claude_channel_state_dir() -> Option<PathBuf> {
 #[cfg(test)]
 pub fn collect_observations_from(state_dir: &Path) -> Vec<ClaudeChannelObservation> {
     let process_facts = collect_process_facts_by_pid();
-    collect_observations_from_with_processes(state_dir, &process_facts)
+    collect_observations_from_processes(state_dir, &process_facts)
 }
 
-fn collect_observations_from_with_processes(
+pub(crate) fn collect_observations_from_processes(
     state_dir: &Path,
     process_facts: &HashMap<u32, ProcessFact>,
 ) -> Vec<ClaudeChannelObservation> {
@@ -162,7 +151,7 @@ fn collect_observations_from_with_processes(
 /// Cleanup is the engine's responsibility because the bridge only deletes its
 /// own file on graceful shutdown, which ungraceful deaths skip. Returns the
 /// number of files reaped.
-fn reap_dead_state_files(
+pub(crate) fn reap_dead_state_files(
     observations: &[ClaudeChannelObservation],
     process_scan_valid: bool,
     now: DateTime<Utc>,
@@ -372,7 +361,7 @@ mod tests {
             ),
         ]);
 
-        let observations = collect_observations_from_with_processes(tmp.path(), &process_facts);
+        let observations = collect_observations_from_processes(tmp.path(), &process_facts);
 
         assert_eq!(observations.len(), 1);
         assert!(observations[0].claude_alive);
@@ -406,7 +395,7 @@ mod tests {
             ),
         )]);
 
-        let observations = collect_observations_from_with_processes(tmp.path(), &process_facts);
+        let observations = collect_observations_from_processes(tmp.path(), &process_facts);
 
         assert_eq!(observations.len(), 1);
         assert!(observations[0].claude_alive);
@@ -438,7 +427,7 @@ mod tests {
             (102, fact("/usr/libexec/some-other-helper", None)),
         ]);
 
-        let observations = collect_observations_from_with_processes(tmp.path(), &process_facts);
+        let observations = collect_observations_from_processes(tmp.path(), &process_facts);
 
         assert_eq!(observations.len(), 1);
         assert!(!observations[0].claude_alive);
@@ -470,7 +459,7 @@ mod tests {
             ),
         )]);
 
-        let observations = collect_observations_from_with_processes(tmp.path(), &process_facts);
+        let observations = collect_observations_from_processes(tmp.path(), &process_facts);
 
         assert_eq!(observations.len(), 1);
         assert!(
@@ -503,7 +492,7 @@ mod tests {
             ),
         )]);
 
-        let observations = collect_observations_from_with_processes(tmp.path(), &process_facts);
+        let observations = collect_observations_from_processes(tmp.path(), &process_facts);
         let now = parse_rfc3339("2026-05-29T00:00:00Z").unwrap();
         let reaped = reap_dead_state_files(&observations, true, now);
 
@@ -529,7 +518,7 @@ mod tests {
         let process_facts =
             HashMap::from([(101, fact("claude --resume", Some("2026-05-28T20:03:47Z")))]);
 
-        let observations = collect_observations_from_with_processes(tmp.path(), &process_facts);
+        let observations = collect_observations_from_processes(tmp.path(), &process_facts);
         let now = parse_rfc3339("2026-05-29T00:00:00Z").unwrap();
         let reaped = reap_dead_state_files(&observations, true, now);
 
@@ -553,7 +542,7 @@ mod tests {
         )
         .unwrap();
         // No matching process → dead, but started seconds ago.
-        let observations = collect_observations_from_with_processes(tmp.path(), &HashMap::new());
+        let observations = collect_observations_from_processes(tmp.path(), &HashMap::new());
         let now = parse_rfc3339("2026-05-29T00:00:30Z").unwrap();
 
         // Process scan empty → never reap regardless.

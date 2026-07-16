@@ -14,7 +14,6 @@ use std::fs;
 use std::fs::OpenOptions;
 use std::path::Path;
 use std::path::PathBuf;
-use std::process::Command;
 
 use crate::codex_bridge::BridgeStateFile;
 
@@ -51,31 +50,8 @@ pub struct CodexBridgeObservation {
     pub app_server_alive: bool,
 }
 
-/// Collect observations from the default state directory, using a fresh
-/// `ps -axo command=` read for TUI attachment inference.
-pub fn collect_observations() -> Vec<CodexBridgeObservation> {
-    let Some(state_dir) = default_codex_bridge_state_dir() else {
-        return Vec::new();
-    };
-    let process_commands = collect_process_commands();
-    collect_observations_from(&state_dir, &process_commands)
-}
-
 pub fn default_codex_bridge_state_dir() -> Option<PathBuf> {
     crate::config::get_codex_bridge_state_dir().ok()
-}
-
-pub fn collect_process_commands() -> Vec<String> {
-    let Ok(output) = Command::new("ps").args(["-axo", "command="]).output() else {
-        return Vec::new();
-    };
-    if !output.status.success() {
-        return Vec::new();
-    }
-    String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .map(str::to_string)
-        .collect()
 }
 
 pub fn codex_tui_process_attached(process_commands: &[String], ws_url: &str) -> bool {

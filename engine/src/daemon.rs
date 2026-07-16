@@ -14,7 +14,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::Result;
 use serde::Deserialize;
@@ -115,6 +115,9 @@ const LOCAL_RETRY_DELAY_SECS: u64 = 5;
 const LIVE_LOCAL_RETRY_DELAY: Duration = Duration::from_millis(500);
 const STARTUP_RECONCILIATION_SCAN_DELAY: Duration = Duration::from_secs(120);
 const LOCAL_STATUS_INTERVAL_SECS: u64 = 1;
+const MANAGED_OBSERVATION_INTERVAL_SECS: u64 = 5;
+const MANAGED_FULL_RECONCILIATION_INTERVAL_SECS: u64 = 60;
+const WAKE_GAP_THRESHOLD_SECS: u64 = 5;
 const MACHINE_PRESENCE_INTERVAL_SECS: u64 = 60;
 const SERVER_HEARTBEAT_INTERVAL_SECS: u64 = 5 * 60;
 const FLIGHT_SAMPLE_INTERVAL_SECS: u64 = 5;
@@ -145,6 +148,31 @@ const CLAUDE_TERMINAL_EVENT_BATCH_LIMIT: usize = 128;
 // for historical engine-status/log readers, but keep code names explicit.
 const FAILED_SHIPMENT_RETRY_CONTEXT: &str = "spool_replay";
 const FAILED_SHIPMENT_RETRY_OBSERVATION_SOURCE: &str = "spool_pending";
+
+struct WakeGapDetector {
+    last_wall: SystemTime,
+    last_monotonic: Instant,
+}
+
+impl WakeGapDetector {
+    fn new() -> Self {
+        Self {
+            last_wall: SystemTime::now(),
+            last_monotonic: Instant::now(),
+        }
+    }
+
+    fn observe(&mut self, wall: SystemTime, monotonic: Instant) -> Option<Duration> {
+        let previous_wall = self.last_wall;
+        let previous_monotonic = self.last_monotonic;
+        self.last_wall = wall;
+        self.last_monotonic = monotonic;
+        let wall_elapsed = wall.duration_since(previous_wall).ok()?;
+        let monotonic_elapsed = monotonic.saturating_duration_since(previous_monotonic);
+        let gap = wall_elapsed.saturating_sub(monotonic_elapsed);
+        (gap >= Duration::from_secs(WAKE_GAP_THRESHOLD_SECS)).then_some(gap)
+    }
+}
 
 /// Spawn caffeinate -s -w <pid> to prevent system sleep on macOS.
 ///
@@ -322,10 +350,17 @@ struct DiscoveryTaskResult {
 #[derive(Clone)]
 struct ManagedObservationScanResult {
     reason: &'static str,
+    full_reconciliation: bool,
+    process_inventory_valid: bool,
     codex_observations: Vec<managed_bridge_scan::CodexBridgeObservation>,
     claude_observations: Vec<managed_claude_scan::ClaudeChannelObservation>,
     opencode_observations: Vec<managed_opencode_scan::OpenCodeServerObservation>,
     cursor_observations: Vec<managed_cursor_helm_scan::CursorHelmObservation>,
+    process_inventory_ms: u64,
+    codex_elapsed_ms: u64,
+    claude_elapsed_ms: u64,
+    opencode_elapsed_ms: u64,
+    cursor_elapsed_ms: u64,
     elapsed_ms: u64,
 }
 
@@ -640,7 +675,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
         read_archive_repair_control().normalized_mode(config.archive_repair_mode);
     let startup_archive_replay_delay =
         archive_startup_replay_warmup_delay(startup_archive_mode, rand::random::<f64>());
-    maybe_start_managed_observation_scan(&mut managed_observation_scan_tasks, "startup");
+    maybe_start_managed_observation_scan(&mut managed_observation_scan_tasks, "startup", true);
     if let Some(delay) = startup_archive_replay_delay {
         tracing::info!(
             mode = startup_archive_mode.as_str(),
@@ -680,6 +715,13 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut local_status_timer =
         tokio::time::interval(Duration::from_secs(LOCAL_STATUS_INTERVAL_SECS));
     local_status_timer.tick().await; // consume first immediate tick
+    let mut managed_observation_timer =
+        tokio::time::interval(Duration::from_secs(MANAGED_OBSERVATION_INTERVAL_SECS));
+    managed_observation_timer.tick().await; // startup scan already owns the first pass
+    let mut managed_full_reconciliation_timer = tokio::time::interval(Duration::from_secs(
+        MANAGED_FULL_RECONCILIATION_INTERVAL_SECS,
+    ));
+    managed_full_reconciliation_timer.tick().await; // startup scan is already full
     let mut machine_presence_timer =
         tokio::time::interval(Duration::from_secs(MACHINE_PRESENCE_INTERVAL_SECS));
     machine_presence_timer.tick().await; // consume first immediate tick
@@ -711,6 +753,9 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
         "startup",
         chrono::Utc::now().to_rfc3339(),
     );
+    let mut wake_gap_detector = WakeGapDetector::new();
+    let mut pending_wake_reconciliation = false;
+    let mut pending_full_reconciliation = false;
     let mut last_unmanaged_session_bindings: Option<Vec<heartbeat::UnmanagedSessionBinding>> = None;
     let mut last_unmanaged_session_bindings_refreshed_at: Option<Instant> = None;
     let mut latest_transcript_wake_observed: HashMap<PathBuf, i64> = HashMap::new();
@@ -1210,23 +1255,47 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         if result.elapsed_ms > 250 {
                             tracing::warn!(
                                 reason = result.reason,
+                                full_reconciliation = result.full_reconciliation,
+                                process_inventory_valid = result.process_inventory_valid,
                                 codex_count = result.codex_observations.len(),
                                 claude_count = result.claude_observations.len(),
                                 opencode_count = result.opencode_observations.len(),
                                 cursor_count = result.cursor_observations.len(),
+                                process_inventory_ms = result.process_inventory_ms,
+                                codex_elapsed_ms = result.codex_elapsed_ms,
+                                claude_elapsed_ms = result.claude_elapsed_ms,
+                                opencode_elapsed_ms = result.opencode_elapsed_ms,
+                                cursor_elapsed_ms = result.cursor_elapsed_ms,
                                 elapsed_ms = result.elapsed_ms,
                                 "Managed observation scan was slow"
                             );
                         } else {
                             tracing::debug!(
                                 reason = result.reason,
+                                full_reconciliation = result.full_reconciliation,
+                                process_inventory_valid = result.process_inventory_valid,
                                 codex_count = result.codex_observations.len(),
                                 claude_count = result.claude_observations.len(),
                                 opencode_count = result.opencode_observations.len(),
                                 cursor_count = result.cursor_observations.len(),
+                                process_inventory_ms = result.process_inventory_ms,
+                                codex_elapsed_ms = result.codex_elapsed_ms,
+                                claude_elapsed_ms = result.claude_elapsed_ms,
+                                opencode_elapsed_ms = result.opencode_elapsed_ms,
+                                cursor_elapsed_ms = result.cursor_elapsed_ms,
                                 elapsed_ms = result.elapsed_ms,
                                 "Managed observation scan completed"
                             );
+                        }
+                        if !result.process_inventory_valid {
+                            tracing::warn!(
+                                reason = result.reason,
+                                "Managed observation scan retained prior truth because process inventory failed"
+                            );
+                            managed_reconciliation = heartbeat::ProjectionReconciliation::failed(
+                                result.reason,
+                            );
+                            continue;
                         }
                         refresh_managed_codex_transcript_paths(
                             &mut managed_codex_transcript_paths,
@@ -1290,6 +1359,31 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         );
                         let payload = projection.payload.clone();
                         last_status_projection = Some(projection);
+                        if pending_wake_reconciliation
+                            && maybe_start_managed_observation_scan(
+                                &mut managed_observation_scan_tasks,
+                                "wake",
+                                true,
+                            )
+                        {
+                            pending_wake_reconciliation = false;
+                            managed_reconciliation = heartbeat::ProjectionReconciliation::running(
+                                "wake",
+                                chrono::Utc::now().to_rfc3339(),
+                            );
+                        } else if pending_full_reconciliation
+                            && maybe_start_managed_observation_scan(
+                                &mut managed_observation_scan_tasks,
+                                "full_reconciliation",
+                                true,
+                            )
+                        {
+                            pending_full_reconciliation = false;
+                            managed_reconciliation = heartbeat::ProjectionReconciliation::running(
+                                "full_reconciliation",
+                                chrono::Utc::now().to_rfc3339(),
+                            );
+                        }
                         let signature = runtime_truth_signature(&payload);
                         if !runtime_truth_bootstrapped {
                             last_runtime_truth_signature = Some(signature);
@@ -1315,6 +1409,12 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     }
                     Some(Err(err)) => {
                         tracing::warn!("Managed observation scan task failed: {}", err);
+                        managed_reconciliation = heartbeat::ProjectionReconciliation::failed(
+                            managed_reconciliation
+                                .reason
+                                .clone()
+                                .unwrap_or_else(|| "managed_observation".to_string()),
+                        );
                     }
                     None => {}
                 }
@@ -1486,10 +1586,27 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
 
             // Frequent local status file refresh for ambient UX and debugging
             _ = local_status_timer.tick() => {
-                if maybe_start_managed_observation_scan(&mut managed_observation_scan_tasks, "local_status") {
-                    managed_reconciliation = heartbeat::ProjectionReconciliation::running(
-                        "local_status",
-                        chrono::Utc::now().to_rfc3339(),
+                if let Some(gap) = wake_gap_detector.observe(SystemTime::now(), Instant::now()) {
+                    tracing::info!(wake_gap_ms = gap.as_millis() as u64, "Detected system wake gap");
+                    if maybe_start_managed_observation_scan(
+                        &mut managed_observation_scan_tasks,
+                        "wake",
+                        true,
+                    ) {
+                        managed_reconciliation = heartbeat::ProjectionReconciliation::running(
+                            "wake",
+                            chrono::Utc::now().to_rfc3339(),
+                        );
+                    } else {
+                        pending_wake_reconciliation = true;
+                    }
+                    maybe_start_unmanaged_binding_refresh(
+                        &mut unmanaged_binding_refresh_tasks,
+                        config.shipper_config.db_path.clone(),
+                        config.shipper_config.machine_name.clone(),
+                        None,
+                        Instant::now(),
+                        "wake",
                     );
                 }
                 if let Some(projection) = last_status_projection.as_ref() {
@@ -1498,6 +1615,34 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         serde_json::to_value(control_channel_status.snapshot()).ok(),
                         &managed_reconciliation,
                         &status_path,
+                    );
+                }
+            }
+
+            _ = managed_full_reconciliation_timer.tick() => {
+                if maybe_start_managed_observation_scan(
+                    &mut managed_observation_scan_tasks,
+                    "full_reconciliation",
+                    true,
+                ) {
+                    managed_reconciliation = heartbeat::ProjectionReconciliation::running(
+                        "full_reconciliation",
+                        chrono::Utc::now().to_rfc3339(),
+                    );
+                } else {
+                    pending_full_reconciliation = true;
+                }
+            }
+
+            _ = managed_observation_timer.tick() => {
+                if maybe_start_managed_observation_scan(
+                    &mut managed_observation_scan_tasks,
+                    "periodic",
+                    false,
+                ) {
+                    managed_reconciliation = heartbeat::ProjectionReconciliation::running(
+                        "periodic",
+                        chrono::Utc::now().to_rfc3339(),
                     );
                 }
             }
@@ -2035,6 +2180,7 @@ fn maybe_start_unmanaged_binding_refresh(
 fn maybe_start_managed_observation_scan(
     scan_tasks: &mut JoinSet<ManagedObservationScanResult>,
     reason: &'static str,
+    full_reconciliation: bool,
 ) -> bool {
     if !scan_tasks.is_empty() {
         return false;
@@ -2042,16 +2188,69 @@ fn maybe_start_managed_observation_scan(
 
     scan_tasks.spawn_blocking(move || {
         let started = Instant::now();
-        let codex_observations = managed_bridge_scan::collect_observations();
-        let claude_observations = managed_claude_scan::collect_observations();
-        let opencode_observations = managed_opencode_scan::collect_observations();
+        let process_started = Instant::now();
+        let process_inventory = crate::process_identity::try_collect_process_facts_by_pid();
+        let process_inventory_valid = process_inventory.is_some();
+        let process_facts = process_inventory.unwrap_or_default();
+        let process_inventory_ms = process_started.elapsed().as_millis() as u64;
+        let process_commands = process_facts
+            .values()
+            .map(|fact| fact.command.clone())
+            .collect::<Vec<_>>();
+
+        let codex_started = Instant::now();
+        let codex_observations = managed_bridge_scan::default_codex_bridge_state_dir()
+            .map(|state_dir| {
+                managed_bridge_scan::collect_observations_from(&state_dir, &process_commands)
+            })
+            .unwrap_or_default();
+        let codex_elapsed_ms = codex_started.elapsed().as_millis() as u64;
+
+        let claude_started = Instant::now();
+        let claude_observations = managed_claude_scan::default_claude_channel_state_dir()
+            .map(|state_dir| {
+                managed_claude_scan::collect_observations_from_processes(
+                    &state_dir,
+                    &process_facts,
+                )
+            })
+            .unwrap_or_default();
+        if full_reconciliation {
+            managed_claude_scan::reap_dead_state_files(
+                &claude_observations,
+                process_inventory_valid,
+                chrono::Utc::now(),
+            );
+        }
+        let claude_elapsed_ms = claude_started.elapsed().as_millis() as u64;
+
+        let opencode_started = Instant::now();
+        let opencode_observations = managed_opencode_scan::default_opencode_server_state_dir()
+            .map(|state_dir| {
+                managed_opencode_scan::collect_observations_from_processes(
+                    &state_dir,
+                    &process_facts,
+                )
+            })
+            .unwrap_or_default();
+        let opencode_elapsed_ms = opencode_started.elapsed().as_millis() as u64;
+
+        let cursor_started = Instant::now();
         let cursor_observations = managed_cursor_helm_scan::collect_observations();
+        let cursor_elapsed_ms = cursor_started.elapsed().as_millis() as u64;
         ManagedObservationScanResult {
             reason,
+            full_reconciliation,
+            process_inventory_valid,
             codex_observations,
             claude_observations,
             opencode_observations,
             cursor_observations,
+            process_inventory_ms,
+            codex_elapsed_ms,
+            claude_elapsed_ms,
+            opencode_elapsed_ms,
+            cursor_elapsed_ms,
             elapsed_ms: started.elapsed().as_millis() as u64,
         }
     });
@@ -3478,6 +3677,48 @@ async fn shutdown_signal() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wake_gap_detector_separates_suspend_gap_from_normal_timer_jitter() {
+        let monotonic = Instant::now();
+        let wall = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000);
+        let mut detector = WakeGapDetector {
+            last_wall: wall,
+            last_monotonic: monotonic,
+        };
+
+        assert_eq!(
+            detector.observe(
+                wall + Duration::from_secs(1),
+                monotonic + Duration::from_secs(1),
+            ),
+            None
+        );
+        assert_eq!(
+            detector.observe(
+                wall + Duration::from_secs(12),
+                monotonic + Duration::from_secs(2),
+            ),
+            Some(Duration::from_secs(10))
+        );
+
+        // A wall-clock correction resets the baseline instead of poisoning
+        // every later wake comparison.
+        assert_eq!(
+            detector.observe(
+                wall + Duration::from_secs(5),
+                monotonic + Duration::from_secs(3),
+            ),
+            None
+        );
+        assert_eq!(
+            detector.observe(
+                wall + Duration::from_secs(6),
+                monotonic + Duration::from_secs(4),
+            ),
+            None
+        );
+    }
 
     fn test_observation() -> ObservationTrace {
         ObservationTrace {

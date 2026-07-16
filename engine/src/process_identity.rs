@@ -34,19 +34,26 @@ impl ProcessFact {
 }
 
 pub fn collect_process_facts_by_pid() -> HashMap<u32, ProcessFact> {
-    let Ok(output) = Command::new("ps")
+    try_collect_process_facts_by_pid().unwrap_or_default()
+}
+
+/// Collect one coherent process inventory, distinguishing a valid empty scan
+/// from a failed `ps` invocation. Callers reconciling durable state must retain
+/// their last observation when this returns `None`.
+pub fn try_collect_process_facts_by_pid() -> Option<HashMap<u32, ProcessFact>> {
+    let output = Command::new("ps")
         .args(["-axo", "pid=,tty=,stat=,lstart=,command="])
         .output()
-    else {
-        return HashMap::new();
-    };
+        .ok()?;
     if !output.status.success() {
-        return HashMap::new();
+        return None;
     }
-    String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .filter_map(parse_process_fact)
-        .collect()
+    Some(
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter_map(parse_process_fact)
+            .collect(),
+    )
 }
 
 /// Parse one `ps -axo pid=,tty=,stat=,lstart=,command=` line.

@@ -18,7 +18,9 @@ use reqwest::Url;
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::process_identity::{collect_process_facts_by_pid, ProcessFact};
+use crate::process_identity::{
+    command_contains_basename, lstart_matches_recorded, ProcessFact,
+};
 
 const HEALTH_CHECK_TIMEOUT: Duration = Duration::from_millis(750);
 const DEFAULT_USERNAME: &str = "opencode";
@@ -69,13 +71,6 @@ struct OpenCodeServerStateFile {
     process_start_time: Option<String>,
 }
 
-pub fn collect_observations() -> Vec<OpenCodeServerObservation> {
-    let Some(state_dir) = default_opencode_server_state_dir() else {
-        return Vec::new();
-    };
-    collect_observations_from(&state_dir)
-}
-
 pub fn default_opencode_server_state_dir() -> Option<PathBuf> {
     let provider_home = std::env::var_os("CLAUDE_CONFIG_DIR")
         .map(PathBuf::from)
@@ -83,12 +78,14 @@ pub fn default_opencode_server_state_dir() -> Option<PathBuf> {
     Some(provider_home.join("managed-local").join("opencode-server"))
 }
 
-pub fn collect_observations_from(state_dir: &Path) -> Vec<OpenCodeServerObservation> {
+pub(crate) fn collect_observations_from_processes(
+    state_dir: &Path,
+    process_facts: &HashMap<u32, ProcessFact>,
+) -> Vec<OpenCodeServerObservation> {
     let mut out = Vec::new();
     let Ok(entries) = fs::read_dir(state_dir) else {
         return out;
     };
-    let process_facts = collect_process_facts_by_pid();
     for entry in entries.flatten() {
         let path = entry.path();
         if path.extension().and_then(|value| value.to_str()) != Some("json") {
@@ -109,11 +106,15 @@ pub fn collect_observations_from(state_dir: &Path) -> Vec<OpenCodeServerObservat
         if session_id.is_empty() || provider_session_id.is_empty() {
             continue;
         }
-        let pid_alive = state
-            .pid
-            .and_then(|pid| i32::try_from(pid).ok())
-            .map(crate::managed_bridge_scan::pid_alive)
-            .unwrap_or(false);
+        let pid_alive = state.pid.is_some_and(|pid| {
+            process_facts.get(&pid).is_some_and(|fact| {
+                command_contains_basename(&fact.command, "opencode")
+                    && lstart_matches_recorded(
+                        fact,
+                        &state.process_start_time.clone().unwrap_or_default(),
+                    )
+            })
+        });
         let server_url = state.server_url.filter(|value| !value.trim().is_empty());
         let server_alive = pid_alive
             && opencode_health_ready(
@@ -122,7 +123,7 @@ pub fn collect_observations_from(state_dir: &Path) -> Vec<OpenCodeServerObservat
                 state.password.as_deref(),
             );
         let has_tui_attachment =
-            opencode_attach_foreground(server_url.as_deref(), &provider_session_id, &process_facts);
+            opencode_attach_foreground(server_url.as_deref(), &provider_session_id, process_facts);
 
         out.push(OpenCodeServerObservation {
             session_id,
@@ -268,6 +269,20 @@ mod tests {
         ["bridge", "fixture"].join("-")
     }
 
+    fn opencode_process_facts(pid: u32) -> HashMap<u32, ProcessFact> {
+        HashMap::from([(
+            pid,
+            ProcessFact {
+                pid,
+                tty: "??".to_string(),
+                stat: "S".to_string(),
+                lstart: String::new(),
+                command: "/opt/homebrew/bin/opencode serve".to_string(),
+                start_time: None,
+            },
+        )])
+    }
+
     #[test]
     fn default_state_dir_uses_provider_home() {
         let temp = tempfile::tempdir().unwrap();
@@ -309,7 +324,7 @@ mod tests {
         )
         .unwrap();
 
-        let obs = collect_observations_from(tmp.path());
+        let obs = collect_observations_from_processes(tmp.path(), &HashMap::new());
 
         assert_eq!(obs.len(), 1);
         assert_eq!(obs[0].session_id, "longhouse-session");
@@ -318,6 +333,40 @@ mod tests {
         assert_eq!(obs[0].server_url.as_deref(), Some("http://127.0.0.1:12345"));
         assert!(!obs[0].server_alive);
         assert!(!obs[0].has_tui_attachment);
+    }
+
+    #[test]
+    fn scan_rejects_reused_opencode_pid_before_health_probe() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join("session.json"),
+            serde_json::json!({
+                "schema_version": 1,
+                "session_id": "longhouse-session",
+                "provider_session_id": "opencode-session",
+                "server_url": "http://127.0.0.1:9",
+                "pid": 4242,
+                "process_start_time": "Mon May  5 11:58:00 2026",
+                "username": "opencode",
+                "password": bridge_test_password(),
+                "started_at": "2026-06-17T10:00:00Z",
+                "updated_at": "2026-06-17T10:00:01Z"
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let (_, reused_pid) = parse_process_fact(
+            "  4242 ??       Ss   Tue May  6 11:58:00 2026 /opt/homebrew/bin/opencode serve",
+        )
+        .unwrap();
+
+        let observations = collect_observations_from_processes(
+            tmp.path(),
+            &HashMap::from([(4242, reused_pid)]),
+        );
+
+        assert_eq!(observations.len(), 1);
+        assert!(!observations[0].server_alive);
     }
 
     #[test]
@@ -343,7 +392,10 @@ mod tests {
         )
         .unwrap();
 
-        let obs = collect_observations_from(tmp.path());
+        let obs = collect_observations_from_processes(
+            tmp.path(),
+            &opencode_process_facts(std::process::id()),
+        );
 
         assert_eq!(obs.len(), 1);
         assert!(obs[0].server_alive);
@@ -378,7 +430,10 @@ mod tests {
         )
         .unwrap();
 
-        let obs = collect_observations_from(tmp.path());
+        let obs = collect_observations_from_processes(
+            tmp.path(),
+            &opencode_process_facts(std::process::id()),
+        );
 
         assert_eq!(obs.len(), 1);
         assert!(!obs[0].server_alive);
