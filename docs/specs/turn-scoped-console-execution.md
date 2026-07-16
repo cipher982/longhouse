@@ -44,8 +44,9 @@ provider settings. It may remain idle indefinitely with no process.
 **Turn** — one accepted user message and the provider work it causes, through
 the settled terminal outcome.
 
-**Invocation** — one provider process executing one Console turn. This is the
-existing `SessionRun` concept.
+**Invocation** — one exclusive provider-worker lease executing one Console
+turn. This is the existing `SessionRun` concept. The worker may come from a
+small anonymous machine-global pool; it is never invocation identity.
 
 **Adapter** — Machine Agent code that translates a provider-neutral turn into
 one upstream provider CLI invocation.
@@ -54,12 +55,16 @@ Everything else is state or transport, not another product noun.
 
 ## Invariants
 
-1. An idle Console thread has no provider process.
+1. An idle Console thread owns no provider process. The Machine Agent may keep
+   at most the configured one or two anonymous warm worker process groups,
+   regardless of session count.
 2. A thread has at most one execution owner.
 3. A normal message always creates a turn; it never implicitly creates a new
    session or process-lifetime mode.
 4. A provider `end_turn` or equivalent signal begins draining. The turn settles
-   only after output capture finishes and the invocation exits or is reaped.
+   only after output capture finishes and its exclusive worker lease is
+   released; the anonymous worker is then retired or safely returned to the
+   bounded pool.
 5. The next queued turn cannot start before the previous invocation settles.
 6. Provider process death fails or cancels a turn, never the thread.
 7. Later turns resume provider-native state. Longhouse does not reconstruct the
@@ -326,9 +331,12 @@ provider set pass end-to-end tests.
 
 ## Acceptance Gate
 
-- Creating a Console session starts zero provider processes.
+- Creating 500 Console sessions never creates a process per session; the
+  anonymous machine-global warm pool remains capped at one or two process
+  groups.
 - First send creates one turn and one invocation.
-- `end_turn` drains output, reaps the process group, and leaves the thread idle.
+- `end_turn` drains output, releases the exclusive lease, and leaves the thread
+  idle; the anonymous worker is retired or safely returned to the bounded pool.
 - Second send creates a new invocation and resumes the same provider thread.
 - A long tool wait keeps exactly one active invocation until the turn settles.
 - Normal mid-turn sends queue FIFO; no Console steer affordance ships at
@@ -342,7 +350,7 @@ provider set pass end-to-end tests.
 ## Non-Goals
 
 - Reconstructing provider-native state from normalized Longhouse messages.
-- Warm provider pools or process caches.
+- Per-session warm provider processes or unbounded process caches.
 - Parallel normal turns on one thread.
 - A general background-jobs product.
 - Changing the upstream TUI experience of Helm sessions.
