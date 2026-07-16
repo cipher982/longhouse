@@ -108,7 +108,7 @@ requires an explicit child thread or fork.
 
 ## Tool Waits and Background Work
 
-A tool wait is inside the turn. If an agent invokes Hatch, waits five minutes
+A tool wait is inside the turn. If an agent invokes a delegated tool, waits five minutes
 for its result, consumes that tool result, and then responds, the invocation
 remains active for the full sequence. No persistence exception is involved; the
 turn simply has not ended.
