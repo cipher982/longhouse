@@ -55,6 +55,7 @@ struct CodexConsoleWorkerPool {
     active_process_groups: HashMap<u32, i32>,
     shutting_down: bool,
     spawn_finished: Arc<tokio::sync::Notify>,
+    active_finished: Arc<tokio::sync::Notify>,
 }
 
 impl Default for CodexConsoleWorkerPool {
@@ -65,6 +66,7 @@ impl Default for CodexConsoleWorkerPool {
             active_process_groups: HashMap::new(),
             shutting_down: false,
             spawn_finished: Arc::new(tokio::sync::Notify::new()),
+            active_finished: Arc::new(tokio::sync::Notify::new()),
         }
     }
 }
@@ -455,11 +457,9 @@ async fn register_active_worker(worker: &InitializedCodexWorker) -> bool {
 
 async fn unregister_active_worker(pid: Option<u32>) {
     let Some(pid) = pid else { return };
-    console_worker_pool()
-        .lock()
-        .await
-        .active_process_groups
-        .remove(&pid);
+    let mut pool = console_worker_pool().lock().await;
+    pool.active_process_groups.remove(&pid);
+    pool.active_finished.notify_waiters();
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -543,32 +543,46 @@ async fn spawn_initialized_codex_worker(
         next_id: 2,
         seq: 0,
     };
-    rpc.write(&json!({
-        "id": 1,
-        "method": "initialize",
-        "params": {
-            "clientInfo": {
-                "name": "longhouse_console",
-                "title": "Longhouse Console",
-                "version": env!("CARGO_PKG_VERSION"),
-            },
-            "capabilities": { "experimentalApi": true },
-        }
-    }))
-    .await?;
-    loop {
-        let value = rpc.next_value().await?;
-        if value.get("id").and_then(Value::as_u64) == Some(1) {
-            if let Some(error) = value.get("error") {
-                anyhow::bail!("Codex worker initialize failed: {error}");
+    let initialize_result = tokio::time::timeout(Duration::from_secs(5), async {
+        rpc.write(&json!({
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "clientInfo": {
+                    "name": "longhouse_console",
+                    "title": "Longhouse Console",
+                    "version": env!("CARGO_PKG_VERSION"),
+                },
+                "capabilities": { "experimentalApi": true },
             }
-            break;
+        }))
+        .await?;
+        loop {
+            let value = rpc.next_value().await?;
+            if value.get("id").and_then(Value::as_u64) == Some(1) {
+                if let Some(error) = value.get("error") {
+                    anyhow::bail!("Codex worker initialize failed: {error}");
+                }
+                break;
+            }
+            if value.get("id").is_some() && value.get("method").is_some() {
+                rpc.respond_to_server_request(&value).await?;
+            }
         }
-        if value.get("id").is_some() && value.get("method").is_some() {
-            rpc.respond_to_server_request(&value).await?;
+        rpc.notify("initialized", json!({})).await?;
+        Ok::<(), anyhow::Error>(())
+    })
+    .await;
+    if let Err(error) = initialize_result
+        .map_err(|_| anyhow::anyhow!("Codex worker initialize timed out"))
+        .and_then(|result| result)
+    {
+        let _ = shutdown_worker_process_group(&mut child, pgid).await;
+        if let Some(task) = stderr_task {
+            let _ = task.await;
         }
+        return Err(error);
     }
-    rpc.notify("initialized", json!({})).await?;
     Ok(InitializedCodexWorker {
         child,
         rpc,
@@ -893,7 +907,6 @@ async fn shutdown_process_group(pgid: i32) {
 }
 
 pub async fn shutdown_codex_console_worker_pool() {
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
     loop {
         let wait = {
             let mut pool = console_worker_pool().lock().await;
@@ -901,27 +914,20 @@ pub async fn shutdown_codex_console_worker_pool() {
             if pool.spawning == 0 {
                 None
             } else {
-                Some(pool.spawn_finished.clone())
+                Some(pool.spawn_finished.clone().notified_owned())
             }
         };
         let Some(wait) = wait else { break };
-        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-        if remaining.is_zero()
-            || tokio::time::timeout(remaining, wait.notified()).await.is_err()
-        {
-            eprintln!("[codex-exec] warm worker shutdown timed out waiting for prewarm");
-            break;
-        }
+        wait.await;
     }
     let (workers, active_process_groups) = {
         let mut pool = console_worker_pool().lock().await;
-        pool.spawning = 0;
         (
             std::mem::take(&mut pool.workers),
-            std::mem::take(&mut pool.active_process_groups),
+            pool.active_process_groups.values().copied().collect::<Vec<_>>(),
         )
     };
-    for pgid in active_process_groups.into_values() {
+    for pgid in active_process_groups {
         shutdown_process_group(pgid).await;
     }
     for mut worker in workers {
@@ -931,6 +937,18 @@ pub async fn shutdown_codex_console_worker_pool() {
                 worker.pid.unwrap_or(0)
             );
         }
+    }
+    loop {
+        let wait = {
+            let pool = console_worker_pool().lock().await;
+            if pool.active_process_groups.is_empty() {
+                None
+            } else {
+                Some(pool.active_finished.clone().notified_owned())
+            }
+        };
+        let Some(wait) = wait else { break };
+        wait.await;
     }
 }
 
