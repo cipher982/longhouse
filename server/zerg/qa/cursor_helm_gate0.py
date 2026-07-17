@@ -665,6 +665,59 @@ def _cancel_scenario(
         session.close()
 
 
+def _resume_scenario(
+    *,
+    binary: str,
+    workspace: Path,
+    events_path: Path,
+    terminal_path: Path,
+    provider_id: str,
+    longhouse_session_id: str,
+    timeout: float,
+    model: str | None,
+) -> dict[str, Any]:
+    marker = f"LONGHOUSE_CURSOR_GATE0_RESUME_{uuid4().hex[:10]}"
+    argv = [binary, "--resume", provider_id, "--workspace", str(workspace), "--force"]
+    if model:
+        argv.extend(["--model", model])
+    argv.append(f"Reply with exactly {marker} and nothing else.")
+    before = len(read_hook_events(events_path))
+    session = CursorPtySession.start(
+        argv=argv,
+        cwd=workspace,
+        env=_child_env(longhouse_session_id, events_path),
+        terminal_path=terminal_path,
+    )
+    try:
+        prompt = wait_for_hook(
+            events_path,
+            longhouse_session_id=longhouse_session_id,
+            event="beforeSubmitPrompt",
+            conversation_id=provider_id,
+            after_count=before,
+            timeout=timeout,
+        )
+        stop = wait_for_hook(
+            events_path,
+            longhouse_session_id=longhouse_session_id,
+            event="stop",
+            conversation_id=provider_id,
+            after_count=before,
+            timeout=timeout,
+        )
+        return {
+            "status": "passed",
+            "provider_conversation_id": provider_id,
+            "longhouse_session_id": longhouse_session_id,
+            "generation_id": prompt.get("generation_id"),
+            "stop_status": stop.get("status"),
+            "store_agent_id": _cursor_store_agent_id(wait_for_store(provider_id, timeout=timeout)),
+            "process_alive_after_turn": session.alive(),
+        }
+    finally:
+        session.close()
+
+
 def run_gate0(args: argparse.Namespace) -> dict[str, Any]:
     binary = _cursor_binary(args.cursor_bin)
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
@@ -712,6 +765,17 @@ def run_gate0(args: argparse.Namespace) -> dict[str, Any]:
             terminal_path=artifact_root / "create-chat-resume.terminal.raw",
             provider_id=provider_id,
             launch_args=["--resume", provider_id],
+            timeout=args.timeout,
+            model=args.model,
+        )
+        first_identity = report["scenarios"]["create_chat_resume"]
+        report["scenarios"]["native_resume_continuity"] = _resume_scenario(
+            binary=binary,
+            workspace=workspace,
+            events_path=events_path,
+            terminal_path=artifact_root / "native-resume.terminal.raw",
+            provider_id=provider_id,
+            longhouse_session_id=str(first_identity["longhouse_session_id"]),
             timeout=args.timeout,
             model=args.model,
         )

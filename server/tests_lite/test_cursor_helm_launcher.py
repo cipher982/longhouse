@@ -356,6 +356,19 @@ def test_handle_command_ping_ok():
     assert reply["ok"] is True
 
 
+def test_resume_cursor_identity_uses_exact_hook_claim(tmp_path, monkeypatch):
+    session_id = "e67f48cc-dbb5-42db-a515-6e8189d5807c"
+    provider_id = "0f55af80-ae4e-46d9-8ea4-63794b2a36d2"
+    monkeypatch.setattr(cursor_helm, "_state_dir", lambda: tmp_path)
+    claims = tmp_path / "binding-probes"
+    claims.mkdir()
+    (claims / f"{session_id}.json").write_text(
+        json.dumps({"session_id": session_id, "conversation_uuid": provider_id})
+    )
+
+    assert cursor_helm._resume_cursor_identity(session_id) == provider_id
+
+
 def test_send_while_active_is_rejected_before_pty_write(monkeypatch):
     monkeypatch.setattr(cursor_helm, "_read_provider_phase", lambda _sid: "active")
     monkeypatch.setattr(

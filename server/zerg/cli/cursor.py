@@ -66,6 +66,11 @@ def launch(
         help="Loop mode to store on the Longhouse session.",
     ),
     name: str | None = typer.Option(None, "--name", help="Optional display name for the session."),
+    resume_session: str | None = typer.Option(
+        None,
+        "--resume-session",
+        help="Resume a stopped Cursor Helm conversation by its Longhouse session UUID.",
+    ),
     url: str | None = typer.Option(None, "--url", "-u", help="Longhouse API URL (uses stored URL if not specified)."),
     token: str | None = typer.Option(None, "--token", "-t", help="Device token (uses stored token if not specified)."),
     config_dir: str | None = typer.Option(
@@ -95,6 +100,7 @@ def launch(
         cursor_args=cursor_args,
         verbose=verbose,
         open_browser=open_browser,
+        resume_session_id=resume_session,
     )
 
 

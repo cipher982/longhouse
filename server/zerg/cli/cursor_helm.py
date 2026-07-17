@@ -265,6 +265,23 @@ def _create_cursor_chat(cursor_bin: str, cwd: Path) -> str:
         raise RuntimeError(f"cursor-agent create-chat returned invalid id {value!r}") from exc
 
 
+def _resume_cursor_identity(longhouse_session_id: str) -> str:
+    try:
+        session_id = str(uuid.UUID(longhouse_session_id))
+    except ValueError as exc:
+        raise RuntimeError("--resume-session must be a Longhouse session UUID") from exc
+    claim_path = _state_dir() / "binding-probes" / f"{session_id}.json"
+    try:
+        claim = json.loads(claim_path.read_text())
+    except (OSError, ValueError, TypeError) as exc:
+        raise RuntimeError(f"no Cursor identity claim exists for Longhouse session {session_id}") from exc
+    provider_id = str(claim.get("conversation_uuid") or "").strip()
+    try:
+        return str(uuid.UUID(provider_id))
+    except ValueError as exc:
+        raise RuntimeError(f"Cursor identity claim for {session_id} is invalid") from exc
+
+
 def _infer_git_context(cwd: Path) -> tuple[str | None, str | None]:
     repo = git_output(cwd, "config", "--get", "remote.origin.url")
     branch = git_output(cwd, "rev-parse", "--abbrev-ref", "HEAD")
@@ -714,6 +731,7 @@ def run_helm(
     cursor_args: list[str] | None,
     verbose: bool = False,
     open_browser: bool = False,
+    resume_session_id: str | None = None,
 ) -> None:
     if not interactive_stdio():
         typer.secho(
@@ -751,13 +769,13 @@ def run_helm(
         )
         raise typer.Exit(code=EXIT_SETUP_FAILED)
     try:
-        provider_conversation_id = _create_cursor_chat(cursor_bin, cwd)
+        provider_conversation_id = _resume_cursor_identity(resume_session_id) if resume_session_id else _create_cursor_chat(cursor_bin, cwd)
     except (OSError, RuntimeError, subprocess.TimeoutExpired) as exc:
         typer.secho(f"Could not create native Cursor conversation: {exc}", fg=typer.colors.RED)
         raise typer.Exit(code=EXIT_SETUP_FAILED) from exc
 
     launch_ui.progress("Preparing your session…")
-    session_id = str(uuid.uuid4())
+    session_id = str(uuid.UUID(resume_session_id)) if resume_session_id else str(uuid.uuid4())
     state_dir = _state_dir()
     state_dir.mkdir(parents=True, exist_ok=True)
     sock_path = _socket_path(session_id)
