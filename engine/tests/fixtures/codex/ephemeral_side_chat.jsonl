@@ -1,5 +1,5 @@
 {"method":"thread/started","params":{"thread":{"id":"thr-side","sessionId":"thr-side","forkedFromId":"thr-parent","parentThreadId":null,"ephemeral":true,"path":null,"status":{"type":"idle"},"turns":[]}}}
-{"method":"thread/started","params":{"thread":{"id":"thr-side","path":null,"status":{"type":"active"}}}}
+{"method":"thread/status/changed","params":{"threadId":"thr-side","status":{"type":"active","activeFlags":[]}}}
 {"method":"turn/started","params":{"threadId":"thr-side","turn":{"id":"turn-side","status":"inProgress"}}}
 {"method":"item/agentMessage/delta","params":{"threadId":"thr-side","turnId":"turn-side","itemId":"item-side","delta":"ephemeral answer"}}
 {"method":"turn/completed","params":{"threadId":"thr-side","turn":{"id":"turn-side","status":"completed"}}}
