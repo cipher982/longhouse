@@ -172,6 +172,16 @@ pub fn cursor_store_raw_snapshot(path: &Path) -> Result<CursorStoreRawSnapshot> 
     let store_incarnation =
         identity_from_metadata(&metadata).context("Cursor store has no stable file incarnation")?;
     let snapshot = read_cursor_store(path)?;
+    cursor_store_raw_snapshot_from(&snapshot, store_incarnation)
+}
+
+/// Build raw wrappers from the exact readable snapshot used by the renderer.
+/// Callers that need both views must use this seam so a concurrent Cursor WAL
+/// commit cannot mix roots and blobs from different SQLite snapshots.
+pub fn cursor_store_raw_snapshot_from(
+    snapshot: &CursorStoreSnapshot,
+    store_incarnation: String,
+) -> Result<CursorStoreRawSnapshot> {
     let mut records = Vec::with_capacity(snapshot.meta_rows.len() + snapshot.blob_rows.len() + 1);
     for row in &snapshot.meta_rows {
         records.push(serde_json::to_vec(&RawMetaRecord {
@@ -213,11 +223,11 @@ pub fn cursor_store_raw_snapshot(path: &Path) -> Result<CursorStoreRawSnapshot> 
         })?);
     }
     Ok(CursorStoreRawSnapshot {
-        conversation_uuid: snapshot.conversation_uuid,
-        root_blob_id: snapshot.root_blob_id,
+        conversation_uuid: snapshot.conversation_uuid.clone(),
+        root_blob_id: snapshot.root_blob_id.clone(),
         store_incarnation,
         created_at_ms: snapshot.created_at_ms,
-        root_message_blob_ids: snapshot.root_message_blob_ids,
+        root_message_blob_ids: snapshot.root_message_blob_ids.clone(),
         source_revision: revision_for_records(&records),
         records,
     })
