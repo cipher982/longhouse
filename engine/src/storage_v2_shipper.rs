@@ -1090,10 +1090,7 @@ pub(crate) fn prepare_next_cursor_envelope(
         &selected,
         started_at.timestamp_micros(),
     )?;
-    let render_generation = Uuid::new_v5(
-        &resolution.source_epoch,
-        format!("{CURSOR_PARSER_REVISION}:{}", snapshot.source_revision).as_bytes(),
-    );
+    let render_generation = cursor_render_generation_id(&session_id);
     let has_reply_evidence = render_records
         .iter()
         .any(|record| record.role == "assistant" || record.role == "tool");
@@ -1799,6 +1796,16 @@ fn render_generation_id(session_id: Uuid) -> Uuid {
     )
 }
 
+fn cursor_render_generation_id(session_id: &str) -> Uuid {
+    Uuid::new_v5(
+        &Uuid::NAMESPACE_URL,
+        format!(
+            "longhouse-cursor-render-v2\0{session_id}\0{CURSOR_PARSER_REVISION}\0cursor-root-order-v1"
+        )
+        .as_bytes(),
+    )
+}
+
 fn opaque_source_id(path: &str) -> String {
     format!(
         "path-sha256:{}",
@@ -2051,6 +2058,10 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(extension.source_epoch, first.source_epoch);
+        assert_eq!(
+            extension.envelope.render.as_ref().unwrap().generation_id,
+            cursor_render_generation_id(&extension.envelope.session_id).to_string()
+        );
         let extension_render = extension.envelope.render.as_ref().unwrap();
         assert_eq!(extension_render.records.len(), 1);
         assert_eq!(extension_render.records[0].content_text.as_deref(), Some("second turn"));
