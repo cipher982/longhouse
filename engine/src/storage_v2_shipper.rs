@@ -1059,15 +1059,22 @@ fn prepare_next_cursor_envelope_with_limit(
             return pending_to_prepared(pending).map(Some);
         }
     }
-    let store_snapshot = cursor_store::read_cursor_render_snapshot(db_path)?;
-    let store_incarnation = identity_from_metadata(
+    let metadata_before = db_path
+        .metadata()
+        .with_context(|| format!("reading Cursor store metadata {}", db_path.display()))?;
+    let store_incarnation = identity_from_metadata(&metadata_before)
+        .context("Cursor store has no stable file incarnation")?;
+    let mut store_snapshot = cursor_store::read_cursor_render_snapshot(db_path)?;
+    let identity_after_render = identity_from_metadata(
         &db_path
             .metadata()
-            .with_context(|| format!("reading Cursor store metadata {}", db_path.display()))?,
-    )
-    .context("Cursor store has no stable file incarnation")?;
+            .with_context(|| format!("rechecking Cursor store metadata {}", db_path.display()))?,
+    );
+    if identity_after_render.as_deref() != Some(store_incarnation.as_str()) {
+        anyhow::bail!("Cursor store file changed identity during root capture");
+    }
     let snapshot =
-        cursor_store::cursor_store_raw_snapshot_from(&store_snapshot, store_incarnation)?;
+        cursor_store::cursor_store_raw_snapshot_from(&store_snapshot, store_incarnation.clone())?;
     let claimed_session_id = crate::cursor_launch_binding::managed_session_id_for_conversation(
         &snapshot.conversation_uuid,
     )?;
@@ -1114,27 +1121,24 @@ fn prepare_next_cursor_envelope_with_limit(
         claimed_session_id.as_deref(),
         root_relation.source_change_hint(),
     )?;
-    if let Some(root_blob_id) = snapshot.root_blob_id.as_deref() {
-        // Persist ordering only after epoch selection commits. A crash in
-        // between may conservatively rotate once more on restart, but can
-        // never consume the rewrite signal and append rewritten history to
-        // the old epoch.
-        cursor_store_root::record_cursor_root(
-            conn,
-            &snapshot.conversation_uuid,
-            root_blob_id,
-            &snapshot.root_message_blob_ids,
-        )?;
-    }
     let newly_referenced_ids = match (&previous_root_ids, &snapshot.root_message_blob_ids) {
         (Some(previous), cursor_store::RootMessageBlobIds::Parsed(current))
             if current.starts_with(previous) =>
         {
             current[previous.len()..].to_vec()
         }
-        (None, cursor_store::RootMessageBlobIds::Parsed(current)) => current.clone(),
+        // Initial capture streams every blob through the bounded page walker;
+        // explicit reference records are only needed for already-spooled
+        // orphan blobs that a later root extension makes visible.
+        (None, cursor_store::RootMessageBlobIds::Parsed(_)) => Vec::new(),
         _ => Vec::new(),
     };
+    store_snapshot
+        .blob_rows
+        .extend(cursor_store::read_cursor_blob_rows(
+            db_path,
+            &newly_referenced_ids,
+        )?);
     let mut capture_records = snapshot.records.clone();
     capture_records.extend(cursor_store::root_reference_records(
         &store_snapshot,
@@ -1146,17 +1150,32 @@ fn prepare_next_cursor_envelope_with_limit(
         resolution.source_epoch,
         &capture_records,
     )?;
-    let mut known_hashes =
-        cursor_store_records::cursor_record_hashes(conn, resolution.source_epoch)?;
+    // Commit root ordering only after every reference needed to render this
+    // transition is durable. A crash before here safely replays and dedupes.
+    if let Some(root_blob_id) = snapshot.root_blob_id.as_deref() {
+        cursor_store_root::record_cursor_root(
+            conn,
+            &snapshot.conversation_uuid,
+            root_blob_id,
+            &snapshot.root_message_blob_ids,
+        )?;
+    }
     let mut streamed_records = Vec::new();
     let mut streamed_bytes = 0usize;
-    let source_capture_has_more = cursor_store::visit_cursor_blob_records(
+    let capture_cursor = cursor_store_records::capture_cursor(conn, resolution.source_epoch)?;
+    let blob_visit = cursor_store::visit_cursor_blob_records(
         db_path,
         &snapshot.conversation_uuid,
         &snapshot.store_incarnation,
+        capture_cursor.as_deref(),
+        256,
         |record| {
             let record_hash = cursor_store_records::cursor_record_hash(&record);
-            if known_hashes.contains(&record_hash) {
+            if cursor_store_records::cursor_record_exists(
+                conn,
+                resolution.source_epoch,
+                &record_hash,
+            )? {
                 return Ok(true);
             }
             if record.len() as u64 > capabilities.max_raw_record_bytes {
@@ -1170,16 +1189,33 @@ fn prepare_next_cursor_envelope_with_limit(
                 return Ok(false);
             }
             streamed_bytes = streamed_bytes.saturating_add(record.len());
-            known_hashes.insert(record_hash);
             streamed_records.push(record);
             Ok(true)
         },
     )?;
+    let identity_after_blobs = identity_from_metadata(
+        &db_path
+            .metadata()
+            .with_context(|| format!("rechecking Cursor store metadata {}", db_path.display()))?,
+    );
+    if identity_after_blobs.as_deref() != Some(store_incarnation.as_str()) {
+        anyhow::bail!("Cursor store file changed identity during blob capture");
+    }
     cursor_store_records::append_unseen_cursor_records(
         conn,
         resolution.source_epoch,
         &streamed_records,
     )?;
+    cursor_store_records::store_capture_cursor(
+        conn,
+        resolution.source_epoch,
+        if blob_visit.has_more {
+            blob_visit.last_blob_id.as_deref()
+        } else {
+            None
+        },
+    )?;
+    let source_capture_has_more = blob_visit.has_more;
     let logical_len = cursor_store_records::cursor_record_count(conn, resolution.source_epoch)?;
     // Refresh max_observed_len after adding local records. `None` revision is
     // intentional: an append changes Cursor's root blob every turn but must

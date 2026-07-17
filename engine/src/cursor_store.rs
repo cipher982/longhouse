@@ -205,10 +205,9 @@ pub fn read_cursor_store(path: &Path) -> Result<CursorStoreSnapshot> {
     })
 }
 
-/// Read only the root and blobs currently referenced by that root. Raw source
-/// capture uses the streaming visitor below; keeping rendering separate avoids
-/// materializing a multi-hundred-megabyte content-addressed blob table on each
-/// live wake.
+/// Read only metadata and the current root blob. Referenced messages are loaded
+/// separately only when a root extension needs an explicit reference record;
+/// raw source capture uses the paged visitor below.
 pub fn read_cursor_render_snapshot(path: &Path) -> Result<CursorStoreSnapshot> {
     let mut conn = open_readonly(path)?;
     let snapshot = conn.transaction()?;
@@ -232,13 +231,6 @@ pub fn read_cursor_render_snapshot(path: &Path) -> Result<CursorStoreSnapshot> {
                     },
                 };
                 blob_rows.push(root_blob);
-                if let RootMessageBlobIds::Parsed(ids) = &ordering {
-                    for blob_id in ids {
-                        if let Some(row) = read_blob_row(&snapshot, blob_id)? {
-                            blob_rows.push(row);
-                        }
-                    }
-                }
                 ordering
             }
             None => RootMessageBlobIds::Unavailable {
@@ -260,6 +252,29 @@ pub fn read_cursor_render_snapshot(path: &Path) -> Result<CursorStoreSnapshot> {
     })
 }
 
+pub fn read_cursor_blob_rows(path: &Path, blob_ids: &[String]) -> Result<Vec<CursorStoreBlobRow>> {
+    const MAX_REFERENCE_ROWS: usize = 256;
+    if blob_ids.len() > MAX_REFERENCE_ROWS {
+        anyhow::bail!("Cursor root extension exceeds the bounded reference capture limit");
+    }
+    let mut conn = open_readonly(path)?;
+    let snapshot = conn.transaction()?;
+    let mut rows = Vec::with_capacity(blob_ids.len());
+    for blob_id in blob_ids {
+        if let Some(row) = read_blob_row(&snapshot, blob_id)? {
+            rows.push(row);
+        }
+    }
+    snapshot.commit()?;
+    Ok(rows)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CursorBlobVisit {
+    pub last_blob_id: Option<String>,
+    pub has_more: bool,
+}
+
 /// Visit exact generic blob wrappers through one WAL-consistent cursor without
 /// retaining the table in memory. Returning false stops at the current row and
 /// reports that source rows remain.
@@ -267,12 +282,18 @@ pub fn visit_cursor_blob_records(
     path: &Path,
     conversation_uuid: &str,
     store_incarnation: &str,
+    after_blob_id: Option<&str>,
+    max_rows: usize,
     mut visitor: impl FnMut(Vec<u8>) -> Result<bool>,
-) -> Result<bool> {
+) -> Result<CursorBlobVisit> {
     let mut conn = open_readonly(path)?;
     let snapshot = conn.transaction()?;
-    let mut statement = snapshot.prepare("SELECT id, data FROM blobs ORDER BY id")?;
-    let mut rows = statement.query([])?;
+    let maximum = i64::try_from(max_rows).context("Cursor blob page limit exceeds i64")?;
+    let mut statement = snapshot
+        .prepare("SELECT id, data FROM blobs WHERE id > COALESCE(?1, '') ORDER BY id LIMIT ?2")?;
+    let mut rows = statement.query(rusqlite::params![after_blob_id, maximum])?;
+    let mut last_blob_id = after_blob_id.map(str::to_owned);
+    let mut visited = 0usize;
     while let Some(row) = rows.next()? {
         let (data_bytes, data_storage_class) = sqlite_bytes(row.get_ref(1)?)?;
         let blob_id: String = row.get(0)?;
@@ -289,13 +310,21 @@ pub fn visit_cursor_blob_records(
             drop(rows);
             drop(statement);
             snapshot.commit()?;
-            return Ok(true);
+            return Ok(CursorBlobVisit {
+                last_blob_id,
+                has_more: true,
+            });
         }
+        last_blob_id = Some(blob_id);
+        visited += 1;
     }
     drop(rows);
     drop(statement);
     snapshot.commit()?;
-    Ok(false)
+    Ok(CursorBlobVisit {
+        last_blob_id,
+        has_more: visited == max_rows,
+    })
 }
 
 /// Return deterministic raw storage-v2 records for all observed Cursor data.
@@ -754,5 +783,49 @@ mod tests {
             snapshot.root_message_blob_ids,
             RootMessageBlobIds::Parsed(vec![MESSAGE_ID.to_string()])
         );
+    }
+
+    #[test]
+    fn blob_capture_pages_without_rescanning_the_first_page() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("store.db");
+        let conn = fixture(&path);
+        for index in 0..300 {
+            conn.execute(
+                "INSERT INTO blobs (id, data) VALUES (?1, ?2)",
+                rusqlite::params![format!("page-{index:03}"), vec![index as u8]],
+            )
+            .unwrap();
+        }
+        drop(conn);
+
+        let mut first_ids = Vec::new();
+        let first =
+            visit_cursor_blob_records(&path, CONVERSATION_ID, "fixture", None, 256, |record| {
+                let value: Value = serde_json::from_slice(&record)?;
+                first_ids.push(value["blob_id"].as_str().unwrap().to_string());
+                Ok(true)
+            })
+            .unwrap();
+        assert!(first.has_more);
+        assert_eq!(first_ids.len(), 256);
+
+        let mut second_ids = Vec::new();
+        let second = visit_cursor_blob_records(
+            &path,
+            CONVERSATION_ID,
+            "fixture",
+            first.last_blob_id.as_deref(),
+            256,
+            |record| {
+                let value: Value = serde_json::from_slice(&record)?;
+                second_ids.push(value["blob_id"].as_str().unwrap().to_string());
+                Ok(true)
+            },
+        )
+        .unwrap();
+        assert!(!second.has_more);
+        assert_eq!(second_ids.len(), 46);
+        assert!(first_ids.iter().all(|id| !second_ids.contains(id)));
     }
 }
