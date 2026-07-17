@@ -397,7 +397,7 @@
         },
         "interrupt": {
           "level": "live_token",
-          "source": "Cursor Helm Gate 0 escape_cancel: Escape stops the active generation, preserves the TUI process, and the next turn completes"
+          "source": "Cursor Helm Gate 0 ctrl_c_cancel: Ctrl-C stops the active generation, emits aborted/error, preserves the TUI process, and the next turn completes"
         },
         "steer_active_turn": {
           "level": "none",
@@ -405,7 +405,7 @@
         },
         "answer_pause": {
           "level": "none",
-          "source": "unsupported until Cursor exposes pause-answer semantics"
+          "source": "Cursor permission hooks use the separate pull-based Longhouse pause-request surface; session.answer_pause machine dispatch is intentionally not advertised"
         },
         "terminate": {
           "level": "hermetic",
@@ -414,7 +414,7 @@
         },
         "tail_output": {
           "level": "hermetic",
-          "source": "cursor_store exact raw storage-v2 source now emits cursor-store-render-v1 text, reasoning, tool-call, and tool-result projections"
+          "source": "cursor_store exact raw storage-v2 source emits cursor-store-render-v2 text, reasoning, tool-call, and tool-result projections"
         },
         "runtime_phase": {
           "level": "hermetic",
