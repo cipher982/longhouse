@@ -383,6 +383,12 @@ class CursorPtySession:
             time.sleep(_INJECT_ESCAPE_SETTLE_SECONDS)
             os.write(self.master_fd, b"\r")
 
+    def escape(self) -> None:
+        if not self.alive():
+            raise RuntimeError(f"Cursor process exited before Escape ({self.process.returncode})")
+        with self._write_lock:
+            os.write(self.master_fd, b"\x1b")
+
     def close(self) -> None:
         self._stop_reader.set()
         if self.alive():
@@ -568,6 +574,97 @@ def _identity_scenario(
         session.close()
 
 
+def _cancel_scenario(
+    *,
+    binary: str,
+    workspace: Path,
+    events_path: Path,
+    terminal_path: Path,
+    provider_id: str,
+    timeout: float,
+    model: str | None,
+) -> dict[str, Any]:
+    longhouse_session_id = str(uuid4())
+    argv = [
+        binary,
+        "--resume",
+        provider_id,
+        "--workspace",
+        str(workspace),
+        "--force",
+    ]
+    if model:
+        argv.extend(["--model", model])
+    argv.append("Run exactly the shell command `sleep 30`, then reply with DONE.")
+    session = CursorPtySession.start(
+        argv=argv,
+        cwd=workspace,
+        env=_child_env(longhouse_session_id, events_path),
+        terminal_path=terminal_path,
+    )
+    try:
+        before = len(read_hook_events(events_path))
+        shell = wait_for_hook(
+            events_path,
+            longhouse_session_id=longhouse_session_id,
+            event="beforeShellExecution",
+            conversation_id=provider_id,
+            after_count=before,
+            timeout=timeout,
+        )
+        generation_id = str(shell.get("generation_id") or "")
+        session.escape()
+        stop = wait_for_hook(
+            events_path,
+            longhouse_session_id=longhouse_session_id,
+            event="stop",
+            conversation_id=provider_id,
+            after_count=before,
+            timeout=timeout,
+        )
+        if stop.get("generation_id") != generation_id:
+            raise RuntimeError("Escape stopped a different Cursor generation")
+        if stop.get("status") == "completed" and stop.get("is_interrupt") is not True:
+            raise RuntimeError("Escape did not report provider interruption semantics")
+        if not session.alive():
+            raise RuntimeError("Escape exited the Cursor TUI")
+
+        marker = f"LONGHOUSE_CURSOR_GATE0_AFTER_CANCEL_{uuid4().hex[:10]}"
+        turn_start = len(read_hook_events(events_path))
+        session.submit_idle(f"Reply with exactly {marker} and nothing else.")
+        prompt = wait_for_hook(
+            events_path,
+            longhouse_session_id=longhouse_session_id,
+            event="beforeSubmitPrompt",
+            conversation_id=provider_id,
+            after_count=turn_start,
+            timeout=timeout,
+        )
+        completed = wait_for_hook(
+            events_path,
+            longhouse_session_id=longhouse_session_id,
+            event="stop",
+            conversation_id=provider_id,
+            after_count=turn_start,
+            timeout=timeout,
+        )
+        if completed.get("status") != "completed":
+            raise RuntimeError("Cursor did not complete the post-cancel turn")
+        return {
+            "status": "passed",
+            "provider_conversation_id": provider_id,
+            "longhouse_session_id": longhouse_session_id,
+            "cancel_generation_id": generation_id,
+            "cancel_status": stop.get("status"),
+            "cancel_is_interrupt": stop.get("is_interrupt"),
+            "process_alive_after_cancel": session.alive(),
+            "next_generation_id": prompt.get("generation_id"),
+            "next_turn_completed": True,
+        }
+    finally:
+        session.close()
+
+
 def run_gate0(args: argparse.Namespace) -> dict[str, Any]:
     binary = _cursor_binary(args.cursor_bin)
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
@@ -627,6 +724,16 @@ def run_gate0(args: argparse.Namespace) -> dict[str, Any]:
             terminal_path=artifact_root / "new-session-id.terminal.raw",
             provider_id=requested_id,
             launch_args=["--new-session-id", requested_id],
+            timeout=args.timeout,
+            model=args.model,
+        )
+        cancel_provider_id = _create_chat(binary, workspace)
+        report["scenarios"]["escape_cancel"] = _cancel_scenario(
+            binary=binary,
+            workspace=workspace,
+            events_path=events_path,
+            terminal_path=artifact_root / "escape-cancel.terminal.raw",
+            provider_id=cancel_provider_id,
             timeout=args.timeout,
             model=args.model,
         )
