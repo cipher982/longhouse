@@ -362,8 +362,8 @@
         "cursor_exec"
       ],
       "launch_local": true,
-      "launch_remote": true,
-      "run_once": true,
+      "launch_remote": false,
+      "run_once": false,
       "reattach": true,
       "send_input": true,
       "interrupt": true,
@@ -380,12 +380,12 @@
           "source": "Cursor Helm Gate 0 on stock cursor-agent 2026.07.16: provider-minted create-chat/--resume identity, hook/store agreement, pristine PTY TUI, and live socket-owned control"
         },
         "launch_remote": {
-          "level": "hermetic",
-          "source": "cursor_acp exact raw JSON-RPC source + storage-v2 receipt-cursor tests"
+          "level": "none",
+          "source": "unavailable until stock Cursor exposes a durable headless conversation source"
         },
         "run_once": {
-          "level": "hermetic",
-          "source": "cursor_acp exact raw JSON-RPC source + storage-v2 receipt-cursor tests"
+          "level": "none",
+          "source": "unavailable until stock Cursor exposes a durable headless conversation source"
         },
         "reattach": {
           "level": "live_token",
@@ -428,9 +428,7 @@
       "machine_control_supports": [
         "cursor.send",
         "cursor.interrupt",
-        "cursor.terminate",
-        "cursor.run_once",
-        "cursor.turn_start"
+        "cursor.terminate"
       ]
     }
   ]

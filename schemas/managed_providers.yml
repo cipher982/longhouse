@@ -319,11 +319,10 @@ providers:
   - cursor_acp
   - cursor_exec
   launch_local: true
-  # Console ACP writes every notification to an engine-owned raw source and
-  # advances only after a storage-v2 receipt. Helm binds the provider-minted
-  # native chat to the managed session through matching hook/store evidence.
-  launch_remote: true
-  run_once: true
+  # Cursor Console remains frozen: ACP is a different control plane and does
+  # not create the native durable conversation required by this Helm contract.
+  launch_remote: false
+  run_once: false
   reattach: true
   send_input: true
   interrupt: true
@@ -341,11 +340,11 @@ providers:
         create-chat/--resume identity, hook/store agreement, pristine PTY TUI, and
         live socket-owned control'
     launch_remote:
-      level: hermetic
-      source: cursor_acp exact raw JSON-RPC source + storage-v2 receipt-cursor tests
+      level: none
+      source: unavailable until stock Cursor exposes a durable headless conversation source
     run_once:
-      level: hermetic
-      source: cursor_acp exact raw JSON-RPC source + storage-v2 receipt-cursor tests
+      level: none
+      source: unavailable until stock Cursor exposes a durable headless conversation source
     reattach:
       level: live_token
       source: 'Cursor Helm Gate 0 native_resume_continuity: a new stock TUI resumes
@@ -384,5 +383,3 @@ providers:
   - cursor.send
   - cursor.interrupt
   - cursor.terminate
-  - cursor.run_once
-  - cursor.turn_start

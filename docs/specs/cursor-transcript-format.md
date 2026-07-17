@@ -304,8 +304,11 @@ may change between cursor-agent releases. The decoder must be tolerant:
 
 The remainder records the pre-storage-v2 contract and exploration history. It
 is not current product behavior. Cursor Helm now binds receipt-backed native
-storage-v2 transcripts through hook/store identity agreement; Cursor Console
-remains a separate control plane.
+storage-v2 transcripts through hook/store identity agreement. Cursor Console
+is frozen and unadvertised: `launch_remote`, `run_once`, `cursor.run_once`, and
+`cursor.turn_start` are false/absent until stock Cursor can create a durable
+native conversation for a headless run. The ACP details below are historical
+implementation notes, not a capability source for `cursor_helm`.
 
 ### Provider contract registration
 

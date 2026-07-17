@@ -7,7 +7,7 @@ from pathlib import Path
 from zerg.services.managed_provider_contracts import contract_for_provider
 
 
-def test_cursor_console_is_receipt_backed_while_helm_binding_stays_explicitly_gated():
+def test_cursor_contract_advertises_helm_without_cross_plane_console_claims():
     contract = contract_for_provider("cursor")
 
     assert contract is not None
@@ -15,14 +15,14 @@ def test_cursor_console_is_receipt_backed_while_helm_binding_stays_explicitly_ga
     assert contract.send_input is True
     assert contract.interrupt is True
     assert contract.terminate is True
-    assert contract.launch_remote is True
-    assert contract.run_once is True
-    # Console resume is adapter-owned turn execution, not Helm reattach.
+    assert contract.launch_remote is False
+    assert contract.run_once is False
     assert contract.can_resume is False
     assert contract.tail_output is True
     assert contract.runtime_phase is True
     assert contract.transcript_binding is True
-    assert "cursor.turn_start" in contract.machine_control_supports
+    assert "cursor.turn_start" not in contract.machine_control_supports
+    assert "cursor.run_once" not in contract.machine_control_supports
     assert "cursor.resume_run_once" not in contract.machine_control_supports
 
 

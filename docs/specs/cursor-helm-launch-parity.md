@@ -1,6 +1,6 @@
 # Cursor Helm Launch Parity
 
-Status: implemented with one upstream gap — stock Cursor has no active-turn steer surface
+Status: implemented; release qualification still requires Runtime Host outage recovery, and stock Cursor has no active-turn steer surface
 Owner: Longhouse Machine Agent + provider launchers
 Last updated: 2026-07-17
 Supersedes the Cursor Helm product conclusions in
@@ -248,7 +248,9 @@ Cursor Helm is launch-ready only when:
 - public docs describe the observed behavior without caveats hidden in
   terminal warnings.
 
-Stock Cursor currently cannot prove active steer. That is the sole known
-upstream parity gap; Longhouse keeps the capability false and records it
-explicitly rather than renaming queued PTY input. All other promoted
-capabilities require their live-provider artifacts to stay green.
+Stock Cursor currently cannot prove active steer. That is the known upstream
+parity gap; Longhouse keeps the capability false rather than renaming queued
+PTY input. Machine Agent restart is exercised by the product canary through the
+real Runtime Host control path. Runtime Host outage/recovery remains an
+explicit release qualification and is not implied by healthy-host canaries.
+All promoted capabilities require their live-provider artifacts to stay green.
