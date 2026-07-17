@@ -50,6 +50,7 @@ def binding_probe(
 
 @app.callback(invoke_without_command=True)
 def launch(
+    ctx: typer.Context,
     cwd: Path = typer.Option(
         Path("."),
         "--cwd",
@@ -91,6 +92,8 @@ def launch(
     ),
 ) -> None:
     """Launch a Longhouse Cursor Helm session: interactive cursor-agent TUI + remote steer."""
+    if ctx.invoked_subcommand is not None:
+        return
     from zerg.cli.cursor_helm import run_helm
 
     run_helm(
