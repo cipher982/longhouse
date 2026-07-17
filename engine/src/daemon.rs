@@ -2982,6 +2982,7 @@ fn provider_name_to_static(provider: &str) -> Option<&'static str> {
     match provider {
         "claude" => Some("claude"),
         "codex" => Some("codex"),
+        "cursor" => Some("cursor"),
         "antigravity" => Some("antigravity"),
         "gemini" => Some("antigravity"),
         _ => None,
@@ -4836,6 +4837,34 @@ mod tests {
         assert_eq!(scheduled.2.turn_id.as_deref(), Some("turn-123"));
         assert_eq!(scheduled.2.wake_reason.as_deref(), Some("turn_completed"));
         assert_eq!(scheduled.2.file_len_hint, Some(456));
+    }
+
+    #[test]
+    fn test_cursor_turn_completed_wake_schedules_native_store_shipping() {
+        let transcript = tempfile::NamedTempFile::new().unwrap();
+        let mut latest_wakes = HashMap::new();
+
+        let scheduled = record_transcript_wake_hint(
+            &mut latest_wakes,
+            TranscriptWakeSignal {
+                provider: "cursor".to_string(),
+                path: transcript.path().to_path_buf(),
+                phase: "idle".to_string(),
+                observed_at_ms: 123,
+                session_id: Some("cursor-session".to_string()),
+                turn_id: Some("cursor-generation".to_string()),
+                wake_reason: Some("turn_completed".to_string()),
+                file_len_hint: Some(4096),
+                received_at_ms: Some(124),
+            },
+        )
+        .expect("completed Cursor turns should schedule native store shipping");
+
+        assert_eq!(scheduled.0, transcript.path());
+        assert_eq!(scheduled.1, "cursor");
+        assert_eq!(scheduled.2.source, "wake_socket");
+        assert_eq!(scheduled.2.session_id.as_deref(), Some("cursor-session"));
+        assert_eq!(scheduled.2.turn_id.as_deref(), Some("cursor-generation"));
     }
 
     #[test]
