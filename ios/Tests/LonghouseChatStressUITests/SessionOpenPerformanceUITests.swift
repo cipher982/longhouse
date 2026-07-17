@@ -8,6 +8,7 @@ final class SessionOpenPerformanceUITests: XCTestCase {
 
     private enum LaunchEnvironment {
         static let timelineOpenFixture = "LONGHOUSE_UI_TEST_TIMELINE_OPEN_FIXTURE"
+        static let launchSessionFixture = "LONGHOUSE_UI_TEST_LAUNCH_SESSION_FIXTURE"
         static let chatEventCount = "LONGHOUSE_UI_TEST_CHAT_EVENT_COUNT"
         static let diagnostics = "LONGHOUSE_WEBKIT_TRANSCRIPT_DIAGNOSTICS"
         static let probePath = "LONGHOUSE_UI_TEST_CHAT_PROBE_PATH"
@@ -125,6 +126,28 @@ final class SessionOpenPerformanceUITests: XCTestCase {
             Self.composerFocusBudgetMs,
             "Composer focus should not wait behind transcript or networking work."
         )
+    }
+
+    func testWorkspacePickerSelectionRespondsImmediately() {
+        let app = XCUIApplication()
+        app.launchEnvironment[LaunchEnvironment.launchSessionFixture] = "1"
+        app.launchArguments += [LaunchArgument.appearanceOverride, "light"]
+        app.launch()
+
+        let picker = app.descendants(matching: .any)["launch-workspace-picker"]
+        XCTAssertTrue(picker.waitForExistence(timeout: 10))
+        picker.tap()
+
+        let workspace = app.buttons["launch-workspace-row-/Users/example/git/g55"]
+        XCTAssertTrue(workspace.waitForExistence(timeout: 5))
+        let selectionStartedAt = Date()
+        workspace.tap()
+        XCTAssertTrue(waitUntil(timeout: 2) {
+            picker.exists && app.staticTexts["g55"].exists
+        })
+        let elapsedMs = elapsedMs(since: selectionStartedAt)
+        print("IOS_WORKSPACE_PICKER_SIM_METRIC selection_ms=\(elapsedMs)")
+        XCTAssertLessThan(elapsedMs, 1_500, "Workspace selection should pop immediately.")
     }
 
     func testTimelineTapToTranscriptPaintProfile() throws {
@@ -318,6 +341,15 @@ final class SessionOpenPerformanceUITests: XCTestCase {
                 return true
             }
             RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
+        return false
+    }
+
+    private func waitUntil(timeout: TimeInterval, predicate: () -> Bool) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if predicate() { return true }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
         }
         return false
     }

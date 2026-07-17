@@ -10,6 +10,7 @@ enum UITestHooks {
     static let chatFixtureTriggerPathEnvironmentKey = "LONGHOUSE_UI_TEST_CHAT_TRIGGER_PATH"
     static let chatFixtureReplayPathEnvironmentKey = "LONGHOUSE_UI_TEST_CHAT_REPLAY_PATH"
     static let timelineOpenFixtureEnvironmentKey = "LONGHOUSE_UI_TEST_TIMELINE_OPEN_FIXTURE"
+    static let launchSessionFixtureEnvironmentKey = "LONGHOUSE_UI_TEST_LAUNCH_SESSION_FIXTURE"
     static let mobileTailDelayMsEnvironmentKey = "LONGHOUSE_UI_TEST_MOBILE_TAIL_DELAY_MS"
     static let appearanceOverrideArgument = "-LONGHOUSE_UI_TEST_APPEARANCE"
 
@@ -60,6 +61,10 @@ enum UITestHooks {
 
     static var shouldUseTimelineOpenFixture: Bool {
         ProcessInfo.processInfo.environment[timelineOpenFixtureEnvironmentKey] == "1"
+    }
+
+    static var shouldUseLaunchSessionFixture: Bool {
+        ProcessInfo.processInfo.environment[launchSessionFixtureEnvironmentKey] == "1"
     }
 
     static var mobileTailDelayMs: Int? {

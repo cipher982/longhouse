@@ -1,3 +1,4 @@
+import OSLog
 import SwiftUI
 
 @MainActor
@@ -22,6 +23,7 @@ struct LaunchSessionSheet: View {
     @State private var workspaceError: String?
     @State private var cwd: String = ""
     @State private var displayName: String = ""
+    private let logger = Logger(subsystem: "ai.longhouse.ios", category: "LaunchSession")
 
     init(
         previewMachines: [MachineDirectoryEntry]? = nil,
@@ -185,6 +187,7 @@ struct LaunchSessionSheet: View {
                         ) { path in
                             cwd = path
                             submitError = nil
+                            logger.info("workspace selection committed path=\(path, privacy: .public)")
                         }
                     } label: {
                         LaunchSummaryRow(
@@ -194,6 +197,7 @@ struct LaunchSessionSheet: View {
                         )
                     }
                     .buttonStyle(.plain)
+                    .accessibilityIdentifier("launch-workspace-picker")
                 }
 
                 LaunchCard {
@@ -313,8 +317,11 @@ struct LaunchSessionSheet: View {
             workspaceError = nil
             return
         }
+        let startedAt = Date()
+        var cacheHit = false
         // Render cached workspaces instantly, then revalidate.
         if let cached = WorkspaceSuggestionsCacheStore.load(serverURL: appState.serverURL, deviceId: deviceId) {
+            cacheHit = true
             workspaces = cached
             if normalizedCwd.isEmpty, let first = cached.first?.path {
                 cwd = first
@@ -327,6 +334,7 @@ struct LaunchSessionSheet: View {
             }
         }
         workspaceError = nil
+        logger.info("workspace suggestions load started device=\(deviceId, privacy: .public) cache_hit=\(cacheHit, privacy: .public) cached_count=\(self.workspaces.count, privacy: .public)")
         do {
             let suggestions = try await api.workspaceSuggestions(deviceId: deviceId)
             guard !Task.isCancelled, deviceId == selectedDeviceId else { return }
@@ -335,6 +343,7 @@ struct LaunchSessionSheet: View {
                 cwd = first
             }
             WorkspaceSuggestionsCacheStore.save(workspaces: suggestions, serverURL: appState.serverURL, deviceId: deviceId)
+            logger.info("workspace suggestions load finished device=\(deviceId, privacy: .public) count=\(suggestions.count, privacy: .public) elapsed_ms=\(Int(Date().timeIntervalSince(startedAt) * 1000), privacy: .public)")
         } catch {
             if Task.isCancelled || (error as? URLError)?.code == .cancelled {
                 return
@@ -343,6 +352,7 @@ struct LaunchSessionSheet: View {
             if workspaces.isEmpty {
                 workspaceError = "Recent workspaces unavailable."
             }
+            logger.error("workspace suggestions load failed device=\(deviceId, privacy: .public) elapsed_ms=\(Int(Date().timeIntervalSince(startedAt) * 1000), privacy: .public) error=\(error.localizedDescription, privacy: .public)")
         }
     }
 
@@ -634,6 +644,8 @@ private struct WorkspaceSelectionView: View {
 
     @State private var search = ""
     @State private var manualPath = ""
+    @State private var selectionStartedAt: Date?
+    private let logger = Logger(subsystem: "ai.longhouse.ios", category: "LaunchSession")
 
     private var filtered: [WorkspaceSuggestion] {
         let query = search.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -653,6 +665,8 @@ private struct WorkspaceSelectionView: View {
                 Section("Recent") {
                     ForEach(filtered) { workspace in
                         Button {
+                            selectionStartedAt = Date()
+                            logger.info("workspace row tapped path=\(workspace.path, privacy: .public) loading=\(loading, privacy: .public) visible_count=\(filtered.count, privacy: .public)")
                             onSelect(workspace.path)
                             dismiss()
                         } label: {
@@ -667,8 +681,11 @@ private struct WorkspaceSelectionView: View {
                                 Spacer()
                                 if workspace.path == selectedPath { Image(systemName: "checkmark") }
                             }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
+                        .accessibilityIdentifier("launch-workspace-row-\(workspace.path)")
                     }
                 }
             }
@@ -686,6 +703,30 @@ private struct WorkspaceSelectionView: View {
         .searchable(text: $search, prompt: "Filter workspaces")
         .navigationTitle("Choose Workspace")
         .navigationBarTitleDisplayMode(.inline)
+        .onAppear {
+            logger.info("workspace picker appeared count=\(workspaces.count, privacy: .public) loading=\(loading, privacy: .public)")
+        }
+        .onDisappear {
+            if let selectionStartedAt {
+                logger.info("workspace picker dismissed after_selection=true elapsed_ms=\(Int(Date().timeIntervalSince(selectionStartedAt) * 1000), privacy: .public)")
+            } else {
+                logger.info("workspace picker dismissed after_selection=false")
+            }
+        }
+        .task { await monitorMainActorStalls() }
+    }
+
+    private func monitorMainActorStalls() async {
+        let intervalNanoseconds: UInt64 = 250_000_000
+        while !Task.isCancelled {
+            let startedAt = Date()
+            try? await Task.sleep(nanoseconds: intervalNanoseconds)
+            if Task.isCancelled { return }
+            let elapsedMs = Int(Date().timeIntervalSince(startedAt) * 1000)
+            if elapsedMs >= 750 {
+                logger.error("workspace picker main actor stall elapsed_ms=\(elapsedMs, privacy: .public)")
+            }
+        }
     }
 }
 
@@ -849,6 +890,21 @@ private func previewMachine(
     .environmentObject(AppState())
     .preferredColorScheme(.dark)
 }
+
+#if DEBUG
+struct LaunchSessionUITestFixtureView: View {
+    var body: some View {
+        LaunchSessionSheet(
+            previewMachines: [previewMachine()],
+            previewWorkspaces: [
+                WorkspaceSuggestion(path: "/Users/example/git/longhouse", label: "longhouse", score: 100, sessionCount: 20),
+                WorkspaceSuggestion(path: "/Users/example/git/g55", label: "g55", score: 90, sessionCount: 12),
+            ],
+            onLaunched: { _ in }
+        )
+    }
+}
+#endif
 
 #Preview("Launch machine chooser") {
     NavigationStack {
