@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from datetime import timezone
@@ -36,6 +38,7 @@ from zerg.services.session_turns import SESSION_TURN_STATE_STARTING
 from zerg.services.session_turns import create_session_turn
 
 CONSOLE_TURN_START_COMMAND = "session.turn.start"
+logger = logging.getLogger("longhouse.console_latency")
 
 CONSOLE_EXECUTION_OWNER_STATES = frozenset(
     {
@@ -399,6 +402,8 @@ async def enqueue_catalog_console_turn(
     client = get_catalogd_client()
     if client is None:
         raise ConsoleTurnUnavailable("catalog_unavailable", "Console turn catalog is unavailable")
+    accepted_wall_ms = int(time.time() * 1000)
+    accepted_mono = time.monotonic()
     result = await client.call(
         "session.console.turn.enqueue.v2",
         {
@@ -432,6 +437,7 @@ async def enqueue_catalog_console_turn(
     if not control.supports(owner_id=owner_id, device_id=device_id, capability=capability):
         error = f"Machine Agent does not advertise {capability}"
     else:
+        dispatch_wall_ms = int(time.time() * 1000)
         payload = {
             "run_id": str(run_id),
             "thread_id": str(turn["thread_id"]),
@@ -442,10 +448,23 @@ async def enqueue_catalog_console_turn(
             "message": str(turn.get("message") or message),
             "launch_actor": "user",
             "launch_surface": "console",
+            "server_accepted_at_ms": accepted_wall_ms,
+            "server_dispatched_at_ms": dispatch_wall_ms,
             **dict(turn.get("provider_config") or {}),
         }
         if turn.get("resume_provider_thread_id"):
             payload["resume_provider_thread_id"] = turn["resume_provider_thread_id"]
+        logger.info(
+            "console_latency stage=command_dispatch session=%s turn=%s run=%s request=%s provider=%s device=%s accepted_elapsed_ms=%d",
+            session_id,
+            turn_id,
+            run_id,
+            payload["client_request_id"],
+            provider,
+            device_id,
+            int((time.monotonic() - accepted_mono) * 1000),
+        )
+        command_started = time.monotonic()
         response = await control.send_command(
             owner_id=owner_id,
             device_id=device_id,
@@ -456,6 +475,16 @@ async def enqueue_catalog_console_turn(
             timeout_secs=15,
         )
         response_message = dict(response.message or {})
+        logger.info(
+            "console_latency stage=command_response session=%s turn=%s run=%s request=%s transport_ok=%s command_ms=%d total_ms=%d",
+            session_id,
+            turn_id,
+            run_id,
+            payload["client_request_id"],
+            response.transport_ok,
+            int((time.monotonic() - command_started) * 1000),
+            int((time.monotonic() - accepted_mono) * 1000),
+        )
         if not response.transport_ok:
             return CatalogConsoleTurn(
                 turn_id=turn_id,

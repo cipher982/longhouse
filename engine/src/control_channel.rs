@@ -1375,6 +1375,20 @@ async fn execute_turn_start(
     let thread_id = payload_required_string(payload, "thread_id")?;
     let turn_id = payload_optional_string(payload, "turn_id");
     let client_request_id = payload_optional_string(payload, "client_request_id");
+    let command_received_at_ms = chrono::Utc::now().timestamp_millis();
+    let server_accepted_at_ms = payload.get("server_accepted_at_ms").and_then(Value::as_i64);
+    let server_dispatched_at_ms = payload.get("server_dispatched_at_ms").and_then(Value::as_i64);
+    eprintln!(
+        "[console-turn] latency stage=machine_command_received session={session_id} run={run_id} turn={} request={} accepted_to_machine_ms={} dispatched_to_machine_ms={}",
+        turn_id.as_deref().unwrap_or("unknown"),
+        client_request_id.as_deref().unwrap_or("unknown"),
+        server_accepted_at_ms
+            .map(|value| command_received_at_ms.saturating_sub(value))
+            .unwrap_or(-1),
+        server_dispatched_at_ms
+            .map(|value| command_received_at_ms.saturating_sub(value))
+            .unwrap_or(-1),
+    );
     let provider = payload_required_string(payload, "provider")?;
     if !matches!(provider.as_str(), "codex" | "cursor") {
         return Err(CommandError {
@@ -1401,6 +1415,7 @@ async fn execute_turn_start(
     let launch_actor = payload_optional_string(payload, "launch_actor");
     let launch_surface = payload_optional_string(payload, "launch_surface");
     let registry = default_turn_claim_registry().map_err(CommandError::command_failed)?;
+    let claim_started = std::time::Instant::now();
     match registry
         .claim(
             &run_id,
@@ -1455,6 +1470,11 @@ async fn execute_turn_start(
         }
         ClaimOutcome::Acquired => {}
     }
+    eprintln!(
+        "[console-turn] latency stage=machine_claimed session={session_id} run={run_id} turn={} claim_ms={}",
+        turn_id.as_deref().unwrap_or("unknown"),
+        claim_started.elapsed().as_millis()
+    );
 
     let local_db_path = config
         .db_path
