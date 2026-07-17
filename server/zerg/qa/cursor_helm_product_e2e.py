@@ -9,6 +9,7 @@ import pty
 import shutil
 import signal
 import subprocess
+import sys
 import threading
 import time
 from dataclasses import dataclass
@@ -156,6 +157,39 @@ def _engine_command(engine: str, session_id: str, kind: str, text: str | None = 
         raise RuntimeError((result.stderr or result.stdout).strip())
 
 
+def _restart_machine_agent(status_path: Path, *, timeout: float) -> dict[str, Any]:
+    if sys.platform != "darwin":
+        raise RuntimeError("Machine Agent restart qualification currently requires launchctl on macOS")
+    try:
+        before = json.loads(status_path.read_text())
+    except (OSError, ValueError) as exc:
+        raise RuntimeError(f"Machine Agent status unavailable at {status_path}") from exc
+    old_pid = int(before.get("daemon_pid") or 0)
+    result = subprocess.run(
+        ["launchctl", "kickstart", "-k", f"gui/{os.getuid()}/com.longhouse.shipper"],
+        text=True,
+        capture_output=True,
+        timeout=15,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError((result.stderr or result.stdout or "Machine Agent restart failed").strip())
+
+    def reconnected() -> dict[str, Any] | None:
+        try:
+            current = json.loads(status_path.read_text())
+        except (OSError, ValueError):
+            return None
+        channel = current.get("control_channel") or {}
+        new_pid = int(current.get("daemon_pid") or 0)
+        if new_pid > 0 and new_pid != old_pid and channel.get("status") == "connected":
+            return current
+        return None
+
+    current = _wait_until(reconnected, timeout=timeout, description="Machine Agent restart and control reconnect")
+    return {"old_pid": old_pid, "new_pid": int(current["daemon_pid"]), "control_status": "connected"}
+
+
 def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
     longhouse = shutil.which(args.longhouse_bin)
     engine = shutil.which(args.engine_bin)
@@ -171,6 +205,7 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
     artifact_root.mkdir(parents=True, exist_ok=True)
     marker_one = f"LONGHOUSE_CURSOR_PRODUCT_ONE_{uuid4().hex[:10]}"
     marker_two = f"LONGHOUSE_CURSOR_PRODUCT_TWO_{uuid4().hex[:10]}"
+    restart_marker = f"LONGHOUSE_CURSOR_PRODUCT_AGENT_RESTART_{uuid4().hex[:10]}"
     recovery = f"LONGHOUSE_CURSOR_PRODUCT_RECOVERY_{uuid4().hex[:10]}"
     forbidden = f"LONGHOUSE_CURSOR_PRODUCT_CANCELLED_{uuid4().hex[:10]}"
     permission_allow = f"LONGHOUSE_CURSOR_PERMISSION_ALLOW_{uuid4().hex[:10]}"
@@ -244,6 +279,31 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
             response.raise_for_status()
             return response.json()
 
+        def send_live(text: str) -> dict[str, Any]:
+            response = httpx.post(
+                f"{url}/api/agents/sessions/{session_id}/send-live",
+                headers=headers,
+                json={"message": text},
+                timeout=30,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            if payload.get("accepted") is not True:
+                raise RuntimeError(f"Runtime Host did not accept Cursor send: {payload}")
+            return payload
+
+        def interrupt_live() -> dict[str, Any]:
+            response = httpx.post(
+                f"{url}/api/agents/sessions/{session_id}/interrupt-live",
+                headers=headers,
+                timeout=30,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            if payload.get("interrupt_dispatched") is not True:
+                raise RuntimeError(f"Runtime Host did not dispatch Cursor interrupt: {payload}")
+            return payload
+
         def hosted_events() -> dict[str, Any] | None:
             return api_get(
                 f"/api/agents/sessions/{session_id}/events",
@@ -256,7 +316,7 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
             description="first Cursor reply in hosted archive",
         )
         first_archive_lag = (datetime.now(UTC) - _response_observed_at(_hook_rows(root, session_id), marker_one)).total_seconds()
-        _engine_command(engine, session_id, "send", f"Reply with exactly {marker_two}")
+        send_live(f"Reply with exactly {marker_two}")
         second = _wait_until(
             lambda: (payload if marker_two in _visible_texts(payload) else None) if (payload := hosted_events()) else None,
             timeout=args.timeout,
@@ -264,10 +324,22 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
         )
         second_archive_lag = (datetime.now(UTC) - _response_observed_at(_hook_rows(root, session_id), marker_two)).total_seconds()
 
-        _engine_command(
-            engine,
-            session_id,
-            "send",
+        machine_agent_restart = None
+        restart_archive_lag = None
+        if not args.skip_machine_agent_restart:
+            status_path = root.parents[1] / "agent" / "engine-status.json"
+            machine_agent_restart = _restart_machine_agent(status_path, timeout=args.timeout)
+            if session.process.poll() is not None:
+                raise RuntimeError("Cursor TUI exited during Machine Agent restart")
+            send_live(f"Reply with exactly {restart_marker}")
+            _wait_until(
+                lambda: (payload if restart_marker in _visible_texts(payload) else None) if (payload := hosted_events()) else None,
+                timeout=args.timeout,
+                description="post-Machine-Agent-restart Cursor reply in hosted archive",
+            )
+            restart_archive_lag = (datetime.now(UTC) - _response_observed_at(_hook_rows(root, session_id), restart_marker)).total_seconds()
+
+        send_live(
             f"Use the Shell tool to run exactly `touch {allow_path}`, then reply with exactly {permission_allow}",
         )
         allow_pause = _wait_until(pending_pause, timeout=args.timeout, description="hosted Cursor allow request")
@@ -282,10 +354,7 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
         )
 
         deny_hook_start = len(_hook_rows(root, session_id))
-        _engine_command(
-            engine,
-            session_id,
-            "send",
+        send_live(
             f"Use the Shell tool to run exactly `touch {deny_path}`, then explain the result briefly",
         )
         deny_pause = _wait_until(pending_pause, timeout=args.timeout, description="hosted Cursor deny request")
@@ -308,10 +377,7 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
             raise RuntimeError("Cursor command ran after remote permission denial")
 
         hook_start = len(_hook_rows(root, session_id))
-        _engine_command(
-            engine,
-            session_id,
-            "send",
+        send_live(
             f"Use the Shell tool to run sleep 30, then reply with {forbidden}",
         )
         shell = _wait_until(
@@ -330,7 +396,7 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
         answer_pause(cancel_pause, "answer")
         time.sleep(0.5)
         cancel_generation = str(shell.get("generation_id") or "")
-        _engine_command(engine, session_id, "interrupt")
+        interrupt_live()
         _wait_until(
             lambda: next(
                 (
@@ -354,7 +420,7 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
         if session.process.poll() is not None:
             raise RuntimeError("Cursor TUI exited after interrupt")
 
-        _engine_command(engine, session_id, "send", f"Reply with exactly {recovery}")
+        send_live(f"Reply with exactly {recovery}")
         recovered = _wait_until(
             lambda: (payload if recovery in _visible_texts(payload) else None) if (payload := hosted_events()) else None,
             timeout=args.timeout,
@@ -362,6 +428,8 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
         )
         recovery_archive_lag = (datetime.now(UTC) - _response_observed_at(_hook_rows(root, session_id), recovery)).total_seconds()
         archive_lags = [first_archive_lag, second_archive_lag, recovery_archive_lag]
+        if restart_archive_lag is not None:
+            archive_lags.append(restart_archive_lag)
         if max(archive_lags) > args.max_archive_lag:
             raise RuntimeError(
                 f"Cursor archive lag exceeded {args.max_archive_lag:.1f}s: " + ", ".join(f"{value:.2f}s" for value in archive_lags)
@@ -380,9 +448,11 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
                 "process_alive_after_cancel": True,
                 "remote_permission_allow": True,
                 "remote_permission_deny": True,
+                "machine_agent_restart": machine_agent_restart,
                 "archive_lag_seconds": {
                     "first": round(first_archive_lag, 3),
                     "second": round(second_archive_lag, 3),
+                    "machine_agent_restart": round(restart_archive_lag, 3) if restart_archive_lag is not None else None,
                     "recovery": round(recovery_archive_lag, 3),
                 },
             }
@@ -413,6 +483,7 @@ def main() -> int:
     parser.add_argument("--model", default="gpt-5.3-codex-low")
     parser.add_argument("--longhouse-bin", default="longhouse")
     parser.add_argument("--engine-bin", default="longhouse-engine")
+    parser.add_argument("--skip-machine-agent-restart", action="store_true")
     args = parser.parse_args()
     try:
         report = run_product_e2e(args)
