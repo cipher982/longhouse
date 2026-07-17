@@ -1,7 +1,7 @@
 # Transcript Convergence
 
-Status: Proposed
-Last updated: 2026-07-13
+Status: Implemented for current Cursor Shadow and Helm sources
+Last updated: 2026-07-17
 
 ## Product contract
 
@@ -29,11 +29,11 @@ that specific default/fallback behavior: hosted installs now default to
 than silently forcing `paused`. Existing installed services still require
 regeneration to receive the new flag.
 
-Separately, Cursor Helm is deliberately control-only pending a native
-storage-v2 source. Commit `0492af78b` prevents its workspace from 404ing, but
-that remains a crash guard, not watchability. Cursor's source implementation
-is governed by `cursor-storage-v2-source-fidelity.md` and its interactive
-binding probe.
+Cursor Helm now binds the native storage-v2 source through provider-minted
+identity plus matching hook/store evidence. Current Cursor text, reasoning,
+tool calls, and tool results render durably, and native hook wakes keep active
+turns converging without waiting for a broad filesystem scan. Cursor's source
+contract remains governed by `cursor-storage-v2-source-fidelity.md`.
 
 ## Definitions
 
@@ -100,9 +100,9 @@ No stage may require an LLM, embedding, summary, or UI-derived inference.
 
 Cursor's native source work follows
 [`cursor-storage-v2-source-fidelity.md`](cursor-storage-v2-source-fidelity.md).
-In particular, Helm-to-store identity binding is allowed only after the
-interactive binding probe succeeds; heuristic binding is forbidden. Cursor is
-not presented as watchable until that probe-gated source has a durable host
+Helm-to-store identity binding uses a provider-minted native chat ID plus the
+exact launched process's hook evidence; heuristic binding remains forbidden.
+Cursor becomes watchable only after that source has a durable host
 acknowledgement and a renderable projection.
 
 ## Scheduler and host policy

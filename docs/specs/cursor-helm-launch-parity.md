@@ -1,6 +1,6 @@
 # Cursor Helm Launch Parity
 
-Status: proposed — evidence gates must pass before capability promotion
+Status: implemented with one upstream gap — stock Cursor has no active-turn steer surface
 Owner: Longhouse Machine Agent + provider launchers
 Last updated: 2026-07-17
 Supersedes the Cursor Helm product conclusions in
@@ -31,25 +31,24 @@ separate capabilities; neither may be presented as Helm parity.
 
 ## Current Truth
 
-The current `cursor_helm` control plane is a PTY owner around stock
-`cursor-agent`:
+The `cursor_helm` control plane owns stock `cursor-agent` in a PTY while native
+hooks and `store.db` provide phase and transcript evidence:
 
-- send writes text, waits, sends Escape, then Enter;
-- interrupt sends `SIGINT`, which exits the provider process in current proof;
-- terminate sends `SIGKILL`;
-- active-turn steer, pause-answer, reattach, and resume are not implemented;
-- provider activity is not observed, so the host may project idle while Cursor
-  is working;
-- the Helm session is control-only and has no transcript binding.
+- a provider-minted chat ID is reserved before launch and bound to the exact
+  Longhouse session after hook and store evidence agree;
+- idle send writes through the PTY only while native lifecycle evidence says
+  Cursor is idle;
+- interrupt writes Ctrl-C to cancel the active generation while preserving the
+  TUI and conversation; terminate remains an explicit process kill;
+- permission allow/deny is resolved through Longhouse's pause-request API;
+- native `--resume` restores the same Cursor and Longhouse identities;
+- the storage-v2 renderer emits readable text, reasoning, tool calls, and tool
+  results, and native hooks wake the Machine Agent at turn boundaries.
 
-The native Cursor storage-v2 source separately captures `store.db` bytes under
-a deterministic Shadow session derived from Cursor `agentId`. It emits
-`render: null`, so the durable raw session remains unreadable and hidden from
-the default timeline. Cursor ACP Console has its own durable source and must
-not lend transcript capability bits to `cursor_helm`.
-
-This is not Claude/Codex parity. Public copy and per-session capabilities must
-say so until the acceptance gates below pass.
+Stock Cursor exposes no operation that changes an already-running turn. The
+live canary proves that submitted input is queued for a later turn, so active
+steer remains unavailable and must not be advertised. Cursor ACP Console has
+its own control plane and must not lend capability bits to `cursor_helm`.
 
 ## Provider Evidence To Prove
 
@@ -131,8 +130,9 @@ supports idempotent upgrade and uninstall. A missing, rejected, or unsupported
 hook is an explicit health/capability failure; it never blocks the stock TUI.
 
 Permission hooks may wait for a bounded remote answer. If Longhouse is
-unavailable or the wait expires, the adapter returns control to Cursor's local
-permission prompt. It never silently allows, denies, or leaves the TUI hung.
+unavailable or the wait expires, the adapter denies the operation and returns
+control to Cursor. This fail-closed rule is required because Cursor's Run
+Everything mode would otherwise execute after an unhandled hook failure.
 
 ### Control
 
@@ -142,8 +142,8 @@ Use the strongest stock Cursor mechanism that passes each proof:
 2. stable native CLI operation with a versioned compatibility canary;
 3. PTY key sequences only when they map to a proven stock-TUI operation and a
    hook/store event confirms the semantic result. This includes idle prompt
-   submission and may include Escape cancellation if the live canary proves it
-   stops only the active turn.
+   submission and includes Ctrl-C cancellation because the live canary proves
+   it stops only the active generation and preserves the TUI.
 
 Do not call queued input active steer. Do not call process exit interrupt. Do
 not infer permission state from terminal pixels if a hook event can represent
@@ -208,8 +208,8 @@ canary to the end; every promoted operation lands with its proof.
 - provisional-to-durable reconciliation and idempotency;
 - per-control-plane capability projection;
 - send while active is rejected before any PTY byte is written;
-- a permission-hook timeout returns to Cursor's local prompt without allow or
-  deny;
+- a permission-hook transport failure or timeout denies the operation without
+  executing it;
 - a bound raw source remains hidden until a render generation exists;
 - no `cursor_helm` capability cites `cursor_acp` evidence;
 - no provider signal from repair, cleanup, or Longhouse restart.
@@ -230,6 +230,10 @@ CI replays sanitized provider evidence. Release qualification runs the live
 provider canary against the exact supported Cursor version. A version mismatch
 cannot reuse an older green result.
 
+Run `make test-cursor-helm-gate0` for the provider-mechanics canary and
+`make test-cursor-helm-product-e2e` for the installed Longhouse → stock Cursor
+→ Machine Agent → Runtime Host product-boundary canary.
+
 ## Promotion Bar
 
 Cursor Helm is launch-ready only when:
@@ -244,7 +248,7 @@ Cursor Helm is launch-ready only when:
 - public docs describe the observed behavior without caveats hidden in
   terminal warnings.
 
-If stock Cursor cannot prove active steer, graceful cancel, permission
-response, or recovery, record the exact upstream gap and keep Cursor Helm out
-of the launch-ready provider set. Do not weaken this bar by renaming PTY
-behavior.
+Stock Cursor currently cannot prove active steer. That is the sole known
+upstream parity gap; Longhouse keeps the capability false and records it
+explicitly rather than renaming queued PTY input. All other promoted
+capabilities require their live-provider artifacts to stay green.

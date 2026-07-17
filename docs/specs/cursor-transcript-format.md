@@ -303,9 +303,9 @@ may change between cursor-agent releases. The decoder must be tolerant:
 ## Historical legacy implementation notes (superseded)
 
 The remainder records the pre-storage-v2 contract and exploration history. It
-is not current product behavior: Cursor Helm is control-only, and Cursor
-Console, archive/tail, runtime-phase, and transcript-binding claims remain
-disabled until receipt-backed native sources exist.
+is not current product behavior. Cursor Helm now binds receipt-backed native
+storage-v2 transcripts through hook/store identity agreement; Cursor Console
+remains a separate control plane.
 
 ### Provider contract registration
 
@@ -454,9 +454,11 @@ art, not assumed:
   variants tried, all fail) but `pty.fork() + \r` with no tmux works
   (anthropics/claude-code#52812). This validates inheriting the real TTY
   (or a direct pty.fork) over a tmux wrapper.
-- **Interrupt** = SIGINT to the pid (verified: SIGINT exits cursor-agent).
-  Ctrl-C *byte* (0x03) does not interrupt — the TUI traps it. **Terminate** =
-  SIGKILL. Mid-turn graceful steer is not available (no surface).
+- **Historical spike result:** SIGINT exited `cursor-agent`. The current Helm
+  implementation writes a Ctrl-C byte to the raw-mode TUI; current live proof
+  shows that it cancels the active generation and preserves the process.
+  **Terminate** remains a process kill. Mid-turn graceful steer is not
+  available (no stock surface).
 
 Scope of Helm-via-injection: **send / interrupt / terminate**. Not mid-turn
 steer. The hard engineering risk is **quiescence detection** — knowing when
