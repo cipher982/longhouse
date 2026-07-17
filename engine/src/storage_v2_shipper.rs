@@ -866,7 +866,10 @@ fn cursor_render_records(
         let Ok(wrapper) = serde_json::from_slice::<Value>(&record.bytes) else {
             continue;
         };
-        if wrapper.get("kind").and_then(Value::as_str) != Some("blob") {
+        if !matches!(
+            wrapper.get("kind").and_then(Value::as_str),
+            Some("blob" | "root_reference")
+        ) {
             continue;
         }
         let Some(blob_id) = wrapper.get("blob_id").and_then(Value::as_str) else {
@@ -1056,7 +1059,7 @@ fn prepare_next_cursor_envelope_with_limit(
             return pending_to_prepared(pending).map(Some);
         }
     }
-    let store_snapshot = cursor_store::read_cursor_store(db_path)?;
+    let store_snapshot = cursor_store::read_cursor_render_snapshot(db_path)?;
     let store_incarnation = identity_from_metadata(
         &db_path
             .metadata()
@@ -1076,11 +1079,12 @@ fn prepare_next_cursor_envelope_with_limit(
         return Ok(None);
     }
     let opaque_source_id = cursor_store::cursor_opaque_source_id(&snapshot.conversation_uuid);
+    let previous_root_ids =
+        cursor_store_root::previous_message_blob_ids(conn, &snapshot.conversation_uuid)?;
     let root_relation = match snapshot.root_blob_id.as_deref() {
-        Some(root_blob_id) => cursor_store_root::observe_cursor_root(
+        Some(_) => cursor_store_root::classify_cursor_root(
             conn,
             &snapshot.conversation_uuid,
-            root_blob_id,
             &snapshot.root_message_blob_ids,
         )?,
         None => cursor_store_root::CursorRootOrderRelation::Inconclusive,
@@ -1110,10 +1114,71 @@ fn prepare_next_cursor_envelope_with_limit(
         claimed_session_id.as_deref(),
         root_relation.source_change_hint(),
     )?;
+    if let Some(root_blob_id) = snapshot.root_blob_id.as_deref() {
+        // Persist ordering only after epoch selection commits. A crash in
+        // between may conservatively rotate once more on restart, but can
+        // never consume the rewrite signal and append rewritten history to
+        // the old epoch.
+        cursor_store_root::record_cursor_root(
+            conn,
+            &snapshot.conversation_uuid,
+            root_blob_id,
+            &snapshot.root_message_blob_ids,
+        )?;
+    }
+    let newly_referenced_ids = match (&previous_root_ids, &snapshot.root_message_blob_ids) {
+        (Some(previous), cursor_store::RootMessageBlobIds::Parsed(current))
+            if current.starts_with(previous) =>
+        {
+            current[previous.len()..].to_vec()
+        }
+        (None, cursor_store::RootMessageBlobIds::Parsed(current)) => current.clone(),
+        _ => Vec::new(),
+    };
+    let mut capture_records = snapshot.records.clone();
+    capture_records.extend(cursor_store::root_reference_records(
+        &store_snapshot,
+        &snapshot.store_incarnation,
+        &newly_referenced_ids,
+    )?);
     cursor_store_records::append_unseen_cursor_records(
         conn,
         resolution.source_epoch,
-        &snapshot.records,
+        &capture_records,
+    )?;
+    let mut known_hashes =
+        cursor_store_records::cursor_record_hashes(conn, resolution.source_epoch)?;
+    let mut streamed_records = Vec::new();
+    let mut streamed_bytes = 0usize;
+    let source_capture_has_more = cursor_store::visit_cursor_blob_records(
+        db_path,
+        &snapshot.conversation_uuid,
+        &snapshot.store_incarnation,
+        |record| {
+            let record_hash = cursor_store_records::cursor_record_hash(&record);
+            if known_hashes.contains(&record_hash) {
+                return Ok(true);
+            }
+            if record.len() as u64 > capabilities.max_raw_record_bytes {
+                anyhow::bail!(
+                    "one Cursor raw record exceeds the negotiated storage-v2 object bound"
+                );
+            }
+            if !streamed_records.is_empty()
+                && streamed_bytes.saturating_add(record.len()) > MAX_RAW_BATCH_BYTES
+            {
+                return Ok(false);
+            }
+            streamed_bytes = streamed_bytes.saturating_add(record.len());
+            known_hashes.insert(record_hash);
+            streamed_records.push(record);
+            Ok(true)
+        },
+    )?;
+    cursor_store_records::append_unseen_cursor_records(
+        conn,
+        resolution.source_epoch,
+        &streamed_records,
     )?;
     let logical_len = cursor_store_records::cursor_record_count(conn, resolution.source_epoch)?;
     // Refresh max_observed_len after adding local records. `None` revision is
@@ -1267,7 +1332,7 @@ fn prepare_next_cursor_envelope_with_limit(
         event_count,
         has_reply_evidence,
         raw_bytes,
-        has_more: range_end < logical_len,
+        has_more: range_end < logical_len || source_capture_has_more,
         media_objects: Vec::new(),
     };
     persist_prepared(conn, &path_text, prepared).map(Some)
@@ -2209,6 +2274,40 @@ mod tests {
     }
 
     #[test]
+    fn cursor_renders_blob_first_referenced_after_its_raw_receipt() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("store.db");
+        let store = make_cursor_store(&path);
+        let orphan_id = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+        store
+            .execute(
+                "INSERT INTO blobs (id, data) VALUES (?1, ?2)",
+                params![
+                    orphan_id,
+                    br#"{"role":"assistant","content":[{"type":"text","text":"referenced later"}]}"#
+                ],
+            )
+            .unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+
+        let first = prepare_next_cursor_envelope(&mut conn, &capabilities(), &path)
+            .unwrap()
+            .unwrap();
+        acknowledge_prepared(&mut conn, &first);
+
+        let mut extended_root = vec![0xbb; 32];
+        extended_root.extend_from_slice(&[0xee; 32]);
+        set_cursor_root(&store, CURSOR_ROOT_B, &extended_root);
+        let extension = prepare_next_cursor_envelope(&mut conn, &capabilities(), &path)
+            .unwrap()
+            .unwrap();
+        let rendered = extension.envelope.render.unwrap().records;
+        assert!(rendered
+            .iter()
+            .any(|record| record.content_text.as_deref() == Some("referenced later")));
+    }
+
+    #[test]
     fn cursor_store_emits_readable_text_and_tool_render_records() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("store.db");
@@ -2543,6 +2642,36 @@ mod tests {
         );
         assert!(live.raw_bytes <= LIVE_TARGET_BATCH_BYTES as u64);
         assert!(live.has_more);
+    }
+
+    #[test]
+    fn cursor_capture_pages_large_unreferenced_blob_tables() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("store.db");
+        let store = make_cursor_store(&path);
+        for index in 0..20 {
+            store
+                .execute(
+                    "INSERT INTO blobs (id, data) VALUES (?1, ?2)",
+                    params![format!("bulk-{index:03}"), vec![b'x'; 1024 * 1024]],
+                )
+                .unwrap();
+        }
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+
+        let prepared = prepare_next_cursor_envelope(&mut conn, &capabilities(), &path)
+            .unwrap()
+            .unwrap();
+        let captured_bytes: i64 = conn
+            .query_row(
+                "SELECT COALESCE(SUM(length(record_bytes)), 0) FROM cursor_store_raw_record WHERE source_epoch = ?1",
+                [prepared.source_epoch.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        assert!(captured_bytes <= (MAX_RAW_BATCH_BYTES + 2 * 1024 * 1024) as i64);
+        assert!(prepared.has_more);
     }
 
     #[tokio::test]

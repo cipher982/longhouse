@@ -9,6 +9,7 @@ use anyhow::{Context, Result};
 use chrono::Utc;
 use rusqlite::{params, Connection, OptionalExtension};
 use sha2::{Digest, Sha256};
+use std::collections::HashSet;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,7 +27,10 @@ pub fn append_unseen_cursor_records(
     records: &[Vec<u8>],
 ) -> Result<u64> {
     let epoch = source_epoch.to_string();
-    let transaction = conn.transaction()?;
+    // A Cursor capture may already hold a wider preparation savepoint so root
+    // ordering, epoch selection, raw records, and pending-envelope persistence
+    // commit atomically. Nested savepoints work in both contexts.
+    let transaction = conn.savepoint()?;
     let next = next_position(&transaction, &epoch)?;
     let mut next = next;
     for bytes in records {
@@ -55,6 +59,18 @@ pub fn cursor_record_count(conn: &Connection, source_epoch: Uuid) -> Result<u64>
         |row| row.get(0),
     )?;
     u64::try_from(count).context("Cursor record count is negative")
+}
+
+pub fn cursor_record_hashes(conn: &Connection, source_epoch: Uuid) -> Result<HashSet<String>> {
+    let mut statement =
+        conn.prepare("SELECT record_hash FROM cursor_store_raw_record WHERE source_epoch = ?1")?;
+    let rows = statement.query_map([source_epoch.to_string()], |row| row.get(0))?;
+    rows.collect::<std::result::Result<HashSet<_>, _>>()
+        .context("reading Cursor raw record hashes")
+}
+
+pub fn cursor_record_hash(bytes: &[u8]) -> String {
+    hex_hash(bytes)
 }
 
 pub fn active_cursor_record_count(

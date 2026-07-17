@@ -35,27 +35,35 @@ struct StoredRootState {
     message_blob_ids: Option<Vec<String>>,
 }
 
+pub fn previous_message_blob_ids(
+    conn: &Connection,
+    conversation_uuid: &str,
+) -> Result<Option<Vec<String>>> {
+    Ok(load_root_state(conn, conversation_uuid)?.and_then(|state| state.message_blob_ids))
+}
+
 /// Record the latest parseable Cursor root ordering for one provider-native
 /// conversation and classify its relationship to prior evidence.
+#[cfg(test)]
 pub fn observe_cursor_root(
     conn: &Connection,
     conversation_uuid: &str,
     root_blob_id: &str,
     ordering: &RootMessageBlobIds,
 ) -> Result<CursorRootOrderRelation> {
+    let relation = classify_cursor_root(conn, conversation_uuid, ordering)?;
+    record_cursor_root(conn, conversation_uuid, root_blob_id, ordering)?;
+    Ok(relation)
+}
+
+pub fn classify_cursor_root(
+    conn: &Connection,
+    conversation_uuid: &str,
+    ordering: &RootMessageBlobIds,
+) -> Result<CursorRootOrderRelation> {
     let conversation_uuid = require_nonempty(conversation_uuid, "conversation_uuid")?;
-    let root_blob_id = require_nonempty(root_blob_id, "root_blob_id")?;
     let previous = load_root_state(conn, conversation_uuid)?;
     let RootMessageBlobIds::Parsed(current_ids) = ordering else {
-        // Do not erase the last proven sequence: a later readable root can
-        // still be compared to it. Recording the observed root id keeps local
-        // diagnostics current without pretending to know its ordering.
-        upsert_root_state(
-            conn,
-            conversation_uuid,
-            root_blob_id,
-            previous.and_then(|state| state.message_blob_ids),
-        )?;
         return Ok(CursorRootOrderRelation::Inconclusive);
     };
 
@@ -70,13 +78,24 @@ pub fn observe_cursor_root(
         }
         Some(_) => CursorRootOrderRelation::Rewrite,
     };
-    upsert_root_state(
-        conn,
-        conversation_uuid,
-        root_blob_id,
-        Some(current_ids.clone()),
-    )?;
     Ok(relation)
+}
+
+pub fn record_cursor_root(
+    conn: &Connection,
+    conversation_uuid: &str,
+    root_blob_id: &str,
+    ordering: &RootMessageBlobIds,
+) -> Result<()> {
+    let conversation_uuid = require_nonempty(conversation_uuid, "conversation_uuid")?;
+    let root_blob_id = require_nonempty(root_blob_id, "root_blob_id")?;
+    let message_blob_ids = match ordering {
+        RootMessageBlobIds::Parsed(ids) => Some(ids.clone()),
+        RootMessageBlobIds::Unavailable { .. } => {
+            load_root_state(conn, conversation_uuid)?.and_then(|state| state.message_blob_ids)
+        }
+    };
+    upsert_root_state(conn, conversation_uuid, root_blob_id, message_blob_ids)
 }
 
 fn load_root_state(conn: &Connection, conversation_uuid: &str) -> Result<Option<StoredRootState>> {
@@ -171,6 +190,30 @@ mod tests {
         assert_eq!(
             CursorRootOrderRelation::Rewrite.source_change_hint(),
             SourceChangeHint::Rewrite
+        );
+    }
+
+    #[test]
+    fn unrecorded_rewrite_remains_a_rewrite_after_restart_boundary() {
+        let temp = tempfile::NamedTempFile::new().unwrap();
+        let conn = open_db(Some(temp.path())).unwrap();
+        observe_cursor_root(&conn, "conversation", "root-a", &parsed(&["a", "b"])).unwrap();
+
+        let rewrite = parsed(&["a", "x"]);
+        assert_eq!(
+            classify_cursor_root(&conn, "conversation", &rewrite).unwrap(),
+            CursorRootOrderRelation::Rewrite
+        );
+        // Simulate epoch rotation committing and the process dying before the
+        // new root ordering is recorded.
+        assert_eq!(
+            classify_cursor_root(&conn, "conversation", &rewrite).unwrap(),
+            CursorRootOrderRelation::Rewrite
+        );
+        record_cursor_root(&conn, "conversation", "root-b", &rewrite).unwrap();
+        assert_eq!(
+            classify_cursor_root(&conn, "conversation", &rewrite).unwrap(),
+            CursorRootOrderRelation::PrefixExtension
         );
     }
 
