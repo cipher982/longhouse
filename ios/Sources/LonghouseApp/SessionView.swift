@@ -245,34 +245,33 @@ struct SessionView: View {
         let showTranscript = state.showsTranscript
 
         return ZStack {
-            WebTranscriptView(
-                serverURL: appState.serverURL,
-                items: viewModel.items,
-                submittedInputs: viewModel.submittedInputs,
-                errorMessage: viewModel.errorMessage,
-                bottomInset: 18,
-                onNearTop: {
-                    Task { await viewModel.loadOlder(sessionId: sessionId, appState: appState) }
-                },
-                onDiagnostics: { diagnostics in
-                    onTranscriptDiagnostics?(diagnostics)
-                    Task {
-                        await viewModel.recordTranscriptDiagnostics(
-                            diagnostics,
-                            sessionId: sessionId,
-                            appState: appState
-                        )
+            if showTranscript {
+                WebTranscriptView(
+                    serverURL: appState.serverURL,
+                    items: viewModel.items,
+                    submittedInputs: viewModel.submittedInputs,
+                    errorMessage: viewModel.errorMessage,
+                    bottomInset: 18,
+                    onNearTop: {
+                        Task { await viewModel.loadOlder(sessionId: sessionId, appState: appState) }
+                    },
+                    onDiagnostics: { diagnostics in
+                        onTranscriptDiagnostics?(diagnostics)
+                        Task {
+                            await viewModel.recordTranscriptDiagnostics(
+                                diagnostics,
+                                sessionId: sessionId,
+                                appState: appState
+                            )
+                        }
+                    },
+                    onLifecycle: { stage in
+                        viewModel.recordTranscriptLifecycle(stage)
                     }
-                },
-                onLifecycle: { stage in
-                    viewModel.recordTranscriptLifecycle(stage)
-                }
-            )
-            .opacity(showTranscript ? 1 : 0.01)
-            .allowsHitTesting(showTranscript)
-            .accessibilityHidden(!showTranscript)
-            .accessibilityIdentifier("session-chat-transcript")
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                )
+                .accessibilityIdentifier("session-chat-transcript")
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
 
             TranscriptStateOverlay(
                 state: state,

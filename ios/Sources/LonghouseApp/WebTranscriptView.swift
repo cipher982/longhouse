@@ -957,7 +957,6 @@ enum WebTranscriptWebViewPool {
     }
 
     private static let logger = Logger(subsystem: "ai.longhouse.ios", category: "WebTranscript")
-    private static let processPool = WKProcessPool()
     private static var warmedWebView: WKWebView?
     private static var warmedWebViewLoaded = false
     private static var prewarmDelegate: WebTranscriptPrewarmDelegate?
@@ -1006,7 +1005,6 @@ enum WebTranscriptWebViewPool {
     private static func configuredWebView() -> WKWebView {
         let configuration = WKWebViewConfiguration()
         configuration.allowsInlineMediaPlayback = true
-        configuration.processPool = processPool
         return WKWebView(frame: .zero, configuration: configuration)
     }
 }

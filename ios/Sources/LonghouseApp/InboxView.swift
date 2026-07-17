@@ -123,13 +123,6 @@ struct TimelineView: View {
                 Task {
                     await appState.ensurePushRegistrationIfPossible()
                 }
-                // Let SwiftUI commit the cached timeline and service the first
-                // gestures before constructing WKWebView. WebKit process startup
-                // is useful for session-open latency but must not sit ahead of
-                // the launch screen's first interactive frame.
-                try? await Task.sleep(nanoseconds: 500_000_000)
-                guard !Task.isCancelled else { return }
-                WebTranscriptWebViewPool.prewarm()
             }
             .onDisappear {
                 viewModel.stopStream()

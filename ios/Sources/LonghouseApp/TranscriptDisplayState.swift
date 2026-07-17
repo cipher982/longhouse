@@ -56,15 +56,14 @@ enum TranscriptDisplayState: Equatable {
         return .empty
     }
 
-    /// True when the WebKit transcript should be visible/interactive underneath
-    /// any overlay. The transcript stays mounted for `.content`,
-    /// `.contentWithRefreshError`, and `.empty` (so its own "No messages yet"
-    /// renders); it is hidden during blocking load and hard error.
+    /// True when real transcript content requires WebKit. Empty and syncing
+    /// sessions stay native so a new Console never pays WebKit process startup
+    /// before its composer can accept input.
     var showsTranscript: Bool {
         switch self {
-        case .loading, .hardError:
+        case .loading, .empty, .syncing, .hardError:
             return false
-        case .empty, .syncing, .content, .contentWithRefreshError:
+        case .content, .contentWithRefreshError:
             return true
         }
     }
@@ -73,7 +72,7 @@ enum TranscriptDisplayState: Equatable {
 /// Single shared overlay for every transcript load state. Replaces the stacked
 /// `if isInitialLoading / else if errorMessage / if refreshError` conditionals
 /// that previously lived inline in `SessionView`. Renders nothing for the
-/// healthy `.content` and `.empty` states (the WebKit transcript shows through).
+/// healthy `.content` state (the WebKit transcript shows through).
 struct TranscriptStateOverlay: View {
     let state: TranscriptDisplayState
     let onRetry: () -> Void
@@ -93,7 +92,13 @@ struct TranscriptStateOverlay: View {
                 refreshBanner(message)
                 Spacer(minLength: 0)
             }
-        case .content, .empty:
+        case .empty:
+            Text("No messages yet")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .accessibilityIdentifier("session-transcript-empty")
+        case .content:
             EmptyView()
         }
     }

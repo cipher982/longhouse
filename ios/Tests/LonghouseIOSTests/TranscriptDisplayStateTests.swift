@@ -64,7 +64,7 @@ struct TranscriptDisplayStateTests {
             refreshErrorMessage: nil
         )
         #expect(state == .empty)
-        #expect(state.showsTranscript == true)
+        #expect(state.showsTranscript == false)
     }
 
     @Test
@@ -77,7 +77,7 @@ struct TranscriptDisplayStateTests {
             isSyncing: true
         )
         #expect(state == .syncing)
-        #expect(state.showsTranscript == true)
+        #expect(state.showsTranscript == false)
     }
 
     @Test
