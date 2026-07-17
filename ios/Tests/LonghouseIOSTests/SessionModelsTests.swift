@@ -4,6 +4,41 @@ import Testing
 
 struct SessionModelsTests {
     @Test
+    func productionLiveCatalogWorkspaceEventDecodesBeforeDurability() throws {
+        let json = """
+        {
+          "session_id": "66642747-7977-464a-9073-d9bbb6102ac3",
+          "latest_event_id": -7,
+          "server_now_ms": 1784251909243,
+          "server_fanout_at_ms": 1784251909243,
+          "pubsub_seq": 9,
+          "transcript_preview": {
+            "event_id": 7,
+            "text": "visible before durability",
+            "role": "assistant",
+            "tool_name": null,
+            "tool_input_json": null,
+            "tool_output_text": null,
+            "tool_call_id": null,
+            "tool_call_state": null,
+            "event_origin": "live_provisional",
+            "timestamp": "2026-07-17T01:31:49.243Z",
+            "is_provisional": true,
+            "is_complete": false,
+            "content_cursor": "console:turn:7",
+            "is_stale": false,
+            "stale_reason": null
+          }
+        }
+        """.data(using: .utf8)!
+
+        let event = try JSONDecoder().decode(SessionWorkspaceStream.WorkspaceChanged.self, from: json)
+        #expect(event.latest_event_id == -7)
+        #expect(event.transcript_preview?.text == "visible before durability")
+        #expect(event.transcript_preview?.is_provisional == true)
+    }
+
+    @Test
     func generatedPresenceStateKeepsOlderServerDecodeCompatibility() throws {
         let decoded = try JSONDecoder().decode(APIPresenceState.self, from: Data(#""syncing_transcript""#.utf8))
         #expect(decoded == .syncingTranscript)

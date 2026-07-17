@@ -26,7 +26,6 @@ const CODEX_EXEC_RUNTIME_SOURCE: &str = "codex_app_server";
 const STDERR_TAIL_LINES: usize = 40;
 const APP_SERVER_TURN_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 const CONSOLE_WARM_POOL_TARGET: usize = 1;
-const CONSOLE_WARM_WORKER_TTL: Duration = Duration::from_secs(120);
 const DEFAULT_CODEX_BIN: &str = "codex";
 const DEFAULT_CONSOLE_APPROVAL_POLICY: &str = "never";
 const DEFAULT_CONSOLE_SANDBOX: &str = "workspace-write";
@@ -374,16 +373,12 @@ pub async fn prewarm_codex_console_workers() {
         Ok(worker)
             if !pool.shutting_down && pool.workers.len() < CONSOLE_WARM_POOL_TARGET =>
         {
-            let worker_pid = worker.pid;
             eprintln!(
                 "[codex-exec] latency stage=warm_worker_ready pid={} pool_size={}",
                 worker.pid.unwrap_or(0),
                 pool.workers.len() + 1
             );
             pool.workers.push(worker);
-            if let Some(worker_pid) = worker_pid {
-                tokio::spawn(reap_warm_worker_after_ttl(worker_pid));
-            }
         }
         Ok(worker) => discard = Some(worker),
         Err(err) => eprintln!(
@@ -401,36 +396,13 @@ pub async fn prewarm_codex_console_workers() {
     spawn_finished.notify_waiters();
 }
 
-async fn reap_warm_worker_after_ttl(pid: u32) {
-    tokio::time::sleep(CONSOLE_WARM_WORKER_TTL).await;
-    let mut pool = console_worker_pool().lock().await;
-    let Some(index) = pool
-        .workers
-        .iter()
-        .position(|worker| worker.pid == Some(pid) && worker.ready_at.elapsed() >= CONSOLE_WARM_WORKER_TTL)
-    else {
-        return;
-    };
-    let mut worker = pool.workers.remove(index);
-    let pool_size = pool.workers.len();
-    drop(pool);
-    eprintln!(
-        "[codex-exec] latency stage=warm_worker_reaped pid={} reason=ttl pool_size={}",
-        worker.pid.unwrap_or(0),
-        pool_size
-    );
-    let _ = shutdown_worker_process_group(&mut worker.child, worker.pgid).await;
-}
-
 async fn lease_warm_worker() -> Option<InitializedCodexWorker> {
     let mut pool = console_worker_pool().lock().await;
     if pool.shutting_down {
         return None;
     }
     while let Some(mut worker) = pool.workers.pop() {
-        if worker.ready_at.elapsed() < CONSOLE_WARM_WORKER_TTL
-            && worker.child.try_wait().ok().flatten().is_none()
-        {
+        if warm_worker_is_alive(&mut worker) {
             if let (Some(pid), Some(pgid)) = (worker.pid, worker.pgid) {
                 pool.active_process_groups.insert(pid, pgid);
             }
@@ -442,6 +414,10 @@ async fn lease_warm_worker() -> Option<InitializedCodexWorker> {
         );
     }
     None
+}
+
+fn warm_worker_is_alive(worker: &mut InitializedCodexWorker) -> bool {
+    worker.child.try_wait().ok().flatten().is_none()
 }
 
 async fn register_active_worker(worker: &InitializedCodexWorker) -> bool {
@@ -1832,6 +1808,11 @@ for line in sys.stdin:
         )
         .await
         .unwrap();
+        worker.ready_at = std::time::Instant::now() - Duration::from_secs(5 * 60);
+        assert!(
+            warm_worker_is_alive(&mut worker),
+            "idle age must not evict the machine-global warm worker"
+        );
         let child_pid: i32 = fs::read_to_string(&child_pid_path)
             .unwrap()
             .parse()

@@ -34,6 +34,7 @@ from pydantic import Field
 from sqlalchemy.orm import Session
 
 from zerg.config import get_settings
+from zerg.database import catalog_db_dependency
 from zerg.database import get_db
 from zerg.dependencies.auth import require_admin
 from zerg.metrics import canary_latency_seconds
@@ -205,7 +206,7 @@ async def _persist_render_beacons(
 async def client_render_beacon(
     beacons: list[RenderBeacon] | RenderBeacon,
     request: Request,
-    db: Session = Depends(get_db),
+    db: Session = Depends(catalog_db_dependency()),
 ) -> dict:
     """Accept one or a batch of render beacons.
 
@@ -279,7 +280,7 @@ async def recent_client_render_beacons(
     session_id: str | None = None,
     event_id: str | None = None,
     limit: int = 50,
-    db: Session = Depends(get_db),
+    db: Session = Depends(catalog_db_dependency()),
 ) -> dict:
     """Return recent persisted browser/iOS render beacons for forensic debugging."""
     query = (
@@ -394,7 +395,6 @@ async def canary_session_lookup() -> dict:
     from datetime import timedelta
     from datetime import timezone
 
-    from zerg.database import get_db
     from zerg.models.agents import AgentSession
 
     cutoff = datetime.now(timezone.utc) - timedelta(minutes=5)

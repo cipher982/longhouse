@@ -302,8 +302,13 @@ actor SessionWorkspaceStream {
                 emit(.connected(c))
             }
         case "workspace_changed":
-            if let w = try? JSONDecoder().decode(WorkspaceChanged.self, from: data) {
+            do {
+                let w = try JSONDecoder().decode(WorkspaceChanged.self, from: data)
                 emit(.changed(w))
+            } catch {
+                logger.error(
+                    "workspace stream decode failed session=\(self.sessionId, privacy: .public) error=\(error.localizedDescription, privacy: .public) payload=\(payload, privacy: .private(mask: .hash))"
+                )
             }
         case "replay_gap":
             if let gap = try? JSONDecoder().decode(ReplayGap.self, from: data) {

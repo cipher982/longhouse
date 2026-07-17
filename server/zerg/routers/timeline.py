@@ -1676,6 +1676,7 @@ async def _live_catalog_workspace_stream(
                 "data": json.dumps(
                     {
                         "session_id": str(session_id),
+                        "latest_event_id": 0,
                         "server_now_ms": int(datetime.now(timezone.utc).timestamp() * 1000),
                         "pubsub_seq": 0,
                     }
@@ -1687,12 +1688,15 @@ async def _live_catalog_workspace_stream(
                 yield {"event": "heartbeat", "data": json.dumps({"timestamp": _utc_now_z()})}
                 continue
             preview = _workspace_transcript_preview_from_payload(message.payload)
+            preview_event_id = _workspace_preview_event_id(preview)
+            latest_event_id = -abs(preview_event_id) if preview_event_id is not None else 0
             yield {
                 "event": "workspace_changed",
                 "id": str(message.seq),
                 "data": json.dumps(
                     {
                         "session_id": str(session_id),
+                        "latest_event_id": latest_event_id,
                         "server_now_ms": int(datetime.now(timezone.utc).timestamp() * 1000),
                         "server_fanout_at_ms": _workspace_server_fanout_at_ms(message.payload),
                         "pubsub_seq": message.seq,

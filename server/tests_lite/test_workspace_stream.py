@@ -1054,3 +1054,62 @@ def test_codex_live_preview_round_trip_post_to_sse(tmp_path):
     assert preview["is_provisional"] is True
     assert preview["content_cursor"] == f"codex_bridge_live:{session_id}:thread-1:turn-1:7"
     assert changed["latest_event_id"] == -7
+
+
+def test_live_catalog_workspace_event_matches_ios_required_contract():
+    """Production live-catalog SSE must decode before durable transcript shipping."""
+    from zerg.services.session_pubsub import get_pubsub
+    from zerg.services.session_pubsub import reset_pubsub_for_test
+    from zerg.services.session_pubsub import topic_session
+
+    reset_pubsub_for_test()
+    session_id = uuid4()
+    timestamp = datetime.now(timezone.utc).isoformat()
+    get_pubsub().publish(
+        topic_session(str(session_id)),
+        {
+            "kind": "transcript_preview",
+            "server_fanout_at_ms": 1234,
+            "transcript_preview": {
+                "event_id": 7,
+                "text": "visible before durability",
+                "role": "assistant",
+                "tool_name": None,
+                "tool_input_json": None,
+                "tool_output_text": None,
+                "tool_call_id": None,
+                "tool_call_state": None,
+                "event_origin": "live_provisional",
+                "timestamp": timestamp,
+                "is_provisional": True,
+                "is_complete": False,
+                "content_cursor": "console:turn:7",
+                "is_stale": False,
+                "stale_reason": None,
+            },
+        },
+    )
+
+    async def _run():
+        request = _DisconnectAfterNCycles(2)
+        events = []
+        async for event in timeline_mod._live_catalog_workspace_stream(
+            request,
+            session_id=session_id,
+            skip_initial=True,
+            last_event_id=0,
+        ):
+            events.append(event)
+            if event.get("event") == "workspace_changed":
+                break
+        return events
+
+    events = asyncio.run(_run())
+    changed = json.loads(next(event["data"] for event in events if event["event"] == "workspace_changed"))
+    assert changed["latest_event_id"] == -7
+    assert changed["transcript_preview"]["text"] == "visible before durability"
+    # Required, non-optional fields in SessionWorkspaceStream.WorkspaceChanged.
+    assert isinstance(changed["session_id"], str)
+    assert isinstance(changed["transcript_preview"]["event_origin"], str)
+    assert isinstance(changed["transcript_preview"]["timestamp"], str)
+    assert isinstance(changed["transcript_preview"]["is_provisional"], bool)
