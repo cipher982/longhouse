@@ -11,6 +11,7 @@ use base64::Engine;
 use chrono::{DateTime, Utc};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
@@ -39,6 +40,7 @@ use crate::storage_v2_contract::{self, EnvelopeIdentity, RangeKind};
 pub(crate) const PARSER_REVISION: &str = "engine-parser-v2";
 pub(crate) const ORDERING_REVISION: &str = "semantic-order-v2";
 const OPENCODE_SESSION_PAGE_SIZE: usize = 64;
+const CURSOR_PARSER_REVISION: &str = "cursor-store-render-v1";
 
 pub(crate) struct PreparedStorageV2Envelope {
     pub envelope: StorageV2Envelope,
@@ -813,6 +815,101 @@ pub(crate) fn prepare_next_opencode_envelope(
     }
 }
 
+fn cursor_render_records(
+    snapshot: &cursor_store::CursorStoreSnapshot,
+    range_start: u64,
+    range_end: u64,
+    started_at_us: i64,
+) -> Result<Vec<StorageV2RenderRecord>> {
+    let cursor_store::RootMessageBlobIds::Parsed(root_ids) = &snapshot.root_message_blob_ids else {
+        return Ok(Vec::new());
+    };
+    let meta_count = snapshot.meta_rows.len() as u64;
+    let mut records = Vec::new();
+    for (message_order, blob_id) in root_ids.iter().enumerate() {
+        let Some((blob_index, blob)) = snapshot
+            .blob_rows
+            .iter()
+            .enumerate()
+            .find(|(_, row)| &row.id == blob_id)
+        else {
+            continue;
+        };
+        let source_position = meta_count + blob_index as u64;
+        if source_position < range_start || source_position >= range_end {
+            continue;
+        }
+        let message: Value = match serde_json::from_slice(&blob.data_bytes) {
+            Ok(value) => value,
+            Err(_) => continue,
+        };
+        let role = message
+            .get("role")
+            .and_then(Value::as_str)
+            .unwrap_or("assistant");
+        let blocks: Vec<Value> = match message.get("content") {
+            Some(Value::Array(values)) => values.clone(),
+            Some(Value::String(text)) => vec![serde_json::json!({"type":"text","text":text})],
+            _ => Vec::new(),
+        };
+        for (subordinal, block) in blocks.iter().enumerate() {
+            let kind = block.get("type").and_then(Value::as_str).unwrap_or("unknown");
+            let (event_role, content_text, tool_name, tool_input_json, tool_output_text, tool_call_id) =
+                match kind {
+                    "text" | "reasoning" => (
+                        if kind == "reasoning" { "assistant" } else { role },
+                        block.get("text").and_then(Value::as_str).map(str::to_owned),
+                        None,
+                        None,
+                        None,
+                        None,
+                    ),
+                    "tool-call" => (
+                        "assistant",
+                        None,
+                        block.get("toolName").and_then(Value::as_str).map(str::to_owned),
+                        block.get("args").or_else(|| block.get("input")).cloned(),
+                        None,
+                        block.get("toolCallId").and_then(Value::as_str).map(str::to_owned),
+                    ),
+                    "tool-result" => (
+                        "tool",
+                        None,
+                        block.get("toolName").and_then(Value::as_str).map(str::to_owned),
+                        None,
+                        block.get("result").map(|value| match value {
+                            Value::String(text) => text.clone(),
+                            other => other.to_string(),
+                        }),
+                        block.get("toolCallId").and_then(Value::as_str).map(str::to_owned),
+                    ),
+                    _ => (role, Some(String::new()), None, None, None, None),
+                };
+            records.push(StorageV2RenderRecord {
+                event_id: Uuid::new_v5(
+                    &Uuid::NAMESPACE_URL,
+                    format!("cursor:{blob_id}:{subordinal}").as_bytes(),
+                )
+                .to_string(),
+                order_time_us: started_at_us + message_order as i64 * 1_000 + subordinal as i64,
+                source_position,
+                event_subordinal: subordinal as u32,
+                role: event_role.to_string(),
+                content_text,
+                tool_name,
+                tool_input_json,
+                tool_output_text,
+                tool_call_id,
+                thread_id: None,
+                branch_kind: (kind == "reasoning").then(|| "reasoning".to_string()),
+                raw_record_ordinal: usize::try_from(source_position - range_start)
+                    .context("Cursor raw record ordinal exceeds usize")?,
+            });
+        }
+    }
+    Ok(records)
+}
+
 pub(crate) fn prepare_next_cursor_envelope(
     conn: &mut Connection,
     capabilities: &StorageV2Capabilities,
@@ -823,6 +920,7 @@ pub(crate) fn prepare_next_cursor_envelope(
     if let Some(pending) = load_pending_for_path(conn, &path_text)? {
         return Ok(Some(pending));
     }
+    let store_snapshot = cursor_store::read_cursor_store(db_path)?;
     let snapshot = cursor_store::cursor_store_raw_snapshot(db_path)?;
     let claimed_session_id = crate::cursor_launch_binding::managed_session_id_for_conversation(
         &snapshot.conversation_uuid,
@@ -944,6 +1042,27 @@ pub(crate) fn prepare_next_cursor_envelope(
     let observed_at = DateTime::parse_from_rfc3339(&resolution.opened_at)
         .expect("source epoch opened_at is generated internally")
         .with_timezone(&Utc);
+    let render_records = cursor_render_records(
+        &store_snapshot,
+        range_start,
+        range_end,
+        started_at.timestamp_micros(),
+    )?;
+    let render_generation = Uuid::new_v5(
+        &resolution.source_epoch,
+        format!("{CURSOR_PARSER_REVISION}:{}", snapshot.source_revision).as_bytes(),
+    );
+    let has_reply_evidence = render_records
+        .iter()
+        .any(|record| record.role == "assistant" || record.role == "tool");
+    let event_count = render_records.len();
+    let render = (!render_records.is_empty()).then(|| StorageV2Render {
+        generation_id: render_generation.to_string(),
+        parser_revision: CURSOR_PARSER_REVISION.to_string(),
+        ordering_revision: "cursor-root-order-v1".to_string(),
+        records: render_records,
+    });
+    let render_ready = render.is_some();
     let prepared = PreparedStorageV2Envelope {
         envelope: StorageV2Envelope {
             protocol_version: 2,
@@ -958,7 +1077,7 @@ pub(crate) fn prepare_next_cursor_envelope(
             range_kind: "record_ordinal".to_string(),
             range_start,
             range_end,
-            render: None,
+            render,
             media: Vec::new(),
             session: StorageV2SessionFacts {
                 environment: "local".to_string(),
@@ -970,7 +1089,7 @@ pub(crate) fn prepare_next_cursor_envelope(
                 last_activity_at: observed_at.max(started_at).to_rfc3339(),
                 ended_at: None,
                 origin_kind: Some("cursor_store".to_string()),
-                hidden_from_default_timeline: managed_session_id.is_none(),
+                hidden_from_default_timeline: managed_session_id.is_none() || !render_ready,
                 launch_actor: None,
                 launch_surface: None,
             },
@@ -986,8 +1105,8 @@ pub(crate) fn prepare_next_cursor_envelope(
         source_epoch: resolution.source_epoch,
         range_start,
         range_end,
-        event_count: 0,
-        has_reply_evidence: false,
+        event_count,
+        has_reply_evidence,
         raw_bytes,
         has_more: range_end < logical_len,
         media_objects: Vec::new(),
@@ -1905,6 +2024,39 @@ mod tests {
             Some(first.source_epoch.to_string())
         );
         assert_eq!(rewrite.range_start, 0);
+    }
+
+    #[test]
+    fn cursor_store_emits_readable_text_and_tool_render_records() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("store.db");
+        let store = make_cursor_store(&path);
+        let message = serde_json::json!({
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "hello from Cursor"},
+                {"type": "tool-call", "toolName": "Shell", "toolCallId": "call-1", "args": {"command": "pwd"}},
+                {"type": "tool-result", "toolName": "Shell", "toolCallId": "call-1", "result": "/tmp"}
+            ]
+        });
+        store
+            .execute(
+                "UPDATE blobs SET data = ?1 WHERE id = ?2",
+                params![serde_json::to_vec(&message).unwrap(), CURSOR_MESSAGE_A],
+            )
+            .unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+
+        let prepared = prepare_next_cursor_envelope(&mut conn, &capabilities(), &path)
+            .unwrap()
+            .unwrap();
+        let render = prepared.envelope.render.unwrap();
+        assert_eq!(render.parser_revision, CURSOR_PARSER_REVISION);
+        assert_eq!(render.records.len(), 3);
+        assert_eq!(render.records[0].content_text.as_deref(), Some("hello from Cursor"));
+        assert_eq!(render.records[1].tool_call_id.as_deref(), Some("call-1"));
+        assert_eq!(render.records[2].role, "tool");
+        assert_eq!(render.records[2].tool_output_text.as_deref(), Some("/tmp"));
     }
 
     #[test]
