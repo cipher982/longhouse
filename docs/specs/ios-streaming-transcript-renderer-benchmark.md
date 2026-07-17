@@ -207,6 +207,12 @@ default simulator run is a smoke comparison, not publishable evidence.
 Physical-device publication runs use the same XCTest and save `.xcresult`, JSON,
 screenshots, and optional `.trace` files under a gitignored artifact directory.
 
+Publication runs set `IOS_TRANSCRIPT_BENCHMARK_BUILD_MODE=optimized`. This keeps
+the Debug-only deterministic fixture available while compiling the app with
+Swift `-O`; results identify the configuration as `Debug-Optimized`. Plain
+`Debug` remains the fast harness-development mode and must not be pooled with
+optimized results.
+
 ## Decision Rules
 
 1. Optimize `snapshot-webkit` first if it misses budgets because of avoidable
