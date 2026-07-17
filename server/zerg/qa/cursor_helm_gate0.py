@@ -277,6 +277,7 @@ def wait_for_hook(
     longhouse_session_id: str,
     event: str | None = None,
     conversation_id: str | None = None,
+    generation_id: str | None = None,
     after_count: int = 0,
     timeout: float = _DEFAULT_TIMEOUT_SECONDS,
 ) -> dict[str, Any]:
@@ -289,6 +290,8 @@ def wait_for_hook(
             if event is not None and row.get("event") != event:
                 continue
             if conversation_id is not None and row.get("conversation_id") != conversation_id:
+                continue
+            if generation_id is not None and row.get("generation_id") != generation_id:
                 continue
             return row
         time.sleep(0.1)
@@ -649,6 +652,7 @@ def _cancel_scenario(
             longhouse_session_id=longhouse_session_id,
             event="stop",
             conversation_id=provider_id,
+            generation_id=str(prompt.get("generation_id") or ""),
             after_count=turn_start,
             timeout=timeout,
         )
