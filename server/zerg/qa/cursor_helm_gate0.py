@@ -396,6 +396,14 @@ class CursorPtySession:
         with self._write_lock:
             os.write(self.master_fd, b"\x1b")
 
+    def submit_active(self, text: str) -> None:
+        if not self.alive():
+            raise RuntimeError(f"Cursor process exited before active steer ({self.process.returncode})")
+        with self._write_lock:
+            os.write(self.master_fd, text.encode("utf-8"))
+            time.sleep(_INJECT_TEXT_SETTLE_SECONDS)
+            os.write(self.master_fd, b"\r")
+
     def close(self) -> None:
         self._stop_reader.set()
         if self.alive():
@@ -783,6 +791,61 @@ def _permission_scenario(
         session.close()
 
 
+def _active_steer_scenario(
+    *,
+    binary: str,
+    workspace: Path,
+    events_path: Path,
+    terminal_path: Path,
+    provider_id: str,
+    timeout: float,
+    model: str | None,
+) -> dict[str, Any]:
+    longhouse_session_id = str(uuid4())
+    argv = [binary, "--resume", provider_id, "--workspace", str(workspace), "--force"]
+    if model:
+        argv.extend(["--model", model])
+    argv.append("Run exactly `sleep 8`, then reply with exactly ORIGINAL and nothing else.")
+    before = len(read_hook_events(events_path))
+    session = CursorPtySession.start(
+        argv=argv,
+        cwd=workspace,
+        env=_child_env(longhouse_session_id, events_path),
+        terminal_path=terminal_path,
+    )
+    try:
+        shell = wait_for_hook(
+            events_path,
+            longhouse_session_id=longhouse_session_id,
+            event="beforeShellExecution",
+            conversation_id=provider_id,
+            after_count=before,
+            timeout=timeout,
+        )
+        generation_id = str(shell.get("generation_id") or "")
+        session.submit_active("Instead, reply with exactly STEERED and nothing else.")
+        response = wait_for_hook(
+            events_path,
+            longhouse_session_id=longhouse_session_id,
+            event="afterAgentResponse",
+            conversation_id=provider_id,
+            generation_id=generation_id,
+            after_count=before,
+            timeout=timeout,
+        )
+        steered = response.get("text_sha256") == _marker_digest("STEERED")
+        return {
+            "status": "passed" if steered else "unsupported",
+            "provider_conversation_id": provider_id,
+            "generation_id": generation_id,
+            "same_generation_response": True,
+            "response_was_steered": steered,
+            "process_alive": session.alive(),
+        }
+    finally:
+        session.close()
+
+
 def run_gate0(args: argparse.Namespace) -> dict[str, Any]:
     binary = _cursor_binary(args.cursor_bin)
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
@@ -878,6 +941,16 @@ def run_gate0(args: argparse.Namespace) -> dict[str, Any]:
                 timeout=args.timeout,
                 model=args.model,
             )
+        steer_provider_id = _create_chat(binary, workspace)
+        report["scenarios"]["active_steer"] = _active_steer_scenario(
+            binary=binary,
+            workspace=workspace,
+            events_path=events_path,
+            terminal_path=artifact_root / "active-steer.terminal.raw",
+            provider_id=steer_provider_id,
+            timeout=args.timeout,
+            model=args.model,
+        )
         report["selected_identity_path"] = "create_chat_resume"
         report["status"] = "passed"
         report["failure_code"] = None

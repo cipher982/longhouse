@@ -103,6 +103,9 @@ def test_cursor_permission_timeout_returns_to_local_prompt(tmp_path: Path) -> No
         "permission": "ask",
         "user_message": "Longhouse unavailable; decide in Cursor",
     }
+    presence = list((tmp_path / "longhouse" / "agent" / "outbox").glob("prs.*.json"))
+    assert len(presence) == 1
+    assert json.loads(presence[0].read_text())["state"] == "thinking"
 
 
 def test_cursor_permission_hook_returns_exact_remote_allow_and_deny(tmp_path: Path) -> None:

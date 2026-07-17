@@ -14,7 +14,7 @@ ownership is what makes remote steer possible. The launcher:
   that socket to the PTY master / child pid:
   - send:   ``text -> 0.3s -> Escape -> 0.1s -> Enter`` (Ink submit workaround,
     claude-code#15553);
-  - interrupt: ``SIGINT`` to the cursor-agent child (#52812);
+  - interrupt: Escape while native hooks prove an active turn (the TUI survives);
   - terminate: ``SIGKILL`` the child, then cleanup + exit.
 
 The engine connects to the socket per command; see
@@ -860,8 +860,8 @@ def run_helm(
 
     typer.secho(
         "Cursor Helm remote control is live when Longhouse registration and the machine lease succeed. "
-        "Transcript archive is unavailable until the native Cursor storage-v2 source is enabled.",
-        fg=typer.colors.YELLOW,
+        "The native Cursor conversation is archived and resumable under this same session.",
+        fg=typer.colors.GREEN,
     )
 
     launch_ui.launch_panel(
@@ -1081,10 +1081,7 @@ def run_helm(
         except OSError:
             pass
         _remove_state(session_id, sock_path)
-        # Catalog registration proves remote control ownership, not transcript
-        # durability. Cursor stays explicitly control-only until storage-v2
-        # receipts exist for its native source.
-        launch_ui.exit_bookend(exit_code=exit_code, machine_name=machine_name, durable=False)
+        launch_ui.exit_bookend(exit_code=exit_code, machine_name=machine_name, durable=True)
         if open_browser:
             typer.echo(f"Timeline: {build_session_url(resolved_url, session_id)}")
 

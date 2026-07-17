@@ -55,6 +55,12 @@ if phase:
     with os.fdopen(fd, "w") as f:
         json.dump({"session_id": sid, "conversation_id": conversation_id, "phase": phase, "generation_id": payload.get("generation_id"), "observed_at": now}, f)
     os.replace(tmp, target)
+    outbox = home / "agent" / "outbox"
+    outbox.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=outbox, prefix=".tmp.")
+    with os.fdopen(fd, "w") as f:
+        json.dump({"session_id": sid, "state": "thinking" if phase == "active" else "idle", "tool_name": payload.get("tool_name"), "cwd": payload.get("cwd"), "provider": "cursor", "control_path": "managed"}, f)
+    os.replace(tmp, outbox / (Path(tmp).name.replace(".tmp.", "prs.") + ".json"))
 claim = {"schema_version": 2, "provider": "cursor", "status": "observed", "session_id": sid, "conversation_uuid": conversation_id, "hook_observed_at": now}
 target = claims / f"{sid}.json"
 fd, tmp = tempfile.mkstemp(dir=claims, prefix=".claim.")
