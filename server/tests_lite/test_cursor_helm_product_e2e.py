@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 from zerg.qa.cursor_helm_product_e2e import _hook_rows
+from zerg.qa.cursor_helm_product_e2e import _pending_pause
 from zerg.qa.cursor_helm_product_e2e import _state_ids
 from zerg.qa.cursor_helm_product_e2e import _visible_texts
 
@@ -35,3 +36,12 @@ def test_product_e2e_helpers_parse_managed_state_hooks_and_visible_events(tmp_pa
     assert _visible_texts(
         {"events": [{"role": "system", "content_text": "hidden"}, {"role": "assistant", "content_text": "ready"}]}
     ) == ["ready"]
+    assert _pending_pause(
+        {
+            "requests": [
+                {"id": "done", "status": "resolved", "can_respond": True},
+                {"id": "blocked", "status": "pending", "can_respond": False},
+                {"id": "ready", "status": "pending", "can_respond": True},
+            ]
+        }
+    ) == {"id": "ready", "status": "pending", "can_respond": True}

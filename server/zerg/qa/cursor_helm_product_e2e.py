@@ -73,6 +73,13 @@ def _visible_texts(payload: dict[str, Any]) -> list[str]:
     return [str(row.get("content_text") or "") for row in payload.get("events", []) if row.get("role") in {"user", "assistant"}]
 
 
+def _pending_pause(payload: dict[str, Any]) -> dict[str, Any] | None:
+    return next(
+        (row for row in payload.get("requests", []) if row.get("status") == "pending" and row.get("can_respond") is True),
+        None,
+    )
+
+
 @dataclass
 class _PtyProcess:
     process: subprocess.Popen[bytes]
@@ -156,6 +163,9 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
     marker_two = f"LONGHOUSE_CURSOR_PRODUCT_TWO_{uuid4().hex[:10]}"
     recovery = f"LONGHOUSE_CURSOR_PRODUCT_RECOVERY_{uuid4().hex[:10]}"
     forbidden = f"LONGHOUSE_CURSOR_PRODUCT_CANCELLED_{uuid4().hex[:10]}"
+    permission_allow = f"LONGHOUSE_CURSOR_PERMISSION_ALLOW_{uuid4().hex[:10]}"
+    allow_path = Path("/tmp") / permission_allow
+    deny_path = Path("/tmp") / f"LONGHOUSE_CURSOR_PERMISSION_DENY_{uuid4().hex[:10]}"
     terminal_path = artifact_root / "terminal.raw"
     session: _PtyProcess | None = None
     session_id: str | None = None
@@ -168,7 +178,7 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
                 "--cwd",
                 str(workspace),
                 "--permission-mode",
-                "bypass",
+                "remote_approve",
                 "--",
                 "--model",
                 args.model,
@@ -200,20 +210,35 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
         token = load_token()
         headers = {"X-Agents-Token": token}
 
-        def hosted_events() -> dict[str, Any] | None:
+        def api_get(path: str, *, params: dict[str, Any] | None = None) -> dict[str, Any] | None:
             try:
-                response = httpx.get(
-                    f"{url}/api/agents/sessions/{session_id}/events",
-                    headers=headers,
-                    params={"context_mode": "forensic", "branch_mode": "head", "limit": 100},
-                    timeout=10,
-                )
+                response = httpx.get(f"{url}{path}", headers=headers, params=params, timeout=10)
             except httpx.TransportError:
                 return None
             if response.status_code in {404, 429, 503}:
                 return None
             response.raise_for_status()
             return response.json()
+
+        def pending_pause() -> dict[str, Any] | None:
+            payload = api_get(f"/api/agents/sessions/{session_id}/pause-requests")
+            return _pending_pause(payload) if payload else None
+
+        def answer_pause(pause: dict[str, Any], decision: str) -> dict[str, Any]:
+            response = httpx.post(
+                f"{url}/api/agents/sessions/{session_id}/pause-requests/{pause['id']}/response",
+                headers=headers,
+                json={"decision": decision, "message": f"Cursor product canary: {decision}"},
+                timeout=10,
+            )
+            response.raise_for_status()
+            return response.json()
+
+        def hosted_events() -> dict[str, Any] | None:
+            return api_get(
+                f"/api/agents/sessions/{session_id}/events",
+                params={"context_mode": "forensic", "branch_mode": "head", "limit": 100},
+            )
 
         first = _wait_until(
             lambda: (payload if marker_one in _visible_texts(payload) else None) if (payload := hosted_events()) else None,
@@ -226,6 +251,49 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
             timeout=args.timeout,
             description="remote Cursor reply in hosted archive",
         )
+
+        _engine_command(
+            engine,
+            session_id,
+            "send",
+            f"Use the Shell tool to run exactly `touch {allow_path}`, then reply with exactly {permission_allow}",
+        )
+        allow_pause = _wait_until(pending_pause, timeout=args.timeout, description="hosted Cursor allow request")
+        if allow_path.exists():
+            raise RuntimeError("Cursor command ran before remote permission approval")
+        answer_pause(allow_pause, "answer")
+        _wait_until(allow_path.exists, timeout=args.timeout, description="approved Cursor command side effect")
+        _wait_until(
+            lambda: (payload if permission_allow in _visible_texts(payload) else None) if (payload := hosted_events()) else None,
+            timeout=args.timeout,
+            description="approved Cursor response in hosted archive",
+        )
+
+        deny_hook_start = len(_hook_rows(root, session_id))
+        _engine_command(
+            engine,
+            session_id,
+            "send",
+            f"Use the Shell tool to run exactly `touch {deny_path}`, then explain the result briefly",
+        )
+        deny_pause = _wait_until(pending_pause, timeout=args.timeout, description="hosted Cursor deny request")
+        if deny_path.exists():
+            raise RuntimeError("Cursor denied command ran before remote permission response")
+        answer_pause(deny_pause, "reject")
+        _wait_until(
+            lambda: next(
+                (
+                    row
+                    for row in _hook_rows(root, session_id)[deny_hook_start:]
+                    if row.get("event") == "stop" and row.get("status") in {"completed", "error", "aborted"}
+                ),
+                None,
+            ),
+            timeout=args.timeout,
+            description="denied Cursor turn completion",
+        )
+        if deny_path.exists():
+            raise RuntimeError("Cursor command ran after remote permission denial")
 
         hook_start = len(_hook_rows(root, session_id))
         _engine_command(
@@ -246,6 +314,9 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
             timeout=args.timeout,
             description="active Cursor shell generation",
         )
+        cancel_pause = _wait_until(pending_pause, timeout=args.timeout, description="hosted Cursor cancel-test permission request")
+        answer_pause(cancel_pause, "answer")
+        time.sleep(0.5)
         cancel_generation = str(shell.get("generation_id") or "")
         _engine_command(engine, session_id, "interrupt")
         _wait_until(
@@ -289,6 +360,8 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
                 "recovery_event_count": recovered["total"],
                 "cancel_generation_id": cancel_generation,
                 "process_alive_after_cancel": True,
+                "remote_permission_allow": True,
+                "remote_permission_deny": True,
             }
         )
         return report
@@ -303,6 +376,8 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
                 pass
         if session is not None:
             session.close()
+        allow_path.unlink(missing_ok=True)
+        deny_path.unlink(missing_ok=True)
         (artifact_root / "product-e2e.json").write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
 
 
