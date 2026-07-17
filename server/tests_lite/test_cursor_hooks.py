@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import socket
 import subprocess
 import threading
+import uuid
 from http.server import BaseHTTPRequestHandler
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -136,3 +139,66 @@ def test_cursor_permission_hook_returns_exact_remote_allow_and_deny(tmp_path: Pa
             )
         assert json.loads(result.stdout)["permission"] == decision
         assert server.requests[0]["provider"] == "cursor"
+
+
+def test_cursor_stop_wakes_engine_with_exact_managed_store(tmp_path: Path) -> None:
+    cursor = tmp_path / ".cursor"
+    cursor.mkdir()
+    conversation_id = "cursor-id"
+    store = cursor / "chats" / "workspace" / conversation_id / "store.db"
+    store.parent.mkdir(parents=True)
+    store.write_bytes(b"cursor-store")
+    longhouse_home = Path("/tmp") / f"lh-cursor-wake-{uuid.uuid4().hex[:8]}"
+    wake_socket = longhouse_home / "agent" / "transcript-wake.sock"
+    wake_socket.parent.mkdir(parents=True)
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.bind(str(wake_socket))
+    listener.listen(1)
+    received: list[dict] = []
+
+    def accept_wake() -> None:
+        conn, _ = listener.accept()
+        with conn:
+            data = bytearray()
+            while chunk := conn.recv(4096):
+                data.extend(chunk)
+        received.append(json.loads(data))
+
+    thread = threading.Thread(target=accept_wake, daemon=True)
+    thread.start()
+    install_cursor_hooks(cursor)
+    script = cursor / "hooks" / "longhouse-cursor-hook.py"
+    env = dict(os.environ)
+    env.update(
+        {
+            "CURSOR_HOME": str(cursor),
+            "LONGHOUSE_HOME": str(longhouse_home),
+            "LONGHOUSE_SESSION_ID": "managed-session",
+        }
+    )
+    result = subprocess.run(
+        [str(script), "stop"],
+        input=json.dumps({"conversation_id": conversation_id, "generation_id": "generation-1"}),
+        text=True,
+        capture_output=True,
+        env=env,
+        timeout=5,
+        check=True,
+    )
+    thread.join(timeout=2)
+    listener.close()
+
+    assert json.loads(result.stdout) == {}
+    assert received == [
+        {
+            "provider": "cursor",
+            "path": str(store),
+            "phase": "idle",
+            "session_id": "managed-session",
+            "turn_id": "generation-1",
+            "wake_reason": "turn_completed",
+            "observed_at_ms": received[0]["observed_at_ms"],
+            "file_len_hint": len(b"cursor-store"),
+        }
+    ]
+    shutil.rmtree(longhouse_home)

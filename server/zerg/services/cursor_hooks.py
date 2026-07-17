@@ -1,5 +1,7 @@
 """Install the Longhouse-owned Cursor hook adapter without replacing user hooks."""
 
+# ruff: noqa: E501 -- the embedded standalone hook is intentionally kept literal.
+
 from __future__ import annotations
 
 import json
@@ -24,7 +26,7 @@ _EVENTS = (
 _MARKER = "longhouse-cursor-hook.py"
 
 _SCRIPT = r"""#!/usr/bin/env python3
-import hashlib, json, os, sys, tempfile, time, urllib.error, urllib.parse, urllib.request
+import hashlib, json, os, socket, sys, tempfile, time, urllib.error, urllib.parse, urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -67,6 +69,30 @@ fd, tmp = tempfile.mkstemp(dir=claims, prefix=".claim.")
 with os.fdopen(fd, "w") as f:
     json.dump(claim, f)
 os.replace(tmp, target)
+
+if event in {"afterAgentResponse", "stop"}:
+    cursor_home = Path(os.environ.get("CURSOR_HOME") or (Path.home() / ".cursor"))
+    stores = list((cursor_home / "chats").glob(f"*/{conversation_id}/store.db"))
+    wake_socket = home / "agent" / "transcript-wake.sock"
+    if len(stores) == 1 and wake_socket.exists():
+        store = stores[0]
+        wake = {
+            "provider": "cursor",
+            "path": str(store),
+            "phase": "idle",
+            "session_id": sid,
+            "turn_id": payload.get("generation_id"),
+            "wake_reason": "turn_completed",
+            "observed_at_ms": int(time.time() * 1000),
+            "file_len_hint": store.stat().st_size,
+        }
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as stream:
+                stream.settimeout(0.075)
+                stream.connect(str(wake_socket))
+                stream.sendall(json.dumps(wake, separators=(",", ":")).encode())
+        except OSError:
+            pass
 
 def permission(value, message=None):
     result = {"permission": value}
