@@ -73,10 +73,9 @@ pub fn try_collect_process_facts_by_pid() -> Option<HashMap<u32, ProcessFact>> {
     let line_count = text.lines().filter(|line| !line.trim().is_empty()).count();
     let facts = text
         .lines()
-        .filter_map(parse_process_fact)
+        .filter_map(parse_process_fact_for_inventory)
         .collect::<HashMap<_, _>>();
     if facts.len() != line_count
-        || facts.values().any(|fact| fact.start_time.is_none())
         || !facts.contains_key(&std::process::id())
     {
         return None;
@@ -90,6 +89,14 @@ pub fn try_collect_process_facts_by_pid() -> Option<HashMap<u32, ProcessFact>> {
 /// a fixed-width 24-char field like `Sun Apr 27 10:15:23 2026`; `command` is the
 /// remainder (and may contain spaces), so it stays last.
 pub fn parse_process_fact(line: &str) -> Option<(u32, ProcessFact)> {
+    parse_process_fact_impl(line, true)
+}
+
+fn parse_process_fact_for_inventory(line: &str) -> Option<(u32, ProcessFact)> {
+    parse_process_fact_impl(line, false)
+}
+
+fn parse_process_fact_impl(line: &str, parse_all_start_times: bool) -> Option<(u32, ProcessFact)> {
     let trimmed = line.trim_start();
     let (pid_text, rest) = trimmed.split_once(char::is_whitespace)?;
     let pid = pid_text.parse::<u32>().ok()?;
@@ -105,6 +112,9 @@ pub fn parse_process_fact(line: &str) -> Option<(u32, ProcessFact)> {
     if command.is_empty() {
         return None;
     }
+    let start_time = (parse_all_start_times || command_needs_start_time(&command))
+        .then(|| parse_lstart(&lstart))
+        .flatten();
     Some((
         pid,
         ProcessFact {
@@ -113,9 +123,34 @@ pub fn parse_process_fact(line: &str) -> Option<(u32, ProcessFact)> {
             stat: stat.to_string(),
             lstart: lstart.clone(),
             command,
-            start_time: parse_lstart(&lstart),
+            start_time,
         },
     ))
+}
+
+fn command_needs_start_time(command: &str) -> bool {
+    command.split_whitespace().any(|part| {
+        Path::new(part)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| {
+                matches!(
+                    name,
+                    "claude"
+                        | "codex"
+                        | "opencode"
+                        | "cursor-agent"
+                        | "longhouse"
+                        | "longhouse-engine"
+                        | "agy"
+                        | "antigravity"
+                        | "gemini"
+                        | "node"
+                        | "nodejs"
+                        | "bun"
+                )
+            })
+    })
 }
 
 pub fn parse_lstart(value: &str) -> Option<DateTime<Utc>> {
@@ -226,5 +261,22 @@ mod tests {
         let full = inventory.get(&pid).expect("current process in inventory");
 
         assert_eq!(targeted, *full);
+    }
+
+    #[test]
+    fn full_inventory_parses_start_time_only_for_relevant_processes() {
+        let shell = parse_process_fact_for_inventory(
+            "  101 ttys003  S+   Mon May  5 11:58:00 2026 /bin/zsh -l",
+        )
+        .unwrap()
+        .1;
+        let provider = parse_process_fact_for_inventory(
+            "  102 ttys003  S+   Mon May  5 11:58:00 2026 /opt/homebrew/bin/codex --remote ws://x",
+        )
+        .unwrap()
+        .1;
+
+        assert!(shell.start_time.is_none());
+        assert!(provider.start_time.is_some());
     }
 }
