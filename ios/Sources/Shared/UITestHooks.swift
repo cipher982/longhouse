@@ -12,6 +12,9 @@ enum UITestHooks {
     static let timelineOpenFixtureEnvironmentKey = "LONGHOUSE_UI_TEST_TIMELINE_OPEN_FIXTURE"
     static let launchSessionFixtureEnvironmentKey = "LONGHOUSE_UI_TEST_LAUNCH_SESSION_FIXTURE"
     static let mobileTailDelayMsEnvironmentKey = "LONGHOUSE_UI_TEST_MOBILE_TAIL_DELAY_MS"
+    static let transcriptBenchmarkRendererEnvironmentKey = "LONGHOUSE_TRANSCRIPT_BENCHMARK_RENDERER"
+    static let transcriptBenchmarkAutoStartEnvironmentKey = "LONGHOUSE_TRANSCRIPT_BENCHMARK_AUTO_START"
+    static let transcriptBenchmarkRunIDEnvironmentKey = "LONGHOUSE_TRANSCRIPT_BENCHMARK_RUN_ID"
     static let appearanceOverrideArgument = "-LONGHOUSE_UI_TEST_APPEARANCE"
 
     static var shouldResetState: Bool {
@@ -72,6 +75,23 @@ enum UITestHooks {
             return nil
         }
         return Int(raw)
+    }
+
+    static var transcriptBenchmarkRenderer: String? {
+        let raw = ProcessInfo.processInfo.environment[transcriptBenchmarkRendererEnvironmentKey]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        return raw?.isEmpty == false ? raw : nil
+    }
+
+    static var shouldAutoStartTranscriptBenchmark: Bool {
+        ProcessInfo.processInfo.environment[transcriptBenchmarkAutoStartEnvironmentKey] == "1"
+    }
+
+    static var transcriptBenchmarkRunID: String? {
+        let raw = ProcessInfo.processInfo.environment[transcriptBenchmarkRunIDEnvironmentKey]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return raw?.isEmpty == false ? raw : nil
     }
 
     static var appearanceOverride: String? {

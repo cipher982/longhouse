@@ -1,5 +1,6 @@
 #if DEBUG
 import SwiftUI
+import UIKit
 
 @MainActor
 struct ChatUITestFixtureView: View {
@@ -7,15 +8,26 @@ struct ChatUITestFixtureView: View {
     private let fixtureName: String
     private let client: ChatUITestWorkspaceClient
     @StateObject private var viewModel: SessionViewModel
-    @StateObject private var probe: ChatUITestProbe
+    @State private var probe: ChatUITestProbe
     @State private var invalidationTick = 0
+    @State private var benchmarkStartRequested = false
 
     init(fixtureName: String) {
         let fixture = ChatUITestFixture(name: fixtureName)
-        let client = ChatUITestWorkspaceClient(fixture: fixture)
+        let sessionID: String
+        if fixtureName == "benchmark-core" {
+            // SessionViewModel's production cache is keyed by session ID. A unique
+            // ID keeps an earlier benchmark's final transcript from becoming the
+            // next run's initial state.
+            let runID = UITestHooks.transcriptBenchmarkRunID ?? UUID().uuidString
+            sessionID = "ui-test-transcript-benchmark-\(runID)"
+        } else {
+            sessionID = "ui-test-chat-session"
+        }
+        let client = ChatUITestWorkspaceClient(fixture: fixture, sessionID: sessionID)
         self.fixtureName = fixtureName
         self.client = client
-        _probe = StateObject(wrappedValue: ChatUITestProbe(path: UITestHooks.chatFixtureProbePath))
+        _probe = State(initialValue: ChatUITestProbe(path: UITestHooks.chatFixtureProbePath))
         _viewModel = StateObject(
             wrappedValue: SessionViewModel(
                 apiFactory: { _ in client },
@@ -38,7 +50,54 @@ struct ChatUITestFixtureView: View {
                 }
             )
         }
+        .overlay(alignment: .topLeading) {
+            if fixtureName == "benchmark-core" {
+                VStack(spacing: 0) {
+                    ChatUITestProbeStatusView(probe: probe)
+                        .frame(width: 2, height: 2)
+                        .clipped()
+                    Button {
+                        benchmarkStartRequested = true
+                    } label: {
+                        Color.clear
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Run transcript benchmark")
+                    .accessibilityIdentifier("transcript-benchmark-start")
+                }
+            }
+        }
         .task(id: fixtureName) {
+            if fixtureName == "benchmark-core" {
+                let renderer = TranscriptBenchmarkRendererKind.selected
+                probe.recordBenchmarkRenderer(renderer)
+                guard renderer.isImplemented else {
+                    probe.recordBenchmark(phase: "renderer_unavailable", updateCount: 0)
+                    return
+                }
+                await waitForInitialWorkspaceLoad()
+                probe.recordBenchmark(phase: "ready", updateCount: 0)
+                if !UITestHooks.shouldAutoStartTranscriptBenchmark {
+                    while !Task.isCancelled && !benchmarkStartRequested {
+                        try? await Task.sleep(nanoseconds: 25_000_000)
+                    }
+                }
+                guard !Task.isCancelled else { return }
+                let coldStalls = await MainThreadStallMonitor.shared.snapshotAndReset()
+                probe.recordColdMainThreadStalls(coldStalls)
+                probe.recordBenchmark(phase: "running", updateCount: 0)
+                let result = await client.runTranscriptBenchmarkTrace()
+                let rendered = await waitForBenchmarkRender(result.expectedLatestItemID)
+                let stalls = await MainThreadStallMonitor.shared.snapshot()
+                probe.recordMainThreadStalls(stalls)
+                probe.recordBenchmark(
+                    phase: rendered ? "complete" : "render_timeout",
+                    updateCount: result.updateCount
+                )
+                return
+            }
             if fixtureName == "render-storm" || fixtureName == "replay-file" {
                 await waitForInitialWorkspaceLoad()
                 await waitForParentChurnTriggerIfConfigured()
@@ -110,11 +169,26 @@ struct ChatUITestFixtureView: View {
             try? await Task.sleep(nanoseconds: 50_000_000)
         }
     }
+
+    private func waitForBenchmarkRender(_ expectedLatestItemID: String) async -> Bool {
+        let deadline = Date().addingTimeInterval(10)
+        while !Task.isCancelled && Date() < deadline {
+            if probe.latestItemID == expectedLatestItemID,
+               probe.lastStage == "rendered" {
+                // Require a short quiet interval so the result does not race a
+                // coalesced pending render behind the final revision.
+                try? await Task.sleep(nanoseconds: 250_000_000)
+                return true
+            }
+            try? await Task.sleep(nanoseconds: 25_000_000)
+        }
+        return false
+    }
 }
 
 @MainActor
 struct TimelineOpenUITestFixtureView: View {
-    @StateObject private var probe = ChatUITestProbe(path: UITestHooks.chatFixtureProbePath)
+    @State private var probe = ChatUITestProbe(path: UITestHooks.chatFixtureProbePath)
 
     private let sessions: [TimelineOpenFixtureSession]
 
@@ -250,8 +324,10 @@ private struct TimelineOpenFixtureSession: Identifiable {
 }
 
 @MainActor
-private final class ChatUITestProbe: ObservableObject {
-    private(set) var statusLine = "renders=0 duplicates=0 repeats=0 rows=0 bytes=0 latest=none fingerprint=none stage=none stick=0 render_ms=0 max_render_ms=0 tick=0"
+private final class ChatUITestProbe {
+    private(set) var statusLine = ""
+    private(set) var latestItemID = "none"
+    private(set) var lastStage = "none"
 
     private let path: String?
     private var renderCount = 0
@@ -259,11 +335,48 @@ private final class ChatUITestProbe: ObservableObject {
     private var repeatRenderCount = 0
     private var lastRenderedKey: String?
     private var maxRenderDurationMs = 0
+    private var renderDurationsMs: [Int] = []
+    private var traceRenderDurationsMs: [Int] = []
+    private var traceRenderBaseline = 0
+    private var traceDuplicateBaseline = 0
+    private var traceRepeatBaseline = 0
+    private var coldRenderMaxMs = 0
     private var tick = 0
+    private var rowCount = 0
+    private var payloadBytes = 0
+    private var payloadFingerprint = "none"
+    private var shouldStickToBottom = false
+    private var renderDurationMs = 0
+    private var benchmarkPhase = "idle"
+    private var benchmarkUpdateCount = 0
+    private var benchmarkRenderer = "none"
+    private var benchmarkSemanticTier = "none"
+    private var mainThreadStallCount = 0
+    private var mainThreadStallMaxMs = 0
+    private var coldMainThreadStallCount = 0
+    private var coldMainThreadStallMaxMs = 0
+    private let buildCommit: String
+    private let buildDirty: Bool
+    private let deviceName: String
+    private let deviceModel: String
+    private let osVersion: String
+    private weak var statusLabel: UILabel?
 
     init(path: String?) {
         self.path = path
-        persist()
+        switch BuildIdentityLoader.loadFromMainBundle() {
+        case .success(let identity):
+            buildCommit = identity.commit
+            buildDirty = identity.dirty
+        case .failure:
+            buildCommit = "unknown"
+            buildDirty = true
+        }
+        let environment = ProcessInfo.processInfo.environment
+        deviceName = environment["SIMULATOR_DEVICE_NAME"] ?? UIDevice.current.model
+        deviceModel = environment["SIMULATOR_MODEL_IDENTIFIER"] ?? Self.hardwareModelIdentifier()
+        osVersion = UIDevice.current.systemVersion
+        rebuildAndPersist()
     }
 
     func record(_ diagnostics: RenderBeaconReporter.WebKitDiagnostics) {
@@ -276,35 +389,140 @@ private final class ChatUITestProbe: ObservableObject {
             }
             lastRenderedKey = key
             renderCount += 1
-            maxRenderDurationMs = max(maxRenderDurationMs, diagnostics.render_duration_ms ?? 0)
+            let durationMs = diagnostics.render_duration_ms ?? 0
+            renderDurationsMs.append(durationMs)
+            if benchmarkPhase == "running" {
+                traceRenderDurationsMs.append(durationMs)
+            }
+            maxRenderDurationMs = max(maxRenderDurationMs, durationMs)
         } else if diagnostics.stage == "duplicate" {
             duplicateCount += 1
         }
 
-        statusLine = [
-            "renders=\(renderCount)",
-            "duplicates=\(duplicateCount)",
-            "repeats=\(repeatRenderCount)",
-            "rows=\(diagnostics.row_count)",
-            "bytes=\(diagnostics.payload_byte_size)",
-            "latest=\(latest)",
-            "fingerprint=\(fingerprint)",
-            "stage=\(diagnostics.stage)",
-            "stick=\(diagnostics.should_stick_to_bottom ? 1 : 0)",
-            "render_ms=\(diagnostics.render_duration_ms ?? 0)",
-            "max_render_ms=\(maxRenderDurationMs)",
-            "tick=\(tick)",
-        ].joined(separator: " ")
-        persist()
+        rowCount = diagnostics.row_count
+        payloadBytes = diagnostics.payload_byte_size
+        latestItemID = latest
+        payloadFingerprint = fingerprint
+        lastStage = diagnostics.stage
+        shouldStickToBottom = diagnostics.should_stick_to_bottom
+        renderDurationMs = diagnostics.render_duration_ms ?? 0
+        // Avoid benchmark telemetry becoming part of the workload. The trace
+        // runner observes these in-memory fields and publishes one final sample.
+        if benchmarkPhase != "running" {
+            rebuildAndPersist()
+        }
     }
 
     func recordTick(_ tick: Int) {
         self.tick = tick
-        statusLine = statusLine
-            .split(separator: " ")
-            .map { token in token.hasPrefix("tick=") ? "tick=\(tick)" : String(token) }
-            .joined(separator: " ")
+        rebuildAndPersist()
+    }
+
+    func recordBenchmark(phase: String, updateCount: Int) {
+        if phase == "running", benchmarkPhase != "running" {
+            traceRenderBaseline = renderCount
+            traceDuplicateBaseline = duplicateCount
+            traceRepeatBaseline = repeatRenderCount
+            traceRenderDurationsMs = []
+            coldRenderMaxMs = maxRenderDurationMs
+        }
+        benchmarkPhase = phase
+        benchmarkUpdateCount = updateCount
+        rebuildAndPersist()
+    }
+
+    func recordBenchmarkRenderer(_ renderer: TranscriptBenchmarkRendererKind) {
+        benchmarkRenderer = renderer.rawValue
+        benchmarkSemanticTier = renderer.semanticTier
+        rebuildAndPersist()
+    }
+
+    func recordMainThreadStalls(_ snapshot: MainThreadStallMonitor.Snapshot) {
+        mainThreadStallCount = snapshot.count
+        mainThreadStallMaxMs = snapshot.maximumDurationMs
+        rebuildAndPersist()
+    }
+
+    func recordColdMainThreadStalls(_ snapshot: MainThreadStallMonitor.Snapshot) {
+        coldMainThreadStallCount = snapshot.count
+        coldMainThreadStallMaxMs = snapshot.maximumDurationMs
+        rebuildAndPersist()
+    }
+
+    func attachStatusLabel(_ label: UILabel) {
+        statusLabel = label
+        updateStatusLabel()
+    }
+
+    private func rebuildAndPersist() {
+        statusLine = [
+            "renders=\(renderCount)",
+            "duplicates=\(duplicateCount)",
+            "repeats=\(repeatRenderCount)",
+            "rows=\(rowCount)",
+            "bytes=\(payloadBytes)",
+            "latest=\(latestItemID)",
+            "fingerprint=\(payloadFingerprint)",
+            "stage=\(lastStage)",
+            "stick=\(shouldStickToBottom ? 1 : 0)",
+            "render_ms=\(renderDurationMs)",
+            "max_render_ms=\(maxRenderDurationMs)",
+            "render_p50_ms=\(percentile(0.50))",
+            "render_p95_ms=\(percentile(0.95))",
+            "cold_render_max_ms=\(coldRenderMaxMs)",
+            "trace_renders=\(max(0, renderCount - traceRenderBaseline))",
+            "trace_duplicates=\(max(0, duplicateCount - traceDuplicateBaseline))",
+            "trace_repeats=\(max(0, repeatRenderCount - traceRepeatBaseline))",
+            "trace_render_p50_ms=\(percentile(0.50, samples: traceRenderDurationsMs))",
+            "trace_render_p95_ms=\(percentile(0.95, samples: traceRenderDurationsMs))",
+            "trace_render_max_ms=\(traceRenderDurationsMs.max() ?? 0)",
+            "tick=\(tick)",
+            "benchmark_phase=\(benchmarkPhase)",
+            "benchmark_updates=\(benchmarkUpdateCount)",
+            "benchmark_renderer=\(benchmarkRenderer)",
+            "semantic_tier=\(benchmarkSemanticTier)",
+            "build_commit=\(buildCommit)",
+            "build_dirty=\(buildDirty ? 1 : 0)",
+            "device_name=\(token(deviceName))",
+            "device_model=\(token(deviceModel))",
+            "os_version=\(token(osVersion))",
+            "main_stalls=\(mainThreadStallCount)",
+            "main_stall_max_ms=\(mainThreadStallMaxMs)",
+            "cold_main_stalls=\(coldMainThreadStallCount)",
+            "cold_main_stall_max_ms=\(coldMainThreadStallMaxMs)",
+        ].joined(separator: " ")
+        updateStatusLabel()
         persist()
+    }
+
+    private func updateStatusLabel() {
+        statusLabel?.text = statusLine
+        statusLabel?.accessibilityLabel = statusLine
+    }
+
+    private func token(_ value: String) -> String {
+        value.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? "unknown"
+    }
+
+    private static func hardwareModelIdentifier() -> String {
+        var systemInfo = utsname()
+        uname(&systemInfo)
+        return withUnsafePointer(to: &systemInfo.machine) { pointer in
+            pointer.withMemoryRebound(to: CChar.self, capacity: 1) {
+                String(cString: $0)
+            }
+        }
+    }
+
+    private func percentile(_ quantile: Double) -> Int {
+        percentile(quantile, samples: renderDurationsMs)
+    }
+
+    private func percentile(_ quantile: Double, samples: [Int]) -> Int {
+        guard !samples.isEmpty else { return 0 }
+        let sorted = samples.sorted()
+        let index = min(sorted.count - 1, Int(ceil(Double(sorted.count) * quantile)) - 1)
+        return sorted[max(0, index)]
     }
 
     private func persist() {
@@ -318,6 +536,22 @@ private final class ChatUITestProbe: ObservableObject {
     }
 }
 
+private struct ChatUITestProbeStatusView: UIViewRepresentable {
+    let probe: ChatUITestProbe
+
+    func makeUIView(context: Context) -> UILabel {
+        let label = UILabel(frame: .zero)
+        label.isAccessibilityElement = true
+        label.accessibilityIdentifier = "transcript-benchmark-status"
+        probe.attachStatusLabel(label)
+        return label
+    }
+
+    func updateUIView(_ uiView: UILabel, context: Context) {
+        probe.attachStatusLabel(uiView)
+    }
+}
+
 private struct ChatUITestFixture: Sendable {
     let name: String
     let eventCount: Int
@@ -326,11 +560,17 @@ private struct ChatUITestFixture: Sendable {
     init(name: String) {
         self.name = name
         replayPath = name == "replay-file" ? UITestHooks.chatFixtureReplayPath : nil
-        eventCount = max(0, UITestHooks.chatFixtureEventCount ?? (name == "stress" ? 500 : 80))
+        let defaultCount: Int
+        switch name {
+        case "stress": defaultCount = 500
+        case "benchmark-core": defaultCount = TranscriptBenchmarkTrace.initialRowCount
+        default: defaultCount = 80
+        }
+        eventCount = max(0, UITestHooks.chatFixtureEventCount ?? defaultCount)
     }
 
     var usesRealtimeStream: Bool {
-        name.hasPrefix("assistant-stream") || name == "console-reconcile"
+        name.hasPrefix("assistant-stream") || name == "console-reconcile" || name == "benchmark-core"
     }
 }
 
@@ -361,6 +601,8 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
                     timestamp: Self.fixedTimestamp(offset: 0)
                 )]
             }
+        } else if fixture.name == "benchmark-core" {
+            seedEvents = TranscriptBenchmarkTrace.initialEvents()
         } else if fixture.name == "tools" {
             seedEvents = Self.toolFixtureEvents()
         } else if fixture.name == "marketing" {
@@ -395,7 +637,9 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
         if let delayMs = UITestHooks.mobileTailDelayMs, delayMs > 0 {
             try? await Task.sleep(nanoseconds: UInt64(delayMs) * 1_000_000)
         }
-        let page = Self.tailPage(events: events, limit: limit, offset: offset)
+        let page = fixtureName == "benchmark-core"
+            ? (events: events, pageOffset: 0)
+            : Self.tailPage(events: events, limit: limit, offset: offset)
         return Self.makeMobileTail(
             sessionID: sessionID,
             events: page.events,
@@ -509,6 +753,71 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
             emitWorkspaceChanged()
             try? await Task.sleep(nanoseconds: intervalNanoseconds)
         }
+    }
+
+    func runTranscriptBenchmarkTrace() async -> TranscriptBenchmarkTraceResult {
+        precondition(fixtureName == "benchmark-core")
+        var updateCount = 0
+
+        for snapshot in TranscriptBenchmarkTrace.streamingSnapshots() {
+            upsertStreamingAssistantMessage(snapshot)
+            emitWorkspaceChanged()
+            updateCount += 1
+            try? await Task.sleep(nanoseconds: TranscriptBenchmarkTrace.streamingIntervalNanoseconds)
+        }
+
+        for ordinal in 1...3 {
+            let callID = "benchmark-tool-\(ordinal)"
+            let callEventID = nextEventID
+            events.append(TranscriptBenchmarkTrace.toolCallEvent(
+                id: callEventID,
+                callID: callID,
+                ordinal: ordinal,
+                state: .running
+            ))
+            nextEventID += 1
+            emitWorkspaceChanged()
+            updateCount += 1
+            try? await Task.sleep(nanoseconds: TranscriptBenchmarkTrace.streamingIntervalNanoseconds)
+
+            if let index = events.firstIndex(where: { $0.id == String(callEventID) }) {
+                events[index] = TranscriptBenchmarkTrace.toolCallEvent(
+                    id: callEventID,
+                    callID: callID,
+                    ordinal: ordinal,
+                    state: .completed
+                )
+            }
+            events.append(TranscriptBenchmarkTrace.toolResultEvent(
+                id: nextEventID,
+                callID: callID,
+                ordinal: ordinal
+            ))
+            nextEventID += 1
+            emitWorkspaceChanged()
+            updateCount += 1
+            try? await Task.sleep(nanoseconds: TranscriptBenchmarkTrace.streamingIntervalNanoseconds)
+        }
+
+        events.insert(contentsOf: TranscriptBenchmarkTrace.olderEvents(), at: 0)
+        emitWorkspaceChanged()
+        updateCount += 1
+
+        let finalID = nextEventID
+        events.append(TranscriptBenchmarkTrace.messageEvent(
+            id: finalID,
+            role: "assistant",
+            content: "Benchmark trace complete after \(updateCount) renderer updates.",
+            timestampOffset: TranscriptBenchmarkTrace.initialRowCount + finalID
+        ))
+        nextEventID += 1
+        emitWorkspaceChanged()
+        updateCount += 1
+
+        return TranscriptBenchmarkTraceResult(
+            updateCount: updateCount,
+            expectedLatestItemID: "prose:\(finalID)"
+        )
     }
 
     private func attachRealtimeContinuation(

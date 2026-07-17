@@ -6,12 +6,19 @@ import OSLog
 /// blocked main run loop. Set `LONGHOUSE_MAIN_THREAD_STALL_DIAGNOSTICS=0` to
 /// disable it while investigating probe-sensitive behavior.
 final class MainThreadStallMonitor: @unchecked Sendable {
+    struct Snapshot: Sendable {
+        let count: Int
+        let maximumDurationMs: Int
+    }
+
     static let shared = MainThreadStallMonitor()
 
     private let logger = Logger(subsystem: "ai.longhouse.ios", category: "MainThreadStall")
     private let monitorQueue = DispatchQueue(label: "ai.longhouse.ios.main-thread-stall")
     private var timer: DispatchSourceTimer?
     private var probeInFlight = false
+    private var stallCount = 0
+    private var maximumStallDurationMs = 0
 
     private init() {}
 
@@ -30,6 +37,30 @@ final class MainThreadStallMonitor: @unchecked Sendable {
         }
     }
 
+    func snapshot() async -> Snapshot {
+        await snapshot(resetAfterRead: false)
+    }
+
+    func snapshotAndReset() async -> Snapshot {
+        await snapshot(resetAfterRead: true)
+    }
+
+    private func snapshot(resetAfterRead: Bool) async -> Snapshot {
+        await withCheckedContinuation { continuation in
+            monitorQueue.async {
+                let snapshot = Snapshot(
+                    count: self.stallCount,
+                    maximumDurationMs: self.maximumStallDurationMs
+                )
+                if resetAfterRead {
+                    self.stallCount = 0
+                    self.maximumStallDurationMs = 0
+                }
+                continuation.resume(returning: snapshot)
+            }
+        }
+    }
+
     private func probeMainRunLoop() {
         guard !probeInFlight else { return }
         probeInFlight = true
@@ -41,6 +72,8 @@ final class MainThreadStallMonitor: @unchecked Sendable {
             self.monitorQueue.async {
                 self.probeInFlight = false
                 if delayMs >= 250 {
+                    self.stallCount += 1
+                    self.maximumStallDurationMs = max(self.maximumStallDurationMs, delayMs)
                     self.logger.error("main thread stall duration_ms=\(delayMs, privacy: .public) uptime_ms=\(Int(ProcessInfo.processInfo.systemUptime * 1000), privacy: .public)")
                     print("MAIN_THREAD_STALL duration_ms=\(delayMs) uptime_ms=\(Int(ProcessInfo.processInfo.systemUptime * 1000))")
                 }
