@@ -438,12 +438,7 @@ impl ManagedObservationSnapshot {
                 .filter(|row| row.server_alive || row.has_tui_attachment)
                 .cloned()
                 .collect(),
-            cursor: self
-                .cursor
-                .iter()
-                .filter(|row| row.live)
-                .cloned()
-                .collect(),
+            cursor: self.cursor.iter().filter(|row| row.live).cloned().collect(),
         }
     }
 }
@@ -3464,12 +3459,28 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
         processing_elapsed: Duration::ZERO,
     };
 
-    let mut conn = match task_context.db_pool.get() {
-        Ok(conn) => conn,
-        Err(e) => {
+    // Pool checkout may wait on SQLite contention. This task runs on the
+    // LocalSet that owns wake/control dispatch, so a synchronous checkout here
+    // can stall every managed session behind archive workers. Keep the wait on
+    // the blocking pool just like parsing/preparation below.
+    let db_pool = task_context.db_pool.clone();
+    let mut conn = match tokio::task::spawn_blocking(move || db_pool.get()).await {
+        Ok(Ok(conn)) => conn,
+        Ok(Err(e)) => {
             if task_context.tracker.record_error() {
                 tracing::warn!(
                     "Error opening shipper DB for {}: {}",
+                    result.job.path.display(),
+                    e
+                );
+            }
+            result.local_retry_after = Some(local_retry_delay(result.job.priority));
+            return finish_path_task(result, task_started);
+        }
+        Err(e) => {
+            if task_context.tracker.record_error() {
+                tracing::warn!(
+                    "Shipper DB checkout task failed for {}: {}",
                     result.job.path.display(),
                     e
                 );
@@ -5668,17 +5679,11 @@ mod tests {
             Duration::from_secs(LOCAL_RETRY_DELAY_SECS)
         );
         assert_eq!(
-            storage_v2_backpressure_retry_delay(
-                WorkPriority::Live,
-                Duration::from_secs(5),
-            ),
+            storage_v2_backpressure_retry_delay(WorkPriority::Live, Duration::from_secs(5),),
             Duration::from_secs(1)
         );
         assert_eq!(
-            storage_v2_backpressure_retry_delay(
-                WorkPriority::Scan,
-                Duration::from_secs(5),
-            ),
+            storage_v2_backpressure_retry_delay(WorkPriority::Scan, Duration::from_secs(5),),
             Duration::from_secs(5)
         );
     }
