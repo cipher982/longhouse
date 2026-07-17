@@ -15,6 +15,9 @@ enum UITestHooks {
     static let transcriptBenchmarkRendererEnvironmentKey = "LONGHOUSE_TRANSCRIPT_BENCHMARK_RENDERER"
     static let transcriptBenchmarkAutoStartEnvironmentKey = "LONGHOUSE_TRANSCRIPT_BENCHMARK_AUTO_START"
     static let transcriptBenchmarkRunIDEnvironmentKey = "LONGHOUSE_TRANSCRIPT_BENCHMARK_RUN_ID"
+    static let transcriptBenchmarkBuildConfigurationEnvironmentKey = "LONGHOUSE_TRANSCRIPT_BENCHMARK_BUILD_CONFIGURATION"
+    static let transcriptBenchmarkDebuggerEnvironmentKey = "LONGHOUSE_TRANSCRIPT_BENCHMARK_DEBUGGER"
+    static let transcriptBenchmarkTemperatureEnvironmentKey = "LONGHOUSE_TRANSCRIPT_BENCHMARK_TEMPERATURE"
     static let appearanceOverrideArgument = "-LONGHOUSE_UI_TEST_APPEARANCE"
 
     static var shouldResetState: Bool {
@@ -94,6 +97,18 @@ enum UITestHooks {
         return raw?.isEmpty == false ? raw : nil
     }
 
+    static var transcriptBenchmarkBuildConfiguration: String? {
+        nonemptyEnvironmentValue(transcriptBenchmarkBuildConfigurationEnvironmentKey)
+    }
+
+    static var transcriptBenchmarkDebugger: String? {
+        nonemptyEnvironmentValue(transcriptBenchmarkDebuggerEnvironmentKey)
+    }
+
+    static var transcriptBenchmarkTemperature: String? {
+        nonemptyEnvironmentValue(transcriptBenchmarkTemperatureEnvironmentKey)
+    }
+
     static var appearanceOverride: String? {
         guard let raw = launchArgumentValue(for: appearanceOverrideArgument)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -120,5 +135,11 @@ enum UITestHooks {
             }
         }
         return nil
+    }
+
+    private static func nonemptyEnvironmentValue(_ key: String) -> String? {
+        let raw = ProcessInfo.processInfo.environment[key]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return raw?.isEmpty == false ? raw : nil
     }
 }

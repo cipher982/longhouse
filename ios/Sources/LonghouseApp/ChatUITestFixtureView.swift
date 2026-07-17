@@ -383,6 +383,13 @@ private final class ChatUITestProbe {
     private let deviceName: String
     private let deviceModel: String
     private let osVersion: String
+    private let benchmarkBuildConfiguration: String
+    private let benchmarkDebugger: String
+    private let benchmarkTemperature: String
+    private let thermalState: String
+    private let lowPowerMode: Bool
+    private let batteryState: String
+    private let batteryLevelPercent: Int
     private weak var statusLabel: UILabel?
 
     init(path: String?) {
@@ -399,6 +406,15 @@ private final class ChatUITestProbe {
         deviceName = environment["SIMULATOR_DEVICE_NAME"] ?? UIDevice.current.model
         deviceModel = environment["SIMULATOR_MODEL_IDENTIFIER"] ?? Self.hardwareModelIdentifier()
         osVersion = UIDevice.current.systemVersion
+        benchmarkBuildConfiguration = UITestHooks.transcriptBenchmarkBuildConfiguration ?? "unknown"
+        benchmarkDebugger = UITestHooks.transcriptBenchmarkDebugger ?? "unknown"
+        benchmarkTemperature = UITestHooks.transcriptBenchmarkTemperature ?? "uncontrolled"
+        thermalState = Self.thermalStateName(ProcessInfo.processInfo.thermalState)
+        lowPowerMode = ProcessInfo.processInfo.isLowPowerModeEnabled
+        UIDevice.current.isBatteryMonitoringEnabled = true
+        batteryState = Self.batteryStateName(UIDevice.current.batteryState)
+        let level = UIDevice.current.batteryLevel
+        batteryLevelPercent = level >= 0 ? Int((level * 100).rounded()) : -1
         rebuildAndPersist()
     }
 
@@ -510,6 +526,13 @@ private final class ChatUITestProbe {
             "device_name=\(token(deviceName))",
             "device_model=\(token(deviceModel))",
             "os_version=\(token(osVersion))",
+            "benchmark_build=\(token(benchmarkBuildConfiguration))",
+            "benchmark_debugger=\(token(benchmarkDebugger))",
+            "benchmark_temperature=\(token(benchmarkTemperature))",
+            "thermal_state=\(thermalState)",
+            "low_power=\(lowPowerMode ? 1 : 0)",
+            "battery_state=\(batteryState)",
+            "battery_level_percent=\(batteryLevelPercent)",
             "main_stalls=\(mainThreadStallCount)",
             "main_stall_max_ms=\(mainThreadStallMaxMs)",
             "cold_main_stalls=\(coldMainThreadStallCount)",
@@ -535,6 +558,26 @@ private final class ChatUITestProbe {
             pointer.withMemoryRebound(to: CChar.self, capacity: 1) {
                 String(cString: $0)
             }
+        }
+    }
+
+    private static func thermalStateName(_ state: ProcessInfo.ThermalState) -> String {
+        switch state {
+        case .nominal: return "nominal"
+        case .fair: return "fair"
+        case .serious: return "serious"
+        case .critical: return "critical"
+        @unknown default: return "unknown"
+        }
+    }
+
+    private static func batteryStateName(_ state: UIDevice.BatteryState) -> String {
+        switch state {
+        case .unknown: return "unknown"
+        case .unplugged: return "unplugged"
+        case .charging: return "charging"
+        case .full: return "full"
+        @unknown default: return "unknown"
         }
     }
 

@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 
 renderer="${IOS_TRANSCRIPT_BENCHMARK_RENDERER:-snapshot-webkit}"
-temperature="${IOS_TRANSCRIPT_BENCHMARK_TEMPERATURE:-cold}"
+temperature="${IOS_TRANSCRIPT_BENCHMARK_TEMPERATURE:-uncontrolled}"
 debugger="${IOS_TRANSCRIPT_BENCHMARK_DEBUGGER:-none}"
 build_mode="${IOS_TRANSCRIPT_BENCHMARK_BUILD_MODE:-debug}"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -14,6 +14,7 @@ output_dir="${IOS_TRANSCRIPT_BENCHMARK_OUTPUT:-$ROOT/artifacts/ios-transcript-be
 derived_data="${IOS_TRANSCRIPT_BENCHMARK_DERIVED_DATA:-$HOME/Library/Developer/Xcode/DerivedData/LonghouseIOS-TranscriptBenchmark}"
 destination="${IOS_TRANSCRIPT_BENCHMARK_DESTINATION:-}"
 build_settings=()
+metadata_settings=()
 case "$build_mode" in
   debug)
     build_label="Debug"
@@ -31,6 +32,14 @@ case "$build_mode" in
     exit 2
     ;;
 esac
+metadata_settings+=(
+  "LONGHOUSE_BENCHMARK_BUILD_CONFIGURATION=$build_label"
+  "LONGHOUSE_BENCHMARK_DEBUGGER=$debugger"
+  "LONGHOUSE_BENCHMARK_RENDERER=$renderer"
+  "LONGHOUSE_BENCHMARK_TEMPERATURE=$temperature"
+)
+
+xcodegen --spec ios/XcodeHarness/project.yml --project-root ios/XcodeHarness
 
 if [[ -z "$destination" ]]; then
   destination="$(python3 scripts/ci/select_ios_simulator.py ios/XcodeHarness/LonghouseIOS.xcodeproj LonghouseChatStress)"
@@ -49,9 +58,6 @@ echo "  destination: $destination"
 echo "  artifacts:   $output_dir"
 
 set +e
-IOS_TRANSCRIPT_BENCHMARK_RENDERER="$renderer" \
-IOS_TRANSCRIPT_BENCHMARK_TEMPERATURE="$temperature" \
-IOS_TRANSCRIPT_BENCHMARK_DEBUGGER="$debugger" \
 xcodebuild \
   -project ios/XcodeHarness/LonghouseIOS.xcodeproj \
   -scheme LonghouseChatStress \
@@ -60,6 +66,7 @@ xcodebuild \
   -resultBundlePath "$result_bundle" \
   -only-testing:LonghouseChatStressUITests/TranscriptRendererBenchmarkUITests/testAgentCoreV1 \
   "${build_settings[@]}" \
+  "${metadata_settings[@]}" \
   test 2>&1 | tee "$console_log"
 test_status=${PIPESTATUS[0]}
 set -e
@@ -68,11 +75,8 @@ if grep -q 'TRANSCRIPT_BENCHMARK_RESULT ' "$console_log"; then
   python3 ios/scripts/extract-transcript-benchmark-result.py \
     "$console_log" \
     "$output_dir/result.json" \
-    --set "buildConfiguration=$build_label" \
     --set "collectedAtUTC=$timestamp" \
-    --set "debugger=$debugger" \
     --set "destination=$destination" \
-    --set "runTemperature=$temperature" \
     --set "xcodeVersion=$xcode_version"
 fi
 

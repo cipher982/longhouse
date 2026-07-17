@@ -156,6 +156,13 @@ The publication matrix is:
 Results from different Xcode, OS beta, build configuration, or debugger state
 must not be pooled.
 
+`uncontrolled` is the default run temperature and is the only honest label for
+an isolated invocation. `warm` requires one discarded identical run immediately
+before the recorded run. `cold` requires an explicitly documented app/WebContent
+reset protocol. The app records the requested label, thermal state, Low Power
+Mode, battery state, and battery level in the result; the extractor must not
+rewrite those fields afterward.
+
 ## Semantic Parity Matrix
 
 A replacement candidate must demonstrate:

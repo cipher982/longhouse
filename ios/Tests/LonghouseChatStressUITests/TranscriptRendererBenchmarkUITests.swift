@@ -2,10 +2,17 @@ import XCTest
 
 @MainActor
 final class TranscriptRendererBenchmarkUITests: XCTestCase {
-    private enum Environment {
-        static let renderer = "IOS_TRANSCRIPT_BENCHMARK_RENDERER"
-        static let temperature = "IOS_TRANSCRIPT_BENCHMARK_TEMPERATURE"
-        static let debugger = "IOS_TRANSCRIPT_BENCHMARK_DEBUGGER"
+    private enum BuildMetadata {
+        static func value(_ key: String, fallback: String) -> String {
+            let value = ProcessInfo.processInfo.environment[key]
+            guard let value, !value.isEmpty else { return fallback }
+            return value
+        }
+
+        static let renderer = value("LONGHOUSE_BENCHMARK_RENDERER", fallback: "snapshot-webkit")
+        static let temperature = value("LONGHOUSE_BENCHMARK_TEMPERATURE", fallback: "uncontrolled")
+        static let debugger = value("LONGHOUSE_BENCHMARK_DEBUGGER", fallback: "none")
+        static let buildConfiguration = value("LONGHOUSE_BENCHMARK_BUILD_CONFIGURATION", fallback: "unknown")
     }
 
     override func setUpWithError() throws {
@@ -13,8 +20,7 @@ final class TranscriptRendererBenchmarkUITests: XCTestCase {
     }
 
     func testAgentCoreV1() throws {
-        let environment = ProcessInfo.processInfo.environment
-        let renderer = environment[Environment.renderer] ?? "snapshot-webkit"
+        let renderer = BuildMetadata.renderer
         let runID = UUID().uuidString
         XCTAssertEqual(
             renderer,
@@ -35,6 +41,9 @@ final class TranscriptRendererBenchmarkUITests: XCTestCase {
         app.launchEnvironment["LONGHOUSE_UI_TEST_CHAT_PROBE_PATH"] = probeURL.path
         app.launchEnvironment["LONGHOUSE_TRANSCRIPT_BENCHMARK_RENDERER"] = renderer
         app.launchEnvironment["LONGHOUSE_TRANSCRIPT_BENCHMARK_RUN_ID"] = runID
+        app.launchEnvironment["LONGHOUSE_TRANSCRIPT_BENCHMARK_BUILD_CONFIGURATION"] = BuildMetadata.buildConfiguration
+        app.launchEnvironment["LONGHOUSE_TRANSCRIPT_BENCHMARK_DEBUGGER"] = BuildMetadata.debugger
+        app.launchEnvironment["LONGHOUSE_TRANSCRIPT_BENCHMARK_TEMPERATURE"] = BuildMetadata.temperature
         app.launchArguments += ["-LONGHOUSE_UI_TEST_APPEARANCE", "light"]
 
         let launchStartedAt = Date()
@@ -111,12 +120,16 @@ final class TranscriptRendererBenchmarkUITests: XCTestCase {
             semanticTier: final.semanticTier,
             gitSHA: initial.buildCommit,
             buildDirty: initial.buildDirty,
-            buildConfiguration: "Debug",
+            buildConfiguration: initial.buildConfiguration,
             deviceName: initial.deviceName,
             deviceModel: initial.deviceModel,
             osVersion: initial.osVersion,
-            runTemperature: environment[Environment.temperature] ?? "cold",
-            debugger: environment[Environment.debugger] ?? "none",
+            runTemperature: initial.runTemperature,
+            debugger: initial.debugger,
+            thermalState: initial.thermalState,
+            lowPowerMode: initial.lowPowerMode,
+            batteryState: initial.batteryState,
+            batteryLevelPercent: initial.batteryLevelPercent,
             launchToReadyMs: launchToReadyMs,
             traceWallMs: traceWallMs,
             xctestScrollWallMs: scrollWallMs,
@@ -227,6 +240,13 @@ private struct BenchmarkProbeMetrics {
     let deviceName: String
     let deviceModel: String
     let osVersion: String
+    let buildConfiguration: String
+    let runTemperature: String
+    let debugger: String
+    let thermalState: String
+    let lowPowerMode: Bool
+    let batteryState: String
+    let batteryLevelPercent: Int
 
     init(_ label: String) {
         let values = Dictionary(uniqueKeysWithValues: label.split(separator: " ").compactMap { token -> (String, String)? in
@@ -263,6 +283,13 @@ private struct BenchmarkProbeMetrics {
         deviceName = values["device_name"]?.removingPercentEncoding ?? "unknown"
         deviceModel = values["device_model"]?.removingPercentEncoding ?? "unknown"
         osVersion = values["os_version"]?.removingPercentEncoding ?? "unknown"
+        buildConfiguration = values["benchmark_build"]?.removingPercentEncoding ?? "unknown"
+        runTemperature = values["benchmark_temperature"]?.removingPercentEncoding ?? "uncontrolled"
+        debugger = values["benchmark_debugger"]?.removingPercentEncoding ?? "unknown"
+        thermalState = values["thermal_state"] ?? "unknown"
+        lowPowerMode = values["low_power"] == "1"
+        batteryState = values["battery_state"] ?? "unknown"
+        batteryLevelPercent = Int(values["battery_level_percent"] ?? "") ?? -1
     }
 }
 
@@ -280,6 +307,10 @@ private struct TranscriptBenchmarkResult: Codable {
     let osVersion: String
     let runTemperature: String
     let debugger: String
+    let thermalState: String
+    let lowPowerMode: Bool
+    let batteryState: String
+    let batteryLevelPercent: Int
     let launchToReadyMs: Int
     let traceWallMs: Int
     let xctestScrollWallMs: Int
