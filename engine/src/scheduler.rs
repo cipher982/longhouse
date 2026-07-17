@@ -791,12 +791,15 @@ impl PathScheduler {
         estimated_bytes: Option<u64>,
     ) {
         observation.enqueued_at_ms = now_ms();
+        let urgent_managed_wake =
+            priority == WorkPriority::Live && observation.source == "wake_socket";
         if let Some(ready) = self.ready_jobs.get_mut(&path) {
+            let mut reposition = false;
             if priority < ready.priority {
                 ready.priority = priority;
                 ready.observation = observation;
                 ready.estimated_bytes = estimated_bytes;
-                self.push_ready_path(path, priority);
+                reposition = true;
             } else if priority == ready.priority
                 && should_replace_observation(&ready.observation, &observation)
             {
@@ -804,8 +807,12 @@ impl PathScheduler {
                 if estimated_bytes.is_some() {
                     ready.estimated_bytes = estimated_bytes;
                 }
+                reposition = urgent_managed_wake;
             } else if estimated_bytes.is_some() {
                 ready.estimated_bytes = estimated_bytes;
+            }
+            if reposition {
+                self.push_ready_path(path, priority, urgent_managed_wake);
             }
             return;
         }
@@ -836,7 +843,7 @@ impl PathScheduler {
                 estimated_bytes,
             },
         );
-        self.push_ready_path(path, priority);
+        self.push_ready_path(path, priority, urgent_managed_wake);
     }
 
     /// Return the next job that can start, respecting both the configured
@@ -1009,8 +1016,17 @@ impl PathScheduler {
         None
     }
 
-    fn push_ready_path(&mut self, path: PathBuf, priority: WorkPriority) {
+    fn push_ready_path(
+        &mut self,
+        path: PathBuf,
+        priority: WorkPriority,
+        urgent_managed_wake: bool,
+    ) {
         match priority {
+            WorkPriority::Live if urgent_managed_wake => {
+                self.ready_live.retain(|candidate| candidate != &path);
+                self.ready_live.push_front(path);
+            }
             WorkPriority::Live => self.ready_live.push_back(path),
             WorkPriority::Retry => self.ready_retry.push_back(path),
             WorkPriority::Scan => self.ready_scan.push_back(path),
@@ -1255,6 +1271,80 @@ mod tests {
         assert_eq!(job.observation.source, "wake_socket");
         assert_eq!(job.observation.session_id.as_deref(), Some("session-123"));
         assert_eq!(job.observation.wake_reason.as_deref(), Some("progress"));
+    }
+
+    #[test]
+    fn test_managed_wake_jumps_a_generic_live_backlog() {
+        let mut scheduler = PathScheduler::new(2);
+        for index in 0..100 {
+            scheduler.enqueue_observed(
+                PathBuf::from(format!("/tmp/backlog-{index}.db")),
+                "cursor",
+                WorkPriority::Live,
+                "fsevent",
+                index,
+            );
+        }
+        let managed = PathBuf::from("/tmp/managed.db");
+        scheduler.enqueue_observation(
+            managed.clone(),
+            "cursor",
+            WorkPriority::Live,
+            ObservationTrace {
+                source: "wake_socket",
+                observed_at_ms: 200,
+                latest_observed_at_ms: None,
+                wake_received_at_ms: Some(201),
+                enqueued_at_ms: 0,
+                session_id: Some("session-123".to_string()),
+                turn_id: Some("turn-123".to_string()),
+                wake_reason: Some("turn_completed".to_string()),
+                file_len_hint: Some(4096),
+            },
+        );
+
+        let job = scheduler.pop_launchable().unwrap();
+        assert_eq!(job.path, managed);
+        assert_eq!(job.observation.source, "wake_socket");
+    }
+
+    #[test]
+    fn test_managed_wake_repositions_an_already_queued_live_path() {
+        let mut scheduler = PathScheduler::new(2);
+        let managed = PathBuf::from("/tmp/managed.db");
+        scheduler.enqueue_observed(
+            managed.clone(),
+            "cursor",
+            WorkPriority::Live,
+            "fsevent",
+            100,
+        );
+        scheduler.enqueue_observed(
+            PathBuf::from("/tmp/other.db"),
+            "cursor",
+            WorkPriority::Live,
+            "fsevent",
+            101,
+        );
+        scheduler.enqueue_observation(
+            managed.clone(),
+            "cursor",
+            WorkPriority::Live,
+            ObservationTrace {
+                source: "wake_socket",
+                observed_at_ms: 200,
+                latest_observed_at_ms: None,
+                wake_received_at_ms: Some(201),
+                enqueued_at_ms: 0,
+                session_id: Some("session-123".to_string()),
+                turn_id: Some("turn-123".to_string()),
+                wake_reason: Some("turn_completed".to_string()),
+                file_len_hint: Some(4096),
+            },
+        );
+
+        assert_eq!(scheduler.pop_launchable().unwrap().path, managed);
+        assert_eq!(scheduler.ready_len(), 1);
     }
 
     #[test]
