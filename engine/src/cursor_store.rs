@@ -15,7 +15,7 @@ use anyhow::{bail, Context, Result};
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
 use rusqlite::types::ValueRef;
-use rusqlite::{Connection, OpenFlags};
+use rusqlite::{Connection, OpenFlags, OptionalExtension};
 use serde::Serialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -112,6 +112,51 @@ struct RawRootObservationRecord<'a> {
     root_blob_storage_class: &'static str,
 }
 
+#[derive(Serialize)]
+struct RawRootReferenceRecord<'a> {
+    v: u8,
+    kind: &'static str,
+    conversation_uuid: &'a str,
+    store_incarnation: &'a str,
+    root_blob_id: &'a str,
+    blob_id: &'a str,
+    blob_bytes_b64: String,
+    blob_storage_class: &'static str,
+}
+
+pub fn root_reference_records(
+    snapshot: &CursorStoreSnapshot,
+    store_incarnation: &str,
+    blob_ids: &[String],
+) -> Result<Vec<Vec<u8>>> {
+    let Some(root_blob_id) = snapshot.root_blob_id.as_deref() else {
+        return Ok(Vec::new());
+    };
+    blob_ids
+        .iter()
+        .filter_map(|blob_id| {
+            snapshot
+                .blob_rows
+                .iter()
+                .find(|row| row.id == *blob_id)
+                .map(|row| (blob_id, row))
+        })
+        .map(|(blob_id, row)| {
+            serde_json::to_vec(&RawRootReferenceRecord {
+                v: 1,
+                kind: "root_reference",
+                conversation_uuid: &snapshot.conversation_uuid,
+                store_incarnation,
+                root_blob_id,
+                blob_id,
+                blob_bytes_b64: BASE64_STANDARD.encode(&row.data_bytes),
+                blob_storage_class: row.data_storage_class.as_str(),
+            })
+            .context("encoding Cursor root reference record")
+        })
+        .collect()
+}
+
 /// Read the Cursor store through SQLite's WAL-aware read-only URI mode.
 ///
 /// This never checkpoints or changes Cursor's database. A malformed root is a
@@ -160,6 +205,128 @@ pub fn read_cursor_store(path: &Path) -> Result<CursorStoreSnapshot> {
     })
 }
 
+/// Read only metadata and the current root blob. Referenced messages are loaded
+/// separately only when a root extension needs an explicit reference record;
+/// raw source capture uses the paged visitor below.
+pub fn read_cursor_render_snapshot(path: &Path) -> Result<CursorStoreSnapshot> {
+    let mut conn = open_readonly(path)?;
+    let snapshot = conn.transaction()?;
+    let meta_rows = read_meta_rows(&snapshot)?;
+    let root_meta = meta_rows
+        .iter()
+        .find(|row| row.key == "0")
+        .context("Cursor store has no meta['0'] root metadata")?;
+    let root_metadata = decode_root_metadata(&root_meta.value_bytes)?;
+    let conversation_uuid = required_string(&root_metadata, "agentId")?;
+    let root_blob_id = optional_string(&root_metadata, "latestRootBlobId");
+    let created_at_ms = root_metadata.get("createdAt").and_then(Value::as_i64);
+    let mut blob_rows = Vec::new();
+    let root_message_blob_ids = match root_blob_id.as_deref() {
+        Some(root_id) => match read_blob_row(&snapshot, root_id)? {
+            Some(root_blob) => {
+                let ordering = match parse_root_message_blob_ids(&root_blob.data_bytes) {
+                    Ok(ids) => RootMessageBlobIds::Parsed(ids),
+                    Err(error) => RootMessageBlobIds::Unavailable {
+                        reason: error.to_string(),
+                    },
+                };
+                blob_rows.push(root_blob);
+                ordering
+            }
+            None => RootMessageBlobIds::Unavailable {
+                reason: format!("Cursor root blob {root_id} is missing from blobs"),
+            },
+        },
+        None => RootMessageBlobIds::Unavailable {
+            reason: "Cursor meta['0'] has no latestRootBlobId".to_string(),
+        },
+    };
+    snapshot.commit()?;
+    Ok(CursorStoreSnapshot {
+        conversation_uuid,
+        root_blob_id,
+        created_at_ms,
+        meta_rows,
+        blob_rows,
+        root_message_blob_ids,
+    })
+}
+
+pub fn read_cursor_blob_rows(path: &Path, blob_ids: &[String]) -> Result<Vec<CursorStoreBlobRow>> {
+    const MAX_REFERENCE_ROWS: usize = 256;
+    if blob_ids.len() > MAX_REFERENCE_ROWS {
+        anyhow::bail!("Cursor root extension exceeds the bounded reference capture limit");
+    }
+    let mut conn = open_readonly(path)?;
+    let snapshot = conn.transaction()?;
+    let mut rows = Vec::with_capacity(blob_ids.len());
+    for blob_id in blob_ids {
+        if let Some(row) = read_blob_row(&snapshot, blob_id)? {
+            rows.push(row);
+        }
+    }
+    snapshot.commit()?;
+    Ok(rows)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CursorBlobVisit {
+    pub last_blob_id: Option<String>,
+    pub has_more: bool,
+}
+
+/// Visit exact generic blob wrappers through one WAL-consistent cursor without
+/// retaining the table in memory. Returning false stops at the current row and
+/// reports that source rows remain.
+pub fn visit_cursor_blob_records(
+    path: &Path,
+    conversation_uuid: &str,
+    store_incarnation: &str,
+    after_blob_id: Option<&str>,
+    max_rows: usize,
+    mut visitor: impl FnMut(Vec<u8>) -> Result<bool>,
+) -> Result<CursorBlobVisit> {
+    let mut conn = open_readonly(path)?;
+    let snapshot = conn.transaction()?;
+    let maximum = i64::try_from(max_rows).context("Cursor blob page limit exceeds i64")?;
+    let mut statement = snapshot
+        .prepare("SELECT id, data FROM blobs WHERE id > COALESCE(?1, '') ORDER BY id LIMIT ?2")?;
+    let mut rows = statement.query(rusqlite::params![after_blob_id, maximum])?;
+    let mut last_blob_id = after_blob_id.map(str::to_owned);
+    let mut visited = 0usize;
+    while let Some(row) = rows.next()? {
+        let (data_bytes, data_storage_class) = sqlite_bytes(row.get_ref(1)?)?;
+        let blob_id: String = row.get(0)?;
+        let record = serde_json::to_vec(&RawBlobRecord {
+            v: 1,
+            kind: "blob",
+            conversation_uuid,
+            store_incarnation,
+            blob_id: &blob_id,
+            blob_bytes_b64: BASE64_STANDARD.encode(data_bytes),
+            blob_storage_class: data_storage_class.as_str(),
+        })?;
+        if !visitor(record)? {
+            drop(rows);
+            drop(statement);
+            snapshot.commit()?;
+            return Ok(CursorBlobVisit {
+                last_blob_id,
+                has_more: true,
+            });
+        }
+        last_blob_id = Some(blob_id);
+        visited += 1;
+    }
+    drop(rows);
+    drop(statement);
+    snapshot.commit()?;
+    Ok(CursorBlobVisit {
+        last_blob_id,
+        has_more: visited == max_rows,
+    })
+}
+
 /// Return deterministic raw storage-v2 records for all observed Cursor data.
 ///
 /// Root observation is intentionally separate from its generic blob record:
@@ -172,6 +339,16 @@ pub fn cursor_store_raw_snapshot(path: &Path) -> Result<CursorStoreRawSnapshot> 
     let store_incarnation =
         identity_from_metadata(&metadata).context("Cursor store has no stable file incarnation")?;
     let snapshot = read_cursor_store(path)?;
+    cursor_store_raw_snapshot_from(&snapshot, store_incarnation)
+}
+
+/// Build raw wrappers from the exact readable snapshot used by the renderer.
+/// Callers that need both views must use this seam so a concurrent Cursor WAL
+/// commit cannot mix roots and blobs from different SQLite snapshots.
+pub fn cursor_store_raw_snapshot_from(
+    snapshot: &CursorStoreSnapshot,
+    store_incarnation: String,
+) -> Result<CursorStoreRawSnapshot> {
     let mut records = Vec::with_capacity(snapshot.meta_rows.len() + snapshot.blob_rows.len() + 1);
     for row in &snapshot.meta_rows {
         records.push(serde_json::to_vec(&RawMetaRecord {
@@ -213,11 +390,11 @@ pub fn cursor_store_raw_snapshot(path: &Path) -> Result<CursorStoreRawSnapshot> 
         })?);
     }
     Ok(CursorStoreRawSnapshot {
-        conversation_uuid: snapshot.conversation_uuid,
-        root_blob_id: snapshot.root_blob_id,
+        conversation_uuid: snapshot.conversation_uuid.clone(),
+        root_blob_id: snapshot.root_blob_id.clone(),
         store_incarnation,
         created_at_ms: snapshot.created_at_ms,
-        root_message_blob_ids: snapshot.root_message_blob_ids,
+        root_message_blob_ids: snapshot.root_message_blob_ids.clone(),
         source_revision: revision_for_records(&records),
         records,
     })
@@ -292,6 +469,23 @@ fn read_blob_rows(conn: &Connection) -> Result<Vec<CursorStoreBlobRow>> {
     })?;
     rows.collect::<std::result::Result<Vec<_>, _>>()
         .context("reading Cursor blob rows")
+}
+
+fn read_blob_row(conn: &Connection, blob_id: &str) -> Result<Option<CursorStoreBlobRow>> {
+    conn.query_row(
+        "SELECT id, data FROM blobs WHERE id = ?1",
+        [blob_id],
+        |row| {
+            let (data_bytes, data_storage_class) = sqlite_bytes(row.get_ref(1)?)?;
+            Ok(CursorStoreBlobRow {
+                id: row.get(0)?,
+                data_bytes,
+                data_storage_class,
+            })
+        },
+    )
+    .optional()
+    .context("reading Cursor blob row")
 }
 
 fn sqlite_bytes(value: ValueRef<'_>) -> rusqlite::Result<(Vec<u8>, SqliteStorageClass)> {
@@ -589,5 +783,49 @@ mod tests {
             snapshot.root_message_blob_ids,
             RootMessageBlobIds::Parsed(vec![MESSAGE_ID.to_string()])
         );
+    }
+
+    #[test]
+    fn blob_capture_pages_without_rescanning_the_first_page() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("store.db");
+        let conn = fixture(&path);
+        for index in 0..300 {
+            conn.execute(
+                "INSERT INTO blobs (id, data) VALUES (?1, ?2)",
+                rusqlite::params![format!("page-{index:03}"), vec![index as u8]],
+            )
+            .unwrap();
+        }
+        drop(conn);
+
+        let mut first_ids = Vec::new();
+        let first =
+            visit_cursor_blob_records(&path, CONVERSATION_ID, "fixture", None, 256, |record| {
+                let value: Value = serde_json::from_slice(&record)?;
+                first_ids.push(value["blob_id"].as_str().unwrap().to_string());
+                Ok(true)
+            })
+            .unwrap();
+        assert!(first.has_more);
+        assert_eq!(first_ids.len(), 256);
+
+        let mut second_ids = Vec::new();
+        let second = visit_cursor_blob_records(
+            &path,
+            CONVERSATION_ID,
+            "fixture",
+            first.last_blob_id.as_deref(),
+            256,
+            |record| {
+                let value: Value = serde_json::from_slice(&record)?;
+                second_ids.push(value["blob_id"].as_str().unwrap().to_string());
+                Ok(true)
+            },
+        )
+        .unwrap();
+        assert!(!second.has_more);
+        assert_eq!(second_ids.len(), 46);
+        assert!(first_ids.iter().all(|id| !second_ids.contains(id)));
     }
 }

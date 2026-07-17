@@ -512,6 +512,54 @@ async def test_storage_v2_request_admission_does_not_reserve_optional_render_lan
 
 
 @pytest.mark.asyncio
+async def test_storage_v2_releases_live_admission_before_catalog_wait(monkeypatch):
+    class TrackingPool:
+        active = 0
+
+        @asynccontextmanager
+        async def admission(self, lane):
+            assert lane == "live"
+            self.active += 1
+            try:
+                yield
+            finally:
+                self.active -= 1
+
+        async def seal(self, *_args, **_kwargs):
+            raise AssertionError("existing envelope reached storage worker")
+
+    workers = TrackingPool()
+
+    class Catalog:
+        async def call(self, method, _payload, **_kwargs):
+            assert workers.active == 0, f"catalog call {method} retained live admission"
+            assert method == "storage.raw_object.exists.batch.v2"
+            return {"objects": [{"receipt": {"status": "already_committed"}}]}
+
+    monkeypatch.setattr(storage_router, "get_catalogd_client", lambda: Catalog())
+    monkeypatch.setattr(storage_router, "get_raw_object_worker_pool", lambda: workers)
+    monkeypatch.setattr(storage_router, "get_render_object_worker_pool", _ForbiddenRenderAdmission)
+    monkeypatch.setattr(storage_router, "_validated_receipt", lambda value: value)
+    app = FastAPI()
+    app.include_router(storage_router.router)
+    app.dependency_overrides[verify_agents_token] = lambda: SimpleNamespace(device_id="cinder", owner_id=1)
+    app.dependency_overrides[require_single_tenant] = lambda: None
+    payload = _payload(
+        tenant_id=get_settings().archive_primary_tenant_id,
+        machine_id="cinder",
+        epoch=UUID("018f0c3a-7b2d-7f10-8a11-323456789abc"),
+    )
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/agents/storage/v2/envelopes",
+            json=payload,
+            headers={"X-Longhouse-Storage-Lane": "live"},
+        )
+    assert response.status_code == 200
+    assert response.json() == {"status": "already_committed"}
+
+
+@pytest.mark.asyncio
 async def test_storage_v2_rejects_oversized_body_before_catalog_work(monkeypatch):
     class ForbiddenCatalog:
         async def call(self, *_args, **_kwargs):

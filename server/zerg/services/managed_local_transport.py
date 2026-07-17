@@ -16,7 +16,7 @@ from zerg.session_execution_home import ManagedSessionTransport
 def _build_engine_bridge_shell_command(
     *,
     session_id: str,
-    subcommand: str,
+    subcommand: str | None,
     args: tuple[str, ...] = (),
     required_commands: tuple[str, ...] = ("longhouse-engine",),
     exec_engine: bool = False,
@@ -51,14 +51,7 @@ def _build_longhouse_cli_shell_command(
     namespace: str | None = None,
 ) -> str:
     group = namespace or command_group
-    invocation = " ".join(
-        [
-            "longhouse",
-            group,
-            subcommand,
-            *args,
-        ]
-    )
+    invocation = " ".join(["longhouse", group, *([subcommand] if subcommand else []), *args])
     inner_parts = [
         build_managed_local_shell_prelude(
             required_commands=required_commands,
@@ -115,6 +108,18 @@ def build_managed_local_attach_command(*, session: AgentSession, db: Session | N
             subcommand="attach",
             args=("--session-id", shlex.quote(session_id)),
             required_commands=("longhouse", "opencode"),
+        )
+
+    if transport == ManagedSessionTransport.CURSOR_HELM.value:
+        cursor_args = ["--resume-session", shlex.quote(session_id)]
+        cwd = str(getattr(session, "cwd", "") or "").strip()
+        if cwd:
+            cursor_args.extend(["--cwd", shlex.quote(cwd)])
+        return _build_longhouse_cli_shell_command(
+            command_group="cursor",
+            subcommand=None,
+            args=tuple(cursor_args),
+            required_commands=("longhouse", "cursor-agent"),
         )
 
     if transport in (

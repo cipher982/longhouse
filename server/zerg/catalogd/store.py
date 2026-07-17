@@ -4338,6 +4338,19 @@ class CatalogStore:
                     .mappings()
                     .first()
                 )
+                revision_generation = (
+                    connection.execute(
+                        select(render_generation).where(
+                            render_generation.c.session_id == session_key,
+                            render_generation.c.parser_revision == render_manifest["parser_revision"],
+                            render_generation.c.ordering_revision == render_manifest["ordering_revision"],
+                        )
+                    )
+                    .mappings()
+                    .first()
+                )
+                if revision_generation is not None and revision_generation["generation_id"] != generation_key:
+                    return {"source_epoch_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
                 if existing_generation is not None and any(
                     (
                         existing_generation["session_id"] != session_key,

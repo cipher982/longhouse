@@ -11,6 +11,7 @@ use base64::Engine;
 use chrono::{DateTime, Utc};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
@@ -39,6 +40,8 @@ use crate::storage_v2_contract::{self, EnvelopeIdentity, RangeKind};
 pub(crate) const PARSER_REVISION: &str = "engine-parser-v2";
 pub(crate) const ORDERING_REVISION: &str = "semantic-order-v2";
 const OPENCODE_SESSION_PAGE_SIZE: usize = 64;
+const CURSOR_PARSER_REVISION: &str = "cursor-store-render-v2";
+const LIVE_TARGET_BATCH_BYTES: usize = 64 * 1024;
 
 pub(crate) struct PreparedStorageV2Envelope {
     pub envelope: StorageV2Envelope,
@@ -97,11 +100,42 @@ pub(crate) fn prepare_next_envelope(
     provider: &str,
     session_id_override: Option<&str>,
 ) -> Result<Option<PreparedStorageV2Envelope>> {
+    prepare_next_envelope_with_limit(
+        conn,
+        capabilities,
+        path,
+        provider,
+        session_id_override,
+        MAX_RAW_BATCH_BYTES,
+    )
+}
+
+fn prepare_next_envelope_with_limit(
+    conn: &mut Connection,
+    capabilities: &StorageV2Capabilities,
+    path: &Path,
+    provider: &str,
+    session_id_override: Option<&str>,
+    maximum_batch_bytes: usize,
+) -> Result<Option<PreparedStorageV2Envelope>> {
     let canonical_path = stable_source_path(path);
     let path_text = canonical_path.to_string_lossy();
     let opaque_source_id = opaque_source_id(&path_text);
-    if let Some(pending) = load_pending_for_source(conn, provider, &opaque_source_id)? {
-        return Ok(Some(pending));
+    if let Some(pending) =
+        pending_source_envelope::load_for_source(conn, provider, &opaque_source_id)?
+    {
+        let oversized_unattempted = pending.raw_bytes > maximum_batch_bytes as u64
+            && pending.attempt_count == 0
+            && maximum_batch_bytes < MAX_RAW_BATCH_BYTES;
+        if !oversized_unattempted
+            || !pending_source_envelope::discard_unattempted(
+                conn,
+                pending.source_epoch,
+                &pending.envelope_id,
+            )?
+        {
+            return pending_to_prepared(pending).map(Some);
+        }
     }
     let durable_session_id = match session_id_override {
         Some(value) => Some(value.to_string()),
@@ -141,7 +175,7 @@ pub(crate) fn prepare_next_envelope(
         path,
         framing,
         position,
-        MAX_RAW_BATCH_BYTES,
+        maximum_batch_bytes,
         maximum_record_bytes,
     )?
     else {
@@ -267,12 +301,18 @@ pub(crate) async fn ship_next_envelope(
     lane: &str,
     request_timeout: Duration,
 ) -> Result<Option<StorageV2ShipOutcome>> {
-    let Some(prepared) = preparation_result(prepare_next_envelope(
+    let maximum_batch_bytes = if lane == "live" {
+        LIVE_TARGET_BATCH_BYTES
+    } else {
+        MAX_RAW_BATCH_BYTES
+    };
+    let Some(prepared) = preparation_result(prepare_next_envelope_with_limit(
         conn,
         capabilities,
         path,
         provider,
         session_id_override,
+        maximum_batch_bytes,
     ))?
     else {
         return Ok(None);
@@ -813,26 +853,245 @@ pub(crate) fn prepare_next_opencode_envelope(
     }
 }
 
+fn cursor_render_records(
+    snapshot: &cursor_store::CursorStoreSnapshot,
+    selected: &[cursor_store_records::CursorRawRecord],
+    started_at_us: i64,
+) -> Result<Vec<StorageV2RenderRecord>> {
+    let cursor_store::RootMessageBlobIds::Parsed(root_ids) = &snapshot.root_message_blob_ids else {
+        return Ok(Vec::new());
+    };
+    let mut selected_blobs: HashMap<String, (u64, usize, Vec<u8>)> = HashMap::new();
+    for (raw_record_ordinal, record) in selected.iter().enumerate() {
+        let Ok(wrapper) = serde_json::from_slice::<Value>(&record.bytes) else {
+            continue;
+        };
+        if !matches!(
+            wrapper.get("kind").and_then(Value::as_str),
+            Some("blob" | "root_reference")
+        ) {
+            continue;
+        }
+        let Some(blob_id) = wrapper.get("blob_id").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(encoded) = wrapper.get("blob_bytes_b64").and_then(Value::as_str) else {
+            continue;
+        };
+        let Ok(bytes) = BASE64_STANDARD.decode(encoded) else {
+            continue;
+        };
+        selected_blobs.insert(
+            blob_id.to_string(),
+            (record.source_position, raw_record_ordinal, bytes),
+        );
+    }
+    let mut records = Vec::new();
+    for (message_order, blob_id) in root_ids.iter().enumerate() {
+        let Some((source_position, raw_record_ordinal, blob_bytes)) = selected_blobs.get(blob_id)
+        else {
+            continue;
+        };
+        let message: Value = match serde_json::from_slice(blob_bytes) {
+            Ok(value) => value,
+            Err(_) => continue,
+        };
+        let role = message
+            .get("role")
+            .and_then(Value::as_str)
+            .unwrap_or("assistant");
+        let blocks: Vec<Value> = match message.get("content") {
+            Some(Value::Array(values)) => values.clone(),
+            Some(Value::String(text)) => vec![serde_json::json!({"type":"text","text":text})],
+            _ => Vec::new(),
+        };
+        for (subordinal, block) in blocks.iter().enumerate() {
+            let kind = block
+                .get("type")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            let (
+                event_role,
+                content_text,
+                tool_name,
+                tool_input_json,
+                tool_output_text,
+                tool_call_id,
+            ) = match kind {
+                "text" | "reasoning" => {
+                    let text = block
+                        .get("text")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    let (effective_role, effective_text) = if kind == "reasoning" {
+                        ("assistant".to_string(), text.to_string())
+                    } else {
+                        classify_cursor_text(role, text)
+                    };
+                    (effective_role, Some(effective_text), None, None, None, None)
+                }
+                "tool-call" => (
+                    "assistant".to_string(),
+                    None,
+                    block
+                        .get("toolName")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
+                    block.get("args").or_else(|| block.get("input")).cloned(),
+                    None,
+                    block
+                        .get("toolCallId")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
+                ),
+                "tool-result" => (
+                    "tool".to_string(),
+                    None,
+                    block
+                        .get("toolName")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
+                    None,
+                    block.get("result").map(|value| match value {
+                        Value::String(text) => text.clone(),
+                        other => other.to_string(),
+                    }),
+                    block
+                        .get("toolCallId")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
+                ),
+                _ => (
+                    role.to_string(),
+                    Some(String::new()),
+                    None,
+                    None,
+                    None,
+                    None,
+                ),
+            };
+            records.push(StorageV2RenderRecord {
+                event_id: Uuid::new_v5(
+                    &Uuid::NAMESPACE_URL,
+                    format!("cursor:{blob_id}:{subordinal}").as_bytes(),
+                )
+                .to_string(),
+                order_time_us: started_at_us + message_order as i64 * 1_000 + subordinal as i64,
+                source_position: *source_position,
+                event_subordinal: subordinal as u32,
+                role: event_role,
+                content_text,
+                tool_name,
+                tool_input_json,
+                tool_output_text,
+                tool_call_id,
+                thread_id: None,
+                branch_kind: (kind == "reasoning").then(|| "reasoning".to_string()),
+                raw_record_ordinal: *raw_record_ordinal,
+            });
+        }
+    }
+    Ok(records)
+}
+
+fn classify_cursor_text(role: &str, text: &str) -> (String, String) {
+    if role != "user" {
+        return (role.to_string(), text.to_string());
+    }
+    if let Some(query_start) = text.find("<user_query>") {
+        let inner_start = query_start + "<user_query>".len();
+        if let Some(query_end) = text[inner_start..].find("</user_query>") {
+            return (
+                "user".to_string(),
+                text[inner_start..inner_start + query_end]
+                    .trim()
+                    .to_string(),
+            );
+        }
+    }
+    const INJECTION_MARKERS: [&str; 6] = [
+        "<user_info>",
+        "<agent_transcripts>",
+        "<rules>",
+        "<system_reminder>",
+        "<attached_files>",
+        "<system_notification>",
+    ];
+    if INJECTION_MARKERS.iter().any(|marker| text.contains(marker)) {
+        return ("system".to_string(), text.to_string());
+    }
+    ("user".to_string(), text.to_string())
+}
+
 pub(crate) fn prepare_next_cursor_envelope(
     conn: &mut Connection,
     capabilities: &StorageV2Capabilities,
     db_path: &Path,
 ) -> Result<Option<PreparedStorageV2Envelope>> {
+    prepare_next_cursor_envelope_with_limit(
+        conn,
+        capabilities,
+        db_path,
+        capabilities.max_raw_record_bytes,
+    )
+}
+
+fn prepare_next_cursor_envelope_with_limit(
+    conn: &mut Connection,
+    capabilities: &StorageV2Capabilities,
+    db_path: &Path,
+    maximum_batch_bytes: u64,
+) -> Result<Option<PreparedStorageV2Envelope>> {
     let canonical_path = stable_source_path(db_path);
     let path_text = canonical_path.to_string_lossy();
-    if let Some(pending) = load_pending_for_path(conn, &path_text)? {
-        return Ok(Some(pending));
+    if let Some(pending) = pending_source_envelope::load_for_path(conn, &path_text)? {
+        let oversized_unattempted = pending.raw_bytes > maximum_batch_bytes
+            && pending.range_end.saturating_sub(pending.range_start) > 1
+            && pending.attempt_count == 0
+            && maximum_batch_bytes < capabilities.max_raw_record_bytes;
+        if !oversized_unattempted
+            || !pending_source_envelope::discard_unattempted(
+                conn,
+                pending.source_epoch,
+                &pending.envelope_id,
+            )?
+        {
+            return pending_to_prepared(pending).map(Some);
+        }
     }
-    let snapshot = cursor_store::cursor_store_raw_snapshot(db_path)?;
+    let metadata_before = db_path
+        .metadata()
+        .with_context(|| format!("reading Cursor store metadata {}", db_path.display()))?;
+    let store_incarnation = identity_from_metadata(&metadata_before)
+        .context("Cursor store has no stable file incarnation")?;
+    let mut store_snapshot = cursor_store::read_cursor_render_snapshot(db_path)?;
+    let identity_after_render = identity_from_metadata(
+        &db_path
+            .metadata()
+            .with_context(|| format!("rechecking Cursor store metadata {}", db_path.display()))?,
+    );
+    if identity_after_render.as_deref() != Some(store_incarnation.as_str()) {
+        anyhow::bail!("Cursor store file changed identity during root capture");
+    }
+    let snapshot =
+        cursor_store::cursor_store_raw_snapshot_from(&store_snapshot, store_incarnation.clone())?;
     let claimed_session_id = crate::cursor_launch_binding::managed_session_id_for_conversation(
         &snapshot.conversation_uuid,
     )?;
+    if claimed_session_id.is_none()
+        && crate::cursor_launch_binding::pending_claim_for_conversation(
+            &snapshot.conversation_uuid,
+        )?
+    {
+        return Ok(None);
+    }
     let opaque_source_id = cursor_store::cursor_opaque_source_id(&snapshot.conversation_uuid);
+    let previous_root_ids =
+        cursor_store_root::previous_message_blob_ids(conn, &snapshot.conversation_uuid)?;
     let root_relation = match snapshot.root_blob_id.as_deref() {
-        Some(root_blob_id) => cursor_store_root::observe_cursor_root(
+        Some(_) => cursor_store_root::classify_cursor_root(
             conn,
             &snapshot.conversation_uuid,
-            root_blob_id,
             &snapshot.root_message_blob_ids,
         )?,
         None => cursor_store_root::CursorRootOrderRelation::Inconclusive,
@@ -862,11 +1121,101 @@ pub(crate) fn prepare_next_cursor_envelope(
         claimed_session_id.as_deref(),
         root_relation.source_change_hint(),
     )?;
+    let newly_referenced_ids = match (&previous_root_ids, &snapshot.root_message_blob_ids) {
+        (Some(previous), cursor_store::RootMessageBlobIds::Parsed(current))
+            if current.starts_with(previous) =>
+        {
+            current[previous.len()..].to_vec()
+        }
+        // Initial capture streams every blob through the bounded page walker;
+        // explicit reference records are only needed for already-spooled
+        // orphan blobs that a later root extension makes visible.
+        (None, cursor_store::RootMessageBlobIds::Parsed(_)) => Vec::new(),
+        _ => Vec::new(),
+    };
+    store_snapshot
+        .blob_rows
+        .extend(cursor_store::read_cursor_blob_rows(
+            db_path,
+            &newly_referenced_ids,
+        )?);
+    let mut capture_records = snapshot.records.clone();
+    capture_records.extend(cursor_store::root_reference_records(
+        &store_snapshot,
+        &snapshot.store_incarnation,
+        &newly_referenced_ids,
+    )?);
     cursor_store_records::append_unseen_cursor_records(
         conn,
         resolution.source_epoch,
-        &snapshot.records,
+        &capture_records,
     )?;
+    // Commit root ordering only after every reference needed to render this
+    // transition is durable. A crash before here safely replays and dedupes.
+    if let Some(root_blob_id) = snapshot.root_blob_id.as_deref() {
+        cursor_store_root::record_cursor_root(
+            conn,
+            &snapshot.conversation_uuid,
+            root_blob_id,
+            &snapshot.root_message_blob_ids,
+        )?;
+    }
+    let mut streamed_records = Vec::new();
+    let mut streamed_bytes = 0usize;
+    let capture_cursor = cursor_store_records::capture_cursor(conn, resolution.source_epoch)?;
+    let blob_visit = cursor_store::visit_cursor_blob_records(
+        db_path,
+        &snapshot.conversation_uuid,
+        &snapshot.store_incarnation,
+        capture_cursor.as_deref(),
+        256,
+        |record| {
+            let record_hash = cursor_store_records::cursor_record_hash(&record);
+            if cursor_store_records::cursor_record_exists(
+                conn,
+                resolution.source_epoch,
+                &record_hash,
+            )? {
+                return Ok(true);
+            }
+            if record.len() as u64 > capabilities.max_raw_record_bytes {
+                anyhow::bail!(
+                    "one Cursor raw record exceeds the negotiated storage-v2 object bound"
+                );
+            }
+            if !streamed_records.is_empty()
+                && streamed_bytes.saturating_add(record.len()) > MAX_RAW_BATCH_BYTES
+            {
+                return Ok(false);
+            }
+            streamed_bytes = streamed_bytes.saturating_add(record.len());
+            streamed_records.push(record);
+            Ok(true)
+        },
+    )?;
+    let identity_after_blobs = identity_from_metadata(
+        &db_path
+            .metadata()
+            .with_context(|| format!("rechecking Cursor store metadata {}", db_path.display()))?,
+    );
+    if identity_after_blobs.as_deref() != Some(store_incarnation.as_str()) {
+        anyhow::bail!("Cursor store file changed identity during blob capture");
+    }
+    cursor_store_records::append_unseen_cursor_records(
+        conn,
+        resolution.source_epoch,
+        &streamed_records,
+    )?;
+    cursor_store_records::store_capture_cursor(
+        conn,
+        resolution.source_epoch,
+        if blob_visit.has_more {
+            blob_visit.last_blob_id.as_deref()
+        } else {
+            None
+        },
+    )?;
+    let source_capture_has_more = blob_visit.has_more;
     let logical_len = cursor_store_records::cursor_record_count(conn, resolution.source_epoch)?;
     // Refresh max_observed_len after adding local records. `None` revision is
     // intentional: an append changes Cursor's root blob every turn but must
@@ -895,6 +1244,22 @@ pub(crate) fn prepare_next_cursor_envelope(
         capabilities.max_records,
         capabilities.max_raw_record_bytes,
     )?;
+    let mut selected_bytes = 0u64;
+    let selected = selected
+        .into_iter()
+        .take_while(|record| {
+            let record_bytes = record.bytes.len() as u64;
+            if selected_bytes > 0
+                && selected_bytes.saturating_add(record_bytes) > maximum_batch_bytes
+            {
+                return false;
+            }
+            // One source record is atomic. It may exceed the live target but
+            // never the negotiated per-record capability enforced above.
+            selected_bytes = selected_bytes.saturating_add(record_bytes);
+            true
+        })
+        .collect::<Vec<_>>();
     let Some(last) = selected.last() else {
         return Ok(None);
     };
@@ -944,6 +1309,20 @@ pub(crate) fn prepare_next_cursor_envelope(
     let observed_at = DateTime::parse_from_rfc3339(&resolution.opened_at)
         .expect("source epoch opened_at is generated internally")
         .with_timezone(&Utc);
+    let render_records =
+        cursor_render_records(&store_snapshot, &selected, started_at.timestamp_micros())?;
+    let render_generation = cursor_render_generation_id(&session_id);
+    let has_reply_evidence = render_records
+        .iter()
+        .any(|record| record.role == "assistant" || record.role == "tool");
+    let event_count = render_records.len();
+    let render = (!render_records.is_empty()).then(|| StorageV2Render {
+        generation_id: render_generation.to_string(),
+        parser_revision: CURSOR_PARSER_REVISION.to_string(),
+        ordering_revision: "cursor-root-order-v1".to_string(),
+        records: render_records,
+    });
+    let render_ready = render.is_some();
     let prepared = PreparedStorageV2Envelope {
         envelope: StorageV2Envelope {
             protocol_version: 2,
@@ -958,7 +1337,7 @@ pub(crate) fn prepare_next_cursor_envelope(
             range_kind: "record_ordinal".to_string(),
             range_start,
             range_end,
-            render: None,
+            render,
             media: Vec::new(),
             session: StorageV2SessionFacts {
                 environment: "local".to_string(),
@@ -970,7 +1349,7 @@ pub(crate) fn prepare_next_cursor_envelope(
                 last_activity_at: observed_at.max(started_at).to_rfc3339(),
                 ended_at: None,
                 origin_kind: Some("cursor_store".to_string()),
-                hidden_from_default_timeline: managed_session_id.is_none(),
+                hidden_from_default_timeline: managed_session_id.is_none() || !render_ready,
                 launch_actor: None,
                 launch_surface: None,
             },
@@ -986,10 +1365,10 @@ pub(crate) fn prepare_next_cursor_envelope(
         source_epoch: resolution.source_epoch,
         range_start,
         range_end,
-        event_count: 0,
-        has_reply_evidence: false,
+        event_count,
+        has_reply_evidence,
         raw_bytes,
-        has_more: range_end < logical_len,
+        has_more: range_end < logical_len || source_capture_has_more,
         media_objects: Vec::new(),
     };
     persist_prepared(conn, &path_text, prepared).map(Some)
@@ -1151,15 +1530,6 @@ fn pending_candidate(
         prepared.has_reply_evidence,
         prepared.has_more,
     ))
-}
-
-fn load_pending_for_path(
-    conn: &Connection,
-    source_path: &str,
-) -> Result<Option<PreparedStorageV2Envelope>> {
-    pending_source_envelope::load_for_path(conn, source_path)?
-        .map(pending_to_prepared)
-        .transpose()
 }
 
 fn load_pending_for_source(
@@ -1339,8 +1709,17 @@ pub(crate) async fn ship_next_cursor_envelope(
     lane: &str,
     request_timeout: Duration,
 ) -> Result<Option<StorageV2ShipOutcome>> {
-    let Some(prepared) =
-        preparation_result(prepare_next_cursor_envelope(conn, capabilities, db_path))?
+    let maximum_batch_bytes = if lane == "live" {
+        LIVE_TARGET_BATCH_BYTES as u64
+    } else {
+        capabilities.max_raw_record_bytes
+    };
+    let Some(prepared) = preparation_result(prepare_next_cursor_envelope_with_limit(
+        conn,
+        capabilities,
+        db_path,
+        maximum_batch_bytes,
+    ))?
     else {
         return Ok(None);
     };
@@ -1638,6 +2017,16 @@ fn render_generation_id(session_id: Uuid) -> Uuid {
     )
 }
 
+fn cursor_render_generation_id(session_id: &str) -> Uuid {
+    Uuid::new_v5(
+        &Uuid::NAMESPACE_URL,
+        format!(
+            "longhouse-cursor-render-v2\0{session_id}\0{CURSOR_PARSER_REVISION}\0cursor-root-order-v1"
+        )
+        .as_bytes(),
+    )
+}
+
 fn opaque_source_id(path: &str) -> String {
     format!(
         "path-sha256:{}",
@@ -1879,14 +2268,27 @@ mod tests {
         set_cursor_root(&store, CURSOR_ROOT_B, &extended_root);
         store
             .execute(
-                "INSERT INTO blobs (id, data) VALUES (?1, X'0304')",
-                [CURSOR_MESSAGE_B],
+                "INSERT INTO blobs (id, data) VALUES (?1, ?2)",
+                params![
+                    CURSOR_MESSAGE_B,
+                    br#"{"role":"assistant","content":[{"type":"text","text":"second turn"}]}"#
+                ],
             )
             .unwrap();
         let extension = prepare_next_cursor_envelope(&mut conn, &capabilities(), &path)
             .unwrap()
             .unwrap();
         assert_eq!(extension.source_epoch, first.source_epoch);
+        assert_eq!(
+            extension.envelope.render.as_ref().unwrap().generation_id,
+            cursor_render_generation_id(&extension.envelope.session_id).to_string()
+        );
+        let extension_render = extension.envelope.render.as_ref().unwrap();
+        assert_eq!(extension_render.records.len(), 1);
+        assert_eq!(
+            extension_render.records[0].content_text.as_deref(),
+            Some("second turn")
+        );
         acknowledge_prepared(&mut conn, &extension);
 
         set_cursor_root(&store, CURSOR_ROOT_C, &[0xff; 32]);
@@ -1905,6 +2307,101 @@ mod tests {
             Some(first.source_epoch.to_string())
         );
         assert_eq!(rewrite.range_start, 0);
+    }
+
+    #[test]
+    fn cursor_renders_blob_first_referenced_after_its_raw_receipt() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("store.db");
+        let store = make_cursor_store(&path);
+        let orphan_id = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+        store
+            .execute(
+                "INSERT INTO blobs (id, data) VALUES (?1, ?2)",
+                params![
+                    orphan_id,
+                    br#"{"role":"assistant","content":[{"type":"text","text":"referenced later"}]}"#
+                ],
+            )
+            .unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+
+        let first = prepare_next_cursor_envelope(&mut conn, &capabilities(), &path)
+            .unwrap()
+            .unwrap();
+        acknowledge_prepared(&mut conn, &first);
+
+        let mut extended_root = vec![0xbb; 32];
+        extended_root.extend_from_slice(&[0xee; 32]);
+        set_cursor_root(&store, CURSOR_ROOT_B, &extended_root);
+        let extension = prepare_next_cursor_envelope(&mut conn, &capabilities(), &path)
+            .unwrap()
+            .unwrap();
+        let rendered = extension.envelope.render.unwrap().records;
+        assert!(rendered
+            .iter()
+            .any(|record| record.content_text.as_deref() == Some("referenced later")));
+    }
+
+    #[test]
+    fn cursor_store_emits_readable_text_and_tool_render_records() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("store.db");
+        let store = make_cursor_store(&path);
+        let message = serde_json::json!({
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "hello from Cursor"},
+                {"type": "tool-call", "toolName": "Shell", "toolCallId": "call-1", "args": {"command": "pwd"}},
+                {"type": "tool-result", "toolName": "Shell", "toolCallId": "call-1", "result": "/tmp"}
+            ]
+        });
+        store
+            .execute(
+                "UPDATE blobs SET data = ?1 WHERE id = ?2",
+                params![serde_json::to_vec(&message).unwrap(), CURSOR_MESSAGE_A],
+            )
+            .unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+
+        let prepared = prepare_next_cursor_envelope(&mut conn, &capabilities(), &path)
+            .unwrap()
+            .unwrap();
+        let render = prepared.envelope.render.unwrap();
+        assert_eq!(render.parser_revision, CURSOR_PARSER_REVISION);
+        assert_eq!(render.records.len(), 3);
+        assert_eq!(
+            render.records[0].content_text.as_deref(),
+            Some("hello from Cursor")
+        );
+        assert_eq!(render.records[1].tool_call_id.as_deref(), Some("call-1"));
+        assert_eq!(render.records[2].role, "tool");
+        assert_eq!(render.records[2].tool_output_text.as_deref(), Some("/tmp"));
+    }
+
+    #[test]
+    fn cursor_render_hides_injected_context_and_unwraps_real_user_query() {
+        assert_eq!(
+            classify_cursor_text(
+                "user",
+                "<user_info>darwin</user_info><rules>workspace</rules>"
+            ),
+            (
+                "system".to_string(),
+                "<user_info>darwin</user_info><rules>workspace</rules>".to_string()
+            )
+        );
+        assert_eq!(
+            classify_cursor_text(
+                "user",
+                "<user_info>darwin</user_info><user_query>  ship it  </user_query>"
+            ),
+            ("user".to_string(), "ship it".to_string())
+        );
+        assert_eq!(
+            classify_cursor_text("user", "plain follow-up"),
+            ("user".to_string(), "plain follow-up".to_string())
+        );
     }
 
     #[test]
@@ -2106,6 +2603,113 @@ mod tests {
         assert_eq!(with_reply.range_end, (user.len() + assistant.len()) as u64);
     }
 
+    #[test]
+    fn live_prepare_refreezes_unattempted_backlog_to_live_budget() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir
+            .path()
+            .join("018f0c3a-7b2d-7f10-8a11-123456789abc.jsonl");
+        let content = "x".repeat(40 * 1024);
+        let first = format!(
+            "{{\"type\":\"user\",\"uuid\":\"u1\",\"timestamp\":\"2026-07-12T12:00:00Z\",\"message\":{{\"content\":{}}}}}\n",
+            serde_json::to_string(&content).unwrap()
+        );
+        let second = format!(
+            "{{\"type\":\"assistant\",\"uuid\":\"a1\",\"timestamp\":\"2026-07-12T12:00:01Z\",\"message\":{{\"content\":{}}}}}\n",
+            serde_json::to_string(&content).unwrap()
+        );
+        fs::write(&path, format!("{first}{second}")).unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+
+        let backlog = prepare_next_envelope(&mut conn, &capabilities(), &path, "claude", None)
+            .unwrap()
+            .unwrap();
+        assert!(backlog.raw_bytes > LIVE_TARGET_BATCH_BYTES as u64);
+
+        let live = prepare_next_envelope_with_limit(
+            &mut conn,
+            &capabilities(),
+            &path,
+            "claude",
+            None,
+            LIVE_TARGET_BATCH_BYTES,
+        )
+        .unwrap()
+        .unwrap();
+        assert_ne!(
+            live.envelope.expected_envelope_id,
+            backlog.envelope.expected_envelope_id
+        );
+        assert!(live.raw_bytes <= LIVE_TARGET_BATCH_BYTES as u64);
+        assert!(live.has_more);
+    }
+
+    #[test]
+    fn cursor_live_prepare_refreezes_record_backlog_to_live_budget() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("store.db");
+        let store = make_cursor_store(&path);
+        for index in 0..4 {
+            store
+                .execute(
+                    "INSERT INTO blobs (id, data) VALUES (?1, ?2)",
+                    params![format!("large-{index}"), vec![b'x'; 40 * 1024]],
+                )
+                .unwrap();
+        }
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+
+        let backlog = prepare_next_cursor_envelope(&mut conn, &capabilities(), &path)
+            .unwrap()
+            .unwrap();
+        assert!(backlog.raw_bytes > LIVE_TARGET_BATCH_BYTES as u64);
+
+        let live = prepare_next_cursor_envelope_with_limit(
+            &mut conn,
+            &capabilities(),
+            &path,
+            LIVE_TARGET_BATCH_BYTES as u64,
+        )
+        .unwrap()
+        .unwrap();
+        assert_ne!(
+            live.envelope.expected_envelope_id,
+            backlog.envelope.expected_envelope_id
+        );
+        assert!(live.raw_bytes <= LIVE_TARGET_BATCH_BYTES as u64);
+        assert!(live.has_more);
+    }
+
+    #[test]
+    fn cursor_capture_pages_large_unreferenced_blob_tables() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("store.db");
+        let store = make_cursor_store(&path);
+        for index in 0..20 {
+            store
+                .execute(
+                    "INSERT INTO blobs (id, data) VALUES (?1, ?2)",
+                    params![format!("bulk-{index:03}"), vec![b'x'; 1024 * 1024]],
+                )
+                .unwrap();
+        }
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+
+        let prepared = prepare_next_cursor_envelope(&mut conn, &capabilities(), &path)
+            .unwrap()
+            .unwrap();
+        let captured_bytes: i64 = conn
+            .query_row(
+                "SELECT COALESCE(SUM(length(record_bytes)), 0) FROM cursor_store_raw_record WHERE source_epoch = ?1",
+                [prepared.source_epoch.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        assert!(captured_bytes <= (MAX_RAW_BATCH_BYTES + 2 * 1024 * 1024) as i64);
+        assert!(prepared.has_more);
+    }
+
     #[tokio::test]
     async fn lost_receipt_retries_identical_body_after_source_growth() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -2278,8 +2882,8 @@ mod tests {
             &conn,
             &stable_source_path(&path).to_string_lossy(),
         )
-            .unwrap()
-            .unwrap();
+        .unwrap()
+        .unwrap();
         assert_eq!(pending.attempt_count, 1);
         assert!(pending.blocked_at.is_none());
         let snapshot = pending_source_envelope::snapshot(&conn).unwrap();

@@ -787,15 +787,19 @@ async def _commit_admitted_envelope(
     settings = get_settings()
     tenant_id = _canonical_text(settings.archive_primary_tenant_id, "tenant_id", 255)
     try:
-        payload = await _read_bounded_json(request)
-        machine_id = _authenticated_machine_id(auth_token, payload)
-        spec, parsed = await asyncio.to_thread(
-            _parse_envelope,
-            payload,
-            tenant_id=tenant_id,
-            machine_id=machine_id,
-            lane=lane,
-        )
+        # Bound body decode separately from catalog work. A slow catalog commit
+        # must not retain scarce live admission and make unrelated live tips
+        # look like storage-worker saturation.
+        async with raw_workers.admission(lane):
+            payload = await _read_bounded_json(request)
+            machine_id = _authenticated_machine_id(auth_token, payload)
+            spec, parsed = await asyncio.to_thread(
+                _parse_envelope,
+                payload,
+                tenant_id=tenant_id,
+                machine_id=machine_id,
+                lane=lane,
+            )
         catalogd = get_catalogd_client()
         if catalogd is None:
             raise CatalogUnavailable("catalogd is not supervised")
@@ -809,26 +813,27 @@ async def _commit_admitted_envelope(
         if objects[0].get("receipt") is not None:
             return _validated_receipt(objects[0]["receipt"])
 
-        raw_task = asyncio.create_task(raw_workers.seal(spec, lane=parsed["lane"]))
-        render_spec = parsed["render_spec"]
-        render_task = asyncio.create_task(render_workers.seal(render_spec, lane=parsed["lane"])) if render_spec is not None else None
-        try:
-            sealed = await raw_task
-        except BaseException:
-            if render_task is not None:
-                await asyncio.gather(render_task, return_exceptions=True)
-            raise
-        if sealed.envelope_id != parsed["expected_envelope_id"]:
-            raise RawObjectWorkerError("sealed raw object identity changed after admission")
-        sealed_render = None
-        if render_task is not None:
+        async with raw_workers.admission(lane):
+            raw_task = asyncio.create_task(raw_workers.seal(spec, lane=parsed["lane"]))
+            render_spec = parsed["render_spec"]
+            render_task = asyncio.create_task(render_workers.seal(render_spec, lane=parsed["lane"])) if render_spec is not None else None
             try:
-                sealed_render = await render_task
-            except (RenderObjectWorkerBusy, RenderObjectWorkerError, RenderObjectValidationError) as exc:
-                logger.warning(
-                    "Render object deferred after raw seal",
-                    extra={"envelope_id": sealed.envelope_id, "lane": lane, "error": str(exc)},
-                )
+                sealed = await raw_task
+            except BaseException:
+                if render_task is not None:
+                    await asyncio.gather(render_task, return_exceptions=True)
+                raise
+            if sealed.envelope_id != parsed["expected_envelope_id"]:
+                raise RawObjectWorkerError("sealed raw object identity changed after admission")
+            sealed_render = None
+            if render_task is not None:
+                try:
+                    sealed_render = await render_task
+                except (RenderObjectWorkerBusy, RenderObjectWorkerError, RenderObjectValidationError) as exc:
+                    logger.warning(
+                        "Render object deferred after raw seal",
+                        extra={"envelope_id": sealed.envelope_id, "lane": lane, "error": str(exc)},
+                    )
         render_manifest = None
         if sealed_render is not None and render_spec is not None:
             render_manifest = {
@@ -924,6 +929,11 @@ async def _commit_admitted_envelope(
             status.HTTP_503_SERVICE_UNAVAILABLE,
             "storage_lane_busy",
             "Storage-v2 worker lane is full; retry the same envelope.",
+            headers={
+                "X-Longhouse-Storage-Backpressure": "storage_lane_busy",
+                "X-Longhouse-Storage-Lane": lane,
+                "Retry-After": "5",
+            },
         ) from exc
     except RawObjectValidationError as exc:
         raise _http_error(status.HTTP_422_UNPROCESSABLE_ENTITY, "invalid_envelope", str(exc)) from exc
@@ -1416,32 +1426,13 @@ async def commit_storage_v2_envelope(
             "invalid_lane",
             "X-Longhouse-Storage-Lane must be live or repair.",
         )
-    raw_workers = get_raw_object_worker_pool()
-    render_workers = get_render_object_worker_pool()
-    try:
-        # Raw admission bounds request parsing and raw sealing. Render sealing
-        # is optional and already owns a bounded lane inside `seal`; reserving
-        # render capacity here made raw-only Cursor envelopes block rendered
-        # Claude/Codex traffic without doing any render work.
-        async with raw_workers.admission(lane):
-            return await _commit_admitted_envelope(
-                request,
-                auth_token,
-                lane=lane,
-                raw_workers=raw_workers,
-                render_workers=render_workers,
-            )
-    except (RawObjectWorkerBusy, RenderObjectWorkerBusy) as exc:
-        raise _http_error(
-            status.HTTP_503_SERVICE_UNAVAILABLE,
-            "storage_lane_busy",
-            "Storage-v2 worker lane is full; retry the same envelope.",
-            headers={
-                "X-Longhouse-Storage-Backpressure": "storage_lane_busy",
-                "X-Longhouse-Storage-Lane": lane,
-                "Retry-After": "5",
-            },
-        ) from exc
+    return await _commit_admitted_envelope(
+        request,
+        auth_token,
+        lane=lane,
+        raw_workers=get_raw_object_worker_pool(),
+        render_workers=get_render_object_worker_pool(),
+    )
 
 
 __all__ = ["MAX_WIRE_BODY_BYTES", "commit_storage_v2_envelope", "router", "storage_v2_capabilities"]

@@ -736,6 +736,10 @@ def install_hooks(
     codex_actions = install_codex_hooks(engine_path=engine_path, claude_dir=claude_dir)
     actions.extend(codex_actions)
 
+    from zerg.services.cursor_hooks import install_cursor_hooks
+
+    actions.extend(install_cursor_hooks())
+
     return actions
 
 

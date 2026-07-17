@@ -26,7 +26,10 @@ pub fn append_unseen_cursor_records(
     records: &[Vec<u8>],
 ) -> Result<u64> {
     let epoch = source_epoch.to_string();
-    let transaction = conn.transaction()?;
+    // A Cursor capture may already hold a wider preparation savepoint so root
+    // ordering, epoch selection, raw records, and pending-envelope persistence
+    // commit atomically. Nested savepoints work in both contexts.
+    let transaction = conn.savepoint()?;
     let next = next_position(&transaction, &epoch)?;
     let mut next = next;
     for bytes in records {
@@ -55,6 +58,55 @@ pub fn cursor_record_count(conn: &Connection, source_epoch: Uuid) -> Result<u64>
         |row| row.get(0),
     )?;
     u64::try_from(count).context("Cursor record count is negative")
+}
+
+pub fn cursor_record_hash(bytes: &[u8]) -> String {
+    hex_hash(bytes)
+}
+
+pub fn cursor_record_exists(
+    conn: &Connection,
+    source_epoch: Uuid,
+    record_hash: &str,
+) -> Result<bool> {
+    let found: Option<i64> = conn
+        .query_row(
+            "SELECT 1 FROM cursor_store_raw_record WHERE source_epoch = ?1 AND record_hash = ?2",
+            params![source_epoch.to_string(), record_hash],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(found.is_some())
+}
+
+pub fn capture_cursor(conn: &Connection, source_epoch: Uuid) -> Result<Option<String>> {
+    conn.query_row(
+        "SELECT last_blob_id FROM cursor_store_capture_cursor WHERE source_epoch = ?1",
+        [source_epoch.to_string()],
+        |row| row.get(0),
+    )
+    .optional()
+    .context("reading Cursor blob capture cursor")
+}
+
+pub fn store_capture_cursor(
+    conn: &Connection,
+    source_epoch: Uuid,
+    last_blob_id: Option<&str>,
+) -> Result<()> {
+    conn.execute(
+        "INSERT INTO cursor_store_capture_cursor (source_epoch, last_blob_id, updated_at)
+         VALUES (?1, ?2, ?3)
+         ON CONFLICT(source_epoch) DO UPDATE SET
+             last_blob_id = excluded.last_blob_id,
+             updated_at = excluded.updated_at",
+        params![
+            source_epoch.to_string(),
+            last_blob_id,
+            Utc::now().to_rfc3339()
+        ],
+    )?;
+    Ok(())
 }
 
 pub fn active_cursor_record_count(
@@ -152,11 +204,24 @@ mod tests {
     use super::*;
     use crate::state::db::open_db;
 
+    fn seed_epoch(conn: &Connection, epoch: Uuid) {
+        let now = Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO source_epoch_registry (
+                source_epoch, provider, opaque_source_id, file_incarnation,
+                start_reason, max_observed_len, created_at, updated_at
+             ) VALUES (?1, 'cursor', ?2, 'fixture', 'fixture', 0, ?3, ?3)",
+            params![epoch.to_string(), format!("fixture:{epoch}"), now],
+        )
+        .unwrap();
+    }
+
     #[test]
     fn exact_records_are_spooled_once_and_positions_are_contiguous() {
         let temp = tempfile::NamedTempFile::new().unwrap();
         let mut conn = open_db(Some(temp.path())).unwrap();
         let epoch = Uuid::new_v4();
+        seed_epoch(&conn, epoch);
         assert_eq!(
             append_unseen_cursor_records(
                 &mut conn,
@@ -200,6 +265,7 @@ mod tests {
         let temp = tempfile::NamedTempFile::new().unwrap();
         let mut conn = open_db(Some(temp.path())).unwrap();
         let epoch = Uuid::new_v4();
+        seed_epoch(&conn, epoch);
         append_unseen_cursor_records(
             &mut conn,
             epoch,

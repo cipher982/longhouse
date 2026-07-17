@@ -295,6 +295,34 @@ async def test_ready_render_manifest_switches_generation_with_raw_receipt(daemon
 
 
 @pytest.mark.asyncio
+async def test_revision_generation_drift_returns_conflict_instead_of_catalog_failure(daemon_paths):
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    epoch = UUID("018f0c3a-7b2d-7f10-8a11-123456789abc")
+    session_id = uuid4()
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        first = _raw_params(epoch=epoch, session_id=session_id, start=0, end=6, records=(b"hello\n",), sealed_at=now)
+        first.update(render_state="ready", render_manifest=_render_manifest(uuid4()), projectors=["search-v2"])
+        await client.call("storage.raw_object.commit.v2", first)
+
+        drifted = _raw_params(epoch=epoch, session_id=session_id, start=6, end=12, records=(b"world\n",), sealed_at=now)
+        drifted.update(
+            render_state="ready",
+            render_manifest=_render_manifest(uuid4(), seed=b"second-render", position=6),
+            projectors=["search-v2"],
+        )
+        with pytest.raises(CatalogRemoteError) as conflict:
+            await client.call("storage.raw_object.commit.v2", drifted)
+        assert conflict.value.code == "source_epoch_conflict"
+    finally:
+        await client.close()
+        await daemon.close()
+
+
+@pytest.mark.asyncio
 async def test_console_provenance_survives_first_archived_provider_transcript(daemon_paths):
     database_path, socket_path = daemon_paths
     now = datetime.now(UTC).replace(microsecond=0)

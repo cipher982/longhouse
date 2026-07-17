@@ -218,8 +218,8 @@ def test_codex_contract_is_current_remote_launch_engine_channel_provider():
         "resume_run_once",
         "turn_start",
     )
-    assert remote_launch_supported_providers() == frozenset({"codex", "claude", "opencode", "cursor"})
-    assert run_once_supported_providers() == frozenset({"codex", "claude", "opencode", "cursor"})
+    assert remote_launch_supported_providers() == frozenset({"codex", "claude", "opencode"})
+    assert run_once_supported_providers() == frozenset({"codex", "claude", "opencode"})
 
 
 def test_codex_and_managed_claude_advertise_remote_pause_answering():

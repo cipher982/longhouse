@@ -75,6 +75,33 @@ struct CursorHelmState {
     socket_path: PathBuf,
 }
 
+#[derive(Debug, Deserialize)]
+struct CursorHelmPhaseFile {
+    session_id: String,
+    phase: String,
+    #[serde(default)]
+    generation_id: Option<String>,
+}
+
+fn active_generation_id(
+    session_id: &str,
+    state_root: Option<&Path>,
+) -> std::result::Result<String, CursorHelmControlError> {
+    let dir = resolve_state_dir(state_root).map_err(CursorHelmControlError::failed)?;
+    let path = dir.join(format!("{session_id}.phase.json"));
+    let bytes = fs::read(&path)
+        .map_err(|_| CursorHelmControlError::failed("Cursor has no current active generation"))?;
+    let phase: CursorHelmPhaseFile = serde_json::from_slice(&bytes)
+        .map_err(|error| CursorHelmControlError::failed(error.to_string()))?;
+    let generation_id = phase.generation_id.unwrap_or_default().trim().to_string();
+    if phase.session_id != session_id || phase.phase != "active" || generation_id.is_empty() {
+        return Err(CursorHelmControlError::failed(
+            "Cursor has no current active generation",
+        ));
+    }
+    Ok(generation_id)
+}
+
 /// Engine-side typed error. `session_not_attached` means the launcher state is
 /// missing, the launcher pid is dead, or the control socket is gone — the
 /// session is not currently remotely steerable. `command_failed` wraps every
@@ -200,6 +227,9 @@ async fn dispatch_command(
     });
     if let Some(text) = text {
         request["text"] = json!(text);
+    }
+    if matches!(kind, CommandKind::Interrupt) {
+        request["generation_id"] = json!(active_generation_id(session_id, state_root)?);
     }
     let mut request_bytes = serde_json::to_vec(&request).map_err(CursorHelmControlError::failed)?;
     request_bytes.push(b'\n');
@@ -381,6 +411,53 @@ mod tests {
 
         let summary = send_text(session_id, "hello", Some(&root)).await.unwrap();
         assert_eq!(summary.exit_code, 0);
+    }
+
+    #[tokio::test]
+    async fn interrupt_carries_exact_active_generation() {
+        let root = tmp_state_root();
+        let session_id = "interrupt-generation-session";
+        let socket = root.join("interrupt-generation.sock");
+        write_state(&root, session_id, &socket, None);
+        fs::write(
+            root.join(format!("{session_id}.phase.json")),
+            json!({
+                "session_id": session_id,
+                "phase": "active",
+                "generation_id": "generation-7",
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        let server = tokio::spawn(async move {
+            let (mut conn, _) = listener.accept().await.unwrap();
+            let mut bytes = Vec::new();
+            conn.read_to_end(&mut bytes).await.unwrap();
+            let request: Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(request["generation_id"], "generation-7");
+            conn.write_all(b"{\"ok\":true}\n").await.unwrap();
+        });
+
+        interrupt(session_id, Some(&root)).await.unwrap();
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn interrupt_rejects_stale_or_idle_phase_before_socket_dispatch() {
+        let root = tmp_state_root();
+        let session_id = "interrupt-idle-session";
+        let socket = root.join("interrupt-idle.sock");
+        write_state(&root, session_id, &socket, None);
+        fs::write(
+            root.join(format!("{session_id}.phase.json")),
+            json!({"session_id": session_id, "phase": "idle", "generation_id": "old"}).to_string(),
+        )
+        .unwrap();
+
+        let error = interrupt(session_id, Some(&root)).await.unwrap_err();
+        assert_eq!(error.code(), "command_failed");
+        assert!(!socket.exists());
     }
 
     #[tokio::test]

@@ -2302,6 +2302,14 @@ fn local_retry_delay(priority: WorkPriority) -> Duration {
     }
 }
 
+fn storage_v2_backpressure_retry_delay(priority: WorkPriority, retry_after: Duration) -> Duration {
+    if priority == WorkPriority::Live {
+        retry_after.min(Duration::from_secs(1))
+    } else {
+        retry_after
+    }
+}
+
 fn spool_retry_delay_for_path(conn: &rusqlite::Connection, path: &Path) -> Option<Duration> {
     let retry_at = match Spool::new(conn).next_retry_at_for_path(&path.to_string_lossy()) {
         Ok(retry_at) => retry_at?,
@@ -2982,6 +2990,7 @@ fn provider_name_to_static(provider: &str) -> Option<&'static str> {
     match provider {
         "claude" => Some("claude"),
         "codex" => Some("codex"),
+        "cursor" => Some("cursor"),
         "antigravity" => Some("antigravity"),
         "gemini" => Some("antigravity"),
         _ => None,
@@ -3759,7 +3768,12 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
                 }
                 result.local_retry_after = Some(
                     backpressure
-                        .map(|value| value.retry_after)
+                        .map(|value| {
+                            storage_v2_backpressure_retry_delay(
+                                result.job.priority,
+                                value.retry_after,
+                            )
+                        })
                         .unwrap_or_else(|| local_retry_delay(result.job.priority)),
                 );
             }
@@ -4839,6 +4853,34 @@ mod tests {
     }
 
     #[test]
+    fn test_cursor_turn_completed_wake_schedules_native_store_shipping() {
+        let transcript = tempfile::NamedTempFile::new().unwrap();
+        let mut latest_wakes = HashMap::new();
+
+        let scheduled = record_transcript_wake_hint(
+            &mut latest_wakes,
+            TranscriptWakeSignal {
+                provider: "cursor".to_string(),
+                path: transcript.path().to_path_buf(),
+                phase: "idle".to_string(),
+                observed_at_ms: 123,
+                session_id: Some("cursor-session".to_string()),
+                turn_id: Some("cursor-generation".to_string()),
+                wake_reason: Some("turn_completed".to_string()),
+                file_len_hint: Some(4096),
+                received_at_ms: Some(124),
+            },
+        )
+        .expect("completed Cursor turns should schedule native store shipping");
+
+        assert_eq!(scheduled.0, transcript.path());
+        assert_eq!(scheduled.1, "cursor");
+        assert_eq!(scheduled.2.source, "wake_socket");
+        assert_eq!(scheduled.2.session_id.as_deref(), Some("cursor-session"));
+        assert_eq!(scheduled.2.turn_id.as_deref(), Some("cursor-generation"));
+    }
+
+    #[test]
     fn test_enqueue_transcript_wake_signal_queues_live_work() {
         let transcript = tempfile::NamedTempFile::new().unwrap();
         let mut latest_wakes = HashMap::new();
@@ -5624,6 +5666,20 @@ mod tests {
         assert_eq!(
             local_retry_delay(WorkPriority::Scan),
             Duration::from_secs(LOCAL_RETRY_DELAY_SECS)
+        );
+        assert_eq!(
+            storage_v2_backpressure_retry_delay(
+                WorkPriority::Live,
+                Duration::from_secs(5),
+            ),
+            Duration::from_secs(1)
+        );
+        assert_eq!(
+            storage_v2_backpressure_retry_delay(
+                WorkPriority::Scan,
+                Duration::from_secs(5),
+            ),
+            Duration::from_secs(5)
         );
     }
 

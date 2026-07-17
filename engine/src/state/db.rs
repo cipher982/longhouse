@@ -209,6 +209,13 @@ pub fn open_db(db_path: Option<&Path>) -> Result<Connection> {
             PRIMARY KEY (source_epoch, record_hash),
             UNIQUE (source_epoch, source_position),
             FOREIGN KEY (source_epoch) REFERENCES source_epoch_registry(source_epoch)
+        );
+
+        CREATE TABLE IF NOT EXISTS cursor_store_capture_cursor (
+            source_epoch TEXT PRIMARY KEY,
+            last_blob_id TEXT,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (source_epoch) REFERENCES source_epoch_registry(source_epoch)
         );",
     )?;
 

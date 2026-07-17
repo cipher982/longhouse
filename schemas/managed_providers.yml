@@ -319,12 +319,11 @@ providers:
   - cursor_acp
   - cursor_exec
   launch_local: true
-  # Console ACP writes every notification to an engine-owned raw source and
-  # advances only after a storage-v2 receipt. Helm remains locally launchable
-  # but is not yet a deterministically bound transcript source.
-  launch_remote: true
-  run_once: true
-  reattach: false
+  # Cursor Console remains frozen: ACP is a different control plane and does
+  # not create the native durable conversation required by this Helm contract.
+  launch_remote: false
+  run_once: false
+  reattach: true
   send_input: true
   interrupt: true
   steer_active_turn: false
@@ -337,58 +336,47 @@ providers:
   operation_evidence:
     launch_local:
       level: hermetic
-      source: 'longhouse cursor launcher: pty.fork pass-through of cursor-agent (pristine
-        TUI, no tmux/emulation) + per-session Unix socket + state file scanned by the
-        engine into a managed-session lease. Live send validated: text -> 0.3s -> Escape
-        -> 0.1s -> Enter submits in cursor-agent (claude-code#15553 Ink workaround);
-        SIGINT exits cursor-agent (#52812). Engine cursor_helm_control forwards over
-        the socket. See docs/specs/cursor-transcript-format.md Helm section.'
-      next: promote to live_no_token with an interactive send/interrupt canary driven from web/iOS
+      source: Cursor product-path canary must pass post-deploy before live-token promotion
     launch_remote:
-      level: hermetic
-      source: cursor_acp exact raw JSON-RPC source + storage-v2 receipt-cursor tests
-    run_once:
-      level: hermetic
-      source: cursor_acp exact raw JSON-RPC source + storage-v2 receipt-cursor tests
-    reattach:
       level: none
-      source: 'unsupported: ACP is a headless stdio process per turn; there is no attach-to-live-process
-        surface. Resume is a new session/load + session/prompt turn, not a reattach.'
+      source: unavailable until stock Cursor exposes a durable headless conversation source
+    run_once:
+      level: none
+      source: unavailable until stock Cursor exposes a durable headless conversation source
+    reattach:
+      level: hermetic
+      source: 'Cursor Helm Gate 0 native_resume_continuity: a new stock TUI resumes
+        the same provider conversation and Longhouse session identity'
     send_input:
       level: hermetic
-      source: 'cursor_helm: engine forwards session.send_text to the launcher Unix socket;
-        launcher writes text -> Escape -> Enter to the PTY master (Ink submit workaround).
-        Validated live in the PTY pass-through spike (cursor-agent replied "ready").'
-      next: promote with live interactive send canary from web/iOS
+      source: 'Cursor Helm Gate 0 idle send: exact prompt digest, native response/stop
+        hooks, and store continuity; active phase is rejected before PTY write'
     interrupt:
       level: hermetic
-      source: 'cursor_helm: engine forwards session.interrupt; launcher sends SIGINT to
-        the cursor-agent child pid (SIGINT exits cursor-agent, #52812).'
-      next: promote with live interrupt canary
+      source: 'Cursor Helm Gate 0 ctrl_c_cancel: Ctrl-C stops the active generation,
+        emits aborted/error, preserves the TUI process, and the next turn completes'
     steer_active_turn:
       level: none
       source: unsupported until Cursor exposes a mid-turn injection API
     answer_pause:
       level: none
-      source: unsupported until Cursor exposes pause-answer semantics
+      source: 'Cursor permission hooks use the separate pull-based Longhouse pause-request
+        surface; session.answer_pause machine dispatch is intentionally not advertised'
     terminate:
       level: hermetic
       source: 'cursor_helm: engine forwards session.terminate; launcher sends SIGKILL to
-        the cursor-agent child pid, unlinks socket/state, exits. cursor_acp also owns the
-        pid with kill_on_drop for the one-shot path.'
+        the cursor-agent child pid, unlinks socket/state, and exits.'
       next: promote with live terminate canary
     tail_output:
       level: hermetic
-      source: cursor_acp JSON-RPC source is persisted through the shared runtime sink
+      source: cursor_store exact raw storage-v2 source emits cursor-store-render-v2 text, reasoning, tool-call, and tool-result projections
     runtime_phase:
       level: hermetic
-      source: cursor_acp phase and terminal events use the shared runtime reducer
+      source: Cursor user hook adapter records native lifecycle/tool events and atomic active/idle/ended phase
     transcript_binding:
       level: hermetic
-      source: cursor_acp emits the native ACP session id as a binding signal
+      source: Cursor hook conversation_id plus launcher-owned Longhouse session ID binds the matching native store without recency heuristics
   machine_control_supports:
   - cursor.send
   - cursor.interrupt
   - cursor.terminate
-  - cursor.run_once
-  - cursor.turn_start

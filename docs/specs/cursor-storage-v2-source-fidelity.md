@@ -1,6 +1,6 @@
 # Cursor Storage-v2 Source Fidelity
 
-Status: proposed — implementation gate is the interactive Helm binding probe
+Status: implemented for Cursor Shadow and Helm; Console remains separate
 Date: 2026-07-13
 Owner: Longhouse Machine Agent
 Related:
@@ -39,15 +39,16 @@ Cursor is two independent axes:
 
 | Surface | Control proof | Archive proof | Product state before the adapter |
 | --- | --- | --- | --- |
-| Shadow | none | none on a storage-v2 Runtime Host | discoverable/import inspection only, not timeline-durable |
-| Helm | Cursor PTY + control socket + engine lease | none | managed, remotely controllable when the lease is live; control-only |
+| Shadow | none | native `store.db` storage-v2 source and renderer | durable, readable, observe-only |
+| Helm | Cursor PTY + control socket + engine lease | hook/store identity claim onto the native source | managed, remotely controllable, durable, and readable |
 | Console | ACP process | none | unavailable — Longhouse is the sole UI and cannot launch a non-durable run |
 
-The Cursor provider contract must not advertise `tail_output`,
-`runtime_phase`, or `transcript_binding` until a receipt-backed adapter proves
-each operation.  `launch_remote` / `run_once` are also unavailable while ACP
-cannot make an engine-owned v2 source.  Helm `send`, `interrupt`, and explicit
-`terminate` remain separate, existing control capabilities.
+The Cursor provider contract advertises transcript and phase capabilities only
+for sessions with the proven native source and observed binding claim.
+`launch_remote` / `run_once` remain unavailable while ACP cannot make an
+engine-owned v2 source. Helm `send`, graceful Ctrl-C `interrupt`, native
+`resume`, permission response, and explicit `terminate` remain separate
+capabilities.
 
 ## Source-fidelity contract
 
@@ -152,12 +153,12 @@ are insufficient.  A missing or ambiguous match expires the claim and leaves
 the source unmanaged; it must never attach a transcript to the wrong Helm
 session.
 
-The open gate is whether interactive `cursor-agent` exposes such evidence
-linking a launch to the durable `conversationUuid`.  The probe is read-only,
-in a disposable workspace, and compares launcher/process metadata with Cursor
-chat metadata before launch, after one prompt, after a tool turn, and at exit.
-If that evidence does not exist, Cursor Helm ships as control-only until
-Cursor exposes it.  This is intentional, not a degraded fallback to Shadow.
+The interactive probe proved this evidence: the launcher precreates a native
+chat, reserves its ID, and the exact child hook reports both inherited
+`LONGHOUSE_SESSION_ID` and Cursor `conversation_id`. The Machine Agent defers
+the pending claim until the store observes that same provider ID, then binds
+the source to the managed session. Ambiguous or missing evidence still fails
+closed to an unmanaged source.
 
 ## Console ACP
 

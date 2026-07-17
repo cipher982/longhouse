@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-from datetime import datetime
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -525,22 +524,22 @@ def test_this_device_launch_returns_hot_readiness_when_archive_writer_is_stale(m
 
 
 @pytest.mark.parametrize(
-    ("provider", "expected_transport", "expect_empty_attach"),
+    ("provider", "expected_transport", "expected_attach"),
     [
-        ("cursor", "cursor_helm", True),
-        ("codex", "codex_app_server", False),
+        ("cursor", "cursor_helm", "cursor"),
+        ("codex", "codex_app_server", "codex"),
     ],
 )
 def test_this_device_launch_materializes_live_catalog_without_archive_db(
     monkeypatch,
     provider,
     expected_transport,
-    expect_empty_attach,
+    expected_attach,
 ):
-    import zerg.database as database_module
     from pathlib import Path
     from uuid import uuid4
 
+    import zerg.database as database_module
     from zerg.catalogd.client import CatalogClient
     from zerg.catalogd.server import CatalogDaemon
     from zerg.routers import session_chat
@@ -584,8 +583,9 @@ def test_this_device_launch_materializes_live_catalog_without_archive_db(
         _result, response = asyncio.run(_run_launch())
         assert response.provider == provider
         assert response.managed_transport.value == expected_transport
-        if expect_empty_attach:
-            assert response.attach_command == ""
+        if expected_attach == "cursor":
+            assert "longhouse cursor --resume-session" in response.attach_command
+            assert response.session_id in response.attach_command
         else:
             assert "codex-bridge attach --session-id" in response.attach_command
             assert response.session_id in response.attach_command
@@ -1062,8 +1062,8 @@ def test_this_device_launch_response_contract_matrix(monkeypatch, tmp_path, prov
         assert payload["attach_command"] == ""
     elif provider == "cursor":
         assert payload["provider_session_id"] is None
-        # Helm is a PTY pass-through in the user's terminal; no separate attach.
-        assert payload["attach_command"] == ""
+        assert "longhouse cursor --resume-session" in payload["attach_command"]
+        assert payload["session_id"] in payload["attach_command"]
 
 
 def test_this_device_launch_returns_native_codex_hot_launch(monkeypatch, tmp_path, managed_launch_live_store):
