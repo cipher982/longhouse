@@ -396,6 +396,28 @@ impl ManagedObservationSnapshot {
             || self.cursor.iter().any(|row| row.state_file == path)
     }
 
+    fn projection_equivalent(&self, other: &Self) -> bool {
+        let mut left = self.clone();
+        let mut right = other.clone();
+        for snapshot in [&mut left, &mut right] {
+            for row in &mut snapshot.codex {
+                row.updated_at.clear();
+                row.active_turn_id = None;
+                row.last_turn_status = None;
+            }
+            for row in &mut snapshot.claude {
+                row.updated_at.clear();
+            }
+            for row in &mut snapshot.opencode {
+                row.updated_at.clear();
+            }
+            for row in &mut snapshot.cursor {
+                row.updated_at.clear();
+            }
+        }
+        left == right
+    }
+
     fn current_only(&self) -> Self {
         Self {
             codex: self
@@ -1445,6 +1467,8 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         }
                         let next_managed_observations =
                             ManagedObservationSnapshot::from_result(&result).current_only();
+                        let managed_observations_changed = !next_managed_observations
+                            .projection_equivalent(&last_managed_observations);
                         last_managed_observations = next_managed_observations;
                         let managed_scan_partial = result.retained_stale_rows > 0;
                         refresh_managed_codex_transcript_paths(
@@ -1464,9 +1488,8 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             &result.opencode_observations,
                             &result.cursor_observations,
                         );
-                        // Unknown managed state files already request a full reconciliation.
-                        // Periodic liveness changes do not require re-walking Shadow bindings.
-                        let should_refresh_unmanaged = result.full_reconciliation;
+                        let should_refresh_unmanaged =
+                            result.full_reconciliation || managed_observations_changed;
                         let paired_generation = projection_generation.saturating_add(1);
                         let paired_refresh_started = should_refresh_unmanaged
                             && maybe_start_unmanaged_binding_refresh(
@@ -1489,6 +1512,8 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             } else {
                                 pending_full_reconciliation = true;
                             }
+                        } else if managed_observations_changed {
+                            pending_periodic_observation = true;
                         }
                         maybe_start_opencode_title_refresh(
                             &mut opencode_title_refresh_tasks,
@@ -2623,23 +2648,17 @@ fn maybe_start_managed_observation_scan(
                 .or_else(crate::process_identity::try_collect_process_facts_by_pid);
         let process_inventory_valid = process_inventory.is_some();
         let process_facts = process_inventory.unwrap_or_default();
-        let unmanaged_process_inventory = full_reconciliation
-            .then(|| {
-                process_facts
-                    .values()
-                    .filter_map(|fact| {
-                        Some(unmanaged_bindings::ProcessInfo {
-                            pid: fact.pid,
-                            start_time: fact
-                                .start_time
-                                .or_else(|| crate::process_identity::parse_lstart(&fact.lstart))?,
-                            start_time_key: fact.lstart.clone(),
-                            command: fact.command.clone(),
-                        })
-                    })
-                    .collect()
+        let unmanaged_process_inventory = process_facts
+            .values()
+            .filter_map(|fact| {
+                Some(unmanaged_bindings::ProcessInfo {
+                    pid: fact.pid,
+                    start_time: fact.start_time?,
+                    start_time_key: fact.lstart.clone(),
+                    command: fact.command.clone(),
+                })
             })
-            .unwrap_or_default();
+            .collect();
         let process_inventory_ms = process_started.elapsed().as_millis() as u64;
         let codex_started = Instant::now();
         let mut codex_observations = if full_reconciliation {
@@ -4029,7 +4048,7 @@ mod tests {
     }
 
     #[test]
-    fn managed_current_only_drops_historical_rows() {
+    fn managed_projection_equivalence_ignores_writer_churn_but_not_tui_state() {
         let observation = codex_bridge_observation(
             Path::new("/tmp/transcript.jsonl"),
             Some("turn-1"),
@@ -4041,6 +4060,16 @@ mod tests {
             codex: vec![observation],
             ..ManagedObservationSnapshot::default()
         };
+        let mut writer_churn = first.clone();
+        writer_churn.codex[0].updated_at = "2026-07-16T00:00:05Z".to_string();
+        writer_churn.codex[0].active_turn_id = Some("turn-2".to_string());
+        writer_churn.codex[0].last_turn_status = Some("completed".to_string());
+
+        assert!(first.projection_equivalent(&writer_churn));
+
+        writer_churn.codex[0].has_tui_attachment = true;
+        assert!(!first.projection_equivalent(&writer_churn));
+
         let mut dead = first.codex[0].clone();
         dead.session_id = "dead-history".to_string();
         dead.bridge_alive = false;
