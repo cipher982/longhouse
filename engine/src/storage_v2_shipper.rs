@@ -40,7 +40,7 @@ use crate::storage_v2_contract::{self, EnvelopeIdentity, RangeKind};
 pub(crate) const PARSER_REVISION: &str = "engine-parser-v2";
 pub(crate) const ORDERING_REVISION: &str = "semantic-order-v2";
 const OPENCODE_SESSION_PAGE_SIZE: usize = 64;
-const CURSOR_PARSER_REVISION: &str = "cursor-store-render-v1";
+const CURSOR_PARSER_REVISION: &str = "cursor-store-render-v2";
 
 pub(crate) struct PreparedStorageV2Envelope {
     pub envelope: StorageV2Envelope,
@@ -867,16 +867,17 @@ fn cursor_render_records(
             let kind = block.get("type").and_then(Value::as_str).unwrap_or("unknown");
             let (event_role, content_text, tool_name, tool_input_json, tool_output_text, tool_call_id) =
                 match kind {
-                    "text" | "reasoning" => (
-                        if kind == "reasoning" { "assistant" } else { role },
-                        block.get("text").and_then(Value::as_str).map(str::to_owned),
-                        None,
-                        None,
-                        None,
-                        None,
-                    ),
+                    "text" | "reasoning" => {
+                        let text = block.get("text").and_then(Value::as_str).unwrap_or_default();
+                        let (effective_role, effective_text) = if kind == "reasoning" {
+                            ("assistant".to_string(), text.to_string())
+                        } else {
+                            classify_cursor_text(role, text)
+                        };
+                        (effective_role, Some(effective_text), None, None, None, None)
+                    }
                     "tool-call" => (
-                        "assistant",
+                        "assistant".to_string(),
                         None,
                         block.get("toolName").and_then(Value::as_str).map(str::to_owned),
                         block.get("args").or_else(|| block.get("input")).cloned(),
@@ -884,7 +885,7 @@ fn cursor_render_records(
                         block.get("toolCallId").and_then(Value::as_str).map(str::to_owned),
                     ),
                     "tool-result" => (
-                        "tool",
+                        "tool".to_string(),
                         None,
                         block.get("toolName").and_then(Value::as_str).map(str::to_owned),
                         None,
@@ -894,7 +895,7 @@ fn cursor_render_records(
                         }),
                         block.get("toolCallId").and_then(Value::as_str).map(str::to_owned),
                     ),
-                    _ => (role, Some(String::new()), None, None, None, None),
+                    _ => (role.to_string(), Some(String::new()), None, None, None, None),
                 };
             records.push(StorageV2RenderRecord {
                 event_id: Uuid::new_v5(
@@ -905,7 +906,7 @@ fn cursor_render_records(
                 order_time_us: started_at_us + message_order as i64 * 1_000 + subordinal as i64,
                 source_position: *source_position,
                 event_subordinal: subordinal as u32,
-                role: event_role.to_string(),
+                role: event_role,
                 content_text,
                 tool_name,
                 tool_input_json,
@@ -918,6 +919,33 @@ fn cursor_render_records(
         }
     }
     Ok(records)
+}
+
+fn classify_cursor_text(role: &str, text: &str) -> (String, String) {
+    if role != "user" {
+        return (role.to_string(), text.to_string());
+    }
+    if let Some(query_start) = text.find("<user_query>") {
+        let inner_start = query_start + "<user_query>".len();
+        if let Some(query_end) = text[inner_start..].find("</user_query>") {
+            return (
+                "user".to_string(),
+                text[inner_start..inner_start + query_end].trim().to_string(),
+            );
+        }
+    }
+    const INJECTION_MARKERS: [&str; 6] = [
+        "<user_info>",
+        "<agent_transcripts>",
+        "<rules>",
+        "<system_reminder>",
+        "<attached_files>",
+        "<system_notification>",
+    ];
+    if INJECTION_MARKERS.iter().any(|marker| text.contains(marker)) {
+        return ("system".to_string(), text.to_string());
+    }
+    ("user".to_string(), text.to_string())
 }
 
 pub(crate) fn prepare_next_cursor_envelope(
@@ -2077,6 +2105,31 @@ mod tests {
         assert_eq!(render.records[1].tool_call_id.as_deref(), Some("call-1"));
         assert_eq!(render.records[2].role, "tool");
         assert_eq!(render.records[2].tool_output_text.as_deref(), Some("/tmp"));
+    }
+
+    #[test]
+    fn cursor_render_hides_injected_context_and_unwraps_real_user_query() {
+        assert_eq!(
+            classify_cursor_text(
+                "user",
+                "<user_info>darwin</user_info><rules>workspace</rules>"
+            ),
+            (
+                "system".to_string(),
+                "<user_info>darwin</user_info><rules>workspace</rules>".to_string()
+            )
+        );
+        assert_eq!(
+            classify_cursor_text(
+                "user",
+                "<user_info>darwin</user_info><user_query>  ship it  </user_query>"
+            ),
+            ("user".to_string(), "ship it".to_string())
+        );
+        assert_eq!(
+            classify_cursor_text("user", "plain follow-up"),
+            ("user".to_string(), "plain follow-up".to_string())
+        );
     }
 
     #[test]
