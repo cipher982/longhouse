@@ -2674,6 +2674,20 @@ async fn handle_server_request(
         .context("server request missing id")?;
     let params = value.get("params").cloned().unwrap_or(Value::Null);
 
+    if extract_string(&params, &["threadId"])
+        .or_else(|| extract_string(&params, &["thread_id"]))
+        .is_some_and(|thread_id| context.rejected_thread_ids.contains(&thread_id))
+    {
+        eprintln!(
+            "[codex-bridge] declining server request for rejected Codex thread: method={method}"
+        );
+        let payload = json!({
+            "id": request_id,
+            "result": immediate_server_request_result(method, &params, false)?,
+        });
+        return send_payload(client, &payload).await;
+    }
+
     if let Some(update) = context
         .runtime_tracker
         .handle_server_request(method, &params)
@@ -2722,39 +2736,44 @@ async fn handle_server_request(
         return Ok(());
     }
 
-    let result = match method {
-        "item/commandExecution/requestApproval" => json!({
-            "decision": if config.auto_approve { "accept" } else { "decline" }
-        }),
-        "item/fileChange/requestApproval" => json!({
-            "decision": if config.auto_approve { "accept" } else { "decline" }
-        }),
-        "item/permissions/requestApproval" => json!({
-            "scope": "turn",
-            "permissions": if config.auto_approve {
-                params.get("permissions").cloned().unwrap_or_else(|| json!({}))
-            } else {
-                json!({})
-            }
-        }),
-        "item/tool/requestUserInput" => json!({
-            "answers": build_request_user_input_answers(&params, config.auto_approve)
-        }),
-        "mcpServer/elicitation/request" => json!({
-            "action": "decline",
-            "content": Value::Null,
-        }),
-        "applyPatchApproval" | "execCommandApproval" => json!({
-            "decision": if config.auto_approve { "Approved" } else { "Denied" }
-        }),
-        other => bail!("unsupported server request in codex bridge: {other}"),
-    };
+    let result = immediate_server_request_result(method, &params, config.auto_approve)?;
 
     let payload = json!({
         "id": request_id,
         "result": result,
     });
     send_payload(client, &payload).await
+}
+
+fn immediate_server_request_result(method: &str, params: &Value, approve: bool) -> Result<Value> {
+    let result = match method {
+        "item/commandExecution/requestApproval" => json!({
+            "decision": if approve { "accept" } else { "decline" }
+        }),
+        "item/fileChange/requestApproval" => json!({
+            "decision": if approve { "accept" } else { "decline" }
+        }),
+        "item/permissions/requestApproval" => json!({
+            "scope": "turn",
+            "permissions": if approve {
+                params.get("permissions").cloned().unwrap_or_else(|| json!({}))
+            } else {
+                json!({})
+            }
+        }),
+        "item/tool/requestUserInput" => json!({
+            "answers": build_request_user_input_answers(params, approve)
+        }),
+        "mcpServer/elicitation/request" => json!({
+            "action": "decline",
+            "content": Value::Null,
+        }),
+        "applyPatchApproval" | "execCommandApproval" => json!({
+            "decision": if approve { "Approved" } else { "Denied" }
+        }),
+        other => bail!("unsupported server request in codex bridge: {other}"),
+    };
+    Ok(result)
 }
 
 fn is_structured_pause_request_method(method: &str) -> bool {
@@ -3181,6 +3200,11 @@ async fn process_notification(
     let mut followup = None;
     match method {
         "thread/started" => {
+            if extract_notification_thread_id(&params)
+                .is_some_and(|id| context.rejected_thread_ids.contains(&id))
+            {
+                return Ok(None);
+            }
             if notification_thread_is_ephemeral(&params) {
                 if let Some(id) = extract_notification_thread_id(&params) {
                     let parent_id = extract_string(&params, &["thread", "forkedFromId"])
@@ -7784,49 +7808,9 @@ mod tests {
         context.state.thread_path = Some("/tmp/parent.jsonl".to_string());
         context.runtime.thread_id = Some("thr-parent".to_string());
 
-        process_notification(
-            &json!({
-                "method": "thread/started",
-                "params": {
-                    "thread": {
-                        "id": "thr-side",
-                        "forkedFromId": "thr-parent",
-                        "ephemeral": true,
-                        "path": null
-                    }
-                }
-            }),
-            &config,
-            &mut context,
-        )
-        .await
-        .unwrap();
-
-        for notification in [
-            json!({
-                "method": "turn/started",
-                "params": {
-                    "threadId": "thr-side",
-                    "turn": { "id": "turn-side", "status": "inProgress" }
-                }
-            }),
-            json!({
-                "method": "item/agentMessage/delta",
-                "params": {
-                    "threadId": "thr-side",
-                    "turnId": "turn-side",
-                    "itemId": "item-side",
-                    "delta": "ephemeral answer"
-                }
-            }),
-            json!({
-                "method": "turn/completed",
-                "params": {
-                    "threadId": "thr-side",
-                    "turn": { "id": "turn-side", "status": "completed" }
-                }
-            }),
-        ] {
+        let fixture = include_str!("../tests/fixtures/codex/ephemeral_side_chat.jsonl");
+        for line in fixture.lines() {
+            let notification: Value = serde_json::from_str(line).unwrap();
             let followup = process_notification(&notification, &config, &mut context)
                 .await
                 .unwrap();
@@ -9383,6 +9367,61 @@ mod tests {
         let pause_event = recv_runtime_event_kind(&mut runtime_rx, "pause_request").await;
         assert_eq!(pause_event["payload"]["can_respond"], false);
         assert_eq!(pause_event["payload"]["kind"], "permission_prompt");
+    }
+
+    #[tokio::test]
+    async fn rejected_ephemeral_thread_request_declines_without_parent_attention() {
+        let (outbound_tx, mut outbound_rx) = mpsc::unbounded_channel::<String>();
+        let (_events_tx, events_rx) = mpsc::unbounded_channel();
+        let (runtime_tx, mut runtime_rx) = mpsc::unbounded_channel::<Vec<Value>>();
+        let temp = tempfile::tempdir().unwrap();
+
+        let mut client = RpcClient {
+            child: None,
+            child_pid: None,
+            child_pgid: None,
+            child_ws_url: None,
+            outbound: RpcOutbound::WebSocket(outbound_tx),
+            events_rx,
+            pending_methods: BTreeMap::new(),
+            next_request_id: 1,
+            ws_url: "ws://example.test".to_string(),
+        };
+        let mut context = make_test_context(&temp);
+        context.state.thread_id = Some("thr-parent".to_string());
+        context.runtime.thread_id = Some("thr-parent".to_string());
+        context.runtime.runtime_tx = Some(runtime_tx);
+        context.rejected_thread_ids.insert("thr-side".to_string());
+        let mut config = make_test_run_config(&temp);
+        config.auto_approve = true;
+
+        handle_server_request(
+            &config,
+            json!({
+                "id": 7,
+                "method": "item/commandExecution/requestApproval",
+                "params": {
+                    "threadId": "thr-side",
+                    "turnId": "turn-side",
+                    "itemId": "cmd-side",
+                    "command": "touch should-not-run"
+                }
+            }),
+            &mut client,
+            &mut context,
+        )
+        .await
+        .unwrap();
+
+        let response_payload: Value =
+            serde_json::from_str(&outbound_rx.recv().await.unwrap()).unwrap();
+        assert_eq!(response_payload["id"], 7);
+        assert_eq!(response_payload["result"], json!({ "decision": "decline" }));
+        assert!(context.pending_pause_requests.lock().await.is_empty());
+        assert_eq!(context.runtime_tracker.attention_state, None);
+        assert!(runtime_rx.try_recv().is_err());
+        assert_eq!(context.state.thread_id.as_deref(), Some("thr-parent"));
+        assert_eq!(context.state.status, "ready");
     }
 
     #[tokio::test]
