@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -49,15 +49,31 @@ struct InitializedCodexWorker {
     ready_at: std::time::Instant,
 }
 
-#[derive(Default)]
 struct CodexConsoleWorkerPool {
     workers: Vec<InitializedCodexWorker>,
     spawning: usize,
+    active_process_groups: HashMap<u32, i32>,
+    shutting_down: bool,
+    spawn_finished: Arc<tokio::sync::Notify>,
+}
+
+impl Default for CodexConsoleWorkerPool {
+    fn default() -> Self {
+        Self {
+            workers: Vec::new(),
+            spawning: 0,
+            active_process_groups: HashMap::new(),
+            shutting_down: false,
+            spawn_finished: Arc::new(tokio::sync::Notify::new()),
+        }
+    }
 }
 
 impl CodexConsoleWorkerPool {
     fn reserve_spawn_slot(&mut self) -> bool {
-        if self.workers.len() + self.spawning >= CONSOLE_WARM_POOL_TARGET {
+        if self.shutting_down
+            || self.workers.len() + self.spawning >= CONSOLE_WARM_POOL_TARGET
+        {
             return false;
         }
         self.spawning += 1;
@@ -290,7 +306,7 @@ struct CodexExecRuntimeSink {
     cwd: String,
     local_db_path: Option<PathBuf>,
     event_tx: mpsc::Sender<Vec<Value>>,
-    critical_event_tx: mpsc::UnboundedSender<Vec<Value>>,
+    critical_event_tx: mpsc::Sender<Vec<Value>>,
     queued_events: Arc<AtomicUsize>,
 }
 
@@ -350,9 +366,12 @@ pub async fn prewarm_codex_console_workers() {
     .await;
     let mut pool = console_worker_pool().lock().await;
     pool.spawning = pool.spawning.saturating_sub(1);
+    let spawn_finished = pool.spawn_finished.clone();
     let mut discard = None;
     match result {
-        Ok(worker) if pool.workers.len() < CONSOLE_WARM_POOL_TARGET => {
+        Ok(worker)
+            if !pool.shutting_down && pool.workers.len() < CONSOLE_WARM_POOL_TARGET =>
+        {
             let worker_pid = worker.pid;
             eprintln!(
                 "[codex-exec] latency stage=warm_worker_ready pid={} pool_size={}",
@@ -377,6 +396,7 @@ pub async fn prewarm_codex_console_workers() {
         );
         let _ = shutdown_worker_process_group(&mut worker.child, worker.pgid).await;
     }
+    spawn_finished.notify_waiters();
 }
 
 async fn reap_warm_worker_after_ttl(pid: u32) {
@@ -402,10 +422,16 @@ async fn reap_warm_worker_after_ttl(pid: u32) {
 
 async fn lease_warm_worker() -> Option<InitializedCodexWorker> {
     let mut pool = console_worker_pool().lock().await;
+    if pool.shutting_down {
+        return None;
+    }
     while let Some(mut worker) = pool.workers.pop() {
         if worker.ready_at.elapsed() < CONSOLE_WARM_WORKER_TTL
             && worker.child.try_wait().ok().flatten().is_none()
         {
+            if let (Some(pid), Some(pgid)) = (worker.pid, worker.pgid) {
+                pool.active_process_groups.insert(pid, pgid);
+            }
             return Some(worker);
         }
         eprintln!(
@@ -414,6 +440,26 @@ async fn lease_warm_worker() -> Option<InitializedCodexWorker> {
         );
     }
     None
+}
+
+async fn register_active_worker(worker: &InitializedCodexWorker) -> bool {
+    let mut pool = console_worker_pool().lock().await;
+    if pool.shutting_down {
+        return false;
+    }
+    if let (Some(pid), Some(pgid)) = (worker.pid, worker.pgid) {
+        pool.active_process_groups.insert(pid, pgid);
+    }
+    true
+}
+
+async fn unregister_active_worker(pid: Option<u32>) {
+    let Some(pid) = pid else { return };
+    console_worker_pool()
+        .lock()
+        .await
+        .active_process_groups
+        .remove(&pid);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -558,6 +604,10 @@ pub async fn start_codex_exec_once(config: CodexExecRunConfig) -> Result<CodexEx
             .await?
         }
     };
+    if !warm_hit && !register_active_worker(&worker).await {
+        shutdown_worker_process_group(&mut worker.child, worker.pgid).await?;
+        anyhow::bail!("Codex Console worker rejected because the Machine Agent is shutting down");
+    }
     let pid = worker.pid;
     let argv = worker.argv.clone();
     let leased_at = std::time::Instant::now();
@@ -573,7 +623,7 @@ pub async fn start_codex_exec_once(config: CodexExecRunConfig) -> Result<CodexEx
         tokio::spawn(prewarm_codex_console_workers());
     }
     let (event_tx, event_rx) = mpsc::channel(EVENT_PUMP_QUEUE_CAPACITY);
-    let (critical_event_tx, critical_event_rx) = mpsc::unbounded_channel();
+    let (critical_event_tx, critical_event_rx) = mpsc::channel(EVENT_PUMP_CRITICAL_CAPACITY);
     let queued_events = Arc::new(AtomicUsize::new(0));
     let sink = CodexExecRuntimeSink {
         session_id: config.session_id.clone(),
@@ -635,6 +685,7 @@ pub async fn start_codex_exec_once(config: CodexExecRunConfig) -> Result<CodexEx
                 }
             };
         }
+        unregister_active_worker(worker.pid).await;
         if let Some(task) = worker.stderr_task {
             let _ = task.await;
         }
@@ -814,18 +865,8 @@ async fn run_app_server_turn(
 }
 
 async fn shutdown_worker_process_group(child: &mut Child, pgid: Option<i32>) -> Result<()> {
-    #[cfg(unix)]
     if let Some(pgid) = pgid {
-        unsafe {
-            libc::killpg(pgid, libc::SIGTERM);
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        let group_alive = unsafe { libc::killpg(pgid, 0) } == 0;
-        if group_alive {
-            unsafe {
-                libc::killpg(pgid, libc::SIGKILL);
-            }
-        }
+        shutdown_process_group(pgid).await;
     }
     if child.try_wait()?.is_none() {
         child.start_kill()?;
@@ -834,12 +875,55 @@ async fn shutdown_worker_process_group(child: &mut Child, pgid: Option<i32>) -> 
     Ok(())
 }
 
+async fn shutdown_process_group(pgid: i32) {
+    #[cfg(unix)]
+    {
+        unsafe {
+            libc::killpg(pgid, libc::SIGTERM);
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        if unsafe { libc::killpg(pgid, 0) } == 0 {
+            unsafe {
+                libc::killpg(pgid, libc::SIGKILL);
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = pgid;
+}
+
 pub async fn shutdown_codex_console_worker_pool() {
-    let workers = {
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let wait = {
+            let mut pool = console_worker_pool().lock().await;
+            pool.shutting_down = true;
+            if pool.spawning == 0 {
+                None
+            } else {
+                Some(pool.spawn_finished.clone())
+            }
+        };
+        let Some(wait) = wait else { break };
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero()
+            || tokio::time::timeout(remaining, wait.notified()).await.is_err()
+        {
+            eprintln!("[codex-exec] warm worker shutdown timed out waiting for prewarm");
+            break;
+        }
+    }
+    let (workers, active_process_groups) = {
         let mut pool = console_worker_pool().lock().await;
         pool.spawning = 0;
-        std::mem::take(&mut pool.workers)
+        (
+            std::mem::take(&mut pool.workers),
+            std::mem::take(&mut pool.active_process_groups),
+        )
     };
+    for pgid in active_process_groups.into_values() {
+        shutdown_process_group(pgid).await;
+    }
     for mut worker in workers {
         if let Err(err) = shutdown_worker_process_group(&mut worker.child, worker.pgid).await {
             eprintln!(
@@ -1449,7 +1533,7 @@ impl CodexExecRuntimeSink {
         let count = events.len();
         self.queued_events.fetch_add(count, Ordering::Relaxed);
         if events_are_critical(&events) {
-            if self.critical_event_tx.send(events).is_err() {
+            if self.critical_event_tx.send(events).await.is_err() {
                 self.queued_events.fetch_sub(count, Ordering::Relaxed);
                 eprintln!(
                     "[codex-exec] runtime critical event pump closed session={} run={} dropped_events={count}",
@@ -1484,6 +1568,7 @@ impl CodexExecRuntimeSink {
 const EVENT_PUMP_COALESCE_WINDOW: Duration = Duration::from_millis(8);
 const EVENT_PUMP_MAX_BATCH: usize = 128;
 const EVENT_PUMP_QUEUE_CAPACITY: usize = 256;
+const EVENT_PUMP_CRITICAL_CAPACITY: usize = 64;
 
 fn events_are_critical(events: &[Value]) -> bool {
     events.iter().any(|event| {
@@ -1493,7 +1578,12 @@ fn events_are_critical(events: &[Value]) -> bool {
         ) || matches!(
             json_string(event, &["payload", "progress_kind"]).as_deref(),
             Some("console_live_tool_item")
-        ) || event
+        ) && event
+            .get("payload")
+            .and_then(|payload| payload.get("completed"))
+            .and_then(Value::as_bool)
+            == Some(true)
+            || event
             .get("payload")
             .and_then(|payload| payload.get("item_completed"))
             .and_then(Value::as_bool)
@@ -1507,7 +1597,7 @@ async fn run_runtime_event_pump(
     session_id: String,
     run_id: String,
     mut receiver: mpsc::Receiver<Vec<Value>>,
-    mut critical_receiver: mpsc::UnboundedReceiver<Vec<Value>>,
+    mut critical_receiver: mpsc::Receiver<Vec<Value>>,
     queued_events: Arc<AtomicUsize>,
 ) {
     let http = reqwest::Client::new();
@@ -1752,7 +1842,7 @@ for line in sys.stdin:
             cwd: config.cwd.to_string_lossy().to_string(),
             local_db_path,
             event_tx: mpsc::channel(EVENT_PUMP_QUEUE_CAPACITY).0,
-            critical_event_tx: mpsc::unbounded_channel().0,
+            critical_event_tx: mpsc::channel(EVENT_PUMP_CRITICAL_CAPACITY).0,
             queued_events: Arc::new(AtomicUsize::new(0)),
         }
     }
@@ -1811,7 +1901,7 @@ for line in sys.stdin:
     async fn runtime_event_pump_coalesces_adjacent_provider_events() {
         let (api_url, mut received) = spawn_runtime_capture_server().await;
         let (tx, rx) = mpsc::channel(EVENT_PUMP_QUEUE_CAPACITY);
-        let (critical_tx, critical_rx) = mpsc::unbounded_channel();
+        let (critical_tx, critical_rx) = mpsc::channel(EVENT_PUMP_CRITICAL_CAPACITY);
         let queued = Arc::new(AtomicUsize::new(2));
         let pump = tokio::spawn(run_runtime_event_pump(
             api_url,
@@ -1860,7 +1950,8 @@ for line in sys.stdin:
     #[tokio::test]
     async fn bounded_preview_queue_preserves_critical_terminal_lane() {
         let (event_tx, _event_rx) = mpsc::channel(1);
-        let (critical_event_tx, mut critical_event_rx) = mpsc::unbounded_channel();
+        let (critical_event_tx, mut critical_event_rx) =
+            mpsc::channel(EVENT_PUMP_CRITICAL_CAPACITY);
         let sink = CodexExecRuntimeSink {
             event_tx,
             critical_event_tx,
@@ -1878,6 +1969,21 @@ for line in sys.stdin:
         let critical = critical_event_rx.recv().await.unwrap();
         assert_eq!(critical[0]["kind"], "terminal_signal");
         assert_eq!(sink.queued_events.load(Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn in_progress_tool_updates_use_bounded_preview_lane() {
+        let in_progress = vec![json!({
+            "kind": "progress_signal",
+            "payload": {"progress_kind": "console_live_tool_item", "completed": false}
+        })];
+        let completed = vec![json!({
+            "kind": "progress_signal",
+            "payload": {"progress_kind": "console_live_tool_item", "completed": true}
+        })];
+
+        assert!(!events_are_critical(&in_progress));
+        assert!(events_are_critical(&completed));
     }
 
     #[test]

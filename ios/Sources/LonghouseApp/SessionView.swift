@@ -2262,9 +2262,11 @@ final class SessionViewModel: ObservableObject {
                 applyRealtimeTranscriptPreview(transcriptPreview, sessionId: sessionId)
                 openWaterfall?.mark(
                     "stream_preview_applied",
-                    "seq=\(change.pubsub_seq ?? 0) no_tail_fetch=true"
+                    "seq=\(change.pubsub_seq ?? 0) provisional=\(transcriptPreview.isProvisional)"
                 )
-                return
+                if transcriptPreview.isProvisional {
+                    return
+                }
             }
             guard let api = apiFactory(appState.serverURL) else { return }
             await refreshTailAfterRealtimeWake(api: api, sessionId: sessionId)

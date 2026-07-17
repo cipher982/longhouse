@@ -254,6 +254,38 @@ struct SessionStreamResumeTests {
     }
 
     @Test
+    func durablePreviewTriggersOneTailReconciliation() async throws {
+        let before = try TestWorkspaceFactory.make(eventId: 10, content: "Before durable preview")
+        let after = try TestWorkspaceFactory.make(eventId: 11, content: "Durable answer")
+        let api = FakeStreamResumeClient(workspaces: [before, after])
+        let recorder = StreamFactoryRecorder()
+        let appState = AppState()
+        appState.serverURL = serverURL
+        let model = SessionViewModel(
+            apiFactory: { _ in api },
+            streamFactory: { _, _, sinceSeq, fingerprint in
+                recorder.make(sinceSeq: sinceSeq, knownWorkspaceFingerprint: fingerprint)
+            },
+            enableRealtime: true,
+            transcriptCache: SessionTranscriptCache(maxBytes: 0),
+            snapshotStore: nil
+        )
+
+        await model.start(sessionId: "session-1", appState: appState)
+        await waitForStartCount(recorder, atLeast: 1)
+        recorder.emitConnected()
+        let baseline = await api.tailRequestCount()
+        recorder.emitPreview(text: "Durable answer", pubsubSeq: 101, provisional: false)
+        let deadline = Date().addingTimeInterval(1)
+        while await api.tailRequestCount() == baseline, Date() < deadline {
+            await Task.yield()
+        }
+
+        #expect(await api.tailRequestCount() == baseline + 1)
+        model.stop()
+    }
+
+    @Test
     func visiblePollPolicyCoversDisconnectedRunningToolAndManagedBackstop() {
         #expect(SessionViewModel.visiblePollDelayNanoseconds(completedTicks: 0) == 750_000_000)
         #expect(SessionViewModel.visiblePollDelayNanoseconds(completedTicks: 3) == 5_000_000_000)
@@ -406,7 +438,7 @@ private final class StreamFactoryRecorder: Sendable {
         )))
     }
 
-    func emitPreview(text: String, pubsubSeq: Int) {
+    func emitPreview(text: String, pubsubSeq: Int, provisional: Bool = true) {
         let c = state.withLock { $0.continuation }
         c?.yield(.changed(SessionWorkspaceStream.WorkspaceChanged(
             session_id: "session-1",
@@ -427,7 +459,7 @@ private final class StreamFactoryRecorder: Sendable {
                 tool_call_state: nil,
                 event_origin: "live_provisional",
                 timestamp: "2026-07-16T22:57:28Z",
-                is_provisional: true,
+                is_provisional: provisional,
                 is_complete: false,
                 content_cursor: "preview-\(pubsubSeq)",
                 is_stale: false,
