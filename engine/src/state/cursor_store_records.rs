@@ -80,13 +80,15 @@ pub fn cursor_record_exists(
 }
 
 pub fn capture_cursor(conn: &Connection, source_epoch: Uuid) -> Result<Option<String>> {
-    conn.query_row(
-        "SELECT last_blob_id FROM cursor_store_capture_cursor WHERE source_epoch = ?1",
-        [source_epoch.to_string()],
-        |row| row.get(0),
-    )
-    .optional()
-    .context("reading Cursor blob capture cursor")
+    let value: Option<Option<String>> = conn
+        .query_row(
+            "SELECT last_blob_id FROM cursor_store_capture_cursor WHERE source_epoch = ?1",
+            [source_epoch.to_string()],
+            |row| row.get(0),
+        )
+        .optional()
+        .context("reading Cursor blob capture cursor")?;
+    Ok(value.flatten())
 }
 
 pub fn store_capture_cursor(
@@ -288,5 +290,21 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn completed_blob_capture_cursor_round_trips_as_none() {
+        let temp = tempfile::NamedTempFile::new().unwrap();
+        let conn = open_db(Some(temp.path())).unwrap();
+        let epoch = Uuid::new_v4();
+        seed_epoch(&conn, epoch);
+
+        store_capture_cursor(&conn, epoch, Some("blob-123")).unwrap();
+        assert_eq!(
+            capture_cursor(&conn, epoch).unwrap().as_deref(),
+            Some("blob-123")
+        );
+        store_capture_cursor(&conn, epoch, None).unwrap();
+        assert_eq!(capture_cursor(&conn, epoch).unwrap(), None);
     }
 }
