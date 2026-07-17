@@ -11,6 +11,7 @@ struct ChatUITestFixtureView: View {
     @State private var probe: ChatUITestProbe
     @State private var invalidationTick = 0
     @State private var benchmarkStartRequested = false
+    @State private var benchmarkScrollCompleted = false
 
     init(fixtureName: String) {
         let fixture = ChatUITestFixture(name: fixtureName)
@@ -66,6 +67,16 @@ struct ChatUITestFixtureView: View {
                     .buttonStyle(.plain)
                     .accessibilityLabel("Run transcript benchmark")
                     .accessibilityIdentifier("transcript-benchmark-start")
+                    Button {
+                        benchmarkScrollCompleted = true
+                    } label: {
+                        Color.clear
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Continue transcript benchmark")
+                    .accessibilityIdentifier("transcript-benchmark-continue")
                 }
             }
         }
@@ -88,7 +99,18 @@ struct ChatUITestFixtureView: View {
                 let coldStalls = await MainThreadStallMonitor.shared.snapshotAndReset()
                 probe.recordColdMainThreadStalls(coldStalls)
                 probe.recordBenchmark(phase: "running", updateCount: 0)
-                let result = await client.runTranscriptBenchmarkTrace()
+                let result = await client.runTranscriptBenchmarkTrace(
+                    onUpdate: {
+                        await viewModel.reload(sessionId: client.sessionID, appState: appState)
+                    },
+                    onScrollCheckpoint: { updateCount in
+                        probe.recordBenchmark(phase: "scroll_ready", updateCount: updateCount)
+                        while !Task.isCancelled && !benchmarkScrollCompleted {
+                            try? await Task.sleep(nanoseconds: 25_000_000)
+                        }
+                        probe.recordBenchmark(phase: "running", updateCount: updateCount)
+                    }
+                )
                 let rendered = await waitForBenchmarkRender(result.expectedLatestItemID)
                 let stalls = await MainThreadStallMonitor.shared.snapshot()
                 probe.recordMainThreadStalls(stalls)
@@ -341,6 +363,7 @@ private final class ChatUITestProbe {
     private var traceDuplicateBaseline = 0
     private var traceRepeatBaseline = 0
     private var coldRenderMaxMs = 0
+    private var traceMeasurementStarted = false
     private var tick = 0
     private var rowCount = 0
     private var payloadBytes = 0
@@ -419,7 +442,8 @@ private final class ChatUITestProbe {
     }
 
     func recordBenchmark(phase: String, updateCount: Int) {
-        if phase == "running", benchmarkPhase != "running" {
+        if phase == "running", !traceMeasurementStarted {
+            traceMeasurementStarted = true
             traceRenderBaseline = renderCount
             traceDuplicateBaseline = duplicateCount
             traceRepeatBaseline = repeatRenderCount
@@ -570,7 +594,7 @@ private struct ChatUITestFixture: Sendable {
     }
 
     var usesRealtimeStream: Bool {
-        name.hasPrefix("assistant-stream") || name == "console-reconcile" || name == "benchmark-core"
+        name.hasPrefix("assistant-stream") || name == "console-reconcile"
     }
 }
 
@@ -755,15 +779,20 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
         }
     }
 
-    func runTranscriptBenchmarkTrace() async -> TranscriptBenchmarkTraceResult {
+    func runTranscriptBenchmarkTrace(
+        onUpdate: @MainActor @Sendable () async -> Void,
+        onScrollCheckpoint: @MainActor @Sendable (Int) async -> Void
+    ) async -> TranscriptBenchmarkTraceResult {
         precondition(fixtureName == "benchmark-core")
         var updateCount = 0
 
         for snapshot in TranscriptBenchmarkTrace.streamingSnapshots() {
             upsertStreamingAssistantMessage(snapshot)
-            emitWorkspaceChanged()
             updateCount += 1
-            try? await Task.sleep(nanoseconds: TranscriptBenchmarkTrace.streamingIntervalNanoseconds)
+            await applyBenchmarkUpdate(onUpdate)
+            if updateCount == 20 {
+                await onScrollCheckpoint(updateCount)
+            }
         }
 
         for ordinal in 1...3 {
@@ -776,9 +805,8 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
                 state: .running
             ))
             nextEventID += 1
-            emitWorkspaceChanged()
             updateCount += 1
-            try? await Task.sleep(nanoseconds: TranscriptBenchmarkTrace.streamingIntervalNanoseconds)
+            await applyBenchmarkUpdate(onUpdate)
 
             if let index = events.firstIndex(where: { $0.id == String(callEventID) }) {
                 events[index] = TranscriptBenchmarkTrace.toolCallEvent(
@@ -794,14 +822,13 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
                 ordinal: ordinal
             ))
             nextEventID += 1
-            emitWorkspaceChanged()
             updateCount += 1
-            try? await Task.sleep(nanoseconds: TranscriptBenchmarkTrace.streamingIntervalNanoseconds)
+            await applyBenchmarkUpdate(onUpdate)
         }
 
         events.insert(contentsOf: TranscriptBenchmarkTrace.olderEvents(), at: 0)
-        emitWorkspaceChanged()
         updateCount += 1
+        await applyBenchmarkUpdate(onUpdate)
 
         let finalID = nextEventID
         events.append(TranscriptBenchmarkTrace.messageEvent(
@@ -811,13 +838,26 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
             timestampOffset: TranscriptBenchmarkTrace.initialRowCount + finalID
         ))
         nextEventID += 1
-        emitWorkspaceChanged()
         updateCount += 1
+        await applyBenchmarkUpdate(onUpdate)
 
         return TranscriptBenchmarkTraceResult(
             updateCount: updateCount,
             expectedLatestItemID: "prose:\(finalID)"
         )
+    }
+
+    private func applyBenchmarkUpdate(
+        _ onUpdate: @MainActor @Sendable () async -> Void
+    ) async {
+        let startedAt = DispatchTime.now().uptimeNanoseconds
+        await onUpdate()
+        let elapsed = DispatchTime.now().uptimeNanoseconds - startedAt
+        if TranscriptBenchmarkTrace.streamingIntervalNanoseconds > elapsed {
+            try? await Task.sleep(
+                nanoseconds: TranscriptBenchmarkTrace.streamingIntervalNanoseconds - elapsed
+            )
+        }
     }
 
     private func attachRealtimeContinuation(

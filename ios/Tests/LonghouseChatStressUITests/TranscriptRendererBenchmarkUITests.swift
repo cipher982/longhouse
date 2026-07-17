@@ -66,14 +66,23 @@ final class TranscriptRendererBenchmarkUITests: XCTestCase {
         XCTAssertEqual(initial.rows, 120)
 
         let startButton = app.buttons["transcript-benchmark-start"]
+        let continueButton = app.buttons["transcript-benchmark-continue"]
         XCTAssertTrue(startButton.waitForExistence(timeout: 5), "Benchmark start control did not appear.")
+        XCTAssertTrue(continueButton.waitForExistence(timeout: 5), "Benchmark continue control did not appear.")
         let traceStartedAt = Date()
         startButton.tap()
 
-        // Move away from the bottom while the active assistant message grows.
+        XCTAssertTrue(
+            waitForProbe(probeURL, status: status, timeout: 30) { $0.benchmarkPhase == "scroll_ready" },
+            readProbe(probeURL, status: status)
+        )
+
+        // Move away from the bottom at a deterministic pause, then keep the
+        // active assistant message growing to detect any snap-back.
         let scrollStartedAt = Date()
         dragTowardOlderMessages(transcript)
         let scrollWallMs = elapsedMs(since: scrollStartedAt)
+        continueButton.tap()
 
         // This includes XCUITest's own idle wait. The app-attributable portion
         // remains an Instruments/signpost measurement and is reported separately.
