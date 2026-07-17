@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import json
 
+import httpx
+
 from zerg.qa.cursor_helm_product_e2e import _assistant_texts
 from zerg.qa.cursor_helm_product_e2e import _can_send_live
 from zerg.qa.cursor_helm_product_e2e import _hook_rows
 from zerg.qa.cursor_helm_product_e2e import _pending_pause
 from zerg.qa.cursor_helm_product_e2e import _response_observed_at
+from zerg.qa.cursor_helm_product_e2e import _session_locked
 from zerg.qa.cursor_helm_product_e2e import _state_ids
 
 
@@ -66,3 +69,23 @@ def test_product_e2e_helpers_parse_managed_state_hooks_and_visible_events(tmp_pa
     assert _can_send_live({"capabilities": {"can_send_input": True}}) is True
     assert _can_send_live({"capabilities": {"can_send_input": False}}) is False
     assert _can_send_live({}) is False
+    assert (
+        _session_locked(
+            httpx.Response(
+                409,
+                json={"detail": {"code": "SESSION_LOCKED"}},
+                request=httpx.Request("POST", "https://example.invalid"),
+            )
+        )
+        is True
+    )
+    assert (
+        _session_locked(
+            httpx.Response(
+                409,
+                json={"detail": "not attached"},
+                request=httpx.Request("POST", "https://example.invalid"),
+            )
+        )
+        is False
+    )

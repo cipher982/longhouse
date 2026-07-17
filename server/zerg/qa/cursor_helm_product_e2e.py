@@ -195,6 +195,16 @@ def _can_send_live(payload: dict[str, Any]) -> bool:
     return isinstance(capabilities, dict) and capabilities.get("can_send_input") is True
 
 
+def _session_locked(response: httpx.Response) -> bool:
+    if response.status_code != 409:
+        return False
+    try:
+        detail = response.json().get("detail")
+    except (ValueError, AttributeError):
+        return False
+    return isinstance(detail, dict) and detail.get("code") == "SESSION_LOCKED"
+
+
 def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
     longhouse = shutil.which(args.longhouse_bin)
     engine = shutil.which(args.engine_bin)
@@ -286,12 +296,17 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
             return response.json()
 
         def send_live(text: str) -> dict[str, Any]:
-            response = httpx.post(
-                f"{url}/api/agents/sessions/{session_id}/send-live",
-                headers=headers,
-                json={"message": text},
-                timeout=30,
-            )
+            lock_deadline = time.monotonic() + min(args.timeout, 20.0)
+            while True:
+                response = httpx.post(
+                    f"{url}/api/agents/sessions/{session_id}/send-live",
+                    headers=headers,
+                    json={"message": text},
+                    timeout=30,
+                )
+                if not _session_locked(response) or time.monotonic() >= lock_deadline:
+                    break
+                time.sleep(0.5)
             if response.is_error:
                 raise RuntimeError(f"Runtime Host send-live failed HTTP {response.status_code}: {response.text[:1000]}")
             payload = response.json()
