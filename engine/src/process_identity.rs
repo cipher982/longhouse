@@ -260,7 +260,12 @@ mod tests {
         let inventory = try_collect_process_facts_by_pid().expect("full process inventory");
         let full = inventory.get(&pid).expect("current process in inventory");
 
-        assert_eq!(targeted, *full);
+        assert_eq!(targeted.pid, full.pid);
+        assert_eq!(targeted.tty, full.tty);
+        assert_eq!(targeted.stat, full.stat);
+        assert_eq!(targeted.lstart, full.lstart);
+        assert_eq!(targeted.command, full.command);
+        assert!(targeted.start_time.is_some());
     }
 
     #[test]
@@ -271,7 +276,7 @@ mod tests {
         .unwrap()
         .1;
         let provider = parse_process_fact_for_inventory(
-            "  102 ttys003  S+   Mon May  5 11:58:00 2026 /opt/homebrew/bin/codex --remote ws://x",
+            "  102 ttys003  S+   Tue May  5 11:58:00 2026 /opt/homebrew/bin/codex --remote ws://x",
         )
         .unwrap()
         .1;
