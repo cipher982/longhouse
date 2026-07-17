@@ -87,6 +87,7 @@ def test_build_managed_local_attach_command_resumes_cursor_native_conversation()
     session = SimpleNamespace(
         id="session-123",
         managed_transport=ManagedSessionTransport.CURSOR_HELM.value,
+        cwd="/tmp/cursor workspace",
     )
 
     command = build_managed_local_attach_command(session=session)
@@ -94,6 +95,7 @@ def test_build_managed_local_attach_command_resumes_cursor_native_conversation()
     inner = _wrapped_inner(command)
     assert "command -v cursor-agent" in inner
     assert "exec longhouse cursor --resume-session session-123" in inner
+    assert "--cwd '/tmp/cursor workspace'" in inner
 
 
 def test_build_managed_local_attach_command_is_empty_for_antigravity_process():

@@ -335,10 +335,8 @@ providers:
   can_resume: false
   operation_evidence:
     launch_local:
-      level: live_token
-      source: 'Cursor Helm Gate 0 on stock cursor-agent 2026.07.16: provider-minted
-        create-chat/--resume identity, hook/store agreement, pristine PTY TUI, and
-        live socket-owned control'
+      level: hermetic
+      source: Cursor product-path canary must pass post-deploy before live-token promotion
     launch_remote:
       level: none
       source: unavailable until stock Cursor exposes a durable headless conversation source
@@ -346,15 +344,15 @@ providers:
       level: none
       source: unavailable until stock Cursor exposes a durable headless conversation source
     reattach:
-      level: live_token
+      level: hermetic
       source: 'Cursor Helm Gate 0 native_resume_continuity: a new stock TUI resumes
         the same provider conversation and Longhouse session identity'
     send_input:
-      level: live_token
+      level: hermetic
       source: 'Cursor Helm Gate 0 idle send: exact prompt digest, native response/stop
         hooks, and store continuity; active phase is rejected before PTY write'
     interrupt:
-      level: live_token
+      level: hermetic
       source: 'Cursor Helm Gate 0 ctrl_c_cancel: Ctrl-C stops the active generation,
         emits aborted/error, preserves the TUI process, and the next turn completes'
     steer_active_turn:
@@ -367,8 +365,7 @@ providers:
     terminate:
       level: hermetic
       source: 'cursor_helm: engine forwards session.terminate; launcher sends SIGKILL to
-        the cursor-agent child pid, unlinks socket/state, exits. cursor_acp also owns the
-        pid with kill_on_drop for the one-shot path.'
+        the cursor-agent child pid, unlinks socket/state, and exits.'
       next: promote with live terminate canary
     tail_output:
       level: hermetic
@@ -378,7 +375,7 @@ providers:
       source: Cursor user hook adapter records native lifecycle/tool events and atomic active/idle/ended phase
     transcript_binding:
       level: hermetic
-      source: Cursor hook conversation_id plus inherited Longhouse session ID binds the matching native store without recency heuristics
+      source: Cursor hook conversation_id plus launcher-owned Longhouse session ID binds the matching native store without recency heuristics
   machine_control_supports:
   - cursor.send
   - cursor.interrupt

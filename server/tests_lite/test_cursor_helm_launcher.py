@@ -83,7 +83,7 @@ def test_pending_binding_reserves_native_conversation_before_cursor_launch(monke
     session_id = "11111111-1111-4111-8111-111111111111"
     cursor_id = "22222222-2222-4222-8222-222222222222"
 
-    cursor_helm._write_pending_binding(session_id, cursor_id)
+    cursor_helm._write_pending_binding(session_id, cursor_id, "launch-1")
 
     claim = json.loads((cursor_helm._state_dir() / "binding-probes" / f"{session_id}.json").read_text())
     assert claim["schema_version"] == 2
@@ -91,7 +91,18 @@ def test_pending_binding_reserves_native_conversation_before_cursor_launch(monke
     assert claim["status"] == "pending"
     assert claim["session_id"] == session_id
     assert claim["conversation_uuid"] == cursor_id
+    assert claim["launch_id"] == "launch-1"
     assert claim["expires_at"] > cursor_helm._now_iso()
+
+
+def test_launch_lock_rejects_concurrent_resume_and_releases_on_close(monkeypatch, tmp_path):
+    _state_dir_for(monkeypatch, tmp_path)
+    first = cursor_helm._acquire_launch_lock("session-1")
+    with pytest.raises(RuntimeError, match="already attached"):
+        cursor_helm._acquire_launch_lock("session-1")
+    os.close(first)
+    replacement = cursor_helm._acquire_launch_lock("session-1")
+    os.close(replacement)
 
 
 def test_register_session_soft_fails_on_connect_error(monkeypatch, tmp_path):
@@ -175,7 +186,7 @@ def test_registration_worker_terminalizes_when_exit_races_success(monkeypatch, t
     monkeypatch.setattr(
         cursor_helm,
         "_post_terminal_event",
-        lambda _url, _token, _sid, reason: terminal_reasons.append(reason),
+        lambda _url, _token, _sid, reason, _exit_code=0: terminal_reasons.append(reason),
     )
     monkeypatch.setattr(cursor_helm, "_REGISTER_RETRY_DELAYS_SECONDS", (0.0,))
 
@@ -206,7 +217,7 @@ def test_reconcile_registration_on_exit_terminalizes_unknown_outcome(monkeypatch
     monkeypatch.setattr(
         cursor_helm,
         "_post_terminal_event",
-        lambda _url, _token, _sid, reason: terminal_reasons.append(reason),
+        lambda _url, _token, _sid, reason, _exit_code=0: terminal_reasons.append(reason),
     )
 
     finished = threading.Event()
@@ -234,7 +245,7 @@ def test_reconcile_registration_on_exit_closes_registered_session(monkeypatch):
     monkeypatch.setattr(
         cursor_helm,
         "_post_terminal_event",
-        lambda _url, _token, _sid, reason: terminal_reasons.append(reason),
+        lambda _url, _token, _sid, reason, _exit_code=0: terminal_reasons.append(reason),
     )
     thread = threading.Thread(target=lambda: None, daemon=True)
     thread.start()
@@ -310,12 +321,14 @@ def test_post_terminal_event_uses_runtime_events_batch(monkeypatch):
 
     monkeypatch.setattr(cursor_helm.httpx, "Client", CaptureClient)
     monkeypatch.setattr(cursor_helm, "get_machine_name_label", lambda: "cinder")
-    cursor_helm._post_terminal_event(
+    posted = cursor_helm._post_terminal_event(
         "https://david010.longhouse.ai",
         "tok",
         "55555555-5555-4555-8555-555555555555",
         "helm_exit",
+        23,
     )
+    assert posted is True
     assert captured["endpoint"] == "https://david010.longhouse.ai/api/agents/runtime/events/batch"
     assert captured["headers"]["X-Agents-Token"] == "tok"
     event = captured["json"]["events"][0]
@@ -324,6 +337,7 @@ def test_post_terminal_event_uses_runtime_events_batch(monkeypatch):
     assert event["source"] == "cursor_helm"
     assert event["payload"]["terminal_state"] == "session_ended"
     assert event["payload"]["terminal_reason"] == "helm_exit"
+    assert event["payload"]["exit_code"] == 23
 
 
 def test_handle_command_send_writes_text_escape_enter_sequence():
@@ -387,7 +401,11 @@ def test_resume_cursor_identity_uses_exact_hook_claim(tmp_path, monkeypatch):
 
 
 def test_send_while_active_is_rejected_before_pty_write(monkeypatch):
-    monkeypatch.setattr(cursor_helm, "_read_provider_phase", lambda _sid: "active")
+    monkeypatch.setattr(
+        cursor_helm,
+        "_read_provider_phase_state",
+        lambda _sid: {"phase": "active", "conversation_id": "cursor-1", "launch_id": "launch-1"},
+    )
     monkeypatch.setattr(
         cursor_helm,
         "_inject_send",
@@ -400,6 +418,8 @@ def test_send_while_active_is_rejected_before_pty_write(monkeypatch):
         master_lock=threading.Lock(),
         stop_event=threading.Event(),
         session_id="managed-session",
+        conversation_id="cursor-1",
+        launch_id="launch-1",
     )
     assert reply["ok"] is False
     assert reply["error"]["code"] == "provider_not_idle"
@@ -432,7 +452,12 @@ def test_interrupt_generation_mismatch_is_rejected_before_pty_write(monkeypatch)
     monkeypatch.setattr(
         cursor_helm,
         "_read_provider_phase_state",
-        lambda _sid: {"phase": "active", "generation_id": "generation-2"},
+        lambda _sid: {
+            "phase": "active",
+            "generation_id": "generation-2",
+            "conversation_id": "cursor-1",
+            "launch_id": "launch-1",
+        },
     )
     monkeypatch.setattr(
         cursor_helm,
@@ -446,6 +471,8 @@ def test_interrupt_generation_mismatch_is_rejected_before_pty_write(monkeypatch)
         master_lock=threading.Lock(),
         stop_event=threading.Event(),
         session_id="managed-session",
+        conversation_id="cursor-1",
+        launch_id="launch-1",
     )
 
     assert reply["ok"] is False
@@ -457,7 +484,12 @@ def test_interrupt_matching_generation_writes_ctrl_c(monkeypatch):
     monkeypatch.setattr(
         cursor_helm,
         "_read_provider_phase_state",
-        lambda _sid: {"phase": "active", "generation_id": "generation-2"},
+        lambda _sid: {
+            "phase": "active",
+            "generation_id": "generation-2",
+            "conversation_id": "cursor-1",
+            "launch_id": "launch-1",
+        },
     )
     monkeypatch.setattr(cursor_helm, "_full_write", lambda _fd, data: written.extend(data) or len(data))
     reply = cursor_helm._handle_command(
@@ -467,6 +499,8 @@ def test_interrupt_matching_generation_writes_ctrl_c(monkeypatch):
         master_lock=threading.Lock(),
         stop_event=threading.Event(),
         session_id="managed-session",
+        conversation_id="cursor-1",
+        launch_id="launch-1",
     )
 
     assert reply["ok"] is True

@@ -47,23 +47,7 @@ claims = root / "binding-probes"
 events.mkdir(parents=True, exist_ok=True)
 claims.mkdir(parents=True, exist_ok=True)
 now = datetime.now(timezone.utc).isoformat()
-row = {"event": event, "observed_at": now, "session_id": sid, "conversation_id": conversation_id, "payload": payload}
-with (events / f"{sid}.ndjson").open("a", encoding="utf-8") as f:
-    f.write(json.dumps(row, separators=(",", ":")) + "\n")
-phase = "active" if event in {"beforeSubmitPrompt", "afterAgentThought", "preToolUse", "beforeShellExecution", "beforeMCPExecution"} else ("idle" if event in {"sessionStart", "stop", "afterAgentResponse"} else ("ended" if event == "sessionEnd" else None))
-if phase:
-    target = root / f"{sid}.phase.json"
-    fd, tmp = tempfile.mkstemp(dir=root, prefix=".phase.")
-    with os.fdopen(fd, "w") as f:
-        json.dump({"session_id": sid, "conversation_id": conversation_id, "phase": phase, "generation_id": payload.get("generation_id"), "observed_at": now}, f)
-    os.replace(tmp, target)
-    outbox = home / "agent" / "outbox"
-    outbox.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=outbox, prefix=".tmp.")
-    with os.fdopen(fd, "w") as f:
-        json.dump({"session_id": sid, "state": "thinking" if phase == "active" else "idle", "tool_name": payload.get("tool_name"), "cwd": payload.get("cwd"), "provider": "cursor", "control_path": "managed"}, f)
-    os.replace(tmp, outbox / (Path(tmp).name.replace(".tmp.", "prs.") + ".json"))
-claim = {"schema_version": 2, "provider": "cursor", "status": "observed", "session_id": sid, "conversation_uuid": conversation_id, "hook_observed_at": now}
+launch_id = os.environ.get("LONGHOUSE_CURSOR_LAUNCH_ID", "").strip()
 target = claims / f"{sid}.json"
 existing_claim = None
 try:
@@ -74,9 +58,39 @@ claim_matches_reservation = (
     isinstance(existing_claim, dict)
     and existing_claim.get("session_id") == sid
     and existing_claim.get("conversation_uuid") == conversation_id
+    and existing_claim.get("launch_id") == launch_id
     and existing_claim.get("status") in {"pending", "observed"}
 )
-if claim_matches_reservation:
+if not claim_matches_reservation:
+    if event in {"beforeShellExecution", "beforeMCPExecution"} and os.environ.get("LONGHOUSE_PERMISSION_HOOK_ENABLED") == "1":
+        print(json.dumps({"permission": "deny", "user_message": "Longhouse launch identity mismatch; command blocked"}))
+    else:
+        print("{}")
+    raise SystemExit(0)
+row = {"event": event, "observed_at": now, "session_id": sid, "conversation_id": conversation_id, "payload": payload}
+with (events / f"{sid}.ndjson").open("a", encoding="utf-8") as f:
+    f.write(json.dumps(row, separators=(",", ":")) + "\n")
+phase = "active" if event in {"beforeSubmitPrompt", "afterAgentThought", "preToolUse", "beforeShellExecution", "beforeMCPExecution"} else ("idle" if event in {"sessionStart", "stop", "afterAgentResponse"} else ("ended" if event == "sessionEnd" else None))
+if phase:
+    target = root / f"{sid}.phase.json"
+    fd, tmp = tempfile.mkstemp(dir=root, prefix=".phase.")
+    with os.fdopen(fd, "w") as f:
+        json.dump({"session_id": sid, "conversation_id": conversation_id, "launch_id": launch_id, "phase": phase, "generation_id": payload.get("generation_id"), "observed_at": now}, f)
+    os.replace(tmp, target)
+    outbox = home / "agent" / "outbox"
+    outbox.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=outbox, prefix=".tmp.")
+    with os.fdopen(fd, "w") as f:
+        json.dump({"session_id": sid, "state": "thinking" if phase == "active" else "idle", "tool_name": payload.get("tool_name"), "cwd": payload.get("cwd"), "provider": "cursor", "control_path": "managed"}, f)
+    os.replace(tmp, outbox / (Path(tmp).name.replace(".tmp.", "prs.") + ".json"))
+claim = {"schema_version": 2, "provider": "cursor", "status": "observed", "session_id": sid, "conversation_uuid": conversation_id, "launch_id": launch_id, "hook_observed_at": now}
+registration_ready = False
+try:
+    launch_state = json.loads((root / f"{sid}.json").read_text())
+    registration_ready = launch_state.get("registration") == "registered"
+except (OSError, ValueError, TypeError):
+    pass
+if registration_ready:
     fd, tmp = tempfile.mkstemp(dir=claims, prefix=".claim.")
     with os.fdopen(fd, "w") as f:
         json.dump(claim, f)
@@ -115,7 +129,8 @@ def permission(value, message=None):
 if event in {"beforeShellExecution", "beforeMCPExecution"} and os.environ.get("LONGHOUSE_PERMISSION_HOOK_ENABLED") == "1":
     base = os.environ.get("LONGHOUSE_HOOK_URL", "").rstrip("/")
     token = os.environ.get("LONGHOUSE_HOOK_TOKEN", "")
-    material = "|".join([conversation_id, str(payload.get("generation_id") or ""), event, str(payload.get("command") or payload.get("tool_name") or "")])
+    invocation_id = str(payload.get("tool_call_id") or payload.get("toolCallId") or payload.get("invocation_id") or payload.get("call_id") or f"{now}:{os.getpid()}")
+    material = "|".join([conversation_id, str(payload.get("generation_id") or ""), event, invocation_id, str(payload.get("command") or payload.get("tool_name") or "")])
     request_id = hashlib.sha256(material.encode()).hexdigest()
     tool_name = "Shell" if event == "beforeShellExecution" else str(payload.get("tool_name") or "MCP")
     tool_input = {"command": payload.get("command")} if event == "beforeShellExecution" else (payload.get("tool_input") or payload.get("arguments") or {})

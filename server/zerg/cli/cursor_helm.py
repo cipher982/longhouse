@@ -141,6 +141,18 @@ def _phase_path(session_id: str) -> Path:
     return _state_dir() / f"{session_id}.phase.json"
 
 
+def _acquire_launch_lock(session_id: str) -> int:
+    state_dir = _state_dir()
+    state_dir.mkdir(parents=True, exist_ok=True)
+    fd = os.open(state_dir / f"{session_id}.lock", os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        os.close(fd)
+        raise RuntimeError(f"Cursor Helm session {session_id} is already attached")
+    return fd
+
+
 def _read_provider_phase_state(session_id: str) -> dict | None:
     try:
         value = json.loads(_phase_path(session_id).read_text())
@@ -295,7 +307,7 @@ def _resume_cursor_identity(longhouse_session_id: str) -> str:
         raise RuntimeError(f"Cursor identity claim for {session_id} is invalid") from exc
 
 
-def _write_pending_binding(session_id: str, provider_conversation_id: str) -> None:
+def _write_pending_binding(session_id: str, provider_conversation_id: str, launch_id: str) -> None:
     claims = _state_dir() / "binding-probes"
     claims.mkdir(parents=True, exist_ok=True)
     now = datetime.now(timezone.utc)
@@ -305,12 +317,23 @@ def _write_pending_binding(session_id: str, provider_conversation_id: str) -> No
         "status": "pending",
         "session_id": session_id,
         "conversation_uuid": provider_conversation_id,
+        "launch_id": launch_id,
         "expires_at": (now + timedelta(minutes=10)).isoformat(),
     }
     target = claims / f"{session_id}.json"
     tmp = target.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(payload, separators=(",", ":")))
     os.replace(tmp, target)
+
+
+def _remove_pending_binding(session_id: str, launch_id: str) -> None:
+    target = _state_dir() / "binding-probes" / f"{session_id}.json"
+    try:
+        claim = json.loads(target.read_text())
+    except (OSError, ValueError, TypeError):
+        return
+    if claim.get("status") == "pending" and claim.get("launch_id") == launch_id:
+        target.unlink(missing_ok=True)
 
 
 def _infer_git_context(cwd: Path) -> tuple[str | None, str | None]:
@@ -503,7 +526,7 @@ def _registration_worker(
         )
 
 
-def _post_terminal_event(url: str, token: str, session_id: str, reason: str) -> None:
+def _post_terminal_event(url: str, token: str, session_id: str, reason: str, exit_code: int = 0) -> bool:
     """Best-effort: tell the Runtime Host the Helm session ended."""
     occurred_at = _now_iso()
     device_id = get_machine_name_label()
@@ -521,19 +544,25 @@ def _post_terminal_event(url: str, token: str, session_id: str, reason: str) -> 
             "terminal_state": "session_ended",
             "terminal_reason": reason,
             "terminal_source": "cursor_helm",
-            "exit_code": 0,
+            "exit_code": exit_code,
         },
     }
     endpoint = f"{url.rstrip('/')}/api/agents/runtime/events/batch"
-    try:
-        with httpx.Client(timeout=_TERMINAL_POST_TIMEOUT) as client:
-            client.post(
-                endpoint,
-                headers={"X-Agents-Token": token},
-                json={"events": [event]},
-            )
-    except httpx.HTTPError:
-        pass
+    for delay in (0.0, 0.25, 0.75):
+        if delay:
+            time.sleep(delay)
+        try:
+            with httpx.Client(timeout=_TERMINAL_POST_TIMEOUT) as client:
+                response = client.post(
+                    endpoint,
+                    headers={"X-Agents-Token": token},
+                    json={"events": [event]},
+                )
+            if response.is_success:
+                return True
+        except httpx.HTTPError:
+            continue
+    return False
 
 
 def _reconcile_registration_on_exit(
@@ -545,6 +574,7 @@ def _reconcile_registration_on_exit(
     registration_box: list[_RegistrationOutcome],
     registration_lock: threading.Lock,
     join_timeout: float = _REGISTER_EXIT_JOIN_SECONDS,
+    exit_code: int = 0,
 ) -> bool:
     """Join registration briefly and close any host session that may exist.
 
@@ -556,11 +586,11 @@ def _reconcile_registration_on_exit(
     with registration_lock:
         outcome = registration_box[0] if registration_box else None
     if outcome is not None and outcome.registered:
-        _post_terminal_event(url, token, session_id, "helm_exit")
+        _post_terminal_event(url, token, session_id, "helm_exit", exit_code)
         return True
     if outcome is None:
         # Abandoned / killed mid-HTTP — host may have committed after our join.
-        _post_terminal_event(url, token, session_id, "helm_exit_before_ready")
+        _post_terminal_event(url, token, session_id, "helm_exit_before_ready", exit_code)
     return False
 
 
@@ -618,14 +648,19 @@ def _handle_command(
     master_lock: threading.Lock,
     stop_event: threading.Event,
     session_id: str | None = None,
+    conversation_id: str | None = None,
+    launch_id: str | None = None,
 ) -> dict:
     kind = str(request.get("kind") or "").strip()
     if kind == "send":
         text = str(request.get("text") or "")
         if not text:
             return {"ok": False, "error": {"code": "bad_request", "message": "missing text"}}
-        phase = _read_provider_phase(session_id) if session_id else None
-        if session_id and phase != "idle":
+        phase_state = _read_provider_phase_state(session_id) if session_id else None
+        phase = str(phase_state.get("phase") or "") if phase_state else None
+        if session_id and (
+            phase != "idle" or phase_state.get("conversation_id") != conversation_id or phase_state.get("launch_id") != launch_id
+        ):
             return {
                 "ok": False,
                 "error": {
@@ -649,7 +684,14 @@ def _handle_command(
         phase = str(phase_state.get("phase") or "") if phase_state else None
         generation_id = str(phase_state.get("generation_id") or "") if phase_state else ""
         expected_generation_id = str(request.get("generation_id") or "")
-        if session_id and (phase != "active" or not generation_id or not expected_generation_id or generation_id != expected_generation_id):
+        if session_id and (
+            phase != "active"
+            or phase_state.get("conversation_id") != conversation_id
+            or phase_state.get("launch_id") != launch_id
+            or not generation_id
+            or not expected_generation_id
+            or generation_id != expected_generation_id
+        ):
             return {
                 "ok": False,
                 "error": {
@@ -685,6 +727,8 @@ def _socket_server(
     master_lock: threading.Lock,
     stop_event: threading.Event,
     session_id: str | None = None,
+    conversation_id: str | None = None,
+    launch_id: str | None = None,
 ) -> None:
     sock.settimeout(0.5)
     while not stop_event.is_set():
@@ -702,6 +746,8 @@ def _socket_server(
                 master_lock=master_lock,
                 stop_event=stop_event,
                 session_id=session_id,
+                conversation_id=conversation_id,
+                launch_id=launch_id,
             )
         except Exception:
             try:
@@ -723,6 +769,8 @@ def _serve_one(
     master_lock: threading.Lock,
     stop_event: threading.Event,
     session_id: str | None = None,
+    conversation_id: str | None = None,
+    launch_id: str | None = None,
 ) -> None:
     conn.settimeout(_COMMAND_READ_TIMEOUT)
     buf = bytearray()
@@ -749,6 +797,8 @@ def _serve_one(
         master_lock=master_lock,
         stop_event=stop_event,
         session_id=session_id,
+        conversation_id=conversation_id,
+        launch_id=launch_id,
     )
     conn.sendall((json.dumps(reply) + "\n").encode())
 
@@ -811,10 +861,16 @@ def run_helm(
 
     launch_ui.progress("Preparing your session…")
     session_id = str(uuid.UUID(resume_session_id)) if resume_session_id else str(uuid.uuid4())
+    launch_id = str(uuid.uuid4())
+    try:
+        launch_lock_fd = _acquire_launch_lock(session_id)
+    except RuntimeError as exc:
+        typer.secho(str(exc), fg=typer.colors.RED)
+        raise typer.Exit(code=EXIT_SETUP_FAILED) from exc
     # Resuming reuses the Longhouse ID but starts a new provider process. A
     # previous generation must never authorize input into the new process.
     _phase_path(session_id).unlink(missing_ok=True)
-    _write_pending_binding(session_id, provider_conversation_id)
+    _write_pending_binding(session_id, provider_conversation_id, launch_id)
     state_dir = _state_dir()
     state_dir.mkdir(parents=True, exist_ok=True)
     sock_path = _socket_path(session_id)
@@ -839,6 +895,8 @@ def run_helm(
     except OSError as exc:
         typer.secho(f"Failed to bind cursor-helm control socket: {exc}", fg=typer.colors.RED)
         _remove_state(session_id, sock_path)
+        _remove_pending_binding(session_id, launch_id)
+        os.close(launch_lock_fd)
         raise typer.Exit(code=EXIT_SETUP_FAILED)
 
     stop_event = threading.Event()
@@ -891,11 +949,15 @@ def run_helm(
 
     if permission_mode == "remote_approve" and (early is None or not early.registered or not early.hook_token):
         stop_event.set()
+        if early is not None and early.registered:
+            _post_terminal_event(resolved_url, resolved_token, session_id, "permission_setup_failed", EXIT_SETUP_FAILED)
         try:
             server_sock.close()
         except OSError:
             pass
         _remove_state(session_id, sock_path)
+        _remove_pending_binding(session_id, launch_id)
+        os.close(launch_lock_fd)
         detail = early.error if early is not None else "registration did not complete"
         typer.secho(
             f"Cursor remote approval could not be enforced ({detail}); Cursor was not launched.",
@@ -955,6 +1017,13 @@ def run_helm(
         # A nested managed launch must own its new identity; inheriting an
         # outer launcher ID cross-binds hook claims and remote control.
         env["LONGHOUSE_SESSION_ID"] = session_id
+        env["LONGHOUSE_CURSOR_LAUNCH_ID"] = launch_id
+        for permission_var in (
+            "LONGHOUSE_PERMISSION_HOOK_ENABLED",
+            "LONGHOUSE_HOOK_URL",
+            "LONGHOUSE_HOOK_TOKEN",
+        ):
+            env.pop(permission_var, None)
         if permission_mode == "remote_approve" and early is not None and early.hook_token:
             env["LONGHOUSE_PERMISSION_HOOK_ENABLED"] = "1"
             env["LONGHOUSE_HOOK_URL"] = resolved_url
@@ -1042,6 +1111,8 @@ def run_helm(
             "master_lock": master_lock,
             "stop_event": stop_event,
             "session_id": session_id,
+            "conversation_id": provider_conversation_id,
+            "launch_id": launch_id,
         },
         daemon=True,
         name="cursor-helm-socket",
@@ -1081,12 +1152,14 @@ def run_helm(
                 if not data:
                     # stdin closed (Ctrl-D) — forward EOF to the child.
                     try:
-                        _full_write(master_fd, b"\x04")
+                        with master_lock:
+                            _full_write(master_fd, b"\x04")
                     except OSError:
                         stop_event.set()
                 else:
                     try:
-                        _full_write(master_fd, data)
+                        with master_lock:
+                            _full_write(master_fd, data)
                     except OSError:
                         stop_event.set()
                         break
@@ -1124,6 +1197,7 @@ def run_helm(
             registration_thread=registration_thread,
             registration_box=registration_box,
             registration_lock=registration_lock,
+            exit_code=exit_code,
         )
         try:
             termios.tcsetattr(real_stdin, termios.TCSADRAIN, saved_term)
@@ -1142,6 +1216,8 @@ def run_helm(
         except OSError:
             pass
         _remove_state(session_id, sock_path)
+        _remove_pending_binding(session_id, launch_id)
+        os.close(launch_lock_fd)
         launch_ui.exit_bookend(exit_code=exit_code, machine_name=machine_name, durable=durable)
         if open_browser:
             typer.echo(f"Timeline: {build_session_url(resolved_url, session_id)}")

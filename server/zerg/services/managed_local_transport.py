@@ -111,10 +111,14 @@ def build_managed_local_attach_command(*, session: AgentSession, db: Session | N
         )
 
     if transport == ManagedSessionTransport.CURSOR_HELM.value:
+        cursor_args = ["--resume-session", shlex.quote(session_id)]
+        cwd = str(getattr(session, "cwd", "") or "").strip()
+        if cwd:
+            cursor_args.extend(["--cwd", shlex.quote(cwd)])
         return _build_longhouse_cli_shell_command(
             command_group="cursor",
             subcommand=None,
-            args=("--resume-session", shlex.quote(session_id)),
+            args=tuple(cursor_args),
             required_commands=("longhouse", "cursor-agent"),
         )
 

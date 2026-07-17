@@ -6,7 +6,7 @@ from zerg.qa.cursor_helm_product_e2e import _hook_rows
 from zerg.qa.cursor_helm_product_e2e import _pending_pause
 from zerg.qa.cursor_helm_product_e2e import _response_observed_at
 from zerg.qa.cursor_helm_product_e2e import _state_ids
-from zerg.qa.cursor_helm_product_e2e import _visible_texts
+from zerg.qa.cursor_helm_product_e2e import _assistant_texts
 
 
 def test_product_e2e_helpers_parse_managed_state_hooks_and_visible_events(tmp_path) -> None:
@@ -34,8 +34,14 @@ def test_product_e2e_helpers_parse_managed_state_hooks_and_visible_events(tmp_pa
             "text": "ready",
         }
     ]
-    assert _visible_texts(
-        {"events": [{"role": "system", "content_text": "hidden"}, {"role": "assistant", "content_text": "ready"}]}
+    assert _assistant_texts(
+        {
+            "events": [
+                {"role": "system", "content_text": "hidden"},
+                {"role": "user", "content_text": "marker must not prove a reply"},
+                {"role": "assistant", "content_text": "ready"},
+            ]
+        }
     ) == ["ready"]
     assert _pending_pause(
         {

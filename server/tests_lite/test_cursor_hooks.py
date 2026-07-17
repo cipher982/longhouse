@@ -14,6 +14,27 @@ from pathlib import Path
 from zerg.services.cursor_hooks import install_cursor_hooks
 
 
+def _seed_launch(home: Path, *, session_id: str = "managed-session", conversation_id: str = "cursor-id") -> str:
+    launch_id = "launch-1"
+    root = home / "managed-local" / "cursor-helm"
+    claims = root / "binding-probes"
+    claims.mkdir(parents=True, exist_ok=True)
+    (claims / f"{session_id}.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "provider": "cursor",
+                "status": "pending",
+                "session_id": session_id,
+                "conversation_uuid": conversation_id,
+                "launch_id": launch_id,
+            }
+        )
+    )
+    (root / f"{session_id}.json").write_text(json.dumps({"session_id": session_id, "registration": "registered"}))
+    return launch_id
+
+
 class _PermissionServer:
     def __init__(self, decision: str):
         self.decision = decision
@@ -114,16 +135,48 @@ def test_cursor_hook_does_not_overwrite_mismatched_launch_reservation(tmp_path: 
     assert json.loads(target.read_text()) == reserved
 
 
+def test_cursor_hook_does_not_promote_binding_before_registration(tmp_path: Path) -> None:
+    cursor = tmp_path / ".cursor"
+    cursor.mkdir()
+    install_cursor_hooks(cursor)
+    script = cursor / "hooks" / "longhouse-cursor-hook.py"
+    home = tmp_path / "longhouse"
+    launch_id = _seed_launch(home)
+    state_path = home / "managed-local" / "cursor-helm" / "managed-session.json"
+    state_path.write_text(json.dumps({"session_id": "managed-session", "registration": "degraded"}))
+    claim_path = home / "managed-local" / "cursor-helm" / "binding-probes" / "managed-session.json"
+
+    subprocess.run(
+        [str(script), "sessionStart"],
+        input=json.dumps({"conversation_id": "cursor-id"}),
+        text=True,
+        capture_output=True,
+        env={
+            **os.environ,
+            "LONGHOUSE_SESSION_ID": "managed-session",
+            "LONGHOUSE_CURSOR_LAUNCH_ID": launch_id,
+            "LONGHOUSE_HOME": str(home),
+        },
+        timeout=5,
+        check=True,
+    )
+
+    assert json.loads(claim_path.read_text())["status"] == "pending"
+
+
 def test_cursor_permission_transport_failure_blocks_instead_of_failing_open(tmp_path: Path) -> None:
     cursor = tmp_path / ".cursor"
     cursor.mkdir()
     install_cursor_hooks(cursor)
     script = cursor / "hooks" / "longhouse-cursor-hook.py"
+    home = tmp_path / "longhouse"
+    launch_id = _seed_launch(home)
     env = dict(os.environ)
     env.update(
         {
             "LONGHOUSE_SESSION_ID": "managed-session",
-            "LONGHOUSE_HOME": str(tmp_path / "longhouse"),
+            "LONGHOUSE_HOME": str(home),
+            "LONGHOUSE_CURSOR_LAUNCH_ID": launch_id,
             "LONGHOUSE_PERMISSION_HOOK_ENABLED": "1",
             "LONGHOUSE_PERMISSION_HOOK_TIMEOUT_S": "0",
             "LONGHOUSE_HOOK_URL": "http://127.0.0.1:1",
@@ -162,11 +215,14 @@ def test_cursor_permission_hook_returns_exact_remote_allow_and_deny(tmp_path: Pa
     script = cursor / "hooks" / "longhouse-cursor-hook.py"
     for decision in ("allow", "deny"):
         with _PermissionServer(decision) as server:
+            home = tmp_path / f"longhouse-{decision}"
+            launch_id = _seed_launch(home)
             env = dict(os.environ)
             env.update(
                 {
                     "LONGHOUSE_SESSION_ID": "managed-session",
-                    "LONGHOUSE_HOME": str(tmp_path / f"longhouse-{decision}"),
+                    "LONGHOUSE_HOME": str(home),
+                    "LONGHOUSE_CURSOR_LAUNCH_ID": launch_id,
                     "LONGHOUSE_PERMISSION_HOOK_ENABLED": "1",
                     "LONGHOUSE_HOOK_URL": server.url,
                     "LONGHOUSE_HOOK_TOKEN": "session-token",
@@ -184,6 +240,38 @@ def test_cursor_permission_hook_returns_exact_remote_allow_and_deny(tmp_path: Pa
         assert json.loads(result.stdout)["permission"] == decision
         assert server.requests[0]["provider"] == "cursor"
         assert server.user_agents == ["Longhouse-Cursor-Hook/1"]
+
+
+def test_identical_cursor_tool_calls_get_distinct_permission_requests(tmp_path: Path) -> None:
+    cursor = tmp_path / ".cursor"
+    cursor.mkdir()
+    install_cursor_hooks(cursor)
+    script = cursor / "hooks" / "longhouse-cursor-hook.py"
+    home = tmp_path / "longhouse"
+    launch_id = _seed_launch(home)
+    env = {
+        **os.environ,
+        "LONGHOUSE_SESSION_ID": "managed-session",
+        "LONGHOUSE_CURSOR_LAUNCH_ID": launch_id,
+        "LONGHOUSE_HOME": str(home),
+        "LONGHOUSE_PERMISSION_HOOK_ENABLED": "1",
+        "LONGHOUSE_HOOK_TOKEN": "session-token",
+    }
+    with _PermissionServer("allow") as server:
+        env["LONGHOUSE_HOOK_URL"] = server.url
+        for _ in range(2):
+            subprocess.run(
+                [str(script), "beforeShellExecution"],
+                input=json.dumps({"conversation_id": "cursor-id", "generation_id": "gen-1", "command": "pwd"}),
+                text=True,
+                capture_output=True,
+                env=env,
+                timeout=5,
+                check=True,
+            )
+
+    assert len(server.requests) == 2
+    assert server.requests[0]["tool_use_id"] != server.requests[1]["tool_use_id"]
 
 
 def test_cursor_stop_wakes_engine_with_exact_managed_store(tmp_path: Path) -> None:
@@ -214,11 +302,13 @@ def test_cursor_stop_wakes_engine_with_exact_managed_store(tmp_path: Path) -> No
     install_cursor_hooks(cursor)
     script = cursor / "hooks" / "longhouse-cursor-hook.py"
     env = dict(os.environ)
+    launch_id = _seed_launch(longhouse_home, conversation_id=conversation_id)
     env.update(
         {
             "CURSOR_HOME": str(cursor),
             "LONGHOUSE_HOME": str(longhouse_home),
             "LONGHOUSE_SESSION_ID": "managed-session",
+            "LONGHOUSE_CURSOR_LAUNCH_ID": launch_id,
         }
     )
     result = subprocess.run(
