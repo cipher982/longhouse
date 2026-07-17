@@ -4,6 +4,7 @@ import json
 
 from zerg.qa.cursor_helm_product_e2e import _hook_rows
 from zerg.qa.cursor_helm_product_e2e import _pending_pause
+from zerg.qa.cursor_helm_product_e2e import _response_observed_at
 from zerg.qa.cursor_helm_product_e2e import _state_ids
 from zerg.qa.cursor_helm_product_e2e import _visible_texts
 
@@ -45,3 +46,13 @@ def test_product_e2e_helpers_parse_managed_state_hooks_and_visible_events(tmp_pa
             ]
         }
     ) == {"id": "ready", "status": "pending", "can_respond": True}
+    assert (
+        _response_observed_at(
+            [
+                {"event": "afterAgentResponse", "text": "old", "observed_at": "2026-07-17T00:00:00+00:00"},
+                {"event": "afterAgentResponse", "text": "marker", "observed_at": "2026-07-17T00:00:01+00:00"},
+            ],
+            "marker",
+        ).isoformat()
+        == "2026-07-17T00:00:01+00:00"
+    )

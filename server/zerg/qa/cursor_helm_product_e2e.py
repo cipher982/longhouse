@@ -80,6 +80,16 @@ def _pending_pause(payload: dict[str, Any]) -> dict[str, Any] | None:
     )
 
 
+def _response_observed_at(rows: list[dict[str, Any]], marker: str) -> datetime:
+    row = next(
+        (item for item in reversed(rows) if item.get("event") == "afterAgentResponse" and marker in str(item.get("text") or "")),
+        None,
+    )
+    if row is None:
+        raise RuntimeError(f"native Cursor response hook missing for {marker}")
+    return datetime.fromisoformat(str(row["observed_at"]))
+
+
 @dataclass
 class _PtyProcess:
     process: subprocess.Popen[bytes]
@@ -245,12 +255,14 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
             timeout=args.timeout,
             description="first Cursor reply in hosted archive",
         )
+        first_archive_lag = (datetime.now(UTC) - _response_observed_at(_hook_rows(root, session_id), marker_one)).total_seconds()
         _engine_command(engine, session_id, "send", f"Reply with exactly {marker_two}")
         second = _wait_until(
             lambda: (payload if marker_two in _visible_texts(payload) else None) if (payload := hosted_events()) else None,
             timeout=args.timeout,
             description="remote Cursor reply in hosted archive",
         )
+        second_archive_lag = (datetime.now(UTC) - _response_observed_at(_hook_rows(root, session_id), marker_two)).total_seconds()
 
         _engine_command(
             engine,
@@ -348,6 +360,12 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
             timeout=args.timeout,
             description="post-cancel Cursor recovery in hosted archive",
         )
+        recovery_archive_lag = (datetime.now(UTC) - _response_observed_at(_hook_rows(root, session_id), recovery)).total_seconds()
+        archive_lags = [first_archive_lag, second_archive_lag, recovery_archive_lag]
+        if max(archive_lags) > args.max_archive_lag:
+            raise RuntimeError(
+                f"Cursor archive lag exceeded {args.max_archive_lag:.1f}s: " + ", ".join(f"{value:.2f}s" for value in archive_lags)
+            )
         report.update(
             {
                 "status": "passed",
@@ -362,6 +380,11 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
                 "process_alive_after_cancel": True,
                 "remote_permission_allow": True,
                 "remote_permission_deny": True,
+                "archive_lag_seconds": {
+                    "first": round(first_archive_lag, 3),
+                    "second": round(second_archive_lag, 3),
+                    "recovery": round(recovery_archive_lag, 3),
+                },
             }
         )
         return report
@@ -386,6 +409,7 @@ def main() -> int:
     parser.add_argument("--workspace", type=Path, default=Path("/tmp/longhouse-cursor-product-e2e"))
     parser.add_argument("--artifact-root", type=Path)
     parser.add_argument("--timeout", type=float, default=90.0)
+    parser.add_argument("--max-archive-lag", type=float, default=10.0)
     parser.add_argument("--model", default="gpt-5.3-codex-low")
     parser.add_argument("--longhouse-bin", default="longhouse")
     parser.add_argument("--engine-bin", default="longhouse-engine")
