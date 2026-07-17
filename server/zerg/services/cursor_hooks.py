@@ -24,7 +24,7 @@ _EVENTS = (
 _MARKER = "longhouse-cursor-hook.py"
 
 _SCRIPT = r"""#!/usr/bin/env python3
-import json, os, sys, tempfile
+import hashlib, json, os, sys, tempfile, time, urllib.error, urllib.parse, urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -61,7 +61,43 @@ fd, tmp = tempfile.mkstemp(dir=claims, prefix=".claim.")
 with os.fdopen(fd, "w") as f:
     json.dump(claim, f)
 os.replace(tmp, target)
-print("{}")
+
+def permission(value, message=None):
+    result = {"permission": value}
+    if message:
+        result["user_message"] = message
+    print(json.dumps(result))
+
+if event in {"beforeShellExecution", "beforeMCPExecution"} and os.environ.get("LONGHOUSE_PERMISSION_HOOK_ENABLED") == "1":
+    base = os.environ.get("LONGHOUSE_HOOK_URL", "").rstrip("/")
+    token = os.environ.get("LONGHOUSE_HOOK_TOKEN", "")
+    material = "|".join([conversation_id, str(payload.get("generation_id") or ""), event, str(payload.get("command") or payload.get("tool_name") or "")])
+    request_id = hashlib.sha256(material.encode()).hexdigest()
+    tool_name = "Shell" if event == "beforeShellExecution" else str(payload.get("tool_name") or "MCP")
+    tool_input = {"command": payload.get("command")} if event == "beforeShellExecution" else (payload.get("tool_input") or payload.get("arguments") or {})
+    body = json.dumps({"session_id": sid, "tool_use_id": request_id, "tool_name": tool_name, "tool_input": tool_input, "provider": "cursor"}).encode()
+    headers = {"Content-Type": "application/json", "X-Agents-Token": token}
+    try:
+        req = urllib.request.Request(base + "/api/agents/permission-requests", data=body, headers=headers, method="POST")
+        with urllib.request.urlopen(req, timeout=5) as response:
+            ack = json.loads(response.read().decode() or "{}")
+        pause_id = str(ack.get("pause_request_id") or "")
+        deadline = time.monotonic() + min(20.0, max(0.0, float(os.environ.get("LONGHOUSE_PERMISSION_HOOK_TIMEOUT_S", "20"))))
+        query = urllib.parse.urlencode({"session_id": sid, "tool_use_id": request_id, "pause_request_id": pause_id})
+        while pause_id and time.monotonic() < deadline:
+            req = urllib.request.Request(base + "/api/agents/permission-decision?" + query, headers={"X-Agents-Token": token})
+            with urllib.request.urlopen(req, timeout=5) as response:
+                result = json.loads(response.read().decode() or "{}")
+            if result.get("resolved"):
+                decision = str(result.get("decision") or "ask").lower()
+                permission(decision if decision in {"allow", "deny"} else "ask", result.get("reason"))
+                raise SystemExit(0)
+            time.sleep(0.5)
+    except (OSError, ValueError, urllib.error.URLError):
+        pass
+    permission("ask", "Longhouse unavailable; decide in Cursor")
+else:
+    print("{}")
 """
 
 
@@ -90,7 +126,8 @@ def install_cursor_hooks(cursor_dir: Path | None = None) -> list[str]:
     for event in _EVENTS:
         existing = hooks.get(event)
         entries = existing if isinstance(existing, list) else []
-        ours = {"command": f"{script} {event}", "timeout": 5, "failClosed": False}
+        timeout = 25 if event in {"beforeShellExecution", "beforeMCPExecution"} else 5
+        ours = {"command": f"{script} {event}", "timeout": timeout, "failClosed": False}
         hooks[event] = [ours if _is_ours(item) else item for item in entries]
         if not any(_is_ours(item) for item in hooks[event]):
             hooks[event].append(ours)

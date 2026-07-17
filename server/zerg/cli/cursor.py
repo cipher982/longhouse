@@ -71,6 +71,11 @@ def launch(
         "--resume-session",
         help="Resume a stopped Cursor Helm conversation by its Longhouse session UUID.",
     ),
+    permission_mode: str = typer.Option(
+        "remote_approve",
+        "--permission-mode",
+        help="remote_approve routes Cursor tool approvals through Longhouse; bypass leaves Cursor local-only.",
+    ),
     url: str | None = typer.Option(None, "--url", "-u", help="Longhouse API URL (uses stored URL if not specified)."),
     token: str | None = typer.Option(None, "--token", "-t", help="Device token (uses stored token if not specified)."),
     config_dir: str | None = typer.Option(
@@ -96,7 +101,7 @@ def launch(
         url=url,
         token=token,
         config_dir=config_dir,
-        permission_mode="bypass",
+        permission_mode=permission_mode,
         cursor_args=cursor_args,
         verbose=verbose,
         open_browser=open_browser,

@@ -105,6 +105,7 @@ class _RegistrationOutcome:
     registered: bool
     attach_command: str = ""
     error: str | None = None
+    hook_token: str | None = None
 
 
 def _panel_capability_for_registration(outcome: _RegistrationOutcome | None) -> str:
@@ -377,6 +378,7 @@ def _register_session(
         session_id=session_id,
         registered=True,
         attach_command=str(body.get("attach_command") or ""),
+        hook_token=str(body.get("hook_token") or "") or None,
     )
 
 
@@ -830,6 +832,8 @@ def run_helm(
     # Brief race: if registration is fast, print steerable panel; never wait
     # for the full HTTP timeout before starting the TUI.
     registration_thread.join(timeout=0.3)
+    if permission_mode == "remote_approve" and not registration_box:
+        registration_thread.join(timeout=_REGISTER_TIMEOUT)
     with registration_lock:
         early = registration_box[0] if registration_box else None
     panel_capability = _panel_capability_for_registration(early)
@@ -890,6 +894,10 @@ def run_helm(
             pass
         env = dict(os.environ)
         env.setdefault("LONGHOUSE_SESSION_ID", session_id)
+        if permission_mode == "remote_approve" and early is not None and early.hook_token:
+            env["LONGHOUSE_PERMISSION_HOOK_ENABLED"] = "1"
+            env["LONGHOUSE_HOOK_URL"] = resolved_url
+            env["LONGHOUSE_HOOK_TOKEN"] = early.hook_token
         # Ink (cursor-agent's TUI) disables ANSI erase/cursor manipulation,
         # synchronized output, and SIGWINCH resize handling when it detects a
         # CI environment or when stdout is not a TTY. The child's stdout is the
