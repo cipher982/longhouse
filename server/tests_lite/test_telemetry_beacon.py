@@ -51,6 +51,7 @@ def _client() -> tuple[TestClient, sessionmaker]:
     app.dependency_overrides[require_admin] = lambda: None
     app.dependency_overrides[require_canary_token] = lambda: None
     app.dependency_overrides[get_db] = override_db
+    app.dependency_overrides[telemetry_mod._get_telemetry_db] = override_db
     app.include_router(beacon_router)
     app.include_router(admin_router)
     app.include_router(canary_router)
@@ -81,6 +82,20 @@ def test_beacon_accepts_single_and_batch():
     resp = c.post("/telemetry/client-render", json=[_beacon(event_id="a"), _beacon(event_id="b", surface="ios")])
     assert resp.status_code == 200
     assert resp.json()["accepted"] == 2
+
+
+def test_beacon_remains_available_when_live_catalog_owns_sqlite(monkeypatch):
+    telemetry_mod._samples.clear()
+    telemetry_mod._buckets.clear()
+    monkeypatch.setattr(telemetry_mod, "live_catalog_enabled", lambda: True)
+    app = FastAPI()
+    app.include_router(beacon_router)
+    client = TestClient(app)
+
+    response = client.post("/telemetry/client-render", json=_beacon())
+
+    assert response.status_code == 200
+    assert response.json()["accepted"] == 1
 
 
 def test_beacon_drops_implausible_clock_skew():

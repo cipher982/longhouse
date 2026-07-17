@@ -16,6 +16,7 @@ endpoint stays internal/admin-only.
 
 from __future__ import annotations
 
+import logging
 import time
 from collections import deque
 from dataclasses import dataclass
@@ -34,8 +35,8 @@ from pydantic import Field
 from sqlalchemy.orm import Session
 
 from zerg.config import get_settings
-from zerg.database import catalog_db_dependency
 from zerg.database import get_db
+from zerg.database import live_catalog_enabled
 from zerg.dependencies.auth import require_admin
 from zerg.metrics import canary_latency_seconds
 from zerg.metrics import canary_observations_total
@@ -77,6 +78,15 @@ _BUCKET_CAPACITY = 60.0
 _BUCKET_REFILL_PER_SEC = 20.0
 _buckets: dict[str, tuple[float, float]] = {}  # ip -> (tokens, last_refill_mono)
 _buckets_max_size = 10_000  # Cap memory; evict LRU-ish by clearing when full.
+logger = logging.getLogger("longhouse.client_render")
+
+
+def _get_telemetry_db():
+    """Legacy persistence is optional; live catalog is owned by catalogd."""
+    if live_catalog_enabled():
+        yield None
+        return
+    yield from get_db()
 
 
 def _take_token(ip: str, now: float) -> bool:
@@ -206,7 +216,7 @@ async def _persist_render_beacons(
 async def client_render_beacon(
     beacons: list[RenderBeacon] | RenderBeacon,
     request: Request,
-    db: Session = Depends(catalog_db_dependency()),
+    db: Session | None = Depends(_get_telemetry_db),
 ) -> dict:
     """Accept one or a batch of render beacons.
 
@@ -263,14 +273,24 @@ async def client_render_beacon(
             event_end_to_end_latency_seconds.labels(surface=b.surface, managed=managed_label).observe(latency_s)
             event_render_beacons_total.labels(surface=b.surface, outcome="ok").inc()
             _samples.append(_Sample(now_mono, b.surface, b.managed, latency_s, b.session_id, b.event_id))
-        persistable.append((b, int(round(latency_ms))))
+        rounded_latency_ms = int(round(latency_ms))
+        persistable.append((b, rounded_latency_ms))
+        logger.info(
+            "client_render session=%s event=%s surface=%s latency_ms=%d pubsub_seq=%s",
+            b.session_id,
+            b.event_id,
+            b.surface,
+            rounded_latency_ms,
+            b.pubsub_seq,
+        )
         accepted += 1
 
-    try:
-        await _persist_render_beacons(db, persistable)
-    except Exception:
-        # Metrics must not depend on forensic persistence.
-        pass
+    if db is not None:
+        try:
+            await _persist_render_beacons(db, persistable)
+        except Exception:
+            # Metrics and structured logs must not depend on forensic persistence.
+            logger.exception("client_render persistence failed")
 
     return {"accepted": accepted, "dropped_skew": dropped_skew, "dropped_range": dropped_range}
 
@@ -280,9 +300,11 @@ async def recent_client_render_beacons(
     session_id: str | None = None,
     event_id: str | None = None,
     limit: int = 50,
-    db: Session = Depends(catalog_db_dependency()),
+    db: Session | None = Depends(_get_telemetry_db),
 ) -> dict:
     """Return recent persisted browser/iOS render beacons for forensic debugging."""
+    if db is None:
+        return {"items": [], "persistence": "structured_logs"}
     query = (
         db.query(SessionObservation)
         .filter(SessionObservation.source_domain == SOURCE_DOMAIN_CLIENT)
