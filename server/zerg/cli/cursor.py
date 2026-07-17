@@ -28,10 +28,11 @@ class _CursorGroup(typer.core.TyperGroup):
     """Treat unknown command tokens as stock Cursor passthrough arguments."""
 
     def invoke(self, ctx: click.Context):
-        protected = list(ctx.protected_args)
+        protected_attr = "_protected_args" if hasattr(ctx, "_protected_args") else "protected_args"
+        protected = list(getattr(ctx, protected_attr))
         if protected and self.get_command(ctx, protected[0]) is None:
             ctx.args = [*protected, *ctx.args]
-            ctx.protected_args = []
+            setattr(ctx, protected_attr, [])
         return super().invoke(ctx)
 
 
