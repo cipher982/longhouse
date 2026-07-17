@@ -119,7 +119,7 @@ pub fn try_collect_relevant_process_facts_by_pid(
 
     let facts = String::from_utf8_lossy(&output.stdout)
         .lines()
-        .filter_map(parse_process_fact)
+        .filter_map(parse_process_fact_without_start_time)
         .collect::<HashMap<_, _>>();
     facts.contains_key(&std::process::id()).then_some(facts)
 }
@@ -141,6 +141,12 @@ pub fn parse_process_fact(line: &str) -> Option<(u32, ProcessFact)> {
 
 fn parse_process_fact_for_inventory(line: &str) -> Option<(u32, ProcessFact)> {
     parse_process_fact_impl(line, false)
+}
+
+fn parse_process_fact_without_start_time(line: &str) -> Option<(u32, ProcessFact)> {
+    let (pid, mut fact) = parse_process_fact_impl(line, false)?;
+    fact.start_time = None;
+    Some((pid, fact))
 }
 
 fn parse_process_fact_impl(line: &str, parse_all_start_times: bool) -> Option<(u32, ProcessFact)> {
