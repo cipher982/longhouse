@@ -817,29 +817,40 @@ pub(crate) fn prepare_next_opencode_envelope(
 
 fn cursor_render_records(
     snapshot: &cursor_store::CursorStoreSnapshot,
-    range_start: u64,
-    range_end: u64,
+    selected: &[cursor_store_records::CursorRawRecord],
     started_at_us: i64,
 ) -> Result<Vec<StorageV2RenderRecord>> {
     let cursor_store::RootMessageBlobIds::Parsed(root_ids) = &snapshot.root_message_blob_ids else {
         return Ok(Vec::new());
     };
-    let meta_count = snapshot.meta_rows.len() as u64;
-    let mut records = Vec::new();
-    for (message_order, blob_id) in root_ids.iter().enumerate() {
-        let Some((blob_index, blob)) = snapshot
-            .blob_rows
-            .iter()
-            .enumerate()
-            .find(|(_, row)| &row.id == blob_id)
-        else {
+    let mut selected_blobs: HashMap<String, (u64, usize, Vec<u8>)> = HashMap::new();
+    for (raw_record_ordinal, record) in selected.iter().enumerate() {
+        let Ok(wrapper) = serde_json::from_slice::<Value>(&record.bytes) else {
             continue;
         };
-        let source_position = meta_count + blob_index as u64;
-        if source_position < range_start || source_position >= range_end {
+        if wrapper.get("kind").and_then(Value::as_str) != Some("blob") {
             continue;
         }
-        let message: Value = match serde_json::from_slice(&blob.data_bytes) {
+        let Some(blob_id) = wrapper.get("blob_id").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(encoded) = wrapper.get("blob_bytes_b64").and_then(Value::as_str) else {
+            continue;
+        };
+        let Ok(bytes) = BASE64_STANDARD.decode(encoded) else {
+            continue;
+        };
+        selected_blobs.insert(
+            blob_id.to_string(),
+            (record.source_position, raw_record_ordinal, bytes),
+        );
+    }
+    let mut records = Vec::new();
+    for (message_order, blob_id) in root_ids.iter().enumerate() {
+        let Some((source_position, raw_record_ordinal, blob_bytes)) = selected_blobs.get(blob_id) else {
+            continue;
+        };
+        let message: Value = match serde_json::from_slice(blob_bytes) {
             Ok(value) => value,
             Err(_) => continue,
         };
@@ -892,7 +903,7 @@ fn cursor_render_records(
                 )
                 .to_string(),
                 order_time_us: started_at_us + message_order as i64 * 1_000 + subordinal as i64,
-                source_position,
+                source_position: *source_position,
                 event_subordinal: subordinal as u32,
                 role: event_role.to_string(),
                 content_text,
@@ -902,8 +913,7 @@ fn cursor_render_records(
                 tool_call_id,
                 thread_id: None,
                 branch_kind: (kind == "reasoning").then(|| "reasoning".to_string()),
-                raw_record_ordinal: usize::try_from(source_position - range_start)
-                    .context("Cursor raw record ordinal exceeds usize")?,
+                raw_record_ordinal: *raw_record_ordinal,
             });
         }
     }
@@ -1044,8 +1054,7 @@ pub(crate) fn prepare_next_cursor_envelope(
         .with_timezone(&Utc);
     let render_records = cursor_render_records(
         &store_snapshot,
-        range_start,
-        range_end,
+        &selected,
         started_at.timestamp_micros(),
     )?;
     let render_generation = Uuid::new_v5(
@@ -1998,14 +2007,20 @@ mod tests {
         set_cursor_root(&store, CURSOR_ROOT_B, &extended_root);
         store
             .execute(
-                "INSERT INTO blobs (id, data) VALUES (?1, X'0304')",
-                [CURSOR_MESSAGE_B],
+                "INSERT INTO blobs (id, data) VALUES (?1, ?2)",
+                params![
+                    CURSOR_MESSAGE_B,
+                    br#"{"role":"assistant","content":[{"type":"text","text":"second turn"}]}"#
+                ],
             )
             .unwrap();
         let extension = prepare_next_cursor_envelope(&mut conn, &capabilities(), &path)
             .unwrap()
             .unwrap();
         assert_eq!(extension.source_epoch, first.source_epoch);
+        let extension_render = extension.envelope.render.as_ref().unwrap();
+        assert_eq!(extension_render.records.len(), 1);
+        assert_eq!(extension_render.records[0].content_text.as_deref(), Some("second turn"));
         acknowledge_prepared(&mut conn, &extension);
 
         set_cursor_root(&store, CURSOR_ROOT_C, &[0xff; 32]);
