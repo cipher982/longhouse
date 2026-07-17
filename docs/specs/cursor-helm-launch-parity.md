@@ -55,17 +55,18 @@ say so until the acceptance gates below pass.
 
 The installed Cursor 2026.07.13 and 2026.07.16 binaries contain a hidden
 `--new-session-id <uuid>` option described as creating a session with a
-caller-provided ID. Cursor hooks expose `conversation_id` and lifecycle/tool
-events. The Longhouse launcher already injects `LONGHOUSE_SESSION_ID` into the
-Cursor child environment. Cursor also exposes `create-chat`, `--resume`,
-`--continue`, stream-json headless output, and ACP.
+caller-provided ID. Cursor hooks expose `conversation_id`, lifecycle/tool
+events, turn-boundary assistant text, and reasoning text. The Longhouse
+launcher already injects `LONGHOUSE_SESSION_ID` into the Cursor child
+environment. Cursor also exposes `create-chat`, `--resume`, `--continue`,
+stream-json headless output, and ACP.
 
 None of those observations is sufficient by itself. The integration must
 capture live evidence from the exact supported Cursor binary and account:
 
 | Proof | Required observation |
 | --- | --- |
-| Caller identity | A TUI launched with `--new-session-id <uuid>` writes the same UUID as `meta['0'].agentId` and hook `conversation_id`. |
+| Caller identity | Both `create-chat` → `--resume <id>` and `--new-session-id <uuid>` are tested; the selected path provides an ID before TUI launch and that ID matches `meta['0'].agentId` plus hook `conversation_id`. |
 | Hook provenance | A hook invoked by that TUI inherits the exact `LONGHOUSE_SESSION_ID`, reports the provider conversation ID, and cannot cross-bind a concurrent session. |
 | Transcript | User, assistant, reasoning, tool start, and tool result become visible in provider order; exact raw store evidence remains receipt-backed. |
 | Idle send | Remote text creates exactly one new user turn and one provider response. |
@@ -85,9 +86,17 @@ event exists.
 
 ### Identity and binding
 
-For a fresh Helm launch, Longhouse mints one UUID and passes it to Cursor via
-`--new-session-id` after a live compatibility probe proves the flag. A
-Longhouse Cursor hook records a binding claim from two independent values:
+For a fresh Helm launch, Longhouse first tries the strongest provider identity
+path proven by Gate 0:
+
+1. provider-minted identity from `create-chat`, followed by
+   `--resume <provider-id>`; or
+2. Longhouse-minted identity passed through the hidden
+   `--new-session-id <uuid>` compatibility path.
+
+The documented/provider-minted path wins when both are reliable. The hidden
+flag is never assumed merely because binary strings contain it. A Longhouse
+Cursor hook records a binding claim from two independent values:
 
 - `LONGHOUSE_SESSION_ID` inherited from the exact launched process;
 - Cursor `conversation_id` from the provider hook payload.
@@ -100,14 +109,30 @@ explicit control-only state.
 
 ### Live and durable transcript
 
-Cursor hooks provide provisional live phase and transcript evidence. The
-native `store.db` adapter remains the durable source of truth and must emit a
+Cursor hooks provide provisional phase, prompt, tool, assistant-response, and
+reasoning evidence at provider hook boundaries. They are not a token-delta
+stream. The native `store.db` adapter remains the durable source of truth and
+must poll fast enough to meet the live readability contract, emitting a
 versioned render projection as well as exact raw records. Durable records
 reconcile provisional records by provider identity and order. Unknown Cursor
 blocks remain raw evidence with typed render gaps.
 
 The managed binding makes the native source use the Helm session ID. It must
-not create a second hidden Shadow session for the same conversation.
+not create a second hidden Shadow session for the same conversation. Binding
+alone never unhides a session: the timeline may expose the bound session only
+after its first readable render generation is committed.
+
+### Hook lifecycle and permission safety
+
+Longhouse installs one user-level Cursor hook adapter through the normal
+onboarding/`machine repair` integration step. Installation merges by Longhouse
+identity, preserves unrelated hooks and ordering, records what it owns, and
+supports idempotent upgrade and uninstall. A missing, rejected, or unsupported
+hook is an explicit health/capability failure; it never blocks the stock TUI.
+
+Permission hooks may wait for a bounded remote answer. If Longhouse is
+unavailable or the wait expires, the adapter returns control to Cursor's local
+permission prompt. It never silently allows, denies, or leaves the TUI hung.
 
 ### Control
 
@@ -115,11 +140,16 @@ Use the strongest stock Cursor mechanism that passes each proof:
 
 1. documented hook or protocol operation;
 2. stable native CLI operation with a versioned compatibility canary;
-3. PTY input only for idle prompt submission when provider phase proves idle.
+3. PTY key sequences only when they map to a proven stock-TUI operation and a
+   hook/store event confirms the semantic result. This includes idle prompt
+   submission and may include Escape cancellation if the live canary proves it
+   stops only the active turn.
 
 Do not call queued input active steer. Do not call process exit interrupt. Do
 not infer permission state from terminal pixels if a hook event can represent
-it. ACP and the Cursor SDK may improve Console, but replacing the interactive
+it. The current send sequence includes Escape; without a provider-phase idle
+guard, a remote send can cancel active work. That guard is mandatory before
+send remains advertised. ACP and the Cursor SDK may improve Console, but replacing the interactive
 TUI changes the mode and cannot be used to claim Helm parity.
 
 ### Resume and recovery
@@ -144,12 +174,13 @@ permission response remain false until their individual canaries pass.
 
 ## Implementation Slices
 
-1. **Honesty baseline:** split Cursor control-plane capability projection and
-   correct launcher, README, docs, web, and iOS copy.
-2. **Provider proof harness:** exercise identity, hooks, concurrent isolation,
+1. **Provider proof harness:** exercise both identity paths, hooks, concurrent isolation,
    transcript, send, cancel, permission, resume, and recovery against the real
    installed Cursor binary. Keep sanitized fixtures for CI replay.
-3. **Identity:** launch with caller ID when proven, install the hook adapter,
+2. **Honesty baseline:** split Cursor control-plane capability projection,
+   remove process-exit interrupt and unrendered tail claims, and correct
+   launcher, README, docs, web, and iOS copy.
+3. **Identity:** launch with the proven pre-known provider ID, install the hook adapter,
    persist strict claims, and bind storage-v2 to Helm without duplication.
 4. **Transcript:** emit Cursor render records, stream provisional hook events,
    reconcile them with durable receipts, and expose typed render gaps.
@@ -176,15 +207,21 @@ canary to the end; every promoted operation lands with its proof.
   unknown blocks, WAL growth, rewrites, and restart;
 - provisional-to-durable reconciliation and idempotency;
 - per-control-plane capability projection;
+- send while active is rejected before any PTY byte is written;
+- a permission-hook timeout returns to Cursor's local prompt without allow or
+  deny;
+- a bound raw source remains hidden until a render generation exists;
+- no `cursor_helm` capability cites `cursor_acp` evidence;
 - no provider signal from repair, cleanup, or Longhouse restart.
 
 ### Real provider integration
 
-- stock Cursor TUI caller-ID and hook binding;
+- `create-chat`/`--resume` and caller-ID round trips plus hook binding;
 - one idle remote send observed in provider output and durable transcript;
 - active-turn steer canary;
 - graceful cancel followed by a successful next turn;
-- permission allow and deny canaries;
+- permission allow, deny, and Longhouse-unavailable timeout canaries;
+- send attempted mid-turn does not cancel or corrupt the active turn;
 - exit, native resume, and next-turn continuity;
 - Machine Agent restart and Runtime Host outage/recovery while the TUI lives;
 - two concurrent Cursor Helm sessions in the same cwd never cross-bind.
