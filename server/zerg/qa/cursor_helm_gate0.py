@@ -24,6 +24,7 @@ import tempfile
 import termios
 import threading
 import time
+import traceback
 from dataclasses import dataclass
 from datetime import UTC
 from datetime import datetime
@@ -386,16 +387,16 @@ class CursorPtySession:
         self._stop_reader.set()
         if self.alive():
             try:
-                os.killpg(self.process.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
+                os.killpg(os.getpgid(self.process.pid), signal.SIGTERM)
+            except (PermissionError, ProcessLookupError):
+                self.process.terminate()
             try:
                 self.process.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 try:
-                    os.killpg(self.process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
+                    os.killpg(os.getpgid(self.process.pid), signal.SIGKILL)
+                except (PermissionError, ProcessLookupError):
+                    self.process.kill()
                 self.process.wait(timeout=5)
         try:
             os.close(self.master_fd)
@@ -427,6 +428,48 @@ def _child_env(longhouse_session_id: str, events_path: Path) -> dict[str, str]:
     env["LINES"] = "40"
     env["COLUMNS"] = "132"
     return env
+
+
+def _trust_workspace(
+    *,
+    binary: str,
+    workspace: Path,
+    events_path: Path,
+    model: str | None,
+    timeout: float,
+) -> dict[str, Any]:
+    """Use Cursor's supported headless trust flag before opening the TUI."""
+    longhouse_session_id = str(uuid4())
+    marker = f"LONGHOUSE_CURSOR_GATE0_TRUST_{uuid4().hex[:10]}"
+    argv = [
+        binary,
+        "--print",
+        "--trust",
+        "--mode",
+        "ask",
+        "--workspace",
+        str(workspace),
+    ]
+    if model:
+        argv.extend(["--model", model])
+    argv.append(f"Reply with exactly {marker} and nothing else.")
+    result = subprocess.run(
+        argv,
+        cwd=workspace,
+        env=_child_env(longhouse_session_id, events_path),
+        text=True,
+        capture_output=True,
+        timeout=timeout,
+        check=False,
+    )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip()
+        raise RuntimeError(f"Cursor workspace trust preflight failed ({result.returncode}): {detail}")
+    return {
+        "status": "passed",
+        "longhouse_session_id": longhouse_session_id,
+        "response_digest_present": bool(result.stdout.strip()),
+    }
 
 
 def _identity_scenario(
@@ -538,6 +581,13 @@ def run_gate0(args: argparse.Namespace) -> dict[str, Any]:
     try:
         if auth.get("isAuthenticated") is not True:
             raise RuntimeError("cursor-agent is not authenticated")
+        report["scenarios"]["workspace_trust"] = _trust_workspace(
+            binary=binary,
+            workspace=workspace,
+            events_path=events_path,
+            model=args.model,
+            timeout=args.timeout,
+        )
         provider_id = _create_chat(binary, workspace)
         report["scenarios"]["create_chat_resume"] = _identity_scenario(
             name="create_chat_resume",
@@ -569,6 +619,7 @@ def run_gate0(args: argparse.Namespace) -> dict[str, Any]:
         report["status"] = "failed"
         report["failure_code"] = type(exc).__name__
         report["error"] = str(exc)
+        report["traceback"] = traceback.format_exc()
     report["finished_at"] = _now()
     output_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return report
