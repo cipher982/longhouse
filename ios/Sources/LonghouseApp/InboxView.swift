@@ -117,7 +117,9 @@ struct TimelineView: View {
             .task {
                 WebTranscriptWebViewPool.prewarm()
                 await viewModel.load(using: appState)
-                viewModel.startStream(using: appState)
+                if scenePhase == .active {
+                    viewModel.startStream(using: appState)
+                }
                 consumePendingPushIfNeeded()
                 Task {
                     await appState.ensurePushRegistrationIfPossible()
@@ -125,7 +127,6 @@ struct TimelineView: View {
             }
             .onAppear {
                 WebTranscriptWebViewPool.prewarm()
-                viewModel.resumeStream(using: appState)
                 consumePendingPushIfNeeded()
             }
             .onDisappear {

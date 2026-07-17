@@ -56,7 +56,11 @@ struct ChatUITestFixtureView: View {
             await waitForInitialWorkspaceLoad()
 
             if fixtureName.hasPrefix("assistant-stream") {
-                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                if fixtureName == "assistant-stream-latency" {
+                    await waitForStressTrigger()
+                } else {
+                    try? await Task.sleep(nanoseconds: 1_500_000_000)
+                }
                 await client.streamAssistantMessage(
                     chunks: [
                         "Assistant fixture streaming",

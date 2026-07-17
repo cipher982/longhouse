@@ -4,6 +4,7 @@ import XCTest
 final class SessionOpenPerformanceUITests: XCTestCase {
     private static let wallClockMedianBudgetMs = 2_200
     private static let webKitRenderBudgetMs = 1_500
+    private static let composerFocusBudgetMs = 2_000
 
     private enum LaunchEnvironment {
         static let timelineOpenFixture = "LONGHOUSE_UI_TEST_TIMELINE_OPEN_FIXTURE"
@@ -93,6 +94,36 @@ final class SessionOpenPerformanceUITests: XCTestCase {
             maxRenderMs,
             Self.webKitRenderBudgetMs,
             "WebKit transcript render regressed. render_ms=\(renderSamples) max_render_ms=\(maxRenderMs)"
+        )
+    }
+
+    func testComposerFocusRemainsResponsiveDuringStreaming() {
+        let scratch = FileManager.default.temporaryDirectory
+            .appendingPathComponent("longhouse-composer-profile-\(UUID().uuidString)", isDirectory: true)
+        let triggerURL = scratch.appendingPathComponent("stream-trigger")
+        try? FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        let app = XCUIApplication()
+        app.launchEnvironment["LONGHOUSE_UI_TEST_CHAT_FIXTURE"] = "assistant-stream-latency"
+        app.launchEnvironment[LaunchEnvironment.chatEventCount] = "120"
+        app.launchEnvironment[LaunchEnvironment.diagnostics] = "1"
+        app.launchEnvironment["LONGHOUSE_UI_TEST_CHAT_TRIGGER_PATH"] = triggerURL.path
+        app.launchArguments += [LaunchArgument.appearanceOverride, "light"]
+        app.launch()
+
+        let composer = app.textFields["session-chat-composer"]
+        let latestMessage = app.staticTexts["Assistant fixture message 119: streaming-style response with enough body to exercise row layout."]
+        XCTAssertTrue(composer.waitForExistence(timeout: 10))
+        XCTAssertTrue(latestMessage.waitForExistence(timeout: 10))
+        try? "1".write(to: triggerURL, atomically: true, encoding: .utf8)
+        let focusStartedAt = Date()
+        composer.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 4))
+        let focusMs = elapsedMs(since: focusStartedAt)
+        print("IOS_COMPOSER_SIM_METRIC focus_ms=\(focusMs)")
+        XCTAssertLessThan(
+            focusMs,
+            Self.composerFocusBudgetMs,
+            "Composer focus should not wait behind transcript or networking work."
         )
     }
 

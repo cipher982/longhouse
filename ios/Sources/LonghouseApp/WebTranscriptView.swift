@@ -61,12 +61,23 @@ struct WebTranscriptView: UIViewRepresentable {
         webView.scrollView.backgroundColor = .clear
         context.coordinator.webView = webView
         context.coordinator.configureMediaAuth(serverURL: serverURL, on: webView)
-        context.coordinator.isLoaded = false
         let lifecycleStage = pooled.reused ? "webview_reused" : "webview_make"
         Task { @MainActor in
             onLifecycle?(lifecycleStage)
         }
-        context.coordinator.loadDocument(serverURL: serverURL, on: webView)
+        if pooled.reused {
+            // Adopt the warm spare's existing navigation, even if WebKit is
+            // still finishing it. Restarting loadHTMLString() here discarded
+            // launch prewarm work exactly when the user opened a session early.
+            context.coordinator.adoptDocument(serverURL: serverURL, loaded: pooled.isLoaded)
+            if pooled.isLoaded {
+                Task { @MainActor in
+                    onLifecycle?("webview_document_reused")
+                }
+            }
+        } else {
+            context.coordinator.loadDocument(serverURL: serverURL, on: webView)
+        }
         return webView
     }
 
@@ -84,6 +95,11 @@ struct WebTranscriptView: UIViewRepresentable {
         )
     }
 
+    static func dismantleUIView(_ webView: WKWebView, coordinator: Coordinator) {
+        coordinator.prepareForReuse()
+        WebTranscriptWebViewPool.recycle(webView)
+    }
+
     private func preparedPayload() -> WebTranscriptPreparedPayload {
         Self.preparedPayload(
             serverURL: serverURL,
@@ -99,6 +115,7 @@ struct WebTranscriptView: UIViewRepresentable {
         submittedInputs: [SubmittedInput],
         errorMessage: String?
     ) -> WebTranscriptPreparedPayload {
+        let startedAt = Date()
         let payload = WebTranscriptPayload(
             errorMessage: errorMessage,
             items: Self.payloadItems(
@@ -114,7 +131,8 @@ struct WebTranscriptView: UIViewRepresentable {
             payloadByteSize: data.count,
             rowCount: payload.items.count,
             latestItemId: payload.items.last?.id,
-            payloadFingerprint: Self.payloadFingerprint(data)
+            payloadFingerprint: Self.payloadFingerprint(data),
+            prepareDurationMs: Int(Date().timeIntervalSince(startedAt) * 1000)
         )
     }
 
@@ -602,20 +620,6 @@ struct WebTranscriptView: UIViewRepresentable {
         /// re-sent when it changes by ≥0.5pt to avoid churn during streaming.
         private var lastBottomInset: CGFloat = 18
 
-        override init() {
-            super.init()
-            NotificationCenter.default.addObserver(
-                self,
-                selector: #selector(keyboardFrameDidChange(_:)),
-                name: UIResponder.keyboardDidChangeFrameNotification,
-                object: nil
-            )
-        }
-
-        deinit {
-            NotificationCenter.default.removeObserver(self)
-        }
-
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             isLoaded = true
             Task { @MainActor in
@@ -651,6 +655,11 @@ struct WebTranscriptView: UIViewRepresentable {
                 WebTranscriptView.documentHTML,
                 baseURL: serverURL.flatMap { URL(string: $0) }
             )
+        }
+
+        func adoptDocument(serverURL: String, loaded: Bool) {
+            documentServerURL = serverURL
+            isLoaded = loaded
         }
 
         func ensureDocumentServerURL(_ serverURL: String, on webView: WKWebView) {
@@ -725,13 +734,6 @@ struct WebTranscriptView: UIViewRepresentable {
             shouldStickToBottom = distanceFromBottom < 96
         }
 
-        @objc private func keyboardFrameDidChange(_ notification: Notification) {
-            // GeometryReader's safe-area update already pushes the final bottom
-            // inset. Re-pin once after UIKit settles instead of issuing JS during
-            // both will-change and did-change phases.
-            repinToBottomIfSticky(reason: "keyboard_did_change")
-        }
-
         private func repinToBottomIfSticky(reason: String, followUpDelay: TimeInterval? = nil) {
             guard shouldStickToBottom, !userScrollInProgress else { return }
             repinToBottom(reason: reason)
@@ -761,6 +763,23 @@ struct WebTranscriptView: UIViewRepresentable {
             guard now.timeIntervalSince(lastNearTopRequestAt) > 0.75 else { return }
             lastNearTopRequestAt = now
             onNearTop?()
+        }
+
+        func prepareForReuse() {
+            webView?.navigationDelegate = nil
+            webView?.scrollView.delegate = nil
+            webView = nil
+            onNearTop = nil
+            onDiagnostics = nil
+            onLifecycle = nil
+            pendingPayload = nil
+            inFlightPayload = nil
+            lastRenderedPayload = nil
+            lastPayload = nil
+            lastDuplicatePayload = nil
+            userScrollInProgress = false
+            dragStartOffsetY = nil
+            shouldStickToBottom = true
         }
 
         func send(
@@ -885,7 +904,7 @@ struct WebTranscriptView: UIViewRepresentable {
                 error_description: error.map { String(describing: $0) }
             )
             logger.debug(
-                "webkit transcript stage=\(stage, privacy: .public) sequence=\(sequence) rows=\(payload.rowCount) bytes=\(payload.payloadByteSize) latest=\(payload.latestItemId ?? "none", privacy: .public) failures=\(self.jsFailureCount) stick=\(self.shouldStickToBottom) render_ms=\(renderDurationMs ?? -1)"
+                "webkit transcript stage=\(stage, privacy: .public) sequence=\(sequence) rows=\(payload.rowCount) bytes=\(payload.payloadByteSize) latest=\(payload.latestItemId ?? "none", privacy: .public) failures=\(self.jsFailureCount) stick=\(self.shouldStickToBottom) prepare_ms=\(payload.prepareDurationMs) render_ms=\(renderDurationMs ?? -1)"
             )
             onDiagnostics?(diagnostics)
         }
@@ -909,12 +928,13 @@ struct WebTranscriptView: UIViewRepresentable {
     }
 }
 
-struct WebTranscriptPreparedPayload: Equatable {
+struct WebTranscriptPreparedPayload {
     let base64: String
     let payloadByteSize: Int
     let rowCount: Int
     let latestItemId: String?
     let payloadFingerprint: String
+    let prepareDurationMs: Int
 }
 
 @MainActor
@@ -949,8 +969,6 @@ enum WebTranscriptWebViewPool {
     }
 
     static func takeOrCreate() -> PooledWebView {
-        // Single-shot warm spare: active transcript web views are not returned
-        // to this pool, so a reused view should contain only the empty document.
         if let webView = warmedWebView {
             warmedWebView = nil
             prewarmDelegate = nil
@@ -961,6 +979,15 @@ enum WebTranscriptWebViewPool {
         }
         logger.info("webkit prewarm miss")
         return PooledWebView(webView: configuredWebView(), reused: false, isLoaded: false)
+    }
+
+    static func recycle(_ webView: WKWebView) {
+        // A just-popped transcript is a better warm spare than a new WebView
+        // still starting its content process. Keep one globally bounded spare.
+        prewarmDelegate = nil
+        warmedWebView = webView
+        warmedWebViewLoaded = true
+        logger.info("webkit recycled")
     }
 
     private static func configuredWebView() -> WKWebView {

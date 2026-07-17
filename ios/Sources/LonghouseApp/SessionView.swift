@@ -1628,6 +1628,9 @@ final class SessionViewModel: ObservableObject {
     private var pollTask: Task<Void, Never>?
     private var prefetchTask: Task<Void, Never>?
     private var realtimeRefreshRetryTask: Task<Void, Never>?
+    private var tailRefreshTask: Task<Void, Error>?
+    private var activeTailRefreshToken: Int?
+    private var nextTailRefreshToken = 0
     private var realtimeRefreshFailureCount = 0
     private var stream: SessionWorkspaceStreamSource?
     private var streamTask: Task<Void, Never>?
@@ -1725,6 +1728,9 @@ final class SessionViewModel: ObservableObject {
             prefetchTask = nil
             realtimeRefreshRetryTask?.cancel()
             realtimeRefreshRetryTask = nil
+            tailRefreshTask?.cancel()
+            tailRefreshTask = nil
+            activeTailRefreshToken = nil
             realtimeRefreshFailureCount = 0
             errorMessage = nil
             refreshErrorMessage = nil
@@ -2169,7 +2175,10 @@ final class SessionViewModel: ObservableObject {
     ) -> Bool {
         if ticks <= 3 { return !connected }
         if pendingInput { return !connected }
-        if setupPending { return true }
+        // Launch-state changes arrive on the workspace stream. Polling the
+        // entire mobile tail while that stream is healthy turned every new
+        // Console launch into a 750ms request/build/WebKit-render loop.
+        if setupPending { return !connected }
         if !connected { return true }
         if hasRunningTool, ticks % 12 == 0 { return true }
         _ = managed
@@ -2389,6 +2398,41 @@ final class SessionViewModel: ObservableObject {
     private func refreshTail(api: SessionWorkspaceClient, sessionId: String, allowFailure: Bool = false) async throws {
         guard activeSessionId == sessionId else { return }
 
+        if let tailRefreshTask {
+            openWaterfall?.mark("request_joined")
+            do {
+                try await tailRefreshTask.value
+            } catch {
+                if !allowFailure { throw error }
+            }
+            return
+        }
+
+        nextTailRefreshToken += 1
+        let token = nextTailRefreshToken
+        activeTailRefreshToken = token
+        let task = Task { [weak self] in
+            guard let self else { return }
+            try await self.performRefreshTail(api: api, sessionId: sessionId)
+        }
+        tailRefreshTask = task
+        defer {
+            if activeTailRefreshToken == token {
+                tailRefreshTask = nil
+                activeTailRefreshToken = nil
+            }
+        }
+
+        do {
+            try await task.value
+        } catch {
+            if !allowFailure { throw error }
+        }
+    }
+
+    private func performRefreshTail(api: SessionWorkspaceClient, sessionId: String) async throws {
+        guard activeSessionId == sessionId else { return }
+
         do {
             let requestStartedAt = Date()
             openWaterfall?.mark("request_start", "limit=\(initialTailLimit)")
@@ -2454,7 +2498,7 @@ final class SessionViewModel: ObservableObject {
             saveCurrentCache()
             scheduleOlderPrefetch(api: api, sessionId: sessionId)
         } catch {
-            if !allowFailure { throw error }
+            throw error
         }
     }
 

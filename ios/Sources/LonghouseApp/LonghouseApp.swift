@@ -545,6 +545,7 @@ final class AppState: ObservableObject {
     }
 
     private func refreshBrowserSession() async -> SessionRestoreResult {
+        let startedAt = Date()
         guard let url = URL(string: "\(serverURL)/api/auth/refresh") else {
             return .unauthenticated
         }
@@ -556,20 +557,25 @@ final class AppState: ObservableObject {
         do {
             let (_, response) = try await URLSession.shared.data(for: request)
             guard let http = response as? HTTPURLResponse else {
+                logger.info("auth refresh finished result=indeterminate elapsed_ms=\(Int(Date().timeIntervalSince(startedAt) * 1000), privacy: .public)")
                 return .indeterminate
             }
 
             if http.statusCode == 200 {
                 SharedAuthStore.captureCookiesFromSharedStorage(for: serverURL)
+                logger.info("auth refresh finished result=authenticated status=200 elapsed_ms=\(Int(Date().timeIntervalSince(startedAt) * 1000), privacy: .public)")
                 return .authenticated
             }
+            logger.info("auth refresh finished result=\(http.statusCode == 401 ? "unauthenticated" : "indeterminate", privacy: .public) status=\(http.statusCode, privacy: .public) elapsed_ms=\(Int(Date().timeIntervalSince(startedAt) * 1000), privacy: .public)")
             return http.statusCode == 401 ? .unauthenticated : .indeterminate
         } catch {
+            logger.info("auth refresh finished result=indeterminate transport_error=true elapsed_ms=\(Int(Date().timeIntervalSince(startedAt) * 1000), privacy: .public)")
             return .indeterminate
         }
     }
 
     private func verifyBrowserSession() async -> SessionRestoreResult {
+        let startedAt = Date()
         guard let url = URL(string: "\(serverURL)/api/auth/verify") else {
             return .unauthenticated
         }
@@ -583,14 +589,18 @@ final class AppState: ObservableObject {
         do {
             let (_, response) = try await URLSession.shared.data(for: request)
             guard let http = response as? HTTPURLResponse else {
+                logger.info("auth verify finished result=indeterminate elapsed_ms=\(Int(Date().timeIntervalSince(startedAt) * 1000), privacy: .public)")
                 return .indeterminate
             }
 
             if http.statusCode == 204 {
+                logger.info("auth verify finished result=authenticated status=204 elapsed_ms=\(Int(Date().timeIntervalSince(startedAt) * 1000), privacy: .public)")
                 return .authenticated
             }
+            logger.info("auth verify finished result=\(http.statusCode == 401 ? "unauthenticated" : "indeterminate", privacy: .public) status=\(http.statusCode, privacy: .public) elapsed_ms=\(Int(Date().timeIntervalSince(startedAt) * 1000), privacy: .public)")
             return http.statusCode == 401 ? .unauthenticated : .indeterminate
         } catch {
+            logger.info("auth verify finished result=indeterminate transport_error=true elapsed_ms=\(Int(Date().timeIntervalSince(startedAt) * 1000), privacy: .public)")
             return .indeterminate
         }
     }
@@ -620,6 +630,7 @@ final class AppState: ObservableObject {
     }
 
     private func refreshRuntimeTokenProactively(requireExistingRuntimeToken: Bool = true) async -> RuntimeTokenRefreshResult {
+        let startedAt = Date()
         // Snapshot the server URL: signout/server-switch may land during the
         // await and we must not write a refreshed token back into a cleared or
         // switched keychain slot.
@@ -637,8 +648,10 @@ final class AppState: ObservableObject {
                 return .deferred
             }
             scheduleRuntimeTokenRefresh()
+            logger.info("runtime token refresh finished result=refreshed elapsed_ms=\(Int(Date().timeIntervalSince(startedAt) * 1000), privacy: .public)")
             return .refreshed
         } catch LonghouseAPIError.notAuthenticated {
+            logger.info("runtime token refresh finished result=rejected elapsed_ms=\(Int(Date().timeIntervalSince(startedAt) * 1000), privacy: .public)")
             return .rejected
         } catch {
             // Leave the existing token in place; the 401-retry path handles it
@@ -646,6 +659,7 @@ final class AppState: ObservableObject {
             // cached shell visible instead of logging out on a deploy/network
             // blip.
             logger.error("proactive runtime token refresh failed error=\(error.localizedDescription, privacy: .public)")
+            logger.info("runtime token refresh finished result=deferred elapsed_ms=\(Int(Date().timeIntervalSince(startedAt) * 1000), privacy: .public)")
             return .deferred
         }
     }

@@ -991,6 +991,30 @@ struct SessionViewModelTests {
     }
 
     @Test
+    func overlappingTailRefreshesShareOneRequest() async throws {
+        let workspace = try makeWorkspace(eventId: 10, content: "Current tail")
+        let api = FakeSessionWorkspaceClient(workspaces: [workspace])
+        let appState = AppState()
+        appState.serverURL = "https://example.longhouse.ai"
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+
+        await model.start(sessionId: "session-1", appState: appState)
+        let baseline = await api.tailRequestCount()
+        await api.pauseNextTailResponse(offset: 0)
+
+        let first = Task { await model.reload(sessionId: "session-1", appState: appState) }
+        await waitForWorkspaceRequestCount(api, atLeast: baseline + 1)
+        let second = Task { await model.reload(sessionId: "session-1", appState: appState) }
+        try? await Task.sleep(nanoseconds: 50_000_000)
+
+        #expect(await api.tailRequestCount() == baseline + 1)
+        await api.resumePausedTailResponses()
+        await first.value
+        await second.value
+        #expect(await api.tailRequestCount() == baseline + 1)
+    }
+
+    @Test
     func transcriptDiagnosticsPostsRenderBeaconAfterWebKitRender() async throws {
         let workspace = try makeWorkspace(eventId: 10, content: "Rendered in WebKit")
         let api = FakeSessionWorkspaceClient(workspaces: [workspace])
