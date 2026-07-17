@@ -2159,6 +2159,10 @@ final class SessionViewModel: ObservableObject {
                     pendingInput: stillHasPendingInput,
                     ticks: ticks
                 ) {
+                    self.openWaterfall?.mark(
+                        "poll_tail",
+                        "connected=\(connected) setup_pending=\(setupPending) pending_input=\(stillHasPendingInput) running_tool=\(hasRunningTool) tick=\(ticks)"
+                    )
                     await self.pollTick(sessionId: sessionId, appState: appState)
                 }
             }

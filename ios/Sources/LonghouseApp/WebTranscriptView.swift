@@ -616,6 +616,8 @@ struct WebTranscriptView: UIViewRepresentable {
         private var lastNearTopRequestAt = Date.distantPast
         private var documentServerURL: String?
         private var mediaAuthSignature: String?
+        private var settledRepinWorkItem: DispatchWorkItem?
+        private var settledRepinGeneration = 0
         /// Last bottom inset (pt) pushed to JS; re-applied on load and only
         /// re-sent when it changes by ≥0.5pt to avoid churn during streaming.
         private var lastBottomInset: CGFloat = 18
@@ -737,11 +739,17 @@ struct WebTranscriptView: UIViewRepresentable {
         private func repinToBottomIfSticky(reason: String, followUpDelay: TimeInterval? = nil) {
             guard shouldStickToBottom, !userScrollInProgress else { return }
             repinToBottom(reason: reason)
+            settledRepinWorkItem?.cancel()
+            settledRepinGeneration += 1
             if let followUpDelay {
                 let delay = max(0.05, min(0.5, followUpDelay))
-                DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-                    self?.repinToBottom(reason: "\(reason)_settled")
+                let generation = settledRepinGeneration
+                let workItem = DispatchWorkItem { [weak self] in
+                    guard let self, self.settledRepinGeneration == generation else { return }
+                    self.repinToBottom(reason: "\(reason)_settled")
                 }
+                settledRepinWorkItem = workItem
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
             }
         }
 
@@ -766,6 +774,9 @@ struct WebTranscriptView: UIViewRepresentable {
         }
 
         func prepareForReuse() {
+            settledRepinWorkItem?.cancel()
+            settledRepinWorkItem = nil
+            settledRepinGeneration += 1
             webView?.navigationDelegate = nil
             webView?.scrollView.delegate = nil
             webView = nil

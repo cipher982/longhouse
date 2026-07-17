@@ -124,6 +124,18 @@ private struct UITestAppearanceOverrideModifier: ViewModifier {
 
 @MainActor
 final class AppState: ObservableObject {
+    private struct LocalCredentialSnapshot: Sendable {
+        let hasRefreshCookie: Bool
+        let hasSessionCookie: Bool
+        let hasRuntimeToken: Bool
+        let hasNativeRefreshToken: Bool
+        let authorizationHeader: String?
+
+        var hasCandidate: Bool {
+            hasRuntimeToken || hasNativeRefreshToken || hasSessionCookie || hasRefreshCookie
+        }
+    }
+
     private let logger = Logger(subsystem: "ai.longhouse.ios", category: "Startup")
 
     @Published var serverURL: String
@@ -136,18 +148,15 @@ final class AppState: ObservableObject {
     private var runtimeTokenRefreshTask: Task<Void, Never>?
 
     init() {
-        let savedServerURL = KeychainHelper.loadServerURL() ?? ""
+        // App-group defaults are the fast launch source. Keychain reads can
+        // block for seconds after device unlock and must not run in init on the
+        // main actor; restoreSession validates credentials asynchronously.
+        let savedServerURL = SharedAuthStore.loadServerURL() ?? ""
         let trimmedServerURL = savedServerURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        let hasCandidate: Bool
-        if !trimmedServerURL.isEmpty {
-            SharedAuthStore.saveServerURL(trimmedServerURL)
-            SharedAuthStore.primeSharedCookieStorage(for: trimmedServerURL)
-            hasCandidate = SharedAuthStore.hasManagedCookies(for: trimmedServerURL)
-                || SharedAuthStore.hasRuntimeToken(for: trimmedServerURL)
-                || SharedAuthStore.hasNativeRefreshToken(for: trimmedServerURL)
-        } else {
-            hasCandidate = false
-        }
+        // A configured server is enough to paint the cached shell immediately.
+        // Missing/expired credentials are resolved by restoreSession moments
+        // later without freezing timeline interaction.
+        let hasCandidate = !trimmedServerURL.isEmpty
         self.serverURL = savedServerURL
         self.hasLocalSessionCandidate = hasCandidate
         self.isAuthenticated = false
@@ -176,17 +185,22 @@ final class AppState: ObservableObject {
             return
         }
 
-        SharedAuthStore.primeSharedCookieStorage(for: serverURL)
-        let cookies = SharedAuthStore.managedCookies(for: serverURL)
-        let hasRefresh = cookies.contains(where: { $0.name == SharedAuthStore.refreshCookieName })
-        let hasSession = cookies.contains(where: { $0.name == SharedAuthStore.sessionCookieName })
-        let hasRuntimeToken = SharedAuthStore.hasRuntimeToken(for: serverURL)
-        let hasNativeRefreshToken = SharedAuthStore.hasNativeRefreshToken(for: serverURL)
-        hasLocalSessionCandidate = hasRuntimeToken || hasNativeRefreshToken || hasSession || hasRefresh
+        // Security.framework calls are synchronous and occasionally take
+        // several seconds on a freshly-unlocked physical device. Load all
+        // credential state off the main actor so the cached timeline remains
+        // scrollable while authentication restores.
+        let credentialLoadStartedAt = Date()
+        let credentials = await Self.loadCredentialSnapshot(serverURL: trimmedServerURL)
+        logger.info("auth credentials loaded elapsed_ms=\(Int(Date().timeIntervalSince(credentialLoadStartedAt) * 1000), privacy: .public) runtime_token=\(credentials.hasRuntimeToken, privacy: .public) session_cookie=\(credentials.hasSessionCookie, privacy: .public)")
+        let hasRefresh = credentials.hasRefreshCookie
+        let hasSession = credentials.hasSessionCookie
+        let hasRuntimeToken = credentials.hasRuntimeToken
+        let hasNativeRefreshToken = credentials.hasNativeRefreshToken
+        hasLocalSessionCandidate = credentials.hasCandidate
 
         var result: SessionRestoreResult
         if hasRuntimeToken {
-            result = await verifyBrowserSession()
+            result = await verifyBrowserSession(authorizationHeader: credentials.authorizationHeader)
             if result == .unauthenticated {
                 // Token may be expired but still inside the CP refresh leeway
                 // (e.g. app suspended past expiry). Try one refresh before
@@ -223,7 +237,7 @@ final class AppState: ObservableObject {
             isAuthenticated = true
             hasLocalSessionCandidate = true
             authError = nil
-            if SharedAuthStore.hasRuntimeToken(for: serverURL) {
+            if hasRuntimeToken {
                 scheduleRuntimeTokenRefresh()
             }
             Task { [weak self] in
@@ -574,7 +588,7 @@ final class AppState: ObservableObject {
         }
     }
 
-    private func verifyBrowserSession() async -> SessionRestoreResult {
+    private func verifyBrowserSession(authorizationHeader preloadedAuthorizationHeader: String? = nil) async -> SessionRestoreResult {
         let startedAt = Date()
         guard let url = URL(string: "\(serverURL)/api/auth/verify") else {
             return .unauthenticated
@@ -582,7 +596,16 @@ final class AppState: ObservableObject {
 
         var request = URLRequest(url: url)
         request.timeoutInterval = 5
-        if let authorizationHeader = SharedAuthStore.authorizationHeader(for: serverURL) {
+        let authorizationHeader: String?
+        if let preloadedAuthorizationHeader {
+            authorizationHeader = preloadedAuthorizationHeader
+        } else {
+            let capturedServerURL = serverURL
+            authorizationHeader = await Task.detached(priority: .userInitiated) {
+                SharedAuthStore.authorizationHeader(for: capturedServerURL)
+            }.value
+        }
+        if let authorizationHeader {
             request.setValue(authorizationHeader, forHTTPHeaderField: "Authorization")
         }
 
@@ -603,6 +626,24 @@ final class AppState: ObservableObject {
             logger.info("auth verify finished result=indeterminate transport_error=true elapsed_ms=\(Int(Date().timeIntervalSince(startedAt) * 1000), privacy: .public)")
             return .indeterminate
         }
+    }
+
+    private nonisolated static func loadCredentialSnapshot(serverURL: String) async -> LocalCredentialSnapshot {
+        await Task.detached(priority: .userInitiated) {
+            let cookies = SharedAuthStore.managedCookies(for: serverURL)
+            let runtimeToken = SharedAuthStore.runtimeToken(for: serverURL)
+            let nativeRefreshToken = SharedAuthStore.nativeRefreshToken(for: serverURL)
+            for cookie in cookies {
+                HTTPCookieStorage.shared.setCookie(cookie)
+            }
+            return LocalCredentialSnapshot(
+                hasRefreshCookie: cookies.contains { $0.name == SharedAuthStore.refreshCookieName },
+                hasSessionCookie: cookies.contains { $0.name == SharedAuthStore.sessionCookieName },
+                hasRuntimeToken: runtimeToken != nil,
+                hasNativeRefreshToken: nativeRefreshToken != nil,
+                authorizationHeader: runtimeToken.map { "Bearer \($0)" }
+            )
+        }.value
     }
 
     /// Schedule a proactive runtime-token refresh ~60s before the stored
