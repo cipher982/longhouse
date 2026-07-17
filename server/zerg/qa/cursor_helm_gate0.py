@@ -207,6 +207,7 @@ row = {
     "prompt_sha256": digest(payload.get("prompt")),
     "text_sha256": digest(payload.get("text")),
     "command_sha256": digest(payload.get("command")),
+    "gate_permission": os.environ.get("LONGHOUSE_CURSOR_GATE0_PERMISSION", ""),
 }
 line = (json.dumps(row, sort_keys=True, separators=(",", ":")) + "\n").encode()
 events_path = os.environ["LONGHOUSE_CURSOR_GATE0_EVENTS"]
@@ -216,7 +217,10 @@ try:
 finally:
     os.close(fd)
 
-if event == "sessionStart":
+gate_permission = os.environ.get("LONGHOUSE_CURSOR_GATE0_PERMISSION", "")
+if event in {"beforeShellExecution", "beforeMCPExecution"} and gate_permission in {"allow", "deny", "ask"}:
+    print(json.dumps({"permission": gate_permission, "user_message": "Longhouse Gate 0"}))
+elif event == "sessionStart":
     print(json.dumps({"continue": True}))
 elif event == "beforeSubmitPrompt":
     print(json.dumps({"continue": True}))
@@ -718,6 +722,63 @@ def _resume_scenario(
         session.close()
 
 
+def _permission_scenario(
+    *,
+    decision: str,
+    binary: str,
+    workspace: Path,
+    events_path: Path,
+    terminal_path: Path,
+    provider_id: str,
+    timeout: float,
+    model: str | None,
+) -> dict[str, Any]:
+    longhouse_session_id = str(uuid4())
+    marker_file = workspace / f"permission-{decision}.txt"
+    argv = [binary, "--resume", provider_id, "--workspace", str(workspace)]
+    if model:
+        argv.extend(["--model", model])
+    argv.append(f"Run exactly `printf ALLOWED > {marker_file}` once, then report the result.")
+    env = _child_env(longhouse_session_id, events_path)
+    env["LONGHOUSE_CURSOR_GATE0_PERMISSION"] = decision
+    before = len(read_hook_events(events_path))
+    session = CursorPtySession.start(argv=argv, cwd=workspace, env=env, terminal_path=terminal_path)
+    try:
+        shell = wait_for_hook(
+            events_path,
+            longhouse_session_id=longhouse_session_id,
+            event="beforeShellExecution",
+            conversation_id=provider_id,
+            after_count=before,
+            timeout=timeout,
+        )
+        if decision == "allow":
+            wait_for_hook(
+                events_path,
+                longhouse_session_id=longhouse_session_id,
+                event="afterShellExecution",
+                conversation_id=provider_id,
+                after_count=before,
+                timeout=timeout,
+            )
+            if not marker_file.exists():
+                raise RuntimeError("Cursor ignored permission=allow")
+        else:
+            time.sleep(1)
+            if marker_file.exists():
+                raise RuntimeError(f"Cursor executed shell after permission={decision}")
+        return {
+            "status": "passed",
+            "decision": decision,
+            "provider_conversation_id": provider_id,
+            "generation_id": shell.get("generation_id"),
+            "side_effect_present": marker_file.exists(),
+            "process_alive": session.alive(),
+        }
+    finally:
+        session.close()
+
+
 def run_gate0(args: argparse.Namespace) -> dict[str, Any]:
     binary = _cursor_binary(args.cursor_bin)
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
@@ -801,6 +862,18 @@ def run_gate0(args: argparse.Namespace) -> dict[str, Any]:
             timeout=args.timeout,
             model=args.model,
         )
+        for decision in ("allow", "deny", "ask"):
+            permission_provider_id = _create_chat(binary, workspace)
+            report["scenarios"][f"permission_{decision}"] = _permission_scenario(
+                decision=decision,
+                binary=binary,
+                workspace=workspace,
+                events_path=events_path,
+                terminal_path=artifact_root / f"permission-{decision}.terminal.raw",
+                provider_id=permission_provider_id,
+                timeout=args.timeout,
+                model=args.model,
+            )
         report["selected_identity_path"] = "create_chat_resume"
         report["status"] = "passed"
         report["failure_code"] = None
