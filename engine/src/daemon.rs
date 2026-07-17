@@ -2637,15 +2637,7 @@ fn maybe_start_managed_observation_scan(
         };
         let started = Instant::now();
         let process_started = Instant::now();
-        let known_pids = managed_process_pids_from_observations(
-            &previous.codex,
-            &previous.claude,
-            &previous.opencode,
-            &previous.cursor,
-        );
-        let process_inventory =
-            crate::process_identity::try_collect_relevant_process_facts_by_pid(known_pids)
-                .or_else(crate::process_identity::try_collect_process_facts_by_pid);
+        let process_inventory = crate::process_identity::try_collect_process_facts_by_pid();
         let process_inventory_valid = process_inventory.is_some();
         let process_facts = process_inventory.unwrap_or_default();
         let unmanaged_process_inventory = process_facts
