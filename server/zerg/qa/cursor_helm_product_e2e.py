@@ -190,6 +190,11 @@ def _restart_machine_agent(status_path: Path, *, timeout: float) -> dict[str, An
     return {"old_pid": old_pid, "new_pid": int(current["daemon_pid"]), "control_status": "connected"}
 
 
+def _can_send_live(payload: dict[str, Any]) -> bool:
+    capabilities = payload.get("capabilities")
+    return isinstance(capabilities, dict) and capabilities.get("can_send_input") is True
+
+
 def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
     longhouse = shutil.which(args.longhouse_bin)
     engine = shutil.which(args.engine_bin)
@@ -319,6 +324,11 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
             description="first Cursor reply in hosted archive",
         )
         first_archive_lag = (datetime.now(UTC) - _response_observed_at(_hook_rows(root, session_id), marker_one)).total_seconds()
+        _wait_until(
+            lambda: (payload if _can_send_live(payload) else None) if (payload := api_get(f"/api/agents/sessions/{session_id}")) else None,
+            timeout=args.timeout,
+            description="Cursor live-control lease on Runtime Host",
+        )
         send_live(f"Reply with exactly {marker_two}")
         second = _wait_until(
             lambda: (payload if marker_two in _assistant_texts(payload) else None) if (payload := hosted_events()) else None,

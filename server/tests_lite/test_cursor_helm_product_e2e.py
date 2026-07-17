@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import json
 
+from zerg.qa.cursor_helm_product_e2e import _assistant_texts
+from zerg.qa.cursor_helm_product_e2e import _can_send_live
 from zerg.qa.cursor_helm_product_e2e import _hook_rows
 from zerg.qa.cursor_helm_product_e2e import _pending_pause
 from zerg.qa.cursor_helm_product_e2e import _response_observed_at
 from zerg.qa.cursor_helm_product_e2e import _state_ids
-from zerg.qa.cursor_helm_product_e2e import _assistant_texts
 
 
 def test_product_e2e_helpers_parse_managed_state_hooks_and_visible_events(tmp_path) -> None:
@@ -62,3 +63,6 @@ def test_product_e2e_helpers_parse_managed_state_hooks_and_visible_events(tmp_pa
         ).isoformat()
         == "2026-07-17T00:00:01+00:00"
     )
+    assert _can_send_live({"capabilities": {"can_send_input": True}}) is True
+    assert _can_send_live({"capabilities": {"can_send_input": False}}) is False
+    assert _can_send_live({}) is False
