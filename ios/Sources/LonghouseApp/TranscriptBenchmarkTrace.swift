@@ -17,7 +17,7 @@ enum TranscriptBenchmarkRendererKind: String, CaseIterable, Sendable {
     /// cannot quietly change methodology. Only a real implementation may flip
     /// its availability bit.
     var isImplemented: Bool {
-        self == .snapshotWebKit
+        self == .snapshotWebKit || self == .retainedWebKit
     }
 
     static var selected: TranscriptBenchmarkRendererKind {

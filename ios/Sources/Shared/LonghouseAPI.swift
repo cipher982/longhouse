@@ -19,7 +19,15 @@ actor RenderBeaconReporter {
         let js_failure_count: Int
         let should_stick_to_bottom: Bool
         let web_view_loaded: Bool
+        let source_revision: Int?
+        let source_operation: String?
+        let swift_prepare_duration_ms: Int
         let render_duration_ms: Int?
+        let js_decode_duration_ms: Int?
+        let js_html_duration_ms: Int?
+        let js_dom_duration_ms: Int?
+        let js_raf_duration_ms: Int?
+        let js_total_duration_ms: Int?
         let error_description: String?
 
         init(
@@ -32,7 +40,15 @@ actor RenderBeaconReporter {
             js_failure_count: Int,
             should_stick_to_bottom: Bool,
             web_view_loaded: Bool,
+            source_revision: Int? = nil,
+            source_operation: String? = nil,
+            swift_prepare_duration_ms: Int = 0,
             render_duration_ms: Int? = nil,
+            js_decode_duration_ms: Int? = nil,
+            js_html_duration_ms: Int? = nil,
+            js_dom_duration_ms: Int? = nil,
+            js_raf_duration_ms: Int? = nil,
+            js_total_duration_ms: Int? = nil,
             error_description: String?
         ) {
             self.stage = stage
@@ -44,7 +60,15 @@ actor RenderBeaconReporter {
             self.js_failure_count = js_failure_count
             self.should_stick_to_bottom = should_stick_to_bottom
             self.web_view_loaded = web_view_loaded
+            self.source_revision = source_revision
+            self.source_operation = source_operation
+            self.swift_prepare_duration_ms = swift_prepare_duration_ms
             self.render_duration_ms = render_duration_ms
+            self.js_decode_duration_ms = js_decode_duration_ms
+            self.js_html_duration_ms = js_html_duration_ms
+            self.js_dom_duration_ms = js_dom_duration_ms
+            self.js_raf_duration_ms = js_raf_duration_ms
+            self.js_total_duration_ms = js_total_duration_ms
             self.error_description = error_description
         }
     }

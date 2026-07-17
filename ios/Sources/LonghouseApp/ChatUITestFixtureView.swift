@@ -100,7 +100,8 @@ struct ChatUITestFixtureView: View {
                 probe.recordColdMainThreadStalls(coldStalls)
                 probe.recordBenchmark(phase: "running", updateCount: 0)
                 let result = await client.runTranscriptBenchmarkTrace(
-                    onUpdate: {
+                    onUpdate: { revision, operation in
+                        viewModel.markBenchmarkSource(revision: revision, operation: operation)
                         await viewModel.reload(sessionId: client.sessionID, appState: appState)
                     },
                     onScrollCheckpoint: { updateCount in
@@ -359,6 +360,14 @@ private final class ChatUITestProbe {
     private var maxRenderDurationMs = 0
     private var renderDurationsMs: [Int] = []
     private var traceRenderDurationsMs: [Int] = []
+    private var tracePrepareDurationsMs: [Int] = []
+    private var traceJSDecodeDurationsMs: [Int] = []
+    private var traceJSHTMLDurationsMs: [Int] = []
+    private var traceJSDOMDurationsMs: [Int] = []
+    private var traceJSRAFDurationsMs: [Int] = []
+    private var traceJSTotalDurationsMs: [Int] = []
+    private var traceSourceRevisions: Set<Int> = []
+    private var traceUnattributedRenderCount = 0
     private var traceRenderBaseline = 0
     private var traceDuplicateBaseline = 0
     private var traceRepeatBaseline = 0
@@ -432,6 +441,17 @@ private final class ChatUITestProbe {
             renderDurationsMs.append(durationMs)
             if benchmarkPhase == "running" {
                 traceRenderDurationsMs.append(durationMs)
+                tracePrepareDurationsMs.append(diagnostics.swift_prepare_duration_ms)
+                if let value = diagnostics.js_decode_duration_ms { traceJSDecodeDurationsMs.append(value) }
+                if let value = diagnostics.js_html_duration_ms { traceJSHTMLDurationsMs.append(value) }
+                if let value = diagnostics.js_dom_duration_ms { traceJSDOMDurationsMs.append(value) }
+                if let value = diagnostics.js_raf_duration_ms { traceJSRAFDurationsMs.append(value) }
+                if let value = diagnostics.js_total_duration_ms { traceJSTotalDurationsMs.append(value) }
+                if let revision = diagnostics.source_revision {
+                    traceSourceRevisions.insert(revision)
+                } else {
+                    traceUnattributedRenderCount += 1
+                }
             }
             maxRenderDurationMs = max(maxRenderDurationMs, durationMs)
         } else if diagnostics.stage == "duplicate" {
@@ -464,6 +484,14 @@ private final class ChatUITestProbe {
             traceDuplicateBaseline = duplicateCount
             traceRepeatBaseline = repeatRenderCount
             traceRenderDurationsMs = []
+            tracePrepareDurationsMs = []
+            traceJSDecodeDurationsMs = []
+            traceJSHTMLDurationsMs = []
+            traceJSDOMDurationsMs = []
+            traceJSRAFDurationsMs = []
+            traceJSTotalDurationsMs = []
+            traceSourceRevisions = []
+            traceUnattributedRenderCount = 0
             coldRenderMaxMs = maxRenderDurationMs
         }
         benchmarkPhase = phase
@@ -516,6 +544,14 @@ private final class ChatUITestProbe {
             "trace_render_p50_ms=\(percentile(0.50, samples: traceRenderDurationsMs))",
             "trace_render_p95_ms=\(percentile(0.95, samples: traceRenderDurationsMs))",
             "trace_render_max_ms=\(traceRenderDurationsMs.max() ?? 0)",
+            "trace_prepare_p95_ms=\(percentile(0.95, samples: tracePrepareDurationsMs))",
+            "trace_js_decode_p95_ms=\(percentile(0.95, samples: traceJSDecodeDurationsMs))",
+            "trace_js_html_p95_ms=\(percentile(0.95, samples: traceJSHTMLDurationsMs))",
+            "trace_js_dom_p95_ms=\(percentile(0.95, samples: traceJSDOMDurationsMs))",
+            "trace_js_raf_p95_ms=\(percentile(0.95, samples: traceJSRAFDurationsMs))",
+            "trace_js_total_p95_ms=\(percentile(0.95, samples: traceJSTotalDurationsMs))",
+            "trace_source_revisions=\(traceSourceRevisions.count)",
+            "trace_unattributed_renders=\(traceUnattributedRenderCount)",
             "tick=\(tick)",
             "benchmark_phase=\(benchmarkPhase)",
             "benchmark_updates=\(benchmarkUpdateCount)",
@@ -823,7 +859,7 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
     }
 
     func runTranscriptBenchmarkTrace(
-        onUpdate: @MainActor @Sendable () async -> Void,
+        onUpdate: @MainActor @Sendable (Int, String) async -> Void,
         onScrollCheckpoint: @MainActor @Sendable (Int) async -> Void
     ) async -> TranscriptBenchmarkTraceResult {
         precondition(fixtureName == "benchmark-core")
@@ -832,7 +868,7 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
         for snapshot in TranscriptBenchmarkTrace.streamingSnapshots() {
             upsertStreamingAssistantMessage(snapshot)
             updateCount += 1
-            await applyBenchmarkUpdate(onUpdate)
+            await applyBenchmarkUpdate(onUpdate, revision: updateCount, operation: "stream")
             if updateCount == 20 {
                 await onScrollCheckpoint(updateCount)
             }
@@ -849,7 +885,7 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
             ))
             nextEventID += 1
             updateCount += 1
-            await applyBenchmarkUpdate(onUpdate)
+            await applyBenchmarkUpdate(onUpdate, revision: updateCount, operation: "tool_running")
 
             if let index = events.firstIndex(where: { $0.id == String(callEventID) }) {
                 events[index] = TranscriptBenchmarkTrace.toolCallEvent(
@@ -866,12 +902,12 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
             ))
             nextEventID += 1
             updateCount += 1
-            await applyBenchmarkUpdate(onUpdate)
+            await applyBenchmarkUpdate(onUpdate, revision: updateCount, operation: "tool_completed")
         }
 
         events.insert(contentsOf: TranscriptBenchmarkTrace.olderEvents(), at: 0)
         updateCount += 1
-        await applyBenchmarkUpdate(onUpdate)
+        await applyBenchmarkUpdate(onUpdate, revision: updateCount, operation: "prepend")
 
         let finalID = nextEventID
         events.append(TranscriptBenchmarkTrace.messageEvent(
@@ -882,7 +918,7 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
         ))
         nextEventID += 1
         updateCount += 1
-        await applyBenchmarkUpdate(onUpdate)
+        await applyBenchmarkUpdate(onUpdate, revision: updateCount, operation: "append_final")
 
         return TranscriptBenchmarkTraceResult(
             updateCount: updateCount,
@@ -891,10 +927,12 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
     }
 
     private func applyBenchmarkUpdate(
-        _ onUpdate: @MainActor @Sendable () async -> Void
+        _ onUpdate: @MainActor @Sendable (Int, String) async -> Void,
+        revision: Int,
+        operation: String
     ) async {
         let startedAt = DispatchTime.now().uptimeNanoseconds
-        await onUpdate()
+        await onUpdate(revision, operation)
         let elapsed = DispatchTime.now().uptimeNanoseconds - startedAt
         if TranscriptBenchmarkTrace.streamingIntervalNanoseconds > elapsed {
             try? await Task.sleep(

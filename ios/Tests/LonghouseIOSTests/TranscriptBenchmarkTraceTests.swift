@@ -30,11 +30,12 @@ struct TranscriptBenchmarkTraceTests {
     }
 
     @Test
-    func candidateLabelsCannotMasqueradeAsImplementedRenderers() {
+    func rendererAvailabilityMatchesImplementedLanes() {
         #expect(TranscriptBenchmarkRendererKind.snapshotWebKit.isImplemented)
-        #expect(!TranscriptBenchmarkRendererKind.retainedWebKit.isImplemented)
+        #expect(TranscriptBenchmarkRendererKind.retainedWebKit.isImplemented)
         #expect(!TranscriptBenchmarkRendererKind.nativeUIKit.isImplemented)
         #expect(TranscriptBenchmarkRendererKind.snapshotWebKit.semanticTier == "production")
+        #expect(TranscriptBenchmarkRendererKind.retainedWebKit.semanticTier == "mechanical-lower-bound")
         #expect(TranscriptBenchmarkRendererKind.nativeUIKit.semanticTier == "mechanical-lower-bound")
     }
 }

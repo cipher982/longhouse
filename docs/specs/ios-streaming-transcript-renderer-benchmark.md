@@ -126,8 +126,11 @@ Each run emits one structured result with:
 - git SHA, build identity, renderer, semantic tier, device model, OS, and run
   temperature (`cold` or `warm`);
 - launch-to-fixture-ready and trigger-to-trace-complete wall time;
-- renderer update count, duplicate count, repeated-revision count, payload
-  bytes, p50/p95/max render duration, and final revision;
+- source update count, attributed source-revision count, unattributed render
+  count, renderer completion count, duplicate count, repeated-revision count,
+  payload bytes, p50/p95/max bridge duration, and final revision;
+- p95 Swift payload preparation, JavaScript decode, HTML generation, DOM
+  mutation, requestAnimationFrame wait, and JS-to-frame duration;
 - scroll-away stickiness and prepend anchor error;
 - composer focus wall time;
 - cold-launch and trace-only main-thread stall counts and maximum stalls;

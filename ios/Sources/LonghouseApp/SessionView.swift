@@ -251,6 +251,8 @@ struct SessionView: View {
                     items: viewModel.items,
                     submittedInputs: viewModel.submittedInputs,
                     errorMessage: viewModel.errorMessage,
+                    sourceRevision: viewModel.benchmarkSourceRevision,
+                    sourceOperation: viewModel.benchmarkSourceOperation,
                     bottomInset: 18,
                     onNearTop: {
                         Task { await viewModel.loadOlder(sessionId: sessionId, appState: appState) }
@@ -1571,6 +1573,11 @@ final class SessionViewModel: ObservableObject {
     }
 
     @Published var detail: SessionDetail?
+    // Benchmark-only attribution. These deliberately are not @Published: the
+    // subsequent transcript mutation owns the SwiftUI invalidation, preventing
+    // an extra render of the previous snapshot under the next revision number.
+    private(set) var benchmarkSourceRevision: Int?
+    private(set) var benchmarkSourceOperation: String?
     @Published var items: [TimelineItem] = []
     /// Blocking load error: only set when there is genuinely nothing to show
     /// (no cache, never loaded). Drives the full-screen error overlay.
@@ -1867,6 +1874,11 @@ final class SessionViewModel: ObservableObject {
             }
         }
         isInitialLoading = false
+    }
+
+    func markBenchmarkSource(revision: Int, operation: String) {
+        benchmarkSourceRevision = revision
+        benchmarkSourceOperation = operation
     }
 
     func send(

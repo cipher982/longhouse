@@ -22,10 +22,9 @@ final class TranscriptRendererBenchmarkUITests: XCTestCase {
     func testAgentCoreV1() throws {
         let renderer = BuildMetadata.renderer
         let runID = UUID().uuidString
-        XCTAssertEqual(
-            renderer,
-            "snapshot-webkit",
-            "The retained-WebKit and native-UIKit names are reserved but not implemented yet. Never publish baseline numbers under a candidate label."
+        XCTAssertTrue(
+            ["snapshot-webkit", "retained-webkit"].contains(renderer),
+            "The native-UIKit name is reserved but not implemented. Never publish baseline numbers under a candidate label."
         )
 
         let scratch = FileManager.default.temporaryDirectory
@@ -71,7 +70,10 @@ final class TranscriptRendererBenchmarkUITests: XCTestCase {
         let launchToReadyMs = elapsedMs(since: launchStartedAt)
         let initial = BenchmarkProbeMetrics(readProbe(probeURL, status: status))
         XCTAssertEqual(initial.renderer, renderer)
-        XCTAssertEqual(initial.semanticTier, "production")
+        XCTAssertEqual(
+            initial.semanticTier,
+            renderer == "snapshot-webkit" ? "production" : "mechanical-lower-bound"
+        )
         XCTAssertEqual(initial.rows, 120)
 
         let startButton = app.buttons["transcript-benchmark-start"]
@@ -144,6 +146,15 @@ final class TranscriptRendererBenchmarkUITests: XCTestCase {
             renderP50Ms: final.traceRenderP50Ms,
             renderP95Ms: final.traceRenderP95Ms,
             renderMaxMs: final.traceRenderMaxMs,
+            benchmarkUpdateCount: final.benchmarkUpdates,
+            attributedSourceRevisionCount: final.traceSourceRevisions,
+            unattributedRenderCount: final.traceUnattributedRenders,
+            prepareP95Ms: final.tracePrepareP95Ms,
+            jsDecodeP95Ms: final.traceJSDecodeP95Ms,
+            jsHTMLP95Ms: final.traceJSHTMLP95Ms,
+            jsDOMP95Ms: final.traceJSDOMP95Ms,
+            jsRAFP95Ms: final.traceJSRAFP95Ms,
+            jsTotalP95Ms: final.traceJSTotalP95Ms,
             coldMainThreadStallCount: final.coldMainThreadStallCount,
             coldMainThreadStallMaxMs: final.coldMainThreadStallMaxMs,
             mainThreadStallCount: final.mainThreadStallCount,
@@ -227,6 +238,14 @@ private struct BenchmarkProbeMetrics {
     let traceRenderP50Ms: Int
     let traceRenderP95Ms: Int
     let traceRenderMaxMs: Int
+    let tracePrepareP95Ms: Int
+    let traceJSDecodeP95Ms: Int
+    let traceJSHTMLP95Ms: Int
+    let traceJSDOMP95Ms: Int
+    let traceJSRAFP95Ms: Int
+    let traceJSTotalP95Ms: Int
+    let traceSourceRevisions: Int
+    let traceUnattributedRenders: Int
     let benchmarkPhase: String
     let benchmarkUpdates: Int
     let renderer: String
@@ -270,6 +289,14 @@ private struct BenchmarkProbeMetrics {
         traceRenderP50Ms = Int(values["trace_render_p50_ms"] ?? "") ?? 0
         traceRenderP95Ms = Int(values["trace_render_p95_ms"] ?? "") ?? 0
         traceRenderMaxMs = Int(values["trace_render_max_ms"] ?? "") ?? 0
+        tracePrepareP95Ms = Int(values["trace_prepare_p95_ms"] ?? "") ?? 0
+        traceJSDecodeP95Ms = Int(values["trace_js_decode_p95_ms"] ?? "") ?? 0
+        traceJSHTMLP95Ms = Int(values["trace_js_html_p95_ms"] ?? "") ?? 0
+        traceJSDOMP95Ms = Int(values["trace_js_dom_p95_ms"] ?? "") ?? 0
+        traceJSRAFP95Ms = Int(values["trace_js_raf_p95_ms"] ?? "") ?? 0
+        traceJSTotalP95Ms = Int(values["trace_js_total_p95_ms"] ?? "") ?? 0
+        traceSourceRevisions = Int(values["trace_source_revisions"] ?? "") ?? 0
+        traceUnattributedRenders = Int(values["trace_unattributed_renders"] ?? "") ?? 0
         benchmarkPhase = values["benchmark_phase"] ?? "none"
         benchmarkUpdates = Int(values["benchmark_updates"] ?? "") ?? 0
         renderer = values["benchmark_renderer"] ?? "none"
@@ -325,6 +352,15 @@ private struct TranscriptBenchmarkResult: Codable {
     let renderP50Ms: Int
     let renderP95Ms: Int
     let renderMaxMs: Int
+    let benchmarkUpdateCount: Int
+    let attributedSourceRevisionCount: Int
+    let unattributedRenderCount: Int
+    let prepareP95Ms: Int
+    let jsDecodeP95Ms: Int
+    let jsHTMLP95Ms: Int
+    let jsDOMP95Ms: Int
+    let jsRAFP95Ms: Int
+    let jsTotalP95Ms: Int
     let coldMainThreadStallCount: Int
     let coldMainThreadStallMaxMs: Int
     let mainThreadStallCount: Int

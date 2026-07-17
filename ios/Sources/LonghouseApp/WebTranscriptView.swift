@@ -10,6 +10,8 @@ struct WebTranscriptView: UIViewRepresentable {
     let items: [TimelineItem]
     let submittedInputs: [SubmittedInput]
     let errorMessage: String?
+    let sourceRevision: Int?
+    let sourceOperation: String?
     /// Height (pt) of the floating native control surface below the transcript.
     /// Drives `#root` bottom padding so the last row clears the card. Defaults
     /// to the original 18px hardcoded inset.
@@ -23,6 +25,8 @@ struct WebTranscriptView: UIViewRepresentable {
         items: [TimelineItem],
         submittedInputs: [SubmittedInput],
         errorMessage: String?,
+        sourceRevision: Int? = nil,
+        sourceOperation: String? = nil,
         bottomInset: CGFloat = 18,
         onNearTop: (() -> Void)? = nil,
         onDiagnostics: ((RenderBeaconReporter.WebKitDiagnostics) -> Void)? = nil,
@@ -32,6 +36,8 @@ struct WebTranscriptView: UIViewRepresentable {
         self.items = items
         self.submittedInputs = submittedInputs
         self.errorMessage = errorMessage
+        self.sourceRevision = sourceRevision
+        self.sourceOperation = sourceOperation
         self.bottomInset = bottomInset
         self.onNearTop = onNearTop
         self.onDiagnostics = onDiagnostics
@@ -105,7 +111,9 @@ struct WebTranscriptView: UIViewRepresentable {
             serverURL: serverURL,
             timelineItems: items,
             submittedInputs: submittedInputs,
-            errorMessage: errorMessage
+            errorMessage: errorMessage,
+            sourceRevision: sourceRevision,
+            sourceOperation: sourceOperation
         )
     }
 
@@ -113,7 +121,9 @@ struct WebTranscriptView: UIViewRepresentable {
         serverURL: String? = nil,
         timelineItems: [TimelineItem],
         submittedInputs: [SubmittedInput],
-        errorMessage: String?
+        errorMessage: String?,
+        sourceRevision: Int? = nil,
+        sourceOperation: String? = nil
     ) -> WebTranscriptPreparedPayload {
         let startedAt = Date()
         let payload = WebTranscriptPayload(
@@ -132,7 +142,9 @@ struct WebTranscriptView: UIViewRepresentable {
             rowCount: payload.items.count,
             latestItemId: payload.items.last?.id,
             payloadFingerprint: Self.payloadFingerprint(data),
-            prepareDurationMs: Int(Date().timeIntervalSince(startedAt) * 1000)
+            prepareDurationMs: Int(Date().timeIntervalSince(startedAt) * 1000),
+            sourceRevision: sourceRevision,
+            sourceOperation: sourceOperation
         )
     }
 
@@ -855,39 +867,72 @@ struct WebTranscriptView: UIViewRepresentable {
 
             renderSequence += 1
             let sequence = renderSequence
-            let stick = shouldStickToBottom && !userScrollInProgress ? "true" : "false"
+            let stick = shouldStickToBottom && !userScrollInProgress
+            let renderMode = UITestHooks.transcriptBenchmarkRenderer == "retained-webkit"
+                ? "retained"
+                : "snapshot"
             inFlightPayload = payload
             let renderStartedAt = Date()
             if shouldStickToBottom && !userScrollInProgress {
                 suppressNearTopUntil = renderStartedAt.addingTimeInterval(0.75)
             }
-            webView.evaluateJavaScript("window.renderTranscript('\(payload.base64)', \(stick));") { [weak self] _, error in
+            webView.evaluateJavaScript(
+                "window.renderTranscript('\(payload.base64)', \(stick ? "true" : "false"), \(sequence), '\(renderMode)');"
+            ) { [weak self] value, error in
                 guard let self else { return }
                 let renderDurationMs = Int(Date().timeIntervalSince(renderStartedAt) * 1000)
+                let synchronousMetrics = value.flatMap(WebTranscriptJavaScriptMetrics.init)
                 if error == nil {
                     self.lastPayload = payload.base64
                     self.lastRenderedPayload = payload
                 } else {
                     self.jsFailureCount += 1
                 }
-                if stick == "true", self.shouldStickToBottom, !self.userScrollInProgress {
+                if stick, self.shouldStickToBottom, !self.userScrollInProgress {
                     self.suppressNearTopUntil = Date().addingTimeInterval(0.75)
                 }
                 self.inFlightPayload = nil
-                self.emitDiagnostics(
-                    stage: error == nil ? "rendered" : "failed",
-                    payload: payload,
-                    sequence: sequence,
-                    error: error,
-                    renderDurationMs: renderDurationMs,
-                    diagnosticsEnabled: diagnosticsEnabled,
-                    onDiagnostics: onDiagnostics
-                )
                 self.flushPendingPayload(
                     to: webView,
                     diagnosticsEnabled: diagnosticsEnabled,
                     onDiagnostics: onDiagnostics
                 )
+                guard error == nil else {
+                    self.emitDiagnostics(
+                        stage: "failed",
+                        payload: payload,
+                        sequence: sequence,
+                        error: error,
+                        renderDurationMs: renderDurationMs,
+                        javaScriptMetrics: synchronousMetrics,
+                        diagnosticsEnabled: diagnosticsEnabled,
+                        onDiagnostics: onDiagnostics
+                    )
+                    return
+                }
+                webView.callAsyncJavaScript(
+                    "return await window.waitForTranscriptFrame(sequence);",
+                    arguments: ["sequence": sequence],
+                    in: nil,
+                    in: .page
+                ) { [weak self] frameResult in
+                    guard let self else { return }
+                    let frameMetrics: WebTranscriptJavaScriptMetrics?
+                    switch frameResult {
+                    case .success(let value): frameMetrics = WebTranscriptJavaScriptMetrics(value)
+                    case .failure: frameMetrics = nil
+                    }
+                    self.emitDiagnostics(
+                        stage: "rendered",
+                        payload: payload,
+                        sequence: sequence,
+                        error: nil,
+                        renderDurationMs: renderDurationMs,
+                        javaScriptMetrics: synchronousMetrics?.merging(frameMetrics),
+                        diagnosticsEnabled: diagnosticsEnabled,
+                        onDiagnostics: onDiagnostics
+                    )
+                }
             }
         }
 
@@ -897,6 +942,7 @@ struct WebTranscriptView: UIViewRepresentable {
             sequence: Int,
             error: Error?,
             renderDurationMs: Int? = nil,
+            javaScriptMetrics: WebTranscriptJavaScriptMetrics? = nil,
             diagnosticsEnabled: Bool,
             onDiagnostics: ((RenderBeaconReporter.WebKitDiagnostics) -> Void)?
         ) {
@@ -911,11 +957,19 @@ struct WebTranscriptView: UIViewRepresentable {
                 js_failure_count: jsFailureCount,
                 should_stick_to_bottom: shouldStickToBottom,
                 web_view_loaded: isLoaded,
+                source_revision: payload.sourceRevision,
+                source_operation: payload.sourceOperation,
+                swift_prepare_duration_ms: payload.prepareDurationMs,
                 render_duration_ms: renderDurationMs,
+                js_decode_duration_ms: javaScriptMetrics?.decodeDurationMs,
+                js_html_duration_ms: javaScriptMetrics?.htmlDurationMs,
+                js_dom_duration_ms: javaScriptMetrics?.domDurationMs,
+                js_raf_duration_ms: javaScriptMetrics?.rafDurationMs,
+                js_total_duration_ms: javaScriptMetrics?.totalDurationMs,
                 error_description: error.map { String(describing: $0) }
             )
             logger.debug(
-                "webkit transcript stage=\(stage, privacy: .public) sequence=\(sequence) rows=\(payload.rowCount) bytes=\(payload.payloadByteSize) latest=\(payload.latestItemId ?? "none", privacy: .public) failures=\(self.jsFailureCount) stick=\(self.shouldStickToBottom) prepare_ms=\(payload.prepareDurationMs) render_ms=\(renderDurationMs ?? -1)"
+                "webkit transcript stage=\(stage, privacy: .public) sequence=\(sequence) revision=\(payload.sourceRevision ?? -1) operation=\(payload.sourceOperation ?? "none", privacy: .public) rows=\(payload.rowCount) bytes=\(payload.payloadByteSize) latest=\(payload.latestItemId ?? "none", privacy: .public) failures=\(self.jsFailureCount) stick=\(self.shouldStickToBottom) prepare_ms=\(payload.prepareDurationMs) render_ms=\(renderDurationMs ?? -1) js_decode_ms=\(javaScriptMetrics?.decodeDurationMs ?? -1) js_html_ms=\(javaScriptMetrics?.htmlDurationMs ?? -1) js_dom_ms=\(javaScriptMetrics?.domDurationMs ?? -1) js_raf_ms=\(javaScriptMetrics?.rafDurationMs ?? -1)"
             )
             onDiagnostics?(diagnostics)
         }
@@ -939,6 +993,51 @@ struct WebTranscriptView: UIViewRepresentable {
     }
 }
 
+private struct WebTranscriptJavaScriptMetrics {
+    let decodeDurationMs: Int?
+    let htmlDurationMs: Int?
+    let domDurationMs: Int?
+    let rafDurationMs: Int?
+    let totalDurationMs: Int?
+
+    init?(_ value: Any) {
+        guard let dictionary = value as? [String: Any] else { return nil }
+        func milliseconds(_ key: String) -> Int? {
+            guard let value = dictionary[key] as? NSNumber else { return nil }
+            return Int(value.doubleValue.rounded())
+        }
+        decodeDurationMs = milliseconds("decode_ms")
+        htmlDurationMs = milliseconds("html_ms")
+        domDurationMs = milliseconds("dom_ms")
+        rafDurationMs = milliseconds("raf_ms")
+        totalDurationMs = milliseconds("total_ms")
+    }
+
+    private init(
+        decodeDurationMs: Int?,
+        htmlDurationMs: Int?,
+        domDurationMs: Int?,
+        rafDurationMs: Int?,
+        totalDurationMs: Int?
+    ) {
+        self.decodeDurationMs = decodeDurationMs
+        self.htmlDurationMs = htmlDurationMs
+        self.domDurationMs = domDurationMs
+        self.rafDurationMs = rafDurationMs
+        self.totalDurationMs = totalDurationMs
+    }
+
+    func merging(_ other: WebTranscriptJavaScriptMetrics?) -> WebTranscriptJavaScriptMetrics {
+        WebTranscriptJavaScriptMetrics(
+            decodeDurationMs: decodeDurationMs ?? other?.decodeDurationMs,
+            htmlDurationMs: htmlDurationMs ?? other?.htmlDurationMs,
+            domDurationMs: domDurationMs ?? other?.domDurationMs,
+            rafDurationMs: rafDurationMs ?? other?.rafDurationMs,
+            totalDurationMs: totalDurationMs ?? other?.totalDurationMs
+        )
+    }
+}
+
 struct WebTranscriptPreparedPayload {
     let base64: String
     let payloadByteSize: Int
@@ -946,6 +1045,8 @@ struct WebTranscriptPreparedPayload {
     let latestItemId: String?
     let payloadFingerprint: String
     let prepareDurationMs: Int
+    let sourceRevision: Int?
+    let sourceOperation: String?
 }
 
 @MainActor
@@ -1601,6 +1702,16 @@ private extension WebTranscriptView {
   <main id="root" aria-live="polite"></main>
   <script>
     let currentItems = [];
+    const transcriptFrames = new Map();
+    const retainedItems = new Map();
+
+    window.waitForTranscriptFrame = async function(sequence) {
+      const frame = transcriptFrames.get(sequence);
+      if (!frame) return {};
+      const metrics = await frame;
+      transcriptFrames.delete(sequence);
+      return metrics;
+    };
 
     function decodePayload(base64) {
       const binary = atob(base64);
@@ -2014,8 +2125,8 @@ private extension WebTranscriptView {
       return '';
     }
 
-    function attachExpandHandlers() {
-      for (const button of document.querySelectorAll('[data-expand-index]')) {
+    function attachExpandHandlers(scope = document) {
+      for (const button of scope.querySelectorAll('[data-expand-index]')) {
         button.addEventListener('click', () => {
           const index = Number(button.getAttribute('data-expand-index'));
           const item = currentItems[index];
@@ -2033,34 +2144,133 @@ private extension WebTranscriptView {
       }
     }
 
-    window.renderTranscript = function(base64, shouldStickToBottom) {
+    function updateRetainedIndices(node, index) {
+      if (node.hasAttribute('data-message-index')) {
+        node.setAttribute('data-message-index', String(index));
+      }
+      for (const button of node.querySelectorAll('[data-expand-index]')) {
+        button.setAttribute('data-expand-index', String(index));
+      }
+    }
+
+    function retainedHTML(payload, root) {
+      let htmlMs = 0;
+      if (payload.errorMessage && currentItems.length === 0) {
+        retainedItems.clear();
+        const startedAt = performance.now();
+        const html = `<div class="error">${escapeHtml(payload.errorMessage)}</div>`;
+        htmlMs += performance.now() - startedAt;
+        const domStartedAt = performance.now();
+        root.innerHTML = html;
+        return { html_ms: htmlMs, dom_ms: performance.now() - domStartedAt };
+      }
+      if (currentItems.length === 0) {
+        retainedItems.clear();
+        const domStartedAt = performance.now();
+        root.innerHTML = '<div class="empty">No messages yet</div>';
+        return { html_ms: htmlMs, dom_ms: performance.now() - domStartedAt };
+      }
+
+      const nextItems = new Map();
+      const fragment = document.createDocumentFragment();
+      if (payload.errorMessage) {
+        const startedAt = performance.now();
+        const error = document.createElement('div');
+        error.className = 'error row';
+        error.textContent = payload.errorMessage;
+        htmlMs += performance.now() - startedAt;
+        fragment.appendChild(error);
+      }
+
+      currentItems.forEach((item, index) => {
+        const signature = JSON.stringify(item);
+        const cached = retainedItems.get(item.id);
+        let node;
+        if (cached && cached.signature === signature) {
+          node = cached.node;
+          updateRetainedIndices(node, index);
+        } else {
+          const startedAt = performance.now();
+          const template = document.createElement('template');
+          template.innerHTML = renderItem(item, index).trim();
+          node = template.content.firstElementChild;
+          htmlMs += performance.now() - startedAt;
+          if (!node) return;
+          attachExpandHandlers(node);
+        }
+        nextItems.set(item.id, { signature, node });
+        fragment.appendChild(node);
+      });
+
+      const domStartedAt = performance.now();
+      root.replaceChildren(fragment);
+      const domMs = performance.now() - domStartedAt;
+      retainedItems.clear();
+      for (const [id, entry] of nextItems) retainedItems.set(id, entry);
+      return { html_ms: htmlMs, dom_ms: domMs };
+    }
+
+    window.renderTranscript = function(base64, shouldStickToBottom, sequence, renderMode) {
+      const startedAt = performance.now();
       const wasAtBottom = shouldStickToBottom || isAtBottom();
       const previousItems = currentItems;
       const previousFirstId = previousItems.length > 0 ? previousItems[0].id : null;
       const previousScrollHeight = document.documentElement.scrollHeight;
       const previousScrollY = window.scrollY;
+      const decodeStartedAt = performance.now();
       const payload = decodePayload(base64);
+      const decodeMs = performance.now() - decodeStartedAt;
       currentItems = payload.items || [];
       const newFirstId = currentItems.length > 0 ? currentItems[0].id : null;
       const prepended = previousFirstId && newFirstId && previousFirstId !== newFirstId
         && currentItems.some(item => item.id === previousFirstId);
       const root = document.getElementById('root');
-      if (payload.errorMessage && currentItems.length === 0) {
-        root.innerHTML = `<div class="error">${escapeHtml(payload.errorMessage)}</div>`;
-      } else if (currentItems.length === 0) {
-        root.innerHTML = '<div class="empty">No messages yet</div>';
+      let htmlMs;
+      let domMs;
+      if (renderMode === 'retained') {
+        const retainedMetrics = retainedHTML(payload, root);
+        htmlMs = retainedMetrics.html_ms;
+        domMs = retainedMetrics.dom_ms;
       } else {
-        const error = payload.errorMessage
-          ? `<div class="error row">${escapeHtml(payload.errorMessage)}</div>`
-          : '';
-        root.innerHTML = error + currentItems.map(renderItem).join('');
-        attachExpandHandlers();
+        retainedItems.clear();
+        const htmlStartedAt = performance.now();
+        let html;
+        if (payload.errorMessage && currentItems.length === 0) {
+          html = `<div class="error">${escapeHtml(payload.errorMessage)}</div>`;
+        } else if (currentItems.length === 0) {
+          html = '<div class="empty">No messages yet</div>';
+        } else {
+          const error = payload.errorMessage
+            ? `<div class="error row">${escapeHtml(payload.errorMessage)}</div>`
+            : '';
+          html = error + currentItems.map(renderItem).join('');
+        }
+        htmlMs = performance.now() - htmlStartedAt;
+        const domStartedAt = performance.now();
+        root.innerHTML = html;
+        attachExpandHandlers(root);
+        domMs = performance.now() - domStartedAt;
       }
       if (wasAtBottom) scrollToBottom();
       else if (prepended) {
         const delta = document.documentElement.scrollHeight - previousScrollHeight;
         window.scrollTo(0, previousScrollY + delta);
       }
+      const rafStartedAt = performance.now();
+      const frame = new Promise(resolve => {
+        requestAnimationFrame(() => {
+          resolve({
+            raf_ms: performance.now() - rafStartedAt,
+            total_ms: performance.now() - startedAt
+          });
+        });
+      });
+      transcriptFrames.set(sequence, frame);
+      return {
+        decode_ms: decodeMs,
+        html_ms: htmlMs,
+        dom_ms: domMs
+      };
     };
   </script>
 </body>
