@@ -945,11 +945,7 @@ pub(crate) fn prepare_next_cursor_envelope(
         )?,
         None => cursor_store_root::CursorRootOrderRelation::Inconclusive,
     };
-    // Cursor raw capture predates readable render projection. Include the
-    // renderer contract in the local epoch incarnation so a projector upgrade
-    // replays already-receipted raw records exactly once instead of leaving
-    // durable sessions permanently raw-only.
-    let incarnation = format!("{}:{CURSOR_PARSER_REVISION}", snapshot.store_incarnation);
+    let incarnation = snapshot.store_incarnation.clone();
     let existing_len =
         cursor_store_records::active_cursor_record_count(conn, "cursor", &opaque_source_id)?;
     let active_incarnation =
