@@ -1,6 +1,6 @@
 //! Shared process identity helpers for PID-reuse-safe liveness checks.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::process::Command;
 
@@ -81,6 +81,53 @@ pub fn try_collect_process_facts_by_pid() -> Option<HashMap<u32, ProcessFact>> {
         return None;
     }
     Some(facts)
+}
+
+/// Collect only processes that can participate in Longhouse session truth.
+///
+/// `pgrep -f` matches the complete command line, so node/bun-launched provider
+/// scripts still match without inventorying every node process on the host.
+/// Known owned PIDs are unioned in so correctness does not depend on naming.
+/// Callers should fall back to the whole-system inventory when this returns
+/// `None` (for example, when `pgrep` is unavailable).
+pub fn try_collect_relevant_process_facts_by_pid(
+    known_pids: impl IntoIterator<Item = u32>,
+) -> Option<HashMap<u32, ProcessFact>> {
+    const PATTERN: &str = "claude|codex|opencode|cursor-agent|longhouse|agy|antigravity|gemini";
+
+    let output = Command::new("pgrep").args(["-f", PATTERN]).output().ok()?;
+    if !output.status.success() && output.status.code() != Some(1) {
+        return None;
+    }
+
+    let mut pids = parse_pid_lines(&String::from_utf8_lossy(&output.stdout));
+    pids.extend(known_pids);
+    pids.insert(std::process::id());
+    let pid_list = pids.iter().map(u32::to_string).collect::<Vec<_>>().join(",");
+    let output = Command::new("ps")
+        .args([
+            "-p",
+            &pid_list,
+            "-o",
+            "pid=,tty=,stat=,lstart=,command=",
+        ])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    let facts = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(parse_process_fact)
+        .collect::<HashMap<_, _>>();
+    facts.contains_key(&std::process::id()).then_some(facts)
+}
+
+fn parse_pid_lines(text: &str) -> HashSet<u32> {
+    text.lines()
+        .filter_map(|line| line.trim().parse::<u32>().ok())
+        .collect()
 }
 
 /// Parse one `ps -axo pid=,tty=,stat=,lstart=,command=` line.
@@ -261,6 +308,22 @@ mod tests {
         let full = inventory.get(&pid).expect("current process in inventory");
 
         assert_eq!(targeted, *full);
+    }
+
+    #[test]
+    fn pid_candidates_ignore_invalid_lines_and_deduplicate() {
+        assert_eq!(
+            parse_pid_lines("42\nnope\n  7\n42\n"),
+            HashSet::from([7, 42])
+        );
+    }
+
+    #[test]
+    fn relevant_inventory_includes_self_and_known_process() {
+        let pid = std::process::id();
+        let facts = try_collect_relevant_process_facts_by_pid([pid])
+            .expect("candidate process inventory");
+        assert_eq!(facts.get(&pid).map(|fact| fact.pid), Some(pid));
     }
 
     #[test]
