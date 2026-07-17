@@ -135,6 +135,21 @@ def _socket_path(session_id: str) -> Path:
     return _state_dir() / f"{session_id}.sock"
 
 
+def _phase_path(session_id: str) -> Path:
+    return _state_dir() / f"{session_id}.phase.json"
+
+
+def _read_provider_phase(session_id: str) -> str | None:
+    try:
+        value = json.loads(_phase_path(session_id).read_text())
+    except (OSError, ValueError, TypeError):
+        return None
+    if value.get("session_id") != session_id:
+        return None
+    phase = str(value.get("phase") or "")
+    return phase if phase in {"active", "idle", "ended"} else None
+
+
 def _process_start_time(pid: int) -> str | None:
     if pid <= 0:
         return None
@@ -230,6 +245,24 @@ def _resolve_cursor_bin() -> str:
         )
         raise typer.Exit(code=EXIT_SETUP_FAILED)
     return found
+
+
+def _create_cursor_chat(cursor_bin: str, cwd: Path) -> str:
+    result = subprocess.run(
+        [cursor_bin, "create-chat"],
+        cwd=cwd,
+        text=True,
+        capture_output=True,
+        timeout=20,
+        check=False,
+    )
+    value = result.stdout.strip()
+    if result.returncode != 0:
+        raise RuntimeError((result.stderr or value or "cursor-agent create-chat failed").strip())
+    try:
+        return str(uuid.UUID(value))
+    except ValueError as exc:
+        raise RuntimeError(f"cursor-agent create-chat returned invalid id {value!r}") from exc
 
 
 def _infer_git_context(cwd: Path) -> tuple[str | None, str | None]:
@@ -535,12 +568,22 @@ def _handle_command(
     child_pid: int,
     master_lock: threading.Lock,
     stop_event: threading.Event,
+    session_id: str | None = None,
 ) -> dict:
     kind = str(request.get("kind") or "").strip()
     if kind == "send":
         text = str(request.get("text") or "")
         if not text:
             return {"ok": False, "error": {"code": "bad_request", "message": "missing text"}}
+        phase = _read_provider_phase(session_id) if session_id else None
+        if session_id and phase != "idle":
+            return {
+                "ok": False,
+                "error": {
+                    "code": "provider_not_idle",
+                    "message": f"Cursor provider phase is {phase or 'unknown'}; send was not injected",
+                },
+            }
         try:
             _inject_send(master_fd, text, master_lock)
         except OSError as exc:
@@ -553,12 +596,20 @@ def _handle_command(
             }
         return {"ok": True, "exit_code": 0, "stdout": "", "stderr": ""}
     if kind == "interrupt":
+        phase = _read_provider_phase(session_id) if session_id else None
+        if session_id and phase != "active":
+            return {
+                "ok": False,
+                "error": {
+                    "code": "provider_not_active",
+                    "message": f"Cursor provider phase is {phase or 'unknown'}; cancel was not injected",
+                },
+            }
         try:
-            os.kill(child_pid, signal.SIGINT)
-        except ProcessLookupError:
-            return {"ok": False, "error": {"code": "session_not_attached", "message": "child gone"}}
+            with master_lock:
+                _full_write(master_fd, b"\x1b")
         except OSError as exc:
-            return {"ok": False, "error": {"code": "command_failed", "message": str(exc)}}
+            return {"ok": False, "error": {"code": "session_not_attached", "message": f"pty closed: {exc}"}}
         return {"ok": True, "exit_code": 0, "stdout": "", "stderr": ""}
     if kind == "terminate":
         try:
@@ -581,6 +632,7 @@ def _socket_server(
     child_pid: int,
     master_lock: threading.Lock,
     stop_event: threading.Event,
+    session_id: str | None = None,
 ) -> None:
     sock.settimeout(0.5)
     while not stop_event.is_set():
@@ -591,7 +643,14 @@ def _socket_server(
         except OSError:
             break
         try:
-            _serve_one(conn, master_fd=master_fd, child_pid=child_pid, master_lock=master_lock, stop_event=stop_event)
+            _serve_one(
+                conn,
+                master_fd=master_fd,
+                child_pid=child_pid,
+                master_lock=master_lock,
+                stop_event=stop_event,
+                session_id=session_id,
+            )
         except Exception:
             try:
                 conn.sendall(b'{"ok": false, "error": {"code": "command_failed", "message": "server error"}}\n')
@@ -611,6 +670,7 @@ def _serve_one(
     child_pid: int,
     master_lock: threading.Lock,
     stop_event: threading.Event,
+    session_id: str | None = None,
 ) -> None:
     conn.settimeout(_COMMAND_READ_TIMEOUT)
     buf = bytearray()
@@ -636,6 +696,7 @@ def _serve_one(
         child_pid=child_pid,
         master_lock=master_lock,
         stop_event=stop_event,
+        session_id=session_id,
     )
     conn.sendall((json.dumps(reply) + "\n").encode())
 
@@ -681,6 +742,19 @@ def run_helm(
         exit_code=EXIT_SETUP_FAILED,
     )
     cursor_bin = _resolve_cursor_bin()
+
+    selector_args = {"--resume", "--continue", "--new-session-id"}
+    if any(arg.split("=", 1)[0] in selector_args for arg in (cursor_args or [])):
+        typer.secho(
+            "Cursor Helm owns native session identity; resume/continue selectors are not accepted as passthrough args.",
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(code=EXIT_SETUP_FAILED)
+    try:
+        provider_conversation_id = _create_cursor_chat(cursor_bin, cwd)
+    except (OSError, RuntimeError, subprocess.TimeoutExpired) as exc:
+        typer.secho(f"Could not create native Cursor conversation: {exc}", fg=typer.colors.RED)
+        raise typer.Exit(code=EXIT_SETUP_FAILED) from exc
 
     launch_ui.progress("Preparing your session…")
     session_id = str(uuid.uuid4())
@@ -778,7 +852,7 @@ def run_helm(
         attach_command=attach_command,
     )
 
-    argv = [cursor_bin, *(cursor_args or [])]
+    argv = [cursor_bin, "--resume", provider_conversation_id, *(cursor_args or [])]
 
     # Read the real terminal's mode + geometry before forking. We need the size
     # in two places: to preseed LINES/COLUMNS in the child env (mitigates the
@@ -880,6 +954,7 @@ def run_helm(
             "child_pid": pid,
             "master_lock": master_lock,
             "stop_event": stop_event,
+            "session_id": session_id,
         },
         daemon=True,
         name="cursor-helm-socket",

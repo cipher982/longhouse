@@ -356,7 +356,47 @@ def test_handle_command_ping_ok():
     assert reply["ok"] is True
 
 
-def test_handle_command_interrupt_signals_child():
+def test_send_while_active_is_rejected_before_pty_write(monkeypatch):
+    monkeypatch.setattr(cursor_helm, "_read_provider_phase", lambda _sid: "active")
+    monkeypatch.setattr(
+        cursor_helm,
+        "_inject_send",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("PTY write must not happen")),
+    )
+    reply = cursor_helm._handle_command(
+        {"kind": "send", "text": "do not cancel me"},
+        master_fd=1,
+        child_pid=1,
+        master_lock=threading.Lock(),
+        stop_event=threading.Event(),
+        session_id="managed-session",
+    )
+    assert reply["ok"] is False
+    assert reply["error"]["code"] == "provider_not_idle"
+
+
+def test_interrupt_while_idle_is_rejected_before_pty_write(monkeypatch):
+    monkeypatch.setattr(cursor_helm, "_read_provider_phase", lambda _sid: "idle")
+    monkeypatch.setattr(
+        cursor_helm,
+        "_full_write",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("PTY write must not happen")),
+    )
+    reply = cursor_helm._handle_command(
+        {"kind": "interrupt"},
+        master_fd=1,
+        child_pid=1,
+        master_lock=threading.Lock(),
+        stop_event=threading.Event(),
+        session_id="managed-session",
+    )
+    assert reply["ok"] is False
+    assert reply["error"]["code"] == "provider_not_active"
+
+
+def test_handle_command_interrupt_writes_escape_without_signaling_child(monkeypatch):
+    written = bytearray()
+    monkeypatch.setattr(cursor_helm, "_full_write", lambda _fd, data: written.extend(data) or len(data))
     child = subprocess.Popen(["sleep", "30"])
     stop = threading.Event()
     reply = cursor_helm._handle_command(
@@ -364,14 +404,11 @@ def test_handle_command_interrupt_signals_child():
         stop_event=stop,
     )
     assert reply["ok"] is True
-    # SIGINT default-terminates `sleep`.
-    try:
-        child.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        child.kill()
-        child.wait()
-        raise AssertionError("interrupt did not terminate the sleep child")
+    assert written == b"\x1b"
+    assert child.poll() is None
     assert not stop.is_set(), "interrupt must not set the stop event (only terminate does)"
+    child.kill()
+    child.wait()
 
 
 def test_handle_command_terminate_kills_child_and_sets_stop():
@@ -389,11 +426,14 @@ def test_handle_command_terminate_kills_child_and_sets_stop():
         raise AssertionError("terminate did not kill the sleep child")
 
 
-def test_handle_command_interrupt_dead_child_reports_not_attached():
+def test_handle_command_interrupt_closed_pty_reports_not_attached():
+    read_fd, write_fd = os.pipe()
+    os.close(write_fd)
     reply = cursor_helm._handle_command(
-        {"kind": "interrupt"}, master_fd=1, child_pid=2_000_000, master_lock=threading.Lock(),
+        {"kind": "interrupt"}, master_fd=write_fd, child_pid=2_000_000, master_lock=threading.Lock(),
         stop_event=threading.Event(),
     )
+    os.close(read_fd)
     assert reply["ok"] is False
     assert reply["error"]["code"] == "session_not_attached"
 
@@ -465,7 +505,7 @@ def _read_pty_echo(master_fd: int, needle: bytes, timeout_s: float = 2.0) -> byt
     return bytes(captured)
 
 
-def test_socket_protocol_send_injects_into_real_pty_and_interrupt_exits_child(tmp_path):
+def test_socket_protocol_send_and_interrupt_inject_into_real_pty(tmp_path):
     stop_event = threading.Event()
     pid, master_fd = pty.fork()
     if pid == 0:
@@ -484,13 +524,11 @@ def test_socket_protocol_send_injects_into_real_pty_and_interrupt_exits_child(tm
         echo = _read_pty_echo(master_fd, b"hello")
         assert b"hello" in echo, f"expected 'hello' in PTY echo, got {echo!r}"
 
-        # interrupt sends SIGINT to cat; cat exits.
+        # interrupt sends Escape to the TUI and leaves the provider alive.
         assert _send_command(sock_path, {"kind": "interrupt"})["ok"] is True
-        try:
-            _, status = os.waitpid(pid, 0)
-            assert os.WIFSIGNALED(status) or os.WIFEXITED(status)
-        except subprocess.TimeoutExpired:
-            raise AssertionError("interrupt did not exit cat")
+        assert b"^" in _read_pty_echo(master_fd, b"^")
+        os.kill(pid, signal.SIGKILL)
+        os.waitpid(pid, 0)
     finally:
         stop_event.set()
         try:

@@ -180,7 +180,7 @@ test-cursor-helm-gate0: ## Real stock-Cursor Helm identity/hook proof (release-g
 	@uv run --project server python scripts/qa/cursor-helm-gate0.py $(ARGS)
 
 test-cursor-helm-gate0-unit: ## Cursor Helm Gate 0 harness unit tests
-	@cd server && uv run --extra dev pytest tests_lite/test_cursor_helm_gate0.py tests_lite/test_cursor_hooks.py -q
+	@cd server && uv run --extra dev pytest tests_lite/test_cursor_helm_gate0.py tests_lite/test_cursor_hooks.py tests_lite/test_cursor_helm_launcher.py -q
 
 test-runner: ## Runner unit tests (~5s)
 	@cd runner && bun test
