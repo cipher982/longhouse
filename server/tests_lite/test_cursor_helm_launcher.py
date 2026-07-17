@@ -22,6 +22,9 @@ import tempfile
 import threading
 import time
 import tty
+from datetime import datetime
+from datetime import timedelta
+from datetime import timezone
 from pathlib import Path
 
 import pytest
@@ -93,6 +96,27 @@ def test_pending_binding_reserves_native_conversation_before_cursor_launch(monke
     assert claim["conversation_uuid"] == cursor_id
     assert claim["launch_id"] == "launch-1"
     assert claim["expires_at"] > cursor_helm._now_iso()
+
+
+def test_failed_resume_restores_last_observed_binding(monkeypatch, tmp_path):
+    _state_dir_for(monkeypatch, tmp_path)
+    claims = cursor_helm._state_dir() / "binding-probes"
+    claims.mkdir(parents=True)
+    target = claims / "session-1.json"
+    observed = {
+        "status": "observed",
+        "session_id": "session-1",
+        "conversation_uuid": "cursor-1",
+        "launch_id": "old-launch",
+    }
+    target.write_text(json.dumps(observed))
+
+    cursor_helm._write_pending_binding("session-1", "cursor-1", "new-launch")
+    assert json.loads(target.read_text())["status"] == "pending"
+    cursor_helm._remove_pending_binding("session-1", "new-launch")
+
+    assert json.loads(target.read_text()) == observed
+    assert not (claims / "session-1.observed-backup.json").exists()
 
 
 def test_launch_lock_rejects_concurrent_resume_and_releases_on_close(monkeypatch, tmp_path):
@@ -186,7 +210,7 @@ def test_registration_worker_terminalizes_when_exit_races_success(monkeypatch, t
     monkeypatch.setattr(
         cursor_helm,
         "_post_terminal_event",
-        lambda _url, _token, _sid, reason, _exit_code=0: terminal_reasons.append(reason),
+        lambda _url, _token, _sid, reason, _exit_code=0: terminal_reasons.append(reason) or True,
     )
     monkeypatch.setattr(cursor_helm, "_REGISTER_RETRY_DELAYS_SECONDS", (0.0,))
 
@@ -217,7 +241,7 @@ def test_reconcile_registration_on_exit_terminalizes_unknown_outcome(monkeypatch
     monkeypatch.setattr(
         cursor_helm,
         "_post_terminal_event",
-        lambda _url, _token, _sid, reason, _exit_code=0: terminal_reasons.append(reason),
+        lambda _url, _token, _sid, reason, _exit_code=0: terminal_reasons.append(reason) or True,
     )
 
     finished = threading.Event()
@@ -245,7 +269,7 @@ def test_reconcile_registration_on_exit_closes_registered_session(monkeypatch):
     monkeypatch.setattr(
         cursor_helm,
         "_post_terminal_event",
-        lambda _url, _token, _sid, reason, _exit_code=0: terminal_reasons.append(reason),
+        lambda _url, _token, _sid, reason, _exit_code=0: terminal_reasons.append(reason) or True,
     )
     thread = threading.Thread(target=lambda: None, daemon=True)
     thread.start()
@@ -340,6 +364,46 @@ def test_post_terminal_event_uses_runtime_events_batch(monkeypatch):
     assert event["payload"]["exit_code"] == 23
 
 
+def test_post_terminal_event_queues_when_runtime_host_is_unavailable(monkeypatch, tmp_path):
+    class FailedClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def post(self, *args, **kwargs):
+            raise cursor_helm.httpx.ConnectError("offline")
+
+    monkeypatch.setattr(cursor_helm.httpx, "Client", FailedClient)
+    monkeypatch.setattr(cursor_helm.time, "sleep", lambda _delay: None)
+    monkeypatch.setenv("LONGHOUSE_HOME", str(tmp_path))
+
+    assert cursor_helm._post_terminal_event("https://offline.invalid", "tok", "session-1", "helm_exit")
+    queued = list((tmp_path / "agent" / "runtime-events-outbox").glob("*.json"))
+    assert len(queued) == 1
+    assert json.loads(queued[0].read_text())["payload"]["terminal_reason"] == "helm_exit"
+
+
+def test_stale_provider_phase_is_not_authoritative(monkeypatch, tmp_path):
+    _state_dir_for(monkeypatch, tmp_path)
+    cursor_helm._state_dir().mkdir(parents=True)
+    session_id = "session-1"
+    cursor_helm._phase_path(session_id).write_text(
+        json.dumps(
+            {
+                "session_id": session_id,
+                "phase": "active",
+                "observed_at": (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat(),
+            }
+        )
+    )
+    assert cursor_helm._read_provider_phase_state(session_id) is None
+
+
 def test_handle_command_send_writes_text_escape_enter_sequence():
     read_fd, write_fd = os.pipe()
     lock = threading.Lock()
@@ -360,7 +424,10 @@ def test_handle_command_send_missing_text_is_bad_request():
     read_fd, write_fd = os.pipe()
     try:
         reply = cursor_helm._handle_command(
-            {"kind": "send"}, master_fd=write_fd, child_pid=1, master_lock=threading.Lock(),
+            {"kind": "send"},
+            master_fd=write_fd,
+            child_pid=1,
+            master_lock=threading.Lock(),
             stop_event=threading.Event(),
         )
         assert reply["ok"] is False
@@ -372,7 +439,10 @@ def test_handle_command_send_missing_text_is_bad_request():
 
 def test_handle_command_unknown_kind_is_bad_request():
     reply = cursor_helm._handle_command(
-        {"kind": "nope"}, master_fd=1, child_pid=1, master_lock=threading.Lock(),
+        {"kind": "nope"},
+        master_fd=1,
+        child_pid=1,
+        master_lock=threading.Lock(),
         stop_event=threading.Event(),
     )
     assert reply["ok"] is False
@@ -381,7 +451,10 @@ def test_handle_command_unknown_kind_is_bad_request():
 
 def test_handle_command_ping_ok():
     reply = cursor_helm._handle_command(
-        {"kind": "ping"}, master_fd=1, child_pid=1, master_lock=threading.Lock(),
+        {"kind": "ping"},
+        master_fd=1,
+        child_pid=1,
+        master_lock=threading.Lock(),
         stop_event=threading.Event(),
     )
     assert reply["ok"] is True
@@ -393,9 +466,7 @@ def test_resume_cursor_identity_uses_exact_hook_claim(tmp_path, monkeypatch):
     monkeypatch.setattr(cursor_helm, "_state_dir", lambda: tmp_path)
     claims = tmp_path / "binding-probes"
     claims.mkdir()
-    (claims / f"{session_id}.json").write_text(
-        json.dumps({"session_id": session_id, "conversation_uuid": provider_id})
-    )
+    (claims / f"{session_id}.json").write_text(json.dumps({"session_id": session_id, "conversation_uuid": provider_id}))
 
     assert cursor_helm._resume_cursor_identity(session_id) == provider_id
 
@@ -513,7 +584,10 @@ def test_handle_command_interrupt_writes_ctrl_c_without_signaling_child(monkeypa
     child = subprocess.Popen(["sleep", "30"])
     stop = threading.Event()
     reply = cursor_helm._handle_command(
-        {"kind": "interrupt"}, master_fd=1, child_pid=child.pid, master_lock=threading.Lock(),
+        {"kind": "interrupt"},
+        master_fd=1,
+        child_pid=child.pid,
+        master_lock=threading.Lock(),
         stop_event=stop,
     )
     assert reply["ok"] is True
@@ -528,7 +602,10 @@ def test_handle_command_terminate_kills_child_and_sets_stop():
     child = subprocess.Popen(["sleep", "30"])
     stop = threading.Event()
     reply = cursor_helm._handle_command(
-        {"kind": "terminate"}, master_fd=1, child_pid=child.pid, master_lock=threading.Lock(),
+        {"kind": "terminate"},
+        master_fd=1,
+        child_pid=child.pid,
+        master_lock=threading.Lock(),
         stop_event=stop,
     )
     assert reply["ok"] is True
@@ -543,7 +620,10 @@ def test_handle_command_interrupt_closed_pty_reports_not_attached():
     read_fd, write_fd = os.pipe()
     os.close(write_fd)
     reply = cursor_helm._handle_command(
-        {"kind": "interrupt"}, master_fd=write_fd, child_pid=2_000_000, master_lock=threading.Lock(),
+        {"kind": "interrupt"},
+        master_fd=write_fd,
+        child_pid=2_000_000,
+        master_lock=threading.Lock(),
         stop_event=threading.Event(),
     )
     os.close(read_fd)
@@ -761,6 +841,7 @@ def test_infer_git_context_handles_none_git_output(monkeypatch):
 def test_infer_git_context_normalizes_detached_head(monkeypatch):
     """A detached HEAD returns the literal string 'HEAD'; the launcher should
     normalize that to None so the session isn't tagged with branch 'HEAD'."""
+
     def fake_git(_cwd, *args):
         if args and args[0] == "config":
             return "https://github.com/example/repo"

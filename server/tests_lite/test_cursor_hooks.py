@@ -164,6 +164,40 @@ def test_cursor_hook_does_not_promote_binding_before_registration(tmp_path: Path
     assert json.loads(claim_path.read_text())["status"] == "pending"
 
 
+def test_cursor_hook_promotes_claim_without_overwriting_phase_and_removes_backup(tmp_path: Path) -> None:
+    cursor = tmp_path / ".cursor"
+    cursor.mkdir()
+    install_cursor_hooks(cursor)
+    script = cursor / "hooks" / "longhouse-cursor-hook.py"
+    home = tmp_path / "longhouse"
+    launch_id = _seed_launch(home)
+    root = home / "managed-local" / "cursor-helm"
+    (root / "managed-session.json").write_text(
+        json.dumps({"session_id": "managed-session", "registration": "registered"})
+    )
+    backup = root / "binding-probes" / "managed-session.observed-backup.json"
+    backup.write_text(json.dumps({"status": "observed"}))
+
+    subprocess.run(
+        [str(script), "sessionStart"],
+        input=json.dumps({"conversation_id": "cursor-id"}),
+        text=True,
+        capture_output=True,
+        env={
+            **os.environ,
+            "LONGHOUSE_SESSION_ID": "managed-session",
+            "LONGHOUSE_CURSOR_LAUNCH_ID": launch_id,
+            "LONGHOUSE_HOME": str(home),
+        },
+        timeout=5,
+        check=True,
+    )
+
+    assert json.loads((root / "managed-session.phase.json").read_text())["phase"] == "idle"
+    assert json.loads((root / "binding-probes" / "managed-session.json").read_text())["status"] == "observed"
+    assert not backup.exists()
+
+
 def test_cursor_permission_transport_failure_blocks_instead_of_failing_open(tmp_path: Path) -> None:
     cursor = tmp_path / ".cursor"
     cursor.mkdir()

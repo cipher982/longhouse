@@ -27,6 +27,7 @@ keeps running.
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import json
 import os
 import pty
@@ -58,6 +59,7 @@ from zerg.cli._common import git_output
 from zerg.cli._common import interactive_stdio
 from zerg.cli._common import load_api_credentials
 from zerg.cli._managed_launch import interactive_human_shell_launch_provenance
+from zerg.services.longhouse_paths import get_agent_runtime_events_outbox_dir
 from zerg.services.longhouse_paths import get_managed_local_dir
 from zerg.services.machine_identity import get_machine_name_label
 from zerg.services.shipper import get_zerg_url
@@ -98,6 +100,8 @@ _TERMINAL_POST_TIMEOUT = 5.0
 _PROVIDER = "cursor"
 _CONTROL_PLANE = "cursor_helm"
 _STATE_PROVIDER_DIR = "cursor-helm"
+_ACTIVE_PHASE_MAX_AGE = timedelta(hours=1)
+_IDLE_PHASE_MAX_AGE = timedelta(hours=24)
 
 
 @dataclass(frozen=True)
@@ -162,6 +166,16 @@ def _read_provider_phase_state(session_id: str) -> dict | None:
         return None
     phase = str(value.get("phase") or "")
     if phase not in {"active", "idle", "ended"}:
+        return None
+    try:
+        observed_at = datetime.fromisoformat(str(value.get("observed_at") or ""))
+        if observed_at.tzinfo is None:
+            return None
+        age = datetime.now(timezone.utc) - observed_at.astimezone(timezone.utc)
+    except (TypeError, ValueError):
+        return None
+    maximum_age = _ACTIVE_PHASE_MAX_AGE if phase == "active" else _IDLE_PHASE_MAX_AGE
+    if age < timedelta(seconds=-30) or age > maximum_age:
         return None
     return value
 
@@ -321,6 +335,15 @@ def _write_pending_binding(session_id: str, provider_conversation_id: str, launc
         "expires_at": (now + timedelta(minutes=10)).isoformat(),
     }
     target = claims / f"{session_id}.json"
+    backup = claims / f"{session_id}.observed-backup.json"
+    try:
+        current = json.loads(target.read_text())
+    except (OSError, ValueError, TypeError):
+        current = None
+    if isinstance(current, dict) and current.get("status") == "observed":
+        backup_tmp = backup.with_suffix(".json.tmp")
+        backup_tmp.write_text(json.dumps(current, separators=(",", ":")))
+        os.replace(backup_tmp, backup)
     tmp = target.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(payload, separators=(",", ":")))
     os.replace(tmp, target)
@@ -328,12 +351,21 @@ def _write_pending_binding(session_id: str, provider_conversation_id: str, launc
 
 def _remove_pending_binding(session_id: str, launch_id: str) -> None:
     target = _state_dir() / "binding-probes" / f"{session_id}.json"
+    backup = _state_dir() / "binding-probes" / f"{session_id}.observed-backup.json"
     try:
         claim = json.loads(target.read_text())
     except (OSError, ValueError, TypeError):
         return
     if claim.get("status") == "pending" and claim.get("launch_id") == launch_id:
-        target.unlink(missing_ok=True)
+        try:
+            previous = json.loads(backup.read_text())
+        except (OSError, ValueError, TypeError):
+            previous = None
+        if isinstance(previous, dict) and previous.get("status") == "observed":
+            os.replace(backup, target)
+        else:
+            target.unlink(missing_ok=True)
+            backup.unlink(missing_ok=True)
 
 
 def _infer_git_context(cwd: Path) -> tuple[str | None, str | None]:
@@ -562,7 +594,20 @@ def _post_terminal_event(url: str, token: str, session_id: str, reason: str, exi
                 return True
         except httpx.HTTPError:
             continue
-    return False
+    try:
+        outbox = get_agent_runtime_events_outbox_dir()
+        outbox.mkdir(parents=True, exist_ok=True)
+        digest = hashlib.sha256(event["dedupe_key"].encode()).hexdigest()[:32]
+        target = outbox / f"rte.{digest}.json"
+        temporary = outbox / f".rte.{digest}.{os.getpid()}.tmp"
+        with temporary.open("wb") as file:
+            file.write(json.dumps(event, separators=(",", ":")).encode())
+            file.flush()
+            os.fsync(file.fileno())
+        os.replace(temporary, target)
+        return True
+    except OSError:
+        return False
 
 
 def _reconcile_registration_on_exit(
@@ -586,8 +631,7 @@ def _reconcile_registration_on_exit(
     with registration_lock:
         outcome = registration_box[0] if registration_box else None
     if outcome is not None and outcome.registered:
-        _post_terminal_event(url, token, session_id, "helm_exit", exit_code)
-        return True
+        return _post_terminal_event(url, token, session_id, "helm_exit", exit_code)
     if outcome is None:
         # Abandoned / killed mid-HTTP — host may have committed after our join.
         _post_terminal_event(url, token, session_id, "helm_exit_before_ready", exit_code)

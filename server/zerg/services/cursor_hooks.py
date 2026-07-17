@@ -48,10 +48,11 @@ events.mkdir(parents=True, exist_ok=True)
 claims.mkdir(parents=True, exist_ok=True)
 now = datetime.now(timezone.utc).isoformat()
 launch_id = os.environ.get("LONGHOUSE_CURSOR_LAUNCH_ID", "").strip()
-target = claims / f"{sid}.json"
+claim_target = claims / f"{sid}.json"
+claim_backup = claims / f"{sid}.observed-backup.json"
 existing_claim = None
 try:
-    existing_claim = json.loads(target.read_text())
+    existing_claim = json.loads(claim_target.read_text())
 except (OSError, ValueError, TypeError):
     pass
 claim_matches_reservation = (
@@ -72,11 +73,11 @@ with (events / f"{sid}.ndjson").open("a", encoding="utf-8") as f:
     f.write(json.dumps(row, separators=(",", ":")) + "\n")
 phase = "active" if event in {"beforeSubmitPrompt", "afterAgentThought", "preToolUse", "beforeShellExecution", "beforeMCPExecution"} else ("idle" if event in {"sessionStart", "stop", "afterAgentResponse"} else ("ended" if event == "sessionEnd" else None))
 if phase:
-    target = root / f"{sid}.phase.json"
+    phase_target = root / f"{sid}.phase.json"
     fd, tmp = tempfile.mkstemp(dir=root, prefix=".phase.")
     with os.fdopen(fd, "w") as f:
         json.dump({"session_id": sid, "conversation_id": conversation_id, "launch_id": launch_id, "phase": phase, "generation_id": payload.get("generation_id"), "observed_at": now}, f)
-    os.replace(tmp, target)
+    os.replace(tmp, phase_target)
     outbox = home / "agent" / "outbox"
     outbox.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=outbox, prefix=".tmp.")
@@ -94,7 +95,8 @@ if registration_ready:
     fd, tmp = tempfile.mkstemp(dir=claims, prefix=".claim.")
     with os.fdopen(fd, "w") as f:
         json.dump(claim, f)
-    os.replace(tmp, target)
+    os.replace(tmp, claim_target)
+    claim_backup.unlink(missing_ok=True)
 
 if event in {"afterAgentResponse", "stop"}:
     cursor_home = Path(os.environ.get("CURSOR_HOME") or (Path.home() / ".cursor"))
