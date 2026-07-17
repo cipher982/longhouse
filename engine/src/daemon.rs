@@ -2302,6 +2302,14 @@ fn local_retry_delay(priority: WorkPriority) -> Duration {
     }
 }
 
+fn storage_v2_backpressure_retry_delay(priority: WorkPriority, retry_after: Duration) -> Duration {
+    if priority == WorkPriority::Live {
+        retry_after.min(Duration::from_secs(1))
+    } else {
+        retry_after
+    }
+}
+
 fn spool_retry_delay_for_path(conn: &rusqlite::Connection, path: &Path) -> Option<Duration> {
     let retry_at = match Spool::new(conn).next_retry_at_for_path(&path.to_string_lossy()) {
         Ok(retry_at) => retry_at?,
@@ -3760,7 +3768,12 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
                 }
                 result.local_retry_after = Some(
                     backpressure
-                        .map(|value| value.retry_after)
+                        .map(|value| {
+                            storage_v2_backpressure_retry_delay(
+                                result.job.priority,
+                                value.retry_after,
+                            )
+                        })
                         .unwrap_or_else(|| local_retry_delay(result.job.priority)),
                 );
             }
@@ -5653,6 +5666,20 @@ mod tests {
         assert_eq!(
             local_retry_delay(WorkPriority::Scan),
             Duration::from_secs(LOCAL_RETRY_DELAY_SECS)
+        );
+        assert_eq!(
+            storage_v2_backpressure_retry_delay(
+                WorkPriority::Live,
+                Duration::from_secs(5),
+            ),
+            Duration::from_secs(1)
+        );
+        assert_eq!(
+            storage_v2_backpressure_retry_delay(
+                WorkPriority::Scan,
+                Duration::from_secs(5),
+            ),
+            Duration::from_secs(5)
         );
     }
 

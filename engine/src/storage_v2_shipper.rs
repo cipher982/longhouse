@@ -41,6 +41,7 @@ pub(crate) const PARSER_REVISION: &str = "engine-parser-v2";
 pub(crate) const ORDERING_REVISION: &str = "semantic-order-v2";
 const OPENCODE_SESSION_PAGE_SIZE: usize = 64;
 const CURSOR_PARSER_REVISION: &str = "cursor-store-render-v2";
+const LIVE_TARGET_BATCH_BYTES: usize = 64 * 1024;
 
 pub(crate) struct PreparedStorageV2Envelope {
     pub envelope: StorageV2Envelope,
@@ -99,11 +100,42 @@ pub(crate) fn prepare_next_envelope(
     provider: &str,
     session_id_override: Option<&str>,
 ) -> Result<Option<PreparedStorageV2Envelope>> {
+    prepare_next_envelope_with_limit(
+        conn,
+        capabilities,
+        path,
+        provider,
+        session_id_override,
+        MAX_RAW_BATCH_BYTES,
+    )
+}
+
+fn prepare_next_envelope_with_limit(
+    conn: &mut Connection,
+    capabilities: &StorageV2Capabilities,
+    path: &Path,
+    provider: &str,
+    session_id_override: Option<&str>,
+    maximum_batch_bytes: usize,
+) -> Result<Option<PreparedStorageV2Envelope>> {
     let canonical_path = stable_source_path(path);
     let path_text = canonical_path.to_string_lossy();
     let opaque_source_id = opaque_source_id(&path_text);
-    if let Some(pending) = load_pending_for_source(conn, provider, &opaque_source_id)? {
-        return Ok(Some(pending));
+    if let Some(pending) =
+        pending_source_envelope::load_for_source(conn, provider, &opaque_source_id)?
+    {
+        let oversized_unattempted = pending.raw_bytes > maximum_batch_bytes as u64
+            && pending.attempt_count == 0
+            && maximum_batch_bytes < MAX_RAW_BATCH_BYTES;
+        if !oversized_unattempted
+            || !pending_source_envelope::discard_unattempted(
+                conn,
+                pending.source_epoch,
+                &pending.envelope_id,
+            )?
+        {
+            return pending_to_prepared(pending).map(Some);
+        }
     }
     let durable_session_id = match session_id_override {
         Some(value) => Some(value.to_string()),
@@ -143,7 +175,7 @@ pub(crate) fn prepare_next_envelope(
         path,
         framing,
         position,
-        MAX_RAW_BATCH_BYTES,
+        maximum_batch_bytes,
         maximum_record_bytes,
     )?
     else {
@@ -269,12 +301,18 @@ pub(crate) async fn ship_next_envelope(
     lane: &str,
     request_timeout: Duration,
 ) -> Result<Option<StorageV2ShipOutcome>> {
-    let Some(prepared) = preparation_result(prepare_next_envelope(
+    let maximum_batch_bytes = if lane == "live" {
+        LIVE_TARGET_BATCH_BYTES
+    } else {
+        MAX_RAW_BATCH_BYTES
+    };
+    let Some(prepared) = preparation_result(prepare_next_envelope_with_limit(
         conn,
         capabilities,
         path,
         provider,
         session_id_override,
+        maximum_batch_bytes,
     ))?
     else {
         return Ok(None);
@@ -2340,6 +2378,47 @@ mod tests {
             .unwrap();
         assert!(with_reply.has_reply_evidence);
         assert_eq!(with_reply.range_end, (user.len() + assistant.len()) as u64);
+    }
+
+    #[test]
+    fn live_prepare_refreezes_unattempted_backlog_to_live_budget() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir
+            .path()
+            .join("018f0c3a-7b2d-7f10-8a11-123456789abc.jsonl");
+        let content = "x".repeat(40 * 1024);
+        let first = format!(
+            "{{\"type\":\"user\",\"uuid\":\"u1\",\"timestamp\":\"2026-07-12T12:00:00Z\",\"message\":{{\"content\":{}}}}}\n",
+            serde_json::to_string(&content).unwrap()
+        );
+        let second = format!(
+            "{{\"type\":\"assistant\",\"uuid\":\"a1\",\"timestamp\":\"2026-07-12T12:00:01Z\",\"message\":{{\"content\":{}}}}}\n",
+            serde_json::to_string(&content).unwrap()
+        );
+        fs::write(&path, format!("{first}{second}")).unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+
+        let backlog = prepare_next_envelope(&mut conn, &capabilities(), &path, "claude", None)
+            .unwrap()
+            .unwrap();
+        assert!(backlog.raw_bytes > LIVE_TARGET_BATCH_BYTES as u64);
+
+        let live = prepare_next_envelope_with_limit(
+            &mut conn,
+            &capabilities(),
+            &path,
+            "claude",
+            None,
+            LIVE_TARGET_BATCH_BYTES,
+        )
+        .unwrap()
+        .unwrap();
+        assert_ne!(
+            live.envelope.expected_envelope_id,
+            backlog.envelope.expected_envelope_id
+        );
+        assert!(live.raw_bytes <= LIVE_TARGET_BATCH_BYTES as u64);
+        assert!(live.has_more);
     }
 
     #[tokio::test]
