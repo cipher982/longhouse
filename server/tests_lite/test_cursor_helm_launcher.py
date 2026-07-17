@@ -77,6 +77,22 @@ def test_state_file_round_trip(monkeypatch, tmp_path):
     assert not sock.exists()
 
 
+def test_pending_binding_reserves_native_conversation_before_cursor_launch(monkeypatch, tmp_path):
+    _state_dir_for(monkeypatch, tmp_path)
+    session_id = "11111111-1111-4111-8111-111111111111"
+    cursor_id = "22222222-2222-4222-8222-222222222222"
+
+    cursor_helm._write_pending_binding(session_id, cursor_id)
+
+    claim = json.loads((cursor_helm._state_dir() / "binding-probes" / f"{session_id}.json").read_text())
+    assert claim["schema_version"] == 2
+    assert claim["provider"] == "cursor"
+    assert claim["status"] == "pending"
+    assert claim["session_id"] == session_id
+    assert claim["conversation_uuid"] == cursor_id
+    assert claim["expires_at"] > cursor_helm._now_iso()
+
+
 def test_register_session_soft_fails_on_connect_error(monkeypatch, tmp_path):
     class BoomClient:
         def __init__(self, *args, **kwargs):

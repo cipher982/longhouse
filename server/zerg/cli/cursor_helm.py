@@ -44,6 +44,7 @@ import tty
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
+from datetime import timedelta
 from datetime import timezone
 from pathlib import Path
 
@@ -281,6 +282,24 @@ def _resume_cursor_identity(longhouse_session_id: str) -> str:
         return str(uuid.UUID(provider_id))
     except ValueError as exc:
         raise RuntimeError(f"Cursor identity claim for {session_id} is invalid") from exc
+
+
+def _write_pending_binding(session_id: str, provider_conversation_id: str) -> None:
+    claims = _state_dir() / "binding-probes"
+    claims.mkdir(parents=True, exist_ok=True)
+    now = datetime.now(timezone.utc)
+    payload = {
+        "schema_version": 2,
+        "provider": "cursor",
+        "status": "pending",
+        "session_id": session_id,
+        "conversation_uuid": provider_conversation_id,
+        "expires_at": (now + timedelta(minutes=10)).isoformat(),
+    }
+    target = claims / f"{session_id}.json"
+    tmp = target.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(payload, separators=(",", ":")))
+    os.replace(tmp, target)
 
 
 def _infer_git_context(cwd: Path) -> tuple[str | None, str | None]:
@@ -778,6 +797,7 @@ def run_helm(
 
     launch_ui.progress("Preparing your session…")
     session_id = str(uuid.UUID(resume_session_id)) if resume_session_id else str(uuid.uuid4())
+    _write_pending_binding(session_id, provider_conversation_id)
     state_dir = _state_dir()
     state_dir.mkdir(parents=True, exist_ok=True)
     sock_path = _socket_path(session_id)

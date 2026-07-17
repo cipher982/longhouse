@@ -49,8 +49,15 @@ struct ProbeObservation {
 /// Return the managed session ID only when exactly one unexpired, probe-grade
 /// claim proves this provider-native Cursor conversation identity.
 pub fn managed_session_id_for_conversation(conversation_uuid: &str) -> Result<Option<String>> {
+    managed_session_id_for_conversation_in(&claim_dir(), conversation_uuid)
+}
+
+fn managed_session_id_for_conversation_in(
+    dir: &Path,
+    conversation_uuid: &str,
+) -> Result<Option<String>> {
     let mut matches = Vec::new();
-    for path in claim_paths(&claim_dir())? {
+    for path in claim_paths(dir)? {
         let Ok(bytes) = fs::read(&path) else {
             continue;
         };
@@ -64,6 +71,32 @@ pub fn managed_session_id_for_conversation(conversation_uuid: &str) -> Result<Op
     matches.sort();
     matches.dedup();
     Ok((matches.len() == 1).then(|| matches.remove(0)))
+}
+
+/// A prelaunch reservation prevents the empty Cursor store from racing ahead
+/// of the first provider hook and materializing as a duplicate Shadow session.
+pub fn pending_claim_for_conversation(conversation_uuid: &str) -> Result<bool> {
+    pending_claim_for_conversation_in(&claim_dir(), conversation_uuid)
+}
+
+fn pending_claim_for_conversation_in(dir: &Path, conversation_uuid: &str) -> Result<bool> {
+    for path in claim_paths(dir)? {
+        let Ok(bytes) = fs::read(&path) else {
+            continue;
+        };
+        let Ok(claim) = serde_json::from_slice::<LaunchBindingClaim>(&bytes) else {
+            continue;
+        };
+        if claim.schema_version == 2
+            && claim.provider == "cursor"
+            && claim.status == "pending"
+            && claim.conversation_uuid == conversation_uuid
+            && claim.expires_at.is_some_and(|value| value > Utc::now())
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn valid_claim(claim: &LaunchBindingClaim, conversation_uuid: &str) -> bool {
@@ -156,14 +189,13 @@ mod tests {
     #[test]
     fn malformed_or_expired_claims_do_not_bind() {
         let dir = tempdir().unwrap();
-        std::env::set_var("LONGHOUSE_CURSOR_HELM_BINDING_DIR", dir.path());
         fs::write(
             dir.path().join("one.json"),
             claim("same", "same", "2099-01-01T00:00:00Z"),
         )
         .unwrap();
         assert_eq!(
-            managed_session_id_for_conversation("same")
+            managed_session_id_for_conversation_in(dir.path(), "same")
                 .unwrap()
                 .as_deref(),
             Some("same")
@@ -174,7 +206,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            managed_session_id_for_conversation("same")
+            managed_session_id_for_conversation_in(dir.path(), "same")
                 .unwrap()
                 .as_deref(),
             Some("same")
@@ -184,9 +216,27 @@ mod tests {
             claim("same", "same", "2000-01-01T00:00:00Z"),
         )
         .unwrap();
-        assert!(managed_session_id_for_conversation("same")
+        assert!(managed_session_id_for_conversation_in(dir.path(), "same")
             .unwrap()
             .is_none());
-        std::env::remove_var("LONGHOUSE_CURSOR_HELM_BINDING_DIR");
+    }
+
+    #[test]
+    fn pending_reservation_defers_only_its_unexpired_native_conversation() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("pending.json"),
+            r#"{"schema_version":2,"provider":"cursor","status":"pending","session_id":"longhouse-id","conversation_uuid":"cursor-id","expires_at":"2099-01-01T00:00:00Z"}"#,
+        )
+        .unwrap();
+        assert!(pending_claim_for_conversation_in(dir.path(), "cursor-id").unwrap());
+        assert!(!pending_claim_for_conversation_in(dir.path(), "different-cursor-id").unwrap());
+
+        fs::write(
+            dir.path().join("pending.json"),
+            r#"{"schema_version":2,"provider":"cursor","status":"pending","session_id":"longhouse-id","conversation_uuid":"cursor-id","expires_at":"2000-01-01T00:00:00Z"}"#,
+        )
+        .unwrap();
+        assert!(!pending_claim_for_conversation_in(dir.path(), "cursor-id").unwrap());
     }
 }

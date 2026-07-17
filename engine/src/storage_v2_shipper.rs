@@ -935,6 +935,11 @@ pub(crate) fn prepare_next_cursor_envelope(
     let claimed_session_id = crate::cursor_launch_binding::managed_session_id_for_conversation(
         &snapshot.conversation_uuid,
     )?;
+    if claimed_session_id.is_none()
+        && crate::cursor_launch_binding::pending_claim_for_conversation(&snapshot.conversation_uuid)?
+    {
+        return Ok(None);
+    }
     let opaque_source_id = cursor_store::cursor_opaque_source_id(&snapshot.conversation_uuid);
     let root_relation = match snapshot.root_blob_id.as_deref() {
         Some(root_blob_id) => cursor_store_root::observe_cursor_root(
