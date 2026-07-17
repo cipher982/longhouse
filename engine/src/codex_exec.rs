@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::OnceLock;
 use std::time::Duration;
 
 #[cfg(unix)]
@@ -24,12 +25,50 @@ const CODEX_DISABLE_UPDATE_CHECK_CONFIG: &str = "check_for_update_on_startup=fal
 const CODEX_EXEC_RUNTIME_SOURCE: &str = "codex_app_server";
 const STDERR_TAIL_LINES: usize = 40;
 const APP_SERVER_TURN_TIMEOUT: Duration = Duration::from_secs(60 * 60);
+const CONSOLE_WARM_POOL_TARGET: usize = 1;
+const CONSOLE_WARM_WORKER_TTL: Duration = Duration::from_secs(120);
+const DEFAULT_CODEX_BIN: &str = "codex";
+const DEFAULT_CONSOLE_APPROVAL_POLICY: &str = "never";
+const DEFAULT_CONSOLE_SANDBOX: &str = "workspace-write";
 
 struct AppServerRpc {
     stdin: ChildStdin,
     lines: Lines<BufReader<ChildStdout>>,
     next_id: u64,
     seq: u64,
+}
+
+struct InitializedCodexWorker {
+    child: Child,
+    rpc: AppServerRpc,
+    stderr_tail: Arc<Mutex<VecDeque<String>>>,
+    stderr_task: Option<tokio::task::JoinHandle<()>>,
+    pid: Option<u32>,
+    argv: Vec<String>,
+    ready_at: std::time::Instant,
+}
+
+#[derive(Default)]
+struct CodexConsoleWorkerPool {
+    workers: Vec<InitializedCodexWorker>,
+    spawning: usize,
+}
+
+impl CodexConsoleWorkerPool {
+    fn reserve_spawn_slot(&mut self) -> bool {
+        if self.workers.len() + self.spawning >= CONSOLE_WARM_POOL_TARGET {
+            return false;
+        }
+        self.spawning += 1;
+        true
+    }
+}
+
+static CODEX_CONSOLE_WORKER_POOL: OnceLock<tokio::sync::Mutex<CodexConsoleWorkerPool>> =
+    OnceLock::new();
+
+fn console_worker_pool() -> &'static tokio::sync::Mutex<CodexConsoleWorkerPool> {
+    CODEX_CONSOLE_WORKER_POOL.get_or_init(Default::default)
 }
 
 #[derive(Default)]
@@ -281,48 +320,242 @@ fn toml_quote_string(value: &str) -> String {
     format!("\"{escaped}\"")
 }
 
-pub async fn start_codex_exec_once(config: CodexExecRunConfig) -> Result<CodexExecRunSummary> {
+fn warm_pool_compatible(config: &CodexExecRunConfig) -> bool {
+    config.codex_bin == DEFAULT_CODEX_BIN
+        && normalized_optional(&config.approval_policy).as_deref()
+            == Some(DEFAULT_CONSOLE_APPROVAL_POLICY)
+        && normalized_optional(&config.sandbox).as_deref() == Some(DEFAULT_CONSOLE_SANDBOX)
+}
+
+pub async fn prewarm_codex_console_workers() {
+    {
+        let mut pool = console_worker_pool().lock().await;
+        if !pool.reserve_spawn_slot() {
+            return;
+        }
+    }
+    let neutral_cwd = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir);
+    let result = spawn_initialized_codex_worker(
+        DEFAULT_CODEX_BIN,
+        Some(DEFAULT_CONSOLE_APPROVAL_POLICY),
+        Some(DEFAULT_CONSOLE_SANDBOX),
+        &neutral_cwd,
+        None,
+        None,
+        None,
+    )
+    .await;
+    let mut pool = console_worker_pool().lock().await;
+    pool.spawning = pool.spawning.saturating_sub(1);
+    match result {
+        Ok(worker) if pool.workers.len() < CONSOLE_WARM_POOL_TARGET => {
+            let worker_pid = worker.pid;
+            eprintln!(
+                "[codex-exec] latency stage=warm_worker_ready pid={} pool_size={}",
+                worker.pid.unwrap_or(0),
+                pool.workers.len() + 1
+            );
+            pool.workers.push(worker);
+            if let Some(worker_pid) = worker_pid {
+                tokio::spawn(reap_warm_worker_after_ttl(worker_pid));
+            }
+        }
+        Ok(_) => {}
+        Err(err) => eprintln!(
+            "[codex-exec] latency stage=warm_worker_miss reason=prewarm_failed error={err}"
+        ),
+    }
+}
+
+async fn reap_warm_worker_after_ttl(pid: u32) {
+    tokio::time::sleep(CONSOLE_WARM_WORKER_TTL).await;
+    let mut pool = console_worker_pool().lock().await;
+    let Some(index) = pool
+        .workers
+        .iter()
+        .position(|worker| worker.pid == Some(pid) && worker.ready_at.elapsed() >= CONSOLE_WARM_WORKER_TTL)
+    else {
+        return;
+    };
+    let worker = pool.workers.remove(index);
+    eprintln!(
+        "[codex-exec] latency stage=warm_worker_reaped pid={} reason=ttl pool_size={}",
+        worker.pid.unwrap_or(0),
+        pool.workers.len()
+    );
+}
+
+async fn lease_warm_worker() -> Option<InitializedCodexWorker> {
+    let mut pool = console_worker_pool().lock().await;
+    while let Some(mut worker) = pool.workers.pop() {
+        if worker.ready_at.elapsed() < CONSOLE_WARM_WORKER_TTL
+            && worker.child.try_wait().ok().flatten().is_none()
+        {
+            return Some(worker);
+        }
+        eprintln!(
+            "[codex-exec] latency stage=warm_worker_miss reason=worker_exited pid={}",
+            worker.pid.unwrap_or(0)
+        );
+    }
+    None
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn spawn_initialized_codex_worker(
+    codex_bin: &str,
+    approval_policy: Option<&str>,
+    sandbox: Option<&str>,
+    process_cwd: &std::path::Path,
+    session_id: Option<&str>,
+    launch_actor: Option<&str>,
+    launch_surface: Option<&str>,
+) -> Result<InitializedCodexWorker> {
+    let config = CodexExecRunConfig {
+        session_id: session_id.unwrap_or("warm-anonymous").to_string(),
+        run_id: "warm-anonymous".to_string(),
+        thread_id: None,
+        turn_id: None,
+        client_request_id: None,
+        cwd: process_cwd.to_path_buf(),
+        api_url: String::new(),
+        api_token: String::new(),
+        codex_bin: codex_bin.to_string(),
+        approval_policy: approval_policy.map(str::to_string),
+        sandbox: sandbox.map(str::to_string),
+        prompt: String::new(),
+        launch_actor: launch_actor.map(str::to_string),
+        launch_surface: launch_surface.map(str::to_string),
+        resume_thread_id: None,
+        machine_name: String::new(),
+        local_db_path: None,
+    };
     let args = codex_exec_args(&config);
-    let argv = std::iter::once(OsString::from(config.codex_bin.clone()))
+    let argv = std::iter::once(OsString::from(codex_bin))
         .chain(args.iter().cloned())
         .map(|item| item.to_string_lossy().to_string())
         .collect::<Vec<_>>();
-
-    let mut command = Command::new(&config.codex_bin);
+    let mut command = Command::new(codex_bin);
     command
         .args(&args)
-        .env("LONGHOUSE_MANAGED_SESSION_ID", &config.session_id)
-        .current_dir(&config.cwd)
+        .current_dir(process_cwd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    if let Some(launch_actor) = normalized_optional(&config.launch_actor) {
-        command.env("LONGHOUSE_LAUNCH_ACTOR", launch_actor);
+    if let Some(session_id) = session_id {
+        command.env("LONGHOUSE_MANAGED_SESSION_ID", session_id);
+    } else {
+        command.env("LONGHOUSE_CONSOLE_WORKER", "1");
     }
-    if let Some(launch_surface) = normalized_optional(&config.launch_surface) {
-        command.env("LONGHOUSE_LAUNCH_SURFACE", launch_surface);
+    if let Some(actor) = launch_actor {
+        command.env("LONGHOUSE_LAUNCH_ACTOR", actor);
     }
-
+    if let Some(surface) = launch_surface {
+        command.env("LONGHOUSE_LAUNCH_SURFACE", surface);
+    }
     #[cfg(unix)]
-    {
-        unsafe {
-            command.pre_exec(|| {
-                if libc::setpgid(0, 0) != 0 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                Ok(())
-            });
-        }
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setpgid(0, 0) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
     }
-
     let mut child = command
         .spawn()
-        .with_context(|| format!("spawning `{}` exec", config.codex_bin))?;
+        .with_context(|| format!("spawning `{codex_bin}` app-server worker"))?;
     let pid = child.id();
-    let stdin = child.stdin.take();
-    let stdout = child.stdout.take();
+    let stdin = child.stdin.take().context("Codex worker stdin unavailable")?;
+    let stdout = child.stdout.take().context("Codex worker stdout unavailable")?;
     let stderr = child.stderr.take();
+    let stderr_tail = Arc::new(Mutex::new(VecDeque::with_capacity(STDERR_TAIL_LINES)));
+    let stderr_task = stderr.map(|stream| {
+        let tail = stderr_tail.clone();
+        tokio::spawn(async move { read_stderr_tail(stream, tail).await })
+    });
+    let mut rpc = AppServerRpc {
+        stdin,
+        lines: BufReader::new(stdout).lines(),
+        next_id: 2,
+        seq: 0,
+    };
+    rpc.write(&json!({
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "clientInfo": {
+                "name": "longhouse_console",
+                "title": "Longhouse Console",
+                "version": env!("CARGO_PKG_VERSION"),
+            },
+            "capabilities": { "experimentalApi": true },
+        }
+    }))
+    .await?;
+    loop {
+        let value = rpc.next_value().await?;
+        if value.get("id").and_then(Value::as_u64) == Some(1) {
+            if let Some(error) = value.get("error") {
+                anyhow::bail!("Codex worker initialize failed: {error}");
+            }
+            break;
+        }
+        if value.get("id").is_some() && value.get("method").is_some() {
+            rpc.respond_to_server_request(&value).await?;
+        }
+    }
+    rpc.notify("initialized", json!({})).await?;
+    Ok(InitializedCodexWorker {
+        child,
+        rpc,
+        stderr_tail,
+        stderr_task,
+        pid,
+        argv,
+        ready_at: std::time::Instant::now(),
+    })
+}
+
+pub async fn start_codex_exec_once(config: CodexExecRunConfig) -> Result<CodexExecRunSummary> {
+    let warm_compatible = warm_pool_compatible(&config);
+    let warm_worker = if warm_compatible {
+        lease_warm_worker().await
+    } else {
+        None
+    };
+    let warm_hit = warm_worker.is_some();
+    let mut worker = match warm_worker {
+        Some(worker) => worker,
+        None => {
+            spawn_initialized_codex_worker(
+                &config.codex_bin,
+                normalized_optional(&config.approval_policy).as_deref(),
+                normalized_optional(&config.sandbox).as_deref(),
+                &config.cwd,
+                Some(&config.session_id),
+                normalized_optional(&config.launch_actor).as_deref(),
+                normalized_optional(&config.launch_surface).as_deref(),
+            )
+            .await?
+        }
+    };
+    let pid = worker.pid;
+    let argv = worker.argv.clone();
+    eprintln!(
+        "[codex-exec] latency stage=warm_worker_lease session={} run={} hit={} pid={} ready_age_ms={}",
+        config.session_id,
+        config.run_id,
+        warm_hit,
+        pid.unwrap_or(0),
+        worker.ready_at.elapsed().as_millis()
+    );
+    if warm_compatible {
+        tokio::spawn(prewarm_codex_console_workers());
+    }
     let (event_tx, event_rx) = mpsc::channel(EVENT_PUMP_QUEUE_CAPACITY);
     let (critical_event_tx, critical_event_rx) = mpsc::unbounded_channel();
     let queued_events = Arc::new(AtomicUsize::new(0));
@@ -348,9 +581,8 @@ pub async fn start_codex_exec_once(config: CodexExecRunConfig) -> Result<CodexEx
         critical_event_rx,
         queued_events,
     ));
-    let stderr_tail = Arc::new(Mutex::new(VecDeque::with_capacity(STDERR_TAIL_LINES)));
     let monitor_sink = sink.clone();
-    let monitor_tail = stderr_tail.clone();
+    let stderr_tail = worker.stderr_tail.clone();
 
     let prompt = config.prompt.clone();
     let cwd = config.cwd.clone();
@@ -358,37 +590,26 @@ pub async fn start_codex_exec_once(config: CodexExecRunConfig) -> Result<CodexEx
     let sandbox = config.sandbox.clone();
     let resume_thread_id = config.resume_thread_id.clone();
     tokio::spawn(async move {
-        let stderr_task = stderr.map(|stream| {
-            tokio::spawn(async move {
-                read_stderr_tail(stream, monitor_tail).await;
-            })
-        });
-        let mut run_result = match (stdin, stdout) {
-            (Some(stdin), Some(stdout)) => {
-                run_app_server_turn(
-                    &mut child,
-                    stdin,
-                    stdout,
-                    &monitor_sink,
-                    &prompt,
-                    &cwd,
-                    approval_policy.as_deref(),
-                    sandbox.as_deref(),
-                    resume_thread_id.as_deref(),
-                )
-                .await
-            }
-            _ => Err(anyhow::anyhow!("Codex app-server stdio was unavailable")),
-        };
+        let mut run_result = run_app_server_turn(
+            &mut worker.child,
+            worker.rpc,
+            &monitor_sink,
+            &prompt,
+            &cwd,
+            approval_policy.as_deref(),
+            sandbox.as_deref(),
+            resume_thread_id.as_deref(),
+        )
+        .await;
         if run_result.is_err() {
-            if let Err(kill_error) = stop_failed_child(&mut child).await {
+            if let Err(kill_error) = stop_failed_child(&mut worker.child).await {
                 let original = run_result.unwrap_err();
                 run_result = Err(original.context(format!(
                     "also failed to stop Codex app-server: {kill_error}"
                 )));
             }
         }
-        if let Some(task) = stderr_task {
+        if let Some(task) = worker.stderr_task {
             let _ = task.await;
         }
         let (terminal_state, exit_code, detail) = match run_result {
@@ -404,7 +625,12 @@ pub async fn start_codex_exec_once(config: CodexExecRunConfig) -> Result<CodexEx
             ),
             Err(err) => (
                 "run_failed",
-                child.try_wait().ok().flatten().and_then(|s| s.code()),
+                worker
+                    .child
+                    .try_wait()
+                    .ok()
+                    .flatten()
+                    .and_then(|s| s.code()),
                 Some(err.to_string()),
             ),
         };
@@ -437,8 +663,7 @@ pub async fn start_codex_exec_once(config: CodexExecRunConfig) -> Result<CodexEx
 
 async fn run_app_server_turn(
     child: &mut Child,
-    stdin: ChildStdin,
-    stdout: ChildStdout,
+    mut rpc: AppServerRpc,
     sink: &CodexExecRuntimeSink,
     prompt: &str,
     cwd: &std::path::Path,
@@ -446,29 +671,7 @@ async fn run_app_server_turn(
     sandbox: Option<&str>,
     resume_thread_id: Option<&str>,
 ) -> Result<Option<i32>> {
-    let mut rpc = AppServerRpc {
-        stdin,
-        lines: BufReader::new(stdout).lines(),
-        next_id: 1,
-        seq: 0,
-    };
     let mut projection = AppServerProjection::default();
-
-    rpc.request(
-        "initialize",
-        json!({
-            "clientInfo": {
-                "name": "longhouse_console",
-                "title": "Longhouse Console",
-                "version": env!("CARGO_PKG_VERSION"),
-            },
-            "capabilities": { "experimentalApi": true },
-        }),
-        sink,
-        &mut projection,
-    )
-    .await?;
-    rpc.notify("initialized", json!({})).await?;
 
     let method = if resume_thread_id.is_some() {
         "thread/resume"
@@ -1369,6 +1572,17 @@ mod tests {
         }
     }
 
+    #[test]
+    fn five_hundred_sessions_reserve_only_machine_global_pool_target() {
+        let mut pool = CodexConsoleWorkerPool::default();
+        let reservations = (0..500)
+            .filter(|_| pool.reserve_spawn_slot())
+            .count();
+
+        assert_eq!(reservations, CONSOLE_WARM_POOL_TARGET);
+        assert_eq!(pool.spawning, CONSOLE_WARM_POOL_TARGET);
+    }
+
     fn runtime_sink(local_db_path: Option<PathBuf>) -> CodexExecRuntimeSink {
         let config = config();
         CodexExecRuntimeSink {
@@ -1752,7 +1966,14 @@ for line in sys.stdin:
         run_config.codex_bin =
             std::env::var("LONGHOUSE_TEST_CODEX_BIN").unwrap_or_else(|_| "codex".to_string());
         run_config.prompt = "Reply with exactly PRODUCTION_ADAPTER_CANARY_OK.".to_string();
+        prewarm_codex_console_workers().await;
+        let lease_started = std::time::Instant::now();
         let summary = start_codex_exec_once(run_config).await.unwrap();
+        assert!(
+            lease_started.elapsed() < Duration::from_millis(500),
+            "warm Console lease exceeded 500ms: {:?}",
+            lease_started.elapsed()
+        );
 
         let mut saw_text = false;
         let mut saw_terminal = false;

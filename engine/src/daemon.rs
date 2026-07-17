@@ -892,6 +892,10 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
         config.shipper_config.clone(),
         control_channel_status.clone(),
     );
+    // Anonymous, machine-global Console warmth: one initialized stock Codex
+    // app-server regardless of how many durable sessions exist. Failure is a
+    // measured cold-path miss and never disables the control channel.
+    tokio::spawn(crate::codex_exec::prewarm_codex_console_workers());
     let (transcript_wake_tx, mut transcript_wake_rx) = mpsc::unbounded_channel();
     let transcript_wake_task = spawn_transcript_wake_listener(transcript_wake_tx)?;
     loop {
