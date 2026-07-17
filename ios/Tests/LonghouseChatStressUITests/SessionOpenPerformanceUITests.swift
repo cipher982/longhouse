@@ -5,6 +5,10 @@ final class SessionOpenPerformanceUITests: XCTestCase {
     private static let wallClockMedianBudgetMs = 2_200
     private static let webKitRenderBudgetMs = 1_500
     private static let composerFocusBudgetMs = 2_000
+    // XCUITest's swipe synthesis + idle wait + accessibility query costs about
+    // 2.8s on the current simulator even when the app responds immediately.
+    // This still cleanly fails the 13s physical-device freeze we are guarding.
+    private static let timelineScrollBudgetMs = 4_000
 
     private enum LaunchEnvironment {
         static let timelineOpenFixture = "LONGHOUSE_UI_TEST_TIMELINE_OPEN_FIXTURE"
@@ -148,6 +152,28 @@ final class SessionOpenPerformanceUITests: XCTestCase {
         let elapsedMs = elapsedMs(since: selectionStartedAt)
         print("IOS_WORKSPACE_PICKER_SIM_METRIC selection_ms=\(elapsedMs)")
         XCTAssertLessThan(elapsedMs, 1_500, "Workspace selection should pop immediately.")
+    }
+
+    func testCachedTimelineScrollRespondsImmediately() {
+        let app = XCUIApplication()
+        app.launchEnvironment[LaunchEnvironment.timelineOpenFixture] = "1"
+        app.launchArguments += [LaunchArgument.appearanceOverride, "light"]
+        app.launch()
+
+        let firstRow = app.descendants(matching: .any)["timeline-open-session-1"]
+        XCTAssertTrue(firstRow.waitForExistence(timeout: 10))
+
+        let scrollStartedAt = Date()
+        app.swipeUp()
+        let laterRow = app.descendants(matching: .any)["timeline-open-session-8"]
+        XCTAssertTrue(waitUntil(timeout: 2) { laterRow.exists && laterRow.isHittable })
+        let elapsedMs = elapsedMs(since: scrollStartedAt)
+        print("IOS_TIMELINE_SCROLL_SIM_METRIC first_swipe_ms=\(elapsedMs)")
+        XCTAssertLessThan(
+            elapsedMs,
+            Self.timelineScrollBudgetMs,
+            "Cached timeline must accept its first scroll without eagerly building every row."
+        )
     }
 
     func testTimelineTapToTranscriptPaintProfile() throws {

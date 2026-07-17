@@ -115,7 +115,6 @@ struct TimelineView: View {
             }
             .refreshable { await viewModel.refresh(using: appState, reloadWidget: true, force: true) }
             .task {
-                WebTranscriptWebViewPool.prewarm()
                 await viewModel.load(using: appState)
                 if scenePhase == .active {
                     viewModel.startStream(using: appState)
@@ -124,10 +123,13 @@ struct TimelineView: View {
                 Task {
                     await appState.ensurePushRegistrationIfPossible()
                 }
-            }
-            .onAppear {
+                // Let SwiftUI commit the cached timeline and service the first
+                // gestures before constructing WKWebView. WebKit process startup
+                // is useful for session-open latency but must not sit ahead of
+                // the launch screen's first interactive frame.
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                guard !Task.isCancelled else { return }
                 WebTranscriptWebViewPool.prewarm()
-                consumePendingPushIfNeeded()
             }
             .onDisappear {
                 viewModel.stopStream()
@@ -162,7 +164,21 @@ struct TimelineView: View {
             LazyVStack(alignment: .leading, spacing: 14) {
                 ConnectionStatusStrip(banner: effectiveConnectionBanner)
                     .padding(.horizontal, 0)
-                timelineSection(title: "Recent", sessions: sessions, emphasized: false)
+                Text("Recent")
+                    .font(.headline.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 2)
+
+                ForEach(sessions) { session in
+                    NavigationLink(value: SessionRoute(sessionId: session.id, fallbackTitle: session.title)) {
+                        TimelineSessionCardRow(
+                            session: session,
+                            emphasized: false,
+                            connectivityBanner: viewModel.connectionBanner
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
             }
             .padding(.horizontal, 16)
             .padding(.top, 8)
@@ -170,28 +186,6 @@ struct TimelineView: View {
         }
         .navigationDestination(for: SessionRoute.self) { route in
             SessionView(sessionId: route.sessionId, fallbackTitle: route.fallbackTitle)
-        }
-    }
-
-    private func timelineSection(title: String, sessions: [SessionSummary], emphasized: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(title)
-                .font(.headline.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 2)
-
-            VStack(spacing: 10) {
-                ForEach(sessions) { session in
-                    NavigationLink(value: SessionRoute(sessionId: session.id, fallbackTitle: session.title)) {
-                        TimelineSessionCardRow(
-                            session: session,
-                            emphasized: emphasized,
-                            connectivityBanner: viewModel.connectionBanner
-                        )
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
         }
     }
 

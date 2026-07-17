@@ -119,7 +119,7 @@ struct TimelineOpenUITestFixtureView: View {
     private let sessions: [TimelineOpenFixtureSession]
 
     init() {
-        sessions = (1...3).map { index in
+        sessions = (1...40).map { index in
             TimelineOpenFixtureSession(
                 id: "ui-test-timeline-session-\(index)",
                 title: "Timeline open fixture \(index)",
@@ -136,16 +136,7 @@ struct TimelineOpenUITestFixtureView: View {
                         NavigationLink {
                             destination(for: session)
                         } label: {
-                            VStack(alignment: .leading, spacing: 6) {
-                                Text(session.title)
-                                    .font(.headline.weight(.semibold))
-                                Text("Fixture transcript")
-                                    .font(.subheadline)
-                                    .foregroundStyle(.secondary)
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(14)
-                            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 8))
+                            TimelineSessionCardRow(session: session.summary, emphasized: false)
                         }
                         .buttonStyle(.plain)
                         .accessibilityIdentifier("timeline-open-session-\(session.index)")
@@ -156,9 +147,8 @@ struct TimelineOpenUITestFixtureView: View {
             .background(Color(.systemGroupedBackground))
             .navigationTitle("Timeline")
             .task {
-                WebTranscriptWebViewPool.prewarm()
-            }
-            .onAppear {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                guard !Task.isCancelled else { return }
                 WebTranscriptWebViewPool.prewarm()
             }
         }
@@ -191,6 +181,71 @@ private struct TimelineOpenFixtureSession: Identifiable {
 
     var index: Int {
         Int(id.split(separator: "-").last ?? "0") ?? 0
+    }
+
+    var summary: SessionSummary {
+        let working = index.isMultiple(of: 3)
+        let statusLabel = working ? "Working" : "Idle"
+        let statusTone = working ? "running" : "inactive"
+        let card = TimelineCardPresentation(
+            ownership: TimelineBadgePresentation(label: "Managed", tone: "neutral"),
+            status: TimelineStatusPresentation(
+                label: statusLabel,
+                tone: statusTone,
+                seenAt: "2026-07-17T12:00:00Z",
+                seenAtPrefix: "Updated"
+            ),
+            borderTone: statusTone
+        )
+        let runtime = SessionRuntimeDisplay(
+            truthTier: "live",
+            signalTier: "live",
+            state: working ? "executing" : "quiescent",
+            tone: statusTone,
+            headline: statusLabel,
+            detail: nil,
+            phaseLabel: statusLabel,
+            compactToolLabel: nil,
+            isLive: working,
+            isExecuting: working,
+            needsAttention: false,
+            isIdle: !working,
+            isStalled: false,
+            isManagedLocalTruth: true,
+            hasSignal: true,
+            controlPath: "managed",
+            activityRecency: working ? "live" : "recent",
+            lifecycle: "running",
+            hostState: "attached",
+            terminalReason: nil
+        )
+        return SessionSummary(
+            id: id,
+            title: title,
+            presenceState: working ? "executing" : "quiescent",
+            provider: index.isMultiple(of: 2) ? "codex" : "claude",
+            project: "fixture-\(index)",
+            lastActivityAt: "2026-07-17T12:00:00Z",
+            summary: "Fixture transcript",
+            summaryStatus: nil,
+            summaryTitle: nil,
+            userState: "active",
+            status: nil,
+            displayPhase: statusLabel,
+            presenceTool: nil,
+            activeTool: nil,
+            gitBranch: "main",
+            homeLabel: nil,
+            headOriginLabel: nil,
+            timelineAnchorAt: "2026-07-17T12:00:00Z",
+            userMessages: index,
+            toolCalls: index * 2,
+            liveControlAvailable: true,
+            hostReattachAvailable: false,
+            replyToLiveSessionAvailable: true,
+            runtimeDisplay: runtime,
+            timelineCard: card
+        )
     }
 }
 

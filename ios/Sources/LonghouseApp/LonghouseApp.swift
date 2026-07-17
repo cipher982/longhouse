@@ -129,7 +129,6 @@ final class AppState: ObservableObject {
         let hasSessionCookie: Bool
         let hasRuntimeToken: Bool
         let hasNativeRefreshToken: Bool
-        let authorizationHeader: String?
 
         var hasCandidate: Bool {
             hasRuntimeToken || hasNativeRefreshToken || hasSessionCookie || hasRefreshCookie
@@ -198,27 +197,20 @@ final class AppState: ObservableObject {
         let hasNativeRefreshToken = credentials.hasNativeRefreshToken
         hasLocalSessionCandidate = credentials.hasCandidate
 
-        var result: SessionRestoreResult
-        if hasRuntimeToken {
-            result = await verifyBrowserSession(authorizationHeader: credentials.authorizationHeader)
-            if result == .unauthenticated {
-                // Token may be expired but still inside the CP refresh leeway
-                // (e.g. app suspended past expiry). Try one refresh before
-                // dropping the session so an overnight-suspended app doesn't
-                // hard-log-out when the token is still refreshable.
-                switch await refreshRuntimeTokenProactively() {
-                case .refreshed:
-                    result = await verifyBrowserSession()
-                case .rejected:
-                    result = .unauthenticated
-                case .deferred:
-                    result = .indeterminate
-                }
-            }
+        let result: SessionRestoreResult
+        if hasRuntimeToken || hasSession {
+            // The cached timeline is already useful and every real API request
+            // handles 401 + token/cookie refresh. A separate cold-start verify
+            // duplicated the first network round trip and, on physical devices,
+            // could spend 5-8 seconds bringing up CFNetwork before the app felt
+            // interactive. Trust the local credential optimistically and let the
+            // first product request validate it.
+            result = .authenticated
+            logger.info("auth restore accepted local credential network_verify=false")
         } else if hasNativeRefreshToken {
             switch await refreshRuntimeTokenProactively(requireExistingRuntimeToken: false) {
             case .refreshed:
-                result = await verifyBrowserSession()
+                result = .authenticated
             case .rejected:
                 result = .unauthenticated
             case .deferred:
@@ -226,8 +218,6 @@ final class AppState: ObservableObject {
             }
         } else if hasRefresh {
             result = await refreshBrowserSession()
-        } else if hasSession {
-            result = await verifyBrowserSession()
         } else {
             result = .unauthenticated
         }
@@ -569,26 +559,28 @@ final class AppState: ObservableObject {
         request.timeoutInterval = 8
 
         do {
-            let (_, response) = try await URLSession.shared.data(for: request)
-            guard let http = response as? HTTPURLResponse else {
+            guard let statusCode = try await Self.performAuthRequest(request) else {
                 logger.info("auth refresh finished result=indeterminate elapsed_ms=\(Int(Date().timeIntervalSince(startedAt) * 1000), privacy: .public)")
                 return .indeterminate
             }
 
-            if http.statusCode == 200 {
-                SharedAuthStore.captureCookiesFromSharedStorage(for: serverURL)
+            if statusCode == 200 {
+                let capturedServerURL = serverURL
+                await Task.detached(priority: .userInitiated) {
+                    SharedAuthStore.captureCookiesFromSharedStorage(for: capturedServerURL)
+                }.value
                 logger.info("auth refresh finished result=authenticated status=200 elapsed_ms=\(Int(Date().timeIntervalSince(startedAt) * 1000), privacy: .public)")
                 return .authenticated
             }
-            logger.info("auth refresh finished result=\(http.statusCode == 401 ? "unauthenticated" : "indeterminate", privacy: .public) status=\(http.statusCode, privacy: .public) elapsed_ms=\(Int(Date().timeIntervalSince(startedAt) * 1000), privacy: .public)")
-            return http.statusCode == 401 ? .unauthenticated : .indeterminate
+            logger.info("auth refresh finished result=\(statusCode == 401 ? "unauthenticated" : "indeterminate", privacy: .public) status=\(statusCode, privacy: .public) elapsed_ms=\(Int(Date().timeIntervalSince(startedAt) * 1000), privacy: .public)")
+            return statusCode == 401 ? .unauthenticated : .indeterminate
         } catch {
             logger.info("auth refresh finished result=indeterminate transport_error=true elapsed_ms=\(Int(Date().timeIntervalSince(startedAt) * 1000), privacy: .public)")
             return .indeterminate
         }
     }
 
-    private func verifyBrowserSession(authorizationHeader preloadedAuthorizationHeader: String? = nil) async -> SessionRestoreResult {
+    private func verifyBrowserSession() async -> SessionRestoreResult {
         let startedAt = Date()
         guard let url = URL(string: "\(serverURL)/api/auth/verify") else {
             return .unauthenticated
@@ -596,36 +588,35 @@ final class AppState: ObservableObject {
 
         var request = URLRequest(url: url)
         request.timeoutInterval = 5
-        let authorizationHeader: String?
-        if let preloadedAuthorizationHeader {
-            authorizationHeader = preloadedAuthorizationHeader
-        } else {
-            let capturedServerURL = serverURL
-            authorizationHeader = await Task.detached(priority: .userInitiated) {
-                SharedAuthStore.authorizationHeader(for: capturedServerURL)
-            }.value
-        }
+        let capturedServerURL = serverURL
+        let authorizationHeader = await Task.detached(priority: .userInitiated) {
+            SharedAuthStore.authorizationHeader(for: capturedServerURL)
+        }.value
         if let authorizationHeader {
             request.setValue(authorizationHeader, forHTTPHeaderField: "Authorization")
         }
 
         do {
-            let (_, response) = try await URLSession.shared.data(for: request)
-            guard let http = response as? HTTPURLResponse else {
+            guard let statusCode = try await Self.performAuthRequest(request) else {
                 logger.info("auth verify finished result=indeterminate elapsed_ms=\(Int(Date().timeIntervalSince(startedAt) * 1000), privacy: .public)")
                 return .indeterminate
             }
 
-            if http.statusCode == 204 {
+            if statusCode == 204 {
                 logger.info("auth verify finished result=authenticated status=204 elapsed_ms=\(Int(Date().timeIntervalSince(startedAt) * 1000), privacy: .public)")
                 return .authenticated
             }
-            logger.info("auth verify finished result=\(http.statusCode == 401 ? "unauthenticated" : "indeterminate", privacy: .public) status=\(http.statusCode, privacy: .public) elapsed_ms=\(Int(Date().timeIntervalSince(startedAt) * 1000), privacy: .public)")
-            return http.statusCode == 401 ? .unauthenticated : .indeterminate
+            logger.info("auth verify finished result=\(statusCode == 401 ? "unauthenticated" : "indeterminate", privacy: .public) status=\(statusCode, privacy: .public) elapsed_ms=\(Int(Date().timeIntervalSince(startedAt) * 1000), privacy: .public)")
+            return statusCode == 401 ? .unauthenticated : .indeterminate
         } catch {
             logger.info("auth verify finished result=indeterminate transport_error=true elapsed_ms=\(Int(Date().timeIntervalSince(startedAt) * 1000), privacy: .public)")
             return .indeterminate
         }
+    }
+
+    private nonisolated static func performAuthRequest(_ request: URLRequest) async throws -> Int? {
+        let (_, response) = try await URLSession.shared.data(for: request)
+        return (response as? HTTPURLResponse)?.statusCode
     }
 
     private nonisolated static func loadCredentialSnapshot(serverURL: String) async -> LocalCredentialSnapshot {
@@ -640,8 +631,7 @@ final class AppState: ObservableObject {
                 hasRefreshCookie: cookies.contains { $0.name == SharedAuthStore.refreshCookieName },
                 hasSessionCookie: cookies.contains { $0.name == SharedAuthStore.sessionCookieName },
                 hasRuntimeToken: runtimeToken != nil,
-                hasNativeRefreshToken: nativeRefreshToken != nil,
-                authorizationHeader: runtimeToken.map { "Bearer \($0)" }
+                hasNativeRefreshToken: nativeRefreshToken != nil
             )
         }.value
     }

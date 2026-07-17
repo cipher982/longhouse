@@ -964,6 +964,8 @@ enum WebTranscriptWebViewPool {
 
     static func prewarm() {
         guard warmedWebView == nil else { return }
+        let startedAt = Date()
+        logger.info("webkit prewarm requested")
         let delegate = WebTranscriptPrewarmDelegate {
             Task { @MainActor in
                 warmedWebViewLoaded = true
@@ -976,7 +978,7 @@ enum WebTranscriptWebViewPool {
         webView.loadHTMLString(WebTranscriptView.documentHTML, baseURL: nil)
         warmedWebView = webView
         warmedWebViewLoaded = false
-        logger.info("webkit prewarm started")
+        logger.info("webkit prewarm started sync_ms=\(Int(Date().timeIntervalSince(startedAt) * 1000), privacy: .public)")
     }
 
     static func takeOrCreate() -> PooledWebView {

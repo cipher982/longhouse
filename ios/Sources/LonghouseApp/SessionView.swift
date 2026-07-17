@@ -43,11 +43,6 @@ struct SessionView: View {
     @State private var pickerSelection: [PhotosPickerItem] = []
     @State private var isShowingPhotoPicker: Bool = false
     @State private var isLoadingPickerItems: Bool = false
-    /// Breathing room (pt) above the floating control card, added on top of the
-    /// SwiftUI-computed bottom safe area so the last transcript row never butts
-    /// directly against the chrome.
-    private static let transcriptComfortGap: CGFloat = 24
-
     init(
         sessionId: String,
         fallbackTitle: String,
@@ -78,28 +73,11 @@ struct SessionView: View {
     }
 
     var body: some View {
-        // Scroll-under-glass: the WKWebView transcript renders full-bleed so the
-        // glass blur shows content scrolling under the floating control card.
-        // SwiftUI already sums the entire bottom obstruction — the
-        // .safeAreaInset chrome + the home indicator — into
-        // safeAreaInsets.bottom. We read that single value and feed it to the DOM
-        // padding, so there are no hand-reconstructed global frames or magic
-        // offsets to drift out of sync when the keyboard, Dynamic Type, or chrome
-        // height changes. The GeometryReader is the view .safeAreaInset is applied
-        // to, so its proxy reports the *increased* bottom inset; the transcript
-        // child then ignores that area only for drawing.
-        GeometryReader { proxy in
-            // Ignore BOTH .container and .keyboard so the WebView frame is fully
-            // stable — it never shrinks when the keyboard opens. The control card
-            // (a .safeAreaInset, below) still rises above the keyboard on its own.
-            // Because the frame is stable, proxy.safeAreaInsets.bottom is the
-            // single, correct clearance: keyboard + card when the keyboard is up,
-            // card + home indicator when it's down. Feeding that to the
-            // DOM padding avoids the double-count we'd get if the frame shrank for
-            // the keyboard AND we padded for it too.
-            transcript(bottomInset: proxy.safeAreaInsets.bottom + Self.transcriptComfortGap)
-                .ignoresSafeArea([.container, .keyboard], edges: .bottom)
-        }
+        // Let SwiftUI's safe-area inset own both composer clearance and keyboard
+        // avoidance. The previous GeometryReader -> safe-area -> DOM-padding
+        // feedback loop repeatedly resized and repinned WebKit while the user was
+        // trying to focus the composer.
+        transcript
         .safeAreaInset(edge: .bottom, spacing: 0) {
             bottomChrome
                 .frame(maxWidth: .infinity)
@@ -262,7 +240,7 @@ struct SessionView: View {
         )
     }
 
-    private func transcript(bottomInset: CGFloat) -> some View {
+    private var transcript: some View {
         let state = transcriptState
         let showTranscript = state.showsTranscript
 
@@ -272,7 +250,7 @@ struct SessionView: View {
                 items: viewModel.items,
                 submittedInputs: viewModel.submittedInputs,
                 errorMessage: viewModel.errorMessage,
-                bottomInset: bottomInset,
+                bottomInset: 18,
                 onNearTop: {
                     Task { await viewModel.loadOlder(sessionId: sessionId, appState: appState) }
                 },

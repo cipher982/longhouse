@@ -98,6 +98,7 @@ test-ios-session-open: ## iOS simulator timeline tap-to-transcript benchmark
 		-only-testing:LonghouseChatStressUITests/SessionOpenPerformanceUITests/testTimelineTapToTranscriptPaintPerformance \
 		-only-testing:LonghouseChatStressUITests/SessionOpenPerformanceUITests/testComposerFocusRemainsResponsiveDuringStreaming \
 		-only-testing:LonghouseChatStressUITests/SessionOpenPerformanceUITests/testWorkspacePickerSelectionRespondsImmediately \
+		-only-testing:LonghouseChatStressUITests/SessionOpenPerformanceUITests/testCachedTimelineScrollRespondsImmediately \
 		test
 
 ios-marketing: ## Capture iOS marketing screenshots to /tmp/lh-shots/ (session-light.png, session-dark.png)
