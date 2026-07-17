@@ -65,10 +65,22 @@ if phase:
     os.replace(tmp, outbox / (Path(tmp).name.replace(".tmp.", "prs.") + ".json"))
 claim = {"schema_version": 2, "provider": "cursor", "status": "observed", "session_id": sid, "conversation_uuid": conversation_id, "hook_observed_at": now}
 target = claims / f"{sid}.json"
-fd, tmp = tempfile.mkstemp(dir=claims, prefix=".claim.")
-with os.fdopen(fd, "w") as f:
-    json.dump(claim, f)
-os.replace(tmp, target)
+existing_claim = None
+try:
+    existing_claim = json.loads(target.read_text())
+except (OSError, ValueError, TypeError):
+    pass
+claim_matches_reservation = (
+    isinstance(existing_claim, dict)
+    and existing_claim.get("session_id") == sid
+    and existing_claim.get("conversation_uuid") == conversation_id
+    and existing_claim.get("status") in {"pending", "observed"}
+)
+if claim_matches_reservation:
+    fd, tmp = tempfile.mkstemp(dir=claims, prefix=".claim.")
+    with os.fdopen(fd, "w") as f:
+        json.dump(claim, f)
+    os.replace(tmp, target)
 
 if event in {"afterAgentResponse", "stop"}:
     cursor_home = Path(os.environ.get("CURSOR_HOME") or (Path.home() / ".cursor"))
@@ -163,7 +175,8 @@ def install_cursor_hooks(cursor_dir: Path | None = None) -> list[str]:
         existing = hooks.get(event)
         entries = existing if isinstance(existing, list) else []
         timeout = 25 if event in {"beforeShellExecution", "beforeMCPExecution"} else 5
-        ours = {"command": f"{script} {event}", "timeout": timeout, "failClosed": False}
+        permission_event = event in {"beforeShellExecution", "beforeMCPExecution"}
+        ours = {"command": f"{script} {event}", "timeout": timeout, "failClosed": permission_event}
         hooks[event] = [ours if _is_ours(item) else item for item in entries]
         if not any(_is_ours(item) for item in hooks[event]):
             hooks[event].append(ours)

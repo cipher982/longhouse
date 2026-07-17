@@ -141,7 +141,7 @@ def _phase_path(session_id: str) -> Path:
     return _state_dir() / f"{session_id}.phase.json"
 
 
-def _read_provider_phase(session_id: str) -> str | None:
+def _read_provider_phase_state(session_id: str) -> dict | None:
     try:
         value = json.loads(_phase_path(session_id).read_text())
     except (OSError, ValueError, TypeError):
@@ -149,7 +149,14 @@ def _read_provider_phase(session_id: str) -> str | None:
     if value.get("session_id") != session_id:
         return None
     phase = str(value.get("phase") or "")
-    return phase if phase in {"active", "idle", "ended"} else None
+    if phase not in {"active", "idle", "ended"}:
+        return None
+    return value
+
+
+def _read_provider_phase(session_id: str) -> str | None:
+    value = _read_provider_phase_state(session_id)
+    return str(value["phase"]) if value is not None else None
 
 
 def _process_start_time(pid: int) -> str | None:
@@ -231,6 +238,10 @@ def _remove_state(session_id: str, socket_path: Path) -> None:
         pass
     try:
         _state_file_path(session_id).unlink(missing_ok=True)
+    except OSError:
+        pass
+    try:
+        _phase_path(session_id).unlink(missing_ok=True)
     except OSError:
         pass
 
@@ -634,13 +645,16 @@ def _handle_command(
             }
         return {"ok": True, "exit_code": 0, "stdout": "", "stderr": ""}
     if kind == "interrupt":
-        phase = _read_provider_phase(session_id) if session_id else None
-        if session_id and phase != "active":
+        phase_state = _read_provider_phase_state(session_id) if session_id else None
+        phase = str(phase_state.get("phase") or "") if phase_state else None
+        generation_id = str(phase_state.get("generation_id") or "") if phase_state else ""
+        expected_generation_id = str(request.get("generation_id") or "")
+        if session_id and (phase != "active" or not generation_id or not expected_generation_id or generation_id != expected_generation_id):
             return {
                 "ok": False,
                 "error": {
-                    "code": "provider_not_active",
-                    "message": f"Cursor provider phase is {phase or 'unknown'}; cancel was not injected",
+                    "code": "provider_generation_mismatch",
+                    "message": "Cursor active generation changed; cancel was not injected",
                 },
             }
         try:
@@ -797,6 +811,9 @@ def run_helm(
 
     launch_ui.progress("Preparing your session…")
     session_id = str(uuid.UUID(resume_session_id)) if resume_session_id else str(uuid.uuid4())
+    # Resuming reuses the Longhouse ID but starts a new provider process. A
+    # previous generation must never authorize input into the new process.
+    _phase_path(session_id).unlink(missing_ok=True)
     _write_pending_binding(session_id, provider_conversation_id)
     state_dir = _state_dir()
     state_dir.mkdir(parents=True, exist_ok=True)
@@ -853,7 +870,10 @@ def run_helm(
     # for the full HTTP timeout before starting the TUI.
     registration_thread.join(timeout=0.3)
     if permission_mode == "remote_approve" and not registration_box:
-        registration_thread.join(timeout=_REGISTER_TIMEOUT)
+        # Remote approval is a safety contract, not a best-effort enhancement.
+        # Do not start Cursor until the bounded registration worker has either
+        # supplied per-session hook credentials or exhausted its retries.
+        registration_thread.join()
     with registration_lock:
         early = registration_box[0] if registration_box else None
     panel_capability = _panel_capability_for_registration(early)
@@ -869,6 +889,20 @@ def run_helm(
     else:
         attach_command = None
 
+    if permission_mode == "remote_approve" and (early is None or not early.registered or not early.hook_token):
+        stop_event.set()
+        try:
+            server_sock.close()
+        except OSError:
+            pass
+        _remove_state(session_id, sock_path)
+        detail = early.error if early is not None else "registration did not complete"
+        typer.secho(
+            f"Cursor remote approval could not be enforced ({detail}); Cursor was not launched.",
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(code=EXIT_SETUP_FAILED)
+
     if verbose:
         typer.echo(f"Longhouse: {resolved_url}")
         typer.echo(f"Session:   {session_id}")
@@ -878,9 +912,14 @@ def run_helm(
     # screen would clear a printed banner; the title persists.
     _set_window_title("Longhouse Helm · cursor-agent")
 
+    if early is not None and early.registered:
+        archive_copy = "The native Cursor conversation will bind to this registered Longhouse session."
+    elif early is not None:
+        archive_copy = "Cursor remains local; Longhouse archive and resume are unavailable for this launch."
+    else:
+        archive_copy = "Archive and resume become available only after registration and native-store binding succeed."
     typer.secho(
-        "Cursor Helm remote control is live when Longhouse registration and the machine lease succeed. "
-        "The native Cursor conversation is archived and resumable under this same session.",
+        "Cursor Helm remote control is live when Longhouse registration and the machine lease succeed. " + archive_copy,
         fg=typer.colors.GREEN,
     )
 
@@ -913,7 +952,9 @@ def run_helm(
         except OSError:
             pass
         env = dict(os.environ)
-        env.setdefault("LONGHOUSE_SESSION_ID", session_id)
+        # A nested managed launch must own its new identity; inheriting an
+        # outer launcher ID cross-binds hook claims and remote control.
+        env["LONGHOUSE_SESSION_ID"] = session_id
         if permission_mode == "remote_approve" and early is not None and early.hook_token:
             env["LONGHOUSE_PERMISSION_HOOK_ENABLED"] = "1"
             env["LONGHOUSE_HOOK_URL"] = resolved_url
@@ -1076,7 +1117,7 @@ def run_helm(
         stop_event.set()
         # Bounded join covers one in-flight register attempt; unknown outcomes
         # still get a best-effort terminalize (see _reconcile_registration_on_exit).
-        _reconcile_registration_on_exit(
+        durable = _reconcile_registration_on_exit(
             url=resolved_url,
             token=resolved_token,
             session_id=session_id,
@@ -1101,7 +1142,7 @@ def run_helm(
         except OSError:
             pass
         _remove_state(session_id, sock_path)
-        launch_ui.exit_bookend(exit_code=exit_code, machine_name=machine_name, durable=True)
+        launch_ui.exit_bookend(exit_code=exit_code, machine_name=machine_name, durable=durable)
         if open_browser:
             typer.echo(f"Timeline: {build_session_url(resolved_url, session_id)}")
 

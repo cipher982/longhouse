@@ -69,7 +69,49 @@ def test_cursor_hook_install_preserves_user_hooks_and_is_idempotent(tmp_path: Pa
     assert (cursor / "hooks.json").read_text() == first
     assert config["hooks"]["beforeShellExecution"][0] == user
     assert sum("longhouse-cursor-hook.py" in item["command"] for item in config["hooks"]["beforeShellExecution"]) == 1
+    longhouse_shell = next(
+        item for item in config["hooks"]["beforeShellExecution"] if "longhouse-cursor-hook.py" in item["command"]
+    )
+    longhouse_lifecycle = next(
+        item for item in config["hooks"]["afterAgentResponse"] if "longhouse-cursor-hook.py" in item["command"]
+    )
+    assert longhouse_shell["failClosed"] is True
+    assert longhouse_lifecycle["failClosed"] is False
     assert "afterAgentResponse" in config["hooks"]
+
+
+def test_cursor_hook_does_not_overwrite_mismatched_launch_reservation(tmp_path: Path) -> None:
+    cursor = tmp_path / ".cursor"
+    cursor.mkdir()
+    install_cursor_hooks(cursor)
+    script = cursor / "hooks" / "longhouse-cursor-hook.py"
+    claims = tmp_path / "longhouse" / "managed-local" / "cursor-helm" / "binding-probes"
+    claims.mkdir(parents=True)
+    target = claims / "managed-session.json"
+    reserved = {
+        "schema_version": 2,
+        "provider": "cursor",
+        "status": "pending",
+        "session_id": "managed-session",
+        "conversation_uuid": "reserved-cursor-id",
+    }
+    target.write_text(json.dumps(reserved))
+    result = subprocess.run(
+        [str(script), "sessionStart"],
+        input=json.dumps({"conversation_id": "different-cursor-id"}),
+        text=True,
+        capture_output=True,
+        env={
+            **os.environ,
+            "LONGHOUSE_SESSION_ID": "managed-session",
+            "LONGHOUSE_HOME": str(tmp_path / "longhouse"),
+        },
+        timeout=5,
+        check=True,
+    )
+
+    assert json.loads(result.stdout) == {}
+    assert json.loads(target.read_text()) == reserved
 
 
 def test_cursor_permission_transport_failure_blocks_instead_of_failing_open(tmp_path: Path) -> None:

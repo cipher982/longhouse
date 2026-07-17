@@ -243,7 +243,7 @@ def write_project_hooks(workspace: Path, events_path: Path) -> Path:
                 {
                     "command": f"{script} {event}",
                     "timeout": 5,
-                    "failClosed": False,
+                    "failClosed": event in {"beforeShellExecution", "beforeMCPExecution"},
                 }
             ]
             for event in _HOOK_EVENTS
@@ -570,7 +570,7 @@ def _identity_scenario(
             timeout=timeout,
         )
         expected_prompt_digest = _marker_digest(f"Reply with exactly {marker} and nothing else.")
-        return {
+        facts = {
             "status": "passed",
             "started_at": started_at,
             "finished_at": _now(),
@@ -585,6 +585,16 @@ def _identity_scenario(
             "response_digest_present": bool(response.get("text_sha256")),
             "stop_status": stop.get("status"),
         }
+        required = {
+            "store_identity": facts["store_agent_id"] == provider_id,
+            "process_alive_after_turn": facts["process_alive_after_turn"] is True,
+            "prompt_digest_matches": facts["prompt_digest_matches"] is True,
+            "response_digest_present": facts["response_digest_present"] is True,
+        }
+        failed = [name for name, passed in required.items() if not passed]
+        if failed:
+            raise RuntimeError(f"Cursor identity scenario {name} failed proof: {', '.join(failed)}")
+        return facts
     finally:
         session.close()
 

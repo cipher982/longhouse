@@ -406,14 +406,18 @@ def test_send_while_active_is_rejected_before_pty_write(monkeypatch):
 
 
 def test_interrupt_while_idle_is_rejected_before_pty_write(monkeypatch):
-    monkeypatch.setattr(cursor_helm, "_read_provider_phase", lambda _sid: "idle")
+    monkeypatch.setattr(
+        cursor_helm,
+        "_read_provider_phase_state",
+        lambda _sid: {"phase": "idle", "generation_id": "generation-1"},
+    )
     monkeypatch.setattr(
         cursor_helm,
         "_full_write",
         lambda *_args: (_ for _ in ()).throw(AssertionError("PTY write must not happen")),
     )
     reply = cursor_helm._handle_command(
-        {"kind": "interrupt"},
+        {"kind": "interrupt", "generation_id": "generation-1"},
         master_fd=1,
         child_pid=1,
         master_lock=threading.Lock(),
@@ -421,7 +425,52 @@ def test_interrupt_while_idle_is_rejected_before_pty_write(monkeypatch):
         session_id="managed-session",
     )
     assert reply["ok"] is False
-    assert reply["error"]["code"] == "provider_not_active"
+    assert reply["error"]["code"] == "provider_generation_mismatch"
+
+
+def test_interrupt_generation_mismatch_is_rejected_before_pty_write(monkeypatch):
+    monkeypatch.setattr(
+        cursor_helm,
+        "_read_provider_phase_state",
+        lambda _sid: {"phase": "active", "generation_id": "generation-2"},
+    )
+    monkeypatch.setattr(
+        cursor_helm,
+        "_full_write",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("PTY write must not happen")),
+    )
+    reply = cursor_helm._handle_command(
+        {"kind": "interrupt", "generation_id": "generation-1"},
+        master_fd=1,
+        child_pid=1,
+        master_lock=threading.Lock(),
+        stop_event=threading.Event(),
+        session_id="managed-session",
+    )
+
+    assert reply["ok"] is False
+    assert reply["error"]["code"] == "provider_generation_mismatch"
+
+
+def test_interrupt_matching_generation_writes_ctrl_c(monkeypatch):
+    written = bytearray()
+    monkeypatch.setattr(
+        cursor_helm,
+        "_read_provider_phase_state",
+        lambda _sid: {"phase": "active", "generation_id": "generation-2"},
+    )
+    monkeypatch.setattr(cursor_helm, "_full_write", lambda _fd, data: written.extend(data) or len(data))
+    reply = cursor_helm._handle_command(
+        {"kind": "interrupt", "generation_id": "generation-2"},
+        master_fd=1,
+        child_pid=1,
+        master_lock=threading.Lock(),
+        stop_event=threading.Event(),
+        session_id="managed-session",
+    )
+
+    assert reply["ok"] is True
+    assert written == b"\x03"
 
 
 def test_handle_command_interrupt_writes_ctrl_c_without_signaling_child(monkeypatch):
