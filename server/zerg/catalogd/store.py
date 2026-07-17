@@ -3429,6 +3429,7 @@ class CatalogStore:
         with _read_snapshot(self.engine) as connection:
             legacy_where = [
                 func.coalesce(card.c.last_activity_at, card.c.started_at) >= since,
+                card.c.hidden_from_default_timeline == 0,
                 ~select(storage.c.session_id).where(storage.c.session_id == card.c.session_id).exists(),
             ]
             storage_where = [
@@ -4193,6 +4194,7 @@ class CatalogStore:
         tombstone = LiveSessionTombstone.__table__
         storage_session = StorageSession.__table__
         live_session_catalog = LiveSessionCatalog.__table__
+        live_timeline_card = LiveTimelineCard.__table__
         render_generation = RenderGeneration.__table__
         render_object = RenderObject.__table__
         media_object = MediaObject.__table__
@@ -4673,6 +4675,47 @@ class CatalogStore:
                 session_values["launch_surface"] = live_console_session["launch_surface"]
                 session_values["hidden_from_default_timeline"] = int(live_console_session["hidden_from_default_timeline"] or 0)
                 session_values["ended_at"] = None
+            durable_content_added = bool(
+                render_manifest is not None
+                and any(int(render_manifest[field] or 0) > 0 for field in ("user_messages", "assistant_messages", "tool_calls"))
+            )
+            if durable_content_added:
+                if live_console_session is not None:
+                    session_values["hidden_from_default_timeline"] = 0
+                human_catalog_shell = or_(
+                    live_session_catalog.c.launch_actor.in_(("user", "human_ui", "human_shell")),
+                    live_session_catalog.c.launch_surface.in_(("web", "ios", "console", "terminal", "api")),
+                )
+                human_card_shell = or_(
+                    live_timeline_card.c.launch_actor.in_(("user", "human_ui", "human_shell")),
+                    live_timeline_card.c.launch_surface.in_(("web", "ios", "console", "terminal", "api")),
+                )
+                connection.execute(
+                    update(live_session_catalog)
+                    .where(
+                        live_session_catalog.c.session_id == session_key,
+                        live_session_catalog.c.hidden_from_default_timeline == 1,
+                        human_catalog_shell,
+                        or_(
+                            live_session_catalog.c.origin_kind.is_(None),
+                            live_session_catalog.c.origin_kind.notin_(("hatch_automation", "test_or_canary")),
+                        ),
+                    )
+                    .values(hidden_from_default_timeline=0, updated_at=commit_time)
+                )
+                connection.execute(
+                    update(live_timeline_card)
+                    .where(
+                        live_timeline_card.c.session_id == session_key,
+                        live_timeline_card.c.hidden_from_default_timeline == 1,
+                        human_card_shell,
+                        or_(
+                            live_timeline_card.c.origin_kind.is_(None),
+                            live_timeline_card.c.origin_kind.notin_(("hatch_automation", "test_or_canary")),
+                        ),
+                    )
+                    .values(hidden_from_default_timeline=0, updated_at=commit_time)
+                )
             if existing_session is None:
                 connection.execute(
                     insert(storage_session).values(

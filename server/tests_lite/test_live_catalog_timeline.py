@@ -218,6 +218,7 @@ def test_live_catalog_timeline_labels_zero_content_shell_as_empty(tmp_path):
                 user_messages=0,
                 assistant_messages=0,
                 tool_calls=0,
+                hidden_from_default_timeline=1,
                 launch_actor="human_ui",
                 launch_surface="ios",
                 created_at=now,
@@ -235,6 +236,7 @@ def test_live_catalog_timeline_labels_zero_content_shell_as_empty(tmp_path):
                 user_messages=0,
                 assistant_messages=0,
                 tool_calls=0,
+                hidden_from_default_timeline=1,
                 archive_state="legacy_hot",
                 launch_actor="human_ui",
                 launch_surface="ios",
@@ -247,11 +249,12 @@ def test_live_catalog_timeline_labels_zero_content_shell_as_empty(tmp_path):
 
         response = project_catalog_timeline_snapshot(_snapshot(db, _params()))
 
-    assert response.total == 1
-    [card] = response.sessions
-    assert card.head.timeline_title == "longhouse · Empty session"
-    assert card.head.title_state == "awaiting_input"
-    assert card.head.title_source == "project"
+    assert response.total == 0
+    facts = CatalogStore(engine).read_session(session_id=str(session_id), owner_id=None)["facts"]
+    session = project_catalog_session_facts(facts, observed_at=now)
+    assert session.timeline_title == "longhouse · Empty session"
+    assert session.title_state == "awaiting_input"
+    assert session.title_source == "project"
 
 
 def test_storage_v2_untitled_session_uses_first_prompt_as_pending_fallback(tmp_path):

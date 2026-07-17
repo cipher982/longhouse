@@ -144,7 +144,9 @@ async def test_catalogd_owns_launch_intent_idempotency_and_outcome(daemon_paths)
     engine = create_catalog_engine(database_path)
     initialize_catalog_schema(engine)
     with Session(engine) as db:
-        assert db.get(LiveSessionCatalog, str(session_id)) is not None
+        session = db.get(LiveSessionCatalog, str(session_id))
+        assert session is not None
+        assert session.hidden_from_default_timeline == 1
         assert db.get(LiveLaunchReadiness, str(session_id)).state == "adopted"
         attempt = db.query(LiveSessionLaunchAttempt).filter_by(command_id=f"launch-{session_id}").one()
         assert attempt.state == "adopted"

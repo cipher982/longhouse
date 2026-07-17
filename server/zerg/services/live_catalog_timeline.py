@@ -515,7 +515,12 @@ def project_catalog_sessions_snapshot(snapshot: dict[str, Any]) -> SessionsListR
     )
 
 
-def read_live_catalog_session(session_id: UUID, *, owner_id: int | None = None) -> tuple[SessionResponse | None, str | None, str]:
+def read_live_catalog_session(
+    session_id: UUID,
+    *,
+    owner_id: int | None = None,
+    include_hidden: bool = True,
+) -> tuple[SessionResponse | None, str | None, str]:
     """Read one session shell and its provider alias from one catalog snapshot."""
 
     snapshot = session_snapshot(str(session_id), owner_id=owner_id) if owner_id is not None else session_snapshot(str(session_id))
@@ -526,6 +531,9 @@ def read_live_catalog_session(session_id: UUID, *, owner_id: int | None = None) 
     facts = snapshot.get("facts")
     if not isinstance(observed_at, datetime) or not isinstance(facts, dict):
         raise ValueError("catalog session snapshot is incomplete")
+    session_facts = facts.get("session")
+    if not include_hidden and isinstance(session_facts, dict) and bool(session_facts.get("hidden_from_default_timeline")):
+        return None, None, commit_seq
     projected = project_catalog_session_facts(facts, observed_at=observed_at)
     provider_alias = facts.get("provider_alias")
     return projected, str(provider_alias) if provider_alias else None, commit_seq
@@ -600,6 +608,7 @@ async def stream_live_catalog_machine_sessions(
                 session, _provider_alias, commit_seq = await asyncio.to_thread(
                     read_live_catalog_session,
                     UUID(session_id),
+                    include_hidden=False,
                 )
             except (ValueError, TypeError):
                 continue
