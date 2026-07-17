@@ -245,6 +245,7 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
 
         state = _wait_until(new_state, timeout=args.timeout, description="Cursor Helm managed state")
         session_id = str(state["session_id"])
+        report["session_id"] = session_id
         claim_path = root / "binding-probes" / f"{session_id}.json"
         claim = _wait_until(
             lambda: json.loads(claim_path.read_text()) if claim_path.exists() else None,
@@ -286,7 +287,8 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
                 json={"message": text},
                 timeout=30,
             )
-            response.raise_for_status()
+            if response.is_error:
+                raise RuntimeError(f"Runtime Host send-live failed HTTP {response.status_code}: {response.text[:1000]}")
             payload = response.json()
             if payload.get("accepted") is not True:
                 raise RuntimeError(f"Runtime Host did not accept Cursor send: {payload}")
@@ -298,7 +300,8 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
                 headers=headers,
                 timeout=30,
             )
-            response.raise_for_status()
+            if response.is_error:
+                raise RuntimeError(f"Runtime Host interrupt-live failed HTTP {response.status_code}: {response.text[:1000]}")
             payload = response.json()
             if payload.get("interrupt_dispatched") is not True:
                 raise RuntimeError(f"Runtime Host did not dispatch Cursor interrupt: {payload}")
