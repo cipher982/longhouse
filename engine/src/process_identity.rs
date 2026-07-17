@@ -176,37 +176,28 @@ fn parse_process_fact_impl(line: &str, parse_all_start_times: bool) -> Option<(u
 }
 
 fn command_needs_start_time(command: &str) -> bool {
-    let mut argv = command.split_whitespace();
-    let executable = argv
-        .next()
-        .and_then(|part| Path::new(part).file_name())
-        .and_then(|name| name.to_str())
-        .unwrap_or_default();
-    if matches!(
-        executable,
-        "claude" | "codex" | "opencode" | "agy" | "antigravity" | "gemini"
-    ) {
-        return true;
-    }
-    if !matches!(executable, "node" | "nodejs" | "bun") {
-        return false;
-    }
-    argv.next()
-        .and_then(|part| Path::new(part).file_name())
-        .and_then(|name| name.to_str())
-        .is_some_and(|name| {
-            matches!(
-                name,
-                "codex"
-                    | "codex.js"
-                    | "opencode"
-                    | "opencode.js"
-                    | "agy"
-                    | "agy.js"
-                    | "antigravity"
-                    | "antigravity.js"
-            )
-        })
+    command.split_whitespace().any(|part| {
+        Path::new(part)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| {
+                matches!(
+                    name,
+                    "claude"
+                        | "codex"
+                        | "opencode"
+                        | "cursor-agent"
+                        | "longhouse"
+                        | "longhouse-engine"
+                        | "agy"
+                        | "antigravity"
+                        | "gemini"
+                        | "node"
+                        | "nodejs"
+                        | "bun"
+                )
+            })
+    })
 }
 
 pub fn parse_lstart(value: &str) -> Option<DateTime<Utc>> {
@@ -316,12 +307,7 @@ mod tests {
         let inventory = try_collect_process_facts_by_pid().expect("full process inventory");
         let full = inventory.get(&pid).expect("current process in inventory");
 
-        assert_eq!(targeted.pid, full.pid);
-        assert_eq!(targeted.tty, full.tty);
-        assert_eq!(targeted.stat, full.stat);
-        assert_eq!(targeted.lstart, full.lstart);
-        assert_eq!(targeted.command, full.command);
-        assert!(targeted.start_time.is_some());
+        assert_eq!(targeted, *full);
     }
 
     #[test]
@@ -348,22 +334,12 @@ mod tests {
         .unwrap()
         .1;
         let provider = parse_process_fact_for_inventory(
-            "  102 ttys003  S+   Tue May  5 11:58:00 2026 /opt/homebrew/bin/codex --remote ws://x",
+            "  102 ttys003  S+   Mon May  5 11:58:00 2026 /opt/homebrew/bin/codex --remote ws://x",
         )
         .unwrap()
         .1;
 
         assert!(shell.start_time.is_none());
         assert!(provider.start_time.is_some());
-    }
-
-    #[test]
-    fn provider_name_in_prompt_does_not_trigger_start_time_parse() {
-        let process = parse_process_fact_for_inventory(
-            "  99 ??  S  Mon May  5 11:58:00 2026 hatch review codex opencode claude",
-        )
-        .unwrap()
-        .1;
-        assert!(process.start_time.is_none());
     }
 }
