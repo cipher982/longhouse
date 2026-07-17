@@ -18,6 +18,7 @@ class _PermissionServer:
     def __init__(self, decision: str):
         self.decision = decision
         self.requests: list[dict] = []
+        self.user_agents: list[str] = []
         outer = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -26,6 +27,7 @@ class _PermissionServer:
 
             def do_POST(self):
                 size = int(self.headers.get("Content-Length") or "0")
+                outer.user_agents.append(self.headers.get("User-Agent") or "")
                 outer.requests.append(json.loads(self.rfile.read(size)))
                 self.reply({"pause_request_id": "pause-1", "request_key": "key-1", "status": "pending"})
 
@@ -70,7 +72,7 @@ def test_cursor_hook_install_preserves_user_hooks_and_is_idempotent(tmp_path: Pa
     assert "afterAgentResponse" in config["hooks"]
 
 
-def test_cursor_permission_timeout_returns_to_local_prompt(tmp_path: Path) -> None:
+def test_cursor_permission_transport_failure_blocks_instead_of_failing_open(tmp_path: Path) -> None:
     cursor = tmp_path / ".cursor"
     cursor.mkdir()
     install_cursor_hooks(cursor)
@@ -103,8 +105,8 @@ def test_cursor_permission_timeout_returns_to_local_prompt(tmp_path: Path) -> No
     )
 
     assert json.loads(result.stdout) == {
-        "permission": "ask",
-        "user_message": "Longhouse unavailable; decide in Cursor",
+        "permission": "deny",
+        "user_message": "Longhouse approval unavailable; command blocked",
     }
     presence = list((tmp_path / "longhouse" / "agent" / "outbox").glob("prs.*.json"))
     assert len(presence) == 1
@@ -139,6 +141,7 @@ def test_cursor_permission_hook_returns_exact_remote_allow_and_deny(tmp_path: Pa
             )
         assert json.loads(result.stdout)["permission"] == decision
         assert server.requests[0]["provider"] == "cursor"
+        assert server.user_agents == ["Longhouse-Cursor-Hook/1"]
 
 
 def test_cursor_stop_wakes_engine_with_exact_managed_store(tmp_path: Path) -> None:

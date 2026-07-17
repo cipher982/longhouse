@@ -108,7 +108,11 @@ if event in {"beforeShellExecution", "beforeMCPExecution"} and os.environ.get("L
     tool_name = "Shell" if event == "beforeShellExecution" else str(payload.get("tool_name") or "MCP")
     tool_input = {"command": payload.get("command")} if event == "beforeShellExecution" else (payload.get("tool_input") or payload.get("arguments") or {})
     body = json.dumps({"session_id": sid, "tool_use_id": request_id, "tool_name": tool_name, "tool_input": tool_input, "provider": "cursor"}).encode()
-    headers = {"Content-Type": "application/json", "X-Agents-Token": token}
+    headers = {
+        "Content-Type": "application/json",
+        "X-Agents-Token": token,
+        "User-Agent": "Longhouse-Cursor-Hook/1",
+    }
     try:
         req = urllib.request.Request(base + "/api/agents/permission-requests", data=body, headers=headers, method="POST")
         with urllib.request.urlopen(req, timeout=5) as response:
@@ -117,7 +121,7 @@ if event in {"beforeShellExecution", "beforeMCPExecution"} and os.environ.get("L
         deadline = time.monotonic() + min(20.0, max(0.0, float(os.environ.get("LONGHOUSE_PERMISSION_HOOK_TIMEOUT_S", "20"))))
         query = urllib.parse.urlencode({"session_id": sid, "tool_use_id": request_id, "pause_request_id": pause_id})
         while pause_id and time.monotonic() < deadline:
-            req = urllib.request.Request(base + "/api/agents/permission-decision?" + query, headers={"X-Agents-Token": token})
+            req = urllib.request.Request(base + "/api/agents/permission-decision?" + query, headers=headers)
             with urllib.request.urlopen(req, timeout=5) as response:
                 result = json.loads(response.read().decode() or "{}")
             if result.get("resolved"):
@@ -127,7 +131,7 @@ if event in {"beforeShellExecution", "beforeMCPExecution"} and os.environ.get("L
             time.sleep(0.5)
     except (OSError, ValueError, urllib.error.URLError):
         pass
-    permission("ask", "Longhouse unavailable; decide in Cursor")
+    permission("deny", "Longhouse approval unavailable; command blocked")
 else:
     print("{}")
 """
