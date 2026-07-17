@@ -1466,7 +1466,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             continue;
                         }
                         let next_managed_observations =
-                            ManagedObservationSnapshot::from_result(&result);
+                            ManagedObservationSnapshot::from_result(&result).current_only();
                         let managed_observations_changed = !next_managed_observations
                             .projection_equivalent(&last_managed_observations);
                         last_managed_observations = next_managed_observations;
