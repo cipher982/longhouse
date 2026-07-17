@@ -5,6 +5,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 
 renderer="${IOS_TRANSCRIPT_BENCHMARK_RENDERER:-snapshot-webkit}"
+temperature="${IOS_TRANSCRIPT_BENCHMARK_TEMPERATURE:-cold}"
+debugger="${IOS_TRANSCRIPT_BENCHMARK_DEBUGGER:-none}"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 xcode_version="$(xcodebuild -version | paste -sd ' ' -)"
 output_dir="${IOS_TRANSCRIPT_BENCHMARK_OUTPUT:-$ROOT/artifacts/ios-transcript-benchmark/$timestamp-$renderer}"
@@ -22,13 +24,14 @@ rm -rf "$result_bundle"
 
 echo "Transcript renderer benchmark"
 echo "  renderer:    $renderer"
+echo "  temperature: $temperature"
 echo "  destination: $destination"
 echo "  artifacts:   $output_dir"
 
 set +e
 IOS_TRANSCRIPT_BENCHMARK_RENDERER="$renderer" \
-IOS_TRANSCRIPT_BENCHMARK_TEMPERATURE="${IOS_TRANSCRIPT_BENCHMARK_TEMPERATURE:-cold}" \
-IOS_TRANSCRIPT_BENCHMARK_DEBUGGER="${IOS_TRANSCRIPT_BENCHMARK_DEBUGGER:-none}" \
+IOS_TRANSCRIPT_BENCHMARK_TEMPERATURE="$temperature" \
+IOS_TRANSCRIPT_BENCHMARK_DEBUGGER="$debugger" \
 xcodebuild \
   -project ios/XcodeHarness/LonghouseIOS.xcodeproj \
   -scheme LonghouseChatStress \
@@ -45,7 +48,9 @@ if grep -q 'TRANSCRIPT_BENCHMARK_RESULT ' "$console_log"; then
     "$console_log" \
     "$output_dir/result.json" \
     --set "collectedAtUTC=$timestamp" \
+    --set "debugger=$debugger" \
     --set "destination=$destination" \
+    --set "runTemperature=$temperature" \
     --set "xcodeVersion=$xcode_version"
 fi
 
