@@ -3181,6 +3181,18 @@ async fn process_notification(
     let mut followup = None;
     match method {
         "thread/started" => {
+            if notification_thread_is_ephemeral(&params) {
+                if let Some(id) = extract_notification_thread_id(&params) {
+                    let parent_id = extract_string(&params, &["thread", "forkedFromId"])
+                        .or_else(|| extract_string(&params, &["thread", "forked_from_id"]));
+                    eprintln!(
+                        "[codex-bridge] ignoring ephemeral Codex thread candidate: {id} parent={}",
+                        parent_id.as_deref().unwrap_or("unknown")
+                    );
+                    context.rejected_thread_ids.insert(id);
+                }
+                return Ok(None);
+            }
             if notification_thread_is_subagent(&params) {
                 if let Some(id) = extract_notification_thread_id(&params) {
                     eprintln!("[codex-bridge] ignoring Codex subagent thread candidate: {id}");
@@ -3556,6 +3568,14 @@ fn notification_thread_is_subagent(params: &Value) -> bool {
     params
         .get("thread")
         .map(codex_thread_value_is_subagent)
+        .unwrap_or(false)
+}
+
+fn notification_thread_is_ephemeral(params: &Value) -> bool {
+    params
+        .get("thread")
+        .and_then(|thread| thread.get("ephemeral"))
+        .and_then(Value::as_bool)
         .unwrap_or(false)
 }
 
@@ -7709,6 +7729,121 @@ mod tests {
         assert_eq!(context.state.thread_path, None);
         assert_eq!(context.runtime.thread_id, None);
         assert!(context.rejected_thread_ids.contains("thr-child"));
+    }
+
+    #[tokio::test]
+    async fn process_notification_ignores_ephemeral_fork_without_replacing_parent() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = make_test_run_config(&temp);
+        let mut context = make_test_context(&temp);
+        context.state.thread_id = Some("thr-parent".to_string());
+        context.state.thread_path = Some("/tmp/parent.jsonl".to_string());
+        context.runtime.thread_id = Some("thr-parent".to_string());
+        context.subscribed_thread_id = Some("thr-parent".to_string());
+
+        let followup = process_notification(
+            &json!({
+                "method": "thread/started",
+                "params": {
+                    "thread": {
+                        "id": "thr-side",
+                        "sessionId": "thr-side",
+                        "forkedFromId": "thr-parent",
+                        "parentThreadId": null,
+                        "ephemeral": true,
+                        "path": null,
+                        "status": { "type": "idle" }
+                    }
+                }
+            }),
+            &config,
+            &mut context,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(followup, None);
+        assert_eq!(context.state.thread_id.as_deref(), Some("thr-parent"));
+        assert_eq!(
+            context.state.thread_path.as_deref(),
+            Some("/tmp/parent.jsonl")
+        );
+        assert_eq!(context.runtime.thread_id.as_deref(), Some("thr-parent"));
+        assert_eq!(context.subscribed_thread_id.as_deref(), Some("thr-parent"));
+        assert_eq!(context.state.status, "ready");
+        assert_eq!(context.state.last_error, None);
+        assert!(context.rejected_thread_ids.contains("thr-side"));
+    }
+
+    #[tokio::test]
+    async fn process_notification_ignores_ephemeral_fork_events_without_degrading_parent() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = make_test_run_config(&temp);
+        let mut context = make_test_context(&temp);
+        context.state.thread_id = Some("thr-parent".to_string());
+        context.state.thread_path = Some("/tmp/parent.jsonl".to_string());
+        context.runtime.thread_id = Some("thr-parent".to_string());
+
+        process_notification(
+            &json!({
+                "method": "thread/started",
+                "params": {
+                    "thread": {
+                        "id": "thr-side",
+                        "forkedFromId": "thr-parent",
+                        "ephemeral": true,
+                        "path": null
+                    }
+                }
+            }),
+            &config,
+            &mut context,
+        )
+        .await
+        .unwrap();
+
+        for notification in [
+            json!({
+                "method": "turn/started",
+                "params": {
+                    "threadId": "thr-side",
+                    "turn": { "id": "turn-side", "status": "inProgress" }
+                }
+            }),
+            json!({
+                "method": "item/agentMessage/delta",
+                "params": {
+                    "threadId": "thr-side",
+                    "turnId": "turn-side",
+                    "itemId": "item-side",
+                    "delta": "ephemeral answer"
+                }
+            }),
+            json!({
+                "method": "turn/completed",
+                "params": {
+                    "threadId": "thr-side",
+                    "turn": { "id": "turn-side", "status": "completed" }
+                }
+            }),
+        ] {
+            let followup = process_notification(&notification, &config, &mut context)
+                .await
+                .unwrap();
+            assert_eq!(followup, None);
+        }
+
+        assert_eq!(context.state.thread_id.as_deref(), Some("thr-parent"));
+        assert_eq!(
+            context.state.thread_path.as_deref(),
+            Some("/tmp/parent.jsonl")
+        );
+        assert_eq!(context.runtime.thread_id.as_deref(), Some("thr-parent"));
+        assert_eq!(context.state.status, "ready");
+        assert_eq!(context.state.last_error, None);
+        assert_eq!(context.state.active_turn_id, None);
+        assert_eq!(context.runtime_tracker.active_turn_id, None);
+        assert!(context.live_transcript_text.is_empty());
     }
 
     #[tokio::test]
