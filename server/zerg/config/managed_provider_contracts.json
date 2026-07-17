@@ -364,7 +364,7 @@
       "launch_local": true,
       "launch_remote": true,
       "run_once": true,
-      "reattach": false,
+      "reattach": true,
       "send_input": true,
       "interrupt": true,
       "steer_active_turn": false,
@@ -376,9 +376,8 @@
       "can_resume": false,
       "operation_evidence": {
         "launch_local": {
-          "level": "hermetic",
-          "source": "longhouse cursor launcher: pty.fork pass-through of cursor-agent (pristine TUI, no tmux/emulation) + per-session Unix socket + state file scanned by the engine into a managed-session lease. Live send validated: text -> 0.3s -> Escape -> 0.1s -> Enter submits in cursor-agent (claude-code#15553 Ink workaround); SIGINT exits cursor-agent (#52812). Engine cursor_helm_control forwards over the socket. See docs/specs/cursor-transcript-format.md Helm section.",
-          "next": "promote to live_no_token with an interactive send/interrupt canary driven from web/iOS"
+          "level": "live_token",
+          "source": "Cursor Helm Gate 0 on stock cursor-agent 2026.07.16: provider-minted create-chat/--resume identity, hook/store agreement, pristine PTY TUI, and live socket-owned control"
         },
         "launch_remote": {
           "level": "hermetic",
@@ -389,18 +388,16 @@
           "source": "cursor_acp exact raw JSON-RPC source + storage-v2 receipt-cursor tests"
         },
         "reattach": {
-          "level": "none",
-          "source": "unsupported: ACP is a headless stdio process per turn; there is no attach-to-live-process surface. Resume is a new session/load + session/prompt turn, not a reattach."
+          "level": "live_token",
+          "source": "Cursor Helm Gate 0 native_resume_continuity: a new stock TUI resumes the same provider conversation and Longhouse session identity"
         },
         "send_input": {
-          "level": "hermetic",
-          "source": "cursor_helm: engine forwards session.send_text to the launcher Unix socket; launcher writes text -> Escape -> Enter to the PTY master (Ink submit workaround). Validated live in the PTY pass-through spike (cursor-agent replied \"ready\").",
-          "next": "promote with live interactive send canary from web/iOS"
+          "level": "live_token",
+          "source": "Cursor Helm Gate 0 idle send: exact prompt digest, native response/stop hooks, and store continuity; active phase is rejected before PTY write"
         },
         "interrupt": {
-          "level": "hermetic",
-          "source": "cursor_helm: engine forwards session.interrupt; launcher sends SIGINT to the cursor-agent child pid (SIGINT exits cursor-agent, #52812).",
-          "next": "promote with live interrupt canary"
+          "level": "live_token",
+          "source": "Cursor Helm Gate 0 escape_cancel: Escape stops the active generation, preserves the TUI process, and the next turn completes"
         },
         "steer_active_turn": {
           "level": "none",
@@ -417,15 +414,15 @@
         },
         "tail_output": {
           "level": "hermetic",
-          "source": "cursor_acp JSON-RPC source is persisted through the shared runtime sink"
+          "source": "cursor_store exact raw storage-v2 source now emits cursor-store-render-v1 text, reasoning, tool-call, and tool-result projections"
         },
         "runtime_phase": {
           "level": "hermetic",
-          "source": "cursor_acp phase and terminal events use the shared runtime reducer"
+          "source": "Cursor user hook adapter records native lifecycle/tool events and atomic active/idle/ended phase"
         },
         "transcript_binding": {
           "level": "hermetic",
-          "source": "cursor_acp emits the native ACP session id as a binding signal"
+          "source": "Cursor hook conversation_id plus inherited Longhouse session ID binds the matching native store without recency heuristics"
         }
       },
       "machine_control_supports": [

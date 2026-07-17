@@ -83,6 +83,19 @@ def test_build_managed_local_attach_command_uses_opencode_server_bridge():
     assert "exec longhouse opencode-channel attach --session-id session-123" in inner
 
 
+def test_build_managed_local_attach_command_resumes_cursor_native_conversation():
+    session = SimpleNamespace(
+        id="session-123",
+        managed_transport=ManagedSessionTransport.CURSOR_HELM.value,
+    )
+
+    command = build_managed_local_attach_command(session=session)
+    assert command is not None
+    inner = _wrapped_inner(command)
+    assert "command -v cursor-agent" in inner
+    assert "exec longhouse cursor --resume-session session-123" in inner
+
+
 def test_build_managed_local_attach_command_is_empty_for_antigravity_process():
     session = SimpleNamespace(
         id="session-123",

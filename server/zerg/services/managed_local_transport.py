@@ -117,6 +117,13 @@ def build_managed_local_attach_command(*, session: AgentSession, db: Session | N
             required_commands=("longhouse", "opencode"),
         )
 
+    if transport == ManagedSessionTransport.CURSOR_HELM.value:
+        return _build_longhouse_cli_shell_command(
+            command_group="cursor",
+            args=("--resume-session", shlex.quote(session_id)),
+            required_commands=("longhouse", "cursor-agent"),
+        )
+
     if transport in (
         ManagedSessionTransport.ANTIGRAVITY_PROCESS.value,
         ManagedSessionTransport.ANTIGRAVITY_HOOK_INBOX.value,
