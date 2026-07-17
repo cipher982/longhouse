@@ -1513,7 +1513,10 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 pending_full_reconciliation = true;
                             }
                         } else if managed_observations_changed {
-                            pending_periodic_observation = true;
+                            defer_managed_pair_retry(
+                                &mut projection_generation,
+                                &mut pending_full_reconciliation,
+                            );
                         }
                         maybe_start_opencode_title_refresh(
                             &mut opencode_title_refresh_tasks,
@@ -2795,6 +2798,13 @@ fn retain_existing_observations<T: Clone>(
     retained_paths
 }
 
+fn defer_managed_pair_retry(projection_generation: &mut u64, pending_full: &mut bool) {
+    // The in-flight unmanaged refresh was paired with older managed truth.
+    // Invalidate it now and retry both halves together once that lane is idle.
+    *projection_generation = projection_generation.saturating_add(1);
+    *pending_full = true;
+}
+
 #[cfg(unix)]
 fn spawn_transcript_wake_listener(
     tx: mpsc::UnboundedSender<TranscriptWakeSignal>,
@@ -4074,6 +4084,17 @@ mod tests {
         let current = with_history.current_only();
         assert_eq!(current.codex.len(), 1);
         assert_eq!(current.codex[0].session_id, first.codex[0].session_id);
+    }
+
+    #[test]
+    fn deferred_managed_pair_invalidates_stale_refresh_and_requests_full_retry() {
+        let mut generation = 41;
+        let mut pending_full = false;
+
+        defer_managed_pair_retry(&mut generation, &mut pending_full);
+
+        assert_eq!(generation, 42);
+        assert!(pending_full);
     }
 
     #[test]
