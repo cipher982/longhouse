@@ -320,8 +320,8 @@ providers:
   - cursor_exec
   launch_local: true
   # Console ACP writes every notification to an engine-owned raw source and
-  # advances only after a storage-v2 receipt. Helm remains locally launchable
-  # but is not yet a deterministically bound transcript source.
+  # advances only after a storage-v2 receipt. Helm binds the provider-minted
+  # native chat to the managed session through matching hook/store evidence.
   launch_remote: true
   run_once: true
   reattach: true
@@ -356,14 +356,15 @@ providers:
         hooks, and store continuity; active phase is rejected before PTY write'
     interrupt:
       level: live_token
-      source: 'Cursor Helm Gate 0 escape_cancel: Escape stops the active generation,
-        preserves the TUI process, and the next turn completes'
+      source: 'Cursor Helm Gate 0 ctrl_c_cancel: Ctrl-C stops the active generation,
+        emits aborted/error, preserves the TUI process, and the next turn completes'
     steer_active_turn:
       level: none
       source: unsupported until Cursor exposes a mid-turn injection API
     answer_pause:
       level: none
-      source: unsupported until Cursor exposes pause-answer semantics
+      source: 'Cursor permission hooks use the separate pull-based Longhouse pause-request
+        surface; session.answer_pause machine dispatch is intentionally not advertised'
     terminate:
       level: hermetic
       source: 'cursor_helm: engine forwards session.terminate; launcher sends SIGKILL to
@@ -372,7 +373,7 @@ providers:
       next: promote with live terminate canary
     tail_output:
       level: hermetic
-      source: cursor_store exact raw storage-v2 source now emits cursor-store-render-v1 text, reasoning, tool-call, and tool-result projections
+      source: cursor_store exact raw storage-v2 source emits cursor-store-render-v2 text, reasoning, tool-call, and tool-result projections
     runtime_phase:
       level: hermetic
       source: Cursor user hook adapter records native lifecycle/tool events and atomic active/idle/ended phase
