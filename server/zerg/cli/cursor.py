@@ -18,14 +18,29 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import click
 import typer
 
 from zerg.session_loop_mode import SessionLoopMode
 
+
+class _CursorGroup(typer.core.TyperGroup):
+    """Treat unknown command tokens as stock Cursor passthrough arguments."""
+
+    def invoke(self, ctx: click.Context):
+        protected = list(ctx.protected_args)
+        if protected and self.get_command(ctx, protected[0]) is None:
+            ctx.args = [*protected, *ctx.args]
+            ctx.protected_args = []
+        return super().invoke(ctx)
+
+
 app = typer.Typer(
+    cls=_CursorGroup,
     help="Cursor agent harness: managed Helm launch + unmanaged ingest/inspection.",
     invoke_without_command=True,
     no_args_is_help=False,
+    context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
 )
 
 
@@ -33,7 +48,11 @@ app = typer.Typer(
 def binding_probe(
     session_id: str = typer.Option(..., "--session-id", help="Longhouse Cursor Helm session UUID."),
     phase: str = typer.Option(..., "--phase", help="before_launch, after_prompt, after_tool_turn, or at_exit."),
-    store_db: Path | None = typer.Option(None, "--store-db", help="Controlled launch's Cursor store.db (required after launch)."),
+    store_db: Path | None = typer.Option(
+        None,
+        "--store-db",
+        help="Controlled launch's Cursor store.db (required after launch).",
+    ),
 ) -> None:
     """Record one interactive, read-only Cursor Helm binding-probe observation."""
     from zerg.services.cursor_binding_probe import record_probe_observation
@@ -86,10 +105,6 @@ def launch(
     ),
     verbose: bool = typer.Option(False, "--verbose/--quiet", "-v", help="Show session id + timeline URL on launch."),
     open_browser: bool = typer.Option(False, "--open/--no-open", help="Print the timeline URL after the session ends."),
-    cursor_args: list[str] = typer.Argument(
-        None,
-        help="Extra args forwarded to cursor-agent (use '--' to separate).",
-    ),
 ) -> None:
     """Launch a Longhouse Cursor Helm session: interactive cursor-agent TUI + remote steer."""
     if ctx.invoked_subcommand is not None:
@@ -105,7 +120,7 @@ def launch(
         token=token,
         config_dir=config_dir,
         permission_mode=permission_mode,
-        cursor_args=cursor_args,
+        cursor_args=list(ctx.args),
         verbose=verbose,
         open_browser=open_browser,
         resume_session_id=resume_session,
