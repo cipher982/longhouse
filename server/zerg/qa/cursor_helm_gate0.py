@@ -386,18 +386,25 @@ class CursorPtySession:
     def close(self) -> None:
         self._stop_reader.set()
         if self.alive():
+            process_group: int | None = None
             try:
-                os.killpg(os.getpgid(self.process.pid), signal.SIGTERM)
+                process_group = os.getpgid(self.process.pid)
+                os.killpg(process_group, signal.SIGTERM)
             except (PermissionError, ProcessLookupError):
                 self.process.terminate()
             try:
                 self.process.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 try:
-                    os.killpg(os.getpgid(self.process.pid), signal.SIGKILL)
+                    if process_group is None:
+                        process_group = os.getpgid(self.process.pid)
+                    os.killpg(process_group, signal.SIGKILL)
                 except (PermissionError, ProcessLookupError):
                     self.process.kill()
-                self.process.wait(timeout=5)
+                try:
+                    self.process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    pass
         try:
             os.close(self.master_fd)
         except OSError:
@@ -485,9 +492,11 @@ def _identity_scenario(
     model: str | None,
 ) -> dict[str, Any]:
     longhouse_session_id = str(uuid4())
+    launch_marker = f"LONGHOUSE_CURSOR_GATE0_BOOT_{name.upper()}_{uuid4().hex[:10]}"
     argv = [binary, *launch_args, "--workspace", str(workspace), "--force"]
     if model:
         argv.extend(["--model", model])
+    argv.append(f"Reply with exactly {launch_marker} and nothing else.")
     session = CursorPtySession.start(
         argv=argv,
         cwd=workspace,
@@ -503,6 +512,15 @@ def _identity_scenario(
             timeout=timeout,
         )
         store = wait_for_store(provider_id, timeout=timeout)
+        boot_event_count = len(read_hook_events(events_path))
+        wait_for_hook(
+            events_path,
+            longhouse_session_id=longhouse_session_id,
+            event="stop",
+            conversation_id=provider_id,
+            after_count=max(0, boot_event_count - 1),
+            timeout=timeout,
+        )
         marker = f"LONGHOUSE_CURSOR_GATE0_{name.upper()}_{uuid4().hex[:10]}"
         before = len(read_hook_events(events_path))
         session.submit_idle(f"Reply with exactly {marker} and nothing else.")
