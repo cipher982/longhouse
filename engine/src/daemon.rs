@@ -2006,6 +2006,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     if let Some(task) = transcript_wake_task {
         task.abort();
     }
+    crate::codex_exec::shutdown_codex_console_worker_pool().await;
     tracing::info!("Daemon shutdown complete");
     Ok(())
 }

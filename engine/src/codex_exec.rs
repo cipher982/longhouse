@@ -44,6 +44,7 @@ struct InitializedCodexWorker {
     stderr_tail: Arc<Mutex<VecDeque<String>>>,
     stderr_task: Option<tokio::task::JoinHandle<()>>,
     pid: Option<u32>,
+    pgid: Option<i32>,
     argv: Vec<String>,
     ready_at: std::time::Instant,
 }
@@ -349,6 +350,7 @@ pub async fn prewarm_codex_console_workers() {
     .await;
     let mut pool = console_worker_pool().lock().await;
     pool.spawning = pool.spawning.saturating_sub(1);
+    let mut discard = None;
     match result {
         Ok(worker) if pool.workers.len() < CONSOLE_WARM_POOL_TARGET => {
             let worker_pid = worker.pid;
@@ -362,10 +364,18 @@ pub async fn prewarm_codex_console_workers() {
                 tokio::spawn(reap_warm_worker_after_ttl(worker_pid));
             }
         }
-        Ok(_) => {}
+        Ok(worker) => discard = Some(worker),
         Err(err) => eprintln!(
             "[codex-exec] latency stage=warm_worker_miss reason=prewarm_failed error={err}"
         ),
+    }
+    drop(pool);
+    if let Some(mut worker) = discard {
+        eprintln!(
+            "[codex-exec] latency stage=warm_worker_reaped pid={} reason=surplus",
+            worker.pid.unwrap_or(0)
+        );
+        let _ = shutdown_worker_process_group(&mut worker.child, worker.pgid).await;
     }
 }
 
@@ -379,12 +389,15 @@ async fn reap_warm_worker_after_ttl(pid: u32) {
     else {
         return;
     };
-    let worker = pool.workers.remove(index);
+    let mut worker = pool.workers.remove(index);
+    let pool_size = pool.workers.len();
+    drop(pool);
     eprintln!(
         "[codex-exec] latency stage=warm_worker_reaped pid={} reason=ttl pool_size={}",
         worker.pid.unwrap_or(0),
-        pool.workers.len()
+        pool_size
     );
+    let _ = shutdown_worker_process_group(&mut worker.child, worker.pgid).await;
 }
 
 async fn lease_warm_worker() -> Option<InitializedCodexWorker> {
@@ -469,6 +482,7 @@ async fn spawn_initialized_codex_worker(
         .spawn()
         .with_context(|| format!("spawning `{codex_bin}` app-server worker"))?;
     let pid = child.id();
+    let pgid = pid.and_then(|value| i32::try_from(value).ok());
     let stdin = child.stdin.take().context("Codex worker stdin unavailable")?;
     let stdout = child.stdout.take().context("Codex worker stdout unavailable")?;
     let stderr = child.stderr.take();
@@ -515,6 +529,7 @@ async fn spawn_initialized_codex_worker(
         stderr_tail,
         stderr_task,
         pid,
+        pgid,
         argv,
         ready_at: std::time::Instant::now(),
     })
@@ -545,6 +560,7 @@ pub async fn start_codex_exec_once(config: CodexExecRunConfig) -> Result<CodexEx
     };
     let pid = worker.pid;
     let argv = worker.argv.clone();
+    let leased_at = std::time::Instant::now();
     eprintln!(
         "[codex-exec] latency stage=warm_worker_lease session={} run={} hit={} pid={} ready_age_ms={}",
         config.session_id,
@@ -599,15 +615,25 @@ pub async fn start_codex_exec_once(config: CodexExecRunConfig) -> Result<CodexEx
             approval_policy.as_deref(),
             sandbox.as_deref(),
             resume_thread_id.as_deref(),
+            warm_hit,
+            leased_at,
         )
         .await;
-        if run_result.is_err() {
-            if let Err(kill_error) = stop_failed_child(&mut worker.child).await {
-                let original = run_result.unwrap_err();
-                run_result = Err(original.context(format!(
-                    "also failed to stop Codex app-server: {kill_error}"
-                )));
-            }
+        if let Err(kill_error) =
+            shutdown_worker_process_group(&mut worker.child, worker.pgid).await
+        {
+            run_result = match run_result {
+                Err(original) => Err(original.context(format!(
+                    "also failed to stop Codex app-server process group: {kill_error}"
+                ))),
+                Ok(value) => {
+                    eprintln!(
+                        "[codex-exec] worker process-group cleanup failed pid={} error={kill_error}",
+                        worker.pid.unwrap_or(0)
+                    );
+                    Ok(value)
+                }
+            };
         }
         if let Some(task) = worker.stderr_task {
             let _ = task.await;
@@ -670,6 +696,8 @@ async fn run_app_server_turn(
     approval_policy: Option<&str>,
     sandbox: Option<&str>,
     resume_thread_id: Option<&str>,
+    warm_hit: bool,
+    leased_at: std::time::Instant,
 ) -> Result<Option<i32>> {
     let mut projection = AppServerProjection::default();
 
@@ -696,6 +724,15 @@ async fn run_app_server_turn(
     sink.post_provider_binding(&provider_thread_id, thread_path.as_deref())
         .await;
 
+    sink.post_latency_stage(
+        "turn_start_write",
+        json!({
+            "warm_hit": warm_hit,
+            "lease_to_write_ms": leased_at.elapsed().as_millis(),
+        }),
+    )
+    .await;
+    let turn_write_started = std::time::Instant::now();
     let turn_response = rpc
         .request(
             "turn/start",
@@ -707,6 +744,14 @@ async fn run_app_server_turn(
             &mut projection,
         )
         .await?;
+    sink.post_latency_stage(
+        "turn_start_ack",
+        json!({
+            "warm_hit": warm_hit,
+            "write_to_ack_ms": turn_write_started.elapsed().as_millis(),
+        }),
+    )
+    .await;
     let expected_turn_id = json_string(&turn_response, &["turn", "id"])
         .context("Codex app-server turn/start omitted turn.id")?;
     sink.post_phase("thinking", None).await;
@@ -768,12 +813,41 @@ async fn run_app_server_turn(
     Ok(status.code())
 }
 
-async fn stop_failed_child(child: &mut Child) -> Result<()> {
-    if child.try_wait()?.is_none() {
-        child.kill().await?;
+async fn shutdown_worker_process_group(child: &mut Child, pgid: Option<i32>) -> Result<()> {
+    #[cfg(unix)]
+    if let Some(pgid) = pgid {
+        unsafe {
+            libc::killpg(pgid, libc::SIGTERM);
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let group_alive = unsafe { libc::killpg(pgid, 0) } == 0;
+        if group_alive {
+            unsafe {
+                libc::killpg(pgid, libc::SIGKILL);
+            }
+        }
     }
-    let _ = child.wait().await?;
+    if child.try_wait()?.is_none() {
+        child.start_kill()?;
+    }
+    let _ = child.wait().await;
     Ok(())
+}
+
+pub async fn shutdown_codex_console_worker_pool() {
+    let workers = {
+        let mut pool = console_worker_pool().lock().await;
+        pool.spawning = 0;
+        std::mem::take(&mut pool.workers)
+    };
+    for mut worker in workers {
+        if let Err(err) = shutdown_worker_process_group(&mut worker.child, worker.pgid).await {
+            eprintln!(
+                "[codex-exec] warm worker shutdown failed pid={} error={err}",
+                worker.pid.unwrap_or(0)
+            );
+        }
+    }
 }
 
 impl AppServerRpc {
@@ -892,6 +966,35 @@ fn normalized_optional(value: &Option<String>) -> Option<String> {
 }
 
 impl CodexExecRuntimeSink {
+    async fn post_latency_stage(&self, stage: &str, metrics: Value) {
+        eprintln!(
+            "[codex-exec] latency stage={stage} session={} run={} turn={} metrics={metrics}",
+            self.session_id,
+            self.run_id,
+            self.turn_id.as_deref().unwrap_or("unknown"),
+        );
+        self.post_events(vec![json!({
+            "runtime_key": format!("codex:{}", self.session_id),
+            "session_id": self.session_id,
+            "run_id": self.run_id,
+            "thread_id": self.thread_id,
+            "provider": "codex",
+            "device_id": self.machine_name,
+            "source": CODEX_EXEC_RUNTIME_SOURCE,
+            "kind": "progress_signal",
+            "occurred_at": Utc::now().to_rfc3339(),
+            "dedupe_key": format!("console:latency:{}:{}", self.run_id, stage),
+            "payload": {
+                "progress_kind": "console_latency_stage",
+                "stage": stage,
+                "metrics": metrics,
+                "turn_id": self.turn_id,
+                "client_request_id": self.client_request_id,
+            }
+        })])
+        .await;
+    }
+
     async fn post_phase(&self, phase: &str, tool_name: Option<String>) {
         let observed_at = Utc::now();
         let phase_identity = if phase == "tool" {
@@ -1583,6 +1686,60 @@ mod tests {
         assert_eq!(pool.spawning, CONSOLE_WARM_POOL_TARGET);
     }
 
+    #[tokio::test]
+    async fn worker_shutdown_reaps_provider_owned_process_group_children() {
+        let temp = tempfile::tempdir().unwrap();
+        let fake_codex = temp.path().join("codex");
+        let child_pid_path = temp.path().join("child.pid");
+        fs::write(
+            &fake_codex,
+            format!(
+                r#"#!/usr/bin/env python3
+import json, os, subprocess, sys, time
+child = subprocess.Popen(["sleep", "60"])
+open({pid_path:?}, "w").write(str(child.pid))
+for line in sys.stdin:
+    msg = json.loads(line)
+    if msg.get("method") == "initialize":
+        print(json.dumps({{"id": msg["id"], "result": {{"userAgent": "fake/1"}}}}), flush=True)
+    elif msg.get("method") == "initialized":
+        time.sleep(60)
+"#,
+                pid_path = child_pid_path.display().to_string()
+            ),
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&fake_codex).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&fake_codex, permissions).unwrap();
+
+        let mut worker = spawn_initialized_codex_worker(
+            fake_codex.to_str().unwrap(),
+            Some("never"),
+            Some("workspace-write"),
+            temp.path(),
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        let child_pid: i32 = fs::read_to_string(&child_pid_path)
+            .unwrap()
+            .parse()
+            .unwrap();
+
+        shutdown_worker_process_group(&mut worker.child, worker.pgid)
+            .await
+            .unwrap();
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(1);
+        while unsafe { libc::kill(child_pid, 0) } == 0 && std::time::Instant::now() < deadline {
+            tokio::task::yield_now().await;
+        }
+        assert_ne!(unsafe { libc::kill(child_pid, 0) }, 0);
+    }
+
     fn runtime_sink(local_db_path: Option<PathBuf>) -> CodexExecRuntimeSink {
         let config = config();
         CodexExecRuntimeSink {
@@ -1967,19 +2124,23 @@ for line in sys.stdin:
             std::env::var("LONGHOUSE_TEST_CODEX_BIN").unwrap_or_else(|_| "codex".to_string());
         run_config.prompt = "Reply with exactly PRODUCTION_ADAPTER_CANARY_OK.".to_string();
         prewarm_codex_console_workers().await;
-        let lease_started = std::time::Instant::now();
         let summary = start_codex_exec_once(run_config).await.unwrap();
-        assert!(
-            lease_started.elapsed() < Duration::from_millis(500),
-            "warm Console lease exceeded 500ms: {:?}",
-            lease_started.elapsed()
-        );
 
         let mut saw_text = false;
         let mut saw_terminal = false;
+        let mut warm_lease_to_turn_write_ms = None;
         tokio::time::timeout(Duration::from_secs(120), async {
             while let Some(batch) = received.recv().await {
                 for event in batch {
+                    if json_string(&event, &["payload", "progress_kind"]).as_deref()
+                        == Some("console_latency_stage")
+                        && json_string(&event, &["payload", "stage"]).as_deref()
+                            == Some("turn_start_write")
+                        && event["payload"]["metrics"]["warm_hit"].as_bool() == Some(true)
+                    {
+                        warm_lease_to_turn_write_ms =
+                            event["payload"]["metrics"]["lease_to_write_ms"].as_u64();
+                    }
                     saw_text |= json_string(&event, &["payload", "live_text"])
                         .is_some_and(|text| text.contains("PRODUCTION_ADAPTER_CANARY_OK"));
                     saw_terminal |= event.get("kind").and_then(Value::as_str)
@@ -1987,7 +2148,7 @@ for line in sys.stdin:
                         && json_string(&event, &["payload", "terminal_state"]).as_deref()
                             == Some("run_completed");
                 }
-                if saw_text && saw_terminal {
+                if saw_text && saw_terminal && warm_lease_to_turn_write_ms.is_some() {
                     break;
                 }
             }
@@ -1995,6 +2156,10 @@ for line in sys.stdin:
         .await
         .unwrap();
         assert!(summary.pid.is_some());
+        assert!(
+            warm_lease_to_turn_write_ms.is_some_and(|elapsed| elapsed < 500),
+            "warm lease did not write turn/start within 500ms: {warm_lease_to_turn_write_ms:?}"
+        );
         assert!(saw_text, "installed Codex emitted no live assistant text");
         assert!(
             saw_terminal,

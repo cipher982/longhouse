@@ -72,6 +72,14 @@ the entire perceived-response waterfall, not add another transport.
    app-server exposes a useful split. Other providers earn warm behavior from
    measured, provider-native proof rather than imitation.
 
+Anonymous workers intentionally do not carry `LONGHOUSE_MANAGED_SESSION_ID`:
+environment cannot be changed safely when a worker is leased to another
+session. Console ownership instead becomes concrete at `turn/start` through
+the durable run claim, provider-thread binding, runtime sink correlation, and
+completion wake. Local-health process scans already exclude bare Codex
+app-server children from session classification. Real-provider canaries must
+continue proving binding and durable attribution on warm hits.
+
 ## Latency Budgets
 
 Two budgets are reported separately so Longhouse cannot hide provider latency
