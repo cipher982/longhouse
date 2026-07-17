@@ -34,6 +34,8 @@ from zerg.services.session_runtime import build_fallback_runtime_view
 from zerg.services.session_runtime import build_runtime_view
 from zerg.services.session_runtime_display import TRANSCRIPT_SYNC_DISPLAY_WINDOW
 from zerg.services.session_state_contract import build_session_state_facts
+from zerg.services.session_title import resolve_timeline_title
+from zerg.services.session_title import resolve_title_provenance
 from zerg.services.session_title import sanitize_title
 from zerg.services.session_views import SessionResponse
 from zerg.services.session_views import SessionsListResponse
@@ -126,12 +128,30 @@ def project_catalog_session_facts(
 
 
 def _title(session: LiveSessionCatalog, card: LiveTimelineCard) -> str:
+    user_messages, assistant_messages, tool_calls = _message_counts(session, card)
+    first_user_message = card.first_user_message_preview or session.first_user_message_preview
+    if (
+        not any((user_messages, assistant_messages, tool_calls))
+        and not sanitize_title(session.anchor_title)
+        and not sanitize_title(first_user_message)
+    ):
+        return resolve_timeline_title(
+            anchor_title=session.anchor_title,
+            summary_title=card.summary_title or session.summary_title,
+            summary_status="ready" if session.summary else "unavailable",
+            first_user_message=first_user_message,
+            project=session.project,
+            git_branch=session.git_branch,
+            provider=session.provider,
+            user_messages=user_messages,
+            assistant_messages=assistant_messages,
+            tool_calls=tool_calls,
+        )
     for value in (
         session.anchor_title,
         card.summary_title,
         session.summary_title,
-        card.first_user_message_preview,
-        session.first_user_message_preview,
+        first_user_message,
         session.project,
     ):
         normalized = str(value or "").strip()
@@ -140,13 +160,29 @@ def _title(session: LiveSessionCatalog, card: LiveTimelineCard) -> str:
     return f"{session.provider.title()} session"
 
 
+def _message_counts(session: LiveSessionCatalog, card: LiveTimelineCard) -> tuple[int, int, int]:
+    return (
+        max(int(session.user_messages or 0), int(card.user_messages or 0)),
+        max(int(session.assistant_messages or 0), int(card.assistant_messages or 0)),
+        max(int(session.tool_calls or 0), int(card.tool_calls or 0)),
+    )
+
+
 def _title_source(session: LiveSessionCatalog, card: LiveTimelineCard) -> str:
-    return "ai" if sanitize_title(session.anchor_title, max_words=6) else "prompt"
+    user_messages, _assistant_messages, _tool_calls = _message_counts(session, card)
+    return resolve_title_provenance(
+        anchor_title=session.anchor_title,
+        first_user_message=card.first_user_message_preview or session.first_user_message_preview,
+        user_messages=user_messages,
+        title_retry_at=session.title_retry_at,
+    )[1]
 
 
 def _title_state(session: LiveSessionCatalog, card: LiveTimelineCard) -> str:
     if sanitize_title(session.anchor_title, max_words=6):
         return "ready"
+    if session.title_last_error == "no_meaningful_user_text":
+        return "exempt"
     if session.title_retry_at is not None:
         return "degraded"
     if card.first_user_message_preview or session.first_user_message_preview:
@@ -479,7 +515,12 @@ def project_catalog_sessions_snapshot(snapshot: dict[str, Any]) -> SessionsListR
     )
 
 
-def read_live_catalog_session(session_id: UUID, *, owner_id: int | None = None) -> tuple[SessionResponse | None, str | None, str]:
+def read_live_catalog_session(
+    session_id: UUID,
+    *,
+    owner_id: int | None = None,
+    include_hidden: bool = True,
+) -> tuple[SessionResponse | None, str | None, str]:
     """Read one session shell and its provider alias from one catalog snapshot."""
 
     snapshot = session_snapshot(str(session_id), owner_id=owner_id) if owner_id is not None else session_snapshot(str(session_id))
@@ -490,6 +531,9 @@ def read_live_catalog_session(session_id: UUID, *, owner_id: int | None = None) 
     facts = snapshot.get("facts")
     if not isinstance(observed_at, datetime) or not isinstance(facts, dict):
         raise ValueError("catalog session snapshot is incomplete")
+    session_facts = facts.get("session")
+    if not include_hidden and isinstance(session_facts, dict) and bool(session_facts.get("hidden_from_default_timeline")):
+        return None, None, commit_seq
     projected = project_catalog_session_facts(facts, observed_at=observed_at)
     provider_alias = facts.get("provider_alias")
     return projected, str(provider_alias) if provider_alias else None, commit_seq
@@ -564,6 +608,7 @@ async def stream_live_catalog_machine_sessions(
                 session, _provider_alias, commit_seq = await asyncio.to_thread(
                     read_live_catalog_session,
                     UUID(session_id),
+                    include_hidden=False,
                 )
             except (ValueError, TypeError):
                 continue

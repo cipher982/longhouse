@@ -903,6 +903,13 @@ async def _commit_admitted_envelope(
                     "git_branch": parsed["session_facts"].get("git_branch"),
                 }
             )
+        if render_manifest is not None and any(
+            int(render_manifest[field] or 0) > 0 for field in ("user_messages", "assistant_messages", "tool_calls")
+        ):
+            from zerg.services.session_pubsub import TOPIC_TIMELINE
+            from zerg.services.session_pubsub import get_pubsub
+
+            get_pubsub().publish(TOPIC_TIMELINE, {"session_id": str(spec.session_id), "kind": "durable_content"})
         return _validated_receipt(committed.get("receipt"))
     except CatalogRemoteError as exc:
         _raise_catalog_error(exc)

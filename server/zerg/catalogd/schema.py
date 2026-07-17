@@ -37,7 +37,7 @@ from sqlalchemy.schema import CreateColumn
 from zerg.catalogd.models import CatalogBase
 from zerg.models.live_store import LiveBase
 
-CATALOG_SCHEMA_VERSION = 1
+CATALOG_SCHEMA_VERSION = 2
 DEFAULT_BUSY_TIMEOUT_MS = 5_000
 
 
@@ -112,9 +112,29 @@ def _schema_generation() -> str:
 
 CATALOG_SCHEMA_GENERATION = _schema_generation()
 
+
 # Every version bump must register the transaction that moves the preceding
 # durable version forward. An empty registry is intentional for initial v1.
-CATALOG_SCHEMA_MIGRATIONS: dict[int, Callable[[Connection], None]] = {}
+def _hide_empty_human_launch_shells(connection: Connection) -> None:
+    human_launch = "(launch_actor IN ('user', 'human_ui', 'human_shell') OR launch_surface IN ('web', 'ios', 'console', 'terminal', 'api'))"
+    connection.exec_driver_sql(
+        "UPDATE live_session_catalog SET hidden_from_default_timeline = 1 "
+        "WHERE hidden_from_default_timeline = 0 AND transcript_revision = 0 "
+        "AND user_messages = 0 AND assistant_messages = 0 AND tool_calls = 0 AND " + human_launch
+    )
+    connection.exec_driver_sql(
+        "UPDATE live_timeline_cards SET hidden_from_default_timeline = 1 "
+        "WHERE hidden_from_default_timeline = 0 AND transcript_revision = 0 "
+        "AND user_messages = 0 AND assistant_messages = 0 AND tool_calls = 0 AND " + human_launch
+    )
+    connection.exec_driver_sql(
+        "UPDATE sessions SET hidden_from_default_timeline = 1 "
+        "WHERE hidden_from_default_timeline = 0 AND transcript_revision = 0 "
+        "AND user_messages = 0 AND assistant_messages = 0 AND tool_calls = 0 AND " + human_launch
+    )
+
+
+CATALOG_SCHEMA_MIGRATIONS: dict[int, Callable[[Connection], None]] = {1: _hide_empty_human_launch_shells}
 
 
 def create_catalog_engine(database: str | Path, *, busy_timeout_ms: int = DEFAULT_BUSY_TIMEOUT_MS) -> Engine:

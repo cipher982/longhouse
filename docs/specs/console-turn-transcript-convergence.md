@@ -136,8 +136,10 @@ binding, event identity, phase, or terminal detection from the adapter.
 ### Live lane
 
 The turn adapter forwards raw provider JSON events as they arrive. For Codex,
-a bounded `codex app-server --listen stdio://` process runs one turn, drains,
-and exits. Its JSON-RPC notifications are retained as raw live evidence and
+a bounded exclusive lease on a stock `codex app-server --listen stdio://`
+worker runs one turn and drains. The worker may come from the Machine Agent's
+anonymous machine-global pool; no Console session owns it while idle. Its
+JSON-RPC notifications are retained as raw live evidence and
 minimally decoded into provisional transcript events:
 
 - user message;
@@ -390,7 +392,8 @@ diagnostic conflict and preserves the catalog fact.
 
 One real Codex Console canary must prove all of the following:
 
-1. New Session starts zero provider processes.
+1. New Session never owns a provider process; opening 500 sessions leaves the
+   anonymous machine-global pool capped at one or two process groups.
 2. First send produces visible `Starting` promptly and `Working` on the first
    provider/runtime event.
 3. Commentary, tool call, tool result, and final answer stream before process
@@ -419,7 +422,7 @@ critical evidence includes upstream event shapes and resume behavior.
 
 ## Non-Goals
 
-- Keeping Console provider processes warm between turns.
+- Keeping per-session Console provider processes warm between turns.
 - Reconstructing provider-native history from normalized Longhouse events.
 - Making Console steerable mid-turn.
 - Adding a second transcript store or client-side lifecycle state machine.

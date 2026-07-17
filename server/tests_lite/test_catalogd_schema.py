@@ -5,15 +5,20 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+from datetime import UTC
+from datetime import datetime
 
 import pytest
 from sqlalchemy import text
+from sqlalchemy.orm import Session
 
 import zerg.catalogd.schema as catalog_schema
 from zerg.catalogd.schema import CATALOG_SCHEMA_VERSION
 from zerg.catalogd.schema import CatalogSchemaMismatchError
 from zerg.catalogd.schema import create_catalog_engine
 from zerg.catalogd.schema import initialize_catalog_schema
+from zerg.models.live_store import LiveSessionCatalog
+from zerg.models.live_store import LiveTimelineCard
 
 
 def test_greenfield_catalog_has_pragmas_live_schema_and_identity(tmp_path):
@@ -76,14 +81,18 @@ def test_existing_live_database_gets_safe_additive_columns(tmp_path):
 
 @pytest.mark.parametrize(
     ("user_version", "metadata_version"),
-    [(0, 1), (2, 1), (1, 2)],
+    [
+        (0, CATALOG_SCHEMA_VERSION),
+        (CATALOG_SCHEMA_VERSION - 1, CATALOG_SCHEMA_VERSION),
+        (CATALOG_SCHEMA_VERSION, CATALOG_SCHEMA_VERSION - 1),
+    ],
 )
 def test_metadata_and_user_version_mismatch_is_typed(tmp_path, user_version, metadata_version):
     engine = create_catalog_engine(tmp_path / "longhouse-live.db")
     initialize_catalog_schema(engine)
     with engine.begin() as connection:
         connection.exec_driver_sql(f"PRAGMA user_version={user_version}")
-        if metadata_version != 1:
+        if metadata_version != CATALOG_SCHEMA_VERSION:
             connection.exec_driver_sql("PRAGMA ignore_check_constraints=ON")
             connection.exec_driver_sql(
                 "UPDATE catalog_meta SET schema_version = ? WHERE singleton = 1",
@@ -97,9 +106,13 @@ def test_metadata_and_user_version_mismatch_is_typed(tmp_path, user_version, met
 def test_version_bump_requires_an_explicit_migration(tmp_path, monkeypatch):
     engine = create_catalog_engine(tmp_path / "longhouse-live.db")
     initialize_catalog_schema(engine)
-    monkeypatch.setattr(catalog_schema, "CATALOG_SCHEMA_VERSION", 2)
+    next_version = CATALOG_SCHEMA_VERSION + 1
+    monkeypatch.setattr(catalog_schema, "CATALOG_SCHEMA_VERSION", next_version)
 
-    with pytest.raises(catalog_schema.CatalogSchemaMigrationError, match="missing catalog schema migration 1->2"):
+    with pytest.raises(
+        catalog_schema.CatalogSchemaMigrationError,
+        match=f"missing catalog schema migration {CATALOG_SCHEMA_VERSION}->{next_version}",
+    ):
         initialize_catalog_schema(engine)
 
 
@@ -110,17 +123,63 @@ def test_registered_version_migration_updates_both_markers_atomically(tmp_path, 
     def migrate(connection):
         connection.exec_driver_sql("CREATE TABLE catalog_v2_proof (value INTEGER NOT NULL)")
 
-    monkeypatch.setattr(catalog_schema, "CATALOG_SCHEMA_VERSION", 2)
-    monkeypatch.setattr(catalog_schema, "CATALOG_SCHEMA_MIGRATIONS", {1: migrate})
+    next_version = CATALOG_SCHEMA_VERSION + 1
+    monkeypatch.setattr(catalog_schema, "CATALOG_SCHEMA_VERSION", next_version)
+    monkeypatch.setattr(catalog_schema, "CATALOG_SCHEMA_MIGRATIONS", {CATALOG_SCHEMA_VERSION: migrate})
 
     metadata = initialize_catalog_schema(engine)
 
-    assert metadata.schema_version == 2
+    assert metadata.schema_version == next_version
     with engine.connect() as connection:
-        assert connection.exec_driver_sql("PRAGMA user_version").scalar_one() == 2
-        assert connection.exec_driver_sql(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='catalog_v2_proof'"
-        ).scalar_one() == 1
+        assert connection.exec_driver_sql("PRAGMA user_version").scalar_one() == next_version
+        assert (
+            connection.exec_driver_sql(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='catalog_v2_proof'"
+            ).scalar_one()
+            == 1
+        )
+
+
+def test_empty_human_shell_backfill_hides_live_projection(tmp_path):
+    engine = create_catalog_engine(tmp_path / "longhouse-live.db")
+    initialize_catalog_schema(engine)
+    now = datetime.now(UTC)
+    with Session(engine) as db:
+        session = LiveSessionCatalog(
+            session_id="empty-shell",
+            provider="codex",
+            environment="production",
+            project="longhouse",
+            started_at=now,
+            last_activity_at=now,
+            launch_actor="human_ui",
+            launch_surface="ios",
+            created_at=now,
+            updated_at=now,
+        )
+        card = LiveTimelineCard(
+            session_id="empty-shell",
+            provider="codex",
+            environment="production",
+            project="longhouse",
+            started_at=now,
+            last_activity_at=now,
+            archive_state="pending",
+            launch_actor="human_ui",
+            launch_surface="ios",
+            derived_state="idle",
+            parser_revision="test",
+            updated_at=now,
+        )
+        db.add_all([session, card])
+        db.commit()
+
+    with engine.begin() as connection:
+        catalog_schema._hide_empty_human_launch_shells(connection)
+
+    with Session(engine) as db:
+        assert db.get(LiveSessionCatalog, "empty-shell").hidden_from_default_timeline == 1
+        assert db.get(LiveTimelineCard, "empty-shell").hidden_from_default_timeline == 1
 
 
 def test_importing_schema_does_not_import_runtime_database_module():

@@ -10,6 +10,7 @@ from uuid import UUID
 from uuid import uuid4
 
 import pytest
+from sqlalchemy.orm import Session
 
 from zerg.catalogd.client import CatalogClient
 from zerg.catalogd.client import CatalogRemoteError
@@ -17,10 +18,15 @@ from zerg.catalogd.models import CatalogBase
 from zerg.catalogd.models import RawObject as LiveRawObject
 from zerg.catalogd.models import SessionTombstone as LiveSessionTombstone
 from zerg.catalogd.models import SourceEpoch as LiveSourceEpoch
+from zerg.catalogd.models import StorageSession
+from zerg.catalogd.schema import CATALOG_SCHEMA_VERSION
 from zerg.catalogd.schema import create_catalog_engine
 from zerg.catalogd.schema import initialize_catalog_schema
 from zerg.catalogd.server import CatalogDaemon
+from zerg.catalogd.store import CatalogStore
 from zerg.models.live_store import LiveHeartbeatStamp
+from zerg.models.live_store import LiveSessionCatalog
+from zerg.models.live_store import LiveTimelineCard
 from zerg.storage_v2.contracts import EnvelopeIdentity
 from zerg.storage_v2.contracts import envelope_id
 
@@ -161,6 +167,52 @@ def _render_manifest(
         "first_user_message_preview": "Build it",
         "last_visible_text_preview": "Build it",
     }
+
+
+@pytest.mark.asyncio
+async def test_first_durable_content_reveals_hidden_console_shell(daemon_paths):
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    session_id = uuid4()
+    engine = create_catalog_engine(database_path)
+    initialize_catalog_schema(engine)
+    CatalogStore(engine).create_console_session(
+        data={
+            "session_id": str(session_id),
+            "thread_id": str(uuid4()),
+            "owner_id": 42,
+            "provider": "codex",
+            "device_id": "cinder",
+            "cwd": "/workspace/longhouse",
+            "project": "longhouse",
+            "provider_config": {},
+            "started_at": now,
+        }
+    )
+    engine.dispose()
+
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        epoch = uuid4()
+        raw = _raw_params(epoch=epoch, session_id=session_id, start=0, end=10, records=(b"user",), sealed_at=now)
+        raw.update(
+            render_state="ready",
+            render_manifest=_render_manifest(uuid4(), source_epoch=epoch),
+            projectors=["search-v2"],
+        )
+        await client.call("storage.raw_object.commit.v2", raw)
+    finally:
+        await client.close()
+        await daemon.close()
+
+    engine = create_catalog_engine(database_path)
+    with Session(engine) as db:
+        assert db.get(StorageSession, str(session_id)).hidden_from_default_timeline == 0
+        assert db.get(LiveSessionCatalog, str(session_id)).hidden_from_default_timeline == 0
+        assert db.get(LiveTimelineCard, str(session_id)).hidden_from_default_timeline == 0
+    engine.dispose()
 
 
 @pytest.mark.asyncio
@@ -321,6 +373,17 @@ async def test_storage_title_fallback_is_immediate_and_ai_completion_is_write_on
 
         candidates = await client.call("storage.session.title.candidates.v2", {"limit": 10})
         assert [row["session_id"] for row in candidates["sessions"]] == [str(session_id)]
+
+        exempted = await client.call(
+            "storage.session.title.fail.v2",
+            {
+                "session_id": str(session_id),
+                "reason": "no_meaningful_user_text",
+                "failed_at": now.isoformat(),
+            },
+        )
+        assert exempted["changed"] is True
+        assert exempted["retry_at"] is None
 
         completed = await client.call(
             "storage.session.title.complete.v2",
@@ -1213,5 +1276,5 @@ def test_existing_v1_catalog_additively_creates_storage_v2_tables(daemon_paths):
         }
     engine.dispose()
 
-    assert metadata.schema_version == 1
+    assert metadata.schema_version == CATALOG_SCHEMA_VERSION
     assert set(CatalogBase.metadata.tables).issubset(table_names)
