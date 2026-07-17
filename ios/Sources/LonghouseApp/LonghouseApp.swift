@@ -27,6 +27,9 @@ struct LonghouseApp: App {
                     }
                 }
                 .task {
+#if DEBUG
+                    MainThreadStallMonitor.shared.startIfEnabled()
+#endif
                     let startedAt = Date()
                     let environment = ProcessInfo.processInfo.environment
                     logger.info("launch task started reset=\(UITestHooks.shouldResetState, privacy: .public) widget_probe_only=\((environment["LONGHOUSE_WIDGET_PROBE_ONLY"] == "1"), privacy: .public)")

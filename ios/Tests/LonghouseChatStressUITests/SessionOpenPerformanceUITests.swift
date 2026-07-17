@@ -176,6 +176,115 @@ final class SessionOpenPerformanceUITests: XCTestCase {
         )
     }
 
+    /// Side-effect-free physical-device profile for catching intermittent
+    /// launch/refresh stalls. The test may be repeated without creating sessions.
+    func testLiveDogfoodColdLaunchScrollProfile() throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard environment["LONGHOUSE_RUN_LIVE_COLD_LAUNCH_PROFILE"] == "1" else {
+            throw XCTSkip("Live cold-launch profiling is opt-in.")
+        }
+
+        let app = XCUIApplication()
+        app.launchEnvironment["LONGHOUSE_MAIN_THREAD_STALL_DIAGNOSTICS"] = "1"
+        let launchStartedAt = Date()
+        app.launch()
+        waitForProfilerAttachmentIfRequested(environment)
+
+        let newSessionButton = app.buttons["Start session"].firstMatch
+        XCTAssertTrue(newSessionButton.waitForExistence(timeout: 30), "Authenticated timeline did not appear.")
+        let launchToTimelineMs = elapsedMs(since: launchStartedAt)
+
+        var scrollSamplesMs: [Int] = []
+        for _ in 0..<3 {
+            let scrollStartedAt = Date()
+            app.swipeUp()
+            scrollSamplesMs.append(elapsedMs(since: scrollStartedAt))
+            app.swipeDown()
+        }
+
+        print([
+            "IOS_LIVE_COLD_LAUNCH_METRIC",
+            "launch_to_timeline_ms=\(launchToTimelineMs)",
+            "scroll_samples_ms=\(scrollSamplesMs)",
+        ].joined(separator: " "))
+    }
+
+    /// Physical-device dogfood profiler. This is intentionally opt-in because
+    /// it uses the installed app's real authenticated state and creates one real
+    /// empty Console session. Run only with both environment variables set.
+    func testLiveDogfoodLaunchScrollAndConsoleFocusProfile() throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard environment["LONGHOUSE_RUN_LIVE_DOGFOOD_PROFILE"] == "1" else {
+            throw XCTSkip("Live dogfood profiling is opt-in.")
+        }
+        guard let workspacePath = environment["LONGHOUSE_LIVE_PROFILE_WORKSPACE_PATH"],
+              workspacePath.starts(with: "/") else {
+            throw XCTSkip("Set LONGHOUSE_LIVE_PROFILE_WORKSPACE_PATH to an absolute path.")
+        }
+
+        let app = XCUIApplication()
+        app.launchEnvironment["LONGHOUSE_MAIN_THREAD_STALL_DIAGNOSTICS"] = "1"
+        let launchStartedAt = Date()
+        app.launch()
+        waitForProfilerAttachmentIfRequested(environment)
+
+        let newSessionButton = app.buttons["Start session"].firstMatch
+        XCTAssertTrue(newSessionButton.waitForExistence(timeout: 30), "Authenticated timeline did not appear.")
+        let launchToTimelineMs = elapsedMs(since: launchStartedAt)
+
+        var scrollSamplesMs: [Int] = []
+        for _ in 0..<3 {
+            let scrollStartedAt = Date()
+            app.swipeUp()
+            scrollSamplesMs.append(elapsedMs(since: scrollStartedAt))
+            app.swipeDown()
+        }
+
+        let sheetStartedAt = Date()
+        newSessionButton.tap()
+        XCTAssertTrue(app.navigationBars["New Session"].waitForExistence(timeout: 20))
+        let sheetOpenMs = elapsedMs(since: sheetStartedAt)
+
+        let picker = app.descendants(matching: .any)["launch-workspace-picker"]
+        XCTAssertTrue(picker.waitForExistence(timeout: 20))
+        picker.tap()
+        let workspace = app.buttons["launch-workspace-row-\(workspacePath)"]
+        XCTAssertTrue(workspace.waitForExistence(timeout: 20), "Workspace was not present in live suggestions.")
+        let workspaceStartedAt = Date()
+        workspace.tap()
+        XCTAssertTrue(waitUntil(timeout: 5) { picker.exists })
+        let workspaceSelectionMs = elapsedMs(since: workspaceStartedAt)
+
+        let consoleLaunchStartedAt = Date()
+        let submit = app.buttons["launch-submit"]
+        XCTAssertTrue(submit.isEnabled, "Live Console launch was not enabled.")
+        submit.tap()
+        let composer = app.textFields["session-chat-composer"]
+        XCTAssertTrue(composer.waitForExistence(timeout: 30), "Console composer did not appear.")
+        let consoleToComposerMs = elapsedMs(since: consoleLaunchStartedAt)
+
+        let focusStartedAt = Date()
+        composer.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 15), "Keyboard did not appear.")
+        let focusMs = elapsedMs(since: focusStartedAt)
+
+        print([
+            "IOS_LIVE_DOGFOOD_METRIC",
+            "launch_to_timeline_ms=\(launchToTimelineMs)",
+            "scroll_samples_ms=\(scrollSamplesMs)",
+            "sheet_open_ms=\(sheetOpenMs)",
+            "workspace_selection_ms=\(workspaceSelectionMs)",
+            "console_to_composer_ms=\(consoleToComposerMs)",
+            "composer_focus_ms=\(focusMs)",
+        ].joined(separator: " "))
+    }
+
+    private func waitForProfilerAttachmentIfRequested(_ environment: [String: String]) {
+        guard let rawDelay = environment["LONGHOUSE_LIVE_PROFILE_ATTACH_DELAY_MS"],
+              let delayMs = UInt64(rawDelay), delayMs > 0 else { return }
+        Thread.sleep(forTimeInterval: TimeInterval(delayMs) / 1_000)
+    }
+
     func testTimelineTapToTranscriptPaintProfile() throws {
         let config = ProfileConfig.fromDisk()
         let scratch = FileManager.default.temporaryDirectory
