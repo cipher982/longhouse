@@ -21,6 +21,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import tty
 from pathlib import Path
 
 import pytest
@@ -423,7 +424,7 @@ def test_interrupt_while_idle_is_rejected_before_pty_write(monkeypatch):
     assert reply["error"]["code"] == "provider_not_active"
 
 
-def test_handle_command_interrupt_writes_escape_without_signaling_child(monkeypatch):
+def test_handle_command_interrupt_writes_ctrl_c_without_signaling_child(monkeypatch):
     written = bytearray()
     monkeypatch.setattr(cursor_helm, "_full_write", lambda _fd, data: written.extend(data) or len(data))
     child = subprocess.Popen(["sleep", "30"])
@@ -433,7 +434,7 @@ def test_handle_command_interrupt_writes_escape_without_signaling_child(monkeypa
         stop_event=stop,
     )
     assert reply["ok"] is True
-    assert written == b"\x1b"
+    assert written == b"\x03"
     assert child.poll() is None
     assert not stop.is_set(), "interrupt must not set the stop event (only terminate does)"
     child.kill()
@@ -538,7 +539,9 @@ def test_socket_protocol_send_and_interrupt_inject_into_real_pty(tmp_path):
     stop_event = threading.Event()
     pid, master_fd = pty.fork()
     if pid == 0:
-        # Child: `cat` echoes stdin to stdout under the PTY slave.
+        # Cursor runs its PTY in raw mode, where Ctrl-C is a byte handled by
+        # the TUI rather than a line-discipline SIGINT.
+        tty.setraw(0)
         os.execvp("cat", ["cat"])
         os._exit(127)
 
@@ -553,9 +556,9 @@ def test_socket_protocol_send_and_interrupt_inject_into_real_pty(tmp_path):
         echo = _read_pty_echo(master_fd, b"hello")
         assert b"hello" in echo, f"expected 'hello' in PTY echo, got {echo!r}"
 
-        # interrupt sends Escape to the TUI and leaves the provider alive.
+        # interrupt sends Ctrl-C to the raw-mode TUI and leaves the provider alive.
         assert _send_command(sock_path, {"kind": "interrupt"})["ok"] is True
-        assert b"^" in _read_pty_echo(master_fd, b"^")
+        assert b"\x03" in _read_pty_echo(master_fd, b"\x03")
         os.kill(pid, signal.SIGKILL)
         os.waitpid(pid, 0)
     finally:

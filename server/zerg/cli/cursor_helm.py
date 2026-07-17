@@ -14,7 +14,7 @@ ownership is what makes remote steer possible. The launcher:
   that socket to the PTY master / child pid:
   - send:   ``text -> 0.3s -> Escape -> 0.1s -> Enter`` (Ink submit workaround,
     claude-code#15553);
-  - interrupt: Escape while native hooks prove an active turn (the TUI survives);
+  - interrupt: Ctrl-C while native hooks prove an active turn (the TUI survives);
   - terminate: ``SIGKILL`` the child, then cleanup + exit.
 
 The engine connects to the socket per command; see
@@ -645,7 +645,7 @@ def _handle_command(
             }
         try:
             with master_lock:
-                _full_write(master_fd, b"\x1b")
+                _full_write(master_fd, b"\x03")
         except OSError as exc:
             return {"ok": False, "error": {"code": "session_not_attached", "message": f"pty closed: {exc}"}}
         return {"ok": True, "exit_code": 0, "stdout": "", "stderr": ""}

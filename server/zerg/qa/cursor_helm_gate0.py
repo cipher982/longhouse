@@ -390,11 +390,11 @@ class CursorPtySession:
             time.sleep(_INJECT_ESCAPE_SETTLE_SECONDS)
             os.write(self.master_fd, b"\r")
 
-    def escape(self) -> None:
+    def interrupt(self) -> None:
         if not self.alive():
-            raise RuntimeError(f"Cursor process exited before Escape ({self.process.returncode})")
+            raise RuntimeError(f"Cursor process exited before Ctrl-C ({self.process.returncode})")
         with self._write_lock:
-            os.write(self.master_fd, b"\x1b")
+            os.write(self.master_fd, b"\x03")
 
     def submit_active(self, text: str) -> None:
         if not self.alive():
@@ -628,7 +628,7 @@ def _cancel_scenario(
             timeout=timeout,
         )
         generation_id = str(shell.get("generation_id") or "")
-        session.escape()
+        session.interrupt()
         stop = wait_for_hook(
             events_path,
             longhouse_session_id=longhouse_session_id,
@@ -638,11 +638,22 @@ def _cancel_scenario(
             timeout=timeout,
         )
         if stop.get("generation_id") != generation_id:
-            raise RuntimeError("Escape stopped a different Cursor generation")
+            raise RuntimeError("Ctrl-C stopped a different Cursor generation")
         if stop.get("status") == "completed" and stop.get("is_interrupt") is not True:
-            raise RuntimeError("Escape did not report provider interruption semantics")
+            raise RuntimeError("Ctrl-C did not report provider interruption semantics")
         if not session.alive():
-            raise RuntimeError("Escape exited the Cursor TUI")
+            raise RuntimeError("Ctrl-C exited the Cursor TUI")
+        time.sleep(0.25)
+        leaked_response = next(
+            (
+                row
+                for row in read_hook_events(events_path)[before:]
+                if row.get("event") == "afterAgentResponse" and row.get("generation_id") == generation_id
+            ),
+            None,
+        )
+        if leaked_response is not None:
+            raise RuntimeError("Ctrl-C stopped the tool but allowed the cancelled generation to respond")
 
         marker = f"LONGHOUSE_CURSOR_GATE0_AFTER_CANCEL_{uuid4().hex[:10]}"
         turn_start = len(read_hook_events(events_path))
@@ -920,11 +931,11 @@ def run_gate0(args: argparse.Namespace) -> dict[str, Any]:
             model=args.model,
         )
         cancel_provider_id = _create_chat(binary, workspace)
-        report["scenarios"]["escape_cancel"] = _cancel_scenario(
+        report["scenarios"]["ctrl_c_cancel"] = _cancel_scenario(
             binary=binary,
             workspace=workspace,
             events_path=events_path,
-            terminal_path=artifact_root / "escape-cancel.terminal.raw",
+            terminal_path=artifact_root / "ctrl-c-cancel.terminal.raw",
             provider_id=cancel_provider_id,
             timeout=args.timeout,
             model=args.model,
