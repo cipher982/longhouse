@@ -51,7 +51,11 @@ The recovery also exposed two follow-on gaps:
 2. a source epoch may close and be replaced while its old pending envelope is
    in flight. The replacement can already cover that range, but the old epoch
    currently receives only a generic overlap conflict and must be inspected
-   manually.
+   manually;
+3. Cursor Console canaries reused one provider conversation identity from
+   multiple temporary/worktree stores. Those paths built divergent local epoch
+   chains for one opaque source and were correctly quarantined, but test traffic
+   still made product health red.
 
 ## Product Invariants
 
@@ -143,7 +147,10 @@ When an old epoch points to a replacement:
   source with both manifests attached to the evidence record.
 
 This recovery is serialized per opaque source ID so two observations cannot
-race epoch replacement and pending-envelope creation.
+race epoch replacement and pending-envelope creation. Multiple local paths that
+claim one opaque source join the same serialization domain; they cannot mint
+independent epoch chains. Canaries must mint unique provider source identities
+per run unless the test explicitly exercises continuation of the same source.
 
 ## Scheduling and Retry Isolation
 
@@ -255,6 +262,8 @@ Fault-injection tests must cover:
 - network loss before send, during upload, and after durable commit;
 - a render generation changing between local preparation and host commit;
 - an epoch being replaced while its old envelope is in flight;
+- two local paths concurrently claiming one opaque source, plus repeated canary
+  runs that must not reuse a production source identity;
 - replacement fully covering, partially covering, and not covering the old
   range;
 - repeated typed pressure with `Retry-After`;
