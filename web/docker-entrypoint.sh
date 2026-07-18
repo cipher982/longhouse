@@ -4,14 +4,14 @@
 # For split deploy: Pass API_BASE_URL/WS_BASE_URL (or PUBLIC_API_URL/PUBLIC_WS_URL)
 # For monolithic: Don't pass env vars, uses same-origin /api defaults
 #
-# BACKEND_HOST: Docker hostname for nginx to proxy /api to (default: backend for docker-compose, zerg-backend for Coolify)
+# BACKEND_HOST: Docker hostname for nginx to proxy /api to (default: backend).
 
 CONFIG_FILE="${CONFIG_FILE:-/usr/share/nginx/html/config.js}"
 CSP_FILE="${CSP_FILE:-/etc/nginx/csp.conf}"
 NGINX_TEMPLATE="${NGINX_TEMPLATE:-/etc/nginx/nginx.conf.template}"
 NGINX_CONF="${NGINX_CONF:-/etc/nginx/nginx.conf}"
 
-# Set backend host for nginx proxy (Coolify uses zerg-backend, local uses backend)
+# Set backend host for nginx proxy.
 export BACKEND_HOST="${BACKEND_HOST:-backend}"
 
 # Generate nginx.conf from template with envsubst
