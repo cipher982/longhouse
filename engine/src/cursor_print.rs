@@ -68,7 +68,9 @@ struct CursorPrintSink {
     runtime_events_outbox_dir: PathBuf,
 }
 
-pub async fn start_cursor_print_turn(config: CursorPrintRunConfig) -> Result<CursorPrintRunSummary> {
+pub async fn start_cursor_print_turn(
+    config: CursorPrintRunConfig,
+) -> Result<CursorPrintRunSummary> {
     validate_uuid(&config.session_id, "session_id")?;
     validate_uuid(&config.thread_id, "thread_id")?;
     validate_uuid(&config.run_id, "run_id")?;
@@ -209,7 +211,7 @@ pub async fn start_cursor_print_turn(config: CursorPrintRunConfig) -> Result<Cur
         crate::turn_claims::process_start_time_for_pid(Some(pid)),
         CURSOR_PRINT_ADAPTER,
         &launch_id,
-        &provider_thread_id,
+        Some(&provider_thread_id),
         &stdout_path.to_string_lossy(),
         &stderr_path.to_string_lossy(),
         result,
@@ -245,13 +247,25 @@ pub async fn recover_cursor_print_turns(
             continue;
         }
         let Some(stdout_path) = claim.stdout_path.as_deref().map(PathBuf::from) else {
-            let _ = registry.mark_terminal(&claim.run_id, "run_failed", Some("Cursor Console claim has no stdout path".to_string()));
+            let _ = registry.mark_terminal(
+                &claim.run_id,
+                "run_failed",
+                Some("Cursor Console claim has no stdout path".to_string()),
+            );
             continue;
         };
-        let stderr_path = claim.stderr_path.as_deref().map(PathBuf::from).unwrap_or_else(|| stdout_path.with_file_name("stderr.log"));
+        let stderr_path = claim
+            .stderr_path
+            .as_deref()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| stdout_path.with_file_name("stderr.log"));
         let provider_thread_id = claim.provider_thread_id.clone().unwrap_or_default();
         if provider_thread_id.is_empty() {
-            let _ = registry.mark_terminal(&claim.run_id, "run_failed", Some("Cursor Console claim has no provider identity".to_string()));
+            let _ = registry.mark_terminal(
+                &claim.run_id,
+                "run_failed",
+                Some("Cursor Console claim has no provider identity".to_string()),
+            );
             continue;
         }
         let result = claim.result.as_ref().and_then(Value::as_object);
@@ -296,7 +310,9 @@ pub fn interrupt_cursor_print_turn(run_id: &str, session_id: &str) -> Result<()>
     if claim.adapter.as_deref() != Some(CURSOR_PRINT_ADAPTER) || claim.state != "spawned" {
         anyhow::bail!("Cursor Console turn is not active");
     }
-    let pid = claim.pid.context("Cursor Console turn has no provider pid")?;
+    let pid = claim
+        .pid
+        .context("Cursor Console turn has no provider pid")?;
     let expected_start = claim
         .process_start_time
         .as_deref()
@@ -355,6 +371,7 @@ async fn monitor_cursor_print(
     loop {
         match read_growth(stdout_path, &mut offset, &mut pending) {
             Ok(lines) => {
+                let had_lines = !lines.is_empty();
                 for bytes in lines {
                     seq += 1;
                     match serde_json::from_slice::<Value>(&bytes) {
@@ -367,9 +384,13 @@ async fn monitor_cursor_print(
                         Err(error) => sink.post_decode_gap(seq, &error.to_string()).await,
                     }
                 }
+                if had_lines {
+                    persist_projection_checkpoint(&sink.run_id, offset, pending.len(), seq);
+                }
             }
             Err(error) => {
-                sink.post_terminal("run_failed", None, Some(error.to_string())).await;
+                sink.post_terminal("run_failed", None, Some(error.to_string()))
+                    .await;
                 return;
             }
         }
@@ -377,6 +398,7 @@ async fn monitor_cursor_print(
             Ok(Some(status)) => {
                 tokio::time::sleep(Duration::from_millis(150)).await;
                 if let Ok(lines) = read_growth(stdout_path, &mut offset, &mut pending) {
+                    let had_lines = !lines.is_empty();
                     for bytes in lines {
                         seq += 1;
                         if let Ok(event) = serde_json::from_slice::<Value>(&bytes) {
@@ -386,12 +408,19 @@ async fn monitor_cursor_print(
                             sink.post_stream_event(seq, event).await;
                         }
                     }
+                    if had_lines {
+                        persist_projection_checkpoint(&sink.run_id, offset, pending.len(), seq);
+                    }
                 }
                 let claim = crate::turn_claims::default_registry()
                     .and_then(|registry| registry.read(&sink.run_id))
                     .ok();
                 let terminal = terminal_from_stream.unwrap_or_else(|| {
-                    if claim.as_ref().and_then(|item| item.cancel_requested_at.as_ref()).is_some() {
+                    if claim
+                        .as_ref()
+                        .and_then(|item| item.cancel_requested_at.as_ref())
+                        .is_some()
+                    {
                         "run_cancelled".to_string()
                     } else if status.success() {
                         "run_completed".to_string()
@@ -402,12 +431,14 @@ async fn monitor_cursor_print(
                 if terminal != "run_completed" {
                     cleanup_process_group(sink.process_group_id).await;
                 }
-                sink.post_terminal(&terminal, status.code(), stderr_tail(stderr_path)).await;
+                sink.post_terminal(&terminal, status.code(), stderr_tail(stderr_path))
+                    .await;
                 return;
             }
             Ok(None) => tokio::time::sleep(Duration::from_millis(100)).await,
             Err(error) => {
-                sink.post_terminal("run_failed", None, Some(error.to_string())).await;
+                sink.post_terminal("run_failed", None, Some(error.to_string()))
+                    .await;
                 return;
             }
         }
@@ -421,12 +452,13 @@ async fn monitor_recovered_claim(
     sink: CursorPrintSink,
     _lock: File,
 ) {
-    let mut offset = 0_u64;
+    let mut offset = claim.projected_stdout_offset;
     let mut pending = Vec::new();
-    let mut seq = 0_u64;
+    let mut seq = claim.projected_seq;
     let mut terminal_from_stream = None;
     loop {
         if let Ok(lines) = read_growth(&stdout_path, &mut offset, &mut pending) {
+            let had_lines = !lines.is_empty();
             for bytes in lines {
                 seq += 1;
                 if let Ok(event) = serde_json::from_slice::<Value>(&bytes) {
@@ -436,6 +468,9 @@ async fn monitor_recovered_claim(
                     sink.post_stream_event(seq, event).await;
                 }
             }
+            if had_lines {
+                persist_projection_checkpoint(&sink.run_id, offset, pending.len(), seq);
+            }
         }
         if !claim_process_is_live(&claim) {
             let cancel_requested = crate::turn_claims::default_registry()
@@ -444,10 +479,15 @@ async fn monitor_recovered_claim(
                 .and_then(|current| current.cancel_requested_at)
                 .is_some();
             let terminal = terminal_from_stream.unwrap_or_else(|| {
-                if cancel_requested { "run_cancelled".to_string() } else { "run_failed".to_string() }
+                if cancel_requested {
+                    "run_cancelled".to_string()
+                } else {
+                    "run_failed".to_string()
+                }
             });
             cleanup_process_group(sink.process_group_id).await;
-            sink.post_terminal(&terminal, None, stderr_tail(&stderr_path)).await;
+            sink.post_terminal(&terminal, None, stderr_tail(&stderr_path))
+                .await;
             return;
         }
         tokio::time::sleep(Duration::from_millis(150)).await;
@@ -460,11 +500,12 @@ async fn settle_recovered_dead_claim(
     stderr_path: &Path,
     sink: &CursorPrintSink,
 ) {
-    let mut offset = 0_u64;
+    let mut offset = claim.projected_stdout_offset;
     let mut pending = Vec::new();
-    let mut seq = 0_u64;
+    let mut seq = claim.projected_seq;
     let mut terminal = None;
     if let Ok(lines) = read_growth(stdout_path, &mut offset, &mut pending) {
+        let had_lines = !lines.is_empty();
         for bytes in lines {
             seq += 1;
             if let Ok(event) = serde_json::from_slice::<Value>(&bytes) {
@@ -472,16 +513,33 @@ async fn settle_recovered_dead_claim(
                 sink.post_stream_event(seq, event).await;
             }
         }
+        if had_lines {
+            persist_projection_checkpoint(&sink.run_id, offset, pending.len(), seq);
+        }
     }
     let terminal = terminal.unwrap_or_else(|| {
-        if claim.cancel_requested_at.is_some() { "run_cancelled".to_string() } else { "run_failed".to_string() }
+        if claim.cancel_requested_at.is_some() {
+            "run_cancelled".to_string()
+        } else {
+            "run_failed".to_string()
+        }
     });
     cleanup_process_group(sink.process_group_id).await;
-    sink.post_terminal(&terminal, None, stderr_tail(stderr_path)).await;
+    sink.post_terminal(&terminal, None, stderr_tail(stderr_path))
+        .await;
+}
+
+fn persist_projection_checkpoint(run_id: &str, read_offset: u64, pending_len: usize, seq: u64) {
+    let complete_offset = read_offset.saturating_sub(pending_len as u64);
+    if let Ok(registry) = crate::turn_claims::default_registry() {
+        let _ = registry.mark_projection_checkpoint(run_id, complete_offset, seq);
+    }
 }
 
 async fn cleanup_process_group(process_group_id: Option<i32>) {
-    let Some(pgid) = process_group_id else { return; };
+    let Some(pgid) = process_group_id else {
+        return;
+    };
     if unsafe { libc::killpg(pgid, 0) } != 0 {
         return;
     }
@@ -552,12 +610,16 @@ impl CursorPrintSink {
             "occurred_at": observed_at.to_rfc3339(),
             "dedupe_key": format!("cursor-print:{}:{}:phase:{phase}", self.session_id, self.run_id),
             "payload": {"managed_transport": CURSOR_PRINT_ADAPTER, "execution_lifetime": "one_shot"}
-        })]).await;
+        })])
+        .await;
     }
 
     async fn post_stream_event(&self, seq: u64, event: Value) {
         if event.get("type").and_then(Value::as_str) == Some("system") {
-            let observed = event.get("session_id").and_then(Value::as_str).unwrap_or_default();
+            let observed = event
+                .get("session_id")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
             if observed == self.provider_thread_id {
                 if let Ok(root) = cursor_managed_root() {
                     let _ = promote_binding(
@@ -609,7 +671,8 @@ impl CursorPrintSink {
                 "managed_transport": CURSOR_PRINT_ADAPTER,
                 "execution_lifetime": "one_shot"
             }
-        })]).await;
+        })])
+        .await;
     }
 
     async fn post_decode_gap(&self, seq: u64, error: &str) {
@@ -628,11 +691,18 @@ impl CursorPrintSink {
         })]).await;
     }
 
-    async fn post_terminal(&self, terminal_state: &str, exit_code: Option<i32>, stderr: Option<String>) {
+    async fn post_terminal(
+        &self,
+        terminal_state: &str,
+        exit_code: Option<i32>,
+        stderr: Option<String>,
+    ) {
         crate::turn_claims::mark_terminal(
             &self.run_id,
             terminal_state,
-            (terminal_state == "run_failed").then(|| stderr.clone()).flatten(),
+            (terminal_state == "run_failed")
+                .then(|| stderr.clone())
+                .flatten(),
         );
         self.persist_local_phase("finished", None, Utc::now());
         self.post_events(vec![json!({
@@ -658,12 +728,22 @@ impl CursorPrintSink {
                 "client_request_id": self.client_request_id,
                 "provider_thread_id": self.provider_thread_id
             }
-        })]).await;
+        })])
+        .await;
     }
 
-    fn persist_local_phase(&self, phase: &str, tool_name: Option<String>, observed_at: DateTime<Utc>) {
-        let Some(db_path) = self.local_db_path.as_deref() else { return; };
-        let Ok(conn) = crate::state::db::open_db(Some(db_path)) else { return; };
+    fn persist_local_phase(
+        &self,
+        phase: &str,
+        tool_name: Option<String>,
+        observed_at: DateTime<Utc>,
+    ) {
+        let Some(db_path) = self.local_db_path.as_deref() else {
+            return;
+        };
+        let Ok(conn) = crate::state::db::open_db(Some(db_path)) else {
+            return;
+        };
         let signal = crate::state::session_phase::SessionPhaseSignal {
             session_id: self.session_id.clone(),
             provider: "cursor".to_string(),
@@ -682,12 +762,15 @@ impl CursorPrintSink {
             phase_source: CURSOR_PRINT_ADAPTER.to_string(),
             observed_at,
         };
-        let _ = crate::state::managed_session_state::ManagedSessionStateStore::new(&conn).record_phase(&managed);
+        let _ = crate::state::managed_session_state::ManagedSessionStateStore::new(&conn)
+            .record_phase(&managed);
     }
 
     async fn post_events(&self, events: Vec<Value>) {
         for event in events {
-            if let Err(error) = crate::outbox::enqueue_runtime_event(&self.runtime_events_outbox_dir, &event) {
+            if let Err(error) =
+                crate::outbox::enqueue_runtime_event(&self.runtime_events_outbox_dir, &event)
+            {
                 eprintln!("[cursor-print] runtime outbox write failed: {error}");
             }
         }
@@ -696,7 +779,12 @@ impl CursorPrintSink {
 
 fn cursor_tool_name(event: &Value) -> Option<String> {
     let call = event.get("tool_call")?;
-    for key in ["shellToolCall", "mcpToolCall", "readToolCall", "writeToolCall"] {
+    for key in [
+        "shellToolCall",
+        "mcpToolCall",
+        "readToolCall",
+        "writeToolCall",
+    ] {
         if call.get(key).is_some() {
             return Some(key.trim_end_matches("ToolCall").to_string());
         }
@@ -705,7 +793,9 @@ fn cursor_tool_name(event: &Value) -> Option<String> {
 }
 
 fn cursor_managed_root() -> Result<PathBuf> {
-    Ok(crate::config::get_longhouse_home()?.join("managed-local").join("cursor-helm"))
+    Ok(crate::config::get_longhouse_home()?
+        .join("managed-local")
+        .join("cursor-helm"))
 }
 
 fn acquire_conversation_lock(root: &Path, provider_thread_id: &str) -> Result<File> {
@@ -744,7 +834,12 @@ fn reserve_binding(
     if let Ok(bytes) = std::fs::read(&target) {
         if serde_json::from_slice::<Value>(&bytes)
             .ok()
-            .and_then(|value| value.get("status").and_then(Value::as_str).map(str::to_string))
+            .and_then(|value| {
+                value
+                    .get("status")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            })
             .as_deref()
             == Some("observed")
         {
@@ -779,7 +874,9 @@ fn promote_binding(
     provider_thread_id: &str,
     launch_id: &str,
 ) -> Result<()> {
-    let target = root.join("binding-probes").join(format!("{session_id}.json"));
+    let target = root
+        .join("binding-probes")
+        .join(format!("{session_id}.json"));
     let existing: Value = serde_json::from_slice(&std::fs::read(&target)?)?;
     if existing.get("status").and_then(Value::as_str) != Some("pending")
         || existing.get("session_id").and_then(Value::as_str) != Some(session_id)
@@ -817,7 +914,9 @@ fn rollback_binding(root: &Path, session_id: &str, launch_id: &str) {
             value.get("status").and_then(Value::as_str) == Some("pending")
                 && value.get("launch_id").and_then(Value::as_str) == Some(launch_id)
         });
-    if !pending_matches { return; }
+    if !pending_matches {
+        return;
+    }
     if backup.exists() {
         let _ = std::fs::rename(&backup, &target);
     } else {
@@ -827,8 +926,16 @@ fn rollback_binding(root: &Path, session_id: &str, launch_id: &str) {
 
 fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
     let parent = path.parent().context("state path has no parent")?;
-    let temporary = parent.join(format!(".{}.{}.tmp", path.file_name().and_then(|v| v.to_str()).unwrap_or("state"), Uuid::new_v4()));
-    let mut file = OpenOptions::new().write(true).create_new(true).mode(0o600).open(&temporary)?;
+    let temporary = parent.join(format!(
+        ".{}.{}.tmp",
+        path.file_name().and_then(|v| v.to_str()).unwrap_or("state"),
+        Uuid::new_v4()
+    ));
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&temporary)?;
     file.write_all(bytes)?;
     file.sync_all()?;
     std::fs::rename(&temporary, path)?;
@@ -836,7 +943,12 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
 }
 
 fn private_output_file(path: &Path) -> Result<File> {
-    Ok(OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(path)?)
+    Ok(OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)?)
 }
 
 fn set_private_dir(path: &Path) -> Result<()> {
@@ -847,14 +959,22 @@ fn set_private_dir(path: &Path) -> Result<()> {
 
 fn stderr_tail(path: &Path) -> Option<String> {
     let text = std::fs::read_to_string(path).ok()?;
-    let mut lines = text.lines().rev().take(STDERR_TAIL_LINES).collect::<VecDeque<_>>();
+    let mut lines = text
+        .lines()
+        .rev()
+        .take(STDERR_TAIL_LINES)
+        .collect::<VecDeque<_>>();
     lines.make_contiguous().reverse();
     let value = lines.into_iter().collect::<Vec<_>>().join("\n");
     (!value.is_empty()).then_some(value)
 }
 
 fn normalized_optional(value: &Option<String>) -> Option<String> {
-    value.as_deref().map(str::trim).filter(|value| !value.is_empty()).map(str::to_string)
+    value
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
 }
 
 fn validate_uuid(value: &str, label: &str) -> Result<()> {
@@ -868,8 +988,18 @@ mod tests {
 
     #[test]
     fn terminal_result_requires_success_shape() {
-        assert_eq!(terminal_state_from_event(&json!({"type":"result","subtype":"success","is_error":false})).as_deref(), Some("run_completed"));
-        assert_eq!(terminal_state_from_event(&json!({"type":"result","subtype":"error","is_error":true})).as_deref(), Some("run_failed"));
+        assert_eq!(
+            terminal_state_from_event(
+                &json!({"type":"result","subtype":"success","is_error":false})
+            )
+            .as_deref(),
+            Some("run_completed")
+        );
+        assert_eq!(
+            terminal_state_from_event(&json!({"type":"result","subtype":"error","is_error":true}))
+                .as_deref(),
+            Some("run_failed")
+        );
         assert!(terminal_state_from_event(&json!({"type":"assistant"})).is_none());
     }
 
@@ -880,9 +1010,15 @@ mod tests {
         std::fs::write(&path, b"one\ntw").unwrap();
         let mut offset = 0;
         let mut pending = Vec::new();
-        assert_eq!(read_growth(&path, &mut offset, &mut pending).unwrap(), vec![b"one".to_vec()]);
+        assert_eq!(
+            read_growth(&path, &mut offset, &mut pending).unwrap(),
+            vec![b"one".to_vec()]
+        );
         std::fs::write(&path, b"one\ntwo\n").unwrap();
-        assert_eq!(read_growth(&path, &mut offset, &mut pending).unwrap(), vec![b"two".to_vec()]);
+        assert_eq!(
+            read_growth(&path, &mut offset, &mut pending).unwrap(),
+            vec![b"two".to_vec()]
+        );
     }
 
     #[test]
@@ -946,8 +1082,11 @@ mod tests {
     async fn installed_cursor_completes_and_resumes_through_production_console_adapter() {
         let temp = tempfile::tempdir().unwrap();
         let previous_home = std::env::var_os("LONGHOUSE_HOME");
-        unsafe { std::env::set_var("LONGHOUSE_HOME", temp.path().join("longhouse")); }
-        let cursor_bin = std::env::var("LONGHOUSE_CURSOR_BIN").unwrap_or_else(|_| "cursor-agent".to_string());
+        unsafe {
+            std::env::set_var("LONGHOUSE_HOME", temp.path().join("longhouse"));
+        }
+        let cursor_bin =
+            std::env::var("LONGHOUSE_CURSOR_BIN").unwrap_or_else(|_| "cursor-agent".to_string());
         let marker = format!("LH_CURSOR_CONSOLE_CANARY_{}", Uuid::new_v4().simple());
 
         async fn run_turn(
@@ -957,9 +1096,8 @@ mod tests {
             resume: Option<String>,
             longhouse_identity: Option<(String, String)>,
         ) -> CursorPrintRunSummary {
-            let (session_id, thread_id) = longhouse_identity.unwrap_or_else(|| {
-                (Uuid::new_v4().to_string(), Uuid::new_v4().to_string())
-            });
+            let (session_id, thread_id) = longhouse_identity
+                .unwrap_or_else(|| (Uuid::new_v4().to_string(), Uuid::new_v4().to_string()));
             let turn_id = Uuid::new_v4().to_string();
             let run_id = Uuid::new_v4().to_string();
             let client_request_id = format!("canary-{}", Uuid::new_v4());
@@ -993,10 +1131,15 @@ mod tests {
                 api_token: None,
                 machine_name: "cursor-console-canary".to_string(),
                 local_db_path: None,
-            }).await.unwrap();
+            })
+            .await
+            .unwrap();
             let deadline = tokio::time::Instant::now() + Duration::from_secs(180);
             loop {
-                let claim = crate::turn_claims::default_registry().unwrap().read(&summary.run_id).unwrap();
+                let claim = crate::turn_claims::default_registry()
+                    .unwrap()
+                    .read(&summary.run_id)
+                    .unwrap();
                 if claim.state == "terminal" {
                     let result = claim.result.unwrap();
                     assert_eq!(
@@ -1008,7 +1151,10 @@ mod tests {
                     );
                     return summary;
                 }
-                assert!(tokio::time::Instant::now() < deadline, "Cursor Console canary timed out");
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "Cursor Console canary timed out"
+                );
                 tokio::time::sleep(Duration::from_millis(250)).await;
             }
         }
@@ -1019,7 +1165,8 @@ mod tests {
             format!("Reply with exactly {marker} and nothing else. Do not use tools."),
             None,
             None,
-        ).await;
+        )
+        .await;
         let first_output = std::fs::read_to_string(&first.stdout_path).unwrap();
         assert!(first_output.contains(&marker));
         assert!(first_output.contains(&first.provider_thread_id));
@@ -1048,9 +1195,12 @@ mod tests {
             format!("Reply with exactly {second_marker} and nothing else. Do not use tools."),
             Some(first.provider_thread_id.clone()),
             Some((first.session_id.clone(), first.thread_id.clone())),
-        ).await;
+        )
+        .await;
         assert_eq!(second.provider_thread_id, first.provider_thread_id);
-        assert!(std::fs::read_to_string(&second.stdout_path).unwrap().contains(&second_marker));
+        assert!(std::fs::read_to_string(&second.stdout_path)
+            .unwrap()
+            .contains(&second_marker));
 
         match previous_home {
             Some(value) => unsafe { std::env::set_var("LONGHOUSE_HOME", value) },

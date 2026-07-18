@@ -12,7 +12,7 @@ use serde::Serialize;
 use serde_json::Value;
 use uuid::Uuid;
 
-const CLAIM_SCHEMA_VERSION: u32 = 3;
+const CLAIM_SCHEMA_VERSION: u32 = 4;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct TurnClaim {
@@ -46,6 +46,10 @@ pub struct TurnClaim {
     pub stderr_path: Option<String>,
     #[serde(default)]
     pub cancel_requested_at: Option<String>,
+    #[serde(default)]
+    pub projected_stdout_offset: u64,
+    #[serde(default)]
+    pub projected_seq: u64,
     pub result: Option<Value>,
     pub error: Option<String>,
 }
@@ -102,6 +106,8 @@ impl TurnClaimRegistry {
             stdout_path: None,
             stderr_path: None,
             cancel_requested_at: None,
+            projected_stdout_offset: 0,
+            projected_seq: 0,
             result: None,
             error: None,
         };
@@ -147,7 +153,7 @@ impl TurnClaimRegistry {
         process_start_time: Option<String>,
         adapter: &str,
         launch_id: &str,
-        provider_thread_id: &str,
+        provider_thread_id: Option<&str>,
         stdout_path: &str,
         stderr_path: &str,
         result: Value,
@@ -159,7 +165,7 @@ impl TurnClaimRegistry {
         claim.process_start_time = process_start_time;
         claim.adapter = Some(adapter.to_string());
         claim.launch_id = Some(launch_id.to_string());
-        claim.provider_thread_id = Some(provider_thread_id.to_string());
+        claim.provider_thread_id = provider_thread_id.map(str::to_string);
         claim.stdout_path = Some(stdout_path.to_string());
         claim.stderr_path = Some(stderr_path.to_string());
         claim.result = Some(result);
@@ -175,6 +181,23 @@ impl TurnClaimRegistry {
             anyhow::bail!("turn claim {run_id} is not an active invocation");
         }
         claim.cancel_requested_at = Some(Utc::now().to_rfc3339());
+        claim.updated_at = Utc::now().to_rfc3339();
+        self.write(&claim)?;
+        Ok(claim)
+    }
+
+    pub fn mark_projection_checkpoint(
+        &self,
+        run_id: &str,
+        stdout_offset: u64,
+        seq: u64,
+    ) -> Result<TurnClaim> {
+        let mut claim = self.read(run_id)?;
+        if stdout_offset < claim.projected_stdout_offset || seq < claim.projected_seq {
+            anyhow::bail!("turn claim {run_id} projection checkpoint cannot move backwards");
+        }
+        claim.projected_stdout_offset = stdout_offset;
+        claim.projected_seq = seq;
         claim.updated_at = Utc::now().to_rfc3339();
         self.write(&claim)?;
         Ok(claim)
@@ -385,7 +408,7 @@ mod tests {
                 Some("Mon Jul 15 10:00:00 2026".to_string()),
                 "cursor_print",
                 "launch-11",
-                "provider-thread-11",
+                Some("provider-thread-11"),
                 "/tmp/stdout.jsonl",
                 "/tmp/stderr.log",
                 serde_json::json!({"transport": "cursor_print"}),
@@ -399,10 +422,36 @@ mod tests {
         assert_eq!(claim.pid, Some(42));
         assert_eq!(claim.process_group_id, Some(42));
         assert_eq!(claim.adapter.as_deref(), Some("cursor_print"));
-        assert_eq!(claim.provider_thread_id.as_deref(), Some("provider-thread-11"));
+        assert_eq!(
+            claim.provider_thread_id.as_deref(),
+            Some("provider-thread-11")
+        );
         assert_eq!(claim.stdout_path.as_deref(), Some("/tmp/stdout.jsonl"));
         assert!(claim.cancel_requested_at.is_some());
+        assert_eq!(claim.projected_stdout_offset, 0);
         assert_eq!(claim.result.unwrap()["transport"], "cursor_print");
+    }
+
+    #[test]
+    fn projection_checkpoint_survives_restart_and_never_moves_backwards() {
+        let temp = tempfile::tempdir().unwrap();
+        let run_id = id(41);
+        let registry = TurnClaimRegistry::new(temp.path().to_path_buf());
+        registry
+            .claim(&run_id, &id(42), &id(43), None, None, "cursor")
+            .unwrap();
+        registry
+            .mark_projection_checkpoint(&run_id, 128, 3)
+            .unwrap();
+
+        let reopened = TurnClaimRegistry::new(temp.path().to_path_buf());
+        let claim = reopened.read(&run_id).unwrap();
+        assert_eq!(claim.projected_stdout_offset, 128);
+        assert_eq!(claim.projected_seq, 3);
+        assert!(reopened.mark_projection_checkpoint(&run_id, 64, 4).is_err());
+        assert!(reopened
+            .mark_projection_checkpoint(&run_id, 256, 2)
+            .is_err());
     }
 
     #[test]
