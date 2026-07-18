@@ -26,6 +26,7 @@ from zerg.cli._common import build_session_url as _build_session_url
 from zerg.cli._common import ensure_managed_launch_preflight as _ensure_managed_launch_preflight
 from zerg.cli._common import interactive_stdio as _interactive_stdio
 from zerg.cli._common import open_session_url as _open_session_url
+from zerg.cli._managed_contract import remove_managed_provider_contract
 from zerg.cli._managed_launch import EXIT_SETUP_FAILED
 from zerg.cli._managed_launch import add_interactive_human_shell_launch_env
 from zerg.cli._managed_launch import finish_managed_launch_preflight
@@ -55,7 +56,6 @@ _ROLLOUT_TERMINAL_EVENT_TYPES = {"task_complete", "turn_aborted"}
 _ROLLOUT_TAIL_LINES = 256
 _CODEX_VERSION_TIMEOUT_SECONDS = 5
 _CODEX_STOP_REASON_BRIDGE_STOP = "bridge_stop"
-_CODEX_STOP_REASON_TERMINAL_DISCONNECTED = "terminal_disconnected"
 _CODEX_STOP_SIGNAL_TIMEOUT_SECONDS = 3.0
 _CODEX_BRIDGE_TOKEN_ENV = "LONGHOUSE_CODEX_BRIDGE_TOKEN"
 _CODEX_BIN_OPTION_HELP = " ".join(
@@ -579,35 +579,7 @@ def _stop_native_codex_bridge(
     return stderr or stdout or f"codex-bridge stop exited with code {completed.returncode}"
 
 
-class _CodexBridgeStopper:
-    def __init__(self, session_id: str, *, state_file: str | None = None) -> None:
-        self.session_id = session_id
-        self.state_file = state_file
-        self._stopped = False
-
-    def stop(self, *, reason: str, timeout_secs: float | None = None) -> str | None:
-        if self._stopped:
-            return None
-        self._stopped = True
-        return _stop_native_codex_bridge(
-            session_id=self.session_id,
-            reason=reason,
-            timeout_secs=timeout_secs,
-        )
-
-    def stop_for_terminal_disconnect(self, *, timeout_secs: float | None = None) -> str | None:
-        if self._stopped:
-            return None
-        if _active_turn_survived_tui_exit(self.state_file):
-            self._stopped = True
-            return None
-        return self.stop(
-            reason=_CODEX_STOP_REASON_TERMINAL_DISCONNECTED,
-            timeout_secs=timeout_secs,
-        )
-
-
-def _install_codex_signal_cleanup(_stopper: _CodexBridgeStopper) -> dict[signal.Signals, object]:
+def _install_codex_signal_cleanup() -> dict[signal.Signals, object]:
     previous_handlers: dict[signal.Signals, object] = {}
 
     def cleanup_and_exit(signum: int, _frame: object) -> None:
@@ -674,7 +646,9 @@ def _run_native_codex_tui_with_recovery(
     """
 
     exit_code = _run_native_codex_tui(**kwargs)
-    if exit_code == 0 or not _native_codex_bridge_reattachable(state_file):
+    # Exit 1 is the observed stock-TUI RPC failure. Signal-shaped exits such
+    # as 130/143 may be intentional and must never be relaunched.
+    if exit_code != 1 or not _native_codex_bridge_reattachable(state_file):
         return exit_code
     typer.secho(
         f"Codex terminal exited with code {exit_code}; reattaching to the healthy managed session…",
@@ -935,8 +909,7 @@ def codex(
         return
 
     launch_ui.progress("Attaching…")
-    bridge_stopper = _CodexBridgeStopper(result.session_id, state_file=state_file)
-    previous_handlers = _install_codex_signal_cleanup(bridge_stopper)
+    previous_handlers = _install_codex_signal_cleanup()
     try:
         exit_code = _run_native_codex_tui_with_recovery(
             state_file=state_file,
@@ -1011,6 +984,7 @@ def codex(
     # only an explicit stop/terminate operation may do that.
     typer.secho("🔥  The hearth still burns — terminal detached.", fg=typer.colors.YELLOW)
     typer.echo(f"   Rejoin: {attach_cmd}")
+    typer.echo(f"   Stop: longhouse codex stop --session-id {result.session_id}")
     _emit_warp_cli_agent_event(
         event="status",
         session_id=result.session_id,
@@ -1050,3 +1024,32 @@ def codex_doctor(
         typer.secho(str(exc), fg=typer.colors.RED)
         raise typer.Exit(code=1)
     _render_codex_doctor(payload, json_output=json_output)
+
+
+@app.command("stop")
+def codex_stop(
+    session_id: str = typer.Option(..., "--session-id", help="Managed Longhouse session id to stop."),
+    config_dir: str | None = typer.Option(
+        None,
+        "--config-dir",
+        "--codex-dir",
+        "--claude-dir",
+        help="Longhouse config directory (default: ~/.claude).",
+    ),
+) -> None:
+    """Explicitly terminate a managed Codex bridge and provider execution."""
+
+    stop_error = _stop_native_codex_bridge(
+        session_id=session_id,
+        reason=_CODEX_STOP_REASON_BRIDGE_STOP,
+    )
+    if stop_error is not None:
+        typer.secho(f"Managed Codex stop failed: {stop_error}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+    remove_managed_provider_contract(
+        provider="codex",
+        session_id=session_id,
+        config_dir=config_dir,
+        config_dir_is_provider_home=True,
+    )
+    typer.echo(f"Stopped managed Codex session {session_id}.")

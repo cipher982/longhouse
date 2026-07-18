@@ -744,15 +744,6 @@ def opencode(
         "--attach/--no-attach",
         help="Launch OpenCode after creating the Longhouse session when running interactively.",
     ),
-    keep_server: bool = typer.Option(
-        False,
-        "--keep-server/--no-keep-server",
-        help=(
-            "Keep the OpenCode server running after the attached TUI exits so the "
-            "session stays reattachable. By default the server is terminal-owned and "
-            "stops when you exit the TUI."
-        ),
-    ),
     open_browser: bool = typer.Option(
         False,
         "--open/--no-open",
@@ -845,24 +836,17 @@ def opencode(
 
     is_interactive = _interactive_stdio()
 
-    from zerg.cli.opencode_channel import LAUNCH_MODE_ATTACHED_TUI
     from zerg.cli.opencode_channel import LAUNCH_MODE_DETACHED
     from zerg.cli.opencode_channel import LAUNCH_MODE_KEEP_SERVER
     from zerg.cli.opencode_channel import OpenCodeServerBridgeError
-    from zerg.cli.opencode_channel import OpenCodeServerBridgeStopper
     from zerg.cli.opencode_channel import _install_opencode_signal_cleanup
     from zerg.cli.opencode_channel import _restore_signal_handlers
     from zerg.cli.opencode_channel import launch_opencode_server_bridge
     from zerg.cli.opencode_channel import run_opencode_attach
 
-    # Decide who owns the server's lifetime. The server starts before we attach,
-    # so the only path that binds it to this terminal is an interactive attach
-    # without --keep-server. --no-attach and non-TTY launches necessarily leave
-    # a reattachable background server; treat that as implied keep_server and
-    # say so, rather than silently orphaning it.
     will_attach = attach and is_interactive
     if will_attach:
-        launch_mode = LAUNCH_MODE_KEEP_SERVER if keep_server else LAUNCH_MODE_ATTACHED_TUI
+        launch_mode = LAUNCH_MODE_KEEP_SERVER
     else:
         launch_mode = LAUNCH_MODE_DETACHED
 
@@ -878,7 +862,7 @@ def opencode(
             opencode_bin=resolved_opencode_bin,
             config_dir=resolved_config_dir,
             launch_mode=launch_mode,
-            owner_wrapper_pid=os.getpid() if launch_mode == LAUNCH_MODE_ATTACHED_TUI else None,
+            owner_wrapper_pid=None,
             model=model,
         )
     except (_OpenCodeLaunchError, OpenCodeServerBridgeError) as exc:
@@ -919,9 +903,7 @@ def opencode(
     launch_ui.progress("Attaching OpenCode…")
     # The attach TUI is a client, not the execution owner. Its exit or failure
     # must never terminate the managed provider server.
-    terminal_owned = launch_mode == LAUNCH_MODE_ATTACHED_TUI
-    stopper = OpenCodeServerBridgeStopper(result.session_id, config_dir=resolved_config_dir)
-    previous_handlers = _install_opencode_signal_cleanup(stopper) if terminal_owned else {}
+    previous_handlers = _install_opencode_signal_cleanup()
     exit_code = 1
     try:
         exit_code = run_opencode_attach(
@@ -936,14 +918,10 @@ def opencode(
     finally:
         _restore_signal_handlers(previous_handlers)
 
-    if terminal_owned:
-        typer.secho(
-            "OpenCode terminal detached; Longhouse left the provider server running.",
-            fg=typer.colors.YELLOW,
-        )
     if exit_code == 0:
         typer.secho("🔥  The hearth still burns — terminal detached.", fg=typer.colors.YELLOW)
         typer.echo(f"   Rejoin: {attach_command}")
+        typer.echo(f"   Stop: longhouse opencode-channel stop --session-id {result.session_id}")
     else:
         launch_ui.exit_bookend(
             exit_code=exit_code,
@@ -951,5 +929,6 @@ def opencode(
             reattach_command=attach_command,
             reattachable_on_nonzero_exit=True,
         )
+        typer.echo(f"   Stop: longhouse opencode-channel stop --session-id {result.session_id}")
     if exit_code != 0:
         raise typer.Exit(code=exit_code)

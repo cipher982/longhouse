@@ -43,9 +43,8 @@ pub struct OpenCodeServerObservation {
     /// True when a foreground `opencode attach` TUI is currently connected to
     /// this server/session. This is live UI presence, not launch history.
     pub has_tui_attachment: bool,
-    /// Lifecycle ownership: attached_tui | keep_server | detached. Drives UI
-    /// presence projection and gates the reaper (only attached_tui servers are
-    /// reapable).
+    /// Launch shape: attached_tui | keep_server | detached. Drives UI presence
+    /// projection only; wrapper disappearance never authorizes process reaping.
     pub launch_mode: String,
     pub owner_wrapper_pid: Option<u32>,
     pub owner_wrapper_start_time: String,

@@ -5,8 +5,8 @@ import os
 from pathlib import Path
 from uuid import uuid4
 
-from cryptography.fernet import Fernet
 import pytest
+from cryptography.fernet import Fernet
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
@@ -521,48 +521,13 @@ def test_pid_matches_recorded_identity_when_ps_cannot_confirm(monkeypatch, tmp_p
     assert opencode_channel._pid_matches_recorded_identity(state) is False
 
 
-def test_stopper_is_idempotent_and_stops_once(monkeypatch, tmp_path):
-    session_id = str(uuid4())
-    stop_calls: list[dict] = []
-    monkeypatch.setattr(
-        opencode_channel,
-        "stop_opencode_server_bridge",
-        lambda **kwargs: stop_calls.append(kwargs) or {},
-    )
-    stopper = opencode_channel.OpenCodeServerBridgeStopper(session_id, config_dir=tmp_path / "config")
-
-    assert stopper.stop_for_terminal_disconnect() is None
-    assert stopper.stop_for_terminal_disconnect() is None  # second call no-ops
-    assert stop_calls == [{"session_id": session_id, "config_dir": tmp_path / "config"}]
-
-
-def test_stopper_returns_error_message_on_failure(monkeypatch, tmp_path):
-    session_id = str(uuid4())
-
-    def boom(**_kwargs):
-        raise opencode_channel.OpenCodeServerBridgeError("no state")
-
-    monkeypatch.setattr(opencode_channel, "stop_opencode_server_bridge", boom)
-    stopper = opencode_channel.OpenCodeServerBridgeStopper(session_id, config_dir=tmp_path / "config")
-
-    assert stopper.stop_for_terminal_disconnect() == "no state"
-
-
 def test_signal_cleanup_install_and_restore(monkeypatch):
     import signal as signal_module
-
-    session_id = str(uuid4())
-    stopped: list[bool] = []
-
-    class _Stopper:
-        def stop_for_terminal_disconnect(self):
-            stopped.append(True)
-            return None
 
     original_sighup = signal_module.getsignal(signal_module.SIGHUP)
     original_sigterm = signal_module.getsignal(signal_module.SIGTERM)
 
-    previous = opencode_channel._install_opencode_signal_cleanup(_Stopper())
+    previous = opencode_channel._install_opencode_signal_cleanup()
     # Handlers were replaced.
     assert signal_module.getsignal(signal_module.SIGHUP) is not original_sighup
     assert signal_module.getsignal(signal_module.SIGTERM) is not original_sigterm
@@ -570,13 +535,9 @@ def test_signal_cleanup_install_and_restore(monkeypatch):
     with pytest.raises(SystemExit) as exc_info:
         signal_module.getsignal(signal_module.SIGHUP)(signal_module.SIGHUP, None)
     assert exc_info.value.code == 128 + signal_module.SIGHUP
-    assert stopped == []
-
     opencode_channel._restore_signal_handlers(previous)
     assert signal_module.getsignal(signal_module.SIGHUP) is original_sighup
     assert signal_module.getsignal(signal_module.SIGTERM) is original_sigterm
-    assert session_id  # keep linter calm about unused
-    assert stopped == []
 
 
 def test_launch_mode_and_owner_persisted_then_read_back(monkeypatch, tmp_path):

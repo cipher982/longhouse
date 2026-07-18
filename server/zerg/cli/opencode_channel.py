@@ -74,10 +74,8 @@ class OpenCodeServerBridgeState:
     # capture identity at launch, which then falls back to a bare liveness check.
     process_start_time: str = ""
     process_command: str = ""
-    # Lifecycle ownership. launch_mode is one of
-    # attached_tui | keep_server | detached. owner_wrapper_* identify the
-    # `longhouse opencode` wrapper process whose exit should stop an
-    # attached_tui server; used by the engine reaper as a crash backstop.
+    # Launch shape. owner_wrapper_* are attachment evidence only; wrapper
+    # disappearance is never permission to kill the provider server.
     launch_mode: str = ""
     owner_wrapper_pid: int = 0
     owner_wrapper_start_time: str = ""
@@ -667,30 +665,7 @@ def stop_opencode_server_bridge(
     }
 
 
-class OpenCodeServerBridgeStopper:
-    """Explicitly stops the backing OpenCode server.
-
-    TUI and wrapper lifecycle never call this automatically. Provider
-    termination requires an explicit user stop/terminate operation.
-    """
-
-    def __init__(self, session_id: str, *, config_dir: Path | None = None) -> None:
-        self.session_id = session_id
-        self.config_dir = config_dir
-        self._stopped = False
-
-    def stop_for_terminal_disconnect(self) -> str | None:
-        if self._stopped:
-            return None
-        self._stopped = True
-        try:
-            stop_opencode_server_bridge(session_id=self.session_id, config_dir=self.config_dir)
-        except OpenCodeServerBridgeError as exc:
-            return str(exc)
-        return None
-
-
-def _install_opencode_signal_cleanup(_stopper: OpenCodeServerBridgeStopper) -> dict:
+def _install_opencode_signal_cleanup() -> dict:
     """Preserve the server when the wrapper loses its terminal or is signaled."""
     previous_handlers: dict = {}
 
@@ -863,7 +838,6 @@ __all__ = [
     "OPENCODE_SERVER_BRIDGE_TRANSPORT",
     "OpenCodeServerBridgeError",
     "OpenCodeServerBridgeState",
-    "OpenCodeServerBridgeStopper",
     "interrupt_opencode_session",
     "launch_opencode_server_bridge",
     "read_opencode_server_bridge_state",

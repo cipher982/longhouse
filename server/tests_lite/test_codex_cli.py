@@ -886,7 +886,7 @@ def test_stop_native_codex_bridge_passes_reason_and_timeout(monkeypatch):
 
     error = codex_cli._stop_native_codex_bridge(
         session_id="session-123",
-        reason=codex_cli._CODEX_STOP_REASON_TERMINAL_DISCONNECTED,
+        reason=codex_cli._CODEX_STOP_REASON_BRIDGE_STOP,
         timeout_secs=0.5,
     )
 
@@ -900,7 +900,7 @@ def test_stop_native_codex_bridge_passes_reason_and_timeout(monkeypatch):
                 "--session-id",
                 "session-123",
                 "--reason",
-                "terminal_disconnected",
+                "bridge_stop",
                 "--force",
             ],
             "check": False,
@@ -915,7 +915,6 @@ def test_signal_cleanup_preserves_bridge(monkeypatch):
     stop_calls: list[dict[str, object]] = []
     signal_calls: list[tuple[object, object]] = []
 
-    stopper = codex_cli._CodexBridgeStopper("session-123")
     monkeypatch.setattr(codex_cli, "_stop_native_codex_bridge", lambda **kwargs: stop_calls.append(kwargs) or None)
     monkeypatch.setattr(
         codex_cli.signal,
@@ -923,7 +922,7 @@ def test_signal_cleanup_preserves_bridge(monkeypatch):
         lambda sig, handler: signal_calls.append((sig, handler)) or "old-handler",
     )
 
-    previous = codex_cli._install_codex_signal_cleanup(stopper)
+    previous = codex_cli._install_codex_signal_cleanup()
     handler = signal_calls[0][1]
 
     try:
@@ -944,34 +943,6 @@ def test_signal_cleanup_preserves_bridge(monkeypatch):
     codex_cli._restore_signal_handlers(previous)
     restored = signal_calls[-len(previous) :]
     assert all(handler == "old-handler" for _sig, handler in restored)
-
-
-def test_signal_cleanup_preserves_bridge_when_active_turn_survives(monkeypatch):
-    stop_calls: list[dict[str, object]] = []
-    signal_calls: list[tuple[object, object]] = []
-
-    stopper = codex_cli._CodexBridgeStopper("session-123", state_file="/tmp/state.json")
-    monkeypatch.setattr(codex_cli, "_active_turn_survived_tui_exit", lambda state_file: state_file == "/tmp/state.json")
-    monkeypatch.setattr(codex_cli, "_stop_native_codex_bridge", lambda **kwargs: stop_calls.append(kwargs) or None)
-    monkeypatch.setattr(
-        codex_cli.signal,
-        "signal",
-        lambda sig, handler: signal_calls.append((sig, handler)) or "old-handler",
-    )
-
-    previous = codex_cli._install_codex_signal_cleanup(stopper)
-    handler = signal_calls[0][1]
-
-    try:
-        handler(codex_cli.signal.SIGHUP, None)
-    except SystemExit:
-        pass
-    else:
-        raise AssertionError("expected SystemExit")
-
-    assert stop_calls == []
-
-    codex_cli._restore_signal_handlers(previous)
 
 
 def test_run_native_codex_tui_uses_foreground_process_group_when_interactive(monkeypatch, tmp_path):
@@ -1050,6 +1021,57 @@ def test_run_native_codex_tui_does_not_relaunch_after_clean_user_exit(monkeypatc
 
     assert exit_code == 0
     assert calls == [{"session_id": "session-123"}]
+
+
+def test_run_native_codex_tui_does_not_relaunch_signal_exit(monkeypatch):
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        codex_cli,
+        "_run_native_codex_tui",
+        lambda **kwargs: calls.append(kwargs) or 130,
+    )
+    monkeypatch.setattr(
+        codex_cli,
+        "_native_codex_bridge_reattachable",
+        lambda _state_file: pytest.fail("signal exit must not probe or relaunch"),
+    )
+
+    exit_code = codex_cli._run_native_codex_tui_with_recovery(
+        state_file="/tmp/state.json",
+        session_id="session-123",
+    )
+
+    assert exit_code == 130
+    assert calls == [{"session_id": "session-123"}]
+
+
+def test_codex_stop_is_explicit_and_removes_contract_after_success(monkeypatch):
+    runner = CliRunner()
+    stop_calls: list[dict[str, object]] = []
+    remove_calls: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        codex_cli,
+        "_stop_native_codex_bridge",
+        lambda **kwargs: stop_calls.append(kwargs) or None,
+    )
+    monkeypatch.setattr(
+        codex_cli,
+        "remove_managed_provider_contract",
+        lambda **kwargs: remove_calls.append(kwargs),
+    )
+
+    result = runner.invoke(app, ["codex", "stop", "--session-id", "session-123"])
+
+    assert result.exit_code == 0, result.output
+    assert stop_calls == [{"session_id": "session-123", "reason": "bridge_stop"}]
+    assert remove_calls == [
+        {
+            "provider": "codex",
+            "session_id": "session-123",
+            "config_dir": None,
+            "config_dir_is_provider_home": True,
+        }
+    ]
 
 
 def test_run_native_codex_tui_attaches_to_prestarted_thread(monkeypatch, tmp_path):
