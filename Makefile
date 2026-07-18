@@ -25,6 +25,7 @@ PERF_PROOF_OUTPUT ?= artifacts/perf-proof/perf-proof.json
 .PHONY: validate-native-device-entrypoints
 .PHONY: perf-proof validate-perf-proof
 .PHONY: validate-legacy-nouns
+.PHONY: provider-release-proof-universal-live-smoke
 
 # ---------------------------------------------------------------------------
 # Help

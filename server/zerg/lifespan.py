@@ -16,6 +16,7 @@ from zerg.database import initialize_database
 from zerg.database import initialize_live_database
 from zerg.database import live_catalog_enabled
 from zerg.database import live_store_configured
+from zerg.database import refresh_database_settings_from_env
 from zerg.observability import configure_observability
 from zerg.observability import shutdown_observability
 from zerg.services.ops_events import ops_events_bridge
@@ -156,6 +157,9 @@ def _validate_models_config_startup() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Handle application startup and shutdown lifecycle."""
+    global _settings
+    _settings = get_settings()
+    refresh_database_settings_from_env()
     startup_started = time.monotonic()
     catalog_mode = live_catalog_enabled()
     try:

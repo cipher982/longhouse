@@ -443,6 +443,15 @@ def _live_database_enabled_for_process(settings) -> bool:
     return bool(settings.live_database_url and (settings.testing or os.getenv("TESTING", "").strip().lower() in {"1", "true", "yes", "on"}))
 
 
+def refresh_database_settings_from_env() -> None:
+    """Refresh process database routing after a CLI establishes its environment."""
+
+    global _settings
+    from zerg.config import get_settings_unchecked
+
+    _settings = get_settings_unchecked()
+
+
 # Default engine and sessionmaker instances for app usage
 if _default_database_enabled_for_process(_settings):
     default_engine = make_engine(_settings.database_url)
@@ -486,16 +495,16 @@ def _ensure_default_engines_from_env() -> Engine | None:
     global live_write_engine
     global live_write_session_factory
 
+    from zerg.config import get_settings_unchecked
+
+    refreshed = get_settings_unchecked()
+    _settings = refreshed
     if default_engine is not None:
         return default_engine
 
     if live_catalog_enabled():
         return None
 
-    from zerg.config import get_settings_unchecked
-
-    refreshed = get_settings_unchecked()
-    _settings = refreshed
     if not refreshed.database_url:
         return None
 

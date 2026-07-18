@@ -18,6 +18,7 @@ from zerg.database import get_db
 from zerg.database import initialize_live_database
 from zerg.database import make_live_engine
 from zerg.database import make_sessionmaker
+from zerg.database import refresh_database_settings_from_env
 from zerg.models.live_store import LiveSessionCatalog
 from zerg.models.user import User
 from zerg.routers.agents_sessions import SessionMessageCreate
@@ -65,6 +66,22 @@ def test_production_catalog_mode_does_not_construct_api_sqlite_engines(monkeypat
     settings = type("Settings", (), {"live_database_url": "sqlite:////data/longhouse-live.db", "testing": False})()
     monkeypatch.setenv("TESTING", "0")
     assert _live_database_enabled_for_process(settings) is False
+
+
+def test_database_routing_refreshes_after_cli_sets_database_url(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        database_module,
+        "_settings",
+        SimpleNamespace(database_url="", live_database_url="", testing=False),
+    )
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'longhouse.db'}")
+    monkeypatch.delenv("TESTING", raising=False)
+
+    refresh_database_settings_from_env()
+
+    assert database_module._settings.database_url.endswith("longhouse.db")
+    assert database_module._settings.live_database_url.endswith("longhouse-live.db")
+    assert database_module.live_catalog_enabled() is True
 
 
 def test_archive_route_process_keeps_catalog_auth_on_live_database(monkeypatch):
