@@ -605,6 +605,27 @@ fn terminal_state_from_event(event: &Value) -> Option<String> {
 }
 
 impl CursorPrintSink {
+    async fn post_binding(&self) {
+        self.post_events(vec![json!({
+            "runtime_key": format!("cursor:{}", self.session_id),
+            "session_id": self.session_id,
+            "thread_id": self.thread_id,
+            "run_id": self.run_id,
+            "provider": "cursor",
+            "device_id": self.machine_name,
+            "source": CURSOR_PRINT_ADAPTER,
+            "kind": "binding_signal",
+            "occurred_at": Utc::now().to_rfc3339(),
+            "dedupe_key": format!("cursor-print:{}:{}:binding", self.session_id, self.launch_id),
+            "payload": {
+                "provider_session_id": self.provider_thread_id,
+                "managed_transport": CURSOR_PRINT_ADAPTER,
+                "execution_lifetime": "one_shot"
+            }
+        })])
+        .await;
+    }
+
     async fn post_phase(&self, phase: &str, tool_name: Option<String>) {
         let observed_at = Utc::now();
         self.persist_local_phase(phase, tool_name.clone(), observed_at);
@@ -648,6 +669,7 @@ impl CursorPrintSink {
                 if let Ok(registry) = crate::turn_claims::default_registry() {
                     let _ = registry.mark_provider_binding(&self.run_id, observed, None);
                 }
+                self.post_binding().await;
             }
         }
         let phase = match (

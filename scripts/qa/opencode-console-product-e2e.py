@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Real Runtime Host -> Machine Agent -> stock OpenCode Console proof."""
+"""Real Runtime Host -> Machine Agent -> stock provider Console proof."""
 
 from __future__ import annotations
 
@@ -56,10 +56,12 @@ def _events(api_url: str, token: str, session_id: str) -> list[dict]:
     )
 
 
-def _wait_for_search(api_url: str, token: str, session_id: str, marker: str, timeout: float = 90) -> None:
+def _wait_for_search(
+    api_url: str, token: str, provider: str, session_id: str, marker: str, timeout: float = 90
+) -> None:
     query = urllib.parse.urlencode(
         {
-            "provider": "opencode",
+            "provider": provider,
             "query": marker,
             "days_back": 1,
             "limit": 5,
@@ -73,7 +75,7 @@ def _wait_for_search(api_url: str, token: str, session_id: str, marker: str, tim
         if session_id in {str(session.get("id")) for session in payload.get("sessions") or []}:
             return
         time.sleep(2)
-    raise RuntimeError("OpenCode Console marker did not converge into session search")
+    raise RuntimeError(f"{provider} Console marker did not converge into session search")
 
 
 def _wait_for_assistant_marker(
@@ -113,21 +115,22 @@ def _start_turn(api_url: str, token: str, session_id: str, message: str, request
     raise RuntimeError("queued Console turn was not assigned a run within 30 seconds")
 
 
-def _wait_for_tool(run_id: str, timeout: float = 90) -> dict:
+def _wait_for_tool(provider: str, run_id: str, timeout: float = 90) -> dict:
     claim_path = Path.home() / ".longhouse" / "agent" / "turn-claims" / f"{run_id}.json"
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if claim_path.exists():
             claim = json.loads(claim_path.read_text(encoding="utf-8"))
             stdout_path = Path(str(claim.get("stdout_path") or ""))
-            if stdout_path.is_file() and '"type":"tool_use"' in stdout_path.read_text(
-                encoding="utf-8", errors="replace"
-            ):
-                return claim
+            if stdout_path.is_file():
+                stdout = stdout_path.read_text(encoding="utf-8", errors="replace")
+                shape = '"type":"tool_use"' if provider == "opencode" else '"type":"tool_call"'
+                if shape in stdout or shape.replace(":", ": ") in stdout:
+                    return claim
             if claim.get("state") in {"terminal", "failed"}:
                 raise RuntimeError(f"tool turn ended before interruption: {claim}")
         time.sleep(0.25)
-    raise RuntimeError("OpenCode did not begin the interrupt canary tool")
+    raise RuntimeError(f"{provider} did not begin the interrupt canary tool")
 
 
 def _wait_for_cancel(run_id: str, timeout: float = 20) -> dict:
@@ -145,7 +148,7 @@ def _wait_for_cancel(run_id: str, timeout: float = 20) -> dict:
                 return claim
             raise RuntimeError(f"interrupted provider process group {pgid} is still alive")
         time.sleep(0.1)
-    raise RuntimeError("interrupted OpenCode turn did not settle")
+    raise RuntimeError("interrupted provider turn did not settle")
 
 
 def run(args: argparse.Namespace) -> dict:
@@ -153,19 +156,21 @@ def run(args: argparse.Namespace) -> dict:
     api_url = args.api_url.rstrip("/") if args.api_url else api_url
     if not api_url or not token:
         raise RuntimeError("Longhouse API URL and machine token are required")
-    marker = f"LH_OPENCODE_PRODUCT_{uuid4().hex}"
-    post_cancel_marker = f"LH_OPENCODE_AFTER_CANCEL_{uuid4().hex}"
+    provider = args.provider
+    provider_label = "OpenCode" if provider == "opencode" else "Cursor"
+    marker = f"LH_{provider.upper()}_PRODUCT_{uuid4().hex}"
+    post_cancel_marker = f"LH_{provider.upper()}_AFTER_CANCEL_{uuid4().hex}"
     created = _request(
         api_url,
         token,
         "POST",
         "/api/agents/sessions",
         {
-            "provider": "opencode",
+            "provider": provider,
             "device_id": args.device_id,
             "cwd": str(Path(args.cwd).resolve()),
-            "project": "opencode-console-product-e2e",
-            "display_name": "OpenCode Console product E2E",
+            "project": f"{provider}-console-product-e2e",
+            "display_name": f"{provider_label} Console product E2E",
             "launch_surface": "product-e2e",
         },
     )
@@ -190,8 +195,9 @@ def run(args: argparse.Namespace) -> dict:
         (Path.home() / ".longhouse" / "agent" / "turn-claims" / f"{second['run_id']}.json").read_text()
     )
     argv = list((second_claim.get("result") or {}).get("argv") or [])
-    if "--session" not in argv:
-        raise RuntimeError(f"second OpenCode turn did not use explicit native resume: {argv}")
+    resume_flag = "--session" if provider == "opencode" else "--resume"
+    if resume_flag not in argv:
+        raise RuntimeError(f"second {provider_label} turn did not use explicit native resume: {argv}")
     tool_turn = _start_turn(
         api_url,
         token,
@@ -199,7 +205,7 @@ def run(args: argparse.Namespace) -> dict:
         "Use the bash tool to run exactly: sleep 60. Do not finish before the command finishes.",
         f"product-e2e-{uuid4()}",
     )
-    _wait_for_tool(str(tool_turn["run_id"]))
+    _wait_for_tool(provider, str(tool_turn["run_id"]))
     interrupted = _request(
         api_url,
         token,
@@ -217,10 +223,10 @@ def run(args: argparse.Namespace) -> dict:
         f"product-e2e-{uuid4()}",
     )
     final_events = _wait_for_assistant_marker(api_url, token, session_id, post_cancel_marker)
-    _wait_for_search(api_url, token, session_id, marker)
+    _wait_for_search(api_url, token, provider, session_id, marker)
     result = {
         "status": "pass",
-        "provider": "opencode",
+        "provider": provider,
         "session_id": session_id,
         "thread_id": created["thread_id"],
         "first_run_id": first["run_id"],
@@ -228,7 +234,7 @@ def run(args: argparse.Namespace) -> dict:
         "interrupt_run_id": tool_turn["run_id"],
         "post_cancel_run_id": post_cancel["run_id"],
         "provider_session_id": second_claim.get("provider_thread_id"),
-        "resume_argv_has_explicit_session": True,
+        "resume_argv_has_explicit_native_id": True,
         "cancel_terminal_state": (cancelled.get("result") or {}).get("terminal_state"),
         "archived_event_count": len(final_events),
         "search_converged": True,
@@ -245,6 +251,7 @@ def run(args: argparse.Namespace) -> dict:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
+    parser.add_argument("--provider", choices=("cursor", "opencode"), default="opencode")
     parser.add_argument("--api-url")
     parser.add_argument("--device-id", default="cinder")
     parser.add_argument("--cwd", default=os.getcwd())
