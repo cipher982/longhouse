@@ -1202,6 +1202,89 @@ mod tests {
             .unwrap()
             .contains(&second_marker));
 
+        let interrupt_turn_id = Uuid::new_v4().to_string();
+        let interrupt_run_id = Uuid::new_v4().to_string();
+        assert!(matches!(
+            crate::turn_claims::default_registry()
+                .unwrap()
+                .claim(
+                    &interrupt_run_id,
+                    &first.session_id,
+                    &first.thread_id,
+                    Some(&interrupt_turn_id),
+                    Some("cursor-canary-interrupt"),
+                    "cursor",
+                )
+                .unwrap(),
+            crate::turn_claims::ClaimOutcome::Acquired
+        ));
+        let interrupted = start_cursor_print_turn(CursorPrintRunConfig {
+            session_id: first.session_id.clone(),
+            thread_id: first.thread_id.clone(),
+            turn_id: Some(interrupt_turn_id),
+            run_id: interrupt_run_id.clone(),
+            client_request_id: Some("cursor-canary-interrupt".to_string()),
+            cwd: temp.path().to_path_buf(),
+            cursor_bin: cursor_bin.clone(),
+            prompt: "Use the shell tool to run exactly: sleep 30. Do not finish before the command finishes."
+                .to_string(),
+            resume_provider_thread_id: Some(first.provider_thread_id.clone()),
+            model: Some("gpt-5.3-codex-low".to_string()),
+            permission_mode: "bypass".to_string(),
+            api_url: "http://127.0.0.1:1".to_string(),
+            api_token: None,
+            machine_name: "cursor-console-canary".to_string(),
+            local_db_path: None,
+        })
+        .await
+        .unwrap();
+        let tool_deadline = tokio::time::Instant::now() + Duration::from_secs(90);
+        loop {
+            let stdout = std::fs::read_to_string(&interrupted.stdout_path).unwrap_or_default();
+            if stdout.contains("\"type\":\"tool_call\"")
+                || stdout.contains("\"type\": \"tool_call\"")
+            {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < tool_deadline,
+                "Cursor did not begin the interrupt canary tool"
+            );
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+        interrupt_cursor_print_turn(&interrupt_run_id, &first.session_id).unwrap();
+        let cancel_deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+        loop {
+            let claim = crate::turn_claims::default_registry()
+                .unwrap()
+                .read(&interrupt_run_id)
+                .unwrap();
+            if claim.state == "terminal" {
+                assert_eq!(claim.result.unwrap()["terminal_state"], "run_cancelled");
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < cancel_deadline,
+                "Cursor interrupt did not settle"
+            );
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert_ne!(unsafe { libc::killpg(interrupted.process_group_id, 0) }, 0);
+
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        let post_cancel_marker = format!("{marker}_AFTER_CANCEL");
+        let post_cancel = run_turn(
+            &cursor_bin,
+            temp.path(),
+            format!("Reply with exactly {post_cancel_marker} and nothing else. Do not use tools."),
+            Some(first.provider_thread_id.clone()),
+            Some((first.session_id.clone(), first.thread_id.clone())),
+        )
+        .await;
+        assert!(std::fs::read_to_string(&post_cancel.stdout_path)
+            .unwrap()
+            .contains(&post_cancel_marker));
+
         match previous_home {
             Some(value) => unsafe { std::env::set_var("LONGHOUSE_HOME", value) },
             None => unsafe { std::env::remove_var("LONGHOUSE_HOME") },
