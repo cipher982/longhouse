@@ -17,7 +17,7 @@ from zerg.services.provisional_events import build_provisional_cursor
 from zerg.services.provisional_events import build_provisional_key
 from zerg.utils.time import normalize_utc
 
-LIVE_PREVIEW_SOURCES = {"codex_bridge_live", "codex_console_live"}
+LIVE_PREVIEW_SOURCES = {"codex_bridge_live", "codex_console_live", "cursor_print"}
 
 
 @dataclass(frozen=True)
@@ -48,7 +48,8 @@ def live_preview_candidate_from_runtime_event(
     payload = event.payload or {}
     if event.session_id is None:
         return None
-    if (event.provider or "").strip().lower() != "codex":
+    provider = (event.provider or "").strip().lower()
+    if provider not in {"codex", "cursor"}:
         return None
     source = (event.source or "").strip()
     if source.lower() not in LIVE_PREVIEW_SOURCES:
@@ -56,6 +57,8 @@ def live_preview_candidate_from_runtime_event(
     if event.kind != "progress_signal":
         return None
     progress_kind = payload.get("progress_kind")
+    if provider == "cursor" and source.lower() == "cursor_print" and progress_kind == "cursor_print_stream":
+        return _cursor_print_preview_candidate(event, payload, observation_id=observation_id)
     if progress_kind not in {"bridge_live_transcript_delta", "console_live_tool_item"}:
         return None
 
@@ -95,6 +98,95 @@ def live_preview_candidate_from_runtime_event(
         tool_call_id=item_id if is_tool else None,
         tool_call_state=(_tool_call_state(payload.get("status"), completed=bool(payload.get("completed"))) if is_tool else None),
     )
+
+
+def _cursor_print_preview_candidate(event: Any, payload: dict[str, Any], *, observation_id: str) -> LivePreviewCandidate | None:
+    raw = payload.get("event")
+    if not isinstance(raw, dict) or event.session_id is None:
+        return None
+    raw_type = str(raw.get("type") or "").strip()
+    seq = _coerce_seq(payload.get("seq"))
+    thread_id = _optional_str(payload.get("thread_id") or event.thread_id)
+    turn_id = _optional_str(payload.get("turn_id"))
+    observed_at = normalize_utc(event.occurred_at) or datetime.now(timezone.utc)
+    if raw_type == "assistant":
+        message = raw.get("message")
+        content = message.get("content") if isinstance(message, dict) else None
+        blocks = content if isinstance(content, list) else []
+        text = "".join(str(block.get("text") or "") for block in blocks if isinstance(block, dict) and block.get("type") == "text")
+        if not text:
+            return None
+        turn_key = build_provisional_key(
+            source="cursor_print",
+            session_id=event.session_id,
+            thread_id=thread_id,
+            turn_id=turn_id,
+        )
+        return LivePreviewCandidate(
+            session_id=event.session_id,
+            thread_id=thread_id,
+            turn_key=turn_key,
+            seq=seq,
+            preview_text=text,
+            provisional_cursor=build_provisional_cursor(key=turn_key, seq=seq),
+            provisional_complete=False,
+            preview_observed_at=observed_at,
+            source="cursor_print",
+            last_observation_id=observation_id,
+        )
+    if raw_type != "tool_call":
+        return None
+    call_id = _optional_str(raw.get("call_id"))
+    call = raw.get("tool_call")
+    if not isinstance(call, dict):
+        return None
+    tool_name, detail = _cursor_tool_detail(call)
+    if detail is None:
+        return None
+    args = detail.get("args") if isinstance(detail.get("args"), dict) else {}
+    result = detail.get("result") if isinstance(detail.get("result"), dict) else {}
+    success = result.get("success") if isinstance(result.get("success"), dict) else {}
+    rejected = result.get("rejected") if isinstance(result.get("rejected"), dict) else {}
+    command = str(args.get("command") or "").strip()
+    output = str(success.get("stdout") or success.get("interleavedOutput") or rejected.get("reason") or "")
+    subtype = str(raw.get("subtype") or "").strip()
+    turn_key = build_provisional_key(
+        source="cursor_print",
+        session_id=event.session_id,
+        thread_id=thread_id,
+        turn_id=_item_scoped_turn_id(turn_id, call_id),
+    )
+    return LivePreviewCandidate(
+        session_id=event.session_id,
+        thread_id=thread_id,
+        turn_key=turn_key,
+        seq=seq,
+        preview_text=output.strip() or command or str(detail.get("description") or tool_name),
+        provisional_cursor=build_provisional_cursor(key=turn_key, seq=seq),
+        provisional_complete=subtype == "completed",
+        preview_observed_at=observed_at,
+        source="cursor_print",
+        last_observation_id=observation_id,
+        preview_role="assistant",
+        tool_name=tool_name,
+        tool_input_json=dict(args) if args else None,
+        tool_output_text=output or None,
+        tool_call_id=call_id,
+        tool_call_state="completed" if subtype == "completed" else "running",
+    )
+
+
+def _cursor_tool_detail(call: dict[str, Any]) -> tuple[str, dict[str, Any] | None]:
+    for key, label in (
+        ("shellToolCall", "Shell"),
+        ("mcpToolCall", "MCP"),
+        ("readToolCall", "Read"),
+        ("writeToolCall", "Write"),
+    ):
+        value = call.get(key)
+        if isinstance(value, dict):
+            return label, value
+    return "Tool", None
 
 
 def upsert_session_live_preview(db: Session, candidate: LivePreviewCandidate) -> bool:

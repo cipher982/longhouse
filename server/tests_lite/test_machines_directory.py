@@ -284,7 +284,7 @@ def test_directory_reports_antigravity_send_without_launchability(tmp_path):
     assert entries[0].launch.blocked_by == "no_launch_support"
 
 
-def test_directory_filters_cursor_turn_start_while_console_is_frozen(tmp_path):
+def test_directory_reports_cursor_native_console_turn_start(tmp_path):
     SessionLocal = _make_db(tmp_path)
     _seed_user(SessionLocal)
     registry = MachineControlChannelRegistry()
@@ -296,11 +296,11 @@ def test_directory_filters_cursor_turn_start_while_console_is_frozen(tmp_path):
         registry=registry,
     )[0]
 
-    assert entry.launchable_providers == ()
-    assert entry.launch_blocked_by == "no_launch_support"
-    assert entry.launch.providers == ()
-    assert entry.launch.blocked_by == "no_launch_support"
-    assert entry.launch.default_provider is None
+    assert entry.launchable_providers == ("cursor",)
+    assert entry.launch_blocked_by is None
+    assert tuple(option.provider for option in entry.launch.providers) == ("cursor",)
+    assert entry.launch.blocked_by is None
+    assert entry.launch.default_provider == "cursor"
 
 
 def test_directory_prefers_codex_console_adapter_when_available(tmp_path):

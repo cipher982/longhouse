@@ -23,6 +23,7 @@ from zerg.services.console_turns import enqueue_console_turn
 from zerg.services.console_turns import dispatch_next_console_turn
 from zerg.services.console_turns import dispatch_catalog_claimed_turn
 from zerg.services.console_turns import mark_console_turn_active
+from zerg.services.console_turns import interrupt_console_turn
 from zerg.services.console_turns import settle_console_turn
 from zerg.services.console_sessions import create_empty_console_session
 from zerg.services.session_inputs import INPUT_STATUS_DELIVERED
@@ -278,6 +279,40 @@ async def test_dispatch_next_console_turn_uses_run_id_as_durable_command_id(tmp_
     assert registry.command["payload"]["turn_id"] == str(queued.turn_id)
     assert registry.command["payload"]["client_request_id"] == "request-dispatch"
     assert registry.command["payload"]["message"] == "Continue exactly once"
+
+
+@pytest.mark.asyncio
+async def test_interrupt_console_turn_targets_exact_active_run(tmp_path, monkeypatch):
+    db = _db(tmp_path)
+    session = _session(db)
+    session.provider = "cursor"
+    thread = ensure_primary_thread(db, session)
+    thread.provider = "cursor"
+    set_thread_execution_target(thread, device_id="cinder", cwd="/tmp/longhouse")
+    db.commit()
+    enqueue_console_turn(db, session=session, owner_id=1, message="Work", client_request_id="interrupt-me")
+
+    class Registry:
+        command = None
+
+        def supports(self, **kwargs):
+            return kwargs["capability"] in {"cursor.turn_start", "cursor.turn_interrupt"}
+
+        async def send_command(self, **kwargs):
+            self.command = kwargs
+            return SimpleNamespace(transport_ok=True, message={"ok": True}, error=None)
+
+    registry = Registry()
+    dispatched = await dispatch_next_console_turn(db, owner_id=1, thread_id=thread.id, registry=registry)
+    monkeypatch.setattr("zerg.database.live_catalog_enabled", lambda: False)
+    result = await interrupt_console_turn(db, owner_id=1, session_id=session.id, registry=registry)
+
+    assert result.dispatched is True
+    assert result.run_id == dispatched.run_id
+    assert registry.command["command_type"] == "session.turn.interrupt"
+    assert registry.command["payload"]["provider"] == "cursor"
+    assert registry.command["payload"]["run_id"] == str(dispatched.run_id)
+    assert registry.command["command_id"] == f"{dispatched.run_id}:interrupt"
 
 
 @pytest.mark.asyncio

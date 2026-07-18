@@ -621,12 +621,19 @@ def load_runtime_state_map(db: Session, session_ids: list[UUID]) -> dict[str, Se
 
 def _is_bridge_transcript_event(event: RuntimeEventIngest) -> bool:
     payload = event.payload or {}
-    return (
+    codex_live = (
         (event.provider or "").strip().lower() == "codex"
         and (event.source or "").strip().lower() in {"codex_bridge_live", "codex_console_live"}
         and event.kind == "progress_signal"
         and payload.get("progress_kind") in {"bridge_live_transcript_delta", "console_live_tool_item"}
     )
+    cursor_live = (
+        (event.provider or "").strip().lower() == "cursor"
+        and (event.source or "").strip().lower() == "cursor_print"
+        and event.kind == "progress_signal"
+        and payload.get("progress_kind") == "cursor_print_stream"
+    )
+    return codex_live or cursor_live
 
 
 def ingest_runtime_events(db: Session, events: list[RuntimeEventIngest]) -> RuntimeEventBatchResult:

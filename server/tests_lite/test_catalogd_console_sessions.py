@@ -116,6 +116,10 @@ def test_catalog_console_turns_claim_and_wake_fifo(tmp_path):
     assert second["turn"]["state"] == "queued"
     assert second["turn"]["run_id"] is None
     assert second["turn"]["client_request_id"] == "request-2"
+    current = store.read_current_console_turn(session_id=str(session_id), owner_id=1)
+    assert current["found"] is True
+    assert current["turn"]["turn_id"] == first["turn"]["turn_id"]
+    assert store.read_current_console_turn(session_id=str(session_id), owner_id=42) == {"found": False}
     facts = store.read_session(session_id=str(session_id), owner_id=1)["facts"]
     assert facts["latest_console_turn"]["state"] == "starting"
     active = store.update_console_turn(

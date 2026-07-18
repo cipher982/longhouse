@@ -370,7 +370,7 @@ mod tests {
     }
 
     #[test]
-    fn spawned_result_survives_registry_recreation() {
+    fn spawned_invocation_identity_and_cancel_survive_registry_recreation() {
         let temp = tempfile::tempdir().unwrap();
         let run_id = id(11);
         let registry = TurnClaimRegistry::new(temp.path().to_path_buf());
@@ -378,19 +378,31 @@ mod tests {
             .claim(&run_id, &id(12), &id(13), None, None, "cursor")
             .unwrap();
         registry
-            .mark_spawned(
+            .mark_spawned_invocation(
                 &run_id,
-                Some(42),
+                42,
+                42,
                 Some("Mon Jul 15 10:00:00 2026".to_string()),
-                serde_json::json!({"transport": "cursor_acp"}),
+                "cursor_print",
+                "launch-11",
+                "provider-thread-11",
+                "/tmp/stdout.jsonl",
+                "/tmp/stderr.log",
+                serde_json::json!({"transport": "cursor_print"}),
             )
             .unwrap();
+        registry.mark_cancel_requested(&run_id).unwrap();
 
         let reopened = TurnClaimRegistry::new(temp.path().to_path_buf());
         let claim = reopened.read(&run_id).unwrap();
         assert_eq!(claim.state, "spawned");
         assert_eq!(claim.pid, Some(42));
-        assert_eq!(claim.result.unwrap()["transport"], "cursor_acp");
+        assert_eq!(claim.process_group_id, Some(42));
+        assert_eq!(claim.adapter.as_deref(), Some("cursor_print"));
+        assert_eq!(claim.provider_thread_id.as_deref(), Some("provider-thread-11"));
+        assert_eq!(claim.stdout_path.as_deref(), Some("/tmp/stdout.jsonl"));
+        assert!(claim.cancel_requested_at.is_some());
+        assert_eq!(claim.result.unwrap()["transport"], "cursor_print");
     }
 
     #[test]

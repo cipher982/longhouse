@@ -109,6 +109,14 @@ def project_catalog_session_facts(
                 capability=f"{session.provider}.turn_start",
             )
         )
+        interrupt_adapter_available = bool(
+            machine_online
+            and registry.supports(
+                owner_id=int(owner_id),
+                device_id=device_id,
+                capability=f"{session.provider}.turn_interrupt",
+            )
+        )
         capabilities = project_console_turn_capabilities(
             capabilities,
             closed=session.closed_at is not None,
@@ -116,6 +124,7 @@ def project_catalog_session_facts(
             turn_state=(latest_console_turn.get("state") if isinstance(latest_console_turn, dict) else None),
             machine_online=machine_online,
             adapter_available=adapter_available,
+            interrupt_adapter_available=interrupt_adapter_available,
         )
     return _response_from_catalog(
         session,

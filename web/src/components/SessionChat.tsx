@@ -18,6 +18,7 @@ import {
   fetchSessionInputs,
   fetchSessionLockStatus,
   interruptLiveSession,
+  interruptConsoleTurn,
   postSessionInput,
   postSessionInputMultipart,
   type QueuedInputSummary,
@@ -528,7 +529,9 @@ export function SessionChat({
     setIsInterrupting(true);
     setError(null);
     try {
-      await interruptLiveSession(session.id);
+      await (session.capabilities?.control_label === "console"
+        ? interruptConsoleTurn(session.id)
+        : interruptLiveSession(session.id));
       queryClient.setQueryData<SessionLockInfo | null>(["session-lock", session.id], {
         locked: false,
         holder: null,
@@ -541,11 +544,12 @@ export function SessionChat({
     } finally {
       setIsInterrupting(false);
     }
-  }, [isInterrupting, isManagedLocal, queryClient, refreshCurrentSessionWorkspace, session.id]);
+  }, [isInterrupting, isManagedLocal, queryClient, refreshCurrentSessionWorkspace, session.capabilities?.control_label, session.id]);
 
   const canSteerNow = isSendLocked && canSteerActiveTurn;
   const canQueueNow = isSendLocked && canQueueNextInput && !queueFull;
-  const canInterruptTurn = isManagedLocal && isSendLocked;
+  const canInterruptTurn =
+    isManagedLocal && (isSendLocked || Boolean(session.capabilities?.can_interrupt_active_turn));
   const attachmentInputEnabled = attachImagesEnabled && !isSendLocked;
   // Inline interrupt is offered for any locked managed-local turn. When the
   // stall-recovery card is showing it already exposes the same action, so we

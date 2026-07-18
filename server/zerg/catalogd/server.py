@@ -281,6 +281,8 @@ class CatalogDaemon:
             return await self._create_console_session(request)
         if request.method == "session.console.turn.enqueue.v2":
             return await self._enqueue_console_turn(request)
+        if request.method == "session.console.turn.current.v2":
+            return await self._read_current_console_turn(request)
         if request.method == "session.console.turn.update.v2":
             return await self._update_console_turn(request)
         if request.method == "session.launch.intent.create.v2":
@@ -1355,6 +1357,26 @@ class CatalogDaemon:
             return self._error(request, "invalid_request", str(exc))
         assert self._store is not None
         return CatalogRpcResponse(id=request.id, result=await self._run_store(self._store.enqueue_console_turn, data=data))
+
+    async def _read_current_console_turn(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if not request.params.get("session_id") or request.params.get("owner_id") is None:
+            return self._error(request, "invalid_request", "session.console.turn.current.v2 requires session_id and owner_id")
+        try:
+            uuid.UUID(str(request.params["session_id"]))
+            owner_id = int(request.params["owner_id"])
+        except (TypeError, ValueError):
+            return self._error(request, "invalid_request", "console turn current identity is invalid")
+        if owner_id <= 0:
+            return self._error(request, "invalid_request", "console turn current owner_id must be positive")
+        assert self._store is not None
+        return CatalogRpcResponse(
+            id=request.id,
+            result=await self._run_store(
+                self._store.read_current_console_turn,
+                session_id=str(request.params["session_id"]),
+                owner_id=owner_id,
+            ),
+        )
 
     async def _update_console_turn(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
         if set(request.params) != {"turn"} or not isinstance(request.params["turn"], dict):

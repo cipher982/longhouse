@@ -1481,7 +1481,8 @@ async fn execute_turn_start(
             run_id: run_id.clone(),
             client_request_id: client_request_id.clone(),
             cwd,
-            cursor_bin: DEFAULT_CURSOR_BIN.to_string(),
+            cursor_bin: std::env::var("LONGHOUSE_CURSOR_BIN")
+                .unwrap_or_else(|_| DEFAULT_CURSOR_BIN.to_string()),
             prompt: message,
             resume_provider_thread_id,
             model: payload_optional_string(payload, "model"),

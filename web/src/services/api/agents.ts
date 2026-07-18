@@ -220,7 +220,7 @@ export interface SessionCapabilities {
   composer_placeholder?: string;
   composer_disabled_reason?: string | null;
   send_disabled_reason?: SendDisabledReason | null;
-  control_label?: "live" | "reattach" | "search-only" | "imported" | null;
+  control_label?: "live" | "reattach" | "console" | "search-only" | "imported" | null;
   observe_only?: boolean;
   search_only?: boolean;
   staleness_reason?: string | null;
@@ -229,6 +229,9 @@ export interface SessionCapabilities {
   can_terminate?: boolean;
   can_tail_output?: boolean;
   can_resume?: boolean;
+  turn_state?: "idle" | "queued" | "starting" | "active" | "draining";
+  can_start_turn?: boolean;
+  can_interrupt_active_turn?: boolean;
   /**
    * True when this session accepts image attachments on input. Today this is
    * codex_app_server + live_control_available; the server is the source of

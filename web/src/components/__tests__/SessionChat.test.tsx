@@ -288,6 +288,35 @@ describe("SessionChat", () => {
     await waitFor(() => expect(interruptCalls).toBe(1));
   });
 
+  it("routes Console Stop to the turn-scoped interrupt endpoint", async () => {
+    const user = userEvent.setup();
+    let consoleInterruptCalls = 0;
+    requestMock.mockImplementation((path: string, init?: RequestInit) => {
+      if (String(path).endsWith("/lock")) {
+        return Promise.resolve({ locked: false, fork_available: false });
+      }
+      if (String(path).endsWith("/turns/current/interrupt") && init?.method === "POST") {
+        consoleInterruptCalls += 1;
+        return Promise.resolve({ interrupt_dispatched: true, session_id: "sess-1" });
+      }
+      return Promise.reject(new Error(`Unexpected request: ${path}`));
+    });
+
+    renderSessionChat({
+      chatMode: "managed_local",
+      session: makeSession({
+        provider: "cursor",
+        capabilities: {
+          control_label: "console",
+          can_interrupt_active_turn: true,
+        } as SessionChatTarget["capabilities"],
+      }),
+    });
+
+    await user.click(await screen.findByRole("button", { name: /stop/i }));
+    await waitFor(() => expect(consoleInterruptCalls).toBe(1));
+  });
+
   it("does not mention Stop when a locked session is not interruptible", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },

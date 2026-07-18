@@ -70,6 +70,9 @@ pub async fn start_cursor_print_turn(config: CursorPrintRunConfig) -> Result<Cur
     validate_uuid(&config.session_id, "session_id")?;
     validate_uuid(&config.thread_id, "thread_id")?;
     validate_uuid(&config.run_id, "run_id")?;
+    if let Some(turn_id) = normalized_optional(&config.turn_id) {
+        validate_uuid(&turn_id, "turn_id")?;
+    }
     let provider_thread_id = match normalized_optional(&config.resume_provider_thread_id) {
         Some(value) => {
             validate_uuid(&value, "resume_provider_thread_id")?;
@@ -305,7 +308,10 @@ pub fn interrupt_cursor_print_turn(run_id: &str, session_id: &str) -> Result<()>
     registry.mark_cancel_requested(run_id)?;
     let result = unsafe { libc::killpg(pgid, libc::SIGINT) };
     if result != 0 {
-        return Err(std::io::Error::last_os_error()).context("interrupting Cursor Console process group");
+        let error = std::io::Error::last_os_error();
+        if error.raw_os_error() != Some(libc::ESRCH) {
+            return Err(error).context("interrupting Cursor Console process group");
+        }
     }
     Ok(())
 }
@@ -588,7 +594,11 @@ impl CursorPrintSink {
     }
 
     async fn post_terminal(&self, terminal_state: &str, exit_code: Option<i32>, stderr: Option<String>) {
-        crate::turn_claims::mark_terminal(&self.run_id, terminal_state, stderr.clone());
+        crate::turn_claims::mark_terminal(
+            &self.run_id,
+            terminal_state,
+            (terminal_state == "run_failed").then(|| stderr.clone()).flatten(),
+        );
         self.persist_local_phase("finished", None, Utc::now());
         self.post_events(vec![json!({
             "runtime_key": format!("cursor:{}", self.session_id),
@@ -811,12 +821,31 @@ mod tests {
         let marker = format!("LH_CURSOR_CONSOLE_CANARY_{}", Uuid::new_v4().simple());
 
         async fn run_turn(cursor_bin: &str, cwd: &Path, prompt: String, resume: Option<String>) -> CursorPrintRunSummary {
+            let session_id = Uuid::new_v4().to_string();
+            let thread_id = Uuid::new_v4().to_string();
+            let turn_id = Uuid::new_v4().to_string();
+            let run_id = Uuid::new_v4().to_string();
+            let client_request_id = format!("canary-{}", Uuid::new_v4());
+            assert!(matches!(
+                crate::turn_claims::default_registry()
+                    .unwrap()
+                    .claim(
+                        &run_id,
+                        &session_id,
+                        &thread_id,
+                        Some(&turn_id),
+                        Some(&client_request_id),
+                        "cursor",
+                    )
+                    .unwrap(),
+                crate::turn_claims::ClaimOutcome::Acquired
+            ));
             let summary = start_cursor_print_turn(CursorPrintRunConfig {
-                session_id: Uuid::new_v4().to_string(),
-                thread_id: Uuid::new_v4().to_string(),
-                turn_id: Some(Uuid::new_v4().to_string()),
-                run_id: Uuid::new_v4().to_string(),
-                client_request_id: Some(format!("canary-{}", Uuid::new_v4())),
+                session_id,
+                thread_id,
+                turn_id: Some(turn_id),
+                run_id,
+                client_request_id: Some(client_request_id),
                 cwd: cwd.to_path_buf(),
                 cursor_bin: cursor_bin.to_string(),
                 prompt,
@@ -849,6 +878,18 @@ mod tests {
         let first_output = std::fs::read_to_string(&first.stdout_path).unwrap();
         assert!(first_output.contains(&marker));
         assert!(first_output.contains(&first.provider_thread_id));
+        let binding: Value = serde_json::from_slice(
+            &std::fs::read(
+                temp.path()
+                    .join("longhouse/managed-local/cursor-helm/binding-probes")
+                    .join(format!("{}.json", first.session_id)),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(binding["status"], "observed");
+        assert_eq!(binding["conversation_uuid"], first.provider_thread_id);
+        assert_eq!(binding["thread_id"], first.thread_id);
 
         let second_marker = format!("{marker}_RESUMED");
         let second = run_turn(

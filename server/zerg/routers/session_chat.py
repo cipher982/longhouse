@@ -15,6 +15,7 @@ from datetime import timedelta
 from datetime import timezone
 from hashlib import blake2b
 from typing import Any
+from uuid import UUID
 
 from fastapi import APIRouter
 from fastapi import Depends
@@ -45,6 +46,7 @@ from zerg.services.console_turns import ConsoleTurnUnavailable
 from zerg.services.console_turns import dispatch_next_console_turn
 from zerg.services.console_turns import enqueue_catalog_console_turn
 from zerg.services.console_turns import enqueue_console_turn
+from zerg.services.console_turns import interrupt_console_turn
 from zerg.services.live_archive_outbox import enqueue_managed_local_launch_outbox
 from zerg.services.live_archive_outbox import project_session_input_receipt_to_archive
 from zerg.services.live_catalog_launch import attach_live_catalog_control
@@ -1476,6 +1478,22 @@ async def interrupt_live_session(
     )
 
 
+@router.post("/{session_id}/turns/current/interrupt", response_model=SessionInterruptResponse)
+async def interrupt_current_console_turn(
+    session_id: UUID,
+    db: Session | None = Depends(_catalog_control_db_dependency),
+    current_user: User = Depends(get_current_browser_route_user),
+) -> SessionInterruptResponse:
+    """Interrupt the current headless Console invocation on its owning machine."""
+    try:
+        result = await interrupt_console_turn(db, owner_id=current_user.id, session_id=session_id)
+    except ConsoleTurnUnavailable as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail={"code": exc.code, "message": str(exc)}) from exc
+    if not result.dispatched:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail={"code": "interrupt_failed", "message": result.error})
+    return SessionInterruptResponse(interrupt_dispatched=True, session_id=str(session_id))
+
+
 @agents_router.post("/{session_id}/interrupt-live", response_model=SessionInterruptResponse)
 async def interrupt_live_session_agents(
     session_id: str,
@@ -1507,6 +1525,27 @@ async def interrupt_live_session_agents(
         source_session=source_session,
         request_id=request_id,
     )
+
+
+@agents_router.post("/{session_id}/turns/current/interrupt", response_model=SessionInterruptResponse)
+async def interrupt_current_console_turn_agents(
+    session_id: UUID,
+    request: Request,
+    db: Session | None = Depends(_catalog_control_db_dependency),
+    device_token: DeviceToken | None = Depends(verify_agents_token),
+    _single: None = Depends(require_single_tenant),
+) -> SessionInterruptResponse:
+    settings = get_settings()
+    resolved_token = device_token if isinstance(device_token, DeviceToken) else None
+    _authorize_live_send(request=request, device_token=resolved_token, auth_disabled=settings.auth_disabled)
+    owner_id = _resolve_agents_owner_id(db, resolved_token)
+    try:
+        result = await interrupt_console_turn(db, owner_id=owner_id, session_id=session_id)
+    except ConsoleTurnUnavailable as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail={"code": exc.code, "message": str(exc)}) from exc
+    if not result.dispatched:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail={"code": "interrupt_failed", "message": result.error})
+    return SessionInterruptResponse(interrupt_dispatched=True, session_id=str(session_id))
 
 
 @router.post("/{session_id}/terminate-live", response_model=SessionTerminateResponse)

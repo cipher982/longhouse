@@ -1451,6 +1451,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/sessions/{session_id}/turns/current/interrupt": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Interrupt Current Console Turn
+         * @description Interrupt the current headless Console invocation on its owning machine.
+         */
+        post: operations["interrupt_current_console_turn_sessions__session_id__turns_current_interrupt_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/sessions/{session_id}/terminate-live": {
         parameters: {
             query?: never;
@@ -1727,6 +1747,23 @@ export interface paths {
          *     source runner. It does not confirm that the provider stopped the turn.
          */
         post: operations["interrupt_live_session_agents_agents_sessions__session_id__interrupt_live_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/sessions/{session_id}/turns/current/interrupt": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Interrupt Current Console Turn Agents */
+        post: operations["interrupt_current_console_turn_agents_agents_sessions__session_id__turns_current_interrupt_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -13234,6 +13271,40 @@ export interface operations {
             };
         };
     };
+    interrupt_current_console_turn_sessions__session_id__turns_current_interrupt_post: {
+        parameters: {
+            query?: {
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
+            };
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionInterruptResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     terminate_live_session_sessions__session_id__terminate_live_post: {
         parameters: {
             query?: {
@@ -13736,6 +13807,37 @@ export interface operations {
         };
     };
     interrupt_live_session_agents_agents_sessions__session_id__interrupt_live_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionInterruptResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    interrupt_current_console_turn_agents_agents_sessions__session_id__turns_current_interrupt_post: {
         parameters: {
             query?: never;
             header?: never;

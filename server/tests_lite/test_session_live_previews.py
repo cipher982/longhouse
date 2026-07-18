@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
+from uuid import uuid4
 
 from sqlalchemy.orm import sessionmaker
 
@@ -23,9 +24,9 @@ def _make_sessionmaker(tmp_path, name: str):
     return sessionmaker(bind=engine)
 
 
-def _seed_session(db, *, started_at: datetime) -> AgentSession:
+def _seed_session(db, *, started_at: datetime, provider: str = "codex") -> AgentSession:
     session = AgentSession(
-        provider="codex",
+        provider=provider,
         environment="test",
         project="live-preview-projection",
         device_id="cinder",
@@ -157,6 +158,99 @@ def test_console_tool_event_materializes_truthful_live_tool_preview(tmp_path):
     assert preview.tool_input_json == {"command": "pwd"}
     assert preview.tool_output_text == "/tmp/project\n"
     assert preview.tool_call_id == "exec-1"
+    assert preview.tool_call_state == "completed"
+    assert preview.provisional_complete is True
+
+
+def test_cursor_print_assistant_event_materializes_live_preview(tmp_path):
+    SessionLocal = _make_sessionmaker(tmp_path, "cursor_print_assistant.db")
+    now = datetime(2026, 7, 17, 12, 0, tzinfo=timezone.utc)
+
+    with SessionLocal() as db:
+        session = _seed_session(db, started_at=now - timedelta(minutes=1), provider="cursor")
+        thread_id = uuid4()
+        run_id = uuid4()
+        event = RuntimeEventIngest(
+            runtime_key=f"cursor:{session.id}",
+            session_id=session.id,
+            thread_id=thread_id,
+            run_id=run_id,
+            provider="cursor",
+            device_id="cinder",
+            source="cursor_print",
+            kind="progress_signal",
+            occurred_at=now,
+            dedupe_key="cursor:run-1:2",
+            payload={
+                "progress_kind": "cursor_print_stream",
+                "thread_id": str(thread_id),
+                "turn_id": "turn-1",
+                "seq": 2,
+                "event": {
+                    "type": "assistant",
+                    "message": {"content": [{"type": "text", "text": "native Cursor reply"}]},
+                },
+            },
+        )
+        result = ingest_runtime_events(db, [event])
+        db.commit()
+        row = db.get(SessionLivePreview, session.id)
+        preview = load_session_live_preview_map(db, [session.id])[str(session.id)]
+
+    assert result.accepted == 1
+    assert preview.text == "native Cursor reply"
+    assert row is not None
+    assert row.thread_id == str(thread_id)
+    assert preview.source == "cursor_print"
+
+
+def test_cursor_print_tool_event_materializes_live_tool_preview(tmp_path):
+    SessionLocal = _make_sessionmaker(tmp_path, "cursor_print_tool.db")
+    now = datetime(2026, 7, 17, 12, 0, tzinfo=timezone.utc)
+
+    with SessionLocal() as db:
+        session = _seed_session(db, started_at=now - timedelta(minutes=1), provider="cursor")
+        thread_id = uuid4()
+        run_id = uuid4()
+        event = RuntimeEventIngest(
+            runtime_key=f"cursor:{session.id}",
+            session_id=session.id,
+            thread_id=thread_id,
+            run_id=run_id,
+            provider="cursor",
+            device_id="cinder",
+            source="cursor_print",
+            kind="progress_signal",
+            occurred_at=now,
+            dedupe_key="cursor:run-1:3",
+            payload={
+                "progress_kind": "cursor_print_stream",
+                "thread_id": str(thread_id),
+                "turn_id": "turn-1",
+                "seq": 3,
+                "event": {
+                    "type": "tool_call",
+                    "subtype": "completed",
+                    "call_id": "call-1",
+                    "tool_call": {
+                        "shellToolCall": {
+                            "args": {"command": "pwd"},
+                            "result": {"success": {"stdout": "/tmp/project\n"}},
+                        }
+                    },
+                },
+            },
+        )
+        result = ingest_runtime_events(db, [event])
+        db.commit()
+        preview = load_session_live_preview_map(db, [session.id])[str(session.id)]
+
+    assert result.accepted == 1
+    assert preview.text == "/tmp/project"
+    assert preview.tool_name == "Shell"
+    assert preview.tool_input_json == {"command": "pwd"}
+    assert preview.tool_output_text == "/tmp/project\n"
+    assert preview.tool_call_id == "call-1"
     assert preview.tool_call_state == "completed"
     assert preview.provisional_complete is True
 

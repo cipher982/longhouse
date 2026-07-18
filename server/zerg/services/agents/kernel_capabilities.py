@@ -192,6 +192,7 @@ def project_console_turn_capabilities(
     turn_state: str | None,
     machine_online: bool = True,
     adapter_available: bool = True,
+    interrupt_adapter_available: bool = False,
 ) -> KernelSessionCapabilities:
     """Project Console's durable turn action without manufacturing a live lease."""
 
@@ -220,7 +221,7 @@ def project_console_turn_capabilities(
         turn_state=normalized_state,
         can_start_turn=can_start,
         start_turn_blocked_by=blocked_by,
-        can_interrupt_active_turn=(normalized_state in {"starting", "active", "draining"} and capabilities.can_interrupt),
+        can_interrupt_active_turn=(normalized_state in {"starting", "active", "draining"} and interrupt_adapter_available),
     )
 
 

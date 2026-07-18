@@ -120,3 +120,11 @@ export async function interruptLiveSession(
     method: "POST",
   });
 }
+
+export async function interruptConsoleTurn(
+  sessionId: string,
+): Promise<SessionInterruptResponse> {
+  return request<SessionInterruptResponse>(`/sessions/${sessionId}/turns/current/interrupt`, {
+    method: "POST",
+  });
+}

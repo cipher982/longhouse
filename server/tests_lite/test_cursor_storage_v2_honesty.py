@@ -7,7 +7,7 @@ from pathlib import Path
 from zerg.services.managed_provider_contracts import contract_for_provider
 
 
-def test_cursor_contract_advertises_helm_without_cross_plane_console_claims():
+def test_cursor_contract_advertises_helm_and_native_console_turns():
     contract = contract_for_provider("cursor")
 
     assert contract is not None
@@ -21,7 +21,10 @@ def test_cursor_contract_advertises_helm_without_cross_plane_console_claims():
     assert contract.tail_output is True
     assert contract.runtime_phase is True
     assert contract.transcript_binding is True
-    assert "cursor.turn_start" not in contract.machine_control_supports
+    assert contract.console_adapter == "cursor_print"
+    assert contract.turn_start is True
+    assert "cursor.turn_start" in contract.machine_control_supports
+    assert "cursor.turn_interrupt" in contract.machine_control_supports
     assert "cursor.run_once" not in contract.machine_control_supports
     assert "cursor.resume_run_once" not in contract.machine_control_supports
 

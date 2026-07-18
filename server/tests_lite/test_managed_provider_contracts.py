@@ -49,6 +49,7 @@ def _manifest_item(provider: str = "test") -> dict:
         "runtime_phase": True,
         "transcript_binding": True,
         "run_once": False,
+        "turn_start": True,
         "operation_evidence": {
             "launch_local": {"level": "hermetic", "source": "test"},
             "launch_remote": {"level": "hermetic", "source": "test"},
@@ -62,6 +63,7 @@ def _manifest_item(provider: str = "test") -> dict:
             "runtime_phase": {"level": "hermetic", "source": "test"},
             "transcript_binding": {"level": "hermetic", "source": "test"},
             "run_once": {"level": "none", "source": "test"},
+            "turn_start": {"level": "hermetic", "source": "test"},
         },
     }
 
@@ -354,6 +356,8 @@ def test_codex_exec_is_direct_one_shot_control_not_a_steer_alias():
         ("codex", "session.answer_pause", "codex.answer_pause"),
         ("codex", "session.terminate", None),
         ("codex", "session.run_once", "codex.run_once"),
+        ("cursor", "session.turn.start", "cursor.turn_start"),
+        ("cursor", "session.turn.interrupt", "cursor.turn_interrupt"),
         ("claude", "session.send_text", "claude.send"),
         ("claude", "session.interrupt", "claude.interrupt"),
         ("claude", "session.steer_text", "claude.steer"),
@@ -385,6 +389,7 @@ def test_machine_control_command_projection_is_manifest_backed_for_every_provide
         "terminate": "session.terminate",
         "run_once": "session.run_once",
         "turn_start": "session.turn.start",
+        "turn_interrupt": "session.turn.interrupt",
     }
     launch_only_operations = {"launch", "continue", "resume_run_once"}
 

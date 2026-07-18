@@ -38,6 +38,7 @@ from zerg.services.session_turns import SESSION_TURN_STATE_STARTING
 from zerg.services.session_turns import create_session_turn
 
 CONSOLE_TURN_START_COMMAND = "session.turn.start"
+CONSOLE_TURN_INTERRUPT_COMMAND = "session.turn.interrupt"
 logger = logging.getLogger("longhouse.console_latency")
 
 CONSOLE_EXECUTION_OWNER_STATES = frozenset(
@@ -98,6 +99,105 @@ class CatalogConsoleTurn:
     state: str
     created: bool
     error: str | None = None
+
+
+@dataclass(frozen=True)
+class ConsoleTurnInterrupt:
+    turn_id: UUID | int
+    run_id: UUID
+    dispatched: bool
+    error: str | None = None
+
+
+async def interrupt_console_turn(
+    db: Session | None,
+    *,
+    owner_id: int,
+    session_id: UUID,
+    registry=None,
+) -> ConsoleTurnInterrupt:
+    """Interrupt the exact active Console invocation, never a Helm control path."""
+
+    from zerg import database as database_module
+    from zerg.services.catalogd_supervisor import get_catalogd_client
+    from zerg.services.machine_control_channel import get_machine_control_channel_registry
+
+    turn: dict[str, object] | None
+    if database_module.live_catalog_enabled():
+        client = get_catalogd_client()
+        if client is None:
+            raise ConsoleTurnUnavailable("catalog_unavailable", "Console turn catalog is unavailable")
+        result = await client.call(
+            "session.console.turn.current.v2",
+            {"session_id": str(session_id), "owner_id": owner_id},
+        )
+        if result.get("found") is not True:
+            raise ConsoleTurnUnavailable("session_not_found", "Console session was not found")
+        turn = result.get("turn") if isinstance(result.get("turn"), dict) else None
+    else:
+        if db is None:
+            raise ConsoleTurnUnavailable("catalog_unavailable", "Console turn store is unavailable")
+        row = (
+            db.query(SessionTurn, SessionThread)
+            .join(SessionThread, SessionThread.id == SessionTurn.thread_id)
+            .join(SessionInput, SessionInput.id == SessionTurn.session_input_id)
+            .filter(
+                SessionTurn.session_id == session_id,
+                SessionTurn.source_kind == SESSION_TURN_SOURCE_CONSOLE,
+                SessionTurn.state.in_(tuple(CONSOLE_EXECUTION_OWNER_STATES)),
+                SessionInput.owner_id == owner_id,
+            )
+            .order_by(SessionTurn.created_at.asc(), SessionTurn.id.asc())
+            .first()
+        )
+        turn = (
+            {
+                "turn_id": row[0].id,
+                "run_id": str(row[0].run_id) if row[0].run_id else None,
+                "provider": row[1].provider,
+                "device_id": row[1].device_id,
+                "thread_id": str(row[1].id),
+            }
+            if row is not None
+            else None
+        )
+    if turn is None or not turn.get("run_id"):
+        raise ConsoleTurnUnavailable("no_active_turn", "Session has no active Console turn")
+
+    provider = str(turn.get("provider") or "").strip()
+    device_id = str(turn.get("device_id") or "").strip()
+    run_id = UUID(str(turn["run_id"]))
+    capability = f"{provider}.turn_interrupt"
+    control = registry or get_machine_control_channel_registry()
+    if not control.supports(owner_id=owner_id, device_id=device_id, capability=capability):
+        raise ConsoleTurnUnavailable("adapter_unavailable", f"Machine Agent does not advertise {capability}")
+    response = await control.send_command(
+        owner_id=owner_id,
+        device_id=device_id,
+        session_id=str(session_id),
+        command_type=CONSOLE_TURN_INTERRUPT_COMMAND,
+        payload={
+            "provider": provider,
+            "run_id": str(run_id),
+            "turn_id": str(turn.get("turn_id") or ""),
+            "thread_id": str(turn.get("thread_id") or ""),
+        },
+        command_id=f"{run_id}:interrupt",
+        timeout_secs=15,
+    )
+    message = dict(response.message or {})
+    error = None
+    if not response.transport_ok:
+        error = str(response.error or "Console turn interrupt outcome is unknown")
+    elif message.get("ok") is not True:
+        detail = message.get("error") if isinstance(message.get("error"), dict) else {}
+        error = str(detail.get("message") or response.error or "Console turn interrupt failed")
+    return ConsoleTurnInterrupt(
+        turn_id=UUID(str(turn["turn_id"])) if database_module.live_catalog_enabled() else int(turn["turn_id"]),
+        run_id=run_id,
+        dispatched=error is None,
+        error=error,
+    )
 
 
 def enqueue_console_turn(

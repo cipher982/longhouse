@@ -2697,6 +2697,25 @@ class CatalogStore:
             commit_seq = _advance_commit_seq(connection, now)
             return {"found": True, "turn": result, "next_turn": next_turn_result, "commit_seq": str(commit_seq)}
 
+    def read_current_console_turn(self, *, session_id: str, owner_id: int) -> dict[str, Any]:
+        with self.engine.connect() as connection:
+            if not self._session_belongs_to_owner(connection, session_id=session_id, owner_id=owner_id):
+                return {"found": False}
+            orm = Session(bind=connection)
+            try:
+                turn = (
+                    orm.query(LiveConsoleTurn)
+                    .filter(
+                        LiveConsoleTurn.session_id == session_id,
+                        LiveConsoleTurn.state.in_(("starting", "active", "draining")),
+                    )
+                    .order_by(LiveConsoleTurn.created_at.asc(), LiveConsoleTurn.id.asc())
+                    .first()
+                )
+                return {"found": True, "turn": _live_console_turn_dto(turn) if turn is not None else None}
+            finally:
+                orm.close()
+
     def create_local_launch(self, *, launch: dict[str, Any]) -> dict[str, Any]:
         """Atomically create a Helm launch shell, control attachment, and outbox row."""
 

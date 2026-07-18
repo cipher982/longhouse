@@ -171,6 +171,23 @@ def test_run_but_no_connection(db):
     assert caps.staleness_reason == "no_connection"
 
 
+def test_console_active_turn_interrupt_comes_from_turn_adapter_not_helm_connection(db):
+    session = _make_session(db)
+    db.commit()
+    base = project_session_capabilities(db, session_id=session.id)
+
+    caps = project_console_turn_capabilities(
+        base,
+        closed=False,
+        execution_target_available=True,
+        turn_state="active",
+        interrupt_adapter_available=True,
+    )
+
+    assert base.can_interrupt is False
+    assert caps.can_interrupt_active_turn is True
+
+
 def test_managed_attached_grants_live(db):
     s = _make_session(db)
     t = _make_thread(db, s)
