@@ -44,6 +44,7 @@ use crate::state::spool::DeadLetterEntry;
 use crate::state::spool::Spool;
 
 const HEARTBEAT_POST_TIMEOUT: Duration = Duration::from_secs(6);
+const MAX_MACHINE_EVIDENCE_FACTS_PER_FAMILY: usize = 2_048;
 
 /// Heartbeat payload sent to the server and written locally.
 #[derive(Debug, Serialize, Clone)]
@@ -1256,6 +1257,10 @@ pub(crate) fn machine_evidence_from_observations(
     transcript.sort_by(|a, b| {
         (&a.provider, &a.provider_session_id).cmp(&(&b.provider, &b.provider_session_id))
     });
+    process.truncate(MAX_MACHINE_EVIDENCE_FACTS_PER_FAMILY);
+    activity.truncate(MAX_MACHINE_EVIDENCE_FACTS_PER_FAMILY);
+    control.truncate(MAX_MACHINE_EVIDENCE_FACTS_PER_FAMILY);
+    transcript.truncate(MAX_MACHINE_EVIDENCE_FACTS_PER_FAMILY);
 
     MachineEvidence {
         schema_version: 1,
@@ -3908,7 +3913,9 @@ mod tests {
             claude_foreground_tui: true,
         };
         let opencode = test_opencode_observation("opencode-session", "attached_tui");
-        let cursor = test_cursor_observation("cursor-session");
+        let mut cursor = test_cursor_observation("cursor-session");
+        cursor.live = false;
+        cursor.launcher_alive = true;
         let antigravity = UnmanagedSessionBinding {
             machine_id: "cinder".to_string(),
             provider: "antigravity".to_string(),
@@ -3916,7 +3923,10 @@ mod tests {
             source_path: Some("/tmp/antigravity.jsonl".to_string()),
             source_inode: Some(7),
             source_device: Some(8),
-            pid: Some(303),
+            // Deliberately overlaps a managed Codex pid. Legacy filtering must
+            // remove it from compatibility bindings without erasing the raw
+            // Antigravity fact from typed evidence.
+            pid: Some(12345),
             process_start_time: Some("Thu May  8 11:58:00 2026".to_string()),
             cwd: Some("/tmp/antigravity".to_string()),
             source_offset: Some(99),
@@ -3937,6 +3947,14 @@ mod tests {
         let opencode_observations = [opencode];
         let cursor_observations = [cursor];
         let unmanaged_bindings = [antigravity];
+        let legacy_filtered = filter_unmanaged_bindings_owned_by_managed_observations(
+            unmanaged_bindings.to_vec(),
+            &codex_observations,
+            &claude_observations,
+            &opencode_observations,
+            &cursor_observations,
+        );
+        assert!(legacy_filtered.is_empty());
         let evidence = machine_evidence_from_observations(
             &codex_observations,
             &claude_observations,
@@ -3965,6 +3983,14 @@ mod tests {
             .transcript
             .iter()
             .all(|fact| fact.provider != "cursor"));
+        assert!(evidence
+            .process
+            .iter()
+            .any(|fact| { fact.provider == "cursor" && fact.role == "launcher" && fact.alive }));
+        assert!(evidence
+            .control
+            .iter()
+            .any(|fact| fact.provider == "cursor" && fact.state == "detached"));
         assert_eq!(
             evidence.activity,
             vec![ActivityEvidence {
@@ -3990,5 +4016,18 @@ mod tests {
         assert_eq!(without_activity.process, evidence.process);
         assert_eq!(without_activity.control, evidence.control);
         assert_eq!(without_activity.transcript, evidence.transcript);
+
+        let serialized = serde_json::to_string(&evidence).unwrap();
+        for forbidden in [
+            "state_file",
+            "ws_url",
+            "server_url",
+            "password",
+            "token",
+            "command",
+            "argv",
+        ] {
+            assert!(!serialized.contains(forbidden), "leaked {forbidden}");
+        }
     }
 }

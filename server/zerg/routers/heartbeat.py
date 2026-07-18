@@ -79,6 +79,7 @@ MANAGED_SESSION_LEASE_SOURCE = "engine_attached_lease"
 UNMANAGED_PROCESS_SNAPSHOT_SOURCE = "engine_process_snapshot"
 DEFAULT_MANAGED_SESSION_LEASE_TTL_MS = 15 * 60 * 1000
 MAX_MANAGED_SESSION_LEASE_TTL_MS = 60 * 60 * 1000
+MAX_MACHINE_EVIDENCE_FACTS_PER_FAMILY = 2_048
 MANAGED_SESSION_LEASE_STATES = {"attached", "detached", "degraded"}
 MANAGED_SESSION_LEASE_PHASES = {"idle", "thinking", "running", "blocked", "needs_user", "none"}
 MANAGED_SESSION_LEASE_PROVIDERS = {"codex", "claude", "opencode", "antigravity"}
@@ -169,7 +170,9 @@ class ActivityEvidenceIn(UTCBaseModel):
 
 
 class ControlEvidenceIn(UTCBaseModel):
-    provider: str = Field(..., max_length=64)
+    # Antigravity has transcript/process observation but no managed control
+    # scanner in schema v1. Do not retain claims the Machine Agent cannot make.
+    provider: Literal["codex", "claude", "opencode", "cursor"]
     session_id: str = Field(..., max_length=255)
     provider_session_id: str | None = Field(None, max_length=255)
     ownership: Literal["managed"]
@@ -197,10 +200,10 @@ class TranscriptEvidenceIn(UTCBaseModel):
 class MachineEvidenceIn(UTCBaseModel):
     schema_version: Literal[1]
     observed_at: datetime
-    process: list[ProcessEvidenceIn] = Field(default_factory=list)
-    activity: list[ActivityEvidenceIn] = Field(default_factory=list)
-    control: list[ControlEvidenceIn] = Field(default_factory=list)
-    transcript: list[TranscriptEvidenceIn] = Field(default_factory=list)
+    process: list[ProcessEvidenceIn] = Field(default_factory=list, max_length=MAX_MACHINE_EVIDENCE_FACTS_PER_FAMILY)
+    activity: list[ActivityEvidenceIn] = Field(default_factory=list, max_length=MAX_MACHINE_EVIDENCE_FACTS_PER_FAMILY)
+    control: list[ControlEvidenceIn] = Field(default_factory=list, max_length=MAX_MACHINE_EVIDENCE_FACTS_PER_FAMILY)
+    transcript: list[TranscriptEvidenceIn] = Field(default_factory=list, max_length=MAX_MACHINE_EVIDENCE_FACTS_PER_FAMILY)
 
 
 class ResolvedWorkspaceIn(UTCBaseModel):

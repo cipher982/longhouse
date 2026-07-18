@@ -176,21 +176,39 @@ def test_heartbeat_accepts_and_retains_typed_machine_evidence_without_reducing_i
         api_app_ref.dependency_overrides = {}
 
 
-def test_heartbeat_machine_evidence_rejects_unknown_schema_and_invalid_pid(tmp_path):
+def test_heartbeat_machine_evidence_rejects_invalid_and_unbounded_claims(tmp_path):
     SessionLocal = _make_db(tmp_path)
     client, api_app_ref = _make_client(SessionLocal)
-    evidence = _machine_evidence_payload()
-    evidence["schema_version"] = 2
-    process = evidence["process"]
-    assert isinstance(process, list)
-    process[0]["pid"] = 0
 
     try:
-        response = client.post(
-            "/api/agents/heartbeat",
-            json={"version": "phase-2", "daemon_pid": 42, "machine_evidence": evidence},
-        )
-        assert response.status_code == 422
+        invalid_evidence = []
+
+        unknown_schema = _machine_evidence_payload()
+        unknown_schema["schema_version"] = 2
+        invalid_evidence.append(unknown_schema)
+
+        invalid_pid = _machine_evidence_payload()
+        process = invalid_pid["process"]
+        assert isinstance(process, list)
+        process[0]["pid"] = 0
+        invalid_evidence.append(invalid_pid)
+
+        antigravity_control = _machine_evidence_payload()
+        control = antigravity_control["control"]
+        assert isinstance(control, list)
+        control[0]["provider"] = "antigravity"
+        invalid_evidence.append(antigravity_control)
+
+        oversized = _machine_evidence_payload()
+        oversized["process"] = [process[1]] * 2_049
+        invalid_evidence.append(oversized)
+
+        for evidence in invalid_evidence:
+            response = client.post(
+                "/api/agents/heartbeat",
+                json={"version": "phase-2", "daemon_pid": 42, "machine_evidence": evidence},
+            )
+            assert response.status_code == 422
     finally:
         api_app_ref.dependency_overrides = {}
 

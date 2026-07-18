@@ -4970,8 +4970,11 @@ export interface components {
         };
         /** ControlEvidenceIn */
         ControlEvidenceIn: {
-            /** Provider */
-            provider: string;
+            /**
+             * Provider
+             * @enum {string}
+             */
+            provider: "codex" | "claude" | "opencode" | "cursor";
             /** Session Id */
             session_id: string;
             /** Provider Session Id */

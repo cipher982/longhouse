@@ -2166,7 +2166,7 @@ fn build_local_status_projection(
         claude_observations,
         opencode_observations,
         cursor_observations,
-        &payload.unmanaged_session_bindings,
+        unmanaged_session_bindings,
         &phase_ledger,
         now,
     ));
