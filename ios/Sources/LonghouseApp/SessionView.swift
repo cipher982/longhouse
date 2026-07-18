@@ -90,7 +90,23 @@ struct SessionView: View {
                 watchButton
             }
         }
-        .task(id: sessionId) { await viewModel.start(sessionId: sessionId, appState: appState) }
+        .task(id: sessionId) {
+            await viewModel.start(sessionId: sessionId, appState: appState)
+            guard !Task.isCancelled,
+                  viewModel.items.isEmpty,
+                  viewModel.submittedInputs.isEmpty
+            else { return }
+            // Keep WebKit off the timeline's first-interaction path, but warm
+            // one bounded transcript view once an empty Console is usable. A
+            // later optimistic send can then reuse it instead of starting the
+            // WebContent process on the Send interaction.
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            guard !Task.isCancelled,
+                  viewModel.items.isEmpty,
+                  viewModel.submittedInputs.isEmpty
+            else { return }
+            WebTranscriptWebViewPool.prewarm()
+        }
         .onDisappear {
             viewModel.pauseRealtime()
         }
@@ -2167,7 +2183,14 @@ final class SessionViewModel: ObservableObject {
         ticks: Int
     ) -> Bool {
         if ticks <= 3 { return !connected }
-        if pendingInput { return !connected }
+        if pendingInput {
+            // A parsed SSE handshake proves the stream was live once, not that
+            // every later frame reaches the phone. Keep one low-frequency
+            // correctness fetch while an optimistic send is unresolved so a
+            // buffered or silently stalled stream cannot leave "Working..."
+            // on screen forever. Disconnected streams retain the faster path.
+            return !connected || ticks.isMultiple(of: 4)
+        }
         // Launch-state changes arrive on the workspace stream. Polling the
         // entire mobile tail while that stream is healthy turned every new
         // Console launch into a 750ms request/build/WebKit-render loop.

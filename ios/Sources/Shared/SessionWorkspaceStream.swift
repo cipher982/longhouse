@@ -253,10 +253,6 @@ actor SessionWorkspaceStream {
             throw URLError(.badServerResponse)
         }
         logger.debug("workspace stream response connected session=\(self.sessionId, privacy: .public)")
-        // HTTP 200 + an open body is already authoritative transport liveness.
-        // Do not keep full-tail polling alive while waiting for the first SSE
-        // control frame to be parsed (or silently dropped by schema drift).
-        emit(.connected(Connected(session_id: sessionId, server_now_ms: nil)))
 
         var eventName = ""
         var eventId: String? = nil
