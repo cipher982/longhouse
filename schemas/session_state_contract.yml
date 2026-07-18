@@ -1,0 +1,90 @@
+schema_version: 1
+state_contract_version: 1
+presentation_policy_version: 1
+
+# Canonical state vocabulary. Provider adapters may retain raw evidence, but
+# every product surface projects only these values.
+enums:
+  activity:
+    - thinking
+    - executing
+    - quiescent
+    - blocked
+    - stalled
+    - unknown
+  run_lifecycle:
+    - starting
+    - running
+    - ended
+    - unknown
+  connection:
+    - connected
+    - degraded
+    - disconnected
+    - unknown
+    - not_applicable
+  action:
+    - available
+    - unavailable
+    - unknown
+  action_reason:
+    - unsupported
+    - observe_only
+    - control_freshness_unknown
+    - control_degraded
+    - control_disconnected
+    - not_granted
+    - not_console
+    - machine_offline
+    - already_connected
+
+# Ordered policy for a primary label. Earlier keys dominate later keys.
+presentation:
+  primary_keys:
+    - closed
+    - launch_failed
+    - starting
+    - needs_answer
+    - needs_approval
+    - thinking
+    - executing
+    - stalled
+    - blocked
+    - idle
+    - ended
+    - activity_unknown
+  access_keys:
+    - live_control
+    - reattach
+    - control_degraded
+    - control_disconnected
+    - control_unknown
+    - read_only
+    - observe_only
+    - search_only
+  transcript_keys:
+    - transcript_lagging
+
+# This is intentionally only the provider adapter identity list. Static
+# operations and evidence/readiness remain in managed_providers.yml.
+providers:
+  - codex
+  - claude
+  - opencode
+  - antigravity
+  - cursor
+
+# Field contracts are deliberately representation-neutral. The Python
+# projector, OpenAPI DTO, TypeScript, Swift, and Rust fixture decoder all use
+# these names; nullable fields are marked with `?`.
+fact_families:
+  session_state: [state_contract_version, presentation_policy_version, mode, disposition, 'launch?', 'run?', activity, control, 'pending_interaction?', transcript, host, presentation, 'commit_seq?']
+  disposition: [state, 'closed_at?', 'close_reason?']
+  launch: [state, 'error_code?', 'error_message?']
+  run: ['id?', lifecycle, 'started_at?', 'ended_at?', 'end_reason?']
+  activity: [state, 'raw_kind?', 'tool?', 'source?', 'observed_at?', 'valid_until?']
+  control: [ownership, connection, 'connection_id?', 'lease_generation?', 'control_plane?', 'observed_at?', 'valid_until?', actions]
+  interaction: [id, kind, 'opened_at?', 'resolved_at?', 'provider_request_id?', can_respond]
+  transcript: [convergence, 'source_revision?', 'durable_revision?', 'render_revision?', 'last_append_at?', searchable, live_observation]
+  host: [state, 'observed_at?']
+  presentation_label: [key, label, tone, 'observed_at?']

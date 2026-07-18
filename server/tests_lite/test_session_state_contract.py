@@ -7,6 +7,8 @@ from datetime import timedelta
 from datetime import timezone
 from types import SimpleNamespace
 
+import pytest
+
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 
@@ -20,6 +22,7 @@ from zerg.services.session_liveness_facts import ProcessObservation
 from zerg.services.session_liveness_facts import SessionLivenessFacts
 from zerg.services.session_runtime import SessionRuntimeView
 from zerg.services.session_state_contract import build_session_state_facts
+from zerg.services.managed_provider_contracts import managed_provider_names
 
 NOW = datetime(2026, 7, 11, 18, 0, tzinfo=timezone.utc)
 
@@ -326,3 +329,19 @@ def test_unknown_provider_phase_is_preserved_but_not_coerced_to_idle():
     assert facts.activity.raw_kind == "provider_magic"
     assert facts.presentation.primary is not None
     assert facts.presentation.primary.label == "Activity unknown"
+
+
+@pytest.mark.parametrize("provider", sorted(managed_provider_names()))
+def test_every_managed_provider_projects_the_same_semantic_axes(provider):
+    facts = _facts(
+        session=_session(provider=provider),
+        runtime=_runtime(phase="running", tool="Bash"),
+    )
+
+    assert facts.activity.state == "executing"
+    assert facts.activity.raw_kind == "running"
+    assert facts.control.connection == "connected"
+    assert facts.presentation.primary is not None
+    assert facts.presentation.primary.key == "executing"
+    assert facts.presentation.access is not None
+    assert facts.presentation.access.key == "live_control"
