@@ -763,33 +763,105 @@ Required checks:
 - provider observation fixtures for all five providers; and
 - secret/argv checks for bridge and hook credentials.
 
-### Phase 3 — Authoritative Bounded Reducer in Shadow Mode
+### Phase 2.5 — Reducer-Grade Evidence Identity
 
-Goal: establish one SQLite authority without immediately changing served
-responses.
+Goal: give the reducer stable ordering and subject identity without inventing
+authority from server receipt time.
 
 Work:
 
-- add bounded candidate-head storage and reducer transactions;
+- version the typed evidence contract with a shared reducer identity containing
+  a canonical subject, source, optional source epoch/position, dedupe key, and
+  canonical evidence hash;
+- require run identity for run-scoped activity and lifecycle evidence;
+- require connection identity and generation for control evidence;
+- keep process-start identity opaque and include it in process subjects rather
+  than coercing it into legacy timestamp columns;
+- declare each adapter source sequenced or unsequenced; unsequenced sources may
+  be freshness-ranked but cannot claim same-position conflict detection;
+- reject evidence that lacks the identity required for its fact family from the
+  reducer while retaining it in the compatibility heartbeat for diagnostics;
+- bound reducer intake independently of the broader heartbeat validation bound;
+  and
+- add five-provider identity/conformance fixtures.
+
+Acceptance criteria:
+
+- no reducer subject or ordering position is derived from server receipt time;
+- evidence for run N cannot address run N+1;
+- a recycled PID cannot address a prior process subject;
+- repeated evidence has a stable dedupe key and canonical hash across restart;
+- reuse of one sequenced source position with different content is detectable;
+- an unsequenced source is explicitly identified and never receives sequenced
+  conflict guarantees; and
+- insufficiently identified evidence is rejected with an explainable reason,
+  not silently reduced under a session-wide key.
+
+Required checks:
+
+- Rust/Python contract compatibility and canonical-hash fixtures;
+- adapter conformance fixtures for Codex, Claude, OpenCode, Cursor, and
+  Antigravity;
+- cross-run, PID-reuse, connection-generation, duplicate, and hash-mismatch
+  fixtures; and
+- secret and bounded-payload checks.
+
+### Phase 3 — Authoritative Bounded Reducer in Shadow Mode
+
+Goal: establish one catalog-owned SQLite authority within the shadow store
+without changing served responses or command authorization.
+
+Work:
+
+- add one candidate head per
+  `(fact_family, subject_key, source, source_epoch)` and reducer transactions;
 - key activity by run/source and leases by connection/generation;
 - preserve durable session/run terminal, interaction, and receipt facts;
 - define deterministic candidate authority and conflict handling;
 - make catalogd/runtime reads able to project `SessionStateFacts` from the new
   heads at one `commit_seq`;
-- shadow ingest current production observations into the new reducer;
+- reduce current typed observations as a sub-operation of the existing
+  catalogd heartbeat transaction rather than through a second queue or replay
+  pipeline;
 - compare old and new facts by axis rather than comparing only labels; and
-- record explainable parity deltas without dual-writing a second authority.
+- record explainable, bounded parity deltas without dual-writing a second
+  authority;
+- suppress all head/receipt writes when evidence is semantically unchanged;
+- retain only a bounded recent source-position window for duplicate/conflict
+  diagnosis; and
+- add reducer and parity kill switches that cannot affect legacy serving or
+  command authorization.
 
 Acceptance criteria:
 
 - replay produces identical current heads;
 - duplicate evidence is idempotent;
-- same source position/different content creates a typed conflict;
+- same current or retained source position/different content creates a typed
+  conflict, while older positions outside the bounded window are stale;
 - session closure and run termination remain monotonic under reordered events;
 - evidence for run N cannot mutate run N+1;
 - control, activity, transcript, and interaction heads advance independently;
 - parity tooling identifies the exact source/fact responsible for a delta; and
 - shadow operation adds bounded storage, not unbounded growth.
+
+SQLite health contract:
+
+- one catalogd RPC mutation and one SQLite transaction per heartbeat batch;
+- no second shadow writer, asynchronous replay queue, or stored projection;
+- no `commit_seq` advance for a duplicate or unchanged reducer batch;
+- freshness and expiry are derived at read time and never create timer-driven
+  writes;
+- reducer input is capped at 256 total facts per heartbeat after Machine Agent
+  coalescing, with each value payload capped at 4 KiB and locator at 1 KiB;
+- WAL bytes, checkpoint busy/remaining frames, writer queue wait, transaction
+  execution time, changed heads, duplicates, stale evidence, conflicts, and
+  cleanup duration are observable;
+- steady-state WAL remains below 64 MiB and below 128 MiB during a representative
+  soak, with no monotonically growing remaining-frame count for five minutes;
+- representative-load p95 catalog writer wait remains below 100 ms, p99 below
+  500 ms, and p99 transaction execution below 50 ms; and
+- truncate checkpoints run only while idle after a successful passive
+  checkpoint, never on the hot writer path.
 
 Required checks:
 
@@ -798,6 +870,7 @@ Required checks:
 - SQLite restart/cold-rebuild tests for durable versus ephemeral facts;
 - performance checks for heartbeat and high-frequency writes through
   `WriteSerializer`; and
+- a long-lived-reader WAL/checkpoint test plus catalog backup/recovery rehearsal;
 - dogfood parity capture on representative Codex, Claude, OpenCode, Cursor, and
   Antigravity sessions.
 
@@ -807,6 +880,16 @@ Cutover gate:
 - known activity differences are classified as intentional expiry/unknown
   corrections; and
 - provider-specific gaps have explicit unsupported/degraded reasons.
+
+Rollout/backout:
+
+- `shadow_reducer_ingest_enabled` stops head mutation while legacy heartbeat
+  behavior remains unchanged;
+- `shadow_parity_enabled` independently stops parity comparison/persistence;
+- one provider/source may be disabled without changing its compatibility
+  heartbeat path; and
+- served reads and command authorization have no Phase 3 switch and remain on
+  the legacy path until the Phase 4 cutover gate passes.
 
 ### Phase 4 — Canonical Server and Command Cutover
 
