@@ -1055,6 +1055,14 @@ mod tests {
         }
         let opencode_bin =
             std::env::var("LONGHOUSE_OPENCODE_BIN").unwrap_or_else(|_| "opencode".to_string());
+        let help = Command::new(&opencode_bin)
+            .args(["run", "--help"])
+            .output()
+            .await
+            .unwrap();
+        let help_text = String::from_utf8_lossy(&help.stdout);
+        assert!(help.status.success() && help_text.contains("--auto"));
+        assert!(!help_text.contains("--dangerously-skip-permissions"));
         let marker = format!("LH_OPENCODE_CONSOLE_{}", Uuid::new_v4().simple());
         let session_id = Uuid::new_v4().to_string();
         let thread_id = Uuid::new_v4().to_string();
