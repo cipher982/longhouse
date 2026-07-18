@@ -122,6 +122,31 @@ pub fn managed_longhouse_session_id_for_opencode(provider_session_id: &str) -> O
     )
 }
 
+pub fn pending_console_binding_blocks_shadow(provider_session_id: &str) -> bool {
+    let Ok(registry) = crate::turn_claims::default_registry() else {
+        return false;
+    };
+    let Ok(claims) = registry.list_nonterminal() else {
+        return false;
+    };
+    pending_console_binding_blocks_shadow_from_claims(provider_session_id, &claims)
+}
+
+fn pending_console_binding_blocks_shadow_from_claims(
+    provider_session_id: &str,
+    claims: &[crate::turn_claims::TurnClaim],
+) -> bool {
+    claims.iter().any(|claim| {
+        claim.provider == "opencode"
+            && claim.adapter.as_deref() == Some(crate::opencode_run::OPENCODE_RUN_ADAPTER)
+            && claim.state == "spawned"
+            && claim
+                .provider_thread_id
+                .as_deref()
+                .map_or(true, |expected| expected == provider_session_id)
+    })
+}
+
 pub fn list_opencode_sessions(db_path: &Path) -> Result<Vec<OpenCodeSessionCandidate>> {
     list_opencode_sessions_inner(db_path, None)
 }
@@ -2138,6 +2163,54 @@ mod tests {
                 .as_deref(),
             Some(longhouse_session_id)
         );
+    }
+
+    #[test]
+    fn pending_console_claim_defers_shadow_until_native_binding_is_known() {
+        let temp = tempfile::tempdir().unwrap();
+        let registry = crate::turn_claims::TurnClaimRegistry::new(temp.path().to_path_buf());
+        let run_id = uuid::Uuid::new_v4().to_string();
+        registry
+            .claim(
+                &run_id,
+                &uuid::Uuid::new_v4().to_string(),
+                &uuid::Uuid::new_v4().to_string(),
+                None,
+                None,
+                "opencode",
+            )
+            .unwrap();
+        registry
+            .mark_spawned_invocation(
+                &run_id,
+                42,
+                42,
+                Some("start".to_string()),
+                crate::opencode_run::OPENCODE_RUN_ADAPTER,
+                "launch",
+                None,
+                "/tmp/stdout",
+                "/tmp/stderr",
+                serde_json::json!({}),
+            )
+            .unwrap();
+        let claims = registry.list_nonterminal().unwrap();
+        assert!(pending_console_binding_blocks_shadow_from_claims(
+            "ses_new", &claims
+        ));
+
+        registry
+            .mark_provider_binding(&run_id, "ses_bound", None)
+            .unwrap();
+        let claims = registry.list_nonterminal().unwrap();
+        assert!(pending_console_binding_blocks_shadow_from_claims(
+            "ses_bound",
+            &claims
+        ));
+        assert!(!pending_console_binding_blocks_shadow_from_claims(
+            "ses_other",
+            &claims
+        ));
     }
 
     #[test]

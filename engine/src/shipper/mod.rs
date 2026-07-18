@@ -273,6 +273,16 @@ pub(crate) async fn ship_opencode_database_with_trace(
     let mut reconciliation_pending = false;
 
     for candidate in sessions {
+        if opencode_db::managed_longhouse_session_id_for_opencode(&candidate.provider_session_id)
+            .is_none()
+            && opencode_db::pending_console_binding_blocks_shadow(&candidate.provider_session_id)
+        {
+            tracing::debug!(
+                provider_session_id = %candidate.provider_session_id,
+                "Deferring unbound OpenCode archive row while a Console binding is pending"
+            );
+            continue;
+        }
         let current_offset = file_state.get_offset(&candidate.source_key)?;
         let current_fingerprint = get_opencode_sqlite_fingerprint(conn, &candidate.source_key)?;
         let persisted_longhouse_session_id =
