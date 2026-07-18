@@ -49,11 +49,11 @@ for arg in "$@"; do
 done
 
 if [ "$has_xdist_arg" -eq 0 ]; then
-    # `auto` expands to every visible CPU on cube and David's Mac. The suite's
-    # SQLite/process-heavy tests exhaust worker resources at 16-way fanout,
-    # killing workers and triggering an xdist scheduler KeyError. Four workers
-    # is faster than serial while remaining stable on both CI and local runs.
-    xdist_workers="${PYTEST_XDIST_WORKERS:-4}"
+    # The suite's SQLite/process-heavy tests are not xdist-safe on cube: even
+    # four workers are killed and leave the scheduler hung until the job
+    # timeout. Serial is deterministic and completes inside the CI budget;
+    # developers can still opt into fanout explicitly while debugging.
+    xdist_workers="${PYTEST_XDIST_WORKERS:-0}"
     case "$xdist_workers" in
         ""|0|false|False|FALSE|off|Off|OFF|no|No|NO)
             ;;
