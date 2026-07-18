@@ -45,7 +45,7 @@ const THREAD_SUBSCRIBE_RETRY_ATTEMPTS: usize = 8;
 const THREAD_SUBSCRIBE_RETRY_DELAY_MS: u64 = 250;
 const CODEX_DISABLE_UPDATE_CHECK_CONFIG: &str = "check_for_update_on_startup=false";
 pub const CODEX_BRIDGE_TOKEN_ENV: &str = "LONGHOUSE_CODEX_BRIDGE_TOKEN";
-pub const BRIDGE_STATE_SCHEMA_VERSION: u32 = 1;
+pub const BRIDGE_STATE_SCHEMA_VERSION: u32 = 2;
 pub const LAUNCH_MODE_DETACHED_UI: &str = "detached_ui";
 pub const LAUNCH_MODE_TUI: &str = "tui";
 const PAUSE_KIND_STRUCTURED_QUESTION: &str = "structured_question";
@@ -250,6 +250,11 @@ pub struct BridgeStateFile {
     pub thread_id: Option<String>,
     pub thread_path: Option<String>,
     pub pid: u32,
+    /// OS process-start identity for the bridge daemon itself. Paired with
+    /// `pid` and the machine boot id so scanners can reject PID reuse after a
+    /// cold restart.
+    #[serde(default)]
+    pub bridge_process_start_time: Option<String>,
     #[serde(default)]
     pub app_server_pid: Option<u32>,
     #[serde(default)]
@@ -721,6 +726,7 @@ pub async fn cmd_codex_bridge_start(config: BridgeStartConfig) -> Result<BridgeS
         thread_id: resume_thread_id.clone(),
         thread_path: resume_thread_path.clone(),
         pid: 0,
+        bridge_process_start_time: None,
         app_server_pid: None,
         app_server_process_start_time: None,
         app_server_pgid: None,
@@ -887,6 +893,7 @@ pub async fn cmd_codex_bridge_start(config: BridgeStartConfig) -> Result<BridgeS
 
 pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
     let pid = std::process::id();
+    let bridge_process_start_time = crate::turn_claims::process_start_time_for_pid(Some(pid));
     crate::codex_attachments::cleanup_session_tmpdir(&config.session_id);
     let resume_thread_id = normalize_optional_string(config.resume_thread_id.clone());
     let resume_thread_path = normalize_optional_string(config.resume_thread_path.clone());
@@ -906,6 +913,7 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
         thread_id: resume_thread_id.clone(),
         thread_path: resume_thread_path.clone(),
         pid,
+        bridge_process_start_time: bridge_process_start_time.clone(),
         app_server_pid: None,
         app_server_process_start_time: None,
         app_server_pgid: None,
@@ -1115,6 +1123,7 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
             thread_id: initial_thread_id.clone(),
             thread_path: initial_thread_path.clone(),
             pid,
+            bridge_process_start_time,
             app_server_pid: client.child_pid,
             app_server_process_start_time,
             app_server_pgid: client.child_pgid,
@@ -5298,6 +5307,7 @@ mod tests {
                 thread_id: None,
                 thread_path: None,
                 pid: 42,
+                bridge_process_start_time: None,
                 app_server_pid: None,
                 app_server_process_start_time: None,
                 app_server_pgid: None,
@@ -5392,6 +5402,7 @@ mod tests {
             thread_id: None,
             thread_path: None,
             pid: 42,
+            bridge_process_start_time: None,
             app_server_pid: None,
             app_server_process_start_time: None,
             app_server_pgid: None,
@@ -5447,6 +5458,7 @@ mod tests {
             thread_id: Some("thread-123".to_string()),
             thread_path: None,
             pid: 42,
+            bridge_process_start_time: None,
             app_server_pid: None,
             app_server_process_start_time: None,
             app_server_pgid: None,
@@ -5516,6 +5528,7 @@ mod tests {
             thread_id: None,
             thread_path: None,
             pid: 42,
+            bridge_process_start_time: None,
             app_server_pid: None,
             app_server_process_start_time: None,
             app_server_pgid: None,
@@ -5851,6 +5864,7 @@ mod tests {
             thread_id: Some("thr-primary".to_string()),
             thread_path: Some(rollout.display().to_string()),
             pid: 42,
+            bridge_process_start_time: None,
             app_server_pid: None,
             app_server_process_start_time: None,
             app_server_pgid: None,
@@ -5898,6 +5912,7 @@ mod tests {
             thread_id: Some("thr-primary".to_string()),
             thread_path: Some(primary.display().to_string()),
             pid: 42,
+            bridge_process_start_time: None,
             app_server_pid: None,
             app_server_process_start_time: None,
             app_server_pgid: None,
@@ -6887,6 +6902,7 @@ mod tests {
             thread_id: Some("thread-123".to_string()),
             thread_path: None,
             pid: 42,
+            bridge_process_start_time: None,
             app_server_pid: None,
             app_server_process_start_time: None,
             app_server_pgid: None,

@@ -73,7 +73,13 @@ def _connection_capabilities_for_provider(provider: str, control_plane: str) -> 
     contract = contract_for_provider(provider)
     if contract is None or control_plane not in contract.control_planes:
         return {}
-    return contract.connection_capabilities
+    capabilities = contract.connection_capabilities
+    if provider == "antigravity":
+        # The provider contract declares potential support. Phase 2 runtime
+        # authority remains gated until typed hook readiness is promoted by the
+        # later reducer cutover; a legacy lease must not bypass that boundary.
+        return {**capabilities, "can_send_input": 0}
+    return capabilities
 
 
 def _apply_connection_capabilities(conn: SessionConnection, capabilities: dict[str, int]) -> None:

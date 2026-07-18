@@ -130,10 +130,8 @@ def test_i1_launch_is_not_live_until_observer_promotes_same_row(tmp_path):
         assert db.query(SessionConnection).filter(SessionConnection.run_id == born_run_id).count() == 1
 
 
-def test_lease_unobserved_provider_is_born_live_with_health(tmp_path):
-    """Antigravity has no heartbeat lease observer, so the launch is the only
-    readiness evidence. It is born attached + fresh health (live) rather than
-    stranded detached forever."""
+def test_antigravity_launch_does_not_grant_send_before_hook_proof(tmp_path):
+    """Dispatching the Antigravity binary is not hook-inbox readiness proof."""
 
     SessionLocal = _make_db(tmp_path)
     with SessionLocal() as db:
@@ -142,12 +140,36 @@ def test_lease_unobserved_provider_is_born_live_with_health(tmp_path):
         session = result.session
 
         conn = db.query(SessionConnection).one()
-        assert conn.state == "attached"
-        assert conn.last_health_at is not None
+        assert conn.state == "detached"
+        assert conn.can_send_input == 0
+        assert conn.last_health_at is None
 
         caps = project_session_capabilities(db, session_id=session.id)
-        assert caps.live_control_available is True
-        assert caps.control_label == "live"
+        assert caps.live_control_available is False
+        assert caps.can_send_input is False
+        assert caps.control_label == "reattach"
+
+        # A legacy attached lease is process/control evidence, not hook-inbox
+        # readiness. It may make the connection live, but cannot grant send.
+        upsert_managed_control_leases(
+            db,
+            [
+                SimpleNamespace(
+                    session_id=session.id,
+                    provider="antigravity",
+                    state="attached",
+                    bridge_status="ready",
+                    thread_subscription_status=None,
+                    machine_id=runner.name,
+                )
+            ],
+            device_id=runner.name,
+            received_at=datetime.now(timezone.utc),
+        )
+        db.commit()
+        legacy_lease_caps = project_session_capabilities(db, session_id=session.id)
+        assert legacy_lease_caps.live_control_available is True
+        assert legacy_lease_caps.can_send_input is False
 
 
 def test_opencode_is_born_detached_pending_lease_observation(tmp_path):

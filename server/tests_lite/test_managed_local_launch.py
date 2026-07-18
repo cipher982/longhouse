@@ -528,6 +528,7 @@ def test_this_device_launch_returns_hot_readiness_when_archive_writer_is_stale(m
     [
         ("cursor", "cursor_helm", "cursor"),
         ("codex", "codex_app_server", "codex"),
+        ("antigravity", "antigravity_hook_inbox", ""),
     ],
 )
 def test_this_device_launch_materializes_live_catalog_without_archive_db(
@@ -586,9 +587,11 @@ def test_this_device_launch_materializes_live_catalog_without_archive_db(
         if expected_attach == "cursor":
             assert "longhouse cursor --resume-session" in response.attach_command
             assert response.session_id in response.attach_command
-        else:
+        elif expected_attach == "codex":
             assert "codex-bridge attach --session-id" in response.attach_command
             assert response.session_id in response.attach_command
+        else:
+            assert response.attach_command == ""
         assert response.provider_session_id is None
         with LiveSession() as live_db:
             catalog = live_db.get(LiveSessionCatalog, response.session_id)
@@ -604,6 +607,8 @@ def test_this_device_launch_materializes_live_catalog_without_archive_db(
             assert connection.run_id == run.id
             assert connection.state == "detached"
             assert connection.device_id == "cinder"
+            if provider == "antigravity":
+                assert connection.can_send_input == 0
             assert live_db.query(LiveSessionThreadAlias).count() == 0
     finally:
         live_engine.dispose()

@@ -4467,6 +4467,7 @@ mod tests {
             last_error: None,
             thread_subscription_status: Some("subscribed".to_string()),
             bridge_pid: 12344,
+            bridge_process_start_time: Some("Mon May  5 11:58:00 2026".to_string()),
             app_server_pid: None,
             app_server_process_start_time: None,
             app_server_pgid: None,

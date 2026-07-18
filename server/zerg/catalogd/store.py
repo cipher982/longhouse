@@ -2728,6 +2728,7 @@ class CatalogStore:
         from zerg.services.live_launch_readiness import upsert_live_launch_readiness
         from zerg.services.managed_local_launcher import managed_local_run_id_for_session
         from zerg.services.managed_local_launcher import managed_provider_has_lease_observer
+        from zerg.services.managed_local_launcher import managed_provider_requires_readiness_proof
 
         plan_payload = dict(launch["plan"])
         session_id = UUID(plan_payload["session_id"])
@@ -2799,16 +2800,18 @@ class CatalogStore:
                     launch_actor=plan.launch_actor,
                     launch_surface=plan.launch_surface,
                 )
+                requires_readiness_proof = managed_provider_requires_readiness_proof(plan.provider)
                 attach_live_catalog_control(
                     orm,
                     session_id=session_id,
                     provider=plan.provider,
                     device_id=plan.source_name,
-                    state="detached" if managed_provider_has_lease_observer(plan.provider) else "attached",
+                    state=("detached" if managed_provider_has_lease_observer(plan.provider) or requires_readiness_proof else "attached"),
                     external_name=plan.managed_session_name,
                     run_id=run_id,
                     provider_session_id=plan.provider_session_id,
                     observed_at=observed_at,
+                    can_send_input=0 if requires_readiness_proof else None,
                 )
                 upsert_live_launch_readiness(
                     orm,

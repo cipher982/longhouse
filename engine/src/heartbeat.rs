@@ -975,7 +975,6 @@ pub(crate) fn machine_evidence_from_observations(
 ) -> MachineEvidence {
     let envelope_observed_at = now.to_rfc3339();
     let boot_id = machine_boot_id();
-    let process_facts = crate::process_identity::collect_process_facts_by_pid();
     let mut process = Vec::new();
     let mut control = Vec::new();
     let mut transcript = Vec::new();
@@ -1000,12 +999,7 @@ pub(crate) fn machine_evidence_from_observations(
             provider_session_id: obs.thread_id.clone(),
             role: "bridge".to_string(),
             pid: Some(obs.bridge_pid),
-            // The bridge state predates persisted bridge start identity. Read
-            // the same OS process snapshot used elsewhere so pid + boot id is
-            // never the whole identity for a live bridge.
-            process_start_time: process_facts
-                .get(&obs.bridge_pid)
-                .map(|fact| fact.lstart.clone()),
+            process_start_time: obs.bridge_process_start_time.clone(),
             boot_id: boot_id.clone(),
             cwd: obs.cwd.clone(),
             alive: obs.bridge_alive,
@@ -2703,6 +2697,7 @@ mod tests {
             last_error: None,
             thread_subscription_status: Some("subscribed".to_string()),
             bridge_pid: 12344,
+            bridge_process_start_time: Some("Sat Apr 26 00:00:00 2026".to_string()),
             app_server_pid: Some(12345),
             app_server_process_start_time: Some("Sat Apr 26 00:00:00 2026".to_string()),
             app_server_pgid: Some(12345),

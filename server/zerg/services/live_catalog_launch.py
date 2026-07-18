@@ -175,6 +175,7 @@ def attach_live_catalog_control(
     run_id: UUID | str | None = None,
     provider_session_id: str | None = None,
     source_path: str | None = None,
+    can_send_input: int | None = None,
     launch_origin: str = "longhouse_spawned",
     force_new_run: bool = False,
     observed_at: datetime | None = None,
@@ -238,10 +239,11 @@ def attach_live_catalog_control(
         )
         db.add(connection)
     caps = contract.connection_capabilities
+    default_send_input = 0 if provider == "antigravity" else caps["can_send_input"]
     connection.state = state
     connection.external_name = external_name
     connection.device_id = device_id
-    connection.can_send_input = caps["can_send_input"]
+    connection.can_send_input = default_send_input if can_send_input is None else can_send_input
     connection.can_interrupt = caps["can_interrupt"]
     connection.can_terminate = caps["can_terminate"]
     connection.can_tail_output = caps["can_tail_output"]

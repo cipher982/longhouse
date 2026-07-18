@@ -44,16 +44,21 @@ _MANAGED_LOCAL_NAME_MAX = 64
 # births the connection ``detached`` so liveness reflects an observed ready
 # channel, not a birth-time assertion — important for OpenCode, where the server
 # bridge can fail to start AFTER the API session is created, and a birth-time
-# ``attached`` would briefly claim live control with no server. Providers
-# WITHOUT a lease observer (antigravity) have no promotion path, so they must be
-# born ``attached`` with a fresh health stamp — there is no later signal to flip
-# them live, and the read-time freshness clamp still degrades them after the
-# lease TTL if no further evidence arrives.
+# ``attached`` would briefly claim live control with no server. Antigravity has
+# no control lease observer. Its typed hook readiness is still
+# shadow evidence in Phase 2, so launch must remain detached/send-disabled
+# until a later authority cutover explicitly promotes it from fresh hook proof.
 _HEARTBEAT_LEASE_OBSERVED_PROVIDERS = frozenset({"claude", "codex", "opencode", "cursor"})
 
 
 def managed_provider_has_lease_observer(provider: str | None) -> bool:
     return str(provider or "").strip().lower() in _HEARTBEAT_LEASE_OBSERVED_PROVIDERS
+
+
+def managed_provider_requires_readiness_proof(provider: str | None) -> bool:
+    """Whether launch alone is insufficient to grant the send capability."""
+
+    return str(provider or "").strip().lower() == "antigravity"
 
 
 def managed_local_run_id_for_session(session_id: UUID | str) -> UUID:
@@ -346,17 +351,18 @@ def materialize_managed_local_launch_plan_sync(
     # the bridge ready, flipping ``live_control_available`` to true. Matching
     # on (run_id, control_plane) keeps promotion on this same row.
     #
-    # For providers with no lease observer (opencode/antigravity) there is no
-    # later promotion signal, so the launch IS the only readiness evidence we
-    # get; birth ``attached`` with a fresh health stamp, and let the read-time
-    # freshness clamp degrade it after the lease TTL if nothing else arrives.
+    # Antigravity launch proves only that the binary was dispatched. It does
+    # not prove the hook inbox can receive input, so Phase 2 keeps that
+    # connection detached and send-disabled while typed readiness runs in
+    # shadow mode. A later reducer cutover may promote it from fresh hook proof.
     #
     # ``device_id`` is stamped to ``source_name`` (== the device-token id the
     # heartbeat reconciler uses) so both promotion and
     # ``mark_missing_managed_control_leases`` target this row instead of
     # leaving a NULL-device, durably-false-live orphan.
     lease_observed = plan.provider in _HEARTBEAT_LEASE_OBSERVED_PROVIDERS
-    birth_state = "detached" if lease_observed else "attached"
+    requires_hook_readiness = managed_provider_requires_readiness_proof(plan.provider)
+    birth_state = "detached" if lease_observed or requires_hook_readiness else "attached"
     connection = record_connection(
         db,
         run=run,
@@ -365,13 +371,13 @@ def materialize_managed_local_launch_plan_sync(
         state=birth_state,
         external_name=plan.managed_session_name,
         device_id=plan.source_name or None,
-        can_send_input=connection_capabilities["can_send_input"],
+        can_send_input=(0 if requires_hook_readiness else connection_capabilities["can_send_input"]),
         can_interrupt=connection_capabilities["can_interrupt"],
         can_terminate=connection_capabilities["can_terminate"],
         can_tail_output=connection_capabilities["can_tail_output"],
         can_resume=connection_capabilities["can_resume"],
     )
-    if not lease_observed:
+    if not lease_observed and not requires_hook_readiness:
         connection.last_health_at = datetime.now(timezone.utc)
 
     mark_managed_local_session_launched(db, session=session)

@@ -37,6 +37,7 @@ pub struct CodexBridgeObservation {
     pub last_error: Option<String>,
     pub thread_subscription_status: Option<String>,
     pub bridge_pid: u32,
+    pub bridge_process_start_time: Option<String>,
     pub app_server_pid: Option<u32>,
     /// Recorded process-start identity for the app server. The scanner already
     /// uses this to reject PID reuse; heartbeat projection must preserve it so
@@ -138,7 +139,13 @@ pub(crate) fn collect_observations_from_paths(
         if session_id.is_empty() {
             continue;
         }
-        let bridge_alive = bridge_lock_is_held(path);
+        let bridge_alive = bridge_lock_is_held(path)
+            && bridge_process_identity_matches(
+                process_facts,
+                state.pid,
+                state.bridge_process_start_time.as_deref(),
+                &state.session_id,
+            );
         let has_tui_attachment = state.ws_url.as_deref().is_some_and(|ws| {
             process_facts
                 .values()
@@ -175,6 +182,7 @@ pub(crate) fn collect_observations_from_paths(
             last_error: state.last_error,
             thread_subscription_status: state.thread_subscription_status,
             bridge_pid: state.pid,
+            bridge_process_start_time: state.bridge_process_start_time,
             app_server_pid: state.app_server_pid,
             app_server_process_start_time: state.app_server_process_start_time,
             app_server_pgid: state.app_server_pgid,
@@ -186,6 +194,23 @@ pub(crate) fn collect_observations_from_paths(
     }
     out.sort_by(|a, b| a.session_id.cmp(&b.session_id));
     out
+}
+
+fn bridge_process_identity_matches(
+    process_facts: &HashMap<u32, ProcessFact>,
+    pid: u32,
+    recorded_start: Option<&str>,
+    session_id: &str,
+) -> bool {
+    let Some(recorded_start) = recorded_start.filter(|value| !value.trim().is_empty()) else {
+        return false;
+    };
+    process_facts.get(&pid).is_some_and(|fact| {
+        fact.command.contains("codex-bridge")
+            && fact.command.contains(" run ")
+            && fact.command.contains(session_id)
+            && lstart_matches_recorded(fact, recorded_start)
+    })
 }
 
 fn state_file_paths(state_dir: &Path) -> Vec<PathBuf> {
@@ -231,6 +256,47 @@ mod tests {
             "ws://127.0.0.1:9999"
         ));
         assert!(!codex_tui_process_attached(&commands, ""));
+    }
+
+    #[test]
+    fn bridge_process_identity_rejects_pid_reuse_and_wrong_command() {
+        let expected_start = "Tue Jun 30 00:00:00 2026";
+        let mut fact = ProcessFact {
+            pid: 111,
+            tty: "??".to_string(),
+            stat: "S".to_string(),
+            lstart: expected_start.to_string(),
+            command: "longhouse-engine codex-bridge run --session-id managed-codex"
+                .to_string(),
+            start_time: None,
+        };
+        let facts = HashMap::from([(111, fact.clone())]);
+        assert!(bridge_process_identity_matches(
+            &facts,
+            111,
+            Some(expected_start),
+            "managed-codex"
+        ));
+        assert!(!bridge_process_identity_matches(
+            &facts,
+            111,
+            Some("Wed Jul  1 00:00:00 2026"),
+            "managed-codex"
+        ));
+
+        fact.command = "bash -lc sleep 100".to_string();
+        assert!(!bridge_process_identity_matches(
+            &HashMap::from([(111, fact)]),
+            111,
+            Some(expected_start),
+            "managed-codex"
+        ));
+        assert!(!bridge_process_identity_matches(
+            &facts,
+            111,
+            None,
+            "managed-codex"
+        ));
     }
 
     #[test]
