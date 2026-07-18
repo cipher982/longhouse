@@ -17,8 +17,10 @@ CLAUDE_AGENTS_TOKEN ?=
 CLAUDE_DEVICE_ID ?=
 PERF_PROOF_OUTPUT ?= artifacts/perf-proof/perf-proof.json
 
-.PHONY: help check-push-readiness dev dev-demo stop test test-ios test-ios-session-open benchmark-ios-transcript ios-marketing test-mobile-chat test-mobile-chat-stress test-mobile-chat-replay test-ios-helper test-frontend test-engine test-codex-console-warm-canary test-cursor-helm-gate0 test-cursor-helm-product-e2e test-cursor-helm-gate0-unit test-runner test-e2e test-e2e-core test-e2e-a11y test-e2e-single test-ci test-full install-engine install-cli validate validate-ws validate-tools validate-sdk validate-ios-api validate-provider-brands validate-makefile validate-build-identity validate-playwright-install validate-public-surface validate-managed-codex-contract validate-managed-session-contract validate-no-python-device-path validate-provider-cli-canaries validate-ship-monitor provider-release-proof provider-release-proof-accept provider-release-proof-diff provider-release-proof-old-new provider-release-proof-staged-old-new provider-release-proof-universal-smoke provider-release-proof-universal-live-smoke provider-release-proof-status provider-release-proof-status-all provider-release-proof-maturity regen-ws generate-tools generate-sdk generate-ios-api generate-provider-brands qa-live hosted-shipper-mixed-bench qa-unmanaged render-canary session-propagation-sla managed-claude-truth-probe managed-claude-poc provider-live-route-e2e provider-live-route-e2e-opencode-transcript reprovision deploy-status launch-readiness ship-watch ship release ui-capture marketing-screenshots demo-render qa-ui-workbench qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-visual-compare test-shipper-e2e test-shipper-synthetic-bench test-shipper-synthetic-live-bench test-shipper-premerge test-wheel-package test-install test-install-first-run test-install-macos-ambient test-install-runner test-hosted-instance test-coolify-deploy test-web-entrypoint test-runtime-packaging-macos test-e2e-onboarding test-readmes test-codex-bridge-e2e test-hooks onboarding-funnel launch-gate-local lint-test-patterns import-smoke ensure-js-deps ensure-playwright-browser demo-db menubar-harness qa-oss vibetest dogfood dogfood-refresh dogfood-check observability-up observability-down
+.PHONY: help check-push-readiness dev dev-demo stop test test-ios test-ios-session-open profile-ios-live-cold benchmark-ios-transcript ios-marketing test-mobile-chat test-mobile-chat-stress test-mobile-chat-replay test-ios-helper test-frontend test-engine test-codex-console-warm-canary test-cursor-helm-gate0 test-cursor-helm-product-e2e test-cursor-helm-gate0-unit test-runner test-e2e test-e2e-core test-e2e-a11y test-e2e-single test-ci test-full install-engine install-cli validate validate-ws validate-tools validate-sdk validate-ios-api validate-provider-brands validate-makefile validate-build-identity validate-public-surface validate-managed-codex-contract validate-managed-session-contract validate-no-python-device-path validate-provider-cli-canaries validate-ship-monitor provider-release-proof provider-release-proof-accept provider-release-proof-diff provider-release-proof-old-new provider-release-proof-staged-old-new provider-release-proof-universal-smoke provider-release-proof-universal-live-smoke provider-release-proof-status provider-release-proof-status-all provider-release-proof-maturity regen-ws generate-tools generate-sdk generate-ios-api generate-provider-brands qa-live hosted-shipper-mixed-bench qa-unmanaged render-canary session-propagation-sla managed-claude-truth-probe managed-claude-poc provider-live-route-e2e provider-live-route-e2e-opencode-transcript reprovision deploy-status launch-readiness ship-watch ship release ui-capture marketing-screenshots demo-render qa-ui-workbench qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-visual-compare test-shipper-e2e test-shipper-synthetic-bench test-shipper-synthetic-live-bench test-shipper-premerge test-wheel-package test-install test-install-first-run test-install-macos-ambient test-install-runner test-hosted-instance test-coolify-deploy test-web-entrypoint test-runtime-packaging-macos test-e2e-onboarding test-readmes test-codex-bridge-e2e test-hooks onboarding-funnel launch-gate-local lint-test-patterns import-smoke ensure-js-deps ensure-playwright-browser demo-db menubar-harness qa-oss vibetest dogfood dogfood-refresh dogfood-check observability-up observability-down
 .PHONY: validate-dogfood-runtime
+.PHONY: validate-playwright-install
+.PHONY: profile-ios-live-console
 .PHONY: validate-native-device-entrypoints
 .PHONY: perf-proof validate-perf-proof
 .PHONY: validate-legacy-nouns
@@ -100,6 +102,50 @@ test-ios-session-open: ## iOS simulator timeline tap-to-transcript benchmark
 		-only-testing:LonghouseChatStressUITests/SessionOpenPerformanceUITests/testWorkspacePickerSelectionRespondsImmediately \
 		-only-testing:LonghouseChatStressUITests/SessionOpenPerformanceUITests/testCachedTimelineScrollRespondsImmediately \
 		test
+
+profile-ios-live-cold: ## Side-effect-free cold-launch/scroll profile on a physical iPhone (IOS_DEVICE_ID required)
+	@test -n "$(IOS_DEVICE_ID)" || (echo "Set IOS_DEVICE_ID to the physical iPhone UDID" >&2; exit 2)
+	@python3 scripts/build/generate_build_identity.py
+	@bash scripts/build/stage_ios_build_identity.sh
+	@xcodegen --spec ios/XcodeHarness/project.yml --project-root ios/XcodeHarness
+	@STAMP="$$(date -u +%Y%m%dT%H%M%SZ)"; \
+	RESULT="artifacts/ios-live-profile/$$STAMP-cold-launch.xcresult"; \
+	mkdir -p artifacts/ios-live-profile; \
+	rm -rf "$$RESULT"; \
+	xcodebuild \
+		-project ios/XcodeHarness/LonghouseIOS.xcodeproj \
+		-scheme LonghouseChatStress \
+		-destination "platform=iOS,id=$(IOS_DEVICE_ID)" \
+		-derivedDataPath "$${IOS_DERIVED_DATA_PATH:-$$HOME/Library/Developer/Xcode/DerivedData/LonghouseIOS-LiveProfile}" \
+		-resultBundlePath "$$RESULT" \
+		-only-testing:LonghouseChatStressUITests/SessionOpenPerformanceUITests/testLiveDogfoodColdLaunchScrollProfile \
+		LONGHOUSE_RUN_LIVE_COLD_LAUNCH_PROFILE=1 \
+		test; STATUS=$$?; \
+	echo "Live profile artifact: $$RESULT"; \
+	exit $$STATUS
+
+profile-ios-live-console: ## Physical launch/workspace/Console/composer profile (creates one session)
+	@test -n "$(IOS_DEVICE_ID)" || (echo "Set IOS_DEVICE_ID to the physical iPhone UDID" >&2; exit 2)
+	@test -n "$(IOS_WORKSPACE_PATH)" || (echo "Set IOS_WORKSPACE_PATH to an absolute workspace path" >&2; exit 2)
+	@python3 scripts/build/generate_build_identity.py
+	@bash scripts/build/stage_ios_build_identity.sh
+	@xcodegen --spec ios/XcodeHarness/project.yml --project-root ios/XcodeHarness
+	@STAMP="$$(date -u +%Y%m%dT%H%M%SZ)"; \
+	RESULT="artifacts/ios-live-profile/$$STAMP-console-focus.xcresult"; \
+	mkdir -p artifacts/ios-live-profile; \
+	rm -rf "$$RESULT"; \
+	xcodebuild \
+		-project ios/XcodeHarness/LonghouseIOS.xcodeproj \
+		-scheme LonghouseChatStress \
+		-destination "platform=iOS,id=$(IOS_DEVICE_ID)" \
+		-derivedDataPath "$${IOS_DERIVED_DATA_PATH:-$$HOME/Library/Developer/Xcode/DerivedData/LonghouseIOS-LiveProfile}" \
+		-resultBundlePath "$$RESULT" \
+		-only-testing:LonghouseChatStressUITests/SessionOpenPerformanceUITests/testLiveDogfoodLaunchScrollAndConsoleFocusProfile \
+		LONGHOUSE_RUN_LIVE_DOGFOOD_PROFILE=1 \
+		LONGHOUSE_LIVE_PROFILE_WORKSPACE_PATH="$(IOS_WORKSPACE_PATH)" \
+		test; STATUS=$$?; \
+	echo "Live profile artifact: $$RESULT"; \
+	exit $$STATUS
 
 benchmark-ios-transcript: ## Deterministic iOS streaming transcript renderer benchmark
 	@python3 scripts/build/generate_build_identity.py
