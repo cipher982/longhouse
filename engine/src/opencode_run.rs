@@ -451,6 +451,8 @@ async fn monitor_recovered_claim(
                 ("run_failed", Some(error.to_string()))
             } else if cancelled {
                 ("run_cancelled", None)
+            } else if provider_thread_id.is_some() && stream_has_successful_finish(&stdout_path) {
+                ("run_completed", None)
             } else {
                 (
                     "run_failed",
@@ -496,6 +498,8 @@ async fn settle_recovered_dead_claim(
     let cancelled = claim.cancel_requested_at.is_some();
     let terminal = if cancelled {
         "run_cancelled"
+    } else if provider_thread_id.is_some() && stream_has_successful_finish(stdout_path) {
+        "run_completed"
     } else {
         "run_failed"
     };
@@ -768,6 +772,22 @@ fn event_provider_thread_id(event: &Value) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string)
+}
+
+fn stream_has_successful_finish(path: &Path) -> bool {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return false;
+    };
+    text.lines().any(|line| {
+        serde_json::from_str::<Value>(line).is_ok_and(|event| {
+            event.get("type").and_then(Value::as_str) == Some("step_finish")
+                && event
+                    .get("part")
+                    .and_then(|part| part.get("reason"))
+                    .and_then(Value::as_str)
+                    == Some("stop")
+        })
+    })
 }
 
 fn promote_binding(sink: &OpenCodeRunSink, provider_thread_id: &str) -> Result<()> {
@@ -1073,13 +1093,32 @@ mod tests {
             .lines()
             .map(|line| serde_json::from_str::<Value>(line).unwrap())
             .collect::<Vec<_>>();
-        assert_eq!(events.len(), 3);
+        assert_eq!(events.len(), 4);
         assert!(events.iter().all(|event| {
             event_provider_thread_id(event).as_deref() == Some("ses_fixture_11720")
         }));
         assert_eq!(events[1]["part"]["callID"], "call_fixture");
         assert_eq!(events[2]["part"]["state"]["status"], "completed");
         assert_eq!(events[2]["part"]["state"]["output"], "fixture");
+        assert_eq!(events[3]["part"]["reason"], "stop");
+    }
+
+    #[test]
+    fn recovered_stream_requires_explicit_success_finish_evidence() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("stdout.jsonl");
+        std::fs::write(
+            &path,
+            "{\"type\":\"text\",\"sessionID\":\"ses_test\",\"part\":{\"type\":\"text\",\"text\":\"done\"}}\n",
+        )
+        .unwrap();
+        assert!(!stream_has_successful_finish(&path));
+        std::fs::write(
+            &path,
+            "{\"type\":\"step_finish\",\"sessionID\":\"ses_test\",\"part\":{\"reason\":\"stop\"}}\n",
+        )
+        .unwrap();
+        assert!(stream_has_successful_finish(&path));
     }
 
     #[tokio::test]
