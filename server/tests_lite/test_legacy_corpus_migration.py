@@ -133,6 +133,7 @@ def test_source_batches_bound_dense_render_payloads():
     assert [batch.range_start for batch in batches] == [0, 1, 2]
 
 
+@pytest.mark.timeout(30)
 @pytest.mark.asyncio
 async def test_high_row_session_streams_inline_archive_and_events_in_bounded_batches(
     legacy_db,
