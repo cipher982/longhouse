@@ -1,0 +1,3 @@
+{"type":"text","timestamp":1784380000000,"sessionID":"ses_fixture_11720","part":{"type":"text","text":"fixture reply"}}
+{"type":"tool_use","timestamp":1784380000100,"sessionID":"ses_fixture_11720","part":{"type":"tool","tool":"bash","callID":"call_fixture","state":{"status":"running","input":{"command":"printf fixture"}}}}
+{"type":"tool_use","timestamp":1784380000200,"sessionID":"ses_fixture_11720","part":{"type":"tool","tool":"bash","callID":"call_fixture","state":{"status":"completed","input":{"command":"printf fixture"},"output":"fixture"}}}

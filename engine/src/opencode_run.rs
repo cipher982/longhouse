@@ -1045,6 +1045,21 @@ mod tests {
         );
     }
 
+    #[test]
+    fn stock_1_17_20_jsonl_fixture_keeps_native_identity_and_tool_shape() {
+        let events = include_str!("../tests/fixtures/opencode/run-1.17.20.jsonl")
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(events.len(), 3);
+        assert!(events.iter().all(|event| {
+            event_provider_thread_id(event).as_deref() == Some("ses_fixture_11720")
+        }));
+        assert_eq!(events[1]["part"]["callID"], "call_fixture");
+        assert_eq!(events[2]["part"]["state"]["status"], "completed");
+        assert_eq!(events[2]["part"]["state"]["output"], "fixture");
+    }
+
     #[tokio::test]
     #[ignore = "requires an authenticated stock opencode and spends provider tokens"]
     async fn installed_opencode_completes_and_resumes_through_production_console_adapter() {
@@ -1060,7 +1075,11 @@ mod tests {
             .output()
             .await
             .unwrap();
-        let help_text = String::from_utf8_lossy(&help.stdout);
+        let help_text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&help.stdout),
+            String::from_utf8_lossy(&help.stderr)
+        );
         assert!(help.status.success() && help_text.contains("--auto"));
         assert!(!help_text.contains("--dangerously-skip-permissions"));
         let marker = format!("LH_OPENCODE_CONSOLE_{}", Uuid::new_v4().simple());

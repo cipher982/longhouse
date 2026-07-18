@@ -1443,6 +1443,21 @@ async fn execute_turn_start(
     }
     let message = payload_required_string(payload, "message")?;
     let resume_provider_thread_id = payload_optional_string(payload, "resume_provider_thread_id");
+    let permission_mode =
+        payload_optional_string(payload, "permission_mode").unwrap_or_else(|| {
+            if provider == "opencode" {
+                "bypass"
+            } else {
+                "remote_approve"
+            }
+            .to_string()
+        });
+    if provider == "opencode" && permission_mode != "bypass" {
+        return Err(CommandError {
+            code: "permission_mode_unsupported".to_string(),
+            message: "OpenCode Console currently supports bypass permission mode only".to_string(),
+        });
+    }
     let launch_actor = payload_optional_string(payload, "launch_actor");
     let launch_surface = payload_optional_string(payload, "launch_surface");
     let registry = default_turn_claim_registry().map_err(CommandError::command_failed)?;
@@ -1524,8 +1539,7 @@ async fn execute_turn_start(
             prompt: message,
             resume_provider_thread_id,
             model: payload_optional_string(payload, "model"),
-            permission_mode: payload_optional_string(payload, "permission_mode")
-                .unwrap_or_else(|| "remote_approve".to_string()),
+            permission_mode: permission_mode.clone(),
             api_url: config.api_url.clone(),
             api_token: config.api_token.clone(),
             machine_name: config.machine_name.clone(),
@@ -1561,8 +1575,7 @@ async fn execute_turn_start(
             prompt: message,
             resume_provider_thread_id,
             model: payload_optional_string(payload, "model"),
-            permission_mode: payload_optional_string(payload, "permission_mode")
-                .unwrap_or_else(|| "bypass".to_string()),
+            permission_mode,
             machine_name: config.machine_name.clone(),
             local_db_path,
         })
@@ -4310,6 +4323,35 @@ exit 1
             let session_flag = argv.iter().position(|value| value == "--session").unwrap();
             assert_eq!(argv[session_flag + 1], "ses_console_test");
         });
+    }
+
+    #[tokio::test]
+    async fn opencode_console_rejects_invisible_interactive_permission_mode() {
+        let run_id = Uuid::new_v4().to_string();
+        let mut cache = command_cache();
+        let response = handle_command_frame(
+            json!({
+                "type": "command",
+                "command_id": run_id,
+                "session_id": Uuid::new_v4().to_string(),
+                "command_type": COMMAND_TURN_START,
+                "payload": {
+                    "provider": "opencode",
+                    "thread_id": Uuid::new_v4().to_string(),
+                    "turn_id": Uuid::new_v4().to_string(),
+                    "run_id": run_id,
+                    "cwd": std::env::temp_dir(),
+                    "message": "do work",
+                    "permission_mode": "remote_approve",
+                },
+            }),
+            &mut cache,
+            &test_config(),
+        )
+        .await;
+
+        assert_eq!(response["ok"], false);
+        assert_eq!(response["error"]["code"], "permission_mode_unsupported");
     }
 
     #[test]
