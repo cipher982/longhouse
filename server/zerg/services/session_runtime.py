@@ -633,7 +633,13 @@ def _is_bridge_transcript_event(event: RuntimeEventIngest) -> bool:
         and event.kind == "progress_signal"
         and payload.get("progress_kind") == "cursor_print_stream"
     )
-    return codex_live or cursor_live
+    opencode_live = (
+        (event.provider or "").strip().lower() == "opencode"
+        and (event.source or "").strip().lower() == "opencode_run"
+        and event.kind == "progress_signal"
+        and payload.get("progress_kind") == "opencode_run_stream"
+    )
+    return codex_live or cursor_live or opencode_live
 
 
 def ingest_runtime_events(db: Session, events: list[RuntimeEventIngest]) -> RuntimeEventBatchResult:

@@ -267,6 +267,94 @@ def test_cursor_print_tool_event_materializes_live_tool_preview(tmp_path):
     assert preview.provisional_complete is True
 
 
+def test_opencode_run_text_event_materializes_live_preview(tmp_path):
+    SessionLocal = _make_sessionmaker(tmp_path, "opencode_run_text.db")
+    now = datetime(2026, 7, 18, 12, 0, tzinfo=timezone.utc)
+
+    with SessionLocal() as db:
+        session = _seed_session(db, started_at=now - timedelta(minutes=1), provider="opencode")
+        thread_id = uuid4()
+        event = RuntimeEventIngest(
+            runtime_key=f"opencode:{session.id}",
+            session_id=session.id,
+            thread_id=thread_id,
+            run_id=uuid4(),
+            provider="opencode",
+            device_id="cinder",
+            source="opencode_run",
+            kind="progress_signal",
+            occurred_at=now,
+            dedupe_key="opencode:run-1:1",
+            payload={
+                "progress_kind": "opencode_run_stream",
+                "thread_id": str(thread_id),
+                "turn_id": "turn-1",
+                "seq": 1,
+                "event": {
+                    "type": "text",
+                    "sessionID": "ses_native",
+                    "part": {"type": "text", "text": "native OpenCode reply"},
+                },
+            },
+        )
+        result = ingest_runtime_events(db, [event])
+        db.commit()
+        preview = load_session_live_preview_map(db, [session.id])[str(session.id)]
+
+    assert result.accepted == 1
+    assert preview.text == "native OpenCode reply"
+
+
+def test_opencode_run_tool_event_materializes_live_tool_preview(tmp_path):
+    SessionLocal = _make_sessionmaker(tmp_path, "opencode_run_tool.db")
+    now = datetime(2026, 7, 18, 12, 0, tzinfo=timezone.utc)
+
+    with SessionLocal() as db:
+        session = _seed_session(db, started_at=now - timedelta(minutes=1), provider="opencode")
+        event = RuntimeEventIngest(
+            runtime_key=f"opencode:{session.id}",
+            session_id=session.id,
+            thread_id=uuid4(),
+            run_id=uuid4(),
+            provider="opencode",
+            device_id="cinder",
+            source="opencode_run",
+            kind="progress_signal",
+            occurred_at=now,
+            dedupe_key="opencode:run-1:2",
+            payload={
+                "progress_kind": "opencode_run_stream",
+                "turn_id": "turn-1",
+                "seq": 2,
+                "event": {
+                    "type": "tool_use",
+                    "sessionID": "ses_native",
+                    "part": {
+                        "type": "tool",
+                        "tool": "bash",
+                        "callID": "call-1",
+                        "state": {
+                            "status": "completed",
+                            "input": {"command": "pwd"},
+                            "output": "/tmp/project\n",
+                        },
+                    },
+                },
+            },
+        )
+        result = ingest_runtime_events(db, [event])
+        db.commit()
+        preview = load_session_live_preview_map(db, [session.id])[str(session.id)]
+
+    assert result.accepted == 1
+    assert preview.text == "/tmp/project"
+    assert preview.tool_name == "bash"
+    assert preview.tool_input_json == {"command": "pwd"}
+    assert preview.tool_output_text == "/tmp/project\n"
+    assert preview.tool_call_id == "call-1"
+    assert preview.tool_call_state == "completed"
+
+
 def test_projection_keeps_higher_seq_for_same_turn(tmp_path):
     SessionLocal = _make_sessionmaker(tmp_path, "same_turn_ordering.db")
     now = datetime(2026, 5, 27, 12, 0, tzinfo=timezone.utc)

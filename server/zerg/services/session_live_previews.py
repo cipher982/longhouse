@@ -17,7 +17,7 @@ from zerg.services.provisional_events import build_provisional_cursor
 from zerg.services.provisional_events import build_provisional_key
 from zerg.utils.time import normalize_utc
 
-LIVE_PREVIEW_SOURCES = {"codex_bridge_live", "codex_console_live", "cursor_print"}
+LIVE_PREVIEW_SOURCES = {"codex_bridge_live", "codex_console_live", "cursor_print", "opencode_run"}
 
 
 @dataclass(frozen=True)
@@ -49,7 +49,7 @@ def live_preview_candidate_from_runtime_event(
     if event.session_id is None:
         return None
     provider = (event.provider or "").strip().lower()
-    if provider not in {"codex", "cursor"}:
+    if provider not in {"codex", "cursor", "opencode"}:
         return None
     source = (event.source or "").strip()
     if source.lower() not in LIVE_PREVIEW_SOURCES:
@@ -59,6 +59,8 @@ def live_preview_candidate_from_runtime_event(
     progress_kind = payload.get("progress_kind")
     if provider == "cursor" and source.lower() == "cursor_print" and progress_kind == "cursor_print_stream":
         return _cursor_print_preview_candidate(event, payload, observation_id=observation_id)
+    if provider == "opencode" and source.lower() == "opencode_run" and progress_kind == "opencode_run_stream":
+        return _opencode_run_preview_candidate(event, payload, observation_id=observation_id)
     if progress_kind not in {"bridge_live_transcript_delta", "console_live_tool_item"}:
         return None
 
@@ -195,6 +197,73 @@ def _cursor_print_preview_candidate(event: Any, payload: dict[str, Any], *, obse
         tool_output_text=output or None,
         tool_call_id=call_id,
         tool_call_state="completed" if subtype == "completed" else "running",
+    )
+
+
+def _opencode_run_preview_candidate(event: Any, payload: dict[str, Any], *, observation_id: str) -> LivePreviewCandidate | None:
+    raw = payload.get("event")
+    if not isinstance(raw, dict) or event.session_id is None:
+        return None
+    part = raw.get("part") if isinstance(raw.get("part"), dict) else {}
+    raw_type = str(raw.get("type") or "").strip()
+    seq = _coerce_seq(payload.get("seq"))
+    thread_id = _optional_str(payload.get("thread_id") or event.thread_id)
+    turn_id = _optional_str(payload.get("turn_id"))
+    observed_at = normalize_utc(event.occurred_at) or datetime.now(timezone.utc)
+    if raw_type == "text" and str(part.get("type") or "") == "text":
+        text = str(part.get("text") or "").strip()
+        if not text:
+            return None
+        turn_key = build_provisional_key(
+            source="opencode_run",
+            session_id=event.session_id,
+            thread_id=thread_id,
+            turn_id=turn_id,
+        )
+        return LivePreviewCandidate(
+            session_id=event.session_id,
+            thread_id=thread_id,
+            turn_key=turn_key,
+            seq=seq,
+            preview_text=text,
+            provisional_cursor=build_provisional_cursor(key=turn_key, seq=seq),
+            provisional_complete=False,
+            preview_observed_at=observed_at,
+            source="opencode_run",
+            last_observation_id=observation_id,
+        )
+    if raw_type != "tool_use" or str(part.get("type") or "") != "tool":
+        return None
+    state = part.get("state") if isinstance(part.get("state"), dict) else {}
+    tool_name = str(part.get("tool") or "Tool")
+    call_id = _optional_str(part.get("callID"))
+    status = str(state.get("status") or "pending")
+    tool_input = state.get("input") if isinstance(state.get("input"), dict) else None
+    output = str(state.get("output") or "")
+    preview_text = output.strip() or json.dumps(tool_input or {}, ensure_ascii=False, sort_keys=True) or tool_name
+    turn_key = build_provisional_key(
+        source="opencode_run",
+        session_id=event.session_id,
+        thread_id=thread_id,
+        turn_id=_item_scoped_turn_id(turn_id, call_id),
+    )
+    return LivePreviewCandidate(
+        session_id=event.session_id,
+        thread_id=thread_id,
+        turn_key=turn_key,
+        seq=seq,
+        preview_text=preview_text,
+        provisional_cursor=build_provisional_cursor(key=turn_key, seq=seq),
+        provisional_complete=status in {"completed", "error"},
+        preview_observed_at=observed_at,
+        source="opencode_run",
+        last_observation_id=observation_id,
+        preview_role="assistant",
+        tool_name=tool_name,
+        tool_input_json=dict(tool_input) if tool_input else None,
+        tool_output_text=output or None,
+        tool_call_id=call_id,
+        tool_call_state=("failed" if status == "error" else "completed" if status == "completed" else "running"),
     )
 
 
