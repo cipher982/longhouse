@@ -43,7 +43,7 @@ identity, and quarantined unresolved `409 -> manifest 404` conflicts. The live
 queue then fell from hundreds of Cursor envelopes to zero blocked Cursor
 envelopes without dropping source bytes.
 
-The recovery also exposed two follow-on gaps:
+The recovery also exposed three follow-on gaps:
 
 1. adopted render authority is currently persisted only in the pending
    envelope, so later appends from the same Cursor store can repeat the
@@ -56,6 +56,30 @@ The recovery also exposed two follow-on gaps:
    multiple temporary/worktree stores. Those paths built divergent local epoch
    chains for one opaque source and were correctly quarantined, but test traffic
    still made product health red.
+
+The next inspection found that the apparent two-source incident had expanded to
+31 blocked sources. Twenty-nine were not new network failures: a July 14
+`session_rebind` had created replacement epochs with stale or cross-provider
+session identities. For 23 sources, the Runtime Host already proved the full
+local pending range durable; six had no corresponding hosted epoch and were
+replayed from their native provider identity. The remaining two were abandoned
+Cursor Console canary stores. Reconciliation reduced the durable outbox to zero
+without deleting provider transcripts.
+
+Three additional files were failing before an envelope existed: two
+Antigravity transcripts had valid path UUIDs overridden by legacy `ag-live-*`
+bindings, and one Codex JSONL contained a single record larger than the 32 MiB
+storage-v2 limit. Preparation errors were put back into the local queue every
+few seconds, counted as consecutive shipping failures, and had no durable
+quarantine record for the operator to inspect. Healthy Cursor envelopes still
+shipped between those failures. This was a second retry storm hidden below the
+durable outbox abstraction.
+
+Finally, restarting an aligned Machine Agent reconstructed about 7 GB of legacy
+archive ranges even though storage-v2 state was already current. The range and
+byte counters collapsed through local retirement with zero archive send
+attempts, while health said `Uploading archive backlog`. Reconciliation work
+must not be presented as network upload or used to estimate upload throughput.
 
 ## Product Invariants
 
@@ -72,6 +96,11 @@ The recovery also exposed two follow-on gaps:
    visible but do not claim that the machine is presently broken.
 7. Every destructive operator action is exact-source, evidence-backed, and
    auditable.
+8. Provider-native identity, Longhouse session identity, and control-channel
+   identity are distinct typed fields. A binding from one domain cannot silently
+   replace another.
+9. Every discovered source reaches a durable terminal state even when envelope
+   preparation fails; in-memory retry timers are never the sole record.
 
 ## Failure Model
 
@@ -87,6 +116,11 @@ Every failed send is classified once at the protocol boundary:
 
 Unknown `4xx`, generic `409`, and `409` followed by `404` are not transient.
 They leave the live lane immediately and retain their evidence in quarantine.
+
+Preparation failures use the same classification before any HTTP request is
+made. A stable malformed identity, oversized record, unsupported framing, or
+parser invariant failure is permanent for that exact source revision. Retrying
+the same bytes cannot repair it.
 
 ## Runtime Host Conflict Receipt
 
@@ -120,6 +154,22 @@ with a later manifest request.
 
 ## Machine Agent Recovery
 
+### Identity binding
+
+The engine validates a binding before it can create or replace a source epoch:
+
+- the binding provider must equal the discovered source provider;
+- the bound Longhouse session ID must be a UUID;
+- provider-native IDs such as `ag-live-*` remain provider session IDs and never
+  occupy the Longhouse session-ID field;
+- a rebind records old and new typed identities plus its evidence origin;
+- an already accepted native epoch is not replaced merely because a stale
+  control binding appears later.
+
+Invalid bindings are ignored in favor of the parser's native identity and
+recorded as repairable identity diagnostics. They cannot generate a replacement
+epoch or enter the send scheduler.
+
 ### Render generation
 
 When revisions match and the Runtime Host reports its existing generation, the
@@ -151,6 +201,21 @@ race epoch replacement and pending-envelope creation. Multiple local paths that
 claim one opaque source join the same serialization domain; they cannot mint
 independent epoch chains. Canaries must mint unique provider source identities
 per run unless the test explicitly exercises continuation of the same source.
+
+### Preparation failure
+
+Source discovery persists a preparation intent before parsing or framing. A
+permanent preparation failure transitions that intent to `quarantined` with the
+provider, canonical path, file identity, source revision, failing offset, limit,
+and evidence hash. It makes one scheduler attempt and no timed retries.
+
+For an oversized LF-delimited record, storage-v2 mirrors the legacy shipper's
+existing range dead-letter behavior: retain an exact evidence pointer for the
+record, advance only with an explicit gap receipt understood by the Runtime
+Host, and continue with later records. If the host contract cannot represent
+that gap, quarantine the source revision rather than spin or silently skip it.
+Whole-document sources cannot skip a record and remain quarantined until their
+framing or limit changes.
 
 ## Scheduling and Retry Isolation
 
@@ -191,6 +256,9 @@ ready -> in_flight -> acknowledged
                   -> quarantined
 ```
 
+The state machine begins at discovery, not after envelope serialization, so
+identity, parser, framing, and raw-record-limit failures are represented too.
+
 Each record carries:
 
 - failure class and stable error code;
@@ -211,6 +279,12 @@ Current shipping is `healthy`, `catching_up`, `pressured`, or `blocked` based on
 current queues, consecutive outcomes, and active source failures. A rejected
 request that was reconciled and followed by successful acknowledgements remains
 in incident history but does not keep the machine red for an hour.
+
+Health also separates `discovering`, `reconciling`, and `uploading`. Bytes being
+hashed, compared, or retired locally are not upload backlog. Upload rate and ETA
+exist only after actual archive send attempts. A component restart must retain
+storage-v2 completion and must not materialize a second legacy backlog for the
+same accepted ranges.
 
 Expose:
 
@@ -269,13 +343,18 @@ Fault-injection tests must cover:
 - repeated typed pressure with `Retry-After`;
 - generic/unknown `409` and `409 -> 404`;
 - one poisoned source alongside at least 100 healthy live sources;
+- invalid cross-provider bindings and non-UUID provider control IDs;
+- an oversized LF-delimited record with valid tail records;
 - Machine Agent and Runtime Host restart during every delivery state;
+- restart with storage-v2-current sources and stale legacy cursor state;
 - stale managed bridge with a live app-server child and PID-reuse rejection.
 
 Pass conditions:
 
 - healthy live sources remain under the ten-second p95 SLO;
 - a poisoned source makes at most one live attempt;
+- a permanent preparation failure makes one attempt, is inspectable after
+  restart, and cannot increment transport-failure counters indefinitely;
 - no source has two concurrent deliveries;
 - ambiguous commit and replacement recovery preserve raw identity and produce
   no duplicate durable range;
@@ -283,13 +362,18 @@ Pass conditions:
   live work;
 - current health becomes healthy after successful recovery while retaining the
   incident in history;
+- local reconciliation is never labeled or measured as upload;
 - every quarantine has an exact operator recovery path.
 
 ## Delivery Order
 
-1. Persist adopted render authority and add epoch-replacement conflict receipts.
-2. Add the per-source delivery state machine and live retry budget.
-3. Split current health from rolling incident history and expose goodput/waste.
-4. Add exact-source inspect/reconcile/retry/discard commands.
-5. Tune the catch-up controller against fault-injection and mixed live/archive
+1. Enforce typed provider/session bindings and repair the historical rebinds.
+2. Persist adopted render authority and add epoch-replacement conflict receipts.
+3. Start the per-source delivery state machine at discovery, including
+   preparation quarantine and oversized-record gap handling.
+4. Split current health from rolling incident history and distinguish local
+   reconciliation from upload.
+5. Add exact-source inspect/reconcile/retry/discard commands.
+6. Prevent storage-v2-current ranges from reappearing as legacy restart backlog.
+7. Tune the catch-up controller against fault-injection and mixed live/archive
    load, then add state-verified managed-process reap.
