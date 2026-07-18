@@ -41,14 +41,15 @@ Cursor is two independent axes:
 | --- | --- | --- | --- |
 | Shadow | none | native `store.db` storage-v2 source and renderer | durable, readable, observe-only |
 | Helm | Cursor PTY + control socket + engine lease | hook/store identity claim onto the native source | managed, remotely controllable, durable, and readable |
-| Console | ACP process | none | unavailable — Longhouse is the sole UI and cannot launch a non-durable run |
+| Console | native `cursor_print` turn adapter | native `store.db` identity and storage-v2 receipt binding | managed, durable, readable, one turn per stock `cursor-agent --print` invocation |
 
 The Cursor provider contract advertises transcript and phase capabilities only
 for sessions with the proven native source and observed binding claim.
-`launch_remote` / `run_once` remain unavailable while ACP cannot make an
-engine-owned v2 source. Helm `send`, graceful Ctrl-C `interrupt`, native
-`resume`, permission response, and explicit `terminate` remain separate
-capabilities.
+`launch_remote` / `run_once` remain unavailable for the Helm transport.
+Cursor Console is separately represented by `session.turn.start` through the
+native `cursor_print` adapter; it is not an ACP fallback and does not grant
+Helm capabilities. Helm `send`, graceful Ctrl-C `interrupt`, native `resume`,
+permission response, and explicit `terminate` remain separate capabilities.
 
 ## Source-fidelity contract
 

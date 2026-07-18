@@ -93,12 +93,12 @@ providers:
   provider_cli_env: null
   requires_longhouse_cli: true
   managed_transport: claude_channel_bridge
-  console_adapter: claude_print
+  console_adapter: null
   control_plane: claude_channel_bridge
   control_plane_aliases: []
   launch_local: true
   launch_remote: true
-  run_once: true
+  run_once: false
   reattach: true
   send_input: true
   interrupt: true
@@ -123,8 +123,8 @@ providers:
       next: promote with Runtime Host remote launch against real Claude or a hermetic
         engine launch happy-path
     run_once:
-      level: hermetic
-      source: claude_print adapter uses stream-json with native session-id/resume
+      level: none
+      source: no Claude turn-scoped Console adapter is implemented; use the managed channel/PTY path
     reattach:
       level: hermetic
       source: Claude channel bridge session state and resume unit coverage

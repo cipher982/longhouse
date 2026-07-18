@@ -1,8 +1,8 @@
 # Longhouse
 
-Install and continue to use your coding agents like normal. This tracks, controls, and intercepts all the best coding agent CLIs so that you can view and control the sessions remotely on web or ios. One searchable timeline for every Claude Code, Codex, Antigravity, OpenCode, and Cursor session across the machines you own with live remote control. 
+Keep using your coding agents like normal. Longhouse watches their native session data and puts Claude Code, Codex, Antigravity, OpenCode, and Cursor sessions into one searchable timeline across the machines you own.
 
-Loca rust daemon monitors and parses all the coding agent transcript and session logs into a unified database format by default, and then just launch your agents with longhouse in front like `longhouse claude` to get full remote control
+Launch a provider through Longhouse when you want its supported remote-control path. Longhouse keeps the upstream CLI and its terminal UI; the available controls depend on the provider's native seam rather than a pretend one-size-fits-all wrapper.
 
 ![Longhouse timeline — one searchable view of your coding-agent sessions across providers and machines](web/public/images/landing/timeline-preview.png)
 
@@ -13,10 +13,10 @@ If you run coding agents often it gets messy quick across the terminal tabs and 
 Longhouse fixes that:
 
 - **Find any past session in seconds** — one timeline + full-text search across every provider and machine.
-- **Steer live work remotely** — launch a session through Longhouse and send to it later from the web or your phone.
+- **Control live work remotely** — launch a session through Longhouse, then send, interrupt, steer, or resume it later when that provider supports the operation.
 - **Own your history** — runs on machines you control, SQLite at the core, nothing uploaded to a vendor cloud.
 
-To be clear, this is NOT like all the other agent wrappers that run their *own* internal management and force you into their UX/UI platform. You can literally just run 'claude' like normal and get the full observability stack. To go further just 'longhouse claude' (or anything else like Cursor, OpenCode, Codex, antigravity) and then *with no change to your terminal experience* you gain full remote control (like that claude remote feature they introcued) but this is fully open source and implemented across all the coding agents into one unified system.
+Longhouse does not replace a provider with its own agent runtime or terminal UI. A bare provider CLI stays observable through its native archive. A managed launch such as `longhouse claude` keeps the stock terminal experience while adding Longhouse's provider-specific control path. The timeline exposes the controls a session can actually perform instead of assuming every provider can steer a live turn.
 
 ## Install
 
@@ -41,13 +41,14 @@ All three install the same product. On macOS the shell installer also drops `Lon
 ## First Session
 
 ```bash
-longhouse claude       # managed session, steerable later
-longhouse codex        # same, for Codex CLI
-longhouse agy          # managed observe-only launch for Antigravity CLI
-longhouse opencode     # managed live-control launch for OpenCode
+longhouse claude       # managed channel session: send, interrupt, steer, resume
+longhouse codex        # managed app-server session: send, interrupt, steer, resume
+longhouse cursor       # managed terminal session: send, interrupt, resume (not active-turn steer)
+longhouse opencode     # managed server session: send, interrupt, reattach (not active-turn steer)
+longhouse agy          # managed safe-boundary input injection (not steerable or interruptible)
 ```
 
-Bare `claude`, `codex`, `antigravity`, and `opencode` still get ingested into the timeline — they just stay unmanaged (searchable, not steerable).
+Bare provider CLI sessions still get ingested into the timeline — they stay unmanaged: searchable and observable, but without Longhouse-owned remote control.
 
 The web UI lives at `http://localhost:8080`. The same surface is scriptable:
 
@@ -124,7 +125,7 @@ Issues: <https://github.com/cipher982/longhouse/issues>
 
 ## Status
 
-Alpha. Actively developed. Claude Code, Codex, Antigravity, and OpenCode sessions sync today. Managed launch is live for Claude, Codex, Antigravity, and OpenCode (Antigravity is observe-only; OpenCode supports managed send, interrupt, launch, and terminate, but not active-turn steer or pause-answer), and the native iOS companion can page on `needs_user` / `blocked` once APNs is configured.
+Alpha. Actively developed. Claude Code, Codex, Cursor, OpenCode, and Antigravity sessions sync today. Managed control is deliberately provider-specific: Claude and Codex support send, interrupt, active-turn steer, and continuation; Cursor supports managed terminal send, interrupt, and reattach but not active-turn steer; OpenCode supports send, interrupt, terminate, and reattach but not active-turn steer or pause-answer; Antigravity supports queued input injection at a native hook boundary but not remote launch, reattach, interrupt, or steer. The native iOS companion can page on `needs_user` / `blocked` once APNs is configured.
 
 Built by [David Rose](https://github.com/cipher982). Apache-2.0.
 
