@@ -2,18 +2,27 @@ import { useState, useEffect } from "react";
 import { SwarmLogo } from "../SwarmLogo";
 import { Button } from "../ui/Button";
 
-interface LandingHeaderProps {
-  onSignIn?: () => void;
-  onGetStarted?: () => void;
-}
-
-type LandingNavLink = {
+export type LandingNavLink = {
   label: string;
   href: string;
   external?: boolean;
 };
 
-export function LandingHeader({ onSignIn, onGetStarted }: LandingHeaderProps) {
+interface LandingHeaderProps {
+  onSignIn?: () => void;
+  onGetStarted?: () => void;
+  navLinks?: LandingNavLink[];
+}
+
+const DEFAULT_NAV_LINKS: LandingNavLink[] = [
+  { label: "How it works", href: "#how-it-works" },
+  { label: "Machine surface", href: "#surface" },
+  { label: "Providers", href: "#providers" },
+  { label: "Blog", href: "/blog" },
+  { label: "Docs", href: "/docs" },
+];
+
+export function LandingHeader({ onSignIn, onGetStarted, navLinks = DEFAULT_NAV_LINKS }: LandingHeaderProps) {
   const [isScrolled, setIsScrolled] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
@@ -25,13 +34,6 @@ export function LandingHeader({ onSignIn, onGetStarted }: LandingHeaderProps) {
     window.addEventListener("scroll", handleScroll, { passive: true });
     return () => window.removeEventListener("scroll", handleScroll);
   }, []);
-
-  const navLinks: LandingNavLink[] = [
-    { label: "How it works", href: "#how-it-works" },
-    { label: "Machine surface", href: "#surface" },
-    { label: "Providers", href: "#providers" },
-    { label: "Docs", href: "/docs" },
-  ];
 
   const handleNavClick = (href: string, external?: boolean) => {
     if (external) {

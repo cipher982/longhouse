@@ -1,6 +1,8 @@
 import { useRoutes, Outlet, Navigate, useLocation } from "react-router-dom";
 import Layout from "../components/Layout";
 import LandingPage from "../pages/LandingPage";
+import BlogIndexPage from "../pages/BlogIndexPage";
+import ProviderIntegrationsPostPage from "../pages/ProviderIntegrationsPostPage";
 import LoginPage from "../pages/LoginPage";
 import DocsLayout from "../pages/docs/DocsLayout";
 import DocsOverviewPage from "../pages/docs/OverviewPage";
@@ -69,6 +71,22 @@ function LandingAliasRedirect() {
 export function buildAppRoutes({ demoMode, singleTenant: _singleTenant }: RoutingConfig) {
   // Public reference pages — shared by demo and normal modes
   const publicInfoRoutes = [
+    {
+      path: "/blog",
+      element: (
+        <ErrorBoundary>
+          <BlogIndexPage />
+        </ErrorBoundary>
+      ),
+    },
+    {
+      path: "/blog/provider-integrations",
+      element: (
+        <ErrorBoundary>
+          <ProviderIntegrationsPostPage />
+        </ErrorBoundary>
+      ),
+    },
     {
       path: "/login",
       element: (
