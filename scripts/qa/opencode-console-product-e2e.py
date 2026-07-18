@@ -8,6 +8,7 @@ import json
 import os
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from uuid import uuid4
@@ -53,6 +54,26 @@ def _events(api_url: str, token: str, session_id: str) -> list[dict]:
     return list(
         _request(api_url, token, "GET", f"/api/agents/sessions/{session_id}/events?limit=100").get("events") or []
     )
+
+
+def _wait_for_search(api_url: str, token: str, session_id: str, marker: str, timeout: float = 90) -> None:
+    query = urllib.parse.urlencode(
+        {
+            "provider": "opencode",
+            "query": marker,
+            "days_back": 1,
+            "limit": 5,
+            "include_test": "true",
+            "hide_autonomous": "false",
+        }
+    )
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        payload = _request(api_url, token, "GET", f"/api/agents/sessions?{query}")
+        if session_id in {str(session.get("id")) for session in payload.get("sessions") or []}:
+            return
+        time.sleep(2)
+    raise RuntimeError("OpenCode Console marker did not converge into session search")
 
 
 def _wait_for_assistant_marker(
@@ -195,6 +216,7 @@ def run(args: argparse.Namespace) -> dict:
         f"product-e2e-{uuid4()}",
     )
     final_events = _wait_for_assistant_marker(api_url, token, session_id, post_cancel_marker)
+    _wait_for_search(api_url, token, session_id, marker)
     result = {
         "status": "pass",
         "provider": "opencode",
@@ -208,6 +230,7 @@ def run(args: argparse.Namespace) -> dict:
         "resume_argv_has_explicit_session": True,
         "cancel_terminal_state": (cancelled.get("result") or {}).get("terminal_state"),
         "archived_event_count": len(final_events),
+        "search_converged": True,
         "resume_marker_count": sum(
             event.get("role") == "assistant" and marker in str(event.get("content_text") or "") for event in events
         ),
