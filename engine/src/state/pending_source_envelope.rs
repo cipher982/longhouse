@@ -346,6 +346,38 @@ pub fn discard_unattempted(
     )? == 1)
 }
 
+/// Replace only the serialized request representation after the Runtime Host
+/// proves that the raw envelope identity is valid but its render generation
+/// must join an already-registered parser revision. Raw source bytes, range,
+/// envelope identity, media, and the durable cursor remain unchanged.
+pub fn replace_request_body_after_render_conflict(
+    conn: &Connection,
+    source_epoch: Uuid,
+    envelope_id: &str,
+    expected_request_body_zstd: &[u8],
+    replacement_request_body_zstd: &[u8],
+) -> Result<()> {
+    let changed = conn.execute(
+        "UPDATE pending_source_envelope
+         SET request_body_zstd = ?1,
+             blocked_at = NULL,
+             block_kind = NULL,
+             block_detail = NULL
+         WHERE source_epoch = ?2 AND envelope_id = ?3
+           AND request_body_zstd = ?4",
+        params![
+            replacement_request_body_zstd,
+            source_epoch.to_string(),
+            envelope_id,
+            expected_request_body_zstd,
+        ],
+    )?;
+    if changed != 1 {
+        bail!("render-generation recovery no longer matches the pending envelope");
+    }
+    Ok(())
+}
+
 /// Advance the durable cursor and forget the exact retry in one transaction.
 pub fn acknowledge_and_delete(
     conn: &mut Connection,
