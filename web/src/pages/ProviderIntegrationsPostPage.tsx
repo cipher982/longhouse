@@ -73,11 +73,50 @@ export default function ProviderIntegrationsPostPage() {
                 </tbody>
               </table>
             </div>
+            <p>
+              The normalized timeline is not a replacement transcript. Longhouse retains provider-native source evidence and projects only records whose meaning is known. This preserves a path to re-render a session when a provider changes its format or exposes a previously unknown record type.
+            </p>
+          </section>
+
+          <section>
+            <h2>Source fidelity rules</h2>
+            <div className="blog-detail-grid">
+              <div>
+                <h3>JSONL is incremental, not uniform</h3>
+                <p>
+                  Claude and Codex are both JSONL sources, but their identity rules differ. Claude subagent and workflow transcripts require filtering so control ledgers do not appear as empty sessions. Codex session metadata establishes the canonical session ID and fork parentage even when the filename is not sufficient.
+                </p>
+              </div>
+              <div>
+                <h3>SQLite needs live-safe reads</h3>
+                <p>
+                  OpenCode and Cursor write while Longhouse is reading. Their adapters are read-only and WAL-aware. Filesystem events on WAL and shared-memory sidecars are mapped back to the canonical database rather than treated as independent sessions.
+                </p>
+              </div>
+              <div>
+                <h3>Raw data is retained separately</h3>
+                <p>
+                  Cursor storage is a content-addressed graph. Longhouse stores exact observed metadata and blob bytes, then emits a versioned render projection for text, reasoning, tools, and results. Unknown graph fields remain durable raw records with typed render gaps.
+                </p>
+              </div>
+              <div>
+                <h3>Identity must be provider-backed</h3>
+                <p>
+                  Longhouse does not bind a managed session to the newest local file. Provider session IDs, hook claims, database identity, and launch identity must agree. Time, working directory, and process recency are diagnostics, not binding proof.
+                </p>
+              </div>
+            </div>
           </section>
 
           <section>
             <h2>Claude Code</h2>
             <p><code>longhouse claude</code> runs the stock Claude terminal UI with a private local channel. The channel binds to the managed session and provides input injection. Interrupts are limited to the matching Claude process through process-identity checks.</p>
+            <p>
+              The channel is a local MCP server used as a control path, not a replacement Claude runtime. Longhouse receives the channel capability, then sends a session-scoped injection request to the local bridge. A steer request carries explicit steer intent and is gated on a fresh active runtime phase; a normal idle injection is not represented as steer.
+            </p>
+            <p>
+              Managed Claude state records the provider session identity and the exact process identities for Claude and the local channel. Local health derives liveness from process scanning. A degraded bridge or closed foreground TUI is not permission to terminate Claude; later continuation uses the provider's persisted session identity.
+            </p>
             <CapabilityList>
               <li>Send input, interrupt, active-turn steer, and answer a pause.</li>
               <li>Reattach or continue using the native session identity.</li>
@@ -88,6 +127,12 @@ export default function ProviderIntegrationsPostPage() {
           <section>
             <h2>Codex</h2>
             <p><code>longhouse codex</code> resolves the stock <code>codex</code> binary from <code>PATH</code>, starts Codex app-server, places a local WebSocket relay in front of it, and attaches the stock TUI to that server.</p>
+            <p>
+              The bridge has three different execution shapes. TUI-attached managed mode keeps the user's terminal connected to app-server. Detached-UI managed mode keeps app-server and the bridge alive without a local TUI, which is the remote-launch path. Console is separate prompt-and-exit execution and must not be conflated with detached-UI control.
+            </p>
+            <p>
+              Bridge state contains the Longhouse session ID, process identities, relay URL, and launch mode. A nonzero exit from the remote TUI attach client is treated as a foreground-link failure. It does not end the bridge or app-server. Only clean user exit or explicit terminate/stop actions can end managed execution.
+            </p>
             <CapabilityList>
               <li>Send input, interrupt, active-turn steer, answer a pause, and reattach or continue.</li>
               <li>A detached TUI does not imply that the managed session has ended. The bridge remains until an explicit stop path terminates it.</li>
@@ -98,6 +143,12 @@ export default function ProviderIntegrationsPostPage() {
           <section>
             <h2>OpenCode</h2>
             <p><code>longhouse opencode</code> runs stock <code>opencode serve</code> on loopback and attaches the normal OpenCode UI. Bridge state retains the local server address, provider session identity, process identity, and credentials needed to reconnect.</p>
+            <p>
+              The bridge state is private to the session and uses a local server password. A launch retry first checks for a healthy state file and reuses the existing server. It does not create another <code>opencode serve</code> process for the same Longhouse session.
+            </p>
+            <p>
+              Liveness has separate checks for the recorded process identity, authenticated local server health, and the presence of a foreground attach TUI. An attach-client failure leaves a healthy server available for reattach. An alive process with a failed health probe is reported as degraded rather than being relabeled as an unmanaged Shadow session.
+            </p>
             <CapabilityList>
               <li>Input maps to OpenCode's prompt API. Interrupt maps to its abort API.</li>
               <li>Managed server launch is idempotent per Longhouse session, preventing duplicate servers after retries.</li>
@@ -109,6 +160,12 @@ export default function ProviderIntegrationsPostPage() {
           <section>
             <h2>Antigravity</h2>
             <p><code>longhouse agy</code> runs the user's <code>agy</code> CLI and installs a hook/plugin adapter. The adapter records phase and transcript-binding information and exposes a private input inbox.</p>
+            <p>
+              The hook adapter receives provider lifecycle events including invocation, tool, and stop boundaries. Input messages are written as private inbox records with bounded size and expiry. A hook atomically claims an eligible message and returns it as an injected user message. The sender waits for the claim record rather than assuming that writing the inbox changed model context.
+            </p>
+            <p>
+              The adapter can request continuation at a provider-defined boundary while pending input exists. That is still not a stable remote process-control channel. There is no supported reattach lease, interrupt operation, or remote execution mode.
+            </p>
             <CapabilityList>
               <li>Remote input is queued and claimed by the next provider-defined safe hook boundary before delivery is reported.</li>
               <li>Supports safe-boundary input injection only.</li>
@@ -120,6 +177,12 @@ export default function ProviderIntegrationsPostPage() {
             <h2>Cursor</h2>
             <h3>Helm</h3>
             <p><code>longhouse cursor</code> reserves a native Cursor chat identity and runs the stock <code>cursor-agent</code> TUI in a PTY. Hook evidence and the native <code>store.db</code> source must agree before the managed session is bound.</p>
+            <p>
+              Cursor's durable source is a content-addressed blob DAG. The root snapshot provides ordered message references; message blobs contain text, reasoning, tool calls, and tool results. The store does not provide reliable per-message timestamps, so archive ordering is source-first rather than timestamp-first.
+            </p>
+            <p>
+              Helm control uses a mode-0600 per-session Unix socket. Idle send is protected by native hook phase evidence. The provider's TUI has a specific submit sequence, but Longhouse does not write to the PTY unless the bound conversation is known idle. This prevents a remote send from cancelling active work or crossing into a different local chat.
+            </p>
             <CapabilityList>
               <li>Input is accepted only when the exact Cursor conversation is idle.</li>
               <li>Interrupt uses Ctrl-C only for a verified active generation. Termination is explicit.</li>
@@ -127,6 +190,34 @@ export default function ProviderIntegrationsPostPage() {
             </CapabilityList>
             <h3>Console</h3>
             <p>Cursor Console runs one stock <code>cursor-agent --print</code> invocation per turn against the same native chat identity. Structured output is written to durable files before it is projected into the timeline. The process may exit after a turn while the Longhouse thread and Cursor chat remain available for a later turn.</p>
+            <p>
+              Each Console turn is claimed before spawn and records process-group identity, process start time, provider chat identity, and output paths. On Machine Agent restart, a matching live process resumes monitoring from the durable output file. Missing or ambiguous terminal evidence fails the turn without replaying the prompt.
+            </p>
+          </section>
+
+          <section>
+            <h2>Control and recovery boundaries</h2>
+            <p>
+              Longhouse treats archive state, control ownership, process liveness, and session phase as separate dimensions. A session can remain searchable after a provider exits. A managed session can be degraded when its control transport is unhealthy. Neither state changes execution ownership or authorizes Longhouse to kill the provider process.
+            </p>
+            <div className="blog-detail-grid">
+              <div>
+                <h3>Process identity</h3>
+                <p>Interrupt, terminate, and recovery paths verify recorded PID identity and process start time. A reused PID is not treated as the original provider process.</p>
+              </div>
+              <div>
+                <h3>Durable turn claims</h3>
+                <p>Console adapters claim a turn before spawning a provider. A retry returns the existing claim instead of executing the prompt twice.</p>
+              </div>
+              <div>
+                <h3>Explicit degradation</h3>
+                <p>Lost bridge state, a missing TUI, or a failed health probe reduces current capability. It does not silently switch to a different provider mode.</p>
+              </div>
+              <div>
+                <h3>Provider proof</h3>
+                <p>Capability flags are not inferred from source availability. Longhouse requires a provider-native mechanism and targeted operation evidence before advertising an action.</p>
+              </div>
+            </div>
           </section>
 
           <section>
