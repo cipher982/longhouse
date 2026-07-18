@@ -91,21 +91,12 @@ struct SessionView: View {
             }
         }
         .task(id: sessionId) {
-            await viewModel.start(sessionId: sessionId, appState: appState)
-            guard !Task.isCancelled,
-                  viewModel.items.isEmpty,
-                  viewModel.submittedInputs.isEmpty
-            else { return }
-            // Keep WebKit off the timeline's first-interaction path, but warm
-            // one bounded transcript view once an empty Console is usable. A
-            // later optimistic send can then reuse it instead of starting the
-            // WebContent process on the Send interaction.
-            try? await Task.sleep(nanoseconds: 500_000_000)
-            guard !Task.isCancelled,
-                  viewModel.items.isEmpty,
-                  viewModel.submittedInputs.isEmpty
-            else { return }
+            // Navigation has already left the timeline, so starting one bounded
+            // WebContent process here cannot steal the timeline's first scroll.
+            // Overlap it with the tail request so existing transcripts and new
+            // Console sends both reuse a ready document.
             WebTranscriptWebViewPool.prewarm()
+            await viewModel.start(sessionId: sessionId, appState: appState)
         }
         .onDisappear {
             viewModel.pauseRealtime()
