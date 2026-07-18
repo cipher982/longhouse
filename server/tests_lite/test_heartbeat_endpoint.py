@@ -154,6 +154,30 @@ def _machine_evidence_payload() -> dict[str, object]:
                 "source": "unmanaged_process_scan",
             },
         ],
+        "readiness": [
+            {
+                "provider": "antigravity",
+                "session_id": "antigravity-session",
+                "operation": "send_input",
+                "hook_installed": True,
+                "recent_hook_observed": True,
+                "claim_observed": True,
+                "response_observed": True,
+                "continuation_observed": False,
+                "hook_event": "PreInvocation",
+                "hook_observed_at": observed_at,
+                "claim_message_id": "message-1",
+                "claimed_at": observed_at,
+                "response_event": "PreInvocation",
+                "response_at": observed_at,
+                "response_status": "ok",
+                "observed_at": observed_at,
+                "valid_until": "2026-05-08T12:02:00Z",
+                "source": "antigravity_hook_state",
+                "raw_locator": "/tmp/antigravity-session.json",
+                "reason_codes": [],
+            }
+        ],
     }
 
 

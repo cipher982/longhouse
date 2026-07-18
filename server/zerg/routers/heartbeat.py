@@ -211,6 +211,29 @@ class ProcessSnapshotScopeIn(UTCBaseModel):
     failure_reason: str | None = Field(None, max_length=255)
 
 
+class ReadinessEvidenceIn(UTCBaseModel):
+    provider: Literal["antigravity"]
+    session_id: str = Field(..., max_length=255)
+    operation: Literal["send_input"]
+    hook_installed: bool
+    recent_hook_observed: bool
+    claim_observed: bool
+    response_observed: bool
+    continuation_observed: bool
+    hook_event: str | None = Field(None, max_length=64)
+    hook_observed_at: datetime | None = None
+    claim_message_id: str | None = Field(None, max_length=255)
+    claimed_at: datetime | None = None
+    response_event: str | None = Field(None, max_length=64)
+    response_at: datetime | None = None
+    response_status: str | None = Field(None, max_length=32)
+    observed_at: datetime
+    valid_until: datetime
+    source: str = Field(..., max_length=64)
+    raw_locator: str | None = Field(None, max_length=1024)
+    reason_codes: list[str] = Field(default_factory=list, max_length=32)
+
+
 class MachineEvidenceIn(UTCBaseModel):
     schema_version: Literal[1]
     observed_at: datetime
@@ -219,6 +242,7 @@ class MachineEvidenceIn(UTCBaseModel):
     control: list[ControlEvidenceIn] = Field(default_factory=list, max_length=MAX_MACHINE_EVIDENCE_FACTS_PER_FAMILY)
     transcript: list[TranscriptEvidenceIn] = Field(default_factory=list, max_length=MAX_MACHINE_EVIDENCE_FACTS_PER_FAMILY)
     process_snapshot_scopes: list[ProcessSnapshotScopeIn] = Field(default_factory=list, max_length=16)
+    readiness: list[ReadinessEvidenceIn] = Field(default_factory=list, max_length=MAX_MACHINE_EVIDENCE_FACTS_PER_FAMILY)
 
 
 class ResolvedWorkspaceIn(UTCBaseModel):

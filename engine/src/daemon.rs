@@ -29,6 +29,7 @@ use crate::error_tracker::ConsecutiveErrorTracker;
 use crate::error_tracker::RecentIssueTracker;
 use crate::flight::FlightRecorder;
 use crate::heartbeat;
+use crate::managed_antigravity_scan;
 use crate::managed_bridge_scan;
 use crate::managed_claude_scan;
 use crate::managed_cursor_helm_scan;
@@ -333,11 +334,13 @@ struct ManagedObservationScanResult {
     process_inventory_valid: bool,
     process_inventory: Vec<unmanaged_bindings::ProcessInfo>,
     codex_observations: Vec<managed_bridge_scan::CodexBridgeObservation>,
+    antigravity_observations: Vec<managed_antigravity_scan::AntigravityHookObservation>,
     claude_observations: Vec<managed_claude_scan::ClaudeChannelObservation>,
     opencode_observations: Vec<managed_opencode_scan::OpenCodeServerObservation>,
     cursor_observations: Vec<managed_cursor_helm_scan::CursorHelmObservation>,
     process_inventory_ms: u64,
     codex_elapsed_ms: u64,
+    antigravity_elapsed_ms: u64,
     claude_elapsed_ms: u64,
     opencode_elapsed_ms: u64,
     cursor_elapsed_ms: u64,
@@ -348,6 +351,7 @@ struct ManagedObservationScanResult {
 #[derive(Clone, Default, PartialEq, Eq)]
 struct ManagedObservationSnapshot {
     codex: Vec<managed_bridge_scan::CodexBridgeObservation>,
+    antigravity: Vec<managed_antigravity_scan::AntigravityHookObservation>,
     claude: Vec<managed_claude_scan::ClaudeChannelObservation>,
     opencode: Vec<managed_opencode_scan::OpenCodeServerObservation>,
     cursor: Vec<managed_cursor_helm_scan::CursorHelmObservation>,
@@ -384,6 +388,7 @@ impl ManagedObservationSnapshot {
     fn from_result(result: &ManagedObservationScanResult) -> Self {
         Self {
             codex: result.codex_observations.clone(),
+            antigravity: result.antigravity_observations.clone(),
             claude: result.claude_observations.clone(),
             opencode: result.opencode_observations.clone(),
             cursor: result.cursor_observations.clone(),
@@ -392,6 +397,7 @@ impl ManagedObservationSnapshot {
 
     fn contains_state_file(&self, path: &Path) -> bool {
         self.codex.iter().any(|row| row.state_file == path)
+            || self.antigravity.iter().any(|row| row.state_file == path)
             || self.claude.iter().any(|row| row.state_file == path)
             || self.opencode.iter().any(|row| row.state_file == path)
             || self.cursor.iter().any(|row| row.state_file == path)
@@ -405,6 +411,9 @@ impl ManagedObservationSnapshot {
                 row.updated_at.clear();
                 row.active_turn_id = None;
                 row.last_turn_status = None;
+            }
+            for row in &mut snapshot.antigravity {
+                row.updated_at.clear();
             }
             for row in &mut snapshot.claude {
                 row.updated_at.clear();
@@ -427,6 +436,7 @@ impl ManagedObservationSnapshot {
                 .filter(|row| row.bridge_alive || row.app_server_alive || row.has_tui_attachment)
                 .cloned()
                 .collect(),
+            antigravity: self.antigravity.clone(),
             claude: self
                 .claude
                 .iter()
@@ -447,6 +457,7 @@ impl ManagedObservationSnapshot {
 fn managed_provider_state_dirs() -> Vec<PathBuf> {
     [
         managed_bridge_scan::default_codex_bridge_state_dir(),
+        managed_antigravity_scan::default_antigravity_state_dir(),
         managed_claude_scan::default_claude_channel_state_dir(),
         managed_opencode_scan::default_opencode_server_state_dir(),
         managed_cursor_helm_scan::default_cursor_helm_state_dir(),
@@ -1409,11 +1420,13 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 full_reconciliation = result.full_reconciliation,
                                 process_inventory_valid = result.process_inventory_valid,
                                 codex_count = result.codex_observations.len(),
+                                antigravity_count = result.antigravity_observations.len(),
                                 claude_count = result.claude_observations.len(),
                                 opencode_count = result.opencode_observations.len(),
                                 cursor_count = result.cursor_observations.len(),
                                 process_inventory_ms = result.process_inventory_ms,
                                 codex_elapsed_ms = result.codex_elapsed_ms,
+                                antigravity_elapsed_ms = result.antigravity_elapsed_ms,
                                 claude_elapsed_ms = result.claude_elapsed_ms,
                                 opencode_elapsed_ms = result.opencode_elapsed_ms,
                                 cursor_elapsed_ms = result.cursor_elapsed_ms,
@@ -1427,11 +1440,13 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 full_reconciliation = result.full_reconciliation,
                                 process_inventory_valid = result.process_inventory_valid,
                                 codex_count = result.codex_observations.len(),
+                                antigravity_count = result.antigravity_observations.len(),
                                 claude_count = result.claude_observations.len(),
                                 opencode_count = result.opencode_observations.len(),
                                 cursor_count = result.cursor_observations.len(),
                                 process_inventory_ms = result.process_inventory_ms,
                                 codex_elapsed_ms = result.codex_elapsed_ms,
+                                antigravity_elapsed_ms = result.antigravity_elapsed_ms,
                                 claude_elapsed_ms = result.claude_elapsed_ms,
                                 opencode_elapsed_ms = result.opencode_elapsed_ms,
                                 cursor_elapsed_ms = result.cursor_elapsed_ms,
@@ -2053,6 +2068,7 @@ fn maybe_start_projection_build(
                     &last_ship_at,
                     &machine_id,
                     &managed.codex,
+                    &managed.antigravity,
                     &managed.claude,
                     &managed.opencode,
                     &managed.cursor,
@@ -2086,6 +2102,7 @@ fn build_local_status_projection(
     last_ship_at: &Option<String>,
     machine_id: &str,
     observations: &[managed_bridge_scan::CodexBridgeObservation],
+    antigravity_observations: &[managed_antigravity_scan::AntigravityHookObservation],
     claude_observations: &[managed_claude_scan::ClaudeChannelObservation],
     opencode_observations: &[managed_opencode_scan::OpenCodeServerObservation],
     cursor_observations: &[managed_cursor_helm_scan::CursorHelmObservation],
@@ -2173,6 +2190,7 @@ fn build_local_status_projection(
         };
     payload.machine_evidence = Some(heartbeat::machine_evidence_from_observations(
         observations,
+        antigravity_observations,
         claude_observations,
         opencode_observations,
         cursor_observations,
@@ -2699,6 +2717,26 @@ fn maybe_start_managed_observation_scan(
         };
         let codex_elapsed_ms = codex_started.elapsed().as_millis() as u64;
 
+        let antigravity_started = Instant::now();
+        let mut antigravity_observations = if full_reconciliation {
+            managed_antigravity_scan::default_antigravity_state_dir()
+                .map(|state_dir| managed_antigravity_scan::collect_observations_from(&state_dir))
+                .unwrap_or_default()
+        } else {
+            let paths = previous
+                .antigravity
+                .iter()
+                .map(|row| row.state_file.clone())
+                .collect::<Vec<_>>();
+            managed_antigravity_scan::collect_observations_from_paths(&paths)
+        };
+        let retained_antigravity = retain_existing_observations(
+            &mut antigravity_observations,
+            &previous.antigravity,
+            |observation| &observation.state_file,
+        );
+        let antigravity_elapsed_ms = antigravity_started.elapsed().as_millis() as u64;
+
         let claude_started = Instant::now();
         let mut claude_observations = if full_reconciliation {
             managed_claude_scan::default_claude_channel_state_dir()
@@ -2783,15 +2821,18 @@ fn maybe_start_managed_observation_scan(
             process_inventory_valid,
             process_inventory: unmanaged_process_inventory,
             codex_observations,
+            antigravity_observations,
             claude_observations,
             opencode_observations,
             cursor_observations,
             process_inventory_ms,
             codex_elapsed_ms,
+            antigravity_elapsed_ms,
             claude_elapsed_ms,
             opencode_elapsed_ms,
             cursor_elapsed_ms,
             retained_stale_rows: retained_codex.len()
+                + retained_antigravity.len()
                 + retained_claude.len()
                 + retained_opencode.len()
                 + retained_cursor.len(),
@@ -4458,6 +4499,7 @@ mod tests {
             &[],
             &[],
             &[],
+            &[],
             &cached,
             false,
             None,
@@ -4491,6 +4533,7 @@ mod tests {
             &[],
             &[],
             &[],
+            &[],
             &cached,
             false,
             None,
@@ -4506,6 +4549,7 @@ mod tests {
             false,
             &None,
             "cinder",
+            &[],
             &[],
             &[],
             &[],
@@ -4526,6 +4570,7 @@ mod tests {
             false,
             &None,
             "cinder",
+            &[],
             &[],
             &[],
             &[],

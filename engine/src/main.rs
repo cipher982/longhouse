@@ -24,6 +24,7 @@ mod error_tracker;
 mod flight;
 mod heartbeat;
 mod machine_presence;
+mod managed_antigravity_scan;
 mod managed_bridge_scan;
 mod managed_claude_scan;
 mod managed_cursor_helm_scan;

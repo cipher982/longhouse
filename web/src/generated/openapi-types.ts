@@ -5826,6 +5826,8 @@ export interface components {
             transcript?: components["schemas"]["TranscriptEvidenceIn"][];
             /** Process Snapshot Scopes */
             process_snapshot_scopes?: components["schemas"]["ProcessSnapshotScopeIn"][];
+            /** Readiness */
+            readiness?: components["schemas"]["ReadinessEvidenceIn"][];
         };
         /** MachineHealthItemResponse */
         MachineHealthItemResponse: {
@@ -6925,6 +6927,61 @@ export interface components {
             last_error?: string | null;
             /** Created At */
             created_at?: string | null;
+        };
+        /** ReadinessEvidenceIn */
+        ReadinessEvidenceIn: {
+            /**
+             * Provider
+             * @constant
+             */
+            provider: "antigravity";
+            /** Session Id */
+            session_id: string;
+            /**
+             * Operation
+             * @constant
+             */
+            operation: "send_input";
+            /** Hook Installed */
+            hook_installed: boolean;
+            /** Recent Hook Observed */
+            recent_hook_observed: boolean;
+            /** Claim Observed */
+            claim_observed: boolean;
+            /** Response Observed */
+            response_observed: boolean;
+            /** Continuation Observed */
+            continuation_observed: boolean;
+            /** Hook Event */
+            hook_event?: string | null;
+            /** Hook Observed At */
+            hook_observed_at?: string | null;
+            /** Claim Message Id */
+            claim_message_id?: string | null;
+            /** Claimed At */
+            claimed_at?: string | null;
+            /** Response Event */
+            response_event?: string | null;
+            /** Response At */
+            response_at?: string | null;
+            /** Response Status */
+            response_status?: string | null;
+            /**
+             * Observed At
+             * Format: date-time
+             */
+            observed_at: string;
+            /**
+             * Valid Until
+             * Format: date-time
+             */
+            valid_until: string;
+            /** Source */
+            source: string;
+            /** Raw Locator */
+            raw_locator?: string | null;
+            /** Reason Codes */
+            reason_codes?: string[];
         };
         /** RealtimePropagationBottleneckResponse */
         RealtimePropagationBottleneckResponse: {

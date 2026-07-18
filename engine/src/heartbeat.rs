@@ -22,6 +22,7 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use crate::build_identity::BuildIdentity;
+use crate::managed_antigravity_scan::AntigravityHookObservation;
 use crate::managed_bridge_scan::CodexBridgeObservation;
 use crate::managed_claude_scan::ClaudeChannelObservation;
 use crate::managed_cursor_helm_scan::CursorHelmObservation;
@@ -45,6 +46,7 @@ use crate::state::spool::Spool;
 
 const HEARTBEAT_POST_TIMEOUT: Duration = Duration::from_secs(6);
 const MAX_MACHINE_EVIDENCE_FACTS_PER_FAMILY: usize = 2_048;
+const ANTIGRAVITY_READINESS_TTL_SECS: i64 = 120;
 
 /// Heartbeat payload sent to the server and written locally.
 #[derive(Debug, Serialize, Clone)]
@@ -181,6 +183,8 @@ pub struct MachineEvidence {
     pub transcript: Vec<TranscriptEvidence>,
     #[serde(default)]
     pub process_snapshot_scopes: Vec<ProcessSnapshotScope>,
+    #[serde(default)]
+    pub readiness: Vec<ReadinessEvidence>,
 }
 
 #[derive(Debug, Serialize, Clone, PartialEq, Eq)]
@@ -193,6 +197,39 @@ pub struct ProcessSnapshotScope {
     pub source: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub failure_reason: Option<String>,
+}
+
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
+pub struct ReadinessEvidence {
+    pub provider: String,
+    pub session_id: String,
+    pub operation: String,
+    pub hook_installed: bool,
+    pub recent_hook_observed: bool,
+    pub claim_observed: bool,
+    pub response_observed: bool,
+    pub continuation_observed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hook_event: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hook_observed_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub claim_message_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub claimed_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response_event: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response_status: Option<String>,
+    pub observed_at: String,
+    pub valid_until: String,
+    pub source: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub raw_locator: Option<String>,
+    #[serde(default)]
+    pub reason_codes: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Clone, PartialEq, Eq)]
@@ -927,6 +964,7 @@ pub fn filter_unmanaged_bindings_owned_by_managed_observations(
 /// are compatibility projections that already mix independent authorities.
 pub(crate) fn machine_evidence_from_observations(
     codex_observations: &[CodexBridgeObservation],
+    antigravity_observations: &[AntigravityHookObservation],
     claude_observations: &[ClaudeChannelObservation],
     opencode_observations: &[OpenCodeServerObservation],
     cursor_observations: &[CursorHelmObservation],
@@ -940,6 +978,10 @@ pub(crate) fn machine_evidence_from_observations(
     let mut process = Vec::new();
     let mut control = Vec::new();
     let mut transcript = Vec::new();
+    let mut readiness = antigravity_observations
+        .iter()
+        .map(|observation| antigravity_readiness_evidence(observation, now))
+        .collect::<Vec<_>>();
 
     let observed_at = |value: &str| {
         if value.trim().is_empty() {
@@ -1273,10 +1315,12 @@ pub(crate) fn machine_evidence_from_observations(
     transcript.sort_by(|a, b| {
         (&a.provider, &a.provider_session_id).cmp(&(&b.provider, &b.provider_session_id))
     });
+    readiness.sort_by(|a, b| a.session_id.cmp(&b.session_id));
     process.truncate(MAX_MACHINE_EVIDENCE_FACTS_PER_FAMILY);
     activity.truncate(MAX_MACHINE_EVIDENCE_FACTS_PER_FAMILY);
     control.truncate(MAX_MACHINE_EVIDENCE_FACTS_PER_FAMILY);
     transcript.truncate(MAX_MACHINE_EVIDENCE_FACTS_PER_FAMILY);
+    readiness.truncate(MAX_MACHINE_EVIDENCE_FACTS_PER_FAMILY);
 
     MachineEvidence {
         schema_version: 1,
@@ -1305,7 +1349,88 @@ pub(crate) fn machine_evidence_from_observations(
                     .then(|| "incremental_or_partial_scan".to_string()),
             },
         ],
+        readiness,
     }
+}
+
+fn antigravity_readiness_evidence(
+    observation: &AntigravityHookObservation,
+    now: DateTime<Utc>,
+) -> ReadinessEvidence {
+    let hook_time = parse_utc(observation.last_hook_observed_at.as_deref());
+    let claim_time = parse_utc(observation.last_claimed_at.as_deref());
+    let response_time = parse_utc(observation.last_response_at.as_deref());
+    let is_fresh = |value: Option<DateTime<Utc>>| {
+        value.is_some_and(|at| {
+            now >= at && now - at <= chrono::Duration::seconds(ANTIGRAVITY_READINESS_TTL_SECS)
+        })
+    };
+    let recent_hook_observed = is_fresh(hook_time);
+    let claim_observed = is_fresh(claim_time);
+    let response_matches_claim =
+        observation
+            .last_claimed_message_id
+            .as_ref()
+            .is_some_and(|message_id| {
+                observation
+                    .last_response_claimed_message_ids
+                    .iter()
+                    .any(|candidate| candidate == message_id)
+            });
+    let response_observed = is_fresh(response_time)
+        && observation.last_response_status.as_deref() == Some("ok")
+        && response_matches_claim;
+    let continuation_observed = response_observed && observation.last_continuation_requested;
+    let hook_installed = observation.schema_version >= 2 && hook_time.is_some();
+    let mut reason_codes = Vec::new();
+    if !hook_installed {
+        reason_codes.push("hook_identity_unproven".to_string());
+    }
+    if !recent_hook_observed {
+        reason_codes.push("hook_observation_missing_or_expired".to_string());
+    }
+    if !claim_observed {
+        reason_codes.push("claim_missing_or_expired".to_string());
+    }
+    if !response_observed {
+        reason_codes.push("matching_response_missing_or_expired".to_string());
+    }
+    let valid_until = [hook_time, claim_time, response_time]
+        .into_iter()
+        .flatten()
+        .map(|at| at + chrono::Duration::seconds(ANTIGRAVITY_READINESS_TTL_SECS))
+        .min()
+        .unwrap_or(now)
+        .to_rfc3339();
+
+    ReadinessEvidence {
+        provider: "antigravity".to_string(),
+        session_id: observation.session_id.clone(),
+        operation: "send_input".to_string(),
+        hook_installed,
+        recent_hook_observed,
+        claim_observed,
+        response_observed,
+        continuation_observed,
+        hook_event: observation.last_hook_event.clone(),
+        hook_observed_at: observation.last_hook_observed_at.clone(),
+        claim_message_id: observation.last_claimed_message_id.clone(),
+        claimed_at: observation.last_claimed_at.clone(),
+        response_event: observation.last_response_event.clone(),
+        response_at: observation.last_response_at.clone(),
+        response_status: observation.last_response_status.clone(),
+        observed_at: observation.updated_at.clone(),
+        valid_until,
+        source: "antigravity_hook_state".to_string(),
+        raw_locator: Some(observation.state_file.display().to_string()),
+        reason_codes,
+    }
+}
+
+fn parse_utc(value: Option<&str>) -> Option<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(value?)
+        .ok()
+        .map(|at| at.with_timezone(&Utc))
 }
 
 fn activity_evidence_from_phase_row(row: &PhaseLedgerRow) -> ActivityEvidence {
@@ -3992,6 +4117,26 @@ mod tests {
             source_mtime: Some("2026-05-08T12:00:00Z".to_string()),
             observed_at: "2026-05-08T12:00:00Z".to_string(),
         };
+        let antigravity_hook = AntigravityHookObservation {
+            state_file: PathBuf::from("/tmp/antigravity-session.json"),
+            schema_version: 2,
+            session_id: "antigravity-session".to_string(),
+            provider_session_id: Some("antigravity-provider-session".to_string()),
+            cwd: Some("/tmp/antigravity".to_string()),
+            transcript_path: Some("/tmp/antigravity.jsonl".to_string()),
+            state: Some("thinking".to_string()),
+            updated_at: "2026-05-08T12:00:02Z".to_string(),
+            last_hook_event: Some("PreInvocation".to_string()),
+            last_hook_observed_at: Some("2026-05-08T12:00:00Z".to_string()),
+            last_claimed_message_id: Some("message-1".to_string()),
+            last_claimed_at: Some("2026-05-08T12:00:01Z".to_string()),
+            last_claim_event: Some("PreInvocation".to_string()),
+            last_response_event: Some("PreInvocation".to_string()),
+            last_response_at: Some("2026-05-08T12:00:02Z".to_string()),
+            last_response_status: Some("ok".to_string()),
+            last_response_claimed_message_ids: vec!["message-1".to_string()],
+            last_continuation_requested: false,
+        };
         let phase = PhaseLedgerRow {
             session_id: "codex-session".to_string(),
             provider: "codex".to_string(),
@@ -4003,6 +4148,7 @@ mod tests {
         };
 
         let codex_observations = [codex];
+        let antigravity_observations = [antigravity_hook];
         let claude_observations = [claude];
         let opencode_observations = [opencode];
         let cursor_observations = [cursor];
@@ -4017,6 +4163,7 @@ mod tests {
         assert!(legacy_filtered.is_empty());
         let evidence = machine_evidence_from_observations(
             &codex_observations,
+            &antigravity_observations,
             &claude_observations,
             &opencode_observations,
             &cursor_observations,
@@ -4052,6 +4199,11 @@ mod tests {
             .control
             .iter()
             .any(|fact| fact.provider == "cursor" && fact.state == "detached"));
+        assert_eq!(evidence.readiness.len(), 1);
+        assert!(evidence.readiness[0].recent_hook_observed);
+        assert!(evidence.readiness[0].claim_observed);
+        assert!(evidence.readiness[0].response_observed);
+        assert!(!evidence.readiness[0].continuation_observed);
         assert_eq!(
             evidence.activity,
             vec![ActivityEvidence {
@@ -4086,6 +4238,7 @@ mod tests {
 
         let without_activity = machine_evidence_from_observations(
             &codex_observations,
+            &antigravity_observations,
             &claude_observations,
             &opencode_observations,
             &cursor_observations,
@@ -4098,6 +4251,7 @@ mod tests {
         assert_eq!(without_activity.process, evidence.process);
         assert_eq!(without_activity.control, evidence.control);
         assert_eq!(without_activity.transcript, evidence.transcript);
+        assert_eq!(without_activity.readiness, evidence.readiness);
         assert!(without_activity
             .process_snapshot_scopes
             .iter()
@@ -4115,5 +4269,16 @@ mod tests {
         ] {
             assert!(!serialized.contains(forbidden), "leaked {forbidden}");
         }
+
+        let expired = antigravity_readiness_evidence(
+            &antigravity_observations[0],
+            now + chrono::Duration::minutes(5),
+        );
+        assert!(!expired.recent_hook_observed);
+        assert!(!expired.claim_observed);
+        assert!(!expired.response_observed);
+        assert!(expired
+            .reason_codes
+            .contains(&"hook_observation_missing_or_expired".to_string()));
     }
 }

@@ -412,8 +412,15 @@ def test_antigravity_hook_claims_inbox_message_and_injects_preinvocation(tmp_pat
     assert claimed["conversation_id"] == "ag-provider-session"
     assert claimed["step_index"] == "8"
     state = json.loads((state_dir / "session-123.json").read_text(encoding="utf-8"))
+    assert state["schema_version"] == 2
     assert state["conversation_id"] == "ag-provider-session"
     assert state["transcript_path"] == str(tmp_path / "transcript.jsonl")
+    assert state["last_hook_event"] == "PreInvocation"
+    assert state["last_claimed_message_id"] == queued["message_id"]
+    assert state["last_response_event"] == "PreInvocation"
+    assert state["last_response_status"] == "ok"
+    assert state["last_response_claimed_message_ids"] == [queued["message_id"]]
+    assert state["last_continuation_requested"] is False
 
 
 def test_antigravity_hook_derives_canonical_inbox_from_longhouse_home(tmp_path):
@@ -539,6 +546,13 @@ def test_antigravity_hook_claims_postinvocation_message_and_forces_continue(tmp_
         "injectSteps": [{"userMessage": "continue after response"}],
         "terminationBehavior": "force_continue",
     }
+    state = json.loads(
+        (antigravity_channel.antigravity_state_dir(config_dir) / "session-123.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert state["last_response_status"] == "ok"
+    assert state["last_continuation_requested"] is True
 
 
 def test_antigravity_stop_hook_continues_when_inbox_has_pending_input(tmp_path):

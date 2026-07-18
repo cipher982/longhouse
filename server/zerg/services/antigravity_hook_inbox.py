@@ -154,7 +154,16 @@ def write_session_state(state_dir: str, payload: dict) -> None:
     if not state_dir or not payload.get("session_id"):
         return
     try:
-        write_private_json(Path(state_dir) / f"{payload['session_id']}.json", payload)
+        path = Path(state_dir) / f"{payload['session_id']}.json"
+        existing = {}
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                existing = loaded
+        except Exception:
+            pass
+        existing.update(payload)
+        write_private_json(path, existing)
     except Exception:
         pass
 
@@ -217,10 +226,10 @@ def claim_inbox_messages(
     conversation_id: str,
     step_index: str,
     limit: int = 4,
-) -> list[str]:
-    texts: list[str] = []
+) -> list[dict]:
+    receipts: list[dict] = []
     if not inbox_dir or not session_id:
-        return texts
+        return receipts
     claimed_dir = Path(inbox_dir) / "claimed"
     for path in pending_message_paths(inbox_dir)[:limit]:
         payload = read_message(path)
@@ -243,11 +252,12 @@ def claim_inbox_messages(
             path.replace(claim_path)
         except OSError:
             continue
+        claimed_at = now_iso()
         payload.update(
             {
                 "id": message_id,
                 "session_id": session_id,
-                "claimed_at": now_iso(),
+                "claimed_at": claimed_at,
                 "claimed_by": "longhouse-antigravity-hook",
                 "hook_event": event,
                 "conversation_id": conversation_id,
@@ -258,8 +268,8 @@ def claim_inbox_messages(
             write_private_json(claim_path, payload)
         except Exception:
             pass
-        texts.append(text)
-    return texts
+        receipts.append({"id": message_id, "text": text, "claimed_at": claimed_at})
+    return receipts
 
 
 def hook_response(event: str, texts: list[str], inbox_dir: str) -> dict:
@@ -312,6 +322,7 @@ elif event == "Stop":
     state = "idle" if fully_idle is True or str(fully_idle).lower() in {"1", "true"} else "running"
 
 if state and session_id:
+    hook_observed_at = now_iso()
     write_presence_outbox(
         longhouse_home,
         {
@@ -327,6 +338,7 @@ if state and session_id:
     write_session_state(
         state_dir,
         {
+            "schema_version": 2,
             "session_id": session_id,
             "provider_session_id": conversation_id,
             "conversation_id": conversation_id,
@@ -334,7 +346,9 @@ if state and session_id:
             "transcript_path": transcript,
             "step_index": step_index,
             "state": state,
-            "updated_at": now_iso(),
+            "updated_at": hook_observed_at,
+            "last_hook_event": event,
+            "last_hook_observed_at": hook_observed_at,
         },
     )
     if managed_session_id and transcript:
@@ -364,9 +378,9 @@ if state and session_id:
         except Exception:
             pass
 
-claimed_texts: list[str] = []
+claimed_receipts: list[dict] = []
 if event in {"PreInvocation", "PostInvocation"}:
-    claimed_texts = claim_inbox_messages(
+    claimed_receipts = claim_inbox_messages(
         inbox_dir=inbox_dir,
         session_id=session_id,
         event=event,
@@ -374,7 +388,35 @@ if event in {"PreInvocation", "PostInvocation"}:
         step_index=step_index,
     )
 
-print(json.dumps(hook_response(event, claimed_texts, inbox_dir), separators=(",", ":")))
+claimed_texts = [str(receipt.get("text") or "") for receipt in claimed_receipts]
+response = hook_response(event, claimed_texts, inbox_dir)
+print(json.dumps(response, separators=(",", ":")), flush=True)
+if session_id and claimed_receipts:
+    last_receipt = claimed_receipts[-1]
+    response_at = now_iso()
+    write_session_state(
+        state_dir,
+        {
+            "schema_version": 2,
+            "session_id": session_id,
+            "updated_at": response_at,
+            "last_claimed_message_id": str(last_receipt.get("id") or ""),
+            "last_claimed_at": str(last_receipt.get("claimed_at") or ""),
+            "last_claim_event": event,
+            "last_claim_conversation_id": conversation_id,
+            "last_claim_step_index": step_index,
+            "last_response_event": event,
+            "last_response_at": response_at,
+            "last_response_status": "ok",
+            "last_response_claimed_message_ids": [
+                str(receipt.get("id") or "") for receipt in claimed_receipts
+            ],
+            "last_continuation_requested": (
+                response.get("terminationBehavior") == "force_continue"
+                or response.get("decision") == "continue"
+            ),
+        },
+    )
 PY
 HOOK_RC=$?
 if [ "$HOOK_RC" -ne 0 ]; then
