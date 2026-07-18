@@ -76,9 +76,123 @@ def _make_client(SessionLocal):
     return client, api_app
 
 
+def _machine_evidence_payload() -> dict[str, object]:
+    observed_at = "2026-05-08T12:00:00Z"
+    process = [
+        {
+            "provider": provider,
+            "session_id": f"{provider}-session" if provider != "antigravity" else None,
+            "provider_session_id": f"{provider}-provider-session",
+            "role": "provider",
+            "pid": 100 + index,
+            "process_start_time": "Thu May  8 11:59:00 2026",
+            "boot_id": "macos:1777970400:0",
+            "cwd": f"/tmp/{provider}",
+            "alive": True,
+            "source": "provider_process_scan",
+            "observed_at": observed_at,
+        }
+        for index, provider in enumerate(("codex", "claude", "opencode", "cursor", "antigravity"))
+    ]
+    control = [
+        {
+            "provider": provider,
+            "session_id": f"{provider}-session",
+            "provider_session_id": f"{provider}-provider-session",
+            "ownership": "managed",
+            "state": "attached",
+            "bridge_status": "ready",
+            "lease_ttl_ms": 900_000,
+            "source": "provider_control_scan",
+            "observed_at": observed_at,
+        }
+        for provider in ("codex", "claude", "opencode", "cursor")
+    ]
+    transcript = [
+        {
+            "provider": provider,
+            "session_id": None if provider == "antigravity" else f"{provider}-session",
+            "provider_session_id": f"{provider}-provider-session",
+            "source_path": f"/tmp/{provider}.jsonl",
+            "source_offset": 12,
+            "source": "provider_transcript_scan",
+            "observed_at": observed_at,
+        }
+        for provider in ("codex", "claude", "opencode", "antigravity")
+    ]
+    return {
+        "schema_version": 1,
+        "observed_at": observed_at,
+        "process": process,
+        "activity": [
+            {
+                "provider": "codex",
+                "session_id": "codex-session",
+                "phase": "running",
+                "tool_name": "Shell",
+                "source": "codex_bridge",
+                "observed_at": observed_at,
+            }
+        ],
+        "control": control,
+        "transcript": transcript,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
+
+def test_heartbeat_accepts_and_retains_typed_machine_evidence_without_reducing_it(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    client, api_app_ref = _make_client(SessionLocal)
+    evidence = _machine_evidence_payload()
+
+    try:
+        response = client.post(
+            "/api/agents/heartbeat",
+            json={"version": "phase-2", "daemon_pid": 42, "machine_evidence": evidence},
+        )
+        assert response.status_code == 204
+
+        with SessionLocal() as db:
+            row = db.query(AgentHeartbeat).one()
+            raw = json.loads(row.raw_json)
+            retained = raw["machine_evidence"]
+            assert retained["schema_version"] == 1
+            assert {fact["provider"] for fact in retained["process"]} == {
+                "codex",
+                "claude",
+                "opencode",
+                "cursor",
+                "antigravity",
+            }
+            assert retained["process"][0]["process_start_time"] == "Thu May  8 11:59:00 2026"
+            # Typed control evidence is validation-only in Phase 2. It must
+            # not silently become a second lifecycle/control reducer.
+            assert db.query(SessionConnection).count() == 0
+    finally:
+        api_app_ref.dependency_overrides = {}
+
+
+def test_heartbeat_machine_evidence_rejects_unknown_schema_and_invalid_pid(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    client, api_app_ref = _make_client(SessionLocal)
+    evidence = _machine_evidence_payload()
+    evidence["schema_version"] = 2
+    process = evidence["process"]
+    assert isinstance(process, list)
+    process[0]["pid"] = 0
+
+    try:
+        response = client.post(
+            "/api/agents/heartbeat",
+            json={"version": "phase-2", "daemon_pid": 42, "machine_evidence": evidence},
+        )
+        assert response.status_code == 422
+    finally:
+        api_app_ref.dependency_overrides = {}
 
 
 def test_heartbeat_endpoint_creates_row(tmp_path):

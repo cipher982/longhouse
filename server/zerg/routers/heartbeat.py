@@ -17,6 +17,7 @@ import time
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
+from typing import Literal
 from typing import Optional
 from uuid import UUID
 
@@ -143,6 +144,65 @@ class ManagedSessionLeaseIn(UTCBaseModel):
     lease_ttl_ms: int = Field(DEFAULT_MANAGED_SESSION_LEASE_TTL_MS, ge=1, le=MAX_MANAGED_SESSION_LEASE_TTL_MS)
 
 
+class ProcessEvidenceIn(UTCBaseModel):
+    provider: str = Field(..., max_length=64)
+    session_id: str | None = Field(None, max_length=255)
+    provider_session_id: str | None = Field(None, max_length=255)
+    role: Literal["provider", "bridge", "app_server", "launcher"]
+    pid: int | None = Field(None, ge=1)
+    # Opaque platform-native process identity, not necessarily RFC3339.
+    process_start_time: str | None = Field(None, max_length=255)
+    boot_id: str | None = Field(None, max_length=255)
+    cwd: str | None = Field(None, max_length=1024)
+    alive: bool
+    source: str = Field(..., max_length=64)
+    observed_at: datetime
+
+
+class ActivityEvidenceIn(UTCBaseModel):
+    provider: str = Field(..., max_length=64)
+    session_id: str = Field(..., max_length=255)
+    phase: str = Field(..., max_length=32)
+    tool_name: str | None = Field(None, max_length=128)
+    source: str = Field(..., max_length=64)
+    observed_at: datetime
+
+
+class ControlEvidenceIn(UTCBaseModel):
+    provider: str = Field(..., max_length=64)
+    session_id: str = Field(..., max_length=255)
+    provider_session_id: str | None = Field(None, max_length=255)
+    ownership: Literal["managed"]
+    state: Literal["attached", "detached", "degraded"]
+    bridge_status: str | None = Field(None, max_length=64)
+    thread_subscription_status: str | None = Field(None, max_length=64)
+    lease_ttl_ms: int = Field(..., ge=1, le=MAX_MANAGED_SESSION_LEASE_TTL_MS)
+    source: str = Field(..., max_length=64)
+    observed_at: datetime
+
+
+class TranscriptEvidenceIn(UTCBaseModel):
+    provider: str = Field(..., max_length=64)
+    session_id: str | None = Field(None, max_length=255)
+    provider_session_id: str = Field(..., max_length=255)
+    source_path: str | None = Field(None, max_length=1024)
+    source_inode: int | None = Field(None, ge=0)
+    source_device: int | None = Field(None, ge=0)
+    source_offset: int | None = Field(None, ge=0)
+    source_mtime: datetime | None = None
+    source: str = Field(..., max_length=64)
+    observed_at: datetime
+
+
+class MachineEvidenceIn(UTCBaseModel):
+    schema_version: Literal[1]
+    observed_at: datetime
+    process: list[ProcessEvidenceIn] = Field(default_factory=list)
+    activity: list[ActivityEvidenceIn] = Field(default_factory=list)
+    control: list[ControlEvidenceIn] = Field(default_factory=list)
+    transcript: list[TranscriptEvidenceIn] = Field(default_factory=list)
+
+
 class ResolvedWorkspaceIn(UTCBaseModel):
     cwd: str | None = Field(None, max_length=1024)
     label: str | None = Field(None, max_length=255)
@@ -240,6 +300,9 @@ class HeartbeatIn(BaseModel):
     # Phase 5 of session-liveness-honesty: unmanaged pid/cwd/source bindings.
     # Optional — older engines don't send this. See UnmanagedSessionBindingIn.
     unmanaged_session_bindings: list[UnmanagedSessionBindingIn] = Field(default_factory=list)
+    # Phase 2 typed observation envelope. Validation + raw retention only;
+    # legacy session arrays remain reducer authority during shadow comparison.
+    machine_evidence: MachineEvidenceIn | None = None
     # Canonical engine-resolved local session snapshot. When present, server
     # ingest prefers this over legacy managed/unmanaged arrays for identity.
     sessions: list[ResolvedLocalSessionIn] = Field(default_factory=list)

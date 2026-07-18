@@ -4527,6 +4527,24 @@ export interface components {
              */
             last_refresh: string;
         };
+        /** ActivityEvidenceIn */
+        ActivityEvidenceIn: {
+            /** Provider */
+            provider: string;
+            /** Session Id */
+            session_id: string;
+            /** Phase */
+            phase: string;
+            /** Tool Name */
+            tool_name?: string | null;
+            /** Source */
+            source: string;
+            /**
+             * Observed At
+             * Format: date-time
+             */
+            observed_at: string;
+        };
         /**
          * ActivityRecency
          * @enum {string}
@@ -4949,6 +4967,38 @@ export interface components {
             run_id?: string | null;
             /** State */
             state: string;
+        };
+        /** ControlEvidenceIn */
+        ControlEvidenceIn: {
+            /** Provider */
+            provider: string;
+            /** Session Id */
+            session_id: string;
+            /** Provider Session Id */
+            provider_session_id?: string | null;
+            /**
+             * Ownership
+             * @constant
+             */
+            ownership: "managed";
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "attached" | "detached" | "degraded";
+            /** Bridge Status */
+            bridge_status?: string | null;
+            /** Thread Subscription Status */
+            thread_subscription_status?: string | null;
+            /** Lease Ttl Ms */
+            lease_ttl_ms: number;
+            /** Source */
+            source: string;
+            /**
+             * Observed At
+             * Format: date-time
+             */
+            observed_at: string;
         };
         /**
          * ControlPath
@@ -5507,6 +5557,7 @@ export interface components {
             managed_sessions?: components["schemas"]["ManagedSessionLeaseIn"][];
             /** Unmanaged Session Bindings */
             unmanaged_session_bindings?: components["schemas"]["UnmanagedSessionBindingIn"][];
+            machine_evidence?: components["schemas"]["MachineEvidenceIn"] | null;
             /** Sessions */
             sessions?: components["schemas"]["ResolvedLocalSessionIn"][];
             /** Sessions Digest */
@@ -5736,6 +5787,27 @@ export interface components {
         MachineDirectoryResponse: {
             /** Machines */
             machines?: components["schemas"]["MachineDirectoryEntry"][];
+        };
+        /** MachineEvidenceIn */
+        MachineEvidenceIn: {
+            /**
+             * Schema Version
+             * @constant
+             */
+            schema_version: 1;
+            /**
+             * Observed At
+             * Format: date-time
+             */
+            observed_at: string;
+            /** Process */
+            process?: components["schemas"]["ProcessEvidenceIn"][];
+            /** Activity */
+            activity?: components["schemas"]["ActivityEvidenceIn"][];
+            /** Control */
+            control?: components["schemas"]["ControlEvidenceIn"][];
+            /** Transcript */
+            transcript?: components["schemas"]["TranscriptEvidenceIn"][];
         };
         /** MachineHealthItemResponse */
         MachineHealthItemResponse: {
@@ -6514,6 +6586,37 @@ export interface components {
          * @enum {string}
          */
         PresenceState: "thinking" | "running" | "idle" | "needs_user" | "blocked" | "stalled";
+        /** ProcessEvidenceIn */
+        ProcessEvidenceIn: {
+            /** Provider */
+            provider: string;
+            /** Session Id */
+            session_id?: string | null;
+            /** Provider Session Id */
+            provider_session_id?: string | null;
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "provider" | "bridge" | "app_server" | "launcher";
+            /** Pid */
+            pid?: number | null;
+            /** Process Start Time */
+            process_start_time?: string | null;
+            /** Boot Id */
+            boot_id?: string | null;
+            /** Cwd */
+            cwd?: string | null;
+            /** Alive */
+            alive: boolean;
+            /** Source */
+            source: string;
+            /**
+             * Observed At
+             * Format: date-time
+             */
+            observed_at: string;
+        };
         /** ProductHealthCheckEvidenceRefResponse */
         ProductHealthCheckEvidenceRefResponse: {
             /** Kind */
@@ -10468,6 +10571,32 @@ export interface components {
              * @description Backing event id when the action projects from an event row
              */
             event_id?: number | null;
+        };
+        /** TranscriptEvidenceIn */
+        TranscriptEvidenceIn: {
+            /** Provider */
+            provider: string;
+            /** Session Id */
+            session_id?: string | null;
+            /** Provider Session Id */
+            provider_session_id: string;
+            /** Source Path */
+            source_path?: string | null;
+            /** Source Inode */
+            source_inode?: number | null;
+            /** Source Device */
+            source_device?: number | null;
+            /** Source Offset */
+            source_offset?: number | null;
+            /** Source Mtime */
+            source_mtime?: string | null;
+            /** Source */
+            source: string;
+            /**
+             * Observed At
+             * Format: date-time
+             */
+            observed_at: string;
         };
         /**
          * TruthTier

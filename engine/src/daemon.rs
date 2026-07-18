@@ -2142,22 +2142,9 @@ fn build_local_status_projection(
             opencode_observations,
             cursor_observations,
         );
-    payload.sessions = heartbeat::resolved_sessions_from_observations(
-        &payload.managed_sessions,
-        &payload.unmanaged_session_bindings,
-        observations,
-        claude_observations,
-        opencode_observations,
-        cursor_observations,
-    );
-    heartbeat::apply_machine_boot_identity(&mut payload.sessions);
-    heartbeat::apply_local_titles(conn, &mut payload.sessions);
-    session_snapshot_state.annotate(&mut payload);
-    // Compute the fresh ledger view up front so a read failure is both
-    // logged and encoded in the status file as `phase_ledger_status`.
-    // Downstream readers (verify-runtime-truth, local-health) can then
-    // tell an intentionally empty ledger apart from one the engine
-    // couldn't read this tick.
+    // Compute the fresh activity ledger once and feed the raw rows into the
+    // typed evidence envelope. Activity facts remain independent of control
+    // leases and of the resolved presentation projection below.
     let (phase_ledger, ledger_status) =
         match crate::state::session_phase::SessionPhaseStore::new(conn)
             .fresh_rows(chrono::Utc::now())
@@ -2174,6 +2161,26 @@ fn build_local_status_projection(
                 )
             }
         };
+    payload.machine_evidence = Some(heartbeat::machine_evidence_from_observations(
+        observations,
+        claude_observations,
+        opencode_observations,
+        cursor_observations,
+        &payload.unmanaged_session_bindings,
+        &phase_ledger,
+        now,
+    ));
+    payload.sessions = heartbeat::resolved_sessions_from_observations(
+        &payload.managed_sessions,
+        &payload.unmanaged_session_bindings,
+        observations,
+        claude_observations,
+        opencode_observations,
+        cursor_observations,
+    );
+    heartbeat::apply_machine_boot_identity(&mut payload.sessions);
+    heartbeat::apply_local_titles(conn, &mut payload.sessions);
+    session_snapshot_state.annotate(&mut payload);
     heartbeat::build_status_file_projection(payload, &stats, phase_ledger, ledger_status)
 }
 
@@ -4308,6 +4315,7 @@ mod tests {
             is_offline: false,
             managed_sessions: Vec::new(),
             unmanaged_session_bindings: Vec::new(),
+            machine_evidence: None,
             sessions: Vec::new(),
             sessions_digest: None,
             sessions_sequence: None,

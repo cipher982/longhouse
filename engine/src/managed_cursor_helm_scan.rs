@@ -30,6 +30,8 @@ pub struct CursorHelmObservation {
     pub cursor_process_start_time: Option<String>,
     pub started_at: String,
     pub updated_at: String,
+    /// Identity-valid launcher process fact, independent of control readiness.
+    pub launcher_alive: bool,
     /// Launcher pid is alive AND the control socket exists — the session is
     /// remotely steerable right now.
     pub live: bool,
@@ -130,6 +132,7 @@ pub(crate) fn collect_observations_from_paths(
             cursor_process_start_time: state.cursor_process_start_time,
             started_at: state.started_at.unwrap_or_default(),
             updated_at: state.updated_at.unwrap_or_default(),
+            launcher_alive,
             live,
         });
     }
