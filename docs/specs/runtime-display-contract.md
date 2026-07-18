@@ -3,6 +3,7 @@
 Status: Accepted target contract; current implementation is transitional
 Last updated: 2026-07-11
 Owner: Longhouse session core
+Implementation epic: `docs/specs/managed-session-state-normalization-epic.md`
 
 This is the canonical semantic contract for session state, runtime evidence,
 control availability, transcript convergence, and their human presentation.
