@@ -9,7 +9,7 @@ set -euo pipefail
 
 # Use repository-local cache/temp for uv reliability
 export XDG_CACHE_HOME="$(pwd)/.uv_cache"
-export TMPDIR="$(pwd)/.uv_tmp"
+export TMPDIR="${LONGHOUSE_TEST_TMPDIR:-/tmp/longhouse-tests-${UID:-$(id -u)}-${PPID}}"
 export UV_CACHE_DIR="$XDG_CACHE_HOME"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -49,7 +49,11 @@ for arg in "$@"; do
 done
 
 if [ "$has_xdist_arg" -eq 0 ]; then
-    xdist_workers="${PYTEST_XDIST_WORKERS:-auto}"
+    # `auto` expands to every visible CPU on cube and David's Mac. The suite's
+    # SQLite/process-heavy tests exhaust worker resources at 16-way fanout,
+    # killing workers and triggering an xdist scheduler KeyError. Four workers
+    # is faster than serial while remaining stable on both CI and local runs.
+    xdist_workers="${PYTEST_XDIST_WORKERS:-4}"
     case "$xdist_workers" in
         ""|0|false|False|FALSE|off|Off|OFF|no|No|NO)
             ;;
