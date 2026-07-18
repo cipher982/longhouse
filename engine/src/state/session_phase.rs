@@ -145,6 +145,7 @@ pub struct PhaseLedgerRow {
     pub tool_name: Option<String>,
     pub source: String,
     pub observed_at: String,
+    pub valid_until: String,
 }
 
 impl<'a> SessionPhaseStore<'a> {
@@ -180,6 +181,7 @@ impl<'a> SessionPhaseStore<'a> {
                 tool_name: row.get(3)?,
                 source: row.get(4)?,
                 observed_at,
+                valid_until: (observed + chrono::Duration::seconds(window_secs)).to_rfc3339(),
             });
         }
         out.sort_by(|a, b| a.session_id.cmp(&b.session_id));
@@ -399,6 +401,7 @@ mod tests {
         assert_eq!(rows[0].session_id, "fresh");
         assert_eq!(rows[0].phase, "running");
         assert_eq!(rows[0].tool_name.as_deref(), Some("Bash"));
+        assert_eq!(rows[0].valid_until, "2026-04-19T12:10:00+00:00");
     }
 
     #[test]

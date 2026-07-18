@@ -4533,10 +4533,14 @@ export interface components {
             provider: string;
             /** Session Id */
             session_id: string;
-            /** Phase */
-            phase: string;
+            /** Kind */
+            kind: string;
+            /** Raw Kind */
+            raw_kind: string;
             /** Tool Name */
             tool_name?: string | null;
+            /** Detail */
+            detail?: string | null;
             /** Source */
             source: string;
             /**
@@ -4544,6 +4548,15 @@ export interface components {
              * Format: date-time
              */
             observed_at: string;
+            /**
+             * Valid Until
+             * Format: date-time
+             */
+            valid_until: string;
+            /** Raw Locator */
+            raw_locator?: string | null;
+            /** Reason Codes */
+            reason_codes?: string[];
         };
         /**
          * ActivityRecency
@@ -5811,6 +5824,8 @@ export interface components {
             control?: components["schemas"]["ControlEvidenceIn"][];
             /** Transcript */
             transcript?: components["schemas"]["TranscriptEvidenceIn"][];
+            /** Process Snapshot Scopes */
+            process_snapshot_scopes?: components["schemas"]["ProcessSnapshotScopeIn"][];
         };
         /** MachineHealthItemResponse */
         MachineHealthItemResponse: {
@@ -6619,6 +6634,27 @@ export interface components {
              * Format: date-time
              */
             observed_at: string;
+        };
+        /** ProcessSnapshotScopeIn */
+        ProcessSnapshotScopeIn: {
+            /**
+             * Scope
+             * @enum {string}
+             */
+            scope: "managed_state_files" | "unmanaged_provider_processes";
+            /** Complete */
+            complete: boolean;
+            /**
+             * Captured At
+             * Format: date-time
+             */
+            captured_at: string;
+            /** Machine Boot Id */
+            machine_boot_id?: string | null;
+            /** Source */
+            source: string;
+            /** Failure Reason */
+            failure_reason?: string | null;
         };
         /** ProductHealthCheckEvidenceRefResponse */
         ProductHealthCheckEvidenceRefResponse: {

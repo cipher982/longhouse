@@ -179,6 +179,20 @@ pub struct MachineEvidence {
     pub control: Vec<ControlEvidence>,
     #[serde(default)]
     pub transcript: Vec<TranscriptEvidence>,
+    #[serde(default)]
+    pub process_snapshot_scopes: Vec<ProcessSnapshotScope>,
+}
+
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
+pub struct ProcessSnapshotScope {
+    pub scope: String,
+    pub complete: bool,
+    pub captured_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub machine_boot_id: Option<String>,
+    pub source: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failure_reason: Option<String>,
 }
 
 #[derive(Debug, Serialize, Clone, PartialEq, Eq)]
@@ -206,11 +220,19 @@ pub struct ProcessEvidence {
 pub struct ActivityEvidence {
     pub provider: String,
     pub session_id: String,
-    pub phase: String,
+    pub kind: String,
+    pub raw_kind: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
     pub source: String,
     pub observed_at: String,
+    pub valid_until: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub raw_locator: Option<String>,
+    #[serde(default)]
+    pub reason_codes: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Clone, PartialEq, Eq)]
@@ -910,6 +932,7 @@ pub(crate) fn machine_evidence_from_observations(
     cursor_observations: &[CursorHelmObservation],
     unmanaged_bindings: &[UnmanagedSessionBinding],
     phase_rows: &[PhaseLedgerRow],
+    process_snapshot_complete: bool,
     now: DateTime<Utc>,
 ) -> MachineEvidence {
     let envelope_observed_at = now.to_rfc3339();
@@ -1234,14 +1257,7 @@ pub(crate) fn machine_evidence_from_observations(
 
     let mut activity = phase_rows
         .iter()
-        .map(|row| ActivityEvidence {
-            provider: row.provider.clone(),
-            session_id: row.session_id.clone(),
-            phase: row.phase.clone(),
-            tool_name: row.tool_name.clone(),
-            source: row.source.clone(),
-            observed_at: row.observed_at.clone(),
-        })
+        .map(activity_evidence_from_phase_row)
         .collect::<Vec<_>>();
 
     process.sort_by(|a, b| {
@@ -1264,11 +1280,54 @@ pub(crate) fn machine_evidence_from_observations(
 
     MachineEvidence {
         schema_version: 1,
-        observed_at: envelope_observed_at,
+        observed_at: envelope_observed_at.clone(),
         process,
         activity,
         control,
         transcript,
+        process_snapshot_scopes: vec![
+            ProcessSnapshotScope {
+                scope: "managed_state_files".to_string(),
+                complete: process_snapshot_complete,
+                captured_at: envelope_observed_at.clone(),
+                machine_boot_id: boot_id.clone(),
+                source: "managed_provider_scan".to_string(),
+                failure_reason: (!process_snapshot_complete)
+                    .then(|| "incremental_or_partial_scan".to_string()),
+            },
+            ProcessSnapshotScope {
+                scope: "unmanaged_provider_processes".to_string(),
+                complete: process_snapshot_complete,
+                captured_at: envelope_observed_at.clone(),
+                machine_boot_id: boot_id,
+                source: "unmanaged_process_scan".to_string(),
+                failure_reason: (!process_snapshot_complete)
+                    .then(|| "incremental_or_partial_scan".to_string()),
+            },
+        ],
+    }
+}
+
+fn activity_evidence_from_phase_row(row: &PhaseLedgerRow) -> ActivityEvidence {
+    let raw_kind = row.phase.trim().to_string();
+    let kind = match raw_kind.as_str() {
+        "thinking" | "running" | "blocked" | "stalled" | "needs_user" | "idle" | "finished" => {
+            raw_kind.clone()
+        }
+        _ => "unknown".to_string(),
+    };
+    ActivityEvidence {
+        provider: row.provider.clone(),
+        session_id: row.session_id.clone(),
+        kind,
+        raw_kind,
+        tool_name: row.tool_name.clone(),
+        detail: None,
+        source: row.source.clone(),
+        observed_at: row.observed_at.clone(),
+        valid_until: row.valid_until.clone(),
+        raw_locator: None,
+        reason_codes: Vec::new(),
     }
 }
 
@@ -3940,6 +3999,7 @@ mod tests {
             tool_name: Some("Shell".to_string()),
             source: "codex_bridge".to_string(),
             observed_at: "2026-05-08T12:00:00Z".to_string(),
+            valid_until: "2026-05-08T12:10:00Z".to_string(),
         };
 
         let codex_observations = [codex];
@@ -3962,6 +4022,7 @@ mod tests {
             &cursor_observations,
             &unmanaged_bindings,
             std::slice::from_ref(&phase),
+            true,
             now,
         );
 
@@ -3996,12 +4057,32 @@ mod tests {
             vec![ActivityEvidence {
                 provider: "codex".to_string(),
                 session_id: "codex-session".to_string(),
-                phase: "running".to_string(),
+                kind: "running".to_string(),
+                raw_kind: "running".to_string(),
                 tool_name: Some("Shell".to_string()),
+                detail: None,
                 source: "codex_bridge".to_string(),
                 observed_at: "2026-05-08T12:00:00Z".to_string(),
+                valid_until: "2026-05-08T12:10:00Z".to_string(),
+                raw_locator: None,
+                reason_codes: Vec::new(),
             }]
         );
+        assert!(evidence
+            .process_snapshot_scopes
+            .iter()
+            .all(|scope| scope.complete));
+        let unknown_activity = activity_evidence_from_phase_row(&PhaseLedgerRow {
+            session_id: "future-session".to_string(),
+            provider: "future-provider".to_string(),
+            phase: "provider_custom_phase".to_string(),
+            tool_name: None,
+            source: "future_hook".to_string(),
+            observed_at: "2026-05-08T12:00:00Z".to_string(),
+            valid_until: "2026-05-08T12:01:00Z".to_string(),
+        });
+        assert_eq!(unknown_activity.kind, "unknown");
+        assert_eq!(unknown_activity.raw_kind, "provider_custom_phase");
 
         let without_activity = machine_evidence_from_observations(
             &codex_observations,
@@ -4010,12 +4091,17 @@ mod tests {
             &cursor_observations,
             &unmanaged_bindings,
             &[],
+            false,
             now,
         );
         assert!(without_activity.activity.is_empty());
         assert_eq!(without_activity.process, evidence.process);
         assert_eq!(without_activity.control, evidence.control);
         assert_eq!(without_activity.transcript, evidence.transcript);
+        assert!(without_activity
+            .process_snapshot_scopes
+            .iter()
+            .all(|scope| !scope.complete));
 
         let serialized = serde_json::to_string(&evidence).unwrap();
         for forbidden in [

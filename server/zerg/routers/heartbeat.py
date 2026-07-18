@@ -163,10 +163,15 @@ class ProcessEvidenceIn(UTCBaseModel):
 class ActivityEvidenceIn(UTCBaseModel):
     provider: str = Field(..., max_length=64)
     session_id: str = Field(..., max_length=255)
-    phase: str = Field(..., max_length=32)
+    kind: str = Field(..., max_length=32)
+    raw_kind: str = Field(..., max_length=64)
     tool_name: str | None = Field(None, max_length=128)
+    detail: str | None = Field(None, max_length=255)
     source: str = Field(..., max_length=64)
     observed_at: datetime
+    valid_until: datetime
+    raw_locator: str | None = Field(None, max_length=1024)
+    reason_codes: list[str] = Field(default_factory=list, max_length=32)
 
 
 class ControlEvidenceIn(UTCBaseModel):
@@ -197,6 +202,15 @@ class TranscriptEvidenceIn(UTCBaseModel):
     observed_at: datetime
 
 
+class ProcessSnapshotScopeIn(UTCBaseModel):
+    scope: Literal["managed_state_files", "unmanaged_provider_processes"]
+    complete: bool
+    captured_at: datetime
+    machine_boot_id: str | None = Field(None, max_length=255)
+    source: str = Field(..., max_length=64)
+    failure_reason: str | None = Field(None, max_length=255)
+
+
 class MachineEvidenceIn(UTCBaseModel):
     schema_version: Literal[1]
     observed_at: datetime
@@ -204,6 +218,7 @@ class MachineEvidenceIn(UTCBaseModel):
     activity: list[ActivityEvidenceIn] = Field(default_factory=list, max_length=MAX_MACHINE_EVIDENCE_FACTS_PER_FAMILY)
     control: list[ControlEvidenceIn] = Field(default_factory=list, max_length=MAX_MACHINE_EVIDENCE_FACTS_PER_FAMILY)
     transcript: list[TranscriptEvidenceIn] = Field(default_factory=list, max_length=MAX_MACHINE_EVIDENCE_FACTS_PER_FAMILY)
+    process_snapshot_scopes: list[ProcessSnapshotScopeIn] = Field(default_factory=list, max_length=16)
 
 
 class ResolvedWorkspaceIn(UTCBaseModel):
@@ -313,6 +328,13 @@ class HeartbeatIn(BaseModel):
     # Older engines omit these, which forces the full compatibility path.
     sessions_digest: str | None = Field(None, max_length=128)
     sessions_sequence: int | None = None
+
+
+def _machine_process_snapshot_complete(payload: HeartbeatIn, scope_name: str) -> bool:
+    evidence = payload.machine_evidence
+    if evidence is None:
+        return False
+    return any(scope.scope == scope_name and scope.complete for scope in evidence.process_snapshot_scopes)
 
 
 def _managed_lease_provider_label(lease: ManagedSessionLeaseIn) -> str:
@@ -767,7 +789,10 @@ async def ingest_heartbeat(
                 if _resolved_sessions_present
                 else payload.unmanaged_session_bindings
             )
-            _unmanaged_bindings_present = _resolved_sessions_present or "unmanaged_session_bindings" in payload.model_fields_set
+            # Omission is authoritative only when the Machine Agent explicitly
+            # says it enumerated the complete process scope. Legacy field
+            # presence and partial/incremental scans fail open.
+            _unmanaged_bindings_present = _machine_process_snapshot_complete(payload, "unmanaged_provider_processes")
 
             incoming_sessions_digest = str(payload.sessions_digest or "").strip() or None
 

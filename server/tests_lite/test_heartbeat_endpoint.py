@@ -128,14 +128,32 @@ def _machine_evidence_payload() -> dict[str, object]:
             {
                 "provider": "codex",
                 "session_id": "codex-session",
-                "phase": "running",
+                "kind": "running",
+                "raw_kind": "running",
                 "tool_name": "Shell",
                 "source": "codex_bridge",
                 "observed_at": observed_at,
+                "valid_until": "2026-05-08T12:10:00Z",
             }
         ],
         "control": control,
         "transcript": transcript,
+        "process_snapshot_scopes": [
+            {
+                "scope": "managed_state_files",
+                "complete": True,
+                "captured_at": observed_at,
+                "machine_boot_id": "macos:1777970400:0",
+                "source": "managed_provider_scan",
+            },
+            {
+                "scope": "unmanaged_provider_processes",
+                "complete": True,
+                "captured_at": observed_at,
+                "machine_boot_id": "macos:1777970400:0",
+                "source": "unmanaged_process_scan",
+            },
+        ],
     }
 
 
@@ -1511,7 +1529,8 @@ def test_heartbeat_missing_managed_detach_can_be_disabled(monkeypatch, tmp_path)
         api_app_ref.dependency_overrides = {}
 
 
-def test_heartbeat_empty_resolved_sessions_closes_stale_unmanaged_session(tmp_path):
+@pytest.mark.parametrize("snapshot_complete", [True, False, None])
+def test_heartbeat_empty_resolved_sessions_requires_complete_process_scope(tmp_path, snapshot_complete):
     SessionLocal = _make_db(tmp_path)
     client, api_app_ref = _make_client(SessionLocal)
     session_id = uuid4()
@@ -1564,19 +1583,34 @@ def test_heartbeat_empty_resolved_sessions_closes_stale_unmanaged_session(tmp_pa
             )
             db.commit()
 
-        response = client.post(
-            "/api/agents/heartbeat",
-            json={
-                "version": "0.7.0",
-                "daemon_pid": 42,
-                "sessions": [],
-            },
-        )
+        heartbeat_payload = {
+            "version": "0.7.0",
+            "daemon_pid": 42,
+            "sessions": [],
+        }
+        if snapshot_complete is not None:
+            heartbeat_payload["machine_evidence"] = {
+                "schema_version": 1,
+                "observed_at": now.isoformat(),
+                "process_snapshot_scopes": [
+                    {
+                        "scope": "unmanaged_provider_processes",
+                        "complete": snapshot_complete,
+                        "captured_at": now.isoformat(),
+                        "source": "unmanaged_process_scan",
+                        "failure_reason": None if snapshot_complete else "incremental_or_partial_scan",
+                    }
+                ],
+            }
+        response = client.post("/api/agents/heartbeat", json=heartbeat_payload)
 
         assert response.status_code == 204, response.text
         with SessionLocal() as db:
             state = db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == session_id).one()
-            assert state.terminal_state == "process_gone"
-            assert state.terminal_source == "engine_process_snapshot"
+            if snapshot_complete:
+                assert state.terminal_state == "process_gone"
+                assert state.terminal_source == "engine_process_snapshot"
+            else:
+                assert state.terminal_state is None
     finally:
         api_app_ref.dependency_overrides = {}
