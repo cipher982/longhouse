@@ -13,8 +13,10 @@ load_dotenv(override=False)
 from zerg.config import get_settings
 from zerg.config import resolve_cors_origins
 from zerg.config import validate_public_origin_config
+from zerg.database import refresh_database_settings_from_env
 
 _settings = get_settings()
+refresh_database_settings_from_env()
 
 if _settings.e2e_log_suppress:
     from zerg.e2e_logging_hacks import silence_info_logs
