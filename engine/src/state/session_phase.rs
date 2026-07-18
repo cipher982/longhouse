@@ -69,6 +69,11 @@ fn phase_window_seconds(phase: &str) -> Option<i64> {
         .iter()
         .find(|(p, _)| *p == phase)
         .map(|(_, s)| *s)
+        // Raw provider activity is evidence even when the canonical reducer
+        // does not recognize its vocabulary yet. Keep it briefly so the
+        // typed envelope can project `unknown` without making an unbounded
+        // durable claim.
+        .or(Some(90))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -95,13 +100,10 @@ impl<'a> SessionPhaseStore<'a> {
     /// the write atomic — no SELECT-then-write race between writers on
     /// different connections.
     ///
-    /// Rejects phases outside `KNOWN_PHASES` so a typo in a hook script or
-    /// bridge update can't pollute the ledger with values the overlay or
-    /// server reducer can't interpret. Rejection returns `Ok(false)`.
+    /// Unknown provider phases are retained as raw evidence. The typed
+    /// heartbeat projection maps them to canonical `unknown`; legacy readers
+    /// remain free to ignore vocabulary they do not understand.
     pub fn record(&self, signal: &SessionPhaseSignal) -> Result<bool> {
-        if !KNOWN_PHASES.contains(&signal.phase.as_str()) {
-            return Ok(false);
-        }
         let observed_at = signal.observed_at.to_rfc3339();
         let tool_name = normalize_optional_string(signal.tool_name.clone());
         let rows = self.conn.execute(
@@ -149,10 +151,9 @@ pub struct PhaseLedgerRow {
 }
 
 impl<'a> SessionPhaseStore<'a> {
-    /// Return ledger rows whose phase + observed_at still satisfy the
-    /// canonical freshness windows. Unknown phases are dropped: the
-    /// overlay/server reducer can't interpret them either, so there's no
-    /// point emitting them.
+    /// Return ledger rows whose phase + observed_at still satisfy their
+    /// freshness windows. Unknown raw phases get a short evidence-only window
+    /// and are projected as canonical `unknown` by the heartbeat envelope.
     pub fn fresh_rows(&self, now: DateTime<Utc>) -> Result<Vec<PhaseLedgerRow>> {
         let mut stmt = self.conn.prepare(
             "SELECT session_id, provider, phase, tool_name, source, observed_at
@@ -320,7 +321,7 @@ mod tests {
     }
 
     #[test]
-    fn record_rejects_unknown_phase() {
+    fn record_retains_unknown_phase_as_raw_evidence() {
         let tmp = tempfile::NamedTempFile::new().unwrap();
         let conn = crate::state::db::open_db(Some(tmp.path())).unwrap();
         let store = SessionPhaseStore::new(&conn);
@@ -328,14 +329,14 @@ mod tests {
         let wrote = store
             .record(&signal("2026-04-19T00:00:00Z", "typo_phase", None))
             .unwrap();
-        assert!(!wrote, "unknown phase must not land in the ledger");
+        assert!(wrote, "unknown raw activity must land in the ledger");
 
         let count: i64 = conn
             .query_row("SELECT COUNT(*) FROM session_phase_state", [], |row| {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(count, 0);
+        assert_eq!(count, 1);
     }
 
     #[test]
@@ -375,19 +376,17 @@ mod tests {
     }
 
     #[test]
-    fn fresh_rows_drops_stale_and_unknown() {
+    fn fresh_rows_drops_stale_but_retains_fresh_unknown() {
         let tmp = tempfile::NamedTempFile::new().unwrap();
         let conn = crate::state::db::open_db(Some(tmp.path())).unwrap();
 
-        // Insert one fresh + one stale + one unknown-phase row directly.
-        // The store's `record()` would reject the unknown one, so we bypass it
-        // to simulate a pre-existing legacy row from an older engine build.
+        // Insert one fresh + one stale + one fresh unknown-phase row directly.
         conn.execute(
             "INSERT INTO session_phase_state (session_id, provider, phase, tool_name, source, observed_at)
              VALUES
                 ('fresh', 'claude', 'running', 'Bash', 'claude_hook', '2026-04-19T12:00:00+00:00'),
                 ('stale', 'claude', 'thinking', NULL, 'claude_hook', '2026-04-19T10:00:00+00:00'),
-                ('bogus', 'claude', 'typo_phase', NULL, 'claude_hook', '2026-04-19T12:00:00+00:00')",
+                ('bogus', 'claude', 'provider_custom_phase', NULL, 'claude_hook', '2026-04-19T12:04:30+00:00')",
             [],
         ).unwrap();
 
@@ -397,11 +396,14 @@ mod tests {
             .with_timezone(&Utc);
         let rows = store.fresh_rows(now).unwrap();
 
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].session_id, "fresh");
-        assert_eq!(rows[0].phase, "running");
-        assert_eq!(rows[0].tool_name.as_deref(), Some("Bash"));
-        assert_eq!(rows[0].valid_until, "2026-04-19T12:10:00+00:00");
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].session_id, "bogus");
+        assert_eq!(rows[0].phase, "provider_custom_phase");
+        assert_eq!(rows[0].valid_until, "2026-04-19T12:06:00+00:00");
+        assert_eq!(rows[1].session_id, "fresh");
+        assert_eq!(rows[1].phase, "running");
+        assert_eq!(rows[1].tool_name.as_deref(), Some("Bash"));
+        assert_eq!(rows[1].valid_until, "2026-04-19T12:10:00+00:00");
     }
 
     #[test]

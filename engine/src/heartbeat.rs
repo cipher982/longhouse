@@ -975,6 +975,7 @@ pub(crate) fn machine_evidence_from_observations(
 ) -> MachineEvidence {
     let envelope_observed_at = now.to_rfc3339();
     let boot_id = machine_boot_id();
+    let process_facts = crate::process_identity::collect_process_facts_by_pid();
     let mut process = Vec::new();
     let mut control = Vec::new();
     let mut transcript = Vec::new();
@@ -999,7 +1000,12 @@ pub(crate) fn machine_evidence_from_observations(
             provider_session_id: obs.thread_id.clone(),
             role: "bridge".to_string(),
             pid: Some(obs.bridge_pid),
-            process_start_time: None,
+            // The bridge state predates persisted bridge start identity. Read
+            // the same OS process snapshot used elsewhere so pid + boot id is
+            // never the whole identity for a live bridge.
+            process_start_time: process_facts
+                .get(&obs.bridge_pid)
+                .map(|fact| fact.lstart.clone()),
             boot_id: boot_id.clone(),
             cwd: obs.cwd.clone(),
             alive: obs.bridge_alive,
@@ -1297,6 +1303,45 @@ pub(crate) fn machine_evidence_from_observations(
         });
     }
 
+    for obs in antigravity_observations {
+        let at = observed_at(&obs.updated_at);
+        // Hook state proves a provider session was observed, but does not own
+        // a provider process. Emit that limitation honestly instead of
+        // manufacturing liveness from hook readiness.
+        process.push(ProcessEvidence {
+            provider: "antigravity".to_string(),
+            session_id: Some(obs.session_id.clone()),
+            provider_session_id: obs.provider_session_id.clone(),
+            role: "provider".to_string(),
+            pid: None,
+            process_start_time: None,
+            boot_id: boot_id.clone(),
+            cwd: obs.cwd.clone(),
+            alive: false,
+            source: "antigravity_hook_state".to_string(),
+            observed_at: at.clone(),
+        });
+        if let Some(provider_session_id) = obs
+            .provider_session_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            transcript.push(TranscriptEvidence {
+                provider: "antigravity".to_string(),
+                session_id: Some(obs.session_id.clone()),
+                provider_session_id: provider_session_id.to_string(),
+                source_path: obs.transcript_path.clone(),
+                source_inode: None,
+                source_device: None,
+                source_offset: None,
+                source_mtime: None,
+                source: "antigravity_hook_state".to_string(),
+                observed_at: at,
+            });
+        }
+    }
+
     let mut activity = phase_rows
         .iter()
         .map(activity_evidence_from_phase_row)
@@ -1436,10 +1481,19 @@ fn parse_utc(value: Option<&str>) -> Option<DateTime<Utc>> {
 fn activity_evidence_from_phase_row(row: &PhaseLedgerRow) -> ActivityEvidence {
     let raw_kind = row.phase.trim().to_string();
     let kind = match raw_kind.as_str() {
-        "thinking" | "running" | "blocked" | "stalled" | "needs_user" | "idle" | "finished" => {
+        "thinking" | "running" | "blocked" | "stalled" | "needs_user" | "idle" => {
             raw_kind.clone()
         }
         _ => "unknown".to_string(),
+    };
+    let reason_codes = if raw_kind == "finished" {
+        // A provider phase alone has neither run nor process authority. Keep
+        // the raw observation, but do not turn it into a positive run terminal.
+        vec!["run_terminal_authority_missing".to_string()]
+    } else if kind == "unknown" {
+        vec!["unknown_provider_activity".to_string()]
+    } else {
+        Vec::new()
     };
     ActivityEvidence {
         provider: row.provider.clone(),
@@ -1452,7 +1506,7 @@ fn activity_evidence_from_phase_row(row: &PhaseLedgerRow) -> ActivityEvidence {
         observed_at: row.observed_at.clone(),
         valid_until: row.valid_until.clone(),
         raw_locator: None,
-        reason_codes: Vec::new(),
+        reason_codes,
     }
 }
 
@@ -4187,6 +4241,17 @@ mod tests {
             .control
             .iter()
             .all(|fact| fact.provider != "antigravity"));
+        assert!(evidence.process.iter().any(|fact| {
+            fact.provider == "antigravity"
+                && fact.source == "antigravity_hook_state"
+                && !fact.alive
+                && fact.pid.is_none()
+        }));
+        assert!(evidence.transcript.iter().any(|fact| {
+            fact.provider == "antigravity"
+                && fact.source == "antigravity_hook_state"
+                && fact.source_path.as_deref() == Some("/tmp/antigravity.jsonl")
+        }));
         assert!(evidence
             .transcript
             .iter()
@@ -4235,6 +4300,26 @@ mod tests {
         });
         assert_eq!(unknown_activity.kind, "unknown");
         assert_eq!(unknown_activity.raw_kind, "provider_custom_phase");
+        assert_eq!(
+            unknown_activity.reason_codes,
+            vec!["unknown_provider_activity"]
+        );
+
+        let unauthoritative_terminal = activity_evidence_from_phase_row(&PhaseLedgerRow {
+            session_id: "terminal-session".to_string(),
+            provider: "codex".to_string(),
+            phase: "finished".to_string(),
+            tool_name: None,
+            source: "codex_bridge".to_string(),
+            observed_at: "2026-05-08T12:00:00Z".to_string(),
+            valid_until: "2026-05-08T12:10:00Z".to_string(),
+        });
+        assert_eq!(unauthoritative_terminal.kind, "unknown");
+        assert_eq!(unauthoritative_terminal.raw_kind, "finished");
+        assert_eq!(
+            unauthoritative_terminal.reason_codes,
+            vec!["run_terminal_authority_missing"]
+        );
 
         let without_activity = machine_evidence_from_observations(
             &codex_observations,
