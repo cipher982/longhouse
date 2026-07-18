@@ -302,6 +302,48 @@ describe("LaunchSessionModal", () => {
     );
   });
 
+  it("launches OpenCode when the machine advertises turn-start parity", async () => {
+    apiMocks.listMachines.mockResolvedValue({
+      machines: [
+        machine({
+          control_operations_by_provider: {
+            codex: ["turn_start"],
+            opencode: ["turn_start", "turn_interrupt"],
+          },
+          launchable_providers: ["codex", "opencode"],
+          supports: ["codex.turn_start", "opencode.turn_start", "opencode.turn_interrupt"],
+          launch: {
+            blocked_by: null,
+            providers: [{ provider: "codex" }, { provider: "opencode" }],
+            default_provider: "codex",
+          },
+        }),
+      ],
+    });
+    apiMocks.createConsoleSession.mockResolvedValue({
+      session_id: "opencode-session-id",
+      thread_id: "opencode-thread-id",
+      created: true,
+    });
+    const user = userEvent.setup();
+    renderModal();
+
+    const picker = await screen.findByTestId("launch-provider-select");
+    await user.click(picker.querySelector("summary")!);
+    await user.click(screen.getByRole("button", { name: "OpenCode" }));
+    await user.type(screen.getByTestId("launch-cwd-input"), "/Users/me/opencode-project");
+    await user.click(screen.getByTestId("launch-submit"));
+
+    await waitFor(() =>
+      expect(apiMocks.createConsoleSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          provider: "opencode",
+          cwd: "/Users/me/opencode-project",
+        }),
+      ),
+    );
+  });
+
   it("prefills the top-ranked workspace and lets you pick another by label", async () => {
     apiMocks.listMachines.mockResolvedValue({
       machines: [machine({ device_id: "cinder", machine_name: "cinder", online: true })],
