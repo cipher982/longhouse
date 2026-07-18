@@ -29,6 +29,7 @@ from fastapi import Response
 from fastapi import status
 from pydantic import BaseModel
 from pydantic import Field
+from pydantic import model_validator
 from sqlalchemy.orm import Session
 
 from zerg.catalogd.client import CatalogRemoteError
@@ -80,6 +81,7 @@ UNMANAGED_PROCESS_SNAPSHOT_SOURCE = "engine_process_snapshot"
 DEFAULT_MANAGED_SESSION_LEASE_TTL_MS = 15 * 60 * 1000
 MAX_MANAGED_SESSION_LEASE_TTL_MS = 60 * 60 * 1000
 MAX_MACHINE_EVIDENCE_FACTS_PER_FAMILY = 2_048
+MAX_REDUCER_EVIDENCE_FACTS = 256
 MANAGED_SESSION_LEASE_STATES = {"attached", "detached", "degraded"}
 MANAGED_SESSION_LEASE_PHASES = {"idle", "thinking", "running", "blocked", "needs_user", "none"}
 MANAGED_SESSION_LEASE_PROVIDERS = {"codex", "claude", "opencode", "antigravity"}
@@ -234,15 +236,56 @@ class ReadinessEvidenceIn(UTCBaseModel):
     reason_codes: list[str] = Field(default_factory=list, max_length=32)
 
 
+class EvidenceIdentityIn(UTCBaseModel):
+    fact_family: Literal["process", "activity", "control", "transcript", "readiness"]
+    fact_index: int = Field(..., ge=0, le=MAX_MACHINE_EVIDENCE_FACTS_PER_FAMILY - 1)
+    subject_key: str = Field(..., min_length=1, max_length=1024)
+    source: str = Field(..., min_length=1, max_length=64)
+    source_epoch: str | None = Field(None, min_length=1, max_length=255)
+    source_seq: int | None = Field(None, ge=0)
+    sequenced: bool
+    dedupe_key: str = Field(..., pattern=r"^[0-9a-f]{64}$")
+    evidence_hash: str = Field(..., pattern=r"^[0-9a-f]{64}$")
+
+
 class MachineEvidenceIn(UTCBaseModel):
-    schema_version: Literal[1]
+    schema_version: Literal[1, 2]
     observed_at: datetime
+    identities: list[EvidenceIdentityIn] = Field(default_factory=list, max_length=MAX_REDUCER_EVIDENCE_FACTS)
     process: list[ProcessEvidenceIn] = Field(default_factory=list, max_length=MAX_MACHINE_EVIDENCE_FACTS_PER_FAMILY)
     activity: list[ActivityEvidenceIn] = Field(default_factory=list, max_length=MAX_MACHINE_EVIDENCE_FACTS_PER_FAMILY)
     control: list[ControlEvidenceIn] = Field(default_factory=list, max_length=MAX_MACHINE_EVIDENCE_FACTS_PER_FAMILY)
     transcript: list[TranscriptEvidenceIn] = Field(default_factory=list, max_length=MAX_MACHINE_EVIDENCE_FACTS_PER_FAMILY)
     process_snapshot_scopes: list[ProcessSnapshotScopeIn] = Field(default_factory=list, max_length=16)
     readiness: list[ReadinessEvidenceIn] = Field(default_factory=list, max_length=MAX_MACHINE_EVIDENCE_FACTS_PER_FAMILY)
+
+    @model_validator(mode="after")
+    def validate_reducer_identities(self) -> MachineEvidenceIn:
+        if self.schema_version == 1:
+            if self.identities:
+                raise ValueError("machine evidence schema v1 cannot include reducer identities")
+            return self
+        seen: set[tuple[str, int]] = set()
+        families = {
+            "process": self.process,
+            "activity": self.activity,
+            "control": self.control,
+            "transcript": self.transcript,
+            "readiness": self.readiness,
+        }
+        for identity in self.identities:
+            key = (identity.fact_family, identity.fact_index)
+            if key in seen:
+                raise ValueError("machine evidence contains duplicate reducer identity")
+            seen.add(key)
+            facts = families[identity.fact_family]
+            if identity.fact_index >= len(facts):
+                raise ValueError("machine evidence reducer identity references a missing fact")
+            if identity.source != facts[identity.fact_index].source:
+                raise ValueError("machine evidence reducer identity source does not match its fact")
+            if identity.sequenced != (identity.source_seq is not None):
+                raise ValueError("machine evidence reducer identity sequence declaration is inconsistent")
+        return self
 
 
 class ResolvedWorkspaceIn(UTCBaseModel):

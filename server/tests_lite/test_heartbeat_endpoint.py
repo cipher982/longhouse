@@ -218,6 +218,40 @@ def test_heartbeat_accepts_and_retains_typed_machine_evidence_without_reducing_i
         api_app_ref.dependency_overrides = {}
 
 
+def test_heartbeat_accepts_reducer_grade_identity_without_promoting_authority(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    client, api_app_ref = _make_client(SessionLocal)
+    evidence = _machine_evidence_payload()
+    evidence["schema_version"] = 2
+    evidence["identities"] = [
+        {
+            "fact_family": "process",
+            "fact_index": 0,
+            "subject_key": "process:codex:boot:101:start",
+            "source": "provider_process_scan",
+            "source_epoch": "process-generation-1",
+            "source_seq": None,
+            "sequenced": False,
+            "dedupe_key": "a" * 64,
+            "evidence_hash": "b" * 64,
+        }
+    ]
+
+    try:
+        response = client.post(
+            "/api/agents/heartbeat",
+            json={"version": "phase-2.5", "daemon_pid": 42, "machine_evidence": evidence},
+        )
+        assert response.status_code == 204
+        with SessionLocal() as db:
+            raw = json.loads(db.query(AgentHeartbeat).one().raw_json)
+            assert raw["machine_evidence"]["schema_version"] == 2
+            assert raw["machine_evidence"]["identities"][0]["subject_key"].startswith("process:codex:")
+            assert db.query(SessionConnection).count() == 0
+    finally:
+        api_app_ref.dependency_overrides = {}
+
+
 def test_heartbeat_machine_evidence_rejects_invalid_and_unbounded_claims(tmp_path):
     SessionLocal = _make_db(tmp_path)
     client, api_app_ref = _make_client(SessionLocal)
@@ -226,8 +260,23 @@ def test_heartbeat_machine_evidence_rejects_invalid_and_unbounded_claims(tmp_pat
         invalid_evidence = []
 
         unknown_schema = _machine_evidence_payload()
-        unknown_schema["schema_version"] = 2
+        unknown_schema["schema_version"] = 3
         invalid_evidence.append(unknown_schema)
+
+        mismatched_identity = _machine_evidence_payload()
+        mismatched_identity["schema_version"] = 2
+        mismatched_identity["identities"] = [
+            {
+                "fact_family": "process",
+                "fact_index": 0,
+                "subject_key": "process:codex:boot:101:start",
+                "source": "wrong_source",
+                "sequenced": False,
+                "dedupe_key": "a" * 64,
+                "evidence_hash": "b" * 64,
+            }
+        ]
+        invalid_evidence.append(mismatched_identity)
 
         invalid_pid = _machine_evidence_payload()
         process = invalid_pid["process"]
