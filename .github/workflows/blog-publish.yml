@@ -1,0 +1,60 @@
+name: Publish Static Blog
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "blog/**"
+      - "scripts/qa/check-static-blog.py"
+      - ".github/workflows/blog-publish.yml"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: static-blog-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate static blog
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Check HTML and local links
+        run: python3 scripts/qa/check-static-blog.py
+
+  publish:
+    name: Publish static blog files
+    runs-on: cube-deploy
+    needs: validate
+    if: github.repository == 'cipher982/longhouse'
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Configure deploy SSH
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_RUNTIME_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_RUNTIME_USER || 'zerg' }}
+        run: ./scripts/ci/setup-deploy-ssh.sh
+
+      - name: Upload and atomically activate release
+        env:
+          RELEASE: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          ROOT=/home/zerg/manual-apps/zerg-caddy/blog
+          ssh deploy-host "mkdir -p '$ROOT/releases/$RELEASE'"
+          rsync -az --delete blog/ "deploy-host:$ROOT/releases/$RELEASE/"
+          ssh deploy-host "ln -s 'releases/$RELEASE' '$ROOT/current.next' && mv -Tf '$ROOT/current.next' '$ROOT/current'"
+
+      - name: Verify public static page
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --location https://longhouse.ai/blog/ | grep -Fq 'Technical notes on session control.'
+          curl --fail --silent --show-error --location https://longhouse.ai/blog/provider-integrations/ | grep -Fq 'Longhouse Provider Integrations'
