@@ -151,7 +151,11 @@ class ResolvedWorkspaceIn(UTCBaseModel):
 
 class ResolvedProcessIn(UTCBaseModel):
     pid: int | None = None
-    process_start_time: datetime | None = None
+    # Process start identity is opaque: managed scanners use platform-native
+    # `ps lstart` strings as well as RFC3339 values. Treating it as a timestamp
+    # rejects valid heartbeats and loses the PID-reuse boundary.
+    process_start_time: str | None = Field(None, max_length=255)
+    boot_id: str | None = Field(None, max_length=255)
     started_at: datetime | None = None
 
 
@@ -359,12 +363,30 @@ def _unmanaged_bindings_from_resolved_sessions(
                 provider_session_id=provider_session_id,
                 source_path=_resolved_join_key_value(session.evidence, "source_path"),
                 pid=session.process.pid,
-                process_start_time=session.process.process_start_time or session.process.started_at,
+                process_start_time=_resolved_process_start_timestamp(session.process),
                 cwd=session.workspace.cwd,
                 observed_at=observed_at,
             )
         )
     return bindings
+
+
+def _resolved_process_start_timestamp(process: ResolvedProcessIn) -> datetime | None:
+    """Use an RFC3339 identity as legacy binding metadata when available.
+
+    Managed process identities are deliberately opaque at the heartbeat
+    boundary. The unmanaged binding table predates that contract and stores a
+    datetime, so only parse values that are already RFC3339; platform-native
+    `ps` strings remain safely absent there rather than rejecting the entire
+    heartbeat.
+    """
+    raw = str(process.process_start_time or "").strip()
+    if raw:
+        try:
+            return normalize_utc(datetime.fromisoformat(raw.replace("Z", "+00:00")))
+        except ValueError:
+            pass
+    return process.started_at
 
 
 def _is_managed_codex_session(db: Session, session: AgentSession | None) -> bool:
@@ -402,34 +424,6 @@ def _runtime_events_for_managed_leases(
     # but the default heartbeat path must not synthesize provider phase events
     # merely to keep managed control alive.
     return []
-
-
-def _clear_synthetic_managed_missing_runtime_on_reattach(
-    db: Session,
-    leases: list[ManagedSessionLeaseIn],
-) -> set[UUID]:
-    """Drop synthetic missing-lease runtime terminals when control reattaches."""
-
-    attached_session_ids = {
-        lease.session_id for lease in leases if lease.session_id is not None and (lease.state or "").strip().lower() == "attached"
-    }
-    if not attached_session_ids:
-        return set()
-
-    touched_session_ids: set[UUID] = set()
-    rows = (
-        db.query(SessionRuntimeState)
-        .filter(SessionRuntimeState.session_id.in_(attached_session_ids))
-        .filter(SessionRuntimeState.terminal_state == "process_gone")
-        .filter(SessionRuntimeState.terminal_source == MANAGED_SESSION_LEASE_SOURCE)
-        .all()
-    )
-    for row in rows:
-        if row.session_id is None:
-            continue
-        touched_session_ids.add(row.session_id)
-        db.delete(row)
-    return touched_session_ids
 
 
 def _latest_heartbeat_sessions_digest(db: Session, device_id: str) -> str | None:
@@ -834,14 +828,6 @@ async def ingest_heartbeat(
                         _managed_leases,
                         device_id=_device_id,
                         received_at=_now,
-                    ):
-                        publish_sessions.setdefault(
-                            session_id,
-                            (None, MANAGED_SESSION_LEASE_SOURCE),
-                        )
-                    for session_id in _clear_synthetic_managed_missing_runtime_on_reattach(
-                        write_db,
-                        _managed_leases,
                     ):
                         publish_sessions.setdefault(
                             session_id,

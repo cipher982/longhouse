@@ -2150,6 +2150,7 @@ fn build_local_status_projection(
         opencode_observations,
         cursor_observations,
     );
+    heartbeat::apply_machine_boot_identity(&mut payload.sessions);
     heartbeat::apply_local_titles(conn, &mut payload.sessions);
     session_snapshot_state.annotate(&mut payload);
     // Compute the fresh ledger view up front so a read failure is both
@@ -4367,6 +4368,7 @@ mod tests {
             process: heartbeat::ResolvedProcess {
                 pid,
                 process_start_time: Some("2026-05-05T12:00:00Z".to_string()),
+                boot_id: None,
                 started_at: Some("2026-05-05T12:00:00Z".to_string()),
             },
             bridge: heartbeat::ResolvedBridge::default(),
@@ -4561,6 +4563,27 @@ mod tests {
         ));
         let mut second = first.clone();
         second.sessions[0].process.pid = Some(43);
+
+        assert_ne!(
+            runtime_truth_signature(&first),
+            runtime_truth_signature(&second)
+        );
+    }
+
+    #[test]
+    fn test_runtime_truth_signature_changes_when_process_boot_identity_changes() {
+        let mut first = empty_heartbeat_payload();
+        first.sessions.push(resolved_session(
+            "claude",
+            None,
+            Some("sess-1"),
+            "unmanaged",
+            "unmanaged",
+            Some(42),
+        ));
+        first.sessions[0].process.boot_id = Some("macos:1777970400:0".to_string());
+        let mut second = first.clone();
+        second.sessions[0].process.boot_id = Some("macos:1778056800:0".to_string());
 
         assert_ne!(
             runtime_truth_signature(&first),

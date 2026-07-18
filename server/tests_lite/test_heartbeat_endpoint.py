@@ -535,7 +535,12 @@ def test_heartbeat_resolved_sessions_materialize_managed_control(tmp_path):
                         "phase_observed_at": "2026-05-05T11:59:58Z",
                         "last_activity_at": "2026-05-05T11:59:58Z",
                         "workspace": {"cwd": "/Users/test/git/zerg", "label": "zerg"},
-                        "process": {"pid": 4201, "started_at": "2026-05-05T11:20:00Z"},
+                        "process": {
+                            "pid": 4201,
+                            "process_start_time": "Mon May  5 11:20:00 2026",
+                            "boot_id": "macos:1777970400:0",
+                            "started_at": "2026-05-05T11:20:00Z",
+                        },
                         "bridge": {
                             "bridge_pid": 4202,
                             "app_server_pid": 4203,
@@ -561,6 +566,8 @@ def test_heartbeat_resolved_sessions_materialize_managed_control(tmp_path):
             assert connection.device_id == "testclient"
             assert connection.last_health_at is not None
             assert raw["sessions"][0]["control_path"] == "managed"
+            assert raw["sessions"][0]["process"]["process_start_time"] == "Mon May  5 11:20:00 2026"
+            assert raw["sessions"][0]["process"]["boot_id"] == "macos:1777970400:0"
             assert raw["managed_sessions"] == []
     finally:
         api_app_ref.dependency_overrides = {}
@@ -875,6 +882,75 @@ def test_heartbeat_omission_detaches_managed_control_without_ending_the_run(tmp_
             runtime = db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == session_id).one()
             assert connection.state == "detached"
             assert runtime.terminal_state is None
+    finally:
+        api_app_ref.dependency_overrides = {}
+
+
+def test_heartbeat_reattach_does_not_erase_a_terminal_run(tmp_path):
+    from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
+
+    SessionLocal = _make_db(tmp_path)
+    client, api_app_ref = _make_client(SessionLocal)
+    session_id = uuid4()
+    now = datetime.now(timezone.utc)
+
+    try:
+        with SessionLocal() as db:
+            session = AgentSession(
+                id=session_id,
+                provider="codex",
+                environment="laptop",
+                started_at=now - timedelta(minutes=5),
+                user_messages=1,
+                assistant_messages=1,
+                tool_calls=0,
+            )
+            db.add(session)
+            db.flush()
+            _thread, _run, connection = seed_managed_kernel_rows(db, session, control_plane="codex_bridge")
+            connection.device_id = "testclient"
+            ingest_runtime_events(
+                db,
+                [
+                    RuntimeEventIngest(
+                        runtime_key=runtime_key_for_session("codex", str(session_id)),
+                        session_id=session_id,
+                        provider="codex",
+                        device_id="testclient",
+                        source="engine_attached_lease",
+                        kind="terminal_signal",
+                        occurred_at=now,
+                        dedupe_key="legacy-managed-terminal",
+                        payload={"terminal_state": "process_gone"},
+                    )
+                ],
+            )
+            db.commit()
+
+        response = client.post(
+            "/api/agents/heartbeat",
+            json={
+                "version": "0.7.0",
+                "daemon_pid": 42,
+                "managed_sessions": [
+                    {
+                        "session_id": str(session_id),
+                        "provider": "codex",
+                        "machine_id": "testclient",
+                        "sequence": 1,
+                        "state": "attached",
+                        "observed_at": now.isoformat(),
+                        "lease_ttl_ms": 900_000,
+                    }
+                ],
+            },
+        )
+
+        assert response.status_code == 204, response.text
+        with SessionLocal() as db:
+            runtime = db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == session_id).one()
+            assert runtime.terminal_state == "process_gone"
+            assert runtime.terminal_source == "engine_attached_lease"
     finally:
         api_app_ref.dependency_overrides = {}
 

@@ -7,7 +7,11 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
+#[cfg(target_os = "linux")]
+use std::fs;
 use std::path::Path;
+#[cfg(target_os = "macos")]
+use std::process::Command;
 use std::sync::OnceLock;
 use std::time::Duration;
 
@@ -26,6 +30,7 @@ use crate::managed_opencode_scan::OpenCodeServerObservation;
 /// Captured once per daemon process at the first write_status_file call.
 /// Compared against the on-disk binary mtime to detect "restart pending".
 static DAEMON_STARTED_AT: OnceLock<String> = OnceLock::new();
+static MACHINE_BOOT_ID: OnceLock<Option<String>> = OnceLock::new();
 use crate::config;
 use crate::error_tracker::ConsecutiveErrorTracker;
 use crate::error_tracker::RecentIssueTracker;
@@ -221,8 +226,72 @@ pub struct ResolvedProcess {
     pub pid: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub process_start_time: Option<String>,
+    /// Machine boot identity paired with pid + process-start identity. This is
+    /// intentionally opaque because Linux and macOS expose different stable
+    /// boot markers.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub boot_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub started_at: Option<String>,
+}
+
+/// Fill the boot identity for process observations before the heartbeat leaves
+/// the Machine Agent. A boot id is machine-scoped, but belongs with each
+/// process tuple so a receiver never mistakes a recycled PID after reboot for
+/// the prior process.
+pub(crate) fn apply_machine_boot_identity(sessions: &mut [ResolvedLocalSession]) {
+    let boot_id = machine_boot_id();
+    apply_boot_identity(sessions, boot_id.as_deref());
+}
+
+fn apply_boot_identity(sessions: &mut [ResolvedLocalSession], boot_id: Option<&str>) {
+    for session in sessions {
+        if session.process.pid.is_some() {
+            session.process.boot_id = boot_id.map(str::to_string);
+        }
+    }
+}
+
+fn machine_boot_id() -> Option<String> {
+    MACHINE_BOOT_ID.get_or_init(detect_machine_boot_id).clone()
+}
+
+#[cfg(target_os = "linux")]
+fn detect_machine_boot_id() -> Option<String> {
+    fs::read_to_string("/proc/sys/kernel/random/boot_id")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .map(|value| format!("linux:{value}"))
+}
+
+#[cfg(target_os = "macos")]
+fn detect_machine_boot_id() -> Option<String> {
+    let output = Command::new("sysctl")
+        .args(["-n", "kern.boottime"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    macos_boot_id_from_sysctl(&String::from_utf8_lossy(&output.stdout))
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn detect_machine_boot_id() -> Option<String> {
+    None
+}
+
+#[cfg(target_os = "macos")]
+fn macos_boot_id_from_sysctl(raw: &str) -> Option<String> {
+    let field = |name: &str| {
+        raw.split_once(name)
+            .and_then(|(_, tail)| tail.split(|ch: char| !ch.is_ascii_digit()).next())
+            .filter(|value| !value.is_empty())
+    };
+    let seconds = field("sec = ")?;
+    let micros = field("usec = ")?;
+    Some(format!("macos:{seconds}:{micros}"))
 }
 
 #[derive(Debug, Serialize, Clone, PartialEq, Eq, Default)]
@@ -391,7 +460,7 @@ pub fn session_snapshot_digest(payload: &HeartbeatPayload) -> String {
             let mut reason_codes = session.reason_codes.clone();
             reason_codes.sort();
             format!(
-                "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
+                "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
                 session.provider,
                 session.session_id.as_deref().unwrap_or(""),
                 session.provider_session_id.as_deref().unwrap_or(""),
@@ -409,6 +478,7 @@ pub fn session_snapshot_digest(payload: &HeartbeatPayload) -> String {
                     .map(|pid| pid.to_string())
                     .unwrap_or_default(),
                 session.process.process_start_time.as_deref().unwrap_or(""),
+                session.process.boot_id.as_deref().unwrap_or(""),
                 session.process.started_at.as_deref().unwrap_or(""),
                 session
                     .bridge
@@ -847,6 +917,7 @@ fn resolved_managed_opencode_session(
                 .map(|obs| obs.process_start_time.trim())
                 .filter(|value| !value.is_empty())
                 .map(str::to_string),
+            boot_id: None,
             started_at: obs
                 .map(|obs| obs.started_at.clone())
                 .filter(|value| !value.trim().is_empty()),
@@ -947,6 +1018,7 @@ fn resolved_managed_codex_session(
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .map(str::to_string),
+            boot_id: None,
             started_at: None,
         },
         bridge: ResolvedBridge {
@@ -1057,6 +1129,7 @@ fn resolved_managed_cursor_session(
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .map(str::to_string),
+            boot_id: None,
             started_at: obs
                 .map(|obs| obs.started_at.clone())
                 .filter(|value| !value.trim().is_empty()),
@@ -1145,6 +1218,7 @@ fn resolved_managed_claude_session(
                 .map(|obs| obs.started_at.trim())
                 .filter(|value| !value.is_empty())
                 .map(str::to_string),
+            boot_id: None,
             started_at: None,
         },
         bridge: ResolvedBridge {
@@ -1230,6 +1304,7 @@ fn resolved_unmanaged_session(binding: &UnmanagedSessionBinding) -> ResolvedLoca
         process: ResolvedProcess {
             pid: binding.pid,
             process_start_time: binding.process_start_time.clone(),
+            boot_id: None,
             started_at: binding.process_start_time.clone(),
         },
         bridge: ResolvedBridge::default(),
@@ -2059,6 +2134,39 @@ mod tests {
         assert_eq!(
             background_session.bridge.ui_presence.as_deref(),
             Some("background")
+        );
+    }
+
+    #[test]
+    fn resolved_processes_carry_machine_boot_identity() {
+        let lease = ManagedSessionLease {
+            session_id: "managed-codex".to_string(),
+            provider: "codex".to_string(),
+            machine_id: "cinder".to_string(),
+            sequence: 1,
+            state: "attached".to_string(),
+            phase: Some("thinking".to_string()),
+            tool_name: None,
+            bridge_status: Some("ready".to_string()),
+            thread_subscription_status: None,
+            observed_at: "2026-05-05T12:00:00Z".to_string(),
+            lease_ttl_ms: 900_000,
+        };
+        let observation = test_observation("managed-codex", "ws://127.0.0.1:45681/session");
+        let mut sessions = resolved_sessions_from_observations(
+            &[lease],
+            &[],
+            &[observation],
+            &[],
+            &[],
+            &[],
+        );
+
+        apply_boot_identity(&mut sessions, Some("macos:1777970400:0"));
+
+        assert_eq!(
+            sessions[0].process.boot_id.as_deref(),
+            Some("macos:1777970400:0")
         );
     }
 
