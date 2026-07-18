@@ -2189,6 +2189,7 @@ fn build_local_status_projection(
             }
         };
     payload.machine_evidence = Some(heartbeat::machine_evidence_from_observations(
+        machine_id,
         observations,
         antigravity_observations,
         claude_observations,

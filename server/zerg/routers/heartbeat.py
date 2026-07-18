@@ -39,6 +39,7 @@ from zerg.database import catalog_db_dependency
 from zerg.database import live_catalog_enabled
 from zerg.database import live_store_configured
 from zerg.dependencies.agents_auth import verify_agents_token
+from zerg.machine_evidence import validate_machine_evidence_identities
 from zerg.metrics import agents_heartbeat_payload_bytes
 from zerg.metrics import agents_heartbeat_requests_total
 from zerg.metrics import agents_heartbeat_snapshot_skipped_total
@@ -165,6 +166,7 @@ class ProcessEvidenceIn(UTCBaseModel):
 class ActivityEvidenceIn(UTCBaseModel):
     provider: str = Field(..., max_length=64)
     session_id: str = Field(..., max_length=255)
+    run_id: str | None = Field(None, min_length=1, max_length=255)
     kind: str = Field(..., max_length=32)
     raw_kind: str = Field(..., max_length=64)
     tool_name: str | None = Field(None, max_length=128)
@@ -181,6 +183,8 @@ class ControlEvidenceIn(UTCBaseModel):
     # scanner in schema v1. Do not retain claims the Machine Agent cannot make.
     provider: Literal["codex", "claude", "opencode", "cursor"]
     session_id: str = Field(..., max_length=255)
+    connection_id: str | None = Field(None, min_length=1, max_length=255)
+    lease_generation: str | None = Field(None, min_length=1, max_length=255)
     provider_session_id: str | None = Field(None, max_length=255)
     ownership: Literal["managed"]
     state: Literal["attached", "detached", "degraded"]
@@ -265,26 +269,8 @@ class MachineEvidenceIn(UTCBaseModel):
             if self.identities:
                 raise ValueError("machine evidence schema v1 cannot include reducer identities")
             return self
-        seen: set[tuple[str, int]] = set()
-        families = {
-            "process": self.process,
-            "activity": self.activity,
-            "control": self.control,
-            "transcript": self.transcript,
-            "readiness": self.readiness,
-        }
-        for identity in self.identities:
-            key = (identity.fact_family, identity.fact_index)
-            if key in seen:
-                raise ValueError("machine evidence contains duplicate reducer identity")
-            seen.add(key)
-            facts = families[identity.fact_family]
-            if identity.fact_index >= len(facts):
-                raise ValueError("machine evidence reducer identity references a missing fact")
-            if identity.source != facts[identity.fact_index].source:
-                raise ValueError("machine evidence reducer identity source does not match its fact")
-            if identity.sequenced != (identity.source_seq is not None):
-                raise ValueError("machine evidence reducer identity sequence declaration is inconsistent")
+        # Rust omits absent Option fields before hashing typed facts.
+        validate_machine_evidence_identities(self.model_dump(mode="json", exclude_none=True))
         return self
 
 
@@ -783,7 +769,10 @@ async def ingest_heartbeat(
                         pass
 
                 wire_bytes = len(await request.body())
-                payload_json = json.dumps(payload.model_dump(mode="json"))
+                payload_for_retention = payload.model_dump(mode="json")
+                if payload.machine_evidence is not None:
+                    payload_for_retention["machine_evidence"] = payload.machine_evidence.model_dump(mode="json", exclude_none=True)
+                payload_json = json.dumps(payload_for_retention)
                 agents_heartbeat_payload_bytes.observe(wire_bytes)
                 set_span_attributes(
                     validate_span,

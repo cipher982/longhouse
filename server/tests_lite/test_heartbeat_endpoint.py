@@ -13,6 +13,7 @@ targeting api_app. No shared conftest.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 from datetime import datetime
@@ -34,6 +35,8 @@ os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 from zerg.database import Base
 from zerg.database import get_db
 from zerg.database import make_engine
+from zerg.machine_evidence import canonical_evidence_hash
+from zerg.machine_evidence import validate_machine_evidence_identities
 from zerg.models.agents import AgentHeartbeat
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionConnection
@@ -181,6 +184,28 @@ def _machine_evidence_payload() -> dict[str, object]:
     }
 
 
+def _process_identity(evidence: dict[str, object]) -> dict[str, object]:
+    process = evidence["process"]
+    assert isinstance(process, list)
+    fact = process[0]
+    provider = str(fact["provider"])
+    pid = int(fact["pid"])
+    process_start = str(fact["process_start_time"])
+    generation = hashlib.sha256(f"{provider}:{pid}:{process_start}".encode()).hexdigest()
+    boot = hashlib.sha256(str(fact["boot_id"]).encode()).hexdigest()
+    return {
+        "fact_family": "process",
+        "fact_index": 0,
+        "subject_key": f"process:{'0' * 64}:{provider}:{boot}:{pid}:{generation}",
+        "source": fact["source"],
+        "source_epoch": generation,
+        "source_seq": None,
+        "sequenced": False,
+        "dedupe_key": "a" * 64,
+        "evidence_hash": canonical_evidence_hash(fact),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
@@ -223,19 +248,7 @@ def test_heartbeat_accepts_reducer_grade_identity_without_promoting_authority(tm
     client, api_app_ref = _make_client(SessionLocal)
     evidence = _machine_evidence_payload()
     evidence["schema_version"] = 2
-    evidence["identities"] = [
-        {
-            "fact_family": "process",
-            "fact_index": 0,
-            "subject_key": "process:codex:boot:101:start",
-            "source": "provider_process_scan",
-            "source_epoch": "process-generation-1",
-            "source_seq": None,
-            "sequenced": False,
-            "dedupe_key": "a" * 64,
-            "evidence_hash": "b" * 64,
-        }
-    ]
+    evidence["identities"] = [_process_identity(evidence)]
 
     try:
         response = client.post(
@@ -245,8 +258,10 @@ def test_heartbeat_accepts_reducer_grade_identity_without_promoting_authority(tm
         assert response.status_code == 204
         with SessionLocal() as db:
             raw = json.loads(db.query(AgentHeartbeat).one().raw_json)
-            assert raw["machine_evidence"]["schema_version"] == 2
-            assert raw["machine_evidence"]["identities"][0]["subject_key"].startswith("process:codex:")
+            retained = raw["machine_evidence"]
+            assert retained["schema_version"] == 2
+            assert retained["identities"][0]["subject_key"].startswith("process:")
+            assert len(validate_machine_evidence_identities(retained)) == 1
             assert db.query(SessionConnection).count() == 0
     finally:
         api_app_ref.dependency_overrides = {}
@@ -277,6 +292,20 @@ def test_heartbeat_machine_evidence_rejects_invalid_and_unbounded_claims(tmp_pat
             }
         ]
         invalid_evidence.append(mismatched_identity)
+
+        forged_hash = _machine_evidence_payload()
+        forged_hash["schema_version"] = 2
+        forged_identity = _process_identity(forged_hash)
+        forged_identity["evidence_hash"] = "b" * 64
+        forged_hash["identities"] = [forged_identity]
+        invalid_evidence.append(forged_hash)
+
+        mismatched_subject = _machine_evidence_payload()
+        mismatched_subject["schema_version"] = 2
+        subject_identity = _process_identity(mismatched_subject)
+        subject_identity["subject_key"] = "process:" + "0" * 64 + ":codex:" + "0" * 64 + ":100:" + "0" * 64
+        mismatched_subject["identities"] = [subject_identity]
+        invalid_evidence.append(mismatched_subject)
 
         invalid_pid = _machine_evidence_payload()
         process = invalid_pid["process"]
@@ -410,6 +439,7 @@ async def test_catalog_heartbeat_uses_one_rpc_without_opening_sqlite(monkeypatch
     assert params["managed_leases_present"] is True
     assert params["managed_leases"][0]["session_id"] == str(session_id)
     assert params["owner_id"] == 7
+
 
 def test_heartbeat_releases_request_db_before_serialized_write(tmp_path, monkeypatch):
     from zerg.dependencies.agents_auth import verify_agents_token
@@ -733,10 +763,10 @@ def test_heartbeat_resolved_sessions_materialize_managed_control(tmp_path):
                     environment="laptop",
                     started_at=datetime(2026, 5, 5, 11, 0, tzinfo=timezone.utc),
                     last_activity_at=datetime(2026, 5, 5, 11, 59, tzinfo=timezone.utc),
-                                                                                user_messages=1,
+                    user_messages=1,
                     assistant_messages=1,
                     tool_calls=0,
-                                    )
+                )
             )
             db.commit()
 
@@ -811,19 +841,19 @@ def test_heartbeat_resolved_sessions_ignore_legacy_session_identity(tmp_path):
                         provider="codex",
                         environment="laptop",
                         started_at=datetime(2026, 5, 5, 11, 0, tzinfo=timezone.utc),
-                                                                                                user_messages=1,
+                        user_messages=1,
                         assistant_messages=1,
                         tool_calls=0,
-                                            ),
+                    ),
                     AgentSession(
                         id=legacy_session_id,
                         provider="claude",
                         environment="laptop",
                         started_at=datetime(2026, 5, 5, 11, 0, tzinfo=timezone.utc),
-                                                                                                user_messages=1,
+                        user_messages=1,
                         assistant_messages=1,
                         tool_calls=0,
-                                            ),
+                    ),
                 ]
             )
             db.commit()
@@ -895,10 +925,10 @@ def test_heartbeat_resolved_managed_unknown_state_does_not_attach(tmp_path):
                     provider="codex",
                     environment="laptop",
                     started_at=datetime(2026, 5, 5, 11, 0, tzinfo=timezone.utc),
-                                                                                user_messages=1,
+                    user_messages=1,
                     assistant_messages=1,
                     tool_calls=0,
-                                    )
+                )
             )
             db.commit()
 
@@ -953,10 +983,10 @@ def test_heartbeat_legacy_managed_sessions_still_materialize_control(tmp_path):
                     provider="claude",
                     environment="laptop",
                     started_at=datetime(2026, 5, 5, 11, 0, tzinfo=timezone.utc),
-                                                                                user_messages=1,
+                    user_messages=1,
                     assistant_messages=1,
                     tool_calls=0,
-                                    )
+                )
             )
             db.commit()
 
@@ -1024,10 +1054,10 @@ def test_heartbeat_empty_resolved_sessions_detaches_missing_managed_control(tmp_
                 provider="codex",
                 environment="laptop",
                 started_at=datetime(2026, 5, 5, 11, 0, tzinfo=timezone.utc),
-                                                                user_messages=1,
+                user_messages=1,
                 assistant_messages=1,
                 tool_calls=0,
-                            )
+            )
             db.add(session)
             db.flush()
             _thread, _run, connection = seed_managed_kernel_rows(db, session, control_plane="codex_bridge")
@@ -1193,11 +1223,11 @@ def test_heartbeat_resolved_opencode_server_bridge_keeps_live_control(tmp_path):
                 provider="opencode",
                 environment="laptop",
                 started_at=datetime(2026, 5, 5, 11, 0, tzinfo=timezone.utc),
-                                                                device_id="testclient",
+                device_id="testclient",
                 user_messages=1,
                 assistant_messages=1,
                 tool_calls=0,
-                            )
+            )
             db.add(session)
             db.flush()
             _thread, _run, connection = seed_managed_kernel_rows(
@@ -1281,11 +1311,11 @@ def test_heartbeat_repeated_opencode_digest_repairs_live_send_capabilities(monke
                 provider="opencode",
                 environment="laptop",
                 started_at=datetime(2026, 5, 5, 11, 0, tzinfo=timezone.utc),
-                                                                device_id="testclient",
+                device_id="testclient",
                 user_messages=1,
                 assistant_messages=1,
                 tool_calls=0,
-                            )
+            )
             db.add(session)
             db.flush()
             _thread, _run, connection = seed_managed_kernel_rows(
@@ -1393,19 +1423,19 @@ def test_heartbeat_empty_resolved_sessions_does_not_detach_other_device_control(
                 provider="codex",
                 environment="laptop",
                 started_at=datetime(2026, 5, 5, 11, 0, tzinfo=timezone.utc),
-                                                                user_messages=1,
+                user_messages=1,
                 assistant_messages=1,
                 tool_calls=0,
-                            )
+            )
             other_session = AgentSession(
                 id=other_session_id,
                 provider="codex",
                 environment="desktop",
                 started_at=datetime(2026, 5, 5, 11, 0, tzinfo=timezone.utc),
-                                                                user_messages=1,
+                user_messages=1,
                 assistant_messages=1,
                 tool_calls=0,
-                            )
+            )
             db.add_all([first_session, other_session])
             db.flush()
             _thread, _run, first_connection = seed_managed_kernel_rows(db, first_session, control_plane="codex_bridge")
@@ -1448,10 +1478,10 @@ def test_heartbeat_empty_resolved_sessions_does_not_detach_unknown_device_contro
                 provider="codex",
                 environment="laptop",
                 started_at=datetime(2026, 5, 5, 11, 0, tzinfo=timezone.utc),
-                                                                user_messages=1,
+                user_messages=1,
                 assistant_messages=1,
                 tool_calls=0,
-                            )
+            )
             db.add(session)
             db.flush()
             seed_managed_kernel_rows(db, session, control_plane="codex_bridge")
@@ -1497,10 +1527,10 @@ def test_heartbeat_repeated_sessions_digest_refreshes_health_without_snapshot_wo
                 provider="codex",
                 environment="laptop",
                 started_at=datetime(2026, 5, 5, 10, 0, tzinfo=timezone.utc),
-                                                                user_messages=1,
+                user_messages=1,
                 assistant_messages=1,
                 tool_calls=0,
-                            )
+            )
             db.add(session)
             db.flush()
             _thread, _run, connection = seed_managed_kernel_rows(db, session, control_plane="codex_bridge")
@@ -1574,10 +1604,10 @@ def test_heartbeat_missing_managed_detach_can_be_disabled(monkeypatch, tmp_path)
                 provider="codex",
                 environment="laptop",
                 started_at=datetime(2026, 5, 5, 11, 0, tzinfo=timezone.utc),
-                                                                user_messages=1,
+                user_messages=1,
                 assistant_messages=1,
                 tool_calls=0,
-                            )
+            )
             db.add(session)
             db.flush()
             _thread, _run, connection = seed_managed_kernel_rows(db, session, control_plane="codex_bridge")
@@ -1618,7 +1648,7 @@ def test_heartbeat_empty_resolved_sessions_requires_complete_process_scope(tmp_p
                 environment="laptop",
                 started_at=now - timedelta(minutes=20),
                 last_activity_at=now - timedelta(minutes=10),
-                                                user_messages=1,
+                user_messages=1,
                 assistant_messages=1,
                 tool_calls=0,
             )

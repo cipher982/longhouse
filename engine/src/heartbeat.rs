@@ -277,6 +277,10 @@ pub struct ProcessEvidence {
 pub struct ActivityEvidence {
     pub provider: String,
     pub session_id: String,
+    /// Durable run authority. Absent phase-only observations remain
+    /// diagnostic and are not eligible for run reduction.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
     pub kind: String,
     pub raw_kind: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -298,6 +302,12 @@ pub struct ControlEvidence {
     pub session_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provider_session_id: Option<String>,
+    /// Immutable adapter connection identity plus its scoped lease epoch.
+    /// Scanner observations without both values remain diagnostic-only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub connection_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lease_generation: Option<String>,
     pub ownership: String,
     pub state: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -983,6 +993,7 @@ pub fn filter_unmanaged_bindings_owned_by_managed_observations(
 /// This must not consume `ManagedSessionLease` or `ResolvedLocalSession`: both
 /// are compatibility projections that already mix independent authorities.
 pub(crate) fn machine_evidence_from_observations(
+    machine_id: &str,
     codex_observations: &[CodexBridgeObservation],
     antigravity_observations: &[AntigravityHookObservation],
     claude_observations: &[ClaudeChannelObservation],
@@ -1070,6 +1081,8 @@ pub(crate) fn machine_evidence_from_observations(
                 provider: "codex".to_string(),
                 session_id: obs.session_id.clone(),
                 provider_session_id: obs.thread_id.clone(),
+                connection_id: None,
+                lease_generation: None,
                 ownership: "managed".to_string(),
                 state: state.to_string(),
                 bridge_status: Some(obs.status.clone()),
@@ -1138,6 +1151,8 @@ pub(crate) fn machine_evidence_from_observations(
             provider: "claude".to_string(),
             session_id: obs.session_id.clone(),
             provider_session_id: obs.provider_session_id.clone(),
+            connection_id: None,
+            lease_generation: None,
             ownership: "managed".to_string(),
             state: if !obs.claude_alive {
                 "detached"
@@ -1205,6 +1220,8 @@ pub(crate) fn machine_evidence_from_observations(
             provider: "opencode".to_string(),
             session_id: obs.session_id.clone(),
             provider_session_id: Some(obs.provider_session_id.clone()),
+            connection_id: None,
+            lease_generation: None,
             ownership: "managed".to_string(),
             state: if !obs.server_alive {
                 "detached"
@@ -1277,6 +1294,8 @@ pub(crate) fn machine_evidence_from_observations(
             provider: "cursor".to_string(),
             session_id: obs.session_id.clone(),
             provider_session_id: None,
+            connection_id: None,
+            lease_generation: None,
             ownership: "managed".to_string(),
             state: if obs.live { "attached" } else { "detached" }.to_string(),
             bridge_status: Some(if obs.live { "ready" } else { "unavailable" }.to_string()),
@@ -1381,8 +1400,7 @@ pub(crate) fn machine_evidence_from_observations(
     transcript.truncate(MAX_MACHINE_EVIDENCE_FACTS_PER_FAMILY);
     readiness.truncate(MAX_MACHINE_EVIDENCE_FACTS_PER_FAMILY);
 
-    let identities =
-        reducer_evidence_identities(&process, &activity, &control, &transcript, &readiness);
+    let identities = reducer_evidence_identities(machine_id, &process, &transcript, &readiness);
 
     MachineEvidence {
         schema_version: 2,
@@ -1417,13 +1435,12 @@ pub(crate) fn machine_evidence_from_observations(
 }
 
 fn reducer_evidence_identities(
+    machine_id: &str,
     process: &[ProcessEvidence],
-    activity: &[ActivityEvidence],
-    control: &[ControlEvidence],
     transcript: &[TranscriptEvidence],
     readiness: &[ReadinessEvidence],
 ) -> Vec<EvidenceIdentity> {
-    let mut identities = Vec::new();
+    let mut families = [Vec::new(), Vec::new(), Vec::new()];
 
     for (fact_index, fact) in process.iter().enumerate() {
         let (Some(pid), Some(start), Some(boot)) = (
@@ -1434,44 +1451,15 @@ fn reducer_evidence_identities(
             continue;
         };
         let generation = stable_component(&format!("{}:{pid}:{start}", fact.provider));
-        identities.push(evidence_identity(
+        families[0].push(evidence_identity(
             "process",
             fact_index,
-            format!("process:{}:{boot}:{pid}:{generation}", fact.provider),
-            &fact.source,
-            Some(generation),
-            None,
-            fact,
-        ));
-    }
-
-    for (fact_index, fact) in activity.iter().enumerate() {
-        let Some(generation) =
-            session_process_generation(process, &fact.provider, &fact.session_id)
-        else {
-            continue;
-        };
-        identities.push(evidence_identity(
-            "activity",
-            fact_index,
-            format!("run:{}:{generation}", fact.session_id),
-            &fact.source,
-            Some(generation),
-            None,
-            fact,
-        ));
-    }
-
-    for (fact_index, fact) in control.iter().enumerate() {
-        let Some(generation) =
-            session_process_generation(process, &fact.provider, &fact.session_id)
-        else {
-            continue;
-        };
-        identities.push(evidence_identity(
-            "control",
-            fact_index,
-            format!("connection:{}:{generation}", fact.session_id),
+            format!(
+                "process:{}:{}:{}:{pid}:{generation}",
+                stable_component(machine_id),
+                fact.provider,
+                stable_component(boot),
+            ),
             &fact.source,
             Some(generation),
             None,
@@ -1492,7 +1480,7 @@ fn reducer_evidence_identities(
         );
         let source_epoch =
             (!epoch_material.starts_with("::")).then(|| stable_component(&epoch_material));
-        identities.push(evidence_identity(
+        families[1].push(evidence_identity(
             "transcript",
             fact_index,
             format!(
@@ -1509,7 +1497,7 @@ fn reducer_evidence_identities(
 
     for (fact_index, fact) in readiness.iter().enumerate() {
         let claim = nonempty(fact.claim_message_id.as_deref()).map(stable_component);
-        identities.push(evidence_identity(
+        families[2].push(evidence_identity(
             "readiness",
             fact_index,
             format!("readiness:{}:{}", fact.session_id, fact.operation),
@@ -1520,31 +1508,27 @@ fn reducer_evidence_identities(
         ));
     }
 
-    identities.truncate(MAX_REDUCER_EVIDENCE_FACTS);
+    // Reserve capacity across independent families. A process-heavy machine
+    // must not starve transcript or readiness evidence merely because process
+    // facts sort first.
+    let mut identities = Vec::new();
+    let mut index = 0;
+    while identities.len() < MAX_REDUCER_EVIDENCE_FACTS {
+        let before = identities.len();
+        for family in &families {
+            if let Some(identity) = family.get(index) {
+                identities.push(identity.clone());
+                if identities.len() == MAX_REDUCER_EVIDENCE_FACTS {
+                    break;
+                }
+            }
+        }
+        if identities.len() == before {
+            break;
+        }
+        index += 1;
+    }
     identities
-}
-
-fn session_process_generation(
-    process: &[ProcessEvidence],
-    provider: &str,
-    session_id: &str,
-) -> Option<String> {
-    process
-        .iter()
-        .filter(|fact| {
-            fact.provider == provider
-                && fact.session_id.as_deref() == Some(session_id)
-                && fact.alive
-                && fact.pid.is_some()
-        })
-        .find_map(|fact| {
-            let pid = fact.pid?;
-            let start = nonempty(fact.process_start_time.as_deref())?;
-            let boot = nonempty(fact.boot_id.as_deref())?;
-            Some(stable_component(&format!(
-                "{provider}:{boot}:{pid}:{start}"
-            )))
-        })
 }
 
 fn evidence_identity<T: Serialize>(
@@ -1556,7 +1540,11 @@ fn evidence_identity<T: Serialize>(
     source_seq: Option<u64>,
     fact: &T,
 ) -> EvidenceIdentity {
-    let bytes = serde_json::to_vec(fact).expect("typed machine evidence must serialize");
+    let value = serde_json::to_value(fact).expect("typed machine evidence must serialize");
+    let bytes = serde_json::to_vec(
+        &canonical_evidence_value(value).expect("typed machine evidence cannot contain floats"),
+    )
+    .expect("canonical machine evidence must serialize");
     let evidence_hash = format!("{:x}", Sha256::digest(bytes));
     let sequenced = source_seq.is_some();
     let position = source_seq
@@ -1581,6 +1569,29 @@ fn evidence_identity<T: Serialize>(
 
 fn stable_component(value: &str) -> String {
     format!("{:x}", Sha256::digest(value.as_bytes()))
+}
+
+fn canonical_evidence_value(value: serde_json::Value) -> Result<serde_json::Value, &'static str> {
+    match value {
+        serde_json::Value::Array(values) => Ok(serde_json::Value::Array(
+            values
+                .into_iter()
+                .map(canonical_evidence_value)
+                .collect::<Result<_, _>>()?,
+        )),
+        // serde_json's default Map is a BTreeMap because the preserve_order
+        // feature is disabled, so rebuilding the object defines sorted keys.
+        serde_json::Value::Object(values) => Ok(serde_json::Value::Object(
+            values
+                .into_iter()
+                .map(|(key, value)| Ok((key, canonical_evidence_value(value)?)))
+                .collect::<Result<_, &'static str>>()?,
+        )),
+        serde_json::Value::Number(number) if number.is_f64() => {
+            Err("floating-point machine evidence is not canonical")
+        }
+        other => Ok(other),
+    }
 }
 
 fn nonempty(value: Option<&str>) -> Option<&str> {
@@ -1685,6 +1696,7 @@ fn activity_evidence_from_phase_row(row: &PhaseLedgerRow) -> ActivityEvidence {
     ActivityEvidence {
         provider: row.provider.clone(),
         session_id: row.session_id.clone(),
+        run_id: None,
         kind,
         raw_kind,
         tool_name: row.tool_name.clone(),
@@ -4404,6 +4416,7 @@ mod tests {
         );
         assert!(legacy_filtered.is_empty());
         let evidence = machine_evidence_from_observations(
+            "cinder",
             &codex_observations,
             &antigravity_observations,
             &claude_observations,
@@ -4416,17 +4429,20 @@ mod tests {
         );
 
         assert_eq!(evidence.schema_version, 2);
-        assert!(evidence.identities.iter().any(|identity| {
-            identity.fact_family == "activity"
-                && identity.subject_key.starts_with("run:codex-session:")
-                && !identity.sequenced
-        }));
-        assert!(evidence.identities.iter().any(|identity| {
-            identity.fact_family == "control"
-                && identity
-                    .subject_key
-                    .starts_with("connection:cursor-session:")
-        }));
+        assert!(evidence
+            .identities
+            .iter()
+            .all(|identity| !matches!(identity.fact_family.as_str(), "activity" | "control")));
+        assert!(evidence
+            .identities
+            .iter()
+            .filter(|identity| identity.fact_family == "process")
+            .all(|identity| {
+                identity.subject_key.starts_with("process:")
+                    && ["codex", "claude", "opencode", "cursor", "antigravity"]
+                        .iter()
+                        .any(|provider| identity.subject_key.contains(&format!(":{provider}:")))
+            }));
         assert!(evidence.identities.iter().any(|identity| {
             identity.fact_family == "transcript"
                 && identity.source_seq == Some(99)
@@ -4481,6 +4497,7 @@ mod tests {
             vec![ActivityEvidence {
                 provider: "codex".to_string(),
                 session_id: "codex-session".to_string(),
+                run_id: None,
                 kind: "running".to_string(),
                 raw_kind: "running".to_string(),
                 tool_name: Some("Shell".to_string()),
@@ -4529,6 +4546,7 @@ mod tests {
         );
 
         let without_activity = machine_evidence_from_observations(
+            "cinder",
             &codex_observations,
             &antigravity_observations,
             &claude_observations,
@@ -4572,5 +4590,19 @@ mod tests {
         assert!(expired
             .reason_codes
             .contains(&"hook_observation_missing_or_expired".to_string()));
+    }
+
+    #[test]
+    fn canonical_evidence_hash_matches_server_golden_vector() {
+        let vector: serde_json::Value =
+            serde_json::from_str(include_str!("../../schemas/machine-evidence-hash-v1.json"))
+                .unwrap();
+        let value = vector.get("value").unwrap().clone();
+        let canonical = serde_json::to_string(&canonical_evidence_value(value).unwrap()).unwrap();
+        let digest = format!("{:x}", Sha256::digest(canonical.as_bytes()));
+
+        assert_eq!(canonical, vector["canonical_json"].as_str().unwrap());
+        assert_eq!(digest, vector["sha256"].as_str().unwrap());
+        assert!(canonical_evidence_value(serde_json::json!({"float": 1.5})).is_err());
     }
 }
