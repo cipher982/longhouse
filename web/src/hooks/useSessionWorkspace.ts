@@ -308,6 +308,10 @@ export function useSessionWorkspace(
     branch_mode: branchMode,
     enabled: Boolean(workspaceData),
     initialPage: workspaceData?.projection ?? null,
+    refetchInterval:
+      streamConnected || !documentVisible || !shouldRefreshWorkspaceSession(workspaceData?.session)
+        ? false
+        : WORKSPACE_FALLBACK_REFRESH_MS,
   });
 
   const [manualSelectedKey, setManualSelectedKey] = useState<string | null>(null);

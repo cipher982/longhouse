@@ -1288,6 +1288,14 @@ test.describe("SSE Fallback", () => {
     // Shorten fallback interval so the test doesn't wait 30s
     await context.addInitScript(() => {
       (window as any).__TEST_WORKSPACE_FALLBACK_MS__ = 2_000;
+      const NativeEventSource = window.EventSource;
+      (window as any).__TEST_WORKSPACE_STREAMS__ = [];
+      window.EventSource = class TestEventSource extends NativeEventSource {
+        constructor(url: string | URL, eventSourceInitDict?: EventSourceInit) {
+          super(url, eventSourceInitDict);
+          (window as any).__TEST_WORKSPACE_STREAMS__.push(this);
+        }
+      };
     });
 
     const suffix = randomUUID().slice(0, 8);
@@ -1297,6 +1305,7 @@ test.describe("SSE Fallback", () => {
     const sessionId = await ingestSession(request, {
       project,
       started_at: new Date(now).toISOString(),
+      ended_at: null,
       events: [
         {
           role: "user",
@@ -1323,8 +1332,16 @@ test.describe("SSE Fallback", () => {
       `initial event ${suffix}`,
     );
 
-    // Kill the SSE stream — abort all future workspace/stream requests
-    await page.route(`**/workspace/stream**`, (route) => route.abort());
+    // Close the exact connected EventSource and deliver its error callback.
+    // Request routing only affects future requests and leaves an established
+    // streaming response alive, which made the old test timing-dependent.
+    await page.evaluate(() => {
+      const streams = (window as any).__TEST_WORKSPACE_STREAMS__ as EventSource[];
+      const stream = streams.at(-1);
+      if (!stream) throw new Error("workspace EventSource was not captured");
+      stream.close();
+      stream.onerror?.(new Event("error"));
+    });
 
     // Ingest a new event while SSE is dead
     const laterTimestamp = new Date(now + 5_000).toISOString();
@@ -1332,6 +1349,7 @@ test.describe("SSE Fallback", () => {
       id: sessionId,
       project,
       started_at: new Date(now).toISOString(),
+      ended_at: null,
       events: [
         {
           role: "user",

@@ -194,9 +194,10 @@ export function useAgentSessionProjectionInfinite(
     enabled?: boolean;
     branch_mode?: "head" | "all";
     initialPage?: AgentSessionProjectionResponse | null;
+    refetchInterval?: number | false;
   } = {}
 ) {
-  const { limit = 1000, enabled = true, branch_mode = "head", initialPage = null } = options;
+  const { limit = 1000, enabled = true, branch_mode = "head", initialPage = null, refetchInterval } = options;
   type ProjectionPageParam =
     | { anchor: "tail"; cursor?: string }
     | { anchor: "start"; offset: number; limit: number };
@@ -243,6 +244,7 @@ export function useAgentSessionProjectionInfinite(
     initialData: initialPage
       ? { pages: [initialPage], pageParams: [{ anchor: "tail" }] }
       : undefined,
+    refetchInterval,
     staleTime: 10_000,
     gcTime: 5 * 60_000,
   });

@@ -305,6 +305,7 @@ describe("useSessionWorkspace", () => {
       initialPage: expect.objectContaining({
         focus_session_id: baseSession.id,
       }),
+      refetchInterval: 5_000,
     });
     expect(agentSessionMocks.useAgentSessionTurns).toHaveBeenCalledWith(baseSession.id, {
       limit: 10,
