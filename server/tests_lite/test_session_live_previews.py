@@ -192,15 +192,27 @@ def test_cursor_print_assistant_event_materializes_live_preview(tmp_path):
                 },
             },
         )
-        result = ingest_runtime_events(db, [event])
+        completed = event.model_copy(
+            update={
+                "dedupe_key": "cursor:run-1:3",
+                "occurred_at": now + timedelta(milliseconds=20),
+                "payload": {
+                    **event.payload,
+                    "seq": 3,
+                    "event": {"type": "result", "subtype": "success", "result": "native Cursor reply"},
+                },
+            }
+        )
+        result = ingest_runtime_events(db, [event, completed])
         db.commit()
         row = db.get(SessionLivePreview, session.id)
         preview = load_session_live_preview_map(db, [session.id])[str(session.id)]
 
-    assert result.accepted == 1
+    assert result.accepted == 2
     assert preview.text == "native Cursor reply"
     assert row is not None
     assert row.thread_id == str(thread_id)
+    assert preview.provisional_complete is True
     assert preview.source == "cursor_print"
 
 

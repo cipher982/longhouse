@@ -37,7 +37,8 @@ except Exception:
     payload = {}
 sid = os.environ.get("LONGHOUSE_SESSION_ID", "").strip()
 conversation_id = str(payload.get("conversation_id") or "").strip()
-if not sid or not conversation_id:
+permission_event = event in {"beforeShellExecution", "beforeMCPExecution"}
+if not conversation_id or (not sid and not permission_event):
     print("{}")
     raise SystemExit(0)
 home = Path(os.environ.get("LONGHOUSE_HOME") or (Path.home() / ".longhouse"))
@@ -48,13 +49,30 @@ events.mkdir(parents=True, exist_ok=True)
 claims.mkdir(parents=True, exist_ok=True)
 now = datetime.now(timezone.utc).isoformat()
 launch_id = os.environ.get("LONGHOUSE_CURSOR_LAUNCH_ID", "").strip()
+existing_claim = None
+if sid:
+    claim_target = claims / f"{sid}.json"
+    try:
+        existing_claim = json.loads(claim_target.read_text())
+    except (OSError, ValueError, TypeError):
+        pass
+else:
+    matches = []
+    for candidate in claims.glob("*.json"):
+        if candidate.name.endswith(".observed-backup.json"):
+            continue
+        try:
+            claim = json.loads(candidate.read_text())
+        except (OSError, ValueError, TypeError):
+            continue
+        if claim.get("adapter") == "cursor_print" and claim.get("conversation_uuid") == conversation_id and claim.get("status") in {"pending", "observed"}:
+            matches.append((candidate, claim))
+    if len(matches) == 1:
+        claim_target, existing_claim = matches[0]
+        sid = str(existing_claim.get("session_id") or "")
+        launch_id = str(existing_claim.get("launch_id") or "")
 claim_target = claims / f"{sid}.json"
 claim_backup = claims / f"{sid}.observed-backup.json"
-existing_claim = None
-try:
-    existing_claim = json.loads(claim_target.read_text())
-except (OSError, ValueError, TypeError):
-    pass
 claim_matches_reservation = (
     isinstance(existing_claim, dict)
     and existing_claim.get("session_id") == sid

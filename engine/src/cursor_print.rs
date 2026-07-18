@@ -60,6 +60,8 @@ struct CursorPrintSink {
     run_id: String,
     client_request_id: Option<String>,
     provider_thread_id: String,
+    launch_id: String,
+    process_group_id: Option<i32>,
     machine_name: String,
     cwd: String,
     local_db_path: Option<PathBuf>,
@@ -109,7 +111,6 @@ pub async fn start_cursor_print_turn(config: CursorPrintRunConfig) -> Result<Cur
         "--print".to_string(),
         "--output-format".to_string(),
         "stream-json".to_string(),
-        "--stream-partial-output".to_string(),
         "--trust".to_string(),
         "--workspace".to_string(),
         config.cwd.to_string_lossy().to_string(),
@@ -134,11 +135,12 @@ pub async fn start_cursor_print_turn(config: CursorPrintRunConfig) -> Result<Cur
         .stdin(Stdio::null())
         .stdout(Stdio::from(stdout_file))
         .stderr(Stdio::from(stderr_file))
-        .env("LONGHOUSE_SESSION_ID", &config.session_id)
-        .env("LONGHOUSE_CURSOR_LAUNCH_ID", &launch_id)
-        .env("LONGHOUSE_CURSOR_REGISTRATION_READY", "1")
-        .env("LONGHOUSE_LAUNCH_ACTOR", "user")
-        .env("LONGHOUSE_LAUNCH_SURFACE", "console");
+        .env_remove("LONGHOUSE_SESSION_ID")
+        .env_remove("LONGHOUSE_CURSOR_LAUNCH_ID")
+        .env_remove("LONGHOUSE_CURSOR_REGISTRATION_READY")
+        .env_remove("LONGHOUSE_CURSOR_PRINT_MODE")
+        .env_remove("LONGHOUSE_LAUNCH_ACTOR")
+        .env_remove("LONGHOUSE_LAUNCH_SURFACE");
     if config.permission_mode == "remote_approve" {
         let token = normalized_optional(&config.api_token)
             .context("Cursor Console remote approval requires a Machine Agent token")?;
@@ -177,6 +179,8 @@ pub async fn start_cursor_print_turn(config: CursorPrintRunConfig) -> Result<Cur
         run_id: config.run_id.clone(),
         client_request_id: config.client_request_id.clone(),
         provider_thread_id: provider_thread_id.clone(),
+        launch_id: launch_id.clone(),
+        process_group_id: Some(process_group_id),
         machine_name: config.machine_name.clone(),
         cwd: config.cwd.to_string_lossy().to_string(),
         local_db_path: config.local_db_path.clone(),
@@ -263,6 +267,8 @@ pub async fn recover_cursor_print_turns(
             run_id: claim.run_id.clone(),
             client_request_id: claim.client_request_id.clone(),
             provider_thread_id: provider_thread_id.clone(),
+            launch_id: claim.launch_id.clone().unwrap_or_default(),
+            process_group_id: claim.process_group_id,
             machine_name: machine_name.to_string(),
             cwd,
             local_db_path: local_db_path.clone(),
@@ -393,6 +399,9 @@ async fn monitor_cursor_print(
                         "run_failed".to_string()
                     }
                 });
+                if terminal != "run_completed" {
+                    cleanup_process_group(sink.process_group_id).await;
+                }
                 sink.post_terminal(&terminal, status.code(), stderr_tail(stderr_path)).await;
                 return;
             }
@@ -437,6 +446,7 @@ async fn monitor_recovered_claim(
             let terminal = terminal_from_stream.unwrap_or_else(|| {
                 if cancel_requested { "run_cancelled".to_string() } else { "run_failed".to_string() }
             });
+            cleanup_process_group(sink.process_group_id).await;
             sink.post_terminal(&terminal, None, stderr_tail(&stderr_path)).await;
             return;
         }
@@ -466,7 +476,20 @@ async fn settle_recovered_dead_claim(
     let terminal = terminal.unwrap_or_else(|| {
         if claim.cancel_requested_at.is_some() { "run_cancelled".to_string() } else { "run_failed".to_string() }
     });
+    cleanup_process_group(sink.process_group_id).await;
     sink.post_terminal(&terminal, None, stderr_tail(stderr_path)).await;
+}
+
+async fn cleanup_process_group(process_group_id: Option<i32>) {
+    let Some(pgid) = process_group_id else { return; };
+    if unsafe { libc::killpg(pgid, 0) } != 0 {
+        return;
+    }
+    unsafe { libc::killpg(pgid, libc::SIGTERM) };
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    if unsafe { libc::killpg(pgid, 0) } == 0 {
+        unsafe { libc::killpg(pgid, libc::SIGKILL) };
+    }
 }
 
 fn claim_process_is_live(claim: &crate::turn_claims::TurnClaim) -> bool {
@@ -536,6 +559,18 @@ impl CursorPrintSink {
         if event.get("type").and_then(Value::as_str) == Some("system") {
             let observed = event.get("session_id").and_then(Value::as_str).unwrap_or_default();
             if observed == self.provider_thread_id {
+                if let Ok(root) = cursor_managed_root() {
+                    let _ = promote_binding(
+                        &root,
+                        &self.session_id,
+                        &self.thread_id,
+                        self.turn_id.as_deref(),
+                        &self.run_id,
+                        self.client_request_id.as_deref(),
+                        observed,
+                        &self.launch_id,
+                    );
+                }
                 if let Ok(registry) = crate::turn_claims::default_registry() {
                     let _ = registry.mark_provider_binding(&self.run_id, observed, None);
                 }
@@ -719,6 +754,7 @@ fn reserve_binding(
     let payload = json!({
         "schema_version": 2,
         "provider": "cursor",
+        "adapter": CURSOR_PRINT_ADAPTER,
         "status": "pending",
         "session_id": session_id,
         "thread_id": thread_id,
@@ -730,6 +766,44 @@ fn reserve_binding(
         "expires_at": (Utc::now() + chrono::Duration::minutes(10)).to_rfc3339(),
     });
     atomic_write(&target, &serde_json::to_vec(&payload)?)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn promote_binding(
+    root: &Path,
+    session_id: &str,
+    thread_id: &str,
+    turn_id: Option<&str>,
+    run_id: &str,
+    client_request_id: Option<&str>,
+    provider_thread_id: &str,
+    launch_id: &str,
+) -> Result<()> {
+    let target = root.join("binding-probes").join(format!("{session_id}.json"));
+    let existing: Value = serde_json::from_slice(&std::fs::read(&target)?)?;
+    if existing.get("status").and_then(Value::as_str) != Some("pending")
+        || existing.get("session_id").and_then(Value::as_str) != Some(session_id)
+        || existing.get("conversation_uuid").and_then(Value::as_str) != Some(provider_thread_id)
+        || existing.get("launch_id").and_then(Value::as_str) != Some(launch_id)
+    {
+        anyhow::bail!("Cursor stream identity does not match its pending binding reservation");
+    }
+    atomic_write(
+        &target,
+        &serde_json::to_vec(&json!({
+            "schema_version": 2,
+            "provider": "cursor",
+            "status": "observed",
+            "session_id": session_id,
+            "thread_id": thread_id,
+            "turn_id": turn_id,
+            "run_id": run_id,
+            "client_request_id": client_request_id,
+            "conversation_uuid": provider_thread_id,
+            "launch_id": launch_id,
+            "hook_observed_at": Utc::now().to_rfc3339(),
+        }))?,
+    )
 }
 
 fn rollback_binding(root: &Path, session_id: &str, launch_id: &str) {
@@ -811,6 +885,62 @@ mod tests {
         assert_eq!(read_growth(&path, &mut offset, &mut pending).unwrap(), vec![b"two".to_vec()]);
     }
 
+    #[test]
+    fn system_init_promotes_only_the_exact_pending_binding() {
+        let temp = tempfile::tempdir().unwrap();
+        let session_id = Uuid::new_v4().to_string();
+        let thread_id = Uuid::new_v4().to_string();
+        let turn_id = Uuid::new_v4().to_string();
+        let run_id = Uuid::new_v4().to_string();
+        let provider_thread_id = Uuid::new_v4().to_string();
+        let launch_id = Uuid::new_v4().to_string();
+        reserve_binding(
+            temp.path(),
+            &session_id,
+            &thread_id,
+            Some(&turn_id),
+            &run_id,
+            Some("request-1"),
+            &provider_thread_id,
+            &launch_id,
+        )
+        .unwrap();
+        assert!(promote_binding(
+            temp.path(),
+            &session_id,
+            &thread_id,
+            Some(&turn_id),
+            &run_id,
+            Some("request-1"),
+            "wrong-provider-thread",
+            &launch_id,
+        )
+        .is_err());
+        promote_binding(
+            temp.path(),
+            &session_id,
+            &thread_id,
+            Some(&turn_id),
+            &run_id,
+            Some("request-1"),
+            &provider_thread_id,
+            &launch_id,
+        )
+        .unwrap();
+        let claim: Value = serde_json::from_slice(
+            &std::fs::read(
+                temp.path()
+                    .join("binding-probes")
+                    .join(format!("{session_id}.json")),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(claim["status"], "observed");
+        assert_eq!(claim["thread_id"], thread_id);
+        assert_eq!(claim["run_id"], run_id);
+    }
+
     #[tokio::test]
     #[ignore = "requires an authenticated stock cursor-agent and spends provider tokens"]
     async fn installed_cursor_completes_and_resumes_through_production_console_adapter() {
@@ -820,9 +950,16 @@ mod tests {
         let cursor_bin = std::env::var("LONGHOUSE_CURSOR_BIN").unwrap_or_else(|_| "cursor-agent".to_string());
         let marker = format!("LH_CURSOR_CONSOLE_CANARY_{}", Uuid::new_v4().simple());
 
-        async fn run_turn(cursor_bin: &str, cwd: &Path, prompt: String, resume: Option<String>) -> CursorPrintRunSummary {
-            let session_id = Uuid::new_v4().to_string();
-            let thread_id = Uuid::new_v4().to_string();
+        async fn run_turn(
+            cursor_bin: &str,
+            cwd: &Path,
+            prompt: String,
+            resume: Option<String>,
+            longhouse_identity: Option<(String, String)>,
+        ) -> CursorPrintRunSummary {
+            let (session_id, thread_id) = longhouse_identity.unwrap_or_else(|| {
+                (Uuid::new_v4().to_string(), Uuid::new_v4().to_string())
+            });
             let turn_id = Uuid::new_v4().to_string();
             let run_id = Uuid::new_v4().to_string();
             let client_request_id = format!("canary-{}", Uuid::new_v4());
@@ -850,7 +987,7 @@ mod tests {
                 cursor_bin: cursor_bin.to_string(),
                 prompt,
                 resume_provider_thread_id: resume,
-                model: None,
+                model: Some("gpt-5.3-codex-low".to_string()),
                 permission_mode: "bypass".to_string(),
                 api_url: "http://127.0.0.1:1".to_string(),
                 api_token: None,
@@ -861,7 +998,14 @@ mod tests {
             loop {
                 let claim = crate::turn_claims::default_registry().unwrap().read(&summary.run_id).unwrap();
                 if claim.state == "terminal" {
-                    assert_eq!(claim.result.unwrap()["terminal_state"], "run_completed");
+                    let result = claim.result.unwrap();
+                    assert_eq!(
+                        result["terminal_state"],
+                        "run_completed",
+                        "stdout={}\nstderr={}",
+                        std::fs::read_to_string(&summary.stdout_path).unwrap_or_default(),
+                        std::fs::read_to_string(&summary.stderr_path).unwrap_or_default(),
+                    );
                     return summary;
                 }
                 assert!(tokio::time::Instant::now() < deadline, "Cursor Console canary timed out");
@@ -873,6 +1017,7 @@ mod tests {
             &cursor_bin,
             temp.path(),
             format!("Reply with exactly {marker} and nothing else. Do not use tools."),
+            None,
             None,
         ).await;
         let first_output = std::fs::read_to_string(&first.stdout_path).unwrap();
@@ -891,12 +1036,18 @@ mod tests {
         assert_eq!(binding["conversation_uuid"], first.provider_thread_id);
         assert_eq!(binding["thread_id"], first.thread_id);
 
+        // Cursor closes the local process before its remote resume checkpoint
+        // is immediately reusable. Real Console dispatch naturally crosses
+        // the runtime-event/catalog round trip; keep the direct canary honest
+        // to that boundary instead of manufacturing a zero-gap second turn.
+        tokio::time::sleep(Duration::from_secs(3)).await;
         let second_marker = format!("{marker}_RESUMED");
         let second = run_turn(
             &cursor_bin,
             temp.path(),
             format!("Reply with exactly {second_marker} and nothing else. Do not use tools."),
             Some(first.provider_thread_id.clone()),
+            Some((first.session_id.clone(), first.thread_id.clone())),
         ).await;
         assert_eq!(second.provider_thread_id, first.provider_thread_id);
         assert!(std::fs::read_to_string(&second.stdout_path).unwrap().contains(&second_marker));

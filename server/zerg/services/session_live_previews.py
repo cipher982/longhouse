@@ -109,6 +109,28 @@ def _cursor_print_preview_candidate(event: Any, payload: dict[str, Any], *, obse
     thread_id = _optional_str(payload.get("thread_id") or event.thread_id)
     turn_id = _optional_str(payload.get("turn_id"))
     observed_at = normalize_utc(event.occurred_at) or datetime.now(timezone.utc)
+    if raw_type == "result" and raw.get("subtype") == "success":
+        text = str(raw.get("result") or "").strip()
+        if not text:
+            return None
+        turn_key = build_provisional_key(
+            source="cursor_print",
+            session_id=event.session_id,
+            thread_id=thread_id,
+            turn_id=turn_id,
+        )
+        return LivePreviewCandidate(
+            session_id=event.session_id,
+            thread_id=thread_id,
+            turn_key=turn_key,
+            seq=seq,
+            preview_text=text,
+            provisional_cursor=build_provisional_cursor(key=turn_key, seq=seq),
+            provisional_complete=True,
+            preview_observed_at=observed_at,
+            source="cursor_print",
+            last_observation_id=observation_id,
+        )
     if raw_type == "assistant":
         message = raw.get("message")
         content = message.get("content") if isinstance(message, dict) else None
@@ -148,7 +170,7 @@ def _cursor_print_preview_candidate(event: Any, payload: dict[str, Any], *, obse
     success = result.get("success") if isinstance(result.get("success"), dict) else {}
     rejected = result.get("rejected") if isinstance(result.get("rejected"), dict) else {}
     command = str(args.get("command") or "").strip()
-    output = str(success.get("stdout") or success.get("interleavedOutput") or rejected.get("reason") or "")
+    output = _cursor_tool_output(success, rejected)
     subtype = str(raw.get("subtype") or "").strip()
     turn_key = build_provisional_key(
         source="cursor_print",
@@ -187,6 +209,17 @@ def _cursor_tool_detail(call: dict[str, Any]) -> tuple[str, dict[str, Any] | Non
         if isinstance(value, dict):
             return label, value
     return "Tool", None
+
+
+def _cursor_tool_output(success: dict[str, Any], rejected: dict[str, Any]) -> str:
+    for key in ("stdout", "interleavedOutput", "content", "output", "text"):
+        value = success.get(key)
+        if isinstance(value, str) and value:
+            return value
+    reason = rejected.get("reason")
+    if isinstance(reason, str) and reason:
+        return reason
+    return json.dumps(success, ensure_ascii=False, sort_keys=True) if success else ""
 
 
 def upsert_session_live_preview(db: Session, candidate: LivePreviewCandidate) -> bool:

@@ -16,7 +16,7 @@ Cursor Console executes one stock native Cursor invocation per accepted turn:
 
 ```text
 cursor-agent --print --output-format stream-json \
-  --stream-partial-output --trust --resume <native-chat-id>
+  --trust --resume <native-chat-id>
 ```
 
 Fresh threads reserve their native identity with `cursor-agent create-chat`.
@@ -70,14 +70,23 @@ before releasing the thread's execution owner.
 ## Identity And Transcript Convergence
 
 The pending Cursor binding claim exists before `--print` starts, preventing an
-empty native store from racing into a duplicate Shadow session. The installed
-Cursor hook promotes the claim only when the inherited Longhouse session and
-launch identifiers agree with Cursor's `conversation_id`.
+empty native store from racing into a duplicate Shadow session. The adapter
+promotes the claim only when Cursor's durable `system.init.session_id` matches
+the reserved native identity plus the Longhouse session and launch identifiers.
+Cursor hooks remain on the synchronous path only for permission decisions;
+Console lifecycle and binding come from the already-durable stream so hook
+latency cannot destabilize the provider connection.
 
 Stream-json is the provisional live lane. Every raw line is durable locally
 before projection and is keyed by run plus byte offset. Known records project
 user input, assistant text, tool state, provider identity, usage, and terminal
 state; unknown records remain raw evidence.
+
+Do not enable Cursor's `--stream-partial-output` on the 2026.07.16 client.
+That mode reconnects after a completed assistant response, duplicates output,
+and can terminate with `WritableIterable is closed`. Plain stream-json still
+streams thinking and tool lifecycle records, then emits the complete assistant
+message and result reliably for fresh and resumed native conversations.
 
 The native Cursor storage-v2 source remains canonical. The invocation binding
 carries session, thread, turn, run, request, and provider identities through
