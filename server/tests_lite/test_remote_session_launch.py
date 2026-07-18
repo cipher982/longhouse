@@ -107,6 +107,71 @@ def _make_db(tmp_path):
     return sessionmaker(bind=engine)
 
 
+def _seed_antigravity_launch_shell(db):
+    session_id = uuid4()
+    now = datetime.now(timezone.utc)
+    session = AgentSession(
+        id=session_id,
+        provider="antigravity",
+        environment="development",
+        project="repo",
+        device_id="cinder",
+        cwd="/Users/me/repo",
+        started_at=now,
+        user_messages=0,
+        assistant_messages=0,
+        tool_calls=0,
+    )
+    db.add(session)
+    db.flush()
+    attempt = SessionLaunchAttempt(
+        session_id=session_id,
+        provider="antigravity",
+        host_id="cinder",
+        state="dispatched",
+    )
+    db.add(attempt)
+    db.flush()
+    return session, attempt
+
+
+def _assert_antigravity_connection_requires_hook_proof(db):
+    connection = db.query(SessionConnection).one()
+    assert connection.state == "detached"
+    assert connection.can_send_input == 0
+    assert connection.last_health_at is None
+
+
+def test_remote_launch_adoption_does_not_bypass_antigravity_hook_proof(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    with SessionLocal() as db:
+        session, attempt = _seed_antigravity_launch_shell(db)
+        remote_launch_module._attach_live_launch_run(
+            db,
+            session=session,
+            attempt=attempt,
+            external_name="cinder",
+        )
+        _assert_antigravity_connection_requires_hook_proof(db)
+
+
+def test_archive_launch_adoption_does_not_bypass_antigravity_hook_proof(tmp_path):
+    from zerg.services.live_archive_outbox import _attach_live_remote_launch
+
+    SessionLocal = _make_db(tmp_path)
+    with SessionLocal() as db:
+        session, attempt = _seed_antigravity_launch_shell(db)
+        _attach_live_remote_launch(
+            db,
+            session=session,
+            attempt=attempt,
+            launch={"started_at": datetime.now(timezone.utc).isoformat()},
+            outcome={},
+            cwd=session.cwd,
+        )
+        _assert_antigravity_connection_requires_hook_proof(db)
+
+
 def _seed_user_and_device(SessionLocal, *, owner_id: int = OWNER_ID, device_id: str = "cinder"):
     with SessionLocal() as db:
         existing = db.query(User).filter(User.id == owner_id).first()

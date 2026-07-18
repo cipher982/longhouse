@@ -60,6 +60,7 @@ from zerg.services.live_launch_readiness import upsert_live_launch_readiness
 from zerg.services.machine_control_channel import MachineControlChannelRegistry
 from zerg.services.machine_control_channel import MachineControlCommandResponse
 from zerg.services.machine_control_channel import get_machine_control_channel_registry
+from zerg.services.managed_local_launcher import managed_provider_requires_readiness_proof
 from zerg.services.managed_provider_contracts import continue_supported_providers
 from zerg.services.managed_provider_contracts import control_plane_for_provider
 from zerg.services.managed_provider_contracts import remote_launch_supported_providers
@@ -548,14 +549,15 @@ def _attach_live_launch_run(
     )
     contract = require_contract_for_provider(session.provider)
     connection_capabilities = contract.connection_capabilities
+    requires_readiness_proof = managed_provider_requires_readiness_proof(session.provider)
     conn = upsert_connection_for_run(
         db,
         run=run,
         control_plane=contract.control_plane,
         acquisition_kind="spawned_control",
-        state="attached",
+        state="detached" if requires_readiness_proof else "attached",
         external_name=external_name or session.device_id,
-        can_send_input=connection_capabilities["can_send_input"],
+        can_send_input=(0 if requires_readiness_proof else connection_capabilities["can_send_input"]),
         can_interrupt=connection_capabilities["can_interrupt"],
         can_terminate=connection_capabilities["can_terminate"],
         can_tail_output=connection_capabilities["can_tail_output"],
@@ -564,7 +566,7 @@ def _attach_live_launch_run(
     # The engine ack IS the readiness observation, so stamp health now. This
     # keeps the connection inside the lease freshness window the capability
     # projection enforces; the insert path of upsert leaves last_health_at NULL.
-    conn.last_health_at = now
+    conn.last_health_at = None if requires_readiness_proof else now
     if session.ended_at is not None:
         session.ended_at = None
     update_launch_attempt(

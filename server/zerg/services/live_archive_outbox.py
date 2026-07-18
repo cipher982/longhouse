@@ -36,6 +36,7 @@ from zerg.services.live_launch_readiness import REMOTE_LAUNCH_OUTBOX_KIND
 from zerg.services.live_launch_readiness import REMOTE_LAUNCH_OUTCOME_OUTBOX_KIND
 from zerg.services.live_launch_readiness import update_live_launch_readiness_state
 from zerg.services.managed_local_launcher import ManagedLocalLaunchPlan
+from zerg.services.managed_local_launcher import managed_provider_requires_readiness_proof
 from zerg.services.managed_local_launcher import materialize_managed_local_launch_plan_sync
 from zerg.services.managed_provider_contracts import require_contract_for_provider
 from zerg.services.session_inputs import INPUT_STATUS_DELIVERED
@@ -875,21 +876,22 @@ def _attach_live_remote_launch(
         run.cwd = cwd or run.cwd
     contract = require_contract_for_provider(session.provider)
     caps = contract.connection_capabilities
+    requires_readiness_proof = managed_provider_requires_readiness_proof(session.provider)
     conn = upsert_connection_for_run(
         db,
         run=run,
         control_plane=contract.control_plane,
         acquisition_kind="spawned_control",
-        state="attached",
+        state="detached" if requires_readiness_proof else "attached",
         external_name=str(outcome.get("external_name") or launch.get("machine_id") or launch.get("device_id") or "").strip() or None,
-        can_send_input=caps["can_send_input"],
+        can_send_input=0 if requires_readiness_proof else caps["can_send_input"],
         can_interrupt=caps["can_interrupt"],
         can_terminate=caps["can_terminate"],
         can_tail_output=caps["can_tail_output"],
         can_resume=caps["can_resume"],
     )
     now = datetime.now(timezone.utc)
-    conn.last_health_at = now
+    conn.last_health_at = None if requires_readiness_proof else now
     session.ended_at = None
     attempt.state = "adopted"
     attempt.run_id = run.id
