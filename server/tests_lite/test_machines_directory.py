@@ -254,7 +254,7 @@ def test_directory_does_not_expose_unproven_claude_console_adapter(tmp_path):
     assert entries[0].launch_blocked_by == "no_launch_support"
 
 
-def test_directory_does_not_expose_unproven_opencode_console_adapter(tmp_path):
+def test_directory_exposes_proven_opencode_console_adapter(tmp_path):
     SessionLocal = _make_db(tmp_path)
     _seed_user(SessionLocal)
     registry = MachineControlChannelRegistry()
@@ -264,8 +264,8 @@ def test_directory_does_not_expose_unproven_opencode_console_adapter(tmp_path):
 
     assert len(entries) == 1
     assert entries[0].can_launch_codex is False
-    assert entries[0].launchable_providers == ()
-    assert entries[0].launch_blocked_by == "no_launch_support"
+    assert entries[0].launchable_providers == ("opencode",)
+    assert entries[0].launch_blocked_by is None
 
 
 def test_directory_reports_antigravity_send_without_launchability(tmp_path):

@@ -274,6 +274,7 @@ def test_opencode_contract_is_server_bridge_control_provider_without_active_turn
     assert opencode.answer_pause is False
     assert opencode.reattach is True
     assert opencode.can_resume is False
+    assert opencode.turn_start is True
     assert opencode.operation_evidence_for("launch_remote")["level"] == "hermetic"
     assert opencode.operation_evidence_for("terminate")["level"] == "hermetic"
     assert opencode.machine_control_supports == (
@@ -281,6 +282,8 @@ def test_opencode_contract_is_server_bridge_control_provider_without_active_turn
         "opencode.interrupt",
         "opencode.launch",
         "opencode.terminate",
+        "opencode.turn_start",
+        "opencode.turn_interrupt",
     )
     assert opencode.connection_capabilities == {
         "can_send_input": 1,
@@ -369,6 +372,8 @@ def test_codex_exec_is_direct_one_shot_control_not_a_steer_alias():
         ("opencode", "session.steer_text", None),
         ("opencode", "session.answer_pause", None),
         ("opencode", "session.terminate", "opencode.terminate"),
+        ("opencode", "session.turn.start", "opencode.turn_start"),
+        ("opencode", "session.turn.interrupt", "opencode.turn_interrupt"),
         ("antigravity", "session.send_text", "antigravity.send"),
         ("antigravity", "session.interrupt", None),
         ("antigravity", "session.steer_text", None),

@@ -316,6 +316,60 @@ async def test_interrupt_console_turn_targets_exact_active_run(tmp_path, monkeyp
 
 
 @pytest.mark.asyncio
+async def test_opencode_console_dispatch_resumes_native_session_and_interrupts_exact_run(tmp_path, monkeypatch):
+    db = _db(tmp_path)
+    session = _session(db)
+    session.provider = "opencode"
+    thread = ensure_primary_thread(db, session)
+    thread.provider = "opencode"
+    set_thread_execution_target(
+        thread,
+        device_id="cinder",
+        cwd="/tmp/longhouse",
+        provider_config={"permission_mode": "bypass"},
+    )
+    record_thread_alias(
+        db,
+        thread=thread,
+        provider="opencode",
+        alias_kind="provider_session_id",
+        alias_value="ses_native_resume",
+    )
+    db.commit()
+    enqueue_console_turn(
+        db,
+        session=session,
+        owner_id=1,
+        message="Continue OpenCode",
+        client_request_id="opencode-resume",
+    )
+
+    class Registry:
+        commands = []
+
+        def supports(self, **kwargs):
+            return kwargs["capability"] in {"opencode.turn_start", "opencode.turn_interrupt"}
+
+        async def send_command(self, **kwargs):
+            self.commands.append(kwargs)
+            return SimpleNamespace(transport_ok=True, message={"ok": True}, error=None)
+
+    registry = Registry()
+    dispatched = await dispatch_next_console_turn(db, owner_id=1, thread_id=thread.id, registry=registry)
+    monkeypatch.setattr("zerg.database.live_catalog_enabled", lambda: False)
+    interrupted = await interrupt_console_turn(db, owner_id=1, session_id=session.id, registry=registry)
+
+    assert dispatched.state == SESSION_TURN_STATE_ACTIVE
+    assert registry.commands[0]["command_type"] == "session.turn.start"
+    assert registry.commands[0]["payload"]["provider"] == "opencode"
+    assert registry.commands[0]["payload"]["resume_provider_thread_id"] == "ses_native_resume"
+    assert interrupted.dispatched is True
+    assert registry.commands[1]["command_type"] == "session.turn.interrupt"
+    assert registry.commands[1]["payload"]["provider"] == "opencode"
+    assert registry.commands[1]["payload"]["run_id"] == str(dispatched.run_id)
+
+
+@pytest.mark.asyncio
 async def test_dispatch_timeout_keeps_durable_claim_starting_and_fifo_blocked(tmp_path):
     db = _db(tmp_path)
     session = _session(db)

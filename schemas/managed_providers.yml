@@ -191,7 +191,7 @@ providers:
   runtime_phase: true
   transcript_binding: true
   can_resume: false
-  turn_start: false
+  turn_start: true
   operation_evidence:
     launch_local:
       level: live_no_token
@@ -243,13 +243,16 @@ providers:
         assertion
       next: promote with release-canary assistant transcript assertion
     turn_start:
-      level: none
-      source: OpenCode turn-scoped Console adapter is not machine-advertised
+      level: hermetic
+      source: opencode_run durable claims, structured JSONL projection, native --session
+        resume, and Console dispatch tests
   machine_control_supports:
   - opencode.send
   - opencode.interrupt
   - opencode.launch
   - opencode.terminate
+  - opencode.turn_start
+  - opencode.turn_interrupt
 - provider: antigravity
   provider_cli_binary: agy
   provider_cli_env: LONGHOUSE_ANTIGRAVITY_BIN

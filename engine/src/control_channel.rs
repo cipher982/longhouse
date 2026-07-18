@@ -39,6 +39,7 @@ use crate::codex_exec::{start_codex_exec_once, CodexExecRunConfig};
 use crate::config::ShipperConfig;
 use crate::console_prompt::wrap_console_run_once_prompt;
 use crate::cursor_print::{start_cursor_print_turn, CursorPrintRunConfig, CURSOR_PRINT_ADAPTER};
+use crate::opencode_run::{start_opencode_run_turn, OpenCodeRunConfig, OPENCODE_RUN_ADAPTER};
 use crate::turn_claims::{
     default_registry as default_turn_claim_registry, process_start_time_for_pid, ClaimOutcome,
 };
@@ -60,6 +61,7 @@ const COMMAND_ARCHIVE_BACKLOG_CONTROL: &str = "archive.backlog_control";
 const COMMAND_ARCHIVE_BACKLOG_CONTROL_V2: &str = "archive.backlog_control.v2";
 const DEFAULT_CODEX_BIN: &str = "codex";
 const DEFAULT_CURSOR_BIN: &str = "cursor-agent";
+const DEFAULT_OPENCODE_BIN: &str = "opencode";
 const DEFAULT_LONGHOUSE_BIN: &str = "longhouse";
 // Remote detached-UI Codex launches run without the user's shell wrapper, so
 // the engine owns the managed zero-prompt contract explicitly.
@@ -498,10 +500,31 @@ pub fn spawn_control_channel(
     status.set_disconnected(None, None, None, None);
 
     Some(tokio::spawn(async move {
-        match crate::cursor_print::recover_cursor_print_turns(&config.machine_name, config.db_path.clone()).await {
-            Ok(count) if count > 0 => tracing::info!(count, "Recovered Cursor Console turn monitors"),
+        match crate::cursor_print::recover_cursor_print_turns(
+            &config.machine_name,
+            config.db_path.clone(),
+        )
+        .await
+        {
+            Ok(count) if count > 0 => {
+                tracing::info!(count, "Recovered Cursor Console turn monitors")
+            }
             Ok(_) => {}
             Err(error) => tracing::warn!(%error, "Failed to reconcile Cursor Console turn claims"),
+        }
+        match crate::opencode_run::recover_opencode_run_turns(
+            &config.machine_name,
+            config.db_path.clone(),
+        )
+        .await
+        {
+            Ok(count) if count > 0 => {
+                tracing::info!(count, "Recovered OpenCode Console turn monitors")
+            }
+            Ok(_) => {}
+            Err(error) => {
+                tracing::warn!(%error, "Failed to reconcile OpenCode Console turn claims")
+            }
         }
         run_reconnect_loop(config, status).await;
     }))
@@ -825,17 +848,29 @@ async fn execute_command(
         COMMAND_TURN_INTERRUPT => {
             let run_id = payload_required_string(&payload, "run_id")?;
             let provider = payload_required_string(&payload, "provider")?;
-            if provider != "cursor" {
-                return Err(CommandError {
-                    code: "provider_unsupported".to_string(),
-                    message: format!("provider={provider} has no turn-scoped interrupt adapter"),
-                });
-            }
-            crate::cursor_print::interrupt_cursor_print_turn(&run_id, &session_id)
-                .map_err(CommandError::command_failed)?;
+            let transport = match provider.as_str() {
+                "cursor" => {
+                    crate::cursor_print::interrupt_cursor_print_turn(&run_id, &session_id)
+                        .map_err(CommandError::command_failed)?;
+                    CURSOR_PRINT_ADAPTER
+                }
+                "opencode" => {
+                    crate::opencode_run::interrupt_opencode_run_turn(&run_id, &session_id)
+                        .map_err(CommandError::command_failed)?;
+                    OPENCODE_RUN_ADAPTER
+                }
+                _ => {
+                    return Err(CommandError {
+                        code: "provider_unsupported".to_string(),
+                        message: format!(
+                            "provider={provider} has no turn-scoped interrupt adapter"
+                        ),
+                    });
+                }
+            };
             Ok(json!({
-                "provider": "cursor",
-                "transport": CURSOR_PRINT_ADAPTER,
+                "provider": provider,
+                "transport": transport,
                 "run_id": run_id,
                 "interrupt_requested": true,
             }))
@@ -1371,7 +1406,9 @@ async fn execute_turn_start(
     let client_request_id = payload_optional_string(payload, "client_request_id");
     let command_received_at_ms = chrono::Utc::now().timestamp_millis();
     let server_accepted_at_ms = payload.get("server_accepted_at_ms").and_then(Value::as_i64);
-    let server_dispatched_at_ms = payload.get("server_dispatched_at_ms").and_then(Value::as_i64);
+    let server_dispatched_at_ms = payload
+        .get("server_dispatched_at_ms")
+        .and_then(Value::as_i64);
     eprintln!(
         "[console-turn] latency stage=machine_command_received session={session_id} run={run_id} turn={} request={} accepted_to_machine_ms={} dispatched_to_machine_ms={}",
         turn_id.as_deref().unwrap_or("unknown"),
@@ -1384,7 +1421,7 @@ async fn execute_turn_start(
             .unwrap_or(-1),
     );
     let provider = payload_required_string(payload, "provider")?;
-    if !matches!(provider.as_str(), "codex" | "cursor") {
+    if !matches!(provider.as_str(), "codex" | "cursor" | "opencode") {
         return Err(CommandError {
             code: "provider_unsupported".to_string(),
             message: format!("provider={provider} has no Console turn adapter"),
@@ -1511,6 +1548,41 @@ async fn execute_turn_start(
                 "argv": summary.argv,
             })
         })
+    } else if provider == "opencode" {
+        start_opencode_run_turn(OpenCodeRunConfig {
+            session_id: session_id.to_string(),
+            thread_id: thread_id.clone(),
+            turn_id: turn_id.clone(),
+            run_id: run_id.clone(),
+            client_request_id: client_request_id.clone(),
+            cwd,
+            opencode_bin: std::env::var("LONGHOUSE_OPENCODE_BIN")
+                .unwrap_or_else(|_| DEFAULT_OPENCODE_BIN.to_string()),
+            prompt: message,
+            resume_provider_thread_id,
+            model: payload_optional_string(payload, "model"),
+            permission_mode: payload_optional_string(payload, "permission_mode")
+                .unwrap_or_else(|| "bypass".to_string()),
+            machine_name: config.machine_name.clone(),
+            local_db_path,
+        })
+        .await
+        .map(|summary| {
+            json!({
+                "session_id": summary.session_id,
+                "thread_id": thread_id,
+                "run_id": summary.run_id,
+                "provider": "opencode",
+                "transport": OPENCODE_RUN_ADAPTER,
+                "provider_thread_id": summary.provider_thread_id,
+                "launch_id": summary.launch_id,
+                "pid": summary.pid,
+                "process_group_id": summary.process_group_id,
+                "stdout_path": summary.stdout_path,
+                "stderr_path": summary.stderr_path,
+                "argv": summary.argv,
+            })
+        })
     } else if provider == "codex" {
         let api_token = config
             .api_token
@@ -1556,7 +1628,10 @@ async fn execute_turn_start(
 
     match launch_result {
         Ok(result) => {
-            if result.get("transport").and_then(Value::as_str) == Some(CURSOR_PRINT_ADAPTER) {
+            if matches!(
+                result.get("transport").and_then(Value::as_str),
+                Some(CURSOR_PRINT_ADAPTER | OPENCODE_RUN_ADAPTER)
+            ) {
                 return Ok(result);
             }
             let pid = result
@@ -2446,6 +2521,8 @@ mod tests {
         ("cursor", "run_once", COMMAND_RUN_ONCE),
         ("cursor", "turn_start", COMMAND_TURN_START),
         ("cursor", "turn_interrupt", COMMAND_TURN_INTERRUPT),
+        ("opencode", "turn_start", COMMAND_TURN_START),
+        ("opencode", "turn_interrupt", COMMAND_TURN_INTERRUPT),
         ("cursor", "send", COMMAND_SEND_TEXT),
         ("cursor", "interrupt", COMMAND_INTERRUPT),
         ("cursor", "terminate", COMMAND_TERMINATE),
@@ -3075,6 +3152,8 @@ mod tests {
                 "opencode.interrupt".to_string(),
                 "opencode.launch".to_string(),
                 "opencode.terminate".to_string(),
+                "opencode.turn_start".to_string(),
+                "opencode.turn_interrupt".to_string(),
             ]
         );
 
@@ -3089,6 +3168,8 @@ mod tests {
                 "opencode.interrupt".to_string(),
                 "opencode.launch".to_string(),
                 "opencode.terminate".to_string(),
+                "opencode.turn_start".to_string(),
+                "opencode.turn_interrupt".to_string(),
                 "opencode.live_proof".to_string(),
             ]
         );
@@ -4130,6 +4211,105 @@ exit 1
         if let Some(pid) = payload["pid"].as_u64() {
             terminate_test_pid(pid as u32);
         }
+    }
+
+    #[test]
+    fn opencode_console_turn_start_uses_stock_run_and_resumes_native_session() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let temp = tempfile::TempDir::new().unwrap();
+        let workspace = temp.path().join("workspace");
+        std::fs::create_dir(&workspace).unwrap();
+        let fake = temp.path().join("opencode");
+        write_test_executable(
+            &fake,
+            "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"text\",\"sessionID\":\"ses_console_test\",\"part\":{\"type\":\"text\",\"text\":\"done\"}}'\n",
+        );
+        let longhouse_home = temp.path().join("longhouse");
+        let session_id = Uuid::new_v4().to_string();
+        let thread_id = Uuid::new_v4().to_string();
+
+        let vars = vec![
+            (
+                "LONGHOUSE_HOME".to_string(),
+                Some(longhouse_home.display().to_string()),
+            ),
+            (
+                "LONGHOUSE_OPENCODE_BIN".to_string(),
+                Some(fake.display().to_string()),
+            ),
+        ];
+        temp_env::with_vars(vars, || {
+            let run_turn = |resume: Option<&str>| {
+                let run_id = Uuid::new_v4().to_string();
+                let mut payload = json!({
+                    "provider": "opencode",
+                    "thread_id": thread_id,
+                    "turn_id": Uuid::new_v4().to_string(),
+                    "run_id": run_id,
+                    "client_request_id": format!("request-{run_id}"),
+                    "cwd": workspace,
+                    "message": "reply once",
+                    "permission_mode": "bypass",
+                });
+                if let Some(provider_thread_id) = resume {
+                    payload["resume_provider_thread_id"] = json!(provider_thread_id);
+                }
+                let mut cache = command_cache();
+                let response = runtime.block_on(handle_command_frame(
+                    json!({
+                        "type": "command",
+                        "command_id": run_id,
+                        "session_id": session_id,
+                        "command_type": COMMAND_TURN_START,
+                        "payload": payload,
+                    }),
+                    &mut cache,
+                    &test_config(),
+                ));
+                assert_eq!(response["ok"], true, "{response}");
+                let argv = response["result"]["argv"].as_array().unwrap();
+                assert!(argv.iter().any(|value| value == "--auto"));
+                assert!(!argv.iter().any(|value| {
+                    matches!(
+                        value.as_str(),
+                        Some("--continue" | "--attach" | "--dangerously-skip-permissions")
+                    )
+                }));
+                let deadline = std::time::Instant::now() + Duration::from_secs(5);
+                loop {
+                    let claim = crate::turn_claims::default_registry()
+                        .unwrap()
+                        .read(&run_id)
+                        .unwrap();
+                    if claim.state == "terminal" {
+                        assert_eq!(
+                            claim.provider_thread_id.as_deref(),
+                            Some("ses_console_test")
+                        );
+                        assert_eq!(claim.result.unwrap()["terminal_state"], "run_completed");
+                        break;
+                    }
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "OpenCode fake turn timed out"
+                    );
+                    runtime.block_on(tokio::time::sleep(Duration::from_millis(20)));
+                }
+                response
+            };
+
+            let first = run_turn(None);
+            assert!(!first["result"]["argv"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|value| value == "--session"));
+            let second = run_turn(Some("ses_console_test"));
+            let argv = second["result"]["argv"].as_array().unwrap();
+            let session_flag = argv.iter().position(|value| value == "--session").unwrap();
+            assert_eq!(argv[session_flag + 1], "ses_console_test");
+        });
     }
 
     #[test]

@@ -5,7 +5,14 @@ from zerg.services.provider_support_state import CONTRACT_OPERATIONS
 from zerg.services.provider_support_state import collect_provider_support_state
 
 CLAUDE_LIVE_CONTROL_OPERATIONS = ["send", "interrupt", "steer", "answer_pause", "launch", "continue"]
-OPENCODE_LIVE_CONTROL_OPERATIONS = ["send", "interrupt", "launch", "terminate"]
+OPENCODE_LIVE_CONTROL_OPERATIONS = [
+    "send",
+    "interrupt",
+    "launch",
+    "terminate",
+    "turn_start",
+    "turn_interrupt",
+]
 
 
 def _expected_supported_operations(contract) -> list[str]:
