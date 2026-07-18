@@ -4369,7 +4369,17 @@ class CatalogStore:
                     .first()
                 )
                 if revision_generation is not None and revision_generation["generation_id"] != generation_key:
-                    return {"source_epoch_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
+                    return {
+                        "source_epoch_conflict": True,
+                        "commit_seq": str(_current_commit_seq(connection)),
+                        "conflict_details": {
+                            "reason": "render_generation_revision_conflict",
+                            "existing_generation_id": str(revision_generation["generation_id"]),
+                            "requested_generation_id": generation_key,
+                            "parser_revision": str(render_manifest["parser_revision"]),
+                            "ordering_revision": str(render_manifest["ordering_revision"]),
+                        },
+                    }
                 if existing_generation is not None and any(
                     (
                         existing_generation["session_id"] != session_key,

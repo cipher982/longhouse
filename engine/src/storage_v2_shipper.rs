@@ -383,6 +383,11 @@ pub(crate) async fn ship_prepared_envelope(
             if let Some(conflict) =
                 error.downcast_ref::<crate::shipping::client::StorageV2Conflict>()
             {
+                if let Some(outcome) =
+                    reconcile_cursor_render_generation_conflict(conn, &pending, &prepared, conflict)?
+                {
+                    return Ok(outcome);
+                }
                 if let Some(outcome) = reconcile_storage_v2_conflict(
                     conn,
                     client,
@@ -418,6 +423,83 @@ pub(crate) async fn ship_prepared_envelope(
     })
 }
 
+fn reconcile_cursor_render_generation_conflict(
+    conn: &Connection,
+    pending: &PendingSourceEnvelope,
+    prepared: &PreparedStorageV2Envelope,
+    conflict: &crate::shipping::client::StorageV2Conflict,
+) -> Result<Option<StorageV2ShipOutcome>> {
+    if prepared.envelope.provider != "cursor"
+        || conflict.details.get("reason").and_then(|value| value.as_str())
+            != Some("render_generation_revision_conflict")
+    {
+        return Ok(None);
+    }
+    let Some(render) = prepared.envelope.render.as_ref() else {
+        return Ok(None);
+    };
+    let Some(existing_generation_id) = conflict
+        .details
+        .get("existing_generation_id")
+        .and_then(|value| value.as_str())
+    else {
+        return Ok(None);
+    };
+    let requested_generation_id = conflict
+        .details
+        .get("requested_generation_id")
+        .and_then(|value| value.as_str());
+    let parser_revision = conflict
+        .details
+        .get("parser_revision")
+        .and_then(|value| value.as_str());
+    let ordering_revision = conflict
+        .details
+        .get("ordering_revision")
+        .and_then(|value| value.as_str());
+    if requested_generation_id != Some(render.generation_id.as_str())
+        || parser_revision != Some(render.parser_revision.as_str())
+        || ordering_revision != Some(render.ordering_revision.as_str())
+        || existing_generation_id == render.generation_id
+        || Uuid::parse_str(existing_generation_id).is_err()
+    {
+        return Ok(None);
+    }
+
+    let mut replacement = prepared.envelope.clone();
+    replacement
+        .render
+        .as_mut()
+        .context("Cursor render-generation recovery lost its render payload")?
+        .generation_id = existing_generation_id.to_string();
+    let replacement_body = serde_json::to_vec(&replacement)
+        .context("serializing reconciled Cursor render generation")?;
+    let replacement_body_zstd = encode_zstd(
+        &replacement_body,
+        "reconciled Cursor storage-v2 request body",
+    )?;
+    pending_source_envelope::replace_request_body_after_render_conflict(
+        conn,
+        prepared.source_epoch,
+        &pending.envelope_id,
+        &pending.request_body_zstd,
+        &replacement_body_zstd,
+    )?;
+    tracing::warn!(
+        source_epoch = %prepared.source_epoch,
+        session_id = prepared.envelope.session_id,
+        parser_revision = render.parser_revision,
+        old_generation_id = render.generation_id,
+        new_generation_id = existing_generation_id,
+        "Reconciled Cursor render generation with Runtime Host authority"
+    );
+    Ok(Some(StorageV2ShipOutcome {
+        bytes_shipped: 0,
+        events_shipped: 0,
+        has_more: true,
+    }))
+}
+
 async fn reconcile_storage_v2_conflict(
     conn: &mut Connection,
     client: &ShipperClient,
@@ -425,13 +507,35 @@ async fn reconcile_storage_v2_conflict(
     prepared: &PreparedStorageV2Envelope,
     request_timeout: Duration,
 ) -> Result<Option<StorageV2ShipOutcome>> {
-    let manifest = client
+    let manifest = match client
         .storage_v2_source_manifest(
             &prepared.source_epoch.to_string(),
             prepared.range_start,
             Some(request_timeout),
         )
-        .await?;
+        .await
+    {
+        Ok(manifest) => manifest,
+        Err(error)
+            if error
+                .downcast_ref::<crate::shipping::client::StorageV2SourceNotFound>()
+                .is_some() =>
+        {
+            return block_source(
+                conn,
+                prepared.source_epoch,
+                "source_epoch_conflict_unresolved",
+                &format!(
+                    "Runtime Host rejected the exact envelope and has no manifest for its source epoch: {}",
+                    error
+                        .downcast_ref::<crate::shipping::client::StorageV2SourceNotFound>()
+                        .expect("typed source-not-found checked above")
+                        .response_body
+                ),
+            );
+        }
+        Err(error) => return Err(error),
+    };
     let Some(proven_through) = proven_manifest_prefix(prepared, &manifest)? else {
         return Ok(None);
     };
@@ -2385,6 +2489,160 @@ mod tests {
         assert_eq!(render.records[2].tool_output_text.as_deref(), Some("/tmp"));
     }
 
+    #[tokio::test]
+    async fn cursor_generation_conflict_adopts_hosted_revision_without_changing_raw_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("store.db");
+        let store = make_cursor_store(&path);
+        store
+            .execute(
+                "UPDATE blobs SET data = ?1 WHERE id = ?2",
+                params![
+                    br#"{"role":"assistant","content":[{"type":"text","text":"hello"}]}"#,
+                    CURSOR_MESSAGE_A,
+                ],
+            )
+            .unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        let prepared = prepare_next_cursor_envelope(&mut conn, &capabilities(), &path)
+            .unwrap()
+            .unwrap();
+        let stable_generation_id = prepared
+            .envelope
+            .render
+            .as_ref()
+            .unwrap()
+            .generation_id
+            .clone();
+        let obsolete_generation_id = Uuid::new_v4().to_string();
+        let mut obsolete_envelope = prepared.envelope.clone();
+        obsolete_envelope
+            .render
+            .as_mut()
+            .unwrap()
+            .generation_id = obsolete_generation_id.clone();
+        let pending = pending_source_envelope::load_for_epoch(&conn, prepared.source_epoch)
+            .unwrap()
+            .unwrap();
+        let obsolete_body = serde_json::to_vec(&obsolete_envelope).unwrap();
+        let obsolete_body_zstd = encode_zstd(&obsolete_body, "obsolete Cursor request").unwrap();
+        pending_source_envelope::replace_request_body_after_render_conflict(
+            &conn,
+            prepared.source_epoch,
+            &pending.envelope_id,
+            &pending.request_body_zstd,
+            &obsolete_body_zstd,
+        )
+        .unwrap();
+        let obsolete_prepared = pending_to_prepared(
+            pending_source_envelope::load_for_epoch(&conn, prepared.source_epoch)
+                .unwrap()
+                .unwrap(),
+        )
+        .unwrap();
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let expected_envelope_id = prepared.envelope.expected_envelope_id.clone();
+        let hosted_generation_id = stable_generation_id.clone();
+        let requested_generation_id = obsolete_generation_id.clone();
+        let server = tokio::spawn(async move {
+            for request_index in 0..2 {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let (request_line, body) = read_http_request(&mut socket).await;
+                assert!(request_line.starts_with("POST /api/agents/storage/v2/envelopes "));
+                let envelope: StorageV2Envelope = serde_json::from_slice(&body).unwrap();
+                assert_eq!(envelope.expected_envelope_id, expected_envelope_id);
+                let render = envelope.render.as_ref().unwrap();
+                let response_body = if request_index == 0 {
+                    assert_eq!(render.generation_id, requested_generation_id);
+                    serde_json::json!({
+                        "detail": {
+                            "code": "source_epoch_conflict",
+                            "message": "render generation drift",
+                            "details": {
+                                "reason": "render_generation_revision_conflict",
+                                "existing_generation_id": hosted_generation_id,
+                                "requested_generation_id": requested_generation_id,
+                                "parser_revision": render.parser_revision,
+                                "ordering_revision": render.ordering_revision,
+                            }
+                        }
+                    })
+                    .to_string()
+                } else {
+                    assert_eq!(render.generation_id, hosted_generation_id);
+                    serde_json::json!({
+                        "v": 2,
+                        "envelope_id": envelope.expected_envelope_id,
+                        "object_hash": "b".repeat(64),
+                        "commit_seq": "42",
+                        "raw_state": "durable",
+                        "render_state": "ready",
+                        "media_state": "complete",
+                        "missing_media_hashes": [],
+                    })
+                    .to_string()
+                };
+                let status = if request_index == 0 {
+                    "409 Conflict"
+                } else {
+                    "200 OK"
+                };
+                let response = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    response_body.len(),
+                    response_body
+                );
+                socket.write_all(response.as_bytes()).await.unwrap();
+            }
+        });
+        let config = ShipperConfig {
+            api_url: format!("http://{address}"),
+            timeout_seconds: 5,
+            ..ShipperConfig::default()
+        };
+        let client = ShipperClient::with_compression(&config, CompressionAlgo::Gzip).unwrap();
+
+        let reconciled = ship_prepared_envelope(
+            &mut conn,
+            &client,
+            &capabilities(),
+            obsolete_prepared,
+            "live",
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap();
+        assert_eq!(reconciled.bytes_shipped, 0);
+        assert!(reconciled.has_more);
+        let repaired = pending_to_prepared(
+            pending_source_envelope::load_for_epoch(&conn, prepared.source_epoch)
+                .unwrap()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            repaired.envelope.render.as_ref().unwrap().generation_id,
+            stable_generation_id
+        );
+        let shipped = ship_prepared_envelope(
+            &mut conn,
+            &client,
+            &capabilities(),
+            repaired,
+            "live",
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap();
+        assert!(shipped.bytes_shipped > 0);
+        assert!(pending_source_envelope::load_for_epoch(&conn, prepared.source_epoch)
+            .unwrap()
+            .is_none());
+        server.await.unwrap();
+    }
+
     #[test]
     fn cursor_render_hides_injected_context_and_unwraps_real_user_query() {
         assert_eq!(
@@ -2823,7 +3081,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn manifest_unavailable_after_conflict_keeps_exact_intent_retryable() {
+    async fn missing_epoch_after_conflict_quarantines_exact_intent() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
@@ -2881,7 +3139,9 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert!(error.to_string().contains("manifest returned 404"));
+        let blocked = error.downcast_ref::<StorageV2SourceBlocked>().unwrap();
+        assert_eq!(blocked.kind, "source_epoch_conflict_unresolved");
+        assert!(blocked.newly_blocked);
         server.await.unwrap();
 
         let pending = pending_source_envelope::load_for_path(
@@ -2891,10 +3151,10 @@ mod tests {
         .unwrap()
         .unwrap();
         assert_eq!(pending.attempt_count, 1);
-        assert!(pending.blocked_at.is_none());
+        assert!(pending.blocked_at.is_some());
         let snapshot = pending_source_envelope::snapshot(&conn).unwrap();
-        assert_eq!(snapshot.pending_count, 1);
-        assert_eq!(snapshot.blocked_source_count, 0);
+        assert_eq!(snapshot.pending_count, 0);
+        assert_eq!(snapshot.blocked_source_count, 1);
     }
 
     #[tokio::test]

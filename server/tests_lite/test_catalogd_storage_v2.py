@@ -304,19 +304,28 @@ async def test_revision_generation_drift_returns_conflict_instead_of_catalog_fai
     await daemon.start()
     client = CatalogClient(socket_path)
     try:
+        existing_generation_id = uuid4()
         first = _raw_params(epoch=epoch, session_id=session_id, start=0, end=6, records=(b"hello\n",), sealed_at=now)
-        first.update(render_state="ready", render_manifest=_render_manifest(uuid4()), projectors=["search-v2"])
+        first.update(render_state="ready", render_manifest=_render_manifest(existing_generation_id), projectors=["search-v2"])
         await client.call("storage.raw_object.commit.v2", first)
 
+        requested_generation_id = uuid4()
         drifted = _raw_params(epoch=epoch, session_id=session_id, start=6, end=12, records=(b"world\n",), sealed_at=now)
         drifted.update(
             render_state="ready",
-            render_manifest=_render_manifest(uuid4(), seed=b"second-render", position=6),
+            render_manifest=_render_manifest(requested_generation_id, seed=b"second-render", position=6),
             projectors=["search-v2"],
         )
         with pytest.raises(CatalogRemoteError) as conflict:
             await client.call("storage.raw_object.commit.v2", drifted)
         assert conflict.value.code == "source_epoch_conflict"
+        assert conflict.value.details == {
+            "reason": "render_generation_revision_conflict",
+            "existing_generation_id": str(existing_generation_id),
+            "requested_generation_id": str(requested_generation_id),
+            "parser_revision": drifted["render_manifest"]["parser_revision"],
+            "ordering_revision": drifted["render_manifest"]["ordering_revision"],
+        }
     finally:
         await client.close()
         await daemon.close()

@@ -73,6 +73,7 @@ impl std::error::Error for StorageV2Backpressure {}
 pub struct StorageV2Conflict {
     pub code: String,
     pub message: String,
+    pub details: serde_json::Value,
     pub response_body: String,
 }
 
@@ -88,6 +89,24 @@ impl std::fmt::Display for StorageV2Conflict {
 
 impl std::error::Error for StorageV2Conflict {}
 
+#[derive(Debug, Clone)]
+pub struct StorageV2SourceNotFound {
+    pub source_epoch: String,
+    pub response_body: String,
+}
+
+impl std::fmt::Display for StorageV2SourceNotFound {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "storage-v2 source epoch {} was not found",
+            self.source_epoch
+        )
+    }
+}
+
+impl std::error::Error for StorageV2SourceNotFound {}
+
 #[derive(Deserialize)]
 struct StorageV2ErrorResponse {
     detail: StorageV2ErrorDetail,
@@ -97,6 +116,8 @@ struct StorageV2ErrorResponse {
 struct StorageV2ErrorDetail {
     code: String,
     message: String,
+    #[serde(default)]
+    details: serde_json::Value,
 }
 
 /// Server-side ingest timing parsed from response headers.
@@ -548,6 +569,17 @@ impl ShipperClient {
         let status = response.status();
         if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
+            if status == reqwest::StatusCode::NOT_FOUND {
+                if let Ok(parsed) = serde_json::from_str::<StorageV2ErrorResponse>(&body) {
+                    if parsed.detail.code == "source_epoch_not_found" {
+                        return Err(StorageV2SourceNotFound {
+                            source_epoch: source_epoch.to_string(),
+                            response_body: body,
+                        }
+                        .into());
+                    }
+                }
+            }
             anyhow::bail!("storage-v2 manifest returned {status}: {body}");
         }
         response
@@ -582,6 +614,7 @@ fn parse_storage_v2_conflict(status: u16, body: &str) -> Option<StorageV2Conflic
     Some(StorageV2Conflict {
         code: parsed.detail.code,
         message: parsed.detail.message,
+        details: parsed.detail.details,
         response_body: body.to_string(),
     })
 }
@@ -866,6 +899,7 @@ mod tests {
         let conflict = parse_storage_v2_conflict(409, body).unwrap();
         assert_eq!(conflict.code, "source_epoch_conflict");
         assert_eq!(conflict.message, "overlap");
+        assert_eq!(conflict.details, serde_json::json!({}));
         assert_eq!(conflict.response_body, body);
         assert!(parse_storage_v2_conflict(503, body).is_none());
         assert!(
