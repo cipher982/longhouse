@@ -539,6 +539,7 @@ async fn project_growth(
                         *provider_thread_id = Some(observed.clone());
                         let registry = crate::turn_claims::default_registry()?;
                         registry.mark_provider_binding(&sink.run_id, &observed, None)?;
+                        sink.post_binding(&observed).await;
                     }
                 }
                 sink.post_stream_event(*seq, event, provider_thread_id.as_deref())
@@ -559,6 +560,27 @@ async fn project_growth(
 }
 
 impl OpenCodeRunSink {
+    async fn post_binding(&self, provider_thread_id: &str) {
+        self.post_events(vec![json!({
+            "runtime_key": format!("opencode:{}", self.session_id),
+            "session_id": self.session_id,
+            "thread_id": self.thread_id,
+            "run_id": self.run_id,
+            "provider": "opencode",
+            "device_id": self.machine_name,
+            "source": OPENCODE_RUN_ADAPTER,
+            "kind": "binding_signal",
+            "occurred_at": Utc::now().to_rfc3339(),
+            "dedupe_key": format!("opencode-run:{}:{}:binding", self.session_id, self.launch_id),
+            "payload": {
+                "provider_session_id": provider_thread_id,
+                "managed_transport": OPENCODE_RUN_ADAPTER,
+                "execution_lifetime": "one_shot"
+            }
+        })])
+        .await;
+    }
+
     async fn post_phase(&self, phase: &str, tool_name: Option<String>) {
         let observed_at = Utc::now();
         self.persist_local_phase(phase, tool_name.clone(), observed_at);
