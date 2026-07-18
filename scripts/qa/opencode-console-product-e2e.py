@@ -100,16 +100,17 @@ def _wait_for_assistant_marker(
 
 
 def _start_turn(api_url: str, token: str, session_id: str, message: str, request_id: str) -> dict:
-    result = _request(
-        api_url,
-        token,
-        "POST",
-        f"/api/agents/sessions/{session_id}/turns",
-        {"message": message, "client_request_id": request_id},
-    )
-    if result.get("state") not in {"active", "starting"} or not result.get("run_id"):
-        raise RuntimeError(f"turn was not accepted: {result}")
-    return result
+    path = f"/api/agents/sessions/{session_id}/turns"
+    payload = {"message": message, "client_request_id": request_id}
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        result = _request(api_url, token, "POST", path, payload)
+        if result.get("state") in {"active", "starting", "completed"} and result.get("run_id"):
+            return result
+        if result.get("state") != "queued":
+            raise RuntimeError(f"turn was not accepted: {result}")
+        time.sleep(0.5)
+    raise RuntimeError("queued Console turn was not assigned a run within 30 seconds")
 
 
 def _wait_for_tool(run_id: str, timeout: float = 90) -> dict:
