@@ -196,7 +196,7 @@ coolify app logs longhouse-demo
 coolify app logs longhouse-control-plane
 ```
 
-## Local Dogfood Refresh (MANDATORY after every ship)
+## Local Dogfood Refresh (MANDATORY for machine-side changes)
 
 **Hosted ship does NOT update the maintainer's laptop.** The `longhouse` CLI,
 `longhouse-engine` daemon, and `Longhouse.app` menu bar are installed
@@ -204,16 +204,19 @@ into his system and only move when rebuilt locally. If you forget this
 step, the menu bar will show "restart pending" and the maintainer is stuck
 dogfooding old code.
 
-After **every** successful `make ship` — not conditionally, not "if
-runtime changed," always — run:
+After a successful `make ship`, run this when the task changes a locally
+installed Longhouse component: CLI/package code, engine, Desktop App,
+installer/connect/onboarding, hooks, or other machine-side behavior.
 
 ```bash
 make dogfood-refresh
 launchctl kickstart -k gui/$(id -u)/ai.longhouse.app
 ```
 
-That rebuilds+reinstalls CLI/engine and restarts the menu bar so it
-picks up the new `engine-status.json`. Takes ~1 minute.
+Skip this for `web/**`-only, docs-only, test-only, and hosted-runtime-only
+changes; those do not alter the installed CLI, engine, or menu bar. For a
+qualifying change, it rebuilds+reinstalls CLI/engine and restarts the menu bar
+so it picks up the new `engine-status.json`.
 
 **Shortcut:** for Python-CLI-only changes under `server/zerg/cli/`,
 `cd server && uv tool install -e .` is ~5s vs ~60s. This is narrow —
