@@ -49,9 +49,10 @@ jobs:
         run: |
           set -euo pipefail
           ROOT=/home/zerg/manual-apps/zerg-caddy/blog
-          ssh deploy-host "mkdir -p '$ROOT/releases/$RELEASE'"
-          rsync -az --delete blog/ "deploy-host:$ROOT/releases/$RELEASE/"
-          ssh deploy-host "ln -s 'releases/$RELEASE' '$ROOT/current.next' && mv -Tf '$ROOT/current.next' '$ROOT/current'"
+          STAGING="$ROOT/staging-$RELEASE"
+          ssh deploy-host "rm -rf '$STAGING' && mkdir -p '$STAGING'"
+          tar -C blog -czf - . | ssh deploy-host "tar -xzf - -C '$STAGING'"
+          ssh deploy-host "if [ ! -e '$ROOT/releases/$RELEASE' ]; then mv '$STAGING' '$ROOT/releases/$RELEASE'; else rm -rf '$STAGING'; fi; ln -s 'releases/$RELEASE' '$ROOT/current.next' && mv -Tf '$ROOT/current.next' '$ROOT/current'"
 
       - name: Verify public static page
         run: |
