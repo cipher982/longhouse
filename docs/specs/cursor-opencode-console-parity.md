@@ -1,6 +1,6 @@
 # Cursor And OpenCode Console Launch Parity
 
-Status: implementation plan
+Status: implemented; release evidence recorded below
 Owner: Longhouse Machine Agent + session kernel
 Date: 2026-07-18
 Related:
@@ -72,8 +72,16 @@ cursor-agent --print --output-format stream-json \
   --trust --resume <native-chat-id>
 ```
 
-No alternate Cursor execution design is introduced. The remaining work is to
-close the release gates already named by `cursor-console-native-turns.md`:
+No alternate Cursor execution design is introduced. The implementation closes
+the release gates named by `cursor-console-native-turns.md`:
+
+Stock Cursor 2026.07.16 preserves the native chat identifier across
+`--resume`, but its print-mode invocation does not restore earlier turns to the
+model context. Longhouse therefore reconstructs a bounded continuation context
+from the prior durable Console run records while still passing the same native
+chat ID. This is compatibility rehydration, not a second conversation store:
+the raw run records are already required for projection recovery, and Cursor's
+native storage remains the archive convergence source.
 
 - exercise the production Runtime Host -> Machine Agent -> Cursor path rather
   than only the adapter boundary;
@@ -194,69 +202,89 @@ make test
 make test-frontend
 make test-e2e-core
 make test-cursor-console-live-canary
+make test-cursor-console-product-e2e
 make test-opencode-console-live-canary
+make test-opencode-console-product-e2e
 ```
+
+The Cursor live canary must ask for information present only in the previous
+turn. Repeating the expected marker in the follow-up prompt is not continuity
+proof. The OpenCode product canary traverses the hosted Runtime Host control
+channel and additionally proves archive/search convergence; this shared
+product boundary is provider-neutral while each real-provider canary proves
+its adapter-specific CLI and process behavior.
 
 ## Formal Task List
 
 ### A. CLI truth and narrow shared lifecycle
 
-- [ ] Add a stock OpenCode CLI contract canary proving `--auto`, fresh `ses_...`
+- [x] Add a stock OpenCode CLI contract canary proving `--auto`, fresh `ses_...`
       identity, explicit `--session` second-process resume, tool JSONL, process-
       group interrupt, and post-cancel resume. Assert that `--continue`,
       `--attach`, and the obsolete permission flag never enter Console argv.
-- [ ] Persist the last projected stdout byte offset (and parser sequence when
+- [x] Persist the last projected stdout byte offset (and parser sequence when
       needed) in durable turn claims so Machine Agent recovery cannot re-emit
       already projected records. Apply the same invariant to Cursor.
-- [ ] Add a small adapter-selected startup recovery seam; retain an explicit
+- [x] Add a small adapter-selected startup recovery seam; retain an explicit
       provider-to-adapter match rather than building a generic framework.
-- [ ] Ensure Runtime Host, machine directory, web, and iOS derive launch and
+- [x] Ensure Runtime Host, machine directory, web, and iOS derive launch and
       interrupt affordances from the same provider contract.
-- [ ] Add cross-provider contract tests preventing advertised operations from
+- [x] Add cross-provider contract tests preventing advertised operations from
       lacking an engine dispatch path.
 
 ### B. Cursor release hardening
 
-- [ ] Fill the Cursor release-gate cases missing from the current adapter and
+- [x] Fill the Cursor release-gate cases missing from the current adapter and
       canary: tools, allow/deny, failure, interrupt, post-cancel resume,
       duplicate dispatch, FIFO, restarts, outage, cold reopen, and search.
-- [ ] Fix any failures found without changing the stock Cursor invocation or
+- [x] Fix any failures found without changing the stock Cursor invocation or
       introducing an execution fallback.
-- [ ] Promote Cursor evidence metadata only to the level actually proven.
+- [x] Promote Cursor evidence metadata only to the level actually proven.
 
 ### C. OpenCode turn adapter
 
-- [ ] Implement `opencode_run` in the Machine Agent with stock-binary discovery,
+- [x] Implement `opencode_run` in the Machine Agent with stock-binary discovery,
       private config, durable raw output, and structured JSONL projection.
-- [ ] Accept opaque `ses_...` native identities, require explicit `--session`
+- [x] Accept opaque `ses_...` native identities, require explicit `--session`
       for resume, scrub ambient OpenCode configuration, and support only the
       explicit launch-bypass permission mode via `--auto`.
-- [ ] Bind fresh and resumed native OpenCode session IDs to the Longhouse
+- [x] Bind fresh and resumed native OpenCode session IDs to the Longhouse
       session/thread/run before archive ingestion can create a duplicate.
-- [ ] Add exact interrupt, output drain, terminal settlement, orphan cleanup,
+- [x] Add exact interrupt, output drain, terminal settlement, orphan cleanup,
       and Machine Agent restart recovery.
-- [ ] Route `session.turn.start` and `session.turn.interrupt` to OpenCode and
+- [x] Route `session.turn.start` and `session.turn.interrupt` to OpenCode and
       advertise the two support bits only after the production canary passes.
 
 ### D. Product surfaces
 
-- [ ] Enable OpenCode in Console machine/provider selection when capability is
+- [x] Enable OpenCode in Console machine/provider selection when capability is
       present and show typed unavailability when it is absent.
-- [ ] Verify fresh launch, active output, stop, queued follow-up, resumed turn,
+- [x] Verify fresh launch, active output, stop, queued follow-up, resumed turn,
       and terminal state in web and iOS against the same API contract.
-- [ ] Keep unsupported steer absent rather than disabled ambiguously.
+- [x] Keep unsupported steer absent rather than disabled ambiguously.
 
 ### E. CI and release proof
 
-- [ ] Add shared fake-provider fixtures and golden JSONL corpora for Cursor and
+- [x] Add shared fake-provider fixtures and golden JSONL corpora for Cursor and
       OpenCode.
-- [ ] Add Runtime Host-to-Machine-Agent integration coverage using a real
+- [x] Add Runtime Host-to-Machine-Agent integration coverage using a real
       command frame plus fake provider process for both provider lifecycles;
       keep fake-registry tests as the unit layer.
-- [ ] Add `make test-opencode-console-live-canary` and evolve the Cursor target
+- [x] Add `make test-opencode-console-live-canary` and evolve the Cursor target
       to the complete release gate.
-- [ ] Run focused suites during implementation, then the required Make targets;
+- [x] Run focused suites during implementation, then the required Make targets;
       record any unrelated baseline failures explicitly.
+
+## Release Evidence
+
+Both provider product canaries passed against stock installed CLIs on `cinder`.
+Each traversed the hosted Runtime Host control channel, created a fresh turn,
+recalled a marker that appeared only in the prior turn, used the same explicit
+native provider identity, began a real tool call, interrupted its exact process
+group, resumed after cancellation, converged into the archive, and became
+searchable. Cursor additionally exposed and fixed a missing Runtime Host
+binding signal; without this end-to-end test, its adapter-only resume test would
+not have caught the catalog assigning a new native identity.
 
 ## Definition Of Done
 
