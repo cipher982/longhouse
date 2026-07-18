@@ -67,7 +67,7 @@ final class TranscriptPayloadGoldenTests: XCTestCase {
         XCTAssertEqual(kinds.first, "message", "leads with the user message")
         XCTAssertTrue(kinds.contains("passiveGroup"), "the two Read calls collapse into a passive group")
 
-        // The two consecutive passive Reads collapse; getJiraIssue/Bash stay as tools.
+        // The two consecutive passive searches collapse; getJiraIssue/Bash stay as tools.
         let passive = payload.first { $0.kind == "passiveGroup" }
         XCTAssertEqual(passive?.calls.count, 2, "passive group holds both Read calls")
 
