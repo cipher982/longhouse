@@ -12,7 +12,7 @@ use serde::Serialize;
 use serde_json::Value;
 use uuid::Uuid;
 
-const CLAIM_SCHEMA_VERSION: u32 = 2;
+const CLAIM_SCHEMA_VERSION: u32 = 3;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct TurnClaim {
@@ -33,7 +33,19 @@ pub struct TurnClaim {
     pub claimed_at: String,
     pub updated_at: String,
     pub pid: Option<u32>,
+    #[serde(default)]
+    pub process_group_id: Option<i32>,
     pub process_start_time: Option<String>,
+    #[serde(default)]
+    pub adapter: Option<String>,
+    #[serde(default)]
+    pub launch_id: Option<String>,
+    #[serde(default)]
+    pub stdout_path: Option<String>,
+    #[serde(default)]
+    pub stderr_path: Option<String>,
+    #[serde(default)]
+    pub cancel_requested_at: Option<String>,
     pub result: Option<Value>,
     pub error: Option<String>,
 }
@@ -83,7 +95,13 @@ impl TurnClaimRegistry {
             claimed_at: now.clone(),
             updated_at: now,
             pid: None,
+            process_group_id: None,
             process_start_time: None,
+            adapter: None,
+            launch_id: None,
+            stdout_path: None,
+            stderr_path: None,
+            cancel_requested_at: None,
             result: None,
             error: None,
         };
@@ -118,6 +136,69 @@ impl TurnClaimRegistry {
         claim.updated_at = Utc::now().to_rfc3339();
         self.write(&claim)?;
         Ok(claim)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn mark_spawned_invocation(
+        &self,
+        run_id: &str,
+        pid: u32,
+        process_group_id: i32,
+        process_start_time: Option<String>,
+        adapter: &str,
+        launch_id: &str,
+        provider_thread_id: &str,
+        stdout_path: &str,
+        stderr_path: &str,
+        result: Value,
+    ) -> Result<TurnClaim> {
+        let mut claim = self.read(run_id)?;
+        claim.state = "spawned".to_string();
+        claim.pid = Some(pid);
+        claim.process_group_id = Some(process_group_id);
+        claim.process_start_time = process_start_time;
+        claim.adapter = Some(adapter.to_string());
+        claim.launch_id = Some(launch_id.to_string());
+        claim.provider_thread_id = Some(provider_thread_id.to_string());
+        claim.stdout_path = Some(stdout_path.to_string());
+        claim.stderr_path = Some(stderr_path.to_string());
+        claim.result = Some(result);
+        claim.error = None;
+        claim.updated_at = Utc::now().to_rfc3339();
+        self.write(&claim)?;
+        Ok(claim)
+    }
+
+    pub fn mark_cancel_requested(&self, run_id: &str) -> Result<TurnClaim> {
+        let mut claim = self.read(run_id)?;
+        if claim.state != "spawned" {
+            anyhow::bail!("turn claim {run_id} is not an active invocation");
+        }
+        claim.cancel_requested_at = Some(Utc::now().to_rfc3339());
+        claim.updated_at = Utc::now().to_rfc3339();
+        self.write(&claim)?;
+        Ok(claim)
+    }
+
+    pub fn list_nonterminal(&self) -> Result<Vec<TurnClaim>> {
+        let Ok(entries) = fs::read_dir(&self.root) else {
+            return Ok(Vec::new());
+        };
+        let mut claims = Vec::new();
+        for entry in entries {
+            let path = entry?.path();
+            if path.extension().and_then(|value| value.to_str()) != Some("json") {
+                continue;
+            }
+            let bytes = fs::read(&path)?;
+            let claim: TurnClaim = serde_json::from_slice(&bytes)
+                .with_context(|| format!("parsing turn claim {}", path.display()))?;
+            if claim.state != "terminal" && claim.state != "failed" {
+                claims.push(claim);
+            }
+        }
+        claims.sort_by(|left, right| left.claimed_at.cmp(&right.claimed_at));
+        Ok(claims)
     }
 
     pub fn mark_provider_binding(

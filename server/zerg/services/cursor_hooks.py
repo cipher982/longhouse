@@ -84,11 +84,23 @@ if phase:
     with os.fdopen(fd, "w") as f:
         json.dump({"session_id": sid, "state": "thinking" if phase == "active" else "idle", "tool_name": payload.get("tool_name"), "cwd": payload.get("cwd"), "provider": "cursor", "control_path": "managed"}, f)
     os.replace(tmp, outbox / (Path(tmp).name.replace(".tmp.", "prs.") + ".json"))
-claim = {"schema_version": 2, "provider": "cursor", "status": "observed", "session_id": sid, "conversation_uuid": conversation_id, "launch_id": launch_id, "hook_observed_at": now}
-registration_ready = False
+claim = {
+    "schema_version": 2,
+    "provider": "cursor",
+    "status": "observed",
+    "session_id": sid,
+    "conversation_uuid": conversation_id,
+    "launch_id": launch_id,
+    "hook_observed_at": now,
+}
+for key in ("thread_id", "turn_id", "run_id", "client_request_id"):
+    if isinstance(existing_claim, dict) and existing_claim.get(key):
+        claim[key] = existing_claim[key]
+registration_ready = os.environ.get("LONGHOUSE_CURSOR_REGISTRATION_READY") == "1"
 try:
-    launch_state = json.loads((root / f"{sid}.json").read_text())
-    registration_ready = launch_state.get("registration") == "registered"
+    if not registration_ready:
+        launch_state = json.loads((root / f"{sid}.json").read_text())
+        registration_ready = launch_state.get("registration") == "registered"
 except (OSError, ValueError, TypeError):
     pass
 if registration_ready:

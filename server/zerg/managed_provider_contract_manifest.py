@@ -26,6 +26,7 @@ _REQUIRED_BOOL_FIELDS = (
     "runtime_phase",
     "transcript_binding",
     "can_resume",
+    "turn_start",
 )
 _STRING_LIST_FIELDS = ("control_plane_aliases", "machine_control_supports")
 _OPERATION_EVIDENCE_FIELDS = (
@@ -41,6 +42,7 @@ _OPERATION_EVIDENCE_FIELDS = (
     "tail_output",
     "runtime_phase",
     "transcript_binding",
+    "turn_start",
 )
 MACHINE_CONTROL_SUPPORT_OPERATION_BY_SUFFIX = {
     "send": "send_input",
@@ -54,7 +56,8 @@ MACHINE_CONTROL_SUPPORT_OPERATION_BY_SUFFIX = {
     "continue": "can_resume",
     "run_once": "run_once",
     "resume_run_once": "run_once",
-    "turn_start": "run_once",
+    "turn_start": "turn_start",
+    "turn_interrupt": "interrupt",
 }
 _MACHINE_CONTROL_SUPPORT_EXTRA_REQUIREMENTS = {
     "resume_run_once": ("can_resume",),

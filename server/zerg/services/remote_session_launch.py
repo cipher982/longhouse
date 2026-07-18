@@ -89,12 +89,9 @@ LAUNCH_LEASE_SECS = 120
 # One-shot (Console) runs record their SessionConnection against the engine's
 # direct exec control plane, not the provider's primary contract control_plane
 # (which for Helm providers like codex is the live bridge). codex_exec is
-# intentionally not contract-registered; cursor_acp is cursor's one-shot / Console
-# control plane (headless ACP over stdio) selected explicitly for run-once launches.
-# cursor_helm is the live / Helm control plane (contract-registered, direct machine
-# control plane) used by the `longhouse cursor` interactive launcher. cursor_exec is
-# retained as a legacy alias. Keep this map explicit rather than deriving from the
-# contract.
+# intentionally not contract-registered. Cursor's native Console path uses the
+# separate turn-scoped cursor_print adapter and does not pass through remote
+# launch/run_once. Legacy cursor_acp rows remain readable archive compatibility.
 class RemoteLaunchError(RuntimeError):
     """Expected remote-launch failure with user-facing detail."""
 

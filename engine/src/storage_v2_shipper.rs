@@ -1075,9 +1075,10 @@ fn prepare_next_cursor_envelope_with_limit(
     }
     let snapshot =
         cursor_store::cursor_store_raw_snapshot_from(&store_snapshot, store_incarnation.clone())?;
-    let claimed_session_id = crate::cursor_launch_binding::managed_session_id_for_conversation(
+    let claimed_binding = crate::cursor_launch_binding::managed_binding_for_conversation(
         &snapshot.conversation_uuid,
     )?;
+    let claimed_session_id = claimed_binding.as_ref().map(|binding| binding.session_id.clone());
     if claimed_session_id.is_none()
         && crate::cursor_launch_binding::pending_claim_for_conversation(
             &snapshot.conversation_uuid,
@@ -1309,8 +1310,13 @@ fn prepare_next_cursor_envelope_with_limit(
     let observed_at = DateTime::parse_from_rfc3339(&resolution.opened_at)
         .expect("source epoch opened_at is generated internally")
         .with_timezone(&Utc);
-    let render_records =
+    let mut render_records =
         cursor_render_records(&store_snapshot, &selected, started_at.timestamp_micros())?;
+    if let Some(thread_id) = claimed_binding.as_ref().and_then(|binding| binding.thread_id.as_ref()) {
+        for record in &mut render_records {
+            record.thread_id = Some(thread_id.clone());
+        }
+    }
     let render_generation = cursor_render_generation_id(&session_id);
     let has_reply_evidence = render_records
         .iter()

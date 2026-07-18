@@ -25,6 +25,14 @@ struct LaunchBindingClaim {
     provider: String,
     status: String,
     session_id: String,
+    #[serde(default)]
+    thread_id: Option<String>,
+    #[serde(default)]
+    turn_id: Option<String>,
+    #[serde(default)]
+    run_id: Option<String>,
+    #[serde(default)]
+    client_request_id: Option<String>,
     conversation_uuid: String,
     #[serde(default)]
     agent_id: Option<String>,
@@ -38,6 +46,15 @@ struct LaunchBindingClaim {
     observations: Vec<ProbeObservation>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManagedCursorBinding {
+    pub session_id: String,
+    pub thread_id: Option<String>,
+    pub turn_id: Option<String>,
+    pub run_id: Option<String>,
+    pub client_request_id: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 struct ProbeObservation {
     phase: String,
@@ -46,16 +63,22 @@ struct ProbeObservation {
     cursor_pid: Option<u64>,
 }
 
-/// Return the managed session ID only when exactly one unexpired, probe-grade
-/// claim proves this provider-native Cursor conversation identity.
-pub fn managed_session_id_for_conversation(conversation_uuid: &str) -> Result<Option<String>> {
-    managed_session_id_for_conversation_in(&claim_dir(), conversation_uuid)
+pub fn managed_binding_for_conversation(conversation_uuid: &str) -> Result<Option<ManagedCursorBinding>> {
+    managed_binding_for_conversation_in(&claim_dir(), conversation_uuid)
 }
 
+#[cfg(test)]
 fn managed_session_id_for_conversation_in(
     dir: &Path,
     conversation_uuid: &str,
 ) -> Result<Option<String>> {
+    Ok(managed_binding_for_conversation_in(dir, conversation_uuid)?.map(|binding| binding.session_id))
+}
+
+fn managed_binding_for_conversation_in(
+    dir: &Path,
+    conversation_uuid: &str,
+) -> Result<Option<ManagedCursorBinding>> {
     let mut matches = Vec::new();
     for path in claim_paths(dir)? {
         let Ok(bytes) = fs::read(&path) else {
@@ -65,11 +88,17 @@ fn managed_session_id_for_conversation_in(
             continue;
         };
         if valid_claim(&claim, conversation_uuid) {
-            matches.push(claim.session_id);
+            matches.push(ManagedCursorBinding {
+                session_id: claim.session_id,
+                thread_id: claim.thread_id,
+                turn_id: claim.turn_id,
+                run_id: claim.run_id,
+                client_request_id: claim.client_request_id,
+            });
         }
     }
-    matches.sort();
-    matches.dedup();
+    matches.sort_by(|left, right| left.session_id.cmp(&right.session_id));
+    matches.dedup_by(|left, right| left.session_id == right.session_id);
     Ok((matches.len() == 1).then(|| matches.remove(0)))
 }
 
@@ -179,11 +208,30 @@ mod tests {
     #[test]
     fn accepts_hook_observed_managed_to_native_identity_mapping() {
         let raw: LaunchBindingClaim = serde_json::from_str(
-            r#"{"schema_version":2,"provider":"cursor","status":"observed","session_id":"longhouse-id","conversation_uuid":"cursor-id","hook_observed_at":"2026-07-17T00:00:00Z"}"#,
+            r#"{"schema_version":2,"provider":"cursor","status":"observed","session_id":"longhouse-id","thread_id":"thread-id","turn_id":"turn-id","run_id":"run-id","client_request_id":"request-id","conversation_uuid":"cursor-id","hook_observed_at":"2026-07-17T00:00:00Z"}"#,
         )
         .unwrap();
         assert!(valid_claim(&raw, "cursor-id"));
         assert!(!valid_claim(&raw, "different-cursor-id"));
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("claim.json"), serde_json::to_vec(&serde_json::json!({
+            "schema_version": 2,
+            "provider": "cursor",
+            "status": "observed",
+            "session_id": "longhouse-id",
+            "thread_id": "thread-id",
+            "turn_id": "turn-id",
+            "run_id": "run-id",
+            "client_request_id": "request-id",
+            "conversation_uuid": "cursor-id",
+            "hook_observed_at": "2026-07-17T00:00:00Z"
+        })).unwrap()).unwrap();
+        let binding = managed_binding_for_conversation_in(dir.path(), "cursor-id").unwrap().unwrap();
+        assert_eq!(binding.session_id, "longhouse-id");
+        assert_eq!(binding.thread_id.as_deref(), Some("thread-id"));
+        assert_eq!(binding.turn_id.as_deref(), Some("turn-id"));
+        assert_eq!(binding.run_id.as_deref(), Some("run-id"));
+        assert_eq!(binding.client_request_id.as_deref(), Some("request-id"));
     }
 
     #[test]

@@ -23,6 +23,7 @@ COMMAND_ANSWER_PAUSE = "session.answer_pause"
 COMMAND_TERMINATE = "session.terminate"
 COMMAND_RUN_ONCE = "session.run_once"
 COMMAND_TURN_START = "session.turn.start"
+COMMAND_TURN_INTERRUPT = "session.turn.interrupt"
 
 _MACHINE_CONTROL_SUFFIX_BY_COMMAND = {
     COMMAND_SEND_TEXT: "send",
@@ -32,6 +33,7 @@ _MACHINE_CONTROL_SUFFIX_BY_COMMAND = {
     COMMAND_TERMINATE: "terminate",
     COMMAND_RUN_ONCE: "run_once",
     COMMAND_TURN_START: "turn_start",
+    COMMAND_TURN_INTERRUPT: "turn_interrupt",
 }
 
 
@@ -55,6 +57,8 @@ class ManagedProviderContract:
     runtime_phase: bool = True
     transcript_binding: bool = True
     can_resume: bool = False
+    console_adapter: str | None = None
+    turn_start: bool = False
     # Expected machine-control channel operation names. The engine still owns
     # the live supports[] handshake; this field documents the provider ceiling.
     machine_control_supports: tuple[str, ...] = ()
@@ -132,6 +136,8 @@ def _contract_from_manifest_item(item: dict[str, object]) -> ManagedProviderCont
         runtime_phase=bool(item.get("runtime_phase", True)),
         transcript_binding=bool(item.get("transcript_binding", True)),
         can_resume=bool(item.get("can_resume", False)),
+        console_adapter=(str(item["console_adapter"]) if item.get("console_adapter") else None),
+        turn_start=bool(item.get("turn_start", False)),
         machine_control_supports=tuple(str(value) for value in item.get("machine_control_supports") or ()),
         operation_evidence={
             str(operation): {str(key): str(value) for key, value in dict(evidence).items()}

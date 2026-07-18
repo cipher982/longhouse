@@ -7,6 +7,7 @@
       "provider_cli_env": "LONGHOUSE_CODEX_BIN",
       "requires_longhouse_cli": false,
       "managed_transport": "codex_app_server",
+      "console_adapter": "codex_exec",
       "control_plane": "codex_bridge",
       "control_plane_aliases": [
         "codex_app_server"
@@ -24,6 +25,7 @@
       "runtime_phase": true,
       "transcript_binding": true,
       "can_resume": true,
+      "turn_start": true,
       "operation_evidence": {
         "launch_local": {
           "level": "live_no_token",
@@ -82,6 +84,10 @@
           "level": "hermetic",
           "source": "Codex hook and rollout ingestion tests",
           "next": "promote with live transcript assertion"
+        },
+        "turn_start": {
+          "level": "hermetic",
+          "source": "codex_exec turn claims and Console dispatch tests"
         }
       },
       "machine_control_supports": [
@@ -102,6 +108,7 @@
       "provider_cli_env": null,
       "requires_longhouse_cli": true,
       "managed_transport": "claude_channel_bridge",
+      "console_adapter": "claude_print",
       "control_plane": "claude_channel_bridge",
       "control_plane_aliases": [],
       "launch_local": true,
@@ -117,6 +124,7 @@
       "runtime_phase": true,
       "transcript_binding": true,
       "can_resume": true,
+      "turn_start": false,
       "operation_evidence": {
         "launch_local": {
           "level": "live_no_token",
@@ -173,6 +181,10 @@
           "level": "hermetic",
           "source": "Claude hook transcript binding tests",
           "next": "promote when Claude release-canary live transcript assertion exists"
+        },
+        "turn_start": {
+          "level": "none",
+          "source": "Claude turn-scoped Console adapter is not machine-advertised"
         }
       },
       "machine_control_supports": [
@@ -190,6 +202,7 @@
       "provider_cli_env": "LONGHOUSE_OPENCODE_BIN",
       "requires_longhouse_cli": false,
       "managed_transport": "opencode_server_bridge",
+      "console_adapter": "opencode_run",
       "control_plane": "opencode_server_bridge",
       "control_plane_aliases": [],
       "launch_local": true,
@@ -205,6 +218,7 @@
       "runtime_phase": true,
       "transcript_binding": true,
       "can_resume": false,
+      "turn_start": false,
       "operation_evidence": {
         "launch_local": {
           "level": "live_no_token",
@@ -261,6 +275,10 @@
           "level": "live_no_token",
           "source": "longhouse provider-live canary OpenCode session.messages noReply marker assertion",
           "next": "promote with release-canary assistant transcript assertion"
+        },
+        "turn_start": {
+          "level": "none",
+          "source": "OpenCode turn-scoped Console adapter is not machine-advertised"
         }
       },
       "machine_control_supports": [
@@ -276,6 +294,7 @@
       "provider_cli_env": "LONGHOUSE_ANTIGRAVITY_BIN",
       "requires_longhouse_cli": true,
       "managed_transport": "antigravity_hook_inbox",
+      "console_adapter": null,
       "control_plane": "antigravity_hook_inbox",
       "control_plane_aliases": [],
       "launch_local": true,
@@ -291,6 +310,7 @@
       "runtime_phase": true,
       "transcript_binding": true,
       "can_resume": false,
+      "turn_start": false,
       "operation_evidence": {
         "launch_local": {
           "level": "live_no_token",
@@ -344,6 +364,10 @@
           "level": "hermetic",
           "source": "Antigravity hook binding tests",
           "next": "promote with real agy transcript assertion"
+        },
+        "turn_start": {
+          "level": "none",
+          "source": "Antigravity has no turn-scoped Console adapter"
         }
       },
       "machine_control_supports": [
@@ -356,6 +380,7 @@
       "provider_cli_env": "LONGHOUSE_CURSOR_BIN",
       "requires_longhouse_cli": false,
       "managed_transport": "cursor_helm",
+      "console_adapter": "cursor_print",
       "control_plane": "cursor_helm",
       "control_plane_aliases": [
         "cursor_acp",
@@ -374,6 +399,7 @@
       "runtime_phase": true,
       "transcript_binding": true,
       "can_resume": false,
+      "turn_start": true,
       "operation_evidence": {
         "launch_local": {
           "level": "hermetic",
@@ -423,12 +449,18 @@
         "transcript_binding": {
           "level": "hermetic",
           "source": "Cursor hook conversation_id plus launcher-owned Longhouse session ID binds the matching native store without recency heuristics"
+        },
+        "turn_start": {
+          "level": "hermetic",
+          "source": "cursor_print structured stream, native create-chat/resume, hooks, and process-group cancellation tests"
         }
       },
       "machine_control_supports": [
         "cursor.send",
         "cursor.interrupt",
-        "cursor.terminate"
+        "cursor.terminate",
+        "cursor.turn_start",
+        "cursor.turn_interrupt"
       ]
     }
   ]

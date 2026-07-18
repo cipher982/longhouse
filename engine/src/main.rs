@@ -13,7 +13,7 @@ mod commands;
 mod config;
 mod console_prompt;
 mod control_channel;
-mod cursor_acp;
+mod cursor_print;
 mod cursor_helm_control;
 mod cursor_launch_binding;
 mod cursor_store;

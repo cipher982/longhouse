@@ -38,7 +38,7 @@ use crate::codex_bridge::{
 use crate::codex_exec::{start_codex_exec_once, CodexExecRunConfig};
 use crate::config::ShipperConfig;
 use crate::console_prompt::wrap_console_run_once_prompt;
-use crate::cursor_acp::{start_cursor_acp_once, CursorAcpRunConfig};
+use crate::cursor_print::{start_cursor_print_turn, CursorPrintRunConfig, CURSOR_PRINT_ADAPTER};
 use crate::turn_claims::{
     default_registry as default_turn_claim_registry, process_start_time_for_pid, ClaimOutcome,
 };
@@ -54,6 +54,7 @@ const COMMAND_LAUNCH: &str = "session.launch";
 const COMMAND_TERMINATE: &str = "session.terminate";
 const COMMAND_RUN_ONCE: &str = "session.run_once";
 const COMMAND_TURN_START: &str = "session.turn.start";
+const COMMAND_TURN_INTERRUPT: &str = "session.turn.interrupt";
 const COMMAND_PROVIDER_LIVE_PROOF: &str = "provider.live_proof";
 const COMMAND_ARCHIVE_BACKLOG_CONTROL: &str = "archive.backlog_control";
 const COMMAND_ARCHIVE_BACKLOG_CONTROL_V2: &str = "archive.backlog_control.v2";
@@ -496,6 +497,11 @@ pub fn spawn_control_channel(
     status.set_disconnected(None, None, None, None);
 
     Some(tokio::spawn(async move {
+        match crate::cursor_print::recover_cursor_print_turns(&config.machine_name, config.db_path.clone()).await {
+            Ok(count) if count > 0 => tracing::info!(count, "Recovered Cursor Console turn monitors"),
+            Ok(_) => {}
+            Err(error) => tracing::warn!(%error, "Failed to reconcile Cursor Console turn claims"),
+        }
         run_reconnect_loop(config, status).await;
     }))
 }
@@ -815,9 +821,27 @@ async fn execute_command(
 
     match command_type.as_str() {
         COMMAND_TURN_START => execute_turn_start(frame, &payload, &session_id, config).await,
+        COMMAND_TURN_INTERRUPT => {
+            let run_id = payload_required_string(&payload, "run_id")?;
+            let provider = payload_required_string(&payload, "provider")?;
+            if provider != "cursor" {
+                return Err(CommandError {
+                    code: "provider_unsupported".to_string(),
+                    message: format!("provider={provider} has no turn-scoped interrupt adapter"),
+                });
+            }
+            crate::cursor_print::interrupt_cursor_print_turn(&run_id, &session_id)
+                .map_err(CommandError::command_failed)?;
+            Ok(json!({
+                "provider": "cursor",
+                "transport": CURSOR_PRINT_ADAPTER,
+                "run_id": run_id,
+                "interrupt_requested": true,
+            }))
+        }
         COMMAND_RUN_ONCE => {
             let provider = payload_required_string(&payload, "provider")?;
-            if provider != "codex" && provider != "cursor" {
+            if provider != "codex" {
                 return Err(CommandError {
                     code: "provider_unsupported".to_string(),
                     message: format!("provider={provider} is not supported for session.run_once"),
@@ -848,37 +872,6 @@ async fn execute_command(
                 .db_path
                 .clone()
                 .or_else(|| crate::config::get_agent_db_path().ok());
-
-            if provider == "cursor" {
-                let summary = start_cursor_acp_once(CursorAcpRunConfig {
-                    session_id: session_id.clone(),
-                    run_id: run_id.clone(),
-                    cwd,
-                    cursor_bin: DEFAULT_CURSOR_BIN.to_string(),
-                    prompt: provider_prompt,
-                    launch_actor: launch_actor.clone(),
-                    launch_surface: launch_surface.clone(),
-                    resume_acp_session_id: resume_target
-                        .as_ref()
-                        .map(|target| target.thread_id.clone()),
-                    machine_name: config.machine_name.clone(),
-                    local_db_path,
-                })
-                .await
-                .map_err(|err| CommandError {
-                    code: "provider_launch_failed".to_string(),
-                    message: err.to_string(),
-                })?;
-
-                return Ok(json!({
-                    "session_id": summary.session_id,
-                    "run_id": summary.run_id,
-                    "provider": "cursor",
-                    "transport": "cursor_acp",
-                    "pid": summary.pid,
-                    "argv": summary.argv,
-                }));
-            }
 
             let api_token = config.api_token.clone().ok_or_else(|| CommandError {
                 code: "provider_launch_failed".to_string(),
@@ -1481,15 +1474,21 @@ async fn execute_turn_start(
         .clone()
         .or_else(|| crate::config::get_agent_db_path().ok());
     let launch_result = if provider == "cursor" {
-        start_cursor_acp_once(CursorAcpRunConfig {
+        start_cursor_print_turn(CursorPrintRunConfig {
             session_id: session_id.to_string(),
+            thread_id: thread_id.clone(),
+            turn_id: turn_id.clone(),
             run_id: run_id.clone(),
+            client_request_id: client_request_id.clone(),
             cwd,
             cursor_bin: DEFAULT_CURSOR_BIN.to_string(),
             prompt: message,
-            launch_actor,
-            launch_surface,
-            resume_acp_session_id: resume_provider_thread_id,
+            resume_provider_thread_id,
+            model: payload_optional_string(payload, "model"),
+            permission_mode: payload_optional_string(payload, "permission_mode")
+                .unwrap_or_else(|| "remote_approve".to_string()),
+            api_url: config.api_url.clone(),
+            api_token: config.api_token.clone(),
             machine_name: config.machine_name.clone(),
             local_db_path,
         })
@@ -1500,8 +1499,13 @@ async fn execute_turn_start(
                 "thread_id": thread_id,
                 "run_id": summary.run_id,
                 "provider": "cursor",
-                "transport": "cursor_acp",
+                "transport": CURSOR_PRINT_ADAPTER,
+                "provider_thread_id": summary.provider_thread_id,
+                "launch_id": summary.launch_id,
                 "pid": summary.pid,
+                "process_group_id": summary.process_group_id,
+                "stdout_path": summary.stdout_path,
+                "stderr_path": summary.stderr_path,
                 "argv": summary.argv,
             })
         })
@@ -1550,6 +1554,9 @@ async fn execute_turn_start(
 
     match launch_result {
         Ok(result) => {
+            if result.get("transport").and_then(Value::as_str) == Some(CURSOR_PRINT_ADAPTER) {
+                return Ok(result);
+            }
             let pid = result
                 .get("pid")
                 .and_then(Value::as_u64)
@@ -2436,6 +2443,7 @@ mod tests {
         ("codex", "turn_start", COMMAND_TURN_START),
         ("cursor", "run_once", COMMAND_RUN_ONCE),
         ("cursor", "turn_start", COMMAND_TURN_START),
+        ("cursor", "turn_interrupt", COMMAND_TURN_INTERRUPT),
         ("cursor", "send", COMMAND_SEND_TEXT),
         ("cursor", "interrupt", COMMAND_INTERRUPT),
         ("cursor", "terminate", COMMAND_TERMINATE),
