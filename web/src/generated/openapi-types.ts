@@ -7263,6 +7263,8 @@ export interface components {
             pid?: number | null;
             /** Process Start Time */
             process_start_time?: string | null;
+            /** Boot Id */
+            boot_id?: string | null;
             /** Started At */
             started_at?: string | null;
         };
