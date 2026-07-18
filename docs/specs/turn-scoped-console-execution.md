@@ -188,7 +188,7 @@ Provider names choose adapters; they do not define launch modes.
 | Console adapter | Fresh turn | Resume turn | Current state |
 | --- | --- | --- | --- |
 | `codex_exec` | `codex exec` | `codex exec resume <thread>` | execution exists; promote behind common contract |
-| `cursor_acp` | ACP `session/new` | ACP `session/load` | execution exists; promote behind common contract |
+| `cursor_print` | `create-chat` + native `--print --resume` | native `--print --resume` | implementation locked; promote only after live product proof |
 | `claude_print` | `claude --print --session-id` | `claude --print --resume` | feasibility evidence only; managed adapter and live resume proof needed |
 | `opencode_run` | `opencode run` | `opencode run --session` | feasibility evidence only; managed adapter and live resume proof needed |
 
