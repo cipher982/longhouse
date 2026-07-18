@@ -48,6 +48,7 @@ async def test_live_catalog_maintenance_never_opens_legacy_notification_database
 @pytest.mark.asyncio
 async def test_production_live_catalog_lifespan_delegates_schema_to_catalogd(monkeypatch):
     calls: list[str] = []
+    monkeypatch.setenv("TESTING", "0")
 
     def forbidden_direct_schema_init(*_args, **_kwargs):
         raise AssertionError("production API process must not initialize the live schema")
@@ -162,6 +163,7 @@ async def test_production_live_catalog_lifespan_delegates_schema_to_catalogd(mon
 @pytest.mark.asyncio
 async def test_lifespan_stops_searchd_and_catalogd_when_later_startup_fails(monkeypatch):
     calls: list[str] = []
+    monkeypatch.setenv("TESTING", "0")
 
     async def start_catalogd():
         calls.append("catalogd_start")

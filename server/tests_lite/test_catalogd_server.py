@@ -20,6 +20,7 @@ from zerg.catalogd.protocol import CatalogRpcResponse
 from zerg.catalogd.protocol import read_frame
 from zerg.catalogd.protocol import write_frame
 from zerg.catalogd.schema import CATALOG_SCHEMA_GENERATION
+from zerg.catalogd.schema import CATALOG_SCHEMA_VERSION
 from zerg.catalogd.schema import create_catalog_engine
 from zerg.catalogd.schema import initialize_catalog_schema
 from zerg.catalogd.server import CatalogDaemon
@@ -50,14 +51,14 @@ async def test_daemon_publishes_private_socket_and_serves_ping_schema(daemon_pat
         assert ping == {
             "catalog_id": str(metadata.catalog_id),
             "schema_generation": CATALOG_SCHEMA_GENERATION,
-            "schema_version": 1,
+            "schema_version": CATALOG_SCHEMA_VERSION,
             "commit_seq": "0",
             "pid": os.getpid(),
             "ready": True,
         }
         assert schema["catalog_id"] == ping["catalog_id"]
-        assert schema["minimum_reader_schema_version"] == 1
-        assert schema["maximum_reader_schema_version"] == 1
+        assert schema["minimum_reader_schema_version"] == CATALOG_SCHEMA_VERSION
+        assert schema["maximum_reader_schema_version"] == CATALOG_SCHEMA_VERSION
         assert stat.S_IMODE(socket_path.stat().st_mode) == 0o600
     finally:
         await client.close()

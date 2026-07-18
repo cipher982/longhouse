@@ -213,7 +213,7 @@ def test_cursor_print_assistant_event_materializes_live_preview(tmp_path):
     assert row is not None
     assert row.thread_id == str(thread_id)
     assert preview.provisional_complete is True
-    assert preview.source == "cursor_print"
+    assert row.source == "cursor_print"
 
 
 def test_cursor_print_tool_event_materializes_live_tool_preview(tmp_path):

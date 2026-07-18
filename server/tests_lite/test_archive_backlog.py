@@ -57,7 +57,7 @@ def test_collect_archive_backlog_summarizes_sqlite_spool(tmp_path: Path):
 
     summary = collect_archive_backlog(tmp_path)
 
-    assert summary["state"] == "dead_lettered"
+    assert summary["state"] == "blocked"
     assert summary["pending_ranges"] == 2
     assert summary["pending_paths"] == 1
     assert summary["pending_sessions"] == 1
