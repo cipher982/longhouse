@@ -90,8 +90,9 @@ def test_opencode_command_launches_managed_session_and_passes_extra_args(monkeyp
     )
 
     assert result.exit_code == 0, result.output
-    # Default is terminal-owned: exiting the TUI stops the server.
-    assert stop_calls == [{"session_id": "session-123", "config_dir": None}]
+    # Exiting the TUI detaches; it is not permission to stop the server.
+    assert stop_calls == []
+    assert "left the provider server running" in result.output
     assert launch_calls[0]["cwd"] == tmp_path
     assert launch_calls[0]["machine_name"] == "work-laptop"
     assert bridge_calls == [
@@ -176,7 +177,7 @@ def test_opencode_funnels_model_flag_to_server(monkeypatch, tmp_path):
     )
 
     assert result.exit_code == 0, result.output
-    assert stop_calls == [{"session_id": "session-123", "config_dir": None}]
+    assert stop_calls == []
     assert bridge_calls == [
         {
             "session_id": "session-123",

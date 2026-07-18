@@ -625,8 +625,9 @@ def test_codex_command_starts_native_bridge_and_attaches(monkeypatch, tmp_path):
     assert "Remote target: ws://127.0.0.1:4800" in result.output
     assert "Opening session in browser..." in result.output
     assert "Attaching…" in result.output
-    # Clean exit (mocked TUI returns 0 + cleanup ok) banks the hearth.
-    assert "The hearth banked" in result.output
+    # A clean TUI exit detaches; it is not permission to kill the provider.
+    assert "still burns" in result.output
+    assert "terminal detached" in result.output
     assert open_calls == ["https://longhouse.test/timeline/session-123"]
     assert bridge_calls == [
         {
@@ -644,14 +645,9 @@ def test_codex_command_starts_native_bridge_and_attaches(monkeypatch, tmp_path):
     assert native_tui_calls == [
         ("session-123", "/tmp/codex", "ws://127.0.0.1:4800", str(tmp_path), False, None, None, None)
     ]
-    assert list_managed_session_contracts(tmp_path / ".longhouse") == []
-    assert stop_calls == [
-        {
-            "session_id": "session-123",
-            "reason": codex_cli._CODEX_STOP_REASON_TERMINAL_DISCONNECTED,
-            "timeout_secs": None,
-        }
-    ]
+    contracts = list_managed_session_contracts(tmp_path / ".longhouse")
+    assert contracts[0]["session_id"] == "session-123"
+    assert stop_calls == []
 
 
 def test_codex_command_no_attach_fails_when_prestart_lacks_thread(monkeypatch, tmp_path):
@@ -1009,6 +1005,51 @@ def test_run_native_codex_tui_uses_foreground_process_group_when_interactive(mon
     ]
     assert foreground_calls[0]["cwd"] == tmp_path
     assert foreground_calls[0]["env"]["LONGHOUSE_MANAGED_SESSION_ID"] == "session-123"
+
+
+def test_run_native_codex_tui_recovers_once_from_nonzero_exit_with_healthy_bridge(monkeypatch):
+    exits = iter((1, 0))
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        codex_cli,
+        "_run_native_codex_tui",
+        lambda **kwargs: calls.append(kwargs) or next(exits),
+    )
+    monkeypatch.setattr(
+        codex_cli,
+        "_native_codex_bridge_reattachable",
+        lambda state_file: state_file == "/tmp/state.json",
+    )
+
+    exit_code = codex_cli._run_native_codex_tui_with_recovery(
+        state_file="/tmp/state.json",
+        session_id="session-123",
+    )
+
+    assert exit_code == 0
+    assert calls == [{"session_id": "session-123"}, {"session_id": "session-123"}]
+
+
+def test_run_native_codex_tui_does_not_relaunch_after_clean_user_exit(monkeypatch):
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        codex_cli,
+        "_run_native_codex_tui",
+        lambda **kwargs: calls.append(kwargs) or 0,
+    )
+    monkeypatch.setattr(
+        codex_cli,
+        "_native_codex_bridge_reattachable",
+        lambda _state_file: pytest.fail("clean exit must not probe or relaunch"),
+    )
+
+    exit_code = codex_cli._run_native_codex_tui_with_recovery(
+        state_file="/tmp/state.json",
+        session_id="session-123",
+    )
+
+    assert exit_code == 0
+    assert calls == [{"session_id": "session-123"}]
 
 
 def test_run_native_codex_tui_attaches_to_prestarted_thread(monkeypatch, tmp_path):

@@ -26,7 +26,6 @@ from zerg.cli._common import build_session_url as _build_session_url
 from zerg.cli._common import ensure_managed_launch_preflight as _ensure_managed_launch_preflight
 from zerg.cli._common import interactive_stdio as _interactive_stdio
 from zerg.cli._common import open_session_url as _open_session_url
-from zerg.cli._managed_contract import remove_managed_provider_contract
 from zerg.cli._managed_launch import EXIT_SETUP_FAILED
 from zerg.cli._managed_launch import add_interactive_human_shell_launch_env
 from zerg.cli._managed_launch import finish_managed_launch_preflight
@@ -661,6 +660,29 @@ def _run_native_codex_tui(
     return int(completed.returncode)
 
 
+def _run_native_codex_tui_with_recovery(
+    *,
+    state_file: str | None,
+    **kwargs: object,
+) -> int:
+    """Reattach once when a healthy managed bridge outlives a TUI failure.
+
+    Stock Codex can exit its whole TUI when a locally cached active turn ends
+    just before Esc sends ``turn/interrupt``. The app-server and provider
+    execution remain healthy, so dropping the user to the shell would turn a
+    recoverable client race into a visible managed-session crash.
+    """
+
+    exit_code = _run_native_codex_tui(**kwargs)
+    if exit_code == 0 or not _native_codex_bridge_reattachable(state_file):
+        return exit_code
+    typer.secho(
+        f"Codex terminal exited with code {exit_code}; reattaching to the healthy managed session…",
+        fg=typer.colors.YELLOW,
+    )
+    return _run_native_codex_tui(**kwargs)
+
+
 def _run_foreground_process_group(*, cmd: list[str], cwd: Path, env: dict[str, str]) -> int:
     """Run an interactive child as the terminal foreground job.
 
@@ -916,7 +938,8 @@ def codex(
     bridge_stopper = _CodexBridgeStopper(result.session_id, state_file=state_file)
     previous_handlers = _install_codex_signal_cleanup(bridge_stopper)
     try:
-        exit_code = _run_native_codex_tui(
+        exit_code = _run_native_codex_tui_with_recovery(
+            state_file=state_file,
             session_id=result.session_id,
             codex_bin=resolved_codex_bin,
             ws_url=ws_url,
@@ -983,35 +1006,18 @@ def codex(
             typer.echo(f"Recovery target: {attach_cmd}")
         return
 
-    stop_error = bridge_stopper.stop(reason=_CODEX_STOP_REASON_TERMINAL_DISCONNECTED)
-    remove_managed_provider_contract(
-        provider="codex",
+    # The TUI is a client of the managed app-server, not its execution owner.
+    # A clean client exit is not permission to terminate the provider process;
+    # only an explicit stop/terminate operation may do that.
+    typer.secho("🔥  The hearth still burns — terminal detached.", fg=typer.colors.YELLOW)
+    typer.echo(f"   Rejoin: {attach_cmd}")
+    _emit_warp_cli_agent_event(
+        event="status",
         session_id=result.session_id,
-        config_dir=resolved_config_dir,
-        config_dir_is_provider_home=True,
+        cwd=cwd,
+        project=project,
+        response="Managed Codex terminal detached; bridge left running for reattach.",
     )
-    if stop_error is not None:
-        _emit_warp_cli_agent_event(
-            event="stop",
-            session_id=result.session_id,
-            cwd=cwd,
-            project=project,
-            response=f"Managed Codex bridge cleanup failed after TUI exit: {stop_error}",
-        )
-        typer.secho(
-            f"Managed bridge cleanup failed after TUI exit: {stop_error}",
-            fg=typer.colors.YELLOW,
-        )
-    else:
-        # Only claim the hearth was cleanly banked if bridge cleanup actually succeeded.
-        launch_ui.exit_bookend(exit_code=0, machine_name=machine_name)
-        _emit_warp_cli_agent_event(
-            event="stop",
-            session_id=result.session_id,
-            cwd=cwd,
-            project=project,
-            response="Managed Codex session ended.",
-        )
 
 
 @app.command("doctor")

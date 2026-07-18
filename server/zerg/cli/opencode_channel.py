@@ -44,7 +44,7 @@ _MAX_READABLE_STATE_SCHEMA_VERSION = _STATE_SCHEMA_VERSION
 _PID_REUSE_TOLERANCE_SECONDS = 120
 
 # Lifecycle ownership of the backing `opencode serve` process.
-LAUNCH_MODE_ATTACHED_TUI = "attached_tui"  # server dies when the attach TUI exits
+LAUNCH_MODE_ATTACHED_TUI = "attached_tui"  # launched with a foreground attach TUI
 LAUNCH_MODE_KEEP_SERVER = "keep_server"  # persistent reattachable background server
 LAUNCH_MODE_DETACHED = "detached"  # no TUI in this process; server left for reattach
 _VALID_LAUNCH_MODES = frozenset({LAUNCH_MODE_ATTACHED_TUI, LAUNCH_MODE_KEEP_SERVER, LAUNCH_MODE_DETACHED})
@@ -668,11 +668,10 @@ def stop_opencode_server_bridge(
 
 
 class OpenCodeServerBridgeStopper:
-    """Stops the backing OpenCode server when the attach TUI exits.
+    """Explicitly stops the backing OpenCode server.
 
-    Clean user exits stop the terminal-owned server. Transport failures and
-    wrapper signals preserve it so Longhouse degradation cannot terminate the
-    provider execution.
+    TUI and wrapper lifecycle never call this automatically. Provider
+    termination requires an explicit user stop/terminate operation.
     """
 
     def __init__(self, session_id: str, *, config_dir: Path | None = None) -> None:

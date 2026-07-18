@@ -917,8 +917,8 @@ def opencode(
         return
 
     launch_ui.progress("Attaching OpenCode…")
-    # A clean user exit stops a terminal-owned server. Signals and nonzero TUI
-    # exits are control-path failures, so they preserve the provider execution.
+    # The attach TUI is a client, not the execution owner. Its exit or failure
+    # must never terminate the managed provider server.
     terminal_owned = launch_mode == LAUNCH_MODE_ATTACHED_TUI
     stopper = OpenCodeServerBridgeStopper(result.session_id, config_dir=resolved_config_dir)
     previous_handlers = _install_opencode_signal_cleanup(stopper) if terminal_owned else {}
@@ -936,20 +936,15 @@ def opencode(
     finally:
         _restore_signal_handlers(previous_handlers)
 
-    if terminal_owned and exit_code == 0:
-        stop_error = stopper.stop_for_terminal_disconnect()
-        if stop_error is not None:
-            typer.secho(
-                f"Managed OpenCode server cleanup failed after TUI exit: {stop_error}",
-                fg=typer.colors.YELLOW,
-            )
-        launch_ui.exit_bookend(exit_code=exit_code, machine_name=machine_name)
+    if terminal_owned:
+        typer.secho(
+            "OpenCode terminal detached; Longhouse left the provider server running.",
+            fg=typer.colors.YELLOW,
+        )
+    if exit_code == 0:
+        typer.secho("🔥  The hearth still burns — terminal detached.", fg=typer.colors.YELLOW)
+        typer.echo(f"   Rejoin: {attach_command}")
     else:
-        if terminal_owned:
-            typer.secho(
-                "OpenCode control exited nonzero; Longhouse left the provider server running.",
-                fg=typer.colors.YELLOW,
-            )
         launch_ui.exit_bookend(
             exit_code=exit_code,
             machine_name=machine_name,
