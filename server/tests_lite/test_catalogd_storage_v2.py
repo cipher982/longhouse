@@ -306,7 +306,9 @@ async def test_revision_generation_drift_returns_conflict_instead_of_catalog_fai
     try:
         existing_generation_id = uuid4()
         first = _raw_params(epoch=epoch, session_id=session_id, start=0, end=6, records=(b"hello\n",), sealed_at=now)
-        first.update(render_state="ready", render_manifest=_render_manifest(existing_generation_id), projectors=["search-v2"])
+        first.update(
+            render_state="ready", render_manifest=_render_manifest(existing_generation_id), projectors=["search-v2"]
+        )
         await client.call("storage.raw_object.commit.v2", first)
 
         requested_generation_id = uuid4()
@@ -1305,6 +1307,9 @@ def test_existing_v1_catalog_additively_creates_storage_v2_tables(daemon_paths):
     with engine.begin() as connection:
         for table_name in CatalogBase.metadata.tables:
             connection.exec_driver_sql(f'DROP TABLE "{table_name}"')
+        # Model a catalog from the preceding v2 build, before the additive
+        # reducer marker and tables existed.
+        connection.exec_driver_sql("UPDATE catalog_meta SET fact_reducer_generation = NULL")
 
     metadata = initialize_catalog_schema(engine)
     with engine.connect() as connection:

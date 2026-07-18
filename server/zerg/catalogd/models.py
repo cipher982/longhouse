@@ -19,6 +19,115 @@ from sqlalchemy.sql import text
 CatalogBase = declarative_base()
 
 
+class FactHead(CatalogBase):
+    """Current bounded candidate from one reducer fact source."""
+
+    __tablename__ = "fact_heads"
+
+    family = Column(String(32), primary_key=True)
+    subject_key = Column(String(1024), primary_key=True)
+    source = Column(String(64), primary_key=True)
+    source_epoch = Column(String(255), primary_key=True, server_default=text("''"))
+    ordering_mode = Column(String(16), nullable=False)
+    source_seq = Column(BigInteger, nullable=True)
+    evidence_hash = Column(String(64), nullable=False)
+    observed_at = Column(DateTime(timezone=True), nullable=True)
+    valid_until = Column(DateTime(timezone=True), nullable=True)
+    value_json = Column(Text, nullable=False)
+    raw_locator = Column(String(1024), nullable=True)
+    updated_commit_seq = Column(BigInteger, nullable=False)
+    received_at = Column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        Index("ix_fact_heads_subject", "family", "subject_key"),
+        Index("ix_fact_heads_family_recent", "family", "updated_commit_seq"),
+    )
+
+
+class FactReceipt(CatalogBase):
+    """Bounded duplicate/conflict window for one fact-head candidate."""
+
+    __tablename__ = "fact_receipts"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    family = Column(String(32), nullable=False)
+    subject_key = Column(String(1024), nullable=False)
+    source = Column(String(64), nullable=False)
+    source_epoch = Column(String(255), nullable=False, server_default=text("''"))
+    position_key = Column(String(64), nullable=False)
+    source_seq = Column(BigInteger, nullable=True)
+    dedupe_key = Column(String(64), nullable=False)
+    evidence_hash = Column(String(64), nullable=False)
+    received_at = Column(DateTime(timezone=True), nullable=False)
+    commit_seq = Column(BigInteger, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "family",
+            "subject_key",
+            "source",
+            "source_epoch",
+            "dedupe_key",
+            name="uq_fact_receipt_candidate_dedupe",
+        ),
+        UniqueConstraint(
+            "family",
+            "subject_key",
+            "source",
+            "source_epoch",
+            "position_key",
+            name="uq_fact_receipt_candidate_position",
+        ),
+        Index(
+            "ix_fact_receipts_candidate_recent",
+            "family",
+            "subject_key",
+            "source",
+            "source_epoch",
+            "id",
+        ),
+    )
+
+
+class FactConflict(CatalogBase):
+    """Bounded, explainable reuse of one source position with new content."""
+
+    __tablename__ = "fact_conflicts"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    family = Column(String(32), nullable=False)
+    subject_key = Column(String(1024), nullable=False)
+    source = Column(String(64), nullable=False)
+    source_epoch = Column(String(255), nullable=False, server_default=text("''"))
+    position_key = Column(String(64), nullable=False)
+    source_seq = Column(BigInteger, nullable=True)
+    conflict_kind = Column(String(32), nullable=False)
+    existing_hash = Column(String(64), nullable=False)
+    incoming_hash = Column(String(64), nullable=False)
+    detected_at = Column(DateTime(timezone=True), nullable=False)
+    commit_seq = Column(BigInteger, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "family",
+            "subject_key",
+            "source",
+            "source_epoch",
+            "position_key",
+            "incoming_hash",
+            name="uq_fact_conflict_position_hash",
+        ),
+        Index(
+            "ix_fact_conflicts_candidate_recent",
+            "family",
+            "subject_key",
+            "source",
+            "source_epoch",
+            "id",
+        ),
+    )
+
+
 class StorageSession(CatalogBase):
     """One denormalized session row for timeline and storage convergence."""
 
@@ -409,6 +518,9 @@ class LegacyMigrationSession(CatalogBase):
 
 __all__ = [
     "CatalogBase",
+    "FactConflict",
+    "FactHead",
+    "FactReceipt",
     "LegacyMigrationRun",
     "LegacyMigrationSession",
     "MediaObject",

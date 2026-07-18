@@ -5,10 +5,12 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC
 from datetime import datetime
 
 import pytest
+from sqlalchemy import event
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -44,6 +46,9 @@ def test_greenfield_catalog_has_pragmas_live_schema_and_identity(tmp_path):
         "legacy_migration_sessions",
         "live_session_catalog",
         "live_runtime_state",
+        "fact_heads",
+        "fact_receipts",
+        "fact_conflicts",
     }.issubset(tables)
 
 
@@ -59,6 +64,162 @@ def test_initialize_is_idempotent_and_preserves_catalog_identity(tmp_path):
     assert second == first
     with second_engine.connect() as connection:
         assert connection.execute(text("SELECT COUNT(*) FROM catalog_meta")).scalar_one() == 1
+
+
+def test_feature_marker_refuses_to_heal_an_incomplete_reducer_schema(tmp_path):
+    engine = create_catalog_engine(tmp_path / "longhouse-live.db")
+    initialize_catalog_schema(engine)
+    with engine.begin() as connection:
+        connection.exec_driver_sql("DROP TABLE fact_receipts")
+
+    with pytest.raises(CatalogSchemaMismatchError, match="fact reducer schema"):
+        initialize_catalog_schema(engine)
+
+
+def test_existing_v2_adopts_reducer_tables_without_advancing_global_version(tmp_path):
+    engine = create_catalog_engine(tmp_path / "longhouse-live.db")
+    initialize_catalog_schema(engine)
+    with engine.begin() as connection:
+        connection.exec_driver_sql("DROP TABLE fact_conflicts")
+        connection.exec_driver_sql("DROP TABLE fact_receipts")
+        connection.exec_driver_sql("DROP TABLE fact_heads")
+        connection.exec_driver_sql("ALTER TABLE catalog_meta DROP COLUMN fact_reducer_generation")
+
+    metadata = initialize_catalog_schema(engine)
+
+    assert metadata.schema_version == 2
+    with engine.connect() as connection:
+        tables = {row[0] for row in connection.exec_driver_sql("SELECT name FROM sqlite_master WHERE type='table'")}
+        assert {"fact_heads", "fact_receipts", "fact_conflicts"}.issubset(tables)
+        assert connection.exec_driver_sql(
+            "SELECT fact_reducer_generation FROM catalog_meta WHERE singleton = 1"
+        ).scalar_one()
+
+
+def test_interrupted_reducer_adoption_rolls_back_without_partial_marker(tmp_path):
+    engine = create_catalog_engine(tmp_path / "longhouse-live.db")
+    initialize_catalog_schema(engine)
+    with engine.begin() as connection:
+        connection.exec_driver_sql("DROP TABLE fact_conflicts")
+        connection.exec_driver_sql("DROP TABLE fact_receipts")
+        connection.exec_driver_sql("DROP TABLE fact_heads")
+        connection.exec_driver_sql("ALTER TABLE catalog_meta DROP COLUMN fact_reducer_generation")
+
+    def fail_mid_adoption(_connection, _cursor, statement, _parameters, _context, _executemany):
+        if "CREATE TABLE" in statement and "fact_receipts" in statement:
+            raise RuntimeError("simulated adoption interruption")
+
+    event.listen(engine, "before_cursor_execute", fail_mid_adoption)
+    try:
+        with pytest.raises(RuntimeError, match="simulated adoption interruption"):
+            initialize_catalog_schema(engine)
+    finally:
+        event.remove(engine, "before_cursor_execute", fail_mid_adoption)
+
+    with engine.connect() as connection:
+        tables = set(connection.exec_driver_sql("SELECT name FROM sqlite_master WHERE type='table'").scalars())
+        columns = {row[1] for row in connection.exec_driver_sql("PRAGMA table_info(catalog_meta)")}
+    assert not ({"fact_heads", "fact_receipts", "fact_conflicts"} & tables)
+    assert "fact_reducer_generation" not in columns
+
+    metadata = initialize_catalog_schema(engine)
+    assert metadata.schema_version == 2
+
+
+def test_reducer_schema_validation_rejects_matching_names_without_constraints(tmp_path):
+    engine = create_catalog_engine(tmp_path / "longhouse-live.db")
+    initialize_catalog_schema(engine)
+    with engine.begin() as connection:
+        connection.exec_driver_sql("DROP TABLE fact_heads")
+        connection.exec_driver_sql(
+            "CREATE TABLE fact_heads ("
+            "family TEXT, subject_key TEXT, source TEXT, source_epoch TEXT, ordering_mode TEXT, "
+            "source_seq INTEGER, evidence_hash TEXT, observed_at TEXT, valid_until TEXT, value_json TEXT, "
+            "raw_locator TEXT, updated_commit_seq INTEGER, received_at TEXT)"
+        )
+        connection.exec_driver_sql("CREATE INDEX ix_fact_heads_subject ON fact_heads(family, subject_key)")
+        connection.exec_driver_sql("CREATE INDEX ix_fact_heads_commit ON fact_heads(updated_commit_seq)")
+
+    with pytest.raises(CatalogSchemaMismatchError, match="primary-key:fact_heads"):
+        initialize_catalog_schema(engine)
+
+
+def test_reducer_schema_validation_rejects_wrong_server_default(tmp_path):
+    engine = create_catalog_engine(tmp_path / "longhouse-live.db")
+    initialize_catalog_schema(engine)
+    with engine.begin() as connection:
+        create_sql = connection.exec_driver_sql(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'fact_heads'"
+        ).scalar_one()
+        wrong_default_sql = create_sql.replace("DEFAULT ''", "DEFAULT 'wrong'", 1)
+        assert wrong_default_sql != create_sql
+        connection.exec_driver_sql("DROP TABLE fact_heads")
+        connection.exec_driver_sql(wrong_default_sql)
+        connection.exec_driver_sql("CREATE INDEX ix_fact_heads_subject ON fact_heads(family, subject_key)")
+        connection.exec_driver_sql("CREATE INDEX ix_fact_heads_commit ON fact_heads(updated_commit_seq)")
+
+    with pytest.raises(CatalogSchemaMismatchError, match="default:fact_heads.source_epoch"):
+        initialize_catalog_schema(engine)
+
+
+def test_additive_reducer_storage_remains_readable_to_previous_v2_shape(tmp_path):
+    engine = create_catalog_engine(tmp_path / "longhouse-live.db")
+    initialize_catalog_schema(engine)
+
+    with engine.connect() as connection:
+        row = connection.exec_driver_sql(
+            "SELECT singleton, catalog_id, schema_version, commit_seq, created_at, updated_at FROM catalog_meta"
+        ).one()
+        tables = set(connection.exec_driver_sql("SELECT name FROM sqlite_master WHERE type='table'").scalars())
+
+    assert row.schema_version == 2
+    assert row.singleton == 1
+    assert {"fact_heads", "fact_receipts", "fact_conflicts"}.issubset(tables)
+
+
+def test_reducer_generation_is_stable_across_processes():
+    command = "from zerg.catalogd.schema import FACT_REDUCER_GENERATION; print(FACT_REDUCER_GENERATION)"
+    values = []
+    for _ in range(2):
+        completed = subprocess.run(
+            [sys.executable, "-c", command],
+            cwd=os.path.dirname(os.path.dirname(__file__)),
+            env=os.environ.copy(),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert completed.returncode == 0, completed.stderr
+        values.append(completed.stdout.strip())
+
+    assert values[0] == values[1] == catalog_schema.FACT_REDUCER_GENERATION
+
+
+def test_concurrent_reducer_adoption_serializes_without_partial_schema(tmp_path):
+    database = tmp_path / "longhouse-live.db"
+    engine = create_catalog_engine(database)
+    initialize_catalog_schema(engine)
+    with engine.begin() as connection:
+        connection.exec_driver_sql("DROP TABLE fact_conflicts")
+        connection.exec_driver_sql("DROP TABLE fact_receipts")
+        connection.exec_driver_sql("DROP TABLE fact_heads")
+        connection.exec_driver_sql("ALTER TABLE catalog_meta DROP COLUMN fact_reducer_generation")
+    engine.dispose()
+
+    def initialize_once():
+        worker_engine = create_catalog_engine(database)
+        try:
+            return initialize_catalog_schema(worker_engine)
+        finally:
+            worker_engine.dispose()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        metadata = list(executor.map(lambda _index: initialize_once(), range(2)))
+
+    assert [item.schema_version for item in metadata] == [CATALOG_SCHEMA_VERSION] * 2
+    final_engine = create_catalog_engine(database)
+    initialize_catalog_schema(final_engine)
+    final_engine.dispose()
 
 
 def test_existing_live_database_gets_safe_additive_columns(tmp_path):

@@ -25,6 +25,7 @@ from sqlalchemy import Integer
 from sqlalchemy import MetaData
 from sqlalchemy import Table
 from sqlalchemy import Text
+from sqlalchemy import UniqueConstraint
 from sqlalchemy import create_engine
 from sqlalchemy import event
 from sqlalchemy import inspect
@@ -74,6 +75,9 @@ catalog_meta = Table(
     Column("commit_seq", Integer, nullable=False, server_default=text("0")),
     Column("created_at", Text, nullable=False),
     Column("updated_at", Text, nullable=False),
+    # Additive feature marker. Older v2 binaries ignore this column and the
+    # reducer tables, so pre-cutover rollback remains possible.
+    Column("fact_reducer_generation", Text, nullable=True),
     CheckConstraint("singleton = 1", name="ck_catalog_meta_singleton"),
     CheckConstraint("schema_version > 0", name="ck_catalog_meta_schema_version_positive"),
     CheckConstraint("commit_seq >= 0", name="ck_catalog_meta_commit_seq_nonnegative"),
@@ -116,7 +120,9 @@ CATALOG_SCHEMA_GENERATION = _schema_generation()
 # Every version bump must register the transaction that moves the preceding
 # durable version forward. An empty registry is intentional for initial v1.
 def _hide_empty_human_launch_shells(connection: Connection) -> None:
-    human_launch = "(launch_actor IN ('user', 'human_ui', 'human_shell') OR launch_surface IN ('web', 'ios', 'console', 'terminal', 'api'))"
+    human_launch = (
+        "(launch_actor IN ('user', 'human_ui', 'human_shell') " "OR launch_surface IN ('web', 'ios', 'console', 'terminal', 'api'))"
+    )
     connection.exec_driver_sql(
         "UPDATE live_session_catalog SET hidden_from_default_timeline = 1 "
         "WHERE hidden_from_default_timeline = 0 AND transcript_revision = 0 "
@@ -134,7 +140,150 @@ def _hide_empty_human_launch_shells(connection: Connection) -> None:
     )
 
 
-CATALOG_SCHEMA_MIGRATIONS: dict[int, Callable[[Connection], None]] = {1: _hide_empty_human_launch_shells}
+_FACT_REDUCER_TABLES = ("fact_heads", "fact_receipts", "fact_conflicts")
+
+
+def _fact_reducer_generation() -> str:
+    shape: list[dict[str, object]] = []
+    for table_name in _FACT_REDUCER_TABLES:
+        table = CatalogBase.metadata.tables[table_name]
+        shape.append(
+            {
+                "table": table_name,
+                "columns": [
+                    {
+                        "name": column.name,
+                        "type": str(column.type),
+                        "nullable": column.nullable,
+                        "primary_key": column.primary_key,
+                        "server_default": (str(column.server_default.arg) if column.server_default is not None else None),
+                    }
+                    for column in table.columns
+                ],
+                "unique_constraints": sorted(
+                    (
+                        {
+                            "name": constraint.name,
+                            "columns": [column.name for column in constraint.columns],
+                        }
+                        for constraint in table.constraints
+                        if isinstance(constraint, UniqueConstraint)
+                    ),
+                    key=lambda item: str(item["name"]),
+                ),
+                "indexes": sorted(
+                    (
+                        {
+                            "name": index.name,
+                            "columns": [column.name for column in index.columns],
+                            "unique": bool(index.unique),
+                        }
+                        for index in table.indexes
+                    ),
+                    key=lambda item: str(item["name"]),
+                ),
+            }
+        )
+    encoded = json.dumps(shape, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+FACT_REDUCER_GENERATION = _fact_reducer_generation()
+
+
+def _validate_fact_reducer_schema(bind: Engine | Connection) -> None:
+    inspector = inspect(bind)
+    live_tables = set(inspector.get_table_names())
+    problems = [f"table:{name}" for name in sorted(set(_FACT_REDUCER_TABLES) - live_tables)]
+    for table_name in set(_FACT_REDUCER_TABLES) & live_tables:
+        declared = CatalogBase.metadata.tables[table_name]
+        live_columns = {column["name"]: column for column in inspector.get_columns(table_name)}
+        declared_columns = {column.name: column for column in declared.columns}
+        if set(live_columns) != set(declared_columns):
+            problems.append(f"columns:{table_name}")
+        for name in set(live_columns) & set(declared_columns):
+            live = live_columns[name]
+            expected = declared_columns[name]
+            if bool(live["nullable"]) != bool(expected.nullable):
+                problems.append(f"nullability:{table_name}.{name}")
+            if str(live["type"]).upper() != str(expected.type).upper():
+                problems.append(f"type:{table_name}.{name}")
+            live_default = live.get("default")
+            expected_default = str(expected.server_default.arg).strip() if expected.server_default is not None else None
+            if (str(live_default).strip() if live_default is not None else None) != expected_default:
+                problems.append(f"default:{table_name}.{name}")
+
+        live_pk = tuple(inspector.get_pk_constraint(table_name).get("constrained_columns") or ())
+        declared_pk = tuple(column.name for column in declared.primary_key.columns)
+        if live_pk != declared_pk:
+            problems.append(f"primary-key:{table_name}")
+
+        live_uniques = {
+            (constraint.get("name"), tuple(constraint.get("column_names") or ()))
+            for constraint in inspector.get_unique_constraints(table_name)
+        }
+        declared_uniques = {
+            (constraint.name, tuple(column.name for column in constraint.columns))
+            for constraint in declared.constraints
+            if isinstance(constraint, UniqueConstraint)
+        }
+        if live_uniques != declared_uniques:
+            problems.append(f"unique-constraints:{table_name}")
+
+        live_indexes = {
+            (index.get("name"), tuple(index.get("column_names") or ()), bool(index.get("unique")))
+            for index in inspector.get_indexes(table_name)
+        }
+        declared_indexes = {(index.name, tuple(column.name for column in index.columns), bool(index.unique)) for index in declared.indexes}
+        if live_indexes != declared_indexes:
+            problems.append(f"indexes:{table_name}")
+    if problems:
+        raise CatalogSchemaMismatchError("catalog fact reducer schema is incompatible: " + ", ".join(sorted(set(problems))))
+
+
+def _initialize_fact_reducer_schema(engine: Engine) -> None:
+    """Atomically adopt or validate additive reducer storage on catalog v2."""
+
+    # pysqlite does not begin a transaction for DDL on its own. Force the
+    # boundary before ALTER/CREATE so an interrupted adoption cannot leave a
+    # partial table set or marker column behind.
+    with engine.connect() as connection:
+        connection.exec_driver_sql("BEGIN IMMEDIATE")
+        try:
+            _initialize_fact_reducer_schema_in_transaction(connection)
+        except BaseException:
+            connection.rollback()
+            raise
+        connection.commit()
+
+
+def _initialize_fact_reducer_schema_in_transaction(connection: Connection) -> None:
+    columns = {row[1] for row in connection.exec_driver_sql("PRAGMA table_info(catalog_meta)")}
+    if "fact_reducer_generation" not in columns:
+        connection.exec_driver_sql("ALTER TABLE catalog_meta ADD COLUMN fact_reducer_generation TEXT")
+    marker = connection.exec_driver_sql("SELECT fact_reducer_generation FROM catalog_meta WHERE singleton = 1").scalar_one()
+    tables = set(inspect(connection).get_table_names())
+    present = set(_FACT_REDUCER_TABLES) & tables
+    if marker is not None:
+        if marker != FACT_REDUCER_GENERATION:
+            raise CatalogSchemaMismatchError("catalog fact reducer generation does not match this build")
+        _validate_fact_reducer_schema(connection)
+        return
+    if present and present != set(_FACT_REDUCER_TABLES):
+        raise CatalogSchemaMismatchError("catalog fact reducer adoption is partial")
+    if not present:
+        for table_name in _FACT_REDUCER_TABLES:
+            CatalogBase.metadata.tables[table_name].create(bind=connection)
+    _validate_fact_reducer_schema(connection)
+    connection.exec_driver_sql(
+        "UPDATE catalog_meta SET fact_reducer_generation = ? WHERE singleton = 1",
+        (FACT_REDUCER_GENERATION,),
+    )
+
+
+CATALOG_SCHEMA_MIGRATIONS: dict[int, Callable[[Connection], None]] = {
+    1: _hide_empty_human_launch_shells,
+}
 
 
 def create_catalog_engine(database: str | Path, *, busy_timeout_ms: int = DEFAULT_BUSY_TIMEOUT_MS) -> Engine:
@@ -335,12 +484,26 @@ def initialize_catalog_schema(engine: Engine) -> CatalogMeta:
     if has_meta_table:
         # Validate both markers before making any model-driven schema changes.
         with engine.connect() as connection:
-            rows = connection.execute(select(catalog_meta)).all()
+            rows = connection.execute(
+                select(
+                    catalog_meta.c.singleton,
+                    catalog_meta.c.catalog_id,
+                    catalog_meta.c.schema_version,
+                    catalog_meta.c.commit_seq,
+                    catalog_meta.c.created_at,
+                    catalog_meta.c.updated_at,
+                )
+            ).all()
         if len(rows) != 1:
             raise CatalogSchemaMismatchError(f"catalog_meta must contain exactly one row; found {len(rows)}")
         durable_version = rows[0].schema_version
-        read_catalog_meta(engine, expected_schema_version=durable_version)
+        _decode_meta(rows[0], expected_schema_version=durable_version)
+        if user_version != durable_version:
+            raise CatalogSchemaMismatchError(
+                f"PRAGMA user_version={user_version} does not match catalog metadata schema_version={durable_version}"
+            )
         _migrate_catalog_schema(engine, from_version=durable_version)
+        _initialize_fact_reducer_schema(engine)
     elif user_version != 0:
         raise CatalogSchemaMismatchError(f"PRAGMA user_version={user_version} is set but catalog_meta is missing")
 
@@ -353,6 +516,7 @@ def initialize_catalog_schema(engine: Engine) -> CatalogMeta:
     _create_declared_indexes(engine, LiveBase.metadata)
     _create_declared_indexes(engine, CatalogBase.metadata)
     _create_declared_indexes(engine, _catalog_metadata)
+    _validate_fact_reducer_schema(engine)
 
     if not has_meta_table:
         now = datetime.now(UTC)
@@ -366,6 +530,7 @@ def initialize_catalog_schema(engine: Engine) -> CatalogMeta:
                     commit_seq=0,
                     created_at=now.isoformat(),
                     updated_at=now.isoformat(),
+                    fact_reducer_generation=FACT_REDUCER_GENERATION,
                 )
             )
             connection.exec_driver_sql(f"PRAGMA user_version={CATALOG_SCHEMA_VERSION}")

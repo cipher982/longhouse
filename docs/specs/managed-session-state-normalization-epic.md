@@ -853,6 +853,11 @@ SQLite health contract:
   writes;
 - reducer input is capped at 256 total facts per heartbeat after Machine Agent
   coalescing, with each value payload capped at 4 KiB and locator at 1 KiB;
+- storage is capped per fact family at 2,048 current source candidates, with at
+  most 16 receipts and 8 conflicts per candidate; head eviction removes its
+  child history in the same catalog transaction;
+- the API and reducer use one pure identity/hash validator, so retained
+  reducer-grade evidence cannot be weaker than reducer intake;
 - WAL bytes, checkpoint busy/remaining frames, writer queue wait, transaction
   execution time, changed heads, duplicates, stale evidence, conflicts, and
   cleanup duration are observable;
@@ -883,6 +888,10 @@ Cutover gate:
 
 Rollout/backout:
 
+- Phase 3A installs and tests the bounded reducer with no live heartbeat intake;
+- Phase 3B may add same-transaction shadow intake only after explicit provider
+  run/connection identities, cross-language hash vectors, interrupted-migration
+  tests, and the WAL pressure policy pass;
 - `shadow_reducer_ingest_enabled` stops head mutation while legacy heartbeat
   behavior remains unchanged;
 - `shadow_parity_enabled` independently stops parity comparison/persistence;
