@@ -5,7 +5,7 @@ on:
     branches: [main]
     paths:
       - "blog/**"
-      - "scripts/qa/check-static-blog.py"
+      - "tools/check-static-blog.py"
       - ".github/workflows/blog-publish.yml"
   workflow_dispatch: {}
 
@@ -23,7 +23,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - name: Check HTML and local links
-        run: python3 scripts/qa/check-static-blog.py
+        run: python3 tools/check-static-blog.py
 
   publish:
     name: Publish static blog files

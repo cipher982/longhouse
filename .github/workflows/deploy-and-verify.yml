@@ -3,6 +3,24 @@ name: Deploy and Verify
 on:
   push:
     branches: [main]
+    paths:
+      - '.dockerignore'
+      - 'bun.lock'
+      - 'config/**'
+      - 'docker/entrypoint.sh'
+      - 'docker/runtime.dockerfile'
+      - 'engine/**'
+      - 'server/**'
+      - 'web/**'
+      - 'scripts/ci/setup-deploy-ssh.sh'
+      - 'scripts/ci/wait-for-http.sh'
+      - 'scripts/lib/hosted-instance.sh'
+      - 'scripts/ops/runtime-deploy.sh'
+      - 'deploy/zerg/**'
+      - 'scripts/qa/**'
+      - '.github/actions/wait-for-ci/**'
+      - '.github/workflows/deploy-and-verify.yml'
+      - '.github/workflows/runtime-image.yml'
   workflow_dispatch:
     inputs:
       runtime_image_tag:

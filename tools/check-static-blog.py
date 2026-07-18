@@ -8,7 +8,7 @@ from pathlib import Path
 import sys
 
 
-ROOT = Path(__file__).resolve().parents[2] / "blog"
+ROOT = Path(__file__).resolve().parents[1] / "blog"
 PAGES = (ROOT / "index.html", ROOT / "provider-integrations" / "index.html")
 
 

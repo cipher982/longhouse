@@ -5,6 +5,16 @@ on:
     branches: [main]
     tags:
       - "runtime-v*"
+    paths:
+      - '.dockerignore'
+      - 'bun.lock'
+      - 'config/**'
+      - 'docker/entrypoint.sh'
+      - 'docker/runtime.dockerfile'
+      - 'engine/**'
+      - 'server/**'
+      - 'web/**'
+      - '.github/workflows/runtime-image.yml'
   workflow_dispatch: {}
 
 permissions:
