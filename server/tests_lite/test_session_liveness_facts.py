@@ -285,7 +285,7 @@ def test_stale_phase_with_fresh_control_lease_keeps_managed_lifecycle_open():
     assert facts.lifecycle.reason == "control_observed"
 
 
-def test_recent_activity_with_stale_control_lease_is_not_control_live():
+def test_recent_activity_with_expired_control_lease_has_unknown_control_freshness():
     last_activity = NOW - timedelta(seconds=10)
     facts = build_session_liveness_facts(
         runtime_view=_runtime_view(
@@ -311,10 +311,9 @@ def test_recent_activity_with_stale_control_lease_is_not_control_live():
 
     assert facts.activity.last_transcript_at == last_activity
     assert facts.phase.kind is None
-    assert facts.control.state == "offline"
+    assert facts.control.state == "unknown"
     assert facts.control.reason == "lease_stale"
-    assert facts.lifecycle.state == "open"
-    assert facts.lifecycle.reason == "control_observed"
+    assert facts.lifecycle.state == "unknown"
 
 
 def test_explicit_provider_terminal_ends_run_without_closing_session():

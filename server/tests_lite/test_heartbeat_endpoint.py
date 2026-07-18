@@ -821,6 +821,64 @@ def test_heartbeat_empty_resolved_sessions_detaches_missing_managed_control(tmp_
         api_app_ref.dependency_overrides = {}
 
 
+def test_heartbeat_omission_detaches_managed_control_without_ending_the_run(tmp_path):
+    from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
+
+    SessionLocal = _make_db(tmp_path)
+    client, api_app_ref = _make_client(SessionLocal)
+    session_id = uuid4()
+    now = datetime.now(timezone.utc)
+
+    try:
+        with SessionLocal() as db:
+            session = AgentSession(
+                id=session_id,
+                provider="codex",
+                environment="laptop",
+                started_at=now - timedelta(minutes=5),
+                user_messages=1,
+                assistant_messages=1,
+                tool_calls=0,
+            )
+            db.add(session)
+            db.flush()
+            _thread, _run, connection = seed_managed_kernel_rows(db, session, control_plane="codex_bridge")
+            connection.device_id = "testclient"
+            ingest_runtime_events(
+                db,
+                [
+                    RuntimeEventIngest(
+                        runtime_key=runtime_key_for_session("codex", str(session_id)),
+                        session_id=session_id,
+                        provider="codex",
+                        device_id="testclient",
+                        source="codex_bridge",
+                        kind="phase_signal",
+                        phase="thinking",
+                        occurred_at=now,
+                        freshness_ms=90_000,
+                        dedupe_key="managed-phase-before-omission",
+                        payload={},
+                    )
+                ],
+            )
+            db.commit()
+
+        response = client.post(
+            "/api/agents/heartbeat",
+            json={"version": "0.7.0", "daemon_pid": 42, "sessions": []},
+        )
+
+        assert response.status_code == 204, response.text
+        with SessionLocal() as db:
+            connection = db.query(SessionConnection).one()
+            runtime = db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == session_id).one()
+            assert connection.state == "detached"
+            assert runtime.terminal_state is None
+    finally:
+        api_app_ref.dependency_overrides = {}
+
+
 def test_heartbeat_resolved_opencode_server_bridge_keeps_live_control(tmp_path):
     from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
     from zerg.services.agents.kernel_capabilities import project_session_capabilities

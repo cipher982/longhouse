@@ -2266,7 +2266,7 @@ def test_collect_local_health_keeps_attached_codex_idle_from_managed_session_sta
     _disable_real_runner_env(monkeypatch, tmp_path)
     monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
     _write_engine_status(tmp_path, age_seconds=5)
-    pinned_now = datetime(2026, 4, 17, 18, 5, 0, tzinfo=timezone.utc)
+    pinned_now = datetime(2026, 4, 17, 17, 35, 0, tzinfo=timezone.utc)
     monkeypatch.setattr(local_health_service, "_utc_now", lambda: pinned_now)
 
     rollout_path = tmp_path / "sessions" / "2026" / "04" / "17" / "rollout-zerg.jsonl"
@@ -5047,7 +5047,7 @@ def test_local_health_command_surfaces_managed_phase_contract_from_raw_hook_even
         assert managed_session["phase"] == case.display_for_tool(tool_name)
 
 
-def test_managed_session_phase_state_keeps_persisted_rows_without_freshness_gating(monkeypatch, tmp_path: Path):
+def test_managed_session_phase_state_expires_stale_rows(monkeypatch, tmp_path: Path):
     _disable_real_runner_env(monkeypatch, tmp_path)
     now = datetime(2026, 4, 20, 12, 0, 0, tzinfo=timezone.utc)
     stale_observed_at = (now - timedelta(minutes=30)).isoformat().replace("+00:00", "Z")
@@ -5070,8 +5070,7 @@ def test_managed_session_phase_state_keeps_persisted_rows_without_freshness_gati
 
     overlay = local_health_service._load_managed_session_phase_state(tmp_path, now=now)
 
-    assert overlay["sess-stale"]["phase"] == "running"
-    assert overlay["sess-stale"]["observed_at"] == stale_observed_at
+    assert "sess-stale" not in overlay
 
 
 def test_managed_session_phase_state_drops_stale_finished_rows_after_retention(monkeypatch, tmp_path: Path):

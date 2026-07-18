@@ -4406,6 +4406,7 @@ mod tests {
             thread_subscription_status: Some("subscribed".to_string()),
             bridge_pid: 12344,
             app_server_pid: None,
+            app_server_process_start_time: None,
             app_server_pgid: None,
             updated_at: updated_at.to_string(),
             bridge_alive,

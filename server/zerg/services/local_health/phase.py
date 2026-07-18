@@ -11,6 +11,7 @@ from zerg.managed_phase_contract import display_label_for_phase
 from zerg.managed_phase_contract import is_known_raw_phase
 from zerg.services.longhouse_paths import get_agent_db_path
 from zerg.services.longhouse_paths import get_agent_outbox_dir
+from zerg.services.session_runtime import phase_freshness_ms
 
 from ._shared import _max_rfc3339
 from ._shared import _normalize_optional_string
@@ -137,20 +138,30 @@ def _managed_phase_is_unknown(raw_phase: str | None) -> bool:
 
 
 def _should_keep_managed_phase_row(row: Mapping[str, str | None], *, now: datetime) -> bool:
-    # `finished` is a transient turn marker, not the steady-state idle phase.
-    # Keep it briefly so local-health can show recent completion, then let it
-    # age out. Other phases remain the canonical current state until a newer
-    # signal replaces them, so they are intentionally not freshness-gated here.
+    """Keep only phase observations that are still current for local display.
+
+    The raw row remains in the Machine Agent DB for diagnosis, but a stale
+    activity observation is not current activity. Local-health must agree with
+    the Runtime Host that expiry becomes unknown rather than leaving an old
+    `thinking`, `running`, or `idle` label visible forever.
+    """
     phase = _normalize_optional_string(row.get("phase"))
     observed_raw = _normalize_optional_string(row.get("observed_at"))
-    if phase != "finished" or observed_raw is None:
-        return True
+    if phase is None or observed_raw is None:
+        return False
     observed_at = _parse_rfc3339(observed_raw)
     if observed_at is None:
-        # A malformed transient completion marker should not linger forever.
         return False
-    age = (now - observed_at).total_seconds()
-    return age <= _MANAGED_FINISHED_RETENTION_SECONDS
+    if phase == "finished":
+        freshness_seconds = _MANAGED_FINISHED_RETENTION_SECONDS
+    else:
+        freshness = phase_freshness_ms(phase)
+        if freshness is None:
+            # Unknown raw phases remain visible as contract-drift diagnostics.
+            # They are not normalized to a current known activity state.
+            return True
+        freshness_seconds = freshness / 1000
+    return (now - observed_at).total_seconds() <= freshness_seconds
 
 
 def _load_managed_session_phase_state(base_dir: Path, *, now: datetime) -> dict[str, dict[str, str | None]]:

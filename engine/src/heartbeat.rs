@@ -843,7 +843,10 @@ fn resolved_managed_opencode_session(
         workspace: workspace_from_cwd(obs.and_then(|obs| obs.cwd.clone())),
         process: ResolvedProcess {
             pid: process_pid,
-            process_start_time: None,
+            process_start_time: obs
+                .map(|obs| obs.process_start_time.trim())
+                .filter(|value| !value.is_empty())
+                .map(str::to_string),
             started_at: obs
                 .map(|obs| obs.started_at.clone())
                 .filter(|value| !value.trim().is_empty()),
@@ -939,7 +942,11 @@ fn resolved_managed_codex_session(
         workspace: workspace_from_cwd(cwd),
         process: ResolvedProcess {
             pid: process_pid,
-            process_start_time: None,
+            process_start_time: obs
+                .and_then(|obs| obs.app_server_process_start_time.as_deref())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string),
             started_at: None,
         },
         bridge: ResolvedBridge {
@@ -1045,7 +1052,11 @@ fn resolved_managed_cursor_session(
         workspace: workspace_from_cwd(cwd),
         process: ResolvedProcess {
             pid: cursor_pid,
-            process_start_time: None,
+            process_start_time: obs
+                .and_then(|obs| obs.cursor_process_start_time.as_deref())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string),
             started_at: obs
                 .map(|obs| obs.started_at.clone())
                 .filter(|value| !value.trim().is_empty()),
@@ -1128,7 +1139,12 @@ fn resolved_managed_claude_session(
         workspace: workspace_from_cwd(cwd),
         process: ResolvedProcess {
             pid: process_pid,
-            process_start_time: None,
+            // Claude's state-file `started_at` is also the identity boundary
+            // the scanner validates against before considering this PID live.
+            process_start_time: obs
+                .map(|obs| obs.started_at.trim())
+                .filter(|value| !value.is_empty())
+                .map(str::to_string),
             started_at: None,
         },
         bridge: ResolvedBridge {
@@ -1911,6 +1927,7 @@ mod tests {
             thread_subscription_status: Some("subscribed".to_string()),
             bridge_pid: 12344,
             app_server_pid: Some(12345),
+            app_server_process_start_time: Some("Sat Apr 26 00:00:00 2026".to_string()),
             app_server_pgid: Some(12345),
             updated_at: "2026-04-26T00:00:00Z".to_string(),
             bridge_alive: true,
@@ -2023,6 +2040,10 @@ mod tests {
         assert_eq!(
             foreground_session.bridge.ui_presence.as_deref(),
             Some("foreground_tui")
+        );
+        assert_eq!(
+            foreground_session.process.process_start_time.as_deref(),
+            Some("Sat Apr 26 00:00:00 2026")
         );
 
         let background_session = sessions
@@ -2161,6 +2182,10 @@ mod tests {
         );
         let session = &sessions[0];
         assert_eq!(session.state, "attached");
+        assert_eq!(
+            session.process.process_start_time.as_deref(),
+            Some("Mon May  5 11:59:00 2026")
+        );
         assert_eq!(session.bridge.ui_attached, Some(false));
         assert_eq!(session.bridge.ui_presence.as_deref(), Some("background"));
 
@@ -2698,7 +2723,9 @@ mod tests {
             socket_path: Some(PathBuf::from(format!("/tmp/{session_id}.sock"))),
             cwd: Some("/Users/test/git/zerg".to_string()),
             launcher_pid: Some(4242),
+            launcher_process_start_time: Some("Tue Jul  8 22:50:19 2026".to_string()),
             cursor_pid: Some(4243),
+            cursor_process_start_time: Some("Tue Jul  8 22:50:20 2026".to_string()),
             started_at: "2026-07-08T22:50:19Z".to_string(),
             updated_at: "2026-07-08T22:50:19Z".to_string(),
             live: true,
@@ -2752,6 +2779,10 @@ mod tests {
         );
         assert_eq!(session.bridge.bridge_pid, Some(4242));
         assert_eq!(session.process.pid, Some(4243));
+        assert_eq!(
+            session.process.process_start_time.as_deref(),
+            Some("Tue Jul  8 22:50:20 2026")
+        );
         assert!(session.evidence.process_observed);
         assert!(session
             .evidence
@@ -2889,6 +2920,10 @@ mod tests {
             Some("/Users/test/git/acme")
         );
         assert_eq!(session.process.pid, Some(9876));
+        assert_eq!(
+            session.process.process_start_time.as_deref(),
+            Some("Mon May  5 11:59:00 2026")
+        );
         assert_eq!(session.evidence.process_observed, true);
         assert_eq!(session.evidence.transcript_observed, true);
         assert_eq!(

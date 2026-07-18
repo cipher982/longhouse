@@ -38,6 +38,10 @@ pub struct CodexBridgeObservation {
     pub thread_subscription_status: Option<String>,
     pub bridge_pid: u32,
     pub app_server_pid: Option<u32>,
+    /// Recorded process-start identity for the app server. The scanner already
+    /// uses this to reject PID reuse; heartbeat projection must preserve it so
+    /// downstream lifecycle logic has the same identity boundary.
+    pub app_server_process_start_time: Option<String>,
     pub app_server_pgid: Option<i32>,
     pub updated_at: String,
     /// `true` when the bridge holds its exclusive `.lock`; that is the
@@ -172,6 +176,7 @@ pub(crate) fn collect_observations_from_paths(
             thread_subscription_status: state.thread_subscription_status,
             bridge_pid: state.pid,
             app_server_pid: state.app_server_pid,
+            app_server_process_start_time: state.app_server_process_start_time,
             app_server_pgid: state.app_server_pgid,
             updated_at: state.updated_at,
             bridge_alive,

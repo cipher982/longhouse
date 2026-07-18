@@ -44,7 +44,6 @@ from zerg.metrics import agents_heartbeat_write_seconds
 from zerg.metrics import managed_session_heartbeat_lease_rows_total
 from zerg.models.agents import AgentHeartbeat
 from zerg.models.agents import AgentSession
-from zerg.models.agents import SessionObservation
 from zerg.models.agents import SessionRuntimeState
 from zerg.models.device_token import DeviceToken
 from zerg.models.live_store import LiveHeartbeatStamp
@@ -60,7 +59,6 @@ from zerg.services.managed_control_state import refresh_managed_control_lease_he
 from zerg.services.managed_control_state import upsert_live_control_leases
 from zerg.services.managed_control_state import upsert_managed_control_leases
 from zerg.services.session_kernel_projection import project_provider_session_id
-from zerg.services.session_observations import OBS_KIND_RUNTIME_SIGNAL
 from zerg.services.session_runtime import RuntimeEventIngest
 from zerg.services.session_runtime import ingest_runtime_events
 from zerg.services.write_backpressure import raise_hot_write_backpressure
@@ -434,16 +432,6 @@ def _clear_synthetic_managed_missing_runtime_on_reattach(
     return touched_session_ids
 
 
-def _runtime_observation_payload_from_raw(payload_raw: str | dict | None) -> dict:
-    if isinstance(payload_raw, dict):
-        return payload_raw
-    try:
-        payload = json.loads(payload_raw or "{}")
-    except (TypeError, json.JSONDecodeError):
-        return {}
-    return payload if isinstance(payload, dict) else {}
-
-
 def _latest_heartbeat_sessions_digest(db: Session, device_id: str) -> str | None:
     row = (
         db.query(AgentHeartbeat.sessions_digest)
@@ -472,142 +460,6 @@ def _latest_live_heartbeat_sessions_digest(db: Session, device_id: str) -> str |
 
 def _managed_lease_session_ids(leases: list[ManagedSessionLeaseIn]) -> set[UUID]:
     return {lease.session_id for lease in leases if lease.session_id is not None}
-
-
-def _is_synthetic_missing_managed_lease_payload(payload: dict) -> bool:
-    if str(payload.get("kind") or "").strip() != "phase_signal":
-        return False
-    if str(payload.get("phase") or "").strip() != "blocked":
-        return False
-    if str(payload.get("tool_name") or "").strip() != "control path":
-        return False
-    event_payload = payload.get("payload")
-    return isinstance(event_payload, dict) and event_payload.get("state") == "missing"
-
-
-def _state_is_synthetic_missing_managed_lease(state: SessionRuntimeState) -> bool:
-    if str(state.phase_source or "").strip() != MANAGED_SESSION_LEASE_SOURCE:
-        return False
-    if str(state.phase or "").strip() != "blocked":
-        return False
-    return str(state.active_tool or "").strip() == "control path"
-
-
-def _state_has_real_managed_lease_history(state: SessionRuntimeState) -> bool:
-    return str(state.phase_source or "").strip() == MANAGED_SESSION_LEASE_SOURCE and not _state_is_synthetic_missing_managed_lease(state)
-
-
-def _latest_real_managed_lease_at_for_key(db: Session, runtime_key: str) -> tuple[bool, datetime | None]:
-    rows = (
-        db.query(
-            SessionObservation.observed_at,
-            SessionObservation.payload_json,
-        )
-        .filter(SessionObservation.runtime_key == runtime_key)
-        .filter(SessionObservation.source == MANAGED_SESSION_LEASE_SOURCE)
-        .filter(SessionObservation.kind == OBS_KIND_RUNTIME_SIGNAL)
-        .order_by(SessionObservation.observed_at.desc(), SessionObservation.id.desc())
-        .limit(200)
-        .all()
-    )
-    saw_lease_history = False
-    for observed_at, payload_json in rows:
-        saw_lease_history = True
-        payload = _runtime_observation_payload_from_raw(payload_json)
-        if _is_synthetic_missing_managed_lease_payload(payload):
-            continue
-        occurred_at = normalize_utc(observed_at)
-        if occurred_at is not None:
-            return True, occurred_at
-    return saw_lease_history, None
-
-
-def _runtime_events_for_missing_managed_leases(
-    db: Session,
-    leases: list[ManagedSessionLeaseIn],
-    *,
-    device_id: str,
-    received_at: datetime,
-) -> list[RuntimeEventIngest]:
-    observed = {
-        ((lease.provider or "").strip().lower(), lease.session_id)
-        for lease in leases
-        if (lease.provider or "").strip() and lease.session_id is not None
-    }
-    rows = (
-        db.query(SessionRuntimeState, AgentSession)
-        .join(AgentSession, SessionRuntimeState.session_id == AgentSession.id)
-        .filter(SessionRuntimeState.device_id == device_id)
-        .filter(SessionRuntimeState.session_id.isnot(None))
-        .filter(SessionRuntimeState.terminal_state.is_(None))
-        .all()
-    )
-    control_by_session: dict[UUID, object] = {}
-    legacy_real_lease_at_by_key: dict[str, tuple[bool, datetime | None]] = {}
-
-    events: list[RuntimeEventIngest] = []
-    for state, session in rows:
-        if not _is_managed_session(db, session):
-            continue
-        provider = (state.provider or session.provider or "").strip().lower()
-        session_id = state.session_id
-        if not provider or session_id is None or (provider, session_id) in observed:
-            continue
-
-        control_row = control_by_session.get(session_id)
-        lease_history_at = None
-        if control_row is not None:
-            lease_history_at = normalize_utc(control_row.lease_observed_at) or normalize_utc(
-                control_row.last_control_seen_at,
-            )
-
-        if lease_history_at is None and _state_has_real_managed_lease_history(state):
-            lease_history_at = normalize_utc(state.last_runtime_signal_at) or normalize_utc(state.timeline_anchor_at)
-
-        if lease_history_at is None and _state_is_synthetic_missing_managed_lease(state):
-            if state.runtime_key not in legacy_real_lease_at_by_key:
-                legacy_real_lease_at_by_key[state.runtime_key] = _latest_real_managed_lease_at_for_key(
-                    db,
-                    state.runtime_key,
-                )
-            saw_legacy_history, legacy_real_lease_at = legacy_real_lease_at_by_key[state.runtime_key]
-            if saw_legacy_history:
-                lease_history_at = legacy_real_lease_at or normalize_utc(state.timeline_anchor_at)
-
-        if lease_history_at is None:
-            continue
-
-        timeline_anchor_at = (
-            lease_history_at
-            or normalize_utc(state.timeline_anchor_at)
-            or normalize_utc(session.last_activity_at)
-            or normalize_utc(state.last_progress_at)
-            or normalize_utc(state.last_live_at)
-            or received_at
-        )
-        events.append(
-            RuntimeEventIngest(
-                runtime_key=state.runtime_key,
-                session_id=session_id,
-                provider=provider,
-                device_id=device_id,
-                source=MANAGED_SESSION_LEASE_SOURCE,
-                kind="terminal_signal",
-                occurred_at=received_at,
-                dedupe_key=(
-                    f"engine-managed-missing-terminal:{device_id}:{session_id}:"
-                    f"{int(state.runtime_version or 0)}:{timeline_anchor_at.isoformat()}"
-                ),
-                payload={
-                    "terminal_state": "process_gone",
-                    "terminal_reason": "process_gone",
-                    "terminal_source": MANAGED_SESSION_LEASE_SOURCE,
-                    "timeline_anchor_at": timeline_anchor_at.isoformat(),
-                },
-            )
-        )
-
-    return events
 
 
 def _has_final_managed_codex_terminal(db: Session, session_id: UUID) -> bool:
@@ -1011,15 +863,6 @@ async def ingest_heartbeat(
                     device_id=_device_id,
                     received_at=_now,
                 )
-                if _managed_leases_present and not managed_snapshot_skip:
-                    runtime_events.extend(
-                        _runtime_events_for_missing_managed_leases(
-                            write_db,
-                            _managed_leases,
-                            device_id=_device_id,
-                            received_at=_now,
-                        )
-                    )
                 if _unmanaged_bindings_present:
                     runtime_events.extend(
                         _runtime_events_for_missing_unbound_unmanaged_sessions(

@@ -15,6 +15,7 @@ from datetime import timedelta
 from datetime import timezone
 from time import monotonic
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 from cryptography.fernet import Fernet
@@ -505,6 +506,114 @@ def test_progress_after_host_expired_reopens_runtime_projection(tmp_path):
         row = resp.json()["sessions"][0]
         assert row["id"] == session_id
         assert row["timeline_card"]["status"]["label"] == "No live signal"
+
+
+def test_late_phase_and_progress_do_not_reopen_ended_run_without_new_run_id(tmp_path):
+    factory = _make_db(tmp_path, "ended_run_rejects_late_activity.db")
+    now = datetime.now(timezone.utc)
+
+    db = factory()
+    try:
+        session = _seed_session(db, started_at=now - timedelta(minutes=30), ended_at=None)
+        session_id = str(session.id)
+        ingest_runtime_events(
+            db,
+            [
+                RuntimeEventIngest(
+                    runtime_key=f"claude:{session_id}",
+                    session_id=session.id,
+                    provider="claude",
+                    device_id="cinder",
+                    source="claude_hook",
+                    kind="terminal_signal",
+                    occurred_at=now,
+                    dedupe_key="terminal:process-gone",
+                    payload={"terminal_state": "process_gone"},
+                ),
+                RuntimeEventIngest(
+                    runtime_key=f"claude:{session_id}",
+                    session_id=session.id,
+                    provider="claude",
+                    device_id="cinder",
+                    source="claude_hook",
+                    kind="phase_signal",
+                    phase="thinking",
+                    occurred_at=now + timedelta(seconds=1),
+                    freshness_ms=90_000,
+                    dedupe_key="phase:late-after-process-gone",
+                    payload={},
+                ),
+                RuntimeEventIngest(
+                    runtime_key=f"claude:{session_id}",
+                    session_id=session.id,
+                    provider="claude",
+                    device_id="cinder",
+                    source="claude_hook",
+                    kind="progress_signal",
+                    occurred_at=now + timedelta(seconds=2),
+                    dedupe_key="progress:late-after-process-gone",
+                    payload={"progress_kind": "transcript_append"},
+                ),
+            ],
+        )
+        db.commit()
+
+        runtime_state = db.query(SessionRuntimeState).filter_by(runtime_key=f"claude:{session_id}").one()
+        assert runtime_state.terminal_state == "process_gone"
+        assert runtime_state.phase == "finished"
+    finally:
+        db.close()
+
+
+def test_new_run_id_may_replace_terminal_state_with_new_activity(tmp_path):
+    factory = _make_db(tmp_path, "new_run_may_replace_terminal.db")
+    now = datetime.now(timezone.utc)
+    previous_run_id = uuid4()
+    next_run_id = uuid4()
+
+    db = factory()
+    try:
+        session = _seed_session(db, started_at=now - timedelta(minutes=30), ended_at=None)
+        session_id = str(session.id)
+        ingest_runtime_events(
+            db,
+            [
+                RuntimeEventIngest(
+                    runtime_key=f"claude:{session_id}",
+                    session_id=session.id,
+                    run_id=previous_run_id,
+                    provider="claude",
+                    device_id="cinder",
+                    source="claude_hook",
+                    kind="terminal_signal",
+                    occurred_at=now,
+                    dedupe_key="terminal:previous-run",
+                    payload={"terminal_state": "process_gone"},
+                ),
+                RuntimeEventIngest(
+                    runtime_key=f"claude:{session_id}",
+                    session_id=session.id,
+                    run_id=next_run_id,
+                    provider="claude",
+                    device_id="cinder",
+                    source="claude_hook",
+                    kind="phase_signal",
+                    phase="thinking",
+                    occurred_at=now + timedelta(seconds=1),
+                    freshness_ms=90_000,
+                    dedupe_key="phase:new-run",
+                    payload={},
+                ),
+            ],
+        )
+        db.commit()
+
+        runtime_state = db.query(SessionRuntimeState).filter_by(runtime_key=f"claude:{session_id}").one()
+        assert runtime_state.run_id == next_run_id
+        assert runtime_state.terminal_state is None
+        assert runtime_state.phase == "thinking"
+    finally:
+        db.close()
 
 
 def test_sessions_list_preserves_ingested_stalled_runtime_phase(tmp_path):

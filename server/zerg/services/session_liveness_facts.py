@@ -149,7 +149,7 @@ def _control_observation(
         reason = reason or "unknown_control_state"
 
     if state == "online" and (expires_at is None or expires_at <= normalized_now):
-        state = "offline"
+        state = "unknown"
         reason = "lease_stale"
 
     if state in {"degraded", "offline"} and reason is None:

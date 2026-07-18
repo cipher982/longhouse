@@ -48,7 +48,13 @@ RuntimeEventKind = Literal[
     "pause_request",
     "pause_resolution",
 ]
-RuntimeEventApplyOutcome = Literal["applied", "ignored", "protected_session_ended", "stored_live_overlay"]
+RuntimeEventApplyOutcome = Literal[
+    "applied",
+    "ignored",
+    "protected_session_ended",
+    "protected_terminal",
+    "stored_live_overlay",
+]
 
 PHASE_FRESHNESS = {
     "thinking": timedelta(seconds=90),
@@ -1042,16 +1048,28 @@ def _apply_runtime_event(
     occurred_at = normalize_utc(event.occurred_at) or datetime.now(timezone.utc)
     pause_changed = False
 
-    if state.terminal_state == "session_ended":
-        incoming_terminal_state = str((event.payload or {}).get("terminal_state") or "").strip()
+    existing_terminal_state = str(state.terminal_state or "").strip()
+    incoming_terminal_state = str((event.payload or {}).get("terminal_state") or "").strip()
+    opens_new_run = event.run_id is not None and event.run_id != state.run_id
+
+    if existing_terminal_state in EXPLICIT_CLOSED_TERMINAL_STATES:
+        return "protected_session_ended"
+
+    if existing_terminal_state in RUN_END_TERMINAL_STATES | RUN_TERMINAL_STATES and not opens_new_run:
+        # A later transcript/phase signal can arrive after a process exit. It is
+        # evidence about the ended run, not proof that the run reopened. New
+        # work must identify a new run before it may clear terminal state.
         if event.kind == "terminal_signal" and incoming_terminal_state in RUN_TERMINAL_STATES:
             changed = _apply_run_terminal_event(db, event=event, state=state, occurred_at=occurred_at)
             if changed:
                 db.flush()
                 return "applied"
-            return "protected_session_ended"
-        if event.kind != "terminal_signal" or incoming_terminal_state != "session_ended":
-            return "protected_session_ended"
+            return "protected_terminal"
+        if event.kind == "terminal_signal" and incoming_terminal_state in EXPLICIT_CLOSED_TERMINAL_STATES:
+            # Explicit session closure is monotonic and may follow a run end.
+            pass
+        else:
+            return "protected_terminal"
 
     if event.session_id is not None and state.session_id != event.session_id:
         state.session_id = event.session_id
