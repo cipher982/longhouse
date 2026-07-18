@@ -204,6 +204,14 @@ impl TurnClaimRegistry {
     }
 
     pub fn list_nonterminal(&self) -> Result<Vec<TurnClaim>> {
+        Ok(self
+            .list_all()?
+            .into_iter()
+            .filter(|claim| claim.state != "terminal" && claim.state != "failed")
+            .collect())
+    }
+
+    pub fn list_all(&self) -> Result<Vec<TurnClaim>> {
         let Ok(entries) = fs::read_dir(&self.root) else {
             return Ok(Vec::new());
         };
@@ -216,9 +224,7 @@ impl TurnClaimRegistry {
             let bytes = fs::read(&path)?;
             let claim: TurnClaim = serde_json::from_slice(&bytes)
                 .with_context(|| format!("parsing turn claim {}", path.display()))?;
-            if claim.state != "terminal" && claim.state != "failed" {
-                claims.push(claim);
-            }
+            claims.push(claim);
         }
         claims.sort_by(|left, right| left.claimed_at.cmp(&right.claimed_at));
         Ok(claims)

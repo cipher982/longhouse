@@ -18,6 +18,7 @@ use uuid::Uuid;
 
 pub const CURSOR_PRINT_ADAPTER: &str = "cursor_print";
 const STDERR_TAIL_LINES: usize = 40;
+const RESUME_CONTEXT_MAX_CHARS: usize = 48_000;
 
 #[derive(Clone, Debug)]
 pub struct CursorPrintRunConfig {
@@ -84,6 +85,17 @@ pub async fn start_cursor_print_turn(
         }
         None => create_chat(&config.cursor_bin, &config.cwd).await?,
     };
+    let provider_prompt = if config.resume_provider_thread_id.is_some() {
+        cursor_resume_prompt(
+            &crate::turn_claims::default_registry()?.list_all()?,
+            &config.session_id,
+            &config.thread_id,
+            &provider_thread_id,
+            &config.prompt,
+        )
+    } else {
+        config.prompt.clone()
+    };
     let launch_id = Uuid::new_v4().to_string();
     let state_root = cursor_managed_root()?;
     let lock = acquire_conversation_lock(&state_root, &provider_thread_id)?;
@@ -125,7 +137,7 @@ pub async fn start_cursor_print_turn(
     if config.permission_mode == "bypass" {
         args.push("--force".to_string());
     }
-    args.push(config.prompt.clone());
+    args.push(provider_prompt);
     let argv = std::iter::once(config.cursor_bin.clone())
         .chain(args.iter().cloned())
         .collect::<Vec<_>>();
@@ -792,6 +804,83 @@ fn cursor_tool_name(event: &Value) -> Option<String> {
     None
 }
 
+fn cursor_resume_prompt(
+    claims: &[crate::turn_claims::TurnClaim],
+    session_id: &str,
+    thread_id: &str,
+    provider_thread_id: &str,
+    current_prompt: &str,
+) -> String {
+    let mut history = claims
+        .iter()
+        .filter(|claim| {
+            claim.state == "terminal"
+                && claim.session_id == session_id
+                && claim.thread_id == thread_id
+                && claim.provider == "cursor"
+                && claim.adapter.as_deref() == Some(CURSOR_PRINT_ADAPTER)
+                && claim.provider_thread_id.as_deref() == Some(provider_thread_id)
+        })
+        .filter_map(|claim| {
+            claim
+                .stdout_path
+                .as_deref()
+                .map(|path| (claim.claimed_at.as_str(), path))
+        })
+        .collect::<Vec<_>>();
+    history.sort_by_key(|(claimed_at, _)| *claimed_at);
+    let mut turns = Vec::new();
+    for (_, path) in history {
+        let Ok(text) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        let mut user = None;
+        let mut assistant = None;
+        for line in text.lines() {
+            let Ok(event) = serde_json::from_str::<Value>(line) else {
+                continue;
+            };
+            match event.get("type").and_then(Value::as_str) {
+                Some("user") => user = cursor_message_text(&event),
+                Some("assistant") => assistant = cursor_message_text(&event),
+                _ => {}
+            }
+        }
+        if user.is_some() || assistant.is_some() {
+            turns.push((user.unwrap_or_default(), assistant.unwrap_or_default()));
+        }
+    }
+    if turns.is_empty() {
+        return current_prompt.to_string();
+    }
+    let mut context = String::new();
+    for (user, assistant) in turns.into_iter().rev() {
+        let block =
+            format!("<turn>\n<user>{user}</user>\n<assistant>{assistant}</assistant>\n</turn>\n");
+        if context.len() + block.len() > RESUME_CONTEXT_MAX_CHARS {
+            break;
+        }
+        context.insert_str(0, &block);
+    }
+    format!(
+        "Longhouse Console continuation context: stock Cursor print resume preserves the native chat identity but may omit earlier turns from model context. Treat the following local, durable records as the immediately preceding conversation.\n<conversation_history>\n{context}</conversation_history>\n<current_user_message>\n{current_prompt}\n</current_user_message>"
+    )
+}
+
+fn cursor_message_text(event: &Value) -> Option<String> {
+    let blocks = event
+        .get("message")
+        .and_then(|message| message.get("content"))
+        .and_then(Value::as_array)?;
+    let text = blocks
+        .iter()
+        .filter(|block| block.get("type").and_then(Value::as_str) == Some("text"))
+        .filter_map(|block| block.get("text").and_then(Value::as_str))
+        .collect::<Vec<_>>()
+        .join("");
+    (!text.is_empty()).then_some(text)
+}
+
 fn cursor_managed_root() -> Result<PathBuf> {
     Ok(crate::config::get_longhouse_home()?
         .join("managed-local")
@@ -1077,6 +1166,53 @@ mod tests {
         assert_eq!(claim["run_id"], run_id);
     }
 
+    #[test]
+    fn resumed_cursor_prompt_rehydrates_prior_local_turns() {
+        let temp = tempfile::tempdir().unwrap();
+        let registry = crate::turn_claims::TurnClaimRegistry::new(temp.path().join("claims"));
+        let session_id = Uuid::new_v4().to_string();
+        let thread_id = Uuid::new_v4().to_string();
+        let run_id = Uuid::new_v4().to_string();
+        let provider_thread_id = Uuid::new_v4().to_string();
+        let stdout_path = temp.path().join("stdout.jsonl");
+        std::fs::write(
+            &stdout_path,
+            "{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"Remember GOLD_MARKER\"}]}}\n{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"GOLD_MARKER\"}]}}\n",
+        )
+        .unwrap();
+        registry
+            .claim(&run_id, &session_id, &thread_id, None, None, "cursor")
+            .unwrap();
+        registry
+            .mark_spawned_invocation(
+                &run_id,
+                42,
+                42,
+                Some("start".to_string()),
+                CURSOR_PRINT_ADAPTER,
+                "launch",
+                Some(&provider_thread_id),
+                stdout_path.to_str().unwrap(),
+                "/tmp/stderr",
+                json!({}),
+            )
+            .unwrap();
+        registry
+            .mark_terminal(&run_id, "run_completed", None)
+            .unwrap();
+
+        let prompt = cursor_resume_prompt(
+            &registry.list_all().unwrap(),
+            &session_id,
+            &thread_id,
+            &provider_thread_id,
+            "What was the marker?",
+        );
+        assert!(prompt.contains("Remember GOLD_MARKER"));
+        assert!(prompt.contains("<assistant>GOLD_MARKER</assistant>"));
+        assert!(prompt.ends_with("What was the marker?\n</current_user_message>"));
+    }
+
     #[tokio::test]
     #[ignore = "requires an authenticated stock cursor-agent and spends provider tokens"]
     async fn installed_cursor_completes_and_resumes_through_production_console_adapter() {
@@ -1188,11 +1324,11 @@ mod tests {
         // the runtime-event/catalog round trip; keep the direct canary honest
         // to that boundary instead of manufacturing a zero-gap second turn.
         tokio::time::sleep(Duration::from_secs(3)).await;
-        let second_marker = format!("{marker}_RESUMED");
         let second = run_turn(
             &cursor_bin,
             temp.path(),
-            format!("Reply with exactly {second_marker} and nothing else. Do not use tools."),
+            "Reply with exactly the marker from the previous turn and nothing else. Do not use tools."
+                .to_string(),
             Some(first.provider_thread_id.clone()),
             Some((first.session_id.clone(), first.thread_id.clone())),
         )
@@ -1200,7 +1336,7 @@ mod tests {
         assert_eq!(second.provider_thread_id, first.provider_thread_id);
         assert!(std::fs::read_to_string(&second.stdout_path)
             .unwrap()
-            .contains(&second_marker));
+            .contains(&marker));
 
         let interrupt_turn_id = Uuid::new_v4().to_string();
         let interrupt_run_id = Uuid::new_v4().to_string();
