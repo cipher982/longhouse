@@ -36,7 +36,7 @@ def daemon_paths():
     root.rmdir()
 
 
-def _seed_control_grant(engine, *, bind_adapter_identity: bool = True):
+def _seed_control_grant(engine, *, bind_adapter_identity: bool = True, provider: str = "codex"):
     now = datetime.now(UTC).replace(microsecond=0)
     session_id = uuid4()
     thread_id = uuid4()
@@ -45,7 +45,7 @@ def _seed_control_grant(engine, *, bind_adapter_identity: bool = True):
         db.add(
             LiveSessionCatalog(
                 session_id=str(session_id),
-                provider="codex",
+                provider=provider,
                 environment="production",
                 device_id="cinder",
                 started_at=now,
@@ -58,7 +58,7 @@ def _seed_control_grant(engine, *, bind_adapter_identity: bool = True):
             LiveSessionThread(
                 id=str(thread_id),
                 session_id=str(session_id),
-                provider="codex",
+                provider=provider,
                 branch_kind="root",
                 is_primary=1,
                 created_at=now,
@@ -69,7 +69,7 @@ def _seed_control_grant(engine, *, bind_adapter_identity: bool = True):
             LiveSessionRun(
                 id=str(run_id),
                 thread_id=str(thread_id),
-                provider="codex",
+                provider=provider,
                 host_id="cinder",
                 launch_origin="longhouse_spawned",
                 started_at=now,
@@ -107,11 +107,12 @@ def _reduce_control_fact(
     state="attached",
     observed_at=None,
     lease_ttl_ms=900_000,
+    provider="codex",
 ):
     observed_at = observed_at or datetime.now(UTC).replace(microsecond=0)
     value = {
         "authority_class": "provider_control",
-        "provider": "codex",
+        "provider": provider,
         "session_id": str(session_id),
         "run_id": str(run_id),
         "connection_id": str(adapter_connection_id),
@@ -119,13 +120,13 @@ def _reduce_control_fact(
         "granted_operations": list(grants),
         "state": state,
         "lease_ttl_ms": lease_ttl_ms,
-        "source": "provider_control_scan",
+        "source": f"{provider}_control_scan",
         "observed_at": observed_at.isoformat(),
     }
     fact = ReducerFact(
         family="control",
         subject_key=f"connection:{adapter_connection_id}:{lease_generation}",
-        source="provider_control_scan",
+        source=f"{provider}_control_scan",
         source_epoch=str(lease_generation),
         source_seq=None,
         dedupe_key=canonical_evidence_hash({**value, "dedupe": observed_at.isoformat()}),
@@ -138,14 +139,14 @@ def _reduce_control_fact(
         reduce_fact_batch(connection, [fact], received_at=observed_at)
 
 
-def _prepare_params(session_id, *, operation_id=None, command_id=None):
+def _prepare_params(session_id, *, operation_id=None, command_id=None, provider="codex"):
     operation_id = operation_id or str(uuid4())
     return {
         "operation_id": operation_id,
         "owner_id": 7,
         "session_id": str(session_id),
         "device_id": "cinder",
-        "provider": "codex",
+        "provider": provider,
         "command_type": "session.send_text",
         "command_id": command_id or f"managed-control:{session_id}:session.send_text:{operation_id}",
         "capability": "send",
@@ -259,17 +260,19 @@ async def test_catalogd_control_prepare_preserves_legacy_identity_for_unbound_co
     assert prepared["grant"]["identity_source"] == "legacy_synthetic"
 
 
-def test_canonical_control_prepare_allows_only_bound_matching_grant(monkeypatch, daemon_paths):
+@pytest.mark.parametrize("provider", ["codex", "claude"])
+def test_canonical_control_prepare_allows_only_bound_matching_grant(monkeypatch, daemon_paths, provider):
     database_path, _socket_path = daemon_paths
     engine = create_catalog_engine(database_path)
     initialize_catalog_schema(engine)
-    session_id, run_id, connection_id, adapter_id, generation = _seed_control_grant(engine)
+    session_id, run_id, connection_id, adapter_id, generation = _seed_control_grant(engine, provider=provider)
     _reduce_control_fact(
         engine,
         session_id=session_id,
         run_id=run_id,
         adapter_connection_id=adapter_id,
         lease_generation=generation,
+        provider=provider,
     )
     with Session(engine) as db:
         connection = db.get(LiveSessionConnection, connection_id)
@@ -278,7 +281,7 @@ def test_canonical_control_prepare_allows_only_bound_matching_grant(monkeypatch,
     monkeypatch.setenv("LONGHOUSE_SESSION_STATE_COMMAND_AUTH", "canonical")
     monkeypatch.setenv("LONGHOUSE_SHADOW_REDUCER_INGEST_ENABLED", "1")
 
-    prepared = CatalogStore(engine).prepare_control_command(**_prepare_params(session_id))
+    prepared = CatalogStore(engine).prepare_control_command(**_prepare_params(session_id, provider=provider))
 
     assert prepared["allowed"] is True
     assert prepared["grant"] == {
@@ -321,11 +324,12 @@ def test_canonical_control_prepare_rejects_unbound_and_ungranted(monkeypatch, da
     engine.dispose()
 
 
-def test_canonical_exact_replay_revalidates_current_grant(monkeypatch, daemon_paths):
+@pytest.mark.parametrize("provider", ["codex", "claude"])
+def test_canonical_exact_replay_revalidates_current_grant(monkeypatch, daemon_paths, provider):
     database_path, _socket_path = daemon_paths
     engine = create_catalog_engine(database_path)
     initialize_catalog_schema(engine)
-    session_id, run_id, _connection_id, adapter_id, generation = _seed_control_grant(engine)
+    session_id, run_id, _connection_id, adapter_id, generation = _seed_control_grant(engine, provider=provider)
     observed_at = datetime.now(UTC).replace(microsecond=0)
     _reduce_control_fact(
         engine,
@@ -334,10 +338,11 @@ def test_canonical_exact_replay_revalidates_current_grant(monkeypatch, daemon_pa
         adapter_connection_id=adapter_id,
         lease_generation=generation,
         observed_at=observed_at,
+        provider=provider,
     )
     monkeypatch.setenv("LONGHOUSE_SESSION_STATE_COMMAND_AUTH", "canonical")
     monkeypatch.setenv("LONGHOUSE_SHADOW_REDUCER_INGEST_ENABLED", "1")
-    params = _prepare_params(session_id)
+    params = _prepare_params(session_id, provider=provider)
     store = CatalogStore(engine)
     prepared = store.prepare_control_command(**params)
     assert prepared["allowed"] is True
@@ -350,6 +355,7 @@ def test_canonical_exact_replay_revalidates_current_grant(monkeypatch, daemon_pa
         lease_generation=generation,
         grants=(),
         observed_at=observed_at.replace(microsecond=1),
+        provider=provider,
     )
     replay = store.prepare_control_command(**params)
 
