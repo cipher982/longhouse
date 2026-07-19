@@ -1130,6 +1130,7 @@ server.serve_forever()
 
 def run_opencode_canary(args: argparse.Namespace, root: Path) -> dict[str, Any]:
     session_id = str(uuid.uuid4())
+    run_id = str(uuid.uuid4())
     workspace = root / "workspace"
     workspace.mkdir(parents=True, exist_ok=True)
     config_dir = root / ".claude"
@@ -1144,6 +1145,8 @@ def run_opencode_canary(args: argparse.Namespace, root: Path) -> dict[str, Any]:
                 "launch",
                 "--session-id",
                 session_id,
+                "--run-id",
+                run_id,
                 "--cwd",
                 str(workspace),
                 "--api-url",
@@ -1169,6 +1172,13 @@ def run_opencode_canary(args: argparse.Namespace, root: Path) -> dict[str, Any]:
                 evidence=_command_evidence(launch),
             )
         launch_payload = json.loads(launch.stdout)
+        if launch_payload.get("run_id") != run_id:
+            return _fail(
+                "opencode_run_identity_mismatch",
+                "opencode-channel launch did not preserve the requested run identity",
+                requested_run_id=run_id,
+                observed_run_id=launch_payload.get("run_id"),
+            )
 
         send = _run_longhouse(
             args,
@@ -1268,6 +1278,7 @@ def run_opencode_canary(args: argparse.Namespace, root: Path) -> dict[str, Any]:
         return _status(
             "pass",
             session_id=session_id,
+            run_id=launch_payload.get("run_id"),
             provider_session_id=launch_payload.get("provider_session_id"),
             observed_events=sorted(observed),
         )

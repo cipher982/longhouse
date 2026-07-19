@@ -8,6 +8,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import uuid
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -258,6 +259,7 @@ def test_all_current_provider_control_paths_are_green() -> None:
 
         opencode = payload["canaries"]["opencode"]
         assert opencode["status"] == "pass"
+        assert str(uuid.UUID(opencode["run_id"])) == opencode["run_id"]
         assert {"serve", "session.create", "prompt_async", "abort", "attach"} <= set(opencode["observed_events"])
 
         antigravity = payload["canaries"]["antigravity"]
