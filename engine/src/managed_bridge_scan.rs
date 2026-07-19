@@ -23,6 +23,8 @@ use crate::process_identity::{command_contains_basename, lstart_matches_recorded
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CodexBridgeObservation {
     pub session_id: String,
+    pub connection_id: Option<String>,
+    pub lease_generation: Option<String>,
     pub state_file: PathBuf,
     pub schema_version: u32,
     pub cwd: Option<String>,
@@ -169,6 +171,8 @@ pub(crate) fn collect_observations_from_paths(
 
         out.push(CodexBridgeObservation {
             session_id,
+            connection_id: state.connection_id,
+            lease_generation: state.lease_generation,
             state_file: path.to_path_buf(),
             schema_version: state.schema_version,
             cwd: Some(state.cwd),
@@ -266,8 +270,7 @@ mod tests {
             tty: "??".to_string(),
             stat: "S".to_string(),
             lstart: expected_start.to_string(),
-            command: "longhouse-engine codex-bridge run --session-id managed-codex"
-                .to_string(),
+            command: "longhouse-engine codex-bridge run --session-id managed-codex".to_string(),
             start_time: None,
         };
         let facts = HashMap::from([(111, fact.clone())]);
@@ -358,7 +361,10 @@ mod tests {
         );
         assert_eq!(with_tui.len(), 1);
         assert!(with_tui[0].has_tui_attachment);
-        assert_eq!(collect_observations_from(tmp.path(), &HashMap::new()).len(), 2);
+        assert_eq!(
+            collect_observations_from(tmp.path(), &HashMap::new()).len(),
+            2
+        );
     }
 
     #[test]

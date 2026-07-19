@@ -28,6 +28,8 @@ use crate::process_identity::{
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClaudeChannelObservation {
     pub session_id: String,
+    pub connection_id: Option<String>,
+    pub lease_generation: Option<String>,
     pub provider_session_id: Option<String>,
     pub state_file: PathBuf,
     pub cwd: Option<String>,
@@ -47,6 +49,8 @@ pub struct ClaudeChannelObservation {
 #[derive(Debug, Deserialize)]
 struct ClaudeChannelStateFile {
     session_id: Option<String>,
+    connection_id: Option<String>,
+    lease_generation: Option<String>,
     provider_session_id: Option<String>,
     cwd: Option<String>,
     claude_pid: Option<u32>,
@@ -124,6 +128,8 @@ pub(crate) fn collect_observations_from_paths(
 
         out.push(ClaudeChannelObservation {
             session_id,
+            connection_id: state.connection_id,
+            lease_generation: state.lease_generation,
             provider_session_id: state.provider_session_id,
             state_file: path.to_path_buf(),
             cwd,

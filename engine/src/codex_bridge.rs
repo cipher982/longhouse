@@ -45,7 +45,7 @@ const THREAD_SUBSCRIBE_RETRY_ATTEMPTS: usize = 8;
 const THREAD_SUBSCRIBE_RETRY_DELAY_MS: u64 = 250;
 const CODEX_DISABLE_UPDATE_CHECK_CONFIG: &str = "check_for_update_on_startup=false";
 pub const CODEX_BRIDGE_TOKEN_ENV: &str = "LONGHOUSE_CODEX_BRIDGE_TOKEN";
-pub const BRIDGE_STATE_SCHEMA_VERSION: u32 = 2;
+pub const BRIDGE_STATE_SCHEMA_VERSION: u32 = 3;
 pub const LAUNCH_MODE_DETACHED_UI: &str = "detached_ui";
 pub const LAUNCH_MODE_TUI: &str = "tui";
 const PAUSE_KIND_STRUCTURED_QUESTION: &str = "structured_question";
@@ -137,6 +137,10 @@ pub struct BridgeStartConfig {
 #[derive(Debug, Clone)]
 pub struct BridgeRunConfig {
     pub session_id: String,
+    /// Launch-scoped identity passed by `codex-bridge start`. Direct `run`
+    /// invocations leave both fields unset and receive a fresh identity.
+    pub connection_id: Option<String>,
+    pub lease_generation: Option<String>,
     pub cwd: PathBuf,
     pub api_url: String,
     pub api_token: String,
@@ -239,6 +243,10 @@ pub struct BridgeStateFile {
     #[serde(default = "default_bridge_state_schema_version")]
     pub schema_version: u32,
     pub session_id: String,
+    #[serde(default)]
+    pub connection_id: Option<String>,
+    #[serde(default)]
+    pub lease_generation: Option<String>,
     pub cwd: String,
     pub codex_bin: String,
     /// Managed Codex launch mode. `detached_ui` means long-running app-server
@@ -719,6 +727,8 @@ pub async fn cmd_codex_bridge_start(config: BridgeStartConfig) -> Result<BridgeS
     let mut state = BridgeStateFile {
         schema_version: BRIDGE_STATE_SCHEMA_VERSION,
         session_id: config.session_id.clone(),
+        connection_id: Some(Uuid::new_v4().to_string()),
+        lease_generation: Some(Uuid::new_v4().to_string()),
         cwd: config.cwd.display().to_string(),
         codex_bin: config.codex_bin.clone(),
         launch_mode: Some(config.launch_mode.persisted_state_value().to_string()),
@@ -782,6 +792,16 @@ pub async fn cmd_codex_bridge_start(config: BridgeStartConfig) -> Result<BridgeS
         .stderr(Stdio::from(stderr))
         .stdin(Stdio::null())
         .env(CODEX_BRIDGE_TOKEN_ENV, &config.api_token);
+    child
+        .arg("--connection-id")
+        .arg(state.connection_id.as_deref().expect("new bridge connection id"))
+        .arg("--lease-generation")
+        .arg(
+            state
+                .lease_generation
+                .as_deref()
+                .expect("new bridge lease generation"),
+        );
     if let Some(longhouse_home) = config.longhouse_home.as_deref() {
         child.arg("--longhouse-home").arg(longhouse_home);
     }
@@ -903,9 +923,15 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
         resume_thread_id.as_deref(),
         resume_thread_path.as_deref(),
     )?;
+    let (connection_id, lease_generation) = resolve_launch_control_identity(
+        config.connection_id.clone(),
+        config.lease_generation.clone(),
+    )?;
     let initial_state = BridgeStateFile {
         schema_version: BRIDGE_STATE_SCHEMA_VERSION,
         session_id: config.session_id.clone(),
+        connection_id: Some(connection_id),
+        lease_generation: Some(lease_generation),
         cwd: config.cwd.display().to_string(),
         codex_bin: config.codex_bin.clone(),
         launch_mode: Some(config.launch_mode.persisted_state_value().to_string()),
@@ -1116,6 +1142,8 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
         state: BridgeStateFile {
             schema_version: BRIDGE_STATE_SCHEMA_VERSION,
             session_id: config.session_id.clone(),
+            connection_id: initial_state.connection_id.clone(),
+            lease_generation: initial_state.lease_generation.clone(),
             cwd: config.cwd.display().to_string(),
             codex_bin: config.codex_bin.clone(),
             launch_mode: initial_state.launch_mode.clone(),
@@ -1325,6 +1353,21 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn resolve_launch_control_identity(
+    connection_id: Option<String>,
+    lease_generation: Option<String>,
+) -> Result<(String, String)> {
+    match (connection_id, lease_generation) {
+        (None, None) => Ok((Uuid::new_v4().to_string(), Uuid::new_v4().to_string())),
+        (Some(connection_id), Some(lease_generation)) => {
+            Uuid::parse_str(&connection_id).context("invalid --connection-id")?;
+            Uuid::parse_str(&lease_generation).context("invalid --lease-generation")?;
+            Ok((connection_id, lease_generation))
+        }
+        _ => bail!("--connection-id and --lease-generation must be supplied together"),
+    }
 }
 
 /// Fire `turn/steer` through the daemon's persistent app-server connection.
@@ -5300,6 +5343,8 @@ mod tests {
             state: BridgeStateFile {
                 schema_version: BRIDGE_STATE_SCHEMA_VERSION,
                 session_id: "session-123".to_string(),
+                connection_id: None,
+                lease_generation: None,
                 cwd: temp.path().display().to_string(),
                 codex_bin: "codex".to_string(),
                 launch_mode: Some(LAUNCH_MODE_TUI.to_string()),
@@ -5395,6 +5440,8 @@ mod tests {
         let state = BridgeStateFile {
             schema_version: BRIDGE_STATE_SCHEMA_VERSION,
             session_id: "session-123".to_string(),
+            connection_id: Some("connection-1".to_string()),
+            lease_generation: Some("lease-1".to_string()),
             cwd: temp.path().display().to_string(),
             codex_bin: "codex".to_string(),
             launch_mode: Some(LAUNCH_MODE_DETACHED_UI.to_string()),
@@ -5423,6 +5470,8 @@ mod tests {
 
         assert_eq!(raw["schema_version"], BRIDGE_STATE_SCHEMA_VERSION);
         assert_eq!(raw["launch_mode"], LAUNCH_MODE_DETACHED_UI);
+        assert_eq!(raw["connection_id"], "connection-1");
+        assert_eq!(raw["lease_generation"], "lease-1");
     }
 
     #[cfg(unix)]
@@ -5451,6 +5500,8 @@ mod tests {
         let state = BridgeStateFile {
             schema_version: BRIDGE_STATE_SCHEMA_VERSION,
             session_id: session_id.to_string(),
+            connection_id: None,
+            lease_generation: None,
             cwd: temp.path().display().to_string(),
             codex_bin: fake_codex.display().to_string(),
             launch_mode: Some(LAUNCH_MODE_TUI.to_string()),
@@ -5521,6 +5572,8 @@ mod tests {
         let state = BridgeStateFile {
             schema_version: BRIDGE_STATE_SCHEMA_VERSION,
             session_id: session_id.to_string(),
+            connection_id: None,
+            lease_generation: None,
             cwd: temp.path().display().to_string(),
             codex_bin: fake_codex.display().to_string(),
             launch_mode: Some(LAUNCH_MODE_TUI.to_string()),
@@ -5624,6 +5677,8 @@ mod tests {
     fn make_test_run_config(temp: &tempfile::TempDir) -> BridgeRunConfig {
         BridgeRunConfig {
             session_id: "session-123".to_string(),
+            connection_id: None,
+            lease_generation: None,
             cwd: temp.path().to_path_buf(),
             api_url: "http://127.0.0.1:9".to_string(),
             api_token: "token".to_string(),
@@ -5645,6 +5700,23 @@ mod tests {
             resume_thread_path: None,
             launch_mode: BridgeLaunchMode::Tui,
         }
+    }
+
+    #[test]
+    fn bridge_run_control_identity_rotates_unless_explicitly_forwarded() {
+        let first = resolve_launch_control_identity(None, None).unwrap();
+        let second = resolve_launch_control_identity(None, None).unwrap();
+        assert_ne!(first, second);
+        assert!(Uuid::parse_str(&first.0).is_ok());
+        assert!(Uuid::parse_str(&first.1).is_ok());
+
+        let forwarded = resolve_launch_control_identity(
+            Some(first.0.clone()),
+            Some(first.1.clone()),
+        )
+        .unwrap();
+        assert_eq!(forwarded, first);
+        assert!(resolve_launch_control_identity(Some(first.0), None).is_err());
     }
 
     fn codex_plan_approval_params() -> Value {
@@ -5857,6 +5929,8 @@ mod tests {
         let state = BridgeStateFile {
             schema_version: BRIDGE_STATE_SCHEMA_VERSION,
             session_id: session_id.to_string(),
+            connection_id: None,
+            lease_generation: None,
             cwd: temp.path().display().to_string(),
             codex_bin: "codex".to_string(),
             launch_mode: Some(LAUNCH_MODE_TUI.to_string()),
@@ -5905,6 +5979,8 @@ mod tests {
         let state = BridgeStateFile {
             schema_version: BRIDGE_STATE_SCHEMA_VERSION,
             session_id: session_id.to_string(),
+            connection_id: None,
+            lease_generation: None,
             cwd: temp.path().display().to_string(),
             codex_bin: "codex".to_string(),
             launch_mode: Some(LAUNCH_MODE_TUI.to_string()),
@@ -6895,6 +6971,8 @@ mod tests {
         let state = BridgeStateFile {
             schema_version: BRIDGE_STATE_SCHEMA_VERSION,
             session_id: session_id.to_string(),
+            connection_id: None,
+            lease_generation: None,
             cwd: temp.path().display().to_string(),
             codex_bin: "codex".to_string(),
             launch_mode: Some(LAUNCH_MODE_DETACHED_UI.to_string()),

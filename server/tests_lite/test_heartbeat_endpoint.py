@@ -248,6 +248,9 @@ def test_heartbeat_accepts_reducer_grade_identity_without_promoting_authority(tm
     client, api_app_ref = _make_client(SessionLocal)
     evidence = _machine_evidence_payload()
     evidence["schema_version"] = 2
+    process = evidence["process"]
+    assert isinstance(process, list)
+    process[0]["observed_at"] = "2026-05-08T12:00:00+00:00"
     evidence["identities"] = [_process_identity(evidence)]
 
     try:

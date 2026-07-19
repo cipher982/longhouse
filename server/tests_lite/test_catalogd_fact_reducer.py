@@ -72,6 +72,35 @@ def test_canonical_hash_matches_shared_rust_vector():
     assert canonical_value_json(vector["value"]) == vector["canonical_json"]
 
 
+@pytest.mark.parametrize("value", [-(2**63), 2**64 - 1])
+def test_canonical_hash_accepts_serde_json_integer_boundaries(value):
+    assert len(canonical_evidence_hash({"integer": value})) == 64
+
+
+@pytest.mark.parametrize("value", [-(2**63) - 1, 2**64])
+def test_canonical_hash_rejects_integers_outside_serde_json_range(value):
+    with pytest.raises(ValueError, match="serde_json range"):
+        canonical_evidence_hash({"integer": value})
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "2026-99-99T99:99:99Z",
+        "2016-12-31T23:59:60Z",
+        "2026-05-08t12:00:00z",
+        "2026-05-08 12:00:00Z",
+        "0000-01-01T00:00:00Z",
+        "0001-01-01T00:00:00+00:01",
+        "9999-12-31T23:59:59-00:01",
+    ],
+)
+def test_canonical_hash_preserves_unparseable_declared_timestamps(value):
+    assert canonical_value_json({"observed_at": value}) == json.dumps(
+        {"observed_at": value}, separators=(",", ":")
+    )
+
+
 def test_extraction_rejects_subject_that_does_not_match_explicit_run_id():
     value = {
         "provider": "codex",
@@ -269,16 +298,21 @@ def test_unsequenced_receipts_are_bounded_and_restart_replays_same_head(tmp_path
 def test_global_family_bound_evicts_heads_and_child_history_together(tmp_path, monkeypatch):
     monkeypatch.setattr(fact_reducer, "MAX_HEADS_PER_FAMILY", 3)
     engine = _engine(tmp_path)
-    facts = [_fact(subject=f"run:run-{index}", run_id=f"run-{index}", source_seq=1) for index in range(5)]
+    original = [_fact(subject=f"run:run-{index}", run_id=f"run-{index}", source_seq=1) for index in range(3)]
+    conflicts = [replace(fact, value={**fact.value, "kind": "conflict"}) for fact in original]
+    conflicts = [replace(fact, evidence_hash=canonical_evidence_hash(fact.value)) for fact in conflicts]
+    newcomers = [_fact(subject=f"run:run-{index}", run_id=f"run-{index}", source_seq=1) for index in range(3, 5)]
     with engine.begin() as connection:
-        reduce_fact_batch(connection, facts, received_at=NOW)
+        reduce_fact_batch(connection, original, received_at=NOW)
+        reduce_fact_batch(connection, conflicts, received_at=NOW + timedelta(seconds=1))
+        reduce_fact_batch(connection, newcomers, received_at=NOW + timedelta(seconds=2))
         head_count = connection.execute(select(func.count()).select_from(fact_reducer.FactHead)).scalar_one()
         receipt_count = connection.execute(select(func.count()).select_from(FactReceipt)).scalar_one()
         conflict_count = connection.execute(select(func.count()).select_from(FactConflict)).scalar_one()
 
     assert head_count == 3
     assert receipt_count == 3
-    assert conflict_count == 0
+    assert conflict_count == 1
 
 
 def test_failed_outer_transaction_rolls_back_head_and_commit_sequence(tmp_path):

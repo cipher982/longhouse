@@ -22,6 +22,7 @@ import tempfile
 import threading
 import time
 import tty
+import uuid
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
@@ -63,6 +64,8 @@ def test_state_file_round_trip(monkeypatch, tmp_path):
     assert state["cursor_process_start_time"] == "start-123"
     assert state["ready"] is True
     assert state["registration"] == "registered"
+    assert uuid.UUID(state["connection_id"])
+    assert uuid.UUID(state["lease_generation"])
 
     started_at = state["started_at"]
     cursor_helm._write_state(
@@ -75,6 +78,8 @@ def test_state_file_round_trip(monkeypatch, tmp_path):
     )
     refreshed = json.loads(cursor_helm._state_file_path(session_id).read_text())
     assert refreshed["started_at"] == started_at
+    assert refreshed["connection_id"] == state["connection_id"]
+    assert refreshed["lease_generation"] == state["lease_generation"]
 
     cursor_helm._remove_state(session_id, sock)
     assert not cursor_helm._state_file_path(session_id).exists()

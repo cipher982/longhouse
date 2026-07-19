@@ -6,10 +6,16 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass
+from datetime import UTC
+from datetime import datetime
 from typing import Any
 
 MAX_REDUCER_EVIDENCE_FACTS = 256
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_RFC3339_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$")
+_MIN_CANONICAL_INTEGER = -(2**63)
+_MAX_CANONICAL_INTEGER = 2**64 - 1
+_CANONICAL_TIMESTAMP_FIELDS = frozenset({"observed_at", "valid_until", "source_mtime", "hook_observed_at", "claimed_at", "response_at"})
 _SUBJECT_PREFIX = {
     "process": "process:",
     "activity": "run:",
@@ -40,13 +46,22 @@ def canonical_evidence_hash(value: dict[str, Any]) -> str:
     return hashlib.sha256(canonical_value_json(value).encode()).hexdigest()
 
 
-def _canonical_value(value: Any) -> Any:
+def _canonical_value(value: Any, field: str | None = None) -> Any:
     if isinstance(value, dict):
-        return {str(key): _canonical_value(item) for key, item in value.items()}
+        return {str(key): _canonical_value(item, str(key)) for key, item in value.items()}
     if isinstance(value, list):
-        return [_canonical_value(item) for item in value]
+        return [_canonical_value(item, field) for item in value]
     if isinstance(value, float):
         raise ValueError("floating-point machine evidence is not canonical")
+    if isinstance(value, int) and not isinstance(value, bool):
+        if not _MIN_CANONICAL_INTEGER <= value <= _MAX_CANONICAL_INTEGER:
+            raise ValueError("machine evidence integer is outside the serde_json range")
+    if isinstance(value, str) and field in _CANONICAL_TIMESTAMP_FIELDS and _RFC3339_RE.fullmatch(value):
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            return parsed.astimezone(UTC).isoformat(timespec="microseconds").replace("+00:00", "Z")
+        except (ValueError, OverflowError):
+            return value
     return value
 
 

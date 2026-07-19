@@ -33,6 +33,8 @@ pub struct ClaudeChannelServeConfig {
 #[derive(Debug)]
 struct BridgeStateInner {
     session_id: Option<String>,
+    connection_id: String,
+    lease_generation: String,
     provider_session_id: Option<String>,
     state_root: PathBuf,
     auth_token: String,
@@ -52,6 +54,8 @@ struct BridgeState {
 #[derive(Debug, Serialize)]
 struct BridgeStatePayload {
     session_id: Option<String>,
+    connection_id: String,
+    lease_generation: String,
     provider_session_id: Option<String>,
     state_root: String,
     auth_token: String,
@@ -67,6 +71,8 @@ struct BridgeStatePayload {
 #[derive(Debug, Serialize)]
 struct BridgeHealthPayload {
     session_id: Option<String>,
+    connection_id: String,
+    lease_generation: String,
     provider_session_id: Option<String>,
     state_root: String,
     port: u16,
@@ -250,6 +256,8 @@ impl BridgeState {
         Ok(Self {
             inner: Arc::new(Mutex::new(BridgeStateInner {
                 session_id,
+                connection_id: Uuid::new_v4().to_string(),
+                lease_generation: Uuid::new_v4().to_string(),
                 provider_session_id,
                 state_root,
                 auth_token,
@@ -297,6 +305,8 @@ impl BridgeState {
         let inner = self.inner.lock().expect("bridge state mutex poisoned");
         BridgeStatePayload {
             session_id: inner.session_id.clone(),
+            connection_id: inner.connection_id.clone(),
+            lease_generation: inner.lease_generation.clone(),
             provider_session_id: inner.provider_session_id.clone(),
             state_root: inner.state_root.display().to_string(),
             auth_token: inner.auth_token.clone(),
@@ -314,6 +324,8 @@ impl BridgeState {
         let inner = self.inner.lock().expect("bridge state mutex poisoned");
         BridgeHealthPayload {
             session_id: inner.session_id.clone(),
+            connection_id: inner.connection_id.clone(),
+            lease_generation: inner.lease_generation.clone(),
             provider_session_id: inner.provider_session_id.clone(),
             state_root: inner.state_root.display().to_string(),
             port: inner.port,
@@ -851,6 +863,9 @@ mod tests {
         let state = BridgeState::new(test_config(temp.path())).unwrap();
         state.set_port(1234).unwrap();
         state.write_state().unwrap();
+        let payload: Value = serde_json::from_slice(&std::fs::read(state_path(temp.path())).unwrap()).unwrap();
+        assert!(Uuid::parse_str(payload["connection_id"].as_str().unwrap()).is_ok());
+        assert!(Uuid::parse_str(payload["lease_generation"].as_str().unwrap()).is_ok());
 
         #[cfg(unix)]
         {

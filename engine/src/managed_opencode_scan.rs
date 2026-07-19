@@ -18,9 +18,7 @@ use reqwest::Url;
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::process_identity::{
-    command_contains_basename, lstart_matches_recorded, ProcessFact,
-};
+use crate::process_identity::{command_contains_basename, lstart_matches_recorded, ProcessFact};
 
 const HEALTH_CHECK_TIMEOUT: Duration = Duration::from_millis(750);
 const DEFAULT_USERNAME: &str = "opencode";
@@ -28,6 +26,8 @@ const DEFAULT_USERNAME: &str = "opencode";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpenCodeServerObservation {
     pub session_id: String,
+    pub connection_id: Option<String>,
+    pub lease_generation: Option<String>,
     pub provider_session_id: String,
     pub state_file: PathBuf,
     pub cwd: Option<String>,
@@ -56,6 +56,8 @@ pub struct OpenCodeServerObservation {
 #[derive(Debug, Deserialize)]
 struct OpenCodeServerStateFile {
     session_id: Option<String>,
+    connection_id: Option<String>,
+    lease_generation: Option<String>,
     provider_session_id: Option<String>,
     server_url: Option<String>,
     pid: Option<u32>,
@@ -210,12 +212,11 @@ fn observations_from_candidates(
         .zip(health)
         .map(|(candidate, health_ready)| OpenCodeServerObservation {
             session_id: candidate.session_id,
+            connection_id: candidate.state.connection_id,
+            lease_generation: candidate.state.lease_generation,
             provider_session_id: candidate.provider_session_id,
             state_file: candidate.state_file,
-            cwd: candidate
-                .state
-                .cwd
-                .filter(|value| !value.trim().is_empty()),
+            cwd: candidate.state.cwd.filter(|value| !value.trim().is_empty()),
             server_url: candidate.server_url,
             pid: candidate.state.pid,
             started_at: candidate.state.started_at.unwrap_or_default(),
@@ -230,10 +231,7 @@ fn observations_from_candidates(
                 .trim()
                 .to_string(),
             owner_wrapper_pid: candidate.state.owner_wrapper_pid,
-            owner_wrapper_start_time: candidate
-                .state
-                .owner_wrapper_start_time
-                .unwrap_or_default(),
+            owner_wrapper_start_time: candidate.state.owner_wrapper_start_time.unwrap_or_default(),
             process_start_time: candidate.state.process_start_time.unwrap_or_default(),
         })
         .collect::<Vec<_>>();
@@ -492,10 +490,8 @@ mod tests {
         )
         .unwrap();
 
-        let observations = collect_observations_from_processes(
-            tmp.path(),
-            &HashMap::from([(4242, reused_pid)]),
-        );
+        let observations =
+            collect_observations_from_processes(tmp.path(), &HashMap::from([(4242, reused_pid)]));
 
         assert_eq!(observations.len(), 1);
         assert!(!observations[0].server_alive);

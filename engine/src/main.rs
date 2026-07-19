@@ -816,6 +816,14 @@ enum CodexBridgeCommands {
         #[arg(long)]
         session_id: String,
 
+        /// Launch-scoped control identity forwarded by `codex-bridge start`.
+        #[arg(long, hide = true)]
+        connection_id: Option<String>,
+
+        /// Launch-scoped lease generation forwarded by `codex-bridge start`.
+        #[arg(long, hide = true)]
+        lease_generation: Option<String>,
+
         #[arg(long)]
         cwd: PathBuf,
 
@@ -1699,6 +1707,8 @@ fn main() -> anyhow::Result<()> {
                 }
                 CodexBridgeCommands::Run {
                     session_id,
+                    connection_id,
+                    lease_generation,
                     cwd,
                     url,
                     codex_bin,
@@ -1723,6 +1733,8 @@ fn main() -> anyhow::Result<()> {
                     let launch_mode = parse_codex_bridge_launch_mode(&launch_mode)?;
                     rt.block_on(cmd_codex_bridge_run(BridgeRunConfig {
                         session_id,
+                        connection_id,
+                        lease_generation,
                         cwd,
                         api_url: url,
                         api_token: token,

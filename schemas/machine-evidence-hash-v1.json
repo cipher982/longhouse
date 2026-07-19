@@ -1,6 +1,6 @@
 {
-  "canonical_json": "{\"edge_values\":[true,null,-1,18446744073709551615],\"nested\":{\"label\":\"café\",\"when\":\"2026-05-08T08:00:00.123456-04:00\"},\"observed_at\":\"2026-05-08T12:00:00Z\",\"provider\":\"codex\",\"reason_codes\":[],\"source\":\"codex_bridge\"}",
-  "sha256": "c84dbc3dddee08fa858b156ee5d231082ac4a6ff0988a1aa9ce8fc32c6582474",
+  "canonical_json": "{\"edge_values\":[true,null,-1,18446744073709551615],\"nested\":{\"label\":\"café\",\"when\":\"2026-05-08T08:00:00.123456-04:00\"},\"observed_at\":\"2026-05-08T12:00:00.000000Z\",\"provider\":\"codex\",\"reason_codes\":[],\"source\":\"codex_bridge\"}",
+  "sha256": "f18f1e35ae9189c6f1260e32a8098dfe820ba91a5b745928a3cd7ad7ab87bd4a",
   "value": {
     "edge_values": [true, null, -1, 18446744073709551615],
     "source": "codex_bridge",

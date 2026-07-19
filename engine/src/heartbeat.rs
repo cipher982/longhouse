@@ -16,10 +16,13 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 use anyhow::Result;
+use chrono::Datelike;
 use chrono::DateTime;
+use chrono::SecondsFormat;
 use chrono::Utc;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
+use uuid::Uuid;
 
 use crate::build_identity::BuildIdentity;
 use crate::managed_antigravity_scan::AntigravityHookObservation;
@@ -1081,8 +1084,8 @@ pub(crate) fn machine_evidence_from_observations(
                 provider: "codex".to_string(),
                 session_id: obs.session_id.clone(),
                 provider_session_id: obs.thread_id.clone(),
-                connection_id: None,
-                lease_generation: None,
+                connection_id: obs.connection_id.clone(),
+                lease_generation: obs.lease_generation.clone(),
                 ownership: "managed".to_string(),
                 state: state.to_string(),
                 bridge_status: Some(obs.status.clone()),
@@ -1151,8 +1154,8 @@ pub(crate) fn machine_evidence_from_observations(
             provider: "claude".to_string(),
             session_id: obs.session_id.clone(),
             provider_session_id: obs.provider_session_id.clone(),
-            connection_id: None,
-            lease_generation: None,
+            connection_id: obs.connection_id.clone(),
+            lease_generation: obs.lease_generation.clone(),
             ownership: "managed".to_string(),
             state: if !obs.claude_alive {
                 "detached"
@@ -1220,8 +1223,8 @@ pub(crate) fn machine_evidence_from_observations(
             provider: "opencode".to_string(),
             session_id: obs.session_id.clone(),
             provider_session_id: Some(obs.provider_session_id.clone()),
-            connection_id: None,
-            lease_generation: None,
+            connection_id: obs.connection_id.clone(),
+            lease_generation: obs.lease_generation.clone(),
             ownership: "managed".to_string(),
             state: if !obs.server_alive {
                 "detached"
@@ -1294,8 +1297,8 @@ pub(crate) fn machine_evidence_from_observations(
             provider: "cursor".to_string(),
             session_id: obs.session_id.clone(),
             provider_session_id: None,
-            connection_id: None,
-            lease_generation: None,
+            connection_id: obs.connection_id.clone(),
+            lease_generation: obs.lease_generation.clone(),
             ownership: "managed".to_string(),
             state: if obs.live { "attached" } else { "detached" }.to_string(),
             bridge_status: Some(if obs.live { "ready" } else { "unavailable" }.to_string()),
@@ -1375,9 +1378,16 @@ pub(crate) fn machine_evidence_from_observations(
         }
     }
 
+    let managed_session_ids = codex_observations
+        .iter()
+        .map(|observation| observation.session_id.as_str())
+        .chain(claude_observations.iter().map(|observation| observation.session_id.as_str()))
+        .chain(opencode_observations.iter().map(|observation| observation.session_id.as_str()))
+        .chain(cursor_observations.iter().map(|observation| observation.session_id.as_str()))
+        .collect::<HashSet<_>>();
     let mut activity = phase_rows
         .iter()
-        .map(activity_evidence_from_phase_row)
+        .map(|row| activity_evidence_from_phase_row(row, managed_session_ids.contains(row.session_id.as_str())))
         .collect::<Vec<_>>();
 
     process.sort_by(|a, b| {
@@ -1400,7 +1410,14 @@ pub(crate) fn machine_evidence_from_observations(
     transcript.truncate(MAX_MACHINE_EVIDENCE_FACTS_PER_FAMILY);
     readiness.truncate(MAX_MACHINE_EVIDENCE_FACTS_PER_FAMILY);
 
-    let identities = reducer_evidence_identities(machine_id, &process, &transcript, &readiness);
+    let identities = reducer_evidence_identities(
+        machine_id,
+        &process,
+        &activity,
+        &control,
+        &transcript,
+        &readiness,
+    );
 
     MachineEvidence {
         schema_version: 2,
@@ -1437,10 +1454,12 @@ pub(crate) fn machine_evidence_from_observations(
 fn reducer_evidence_identities(
     machine_id: &str,
     process: &[ProcessEvidence],
+    activity: &[ActivityEvidence],
+    control: &[ControlEvidence],
     transcript: &[TranscriptEvidence],
     readiness: &[ReadinessEvidence],
 ) -> Vec<EvidenceIdentity> {
-    let mut families = [Vec::new(), Vec::new(), Vec::new()];
+    let mut families = [Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new()];
 
     for (fact_index, fact) in process.iter().enumerate() {
         let (Some(pid), Some(start), Some(boot)) = (
@@ -1480,7 +1499,7 @@ fn reducer_evidence_identities(
         );
         let source_epoch =
             (!epoch_material.starts_with("::")).then(|| stable_component(&epoch_material));
-        families[1].push(evidence_identity(
+        families[3].push(evidence_identity(
             "transcript",
             fact_index,
             format!(
@@ -1497,12 +1516,45 @@ fn reducer_evidence_identities(
 
     for (fact_index, fact) in readiness.iter().enumerate() {
         let claim = nonempty(fact.claim_message_id.as_deref()).map(stable_component);
-        families[2].push(evidence_identity(
+        families[4].push(evidence_identity(
             "readiness",
             fact_index,
             format!("readiness:{}:{}", fact.session_id, fact.operation),
             &fact.source,
             claim,
+            None,
+            fact,
+        ));
+    }
+
+    for (fact_index, fact) in activity.iter().enumerate() {
+        let Some(run_id) = nonempty(fact.run_id.as_deref()) else {
+            continue;
+        };
+        families[1].push(evidence_identity(
+            "activity",
+            fact_index,
+            format!("run:{run_id}"),
+            &fact.source,
+            Some(run_id.to_string()),
+            None,
+            fact,
+        ));
+    }
+
+    for (fact_index, fact) in control.iter().enumerate() {
+        let (Some(connection_id), Some(lease_generation)) = (
+            nonempty(fact.connection_id.as_deref()),
+            nonempty(fact.lease_generation.as_deref()),
+        ) else {
+            continue;
+        };
+        families[2].push(evidence_identity(
+            "control",
+            fact_index,
+            format!("connection:{connection_id}:{lease_generation}"),
+            &fact.source,
+            Some(lease_generation.to_string()),
             None,
             fact,
         ));
@@ -1572,11 +1624,18 @@ fn stable_component(value: &str) -> String {
 }
 
 fn canonical_evidence_value(value: serde_json::Value) -> Result<serde_json::Value, &'static str> {
+    canonical_evidence_value_for_field(value, None)
+}
+
+fn canonical_evidence_value_for_field(
+    value: serde_json::Value,
+    field: Option<&str>,
+) -> Result<serde_json::Value, &'static str> {
     match value {
         serde_json::Value::Array(values) => Ok(serde_json::Value::Array(
             values
                 .into_iter()
-                .map(canonical_evidence_value)
+                .map(|value| canonical_evidence_value_for_field(value, field))
                 .collect::<Result<_, _>>()?,
         )),
         // serde_json's default Map is a BTreeMap because the preserve_order
@@ -1584,14 +1643,91 @@ fn canonical_evidence_value(value: serde_json::Value) -> Result<serde_json::Valu
         serde_json::Value::Object(values) => Ok(serde_json::Value::Object(
             values
                 .into_iter()
-                .map(|(key, value)| Ok((key, canonical_evidence_value(value)?)))
+                .map(|(key, value)| {
+                    let canonical = canonical_evidence_value_for_field(value, Some(&key))?;
+                    Ok((key, canonical))
+                })
                 .collect::<Result<_, &'static str>>()?,
         )),
         serde_json::Value::Number(number) if number.is_f64() => {
             Err("floating-point machine evidence is not canonical")
         }
+        serde_json::Value::String(value) if field.is_some_and(canonical_timestamp_field) => {
+            // Chrono accepts RFC 3339 leap-second syntax while Python's
+            // datetime does not. Preserve unsupported values identically in
+            // both implementations instead of silently rewriting evidence.
+            let canonical = if !has_canonical_rfc3339_syntax(&value)
+                || value.as_bytes().get(17..19) == Some(b"60")
+            {
+                value
+            } else {
+                match DateTime::parse_from_rfc3339(&value) {
+                    Ok(parsed) => {
+                        let utc = parsed.with_timezone(&Utc);
+                        if (1..=9999).contains(&utc.year()) {
+                            utc.to_rfc3339_opts(SecondsFormat::Micros, true)
+                        } else {
+                            value
+                        }
+                    }
+                    Err(_) => value,
+                }
+            };
+            Ok(serde_json::Value::String(canonical))
+        }
         other => Ok(other),
     }
+}
+
+fn has_canonical_rfc3339_syntax(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    if bytes.len() < 20
+        || !bytes[0..4].iter().all(u8::is_ascii_digit)
+        || &bytes[0..4] == b"0000"
+        || bytes[4] != b'-'
+        || !bytes[5..7].iter().all(u8::is_ascii_digit)
+        || bytes[7] != b'-'
+        || !bytes[8..10].iter().all(u8::is_ascii_digit)
+        || bytes[10] != b'T'
+        || !bytes[11..13].iter().all(u8::is_ascii_digit)
+        || bytes[13] != b':'
+        || !bytes[14..16].iter().all(u8::is_ascii_digit)
+        || bytes[16] != b':'
+        || !bytes[17..19].iter().all(u8::is_ascii_digit)
+    {
+        return false;
+    }
+
+    let suffix_start = if bytes[19] == b'.' {
+        let Some(offset) = bytes[20..].iter().position(|byte| !byte.is_ascii_digit()) else {
+            return false;
+        };
+        if offset == 0 {
+            return false;
+        }
+        20 + offset
+    } else {
+        19
+    };
+    let suffix = &bytes[suffix_start..];
+    suffix == b"Z"
+        || (suffix.len() == 6
+            && matches!(suffix[0], b'+' | b'-')
+            && suffix[1..3].iter().all(u8::is_ascii_digit)
+            && suffix[3] == b':'
+            && suffix[4..6].iter().all(u8::is_ascii_digit))
+}
+
+fn canonical_timestamp_field(field: &str) -> bool {
+    matches!(
+        field,
+        "observed_at"
+            | "valid_until"
+            | "source_mtime"
+            | "hook_observed_at"
+            | "claimed_at"
+            | "response_at"
+    )
 }
 
 fn nonempty(value: Option<&str>) -> Option<&str> {
@@ -1678,7 +1814,7 @@ fn parse_utc(value: Option<&str>) -> Option<DateTime<Utc>> {
         .map(|at| at.with_timezone(&Utc))
 }
 
-fn activity_evidence_from_phase_row(row: &PhaseLedgerRow) -> ActivityEvidence {
+fn activity_evidence_from_phase_row(row: &PhaseLedgerRow, managed: bool) -> ActivityEvidence {
     let raw_kind = row.phase.trim().to_string();
     let kind = match raw_kind.as_str() {
         "thinking" | "running" | "blocked" | "stalled" | "needs_user" | "idle" => raw_kind.clone(),
@@ -1696,7 +1832,7 @@ fn activity_evidence_from_phase_row(row: &PhaseLedgerRow) -> ActivityEvidence {
     ActivityEvidence {
         provider: row.provider.clone(),
         session_id: row.session_id.clone(),
-        run_id: None,
+        run_id: managed.then(|| managed_local_run_id(&row.session_id)),
         kind,
         raw_kind,
         tool_name: row.tool_name.clone(),
@@ -1707,6 +1843,14 @@ fn activity_evidence_from_phase_row(row: &PhaseLedgerRow) -> ActivityEvidence {
         raw_locator: None,
         reason_codes,
     }
+}
+
+fn managed_local_run_id(session_id: &str) -> String {
+    Uuid::new_v5(
+        &Uuid::NAMESPACE_URL,
+        format!("longhouse:managed-local-run:{session_id}").as_bytes(),
+    )
+    .to_string()
 }
 
 pub fn resolved_sessions_from_observations(
@@ -2889,6 +3033,8 @@ mod tests {
     fn test_observation(session_id: &str, ws_url: &str) -> CodexBridgeObservation {
         CodexBridgeObservation {
             session_id: session_id.to_string(),
+            connection_id: Some(format!("connection-{session_id}")),
+            lease_generation: Some(format!("lease-{session_id}")),
             state_file: PathBuf::from(format!("/tmp/{session_id}.json")),
             schema_version: crate::codex_bridge::BRIDGE_STATE_SCHEMA_VERSION,
             cwd: Some("/tmp/cwd".to_string()),
@@ -3063,6 +3209,8 @@ mod tests {
         fn claude_obs(alive: bool, foreground: bool) -> ClaudeChannelObservation {
             ClaudeChannelObservation {
                 session_id: "claude-presence".to_string(),
+                connection_id: None,
+                lease_generation: None,
                 provider_session_id: Some("provider-claude".to_string()),
                 state_file: PathBuf::from("/tmp/claude-presence.json"),
                 cwd: None,
@@ -3107,6 +3255,8 @@ mod tests {
     fn test_opencode_observation(session_id: &str, launch_mode: &str) -> OpenCodeServerObservation {
         OpenCodeServerObservation {
             session_id: session_id.to_string(),
+            connection_id: Some(format!("connection-{session_id}")),
+            lease_generation: Some(format!("lease-{session_id}")),
             provider_session_id: format!("provider-{session_id}"),
             state_file: PathBuf::from(format!("/tmp/{session_id}.json")),
             cwd: Some("/Users/test/git/acme".to_string()),
@@ -3336,6 +3486,8 @@ mod tests {
 
         let live = ClaudeChannelObservation {
             session_id: session_id.to_string(),
+            connection_id: None,
+            lease_generation: None,
             provider_session_id: Some(session_id.to_string()),
             state_file: PathBuf::from("/tmp/live.json"),
             cwd: Some("/Users/test/git/acme".to_string()),
@@ -3350,6 +3502,8 @@ mod tests {
         };
         let dead = ClaudeChannelObservation {
             session_id: "19b68f98-1e31-458e-b78a-6dfd062ead75".to_string(),
+            connection_id: None,
+            lease_generation: None,
             provider_session_id: None,
             state_file: PathBuf::from("/tmp/dead.json"),
             cwd: None,
@@ -3522,6 +3676,8 @@ mod tests {
 
         let obs = ClaudeChannelObservation {
             session_id: "managed-claude".to_string(),
+            connection_id: None,
+            lease_generation: None,
             provider_session_id: Some("claude-provider-session".to_string()),
             state_file: PathBuf::from("/tmp/managed-claude.json"),
             cwd: None,
@@ -3669,6 +3825,8 @@ mod tests {
 
         let obs = ClaudeChannelObservation {
             session_id: "managed-claude".to_string(),
+            connection_id: None,
+            lease_generation: None,
             provider_session_id: Some("claude-provider-session".to_string()),
             state_file: PathBuf::from("/tmp/managed-claude.json"),
             cwd: Some("/Users/test/git/acme".to_string()),
@@ -3711,6 +3869,8 @@ mod tests {
     fn test_cursor_observation(session_id: &str) -> CursorHelmObservation {
         CursorHelmObservation {
             session_id: session_id.to_string(),
+            connection_id: Some(format!("connection-{session_id}")),
+            lease_generation: Some(format!("lease-{session_id}")),
             state_file: PathBuf::from(format!("/tmp/{session_id}.json")),
             socket_path: Some(PathBuf::from(format!("/tmp/{session_id}.sock"))),
             cwd: Some("/Users/test/git/zerg".to_string()),
@@ -3878,6 +4038,8 @@ mod tests {
         };
         let obs = OpenCodeServerObservation {
             session_id: "managed-opencode".to_string(),
+            connection_id: None,
+            lease_generation: None,
             provider_session_id: "opencode-native-session".to_string(),
             state_file: PathBuf::from("/tmp/managed-opencode.json"),
             cwd: Some("/Users/test/git/acme".to_string()),
@@ -4338,6 +4500,8 @@ mod tests {
         let codex = test_observation("codex-session", "ws://127.0.0.1:45681/session");
         let claude = ClaudeChannelObservation {
             session_id: "claude-session".to_string(),
+            connection_id: Some("connection-claude-session".to_string()),
+            lease_generation: Some("lease-claude-session".to_string()),
             provider_session_id: Some("claude-provider-session".to_string()),
             state_file: PathBuf::from("/tmp/claude-session.json"),
             cwd: Some("/tmp/claude".to_string()),
@@ -4429,10 +4593,18 @@ mod tests {
         );
 
         assert_eq!(evidence.schema_version, 2);
-        assert!(evidence
-            .identities
-            .iter()
-            .all(|identity| !matches!(identity.fact_family.as_str(), "activity" | "control")));
+        assert!(evidence.identities.iter().any(|identity| {
+            identity.fact_family == "activity"
+                && identity.subject_key == format!("run:{}", managed_local_run_id("codex-session"))
+        }));
+        for provider in ["codex", "claude", "opencode", "cursor"] {
+            assert!(evidence.identities.iter().any(|identity| {
+                identity.fact_family == "control"
+                    && identity
+                        .subject_key
+                        .starts_with(&format!("connection:connection-{provider}-session:"))
+            }));
+        }
         assert!(evidence
             .identities
             .iter()
@@ -4497,7 +4669,7 @@ mod tests {
             vec![ActivityEvidence {
                 provider: "codex".to_string(),
                 session_id: "codex-session".to_string(),
-                run_id: None,
+                run_id: Some(managed_local_run_id("codex-session")),
                 kind: "running".to_string(),
                 raw_kind: "running".to_string(),
                 tool_name: Some("Shell".to_string()),
@@ -4521,7 +4693,7 @@ mod tests {
             source: "future_hook".to_string(),
             observed_at: "2026-05-08T12:00:00Z".to_string(),
             valid_until: "2026-05-08T12:01:00Z".to_string(),
-        });
+        }, false);
         assert_eq!(unknown_activity.kind, "unknown");
         assert_eq!(unknown_activity.raw_kind, "provider_custom_phase");
         assert_eq!(
@@ -4537,7 +4709,7 @@ mod tests {
             source: "codex_bridge".to_string(),
             observed_at: "2026-05-08T12:00:00Z".to_string(),
             valid_until: "2026-05-08T12:10:00Z".to_string(),
-        });
+        }, false);
         assert_eq!(unauthoritative_terminal.kind, "unknown");
         assert_eq!(unauthoritative_terminal.raw_kind, "finished");
         assert_eq!(
@@ -4604,5 +4776,29 @@ mod tests {
         assert_eq!(canonical, vector["canonical_json"].as_str().unwrap());
         assert_eq!(digest, vector["sha256"].as_str().unwrap());
         assert!(canonical_evidence_value(serde_json::json!({"float": 1.5})).is_err());
+        assert_eq!(
+            managed_local_run_id("codex-session"),
+            "02e1f76d-677e-5125-b577-002efa1a0fe5"
+        );
+        for raw in ["-9223372036854775808", "18446744073709551615"] {
+            let value: serde_json::Value = serde_json::from_str(raw).unwrap();
+            assert!(canonical_evidence_value(value).is_ok());
+        }
+        for raw in ["-9223372036854775809", "18446744073709551616"] {
+            let value: serde_json::Value = serde_json::from_str(raw).unwrap();
+            assert!(canonical_evidence_value(value).is_err());
+        }
+        for timestamp in [
+            "2026-99-99T99:99:99Z",
+            "2016-12-31T23:59:60Z",
+            "2026-05-08t12:00:00z",
+            "2026-05-08 12:00:00Z",
+            "0000-01-01T00:00:00Z",
+            "0001-01-01T00:00:00+00:01",
+            "9999-12-31T23:59:59-00:01",
+        ] {
+            let value = serde_json::json!({"observed_at": timestamp});
+            assert_eq!(canonical_evidence_value(value.clone()).unwrap(), value);
+        }
     }
 }

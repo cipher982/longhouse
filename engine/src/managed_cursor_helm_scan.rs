@@ -21,6 +21,8 @@ use crate::process_identity::{lstart_matches_recorded, ProcessFact};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CursorHelmObservation {
     pub session_id: String,
+    pub connection_id: Option<String>,
+    pub lease_generation: Option<String>,
     pub state_file: PathBuf,
     pub socket_path: Option<PathBuf>,
     pub cwd: Option<String>,
@@ -40,6 +42,10 @@ pub struct CursorHelmObservation {
 #[derive(Debug, Deserialize)]
 struct CursorHelmStateFile {
     session_id: Option<String>,
+    #[serde(default)]
+    connection_id: Option<String>,
+    #[serde(default)]
+    lease_generation: Option<String>,
     #[serde(default)]
     socket_path: Option<String>,
     #[serde(default)]
@@ -123,6 +129,8 @@ pub(crate) fn collect_observations_from_paths(
         let live = launcher_alive && cursor_pid.is_some() && socket_present && ready;
         out.push(CursorHelmObservation {
             session_id,
+            connection_id: state.connection_id,
+            lease_generation: state.lease_generation,
             state_file: path.to_path_buf(),
             socket_path,
             cwd: state.cwd.filter(|value| !value.trim().is_empty()),

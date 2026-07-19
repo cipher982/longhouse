@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+from uuid import UUID
 from uuid import uuid4
 
 import pytest
@@ -577,6 +578,8 @@ def test_launch_mode_and_owner_persisted_then_read_back(monkeypatch, tmp_path):
     assert state.launch_mode == opencode_channel.LAUNCH_MODE_KEEP_SERVER
     assert state.owner_wrapper_pid == 9988
     assert state.owner_wrapper_start_time == "Mon May 27 00:00:00 2026"
+    assert UUID(state.connection_id)
+    assert UUID(state.lease_generation)
 
 
 def test_launch_rejects_unknown_launch_mode(tmp_path):

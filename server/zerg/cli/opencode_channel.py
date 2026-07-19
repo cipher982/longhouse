@@ -24,6 +24,7 @@ from urllib.parse import urlencode
 from urllib.request import Request
 from urllib.request import urlopen
 from uuid import UUID
+from uuid import uuid4
 
 import typer
 
@@ -79,6 +80,8 @@ class OpenCodeServerBridgeState:
     launch_mode: str = ""
     owner_wrapper_pid: int = 0
     owner_wrapper_start_time: str = ""
+    connection_id: str = ""
+    lease_generation: str = ""
 
     @classmethod
     def from_mapping(cls, payload: dict) -> "OpenCodeServerBridgeState":
@@ -100,6 +103,8 @@ class OpenCodeServerBridgeState:
             launch_mode=str(payload.get("launch_mode") or ""),
             owner_wrapper_pid=int(payload.get("owner_wrapper_pid") or 0),
             owner_wrapper_start_time=str(payload.get("owner_wrapper_start_time") or ""),
+            connection_id=str(payload.get("connection_id") or ""),
+            lease_generation=str(payload.get("lease_generation") or ""),
         )
 
     def redacted(self) -> dict:
@@ -563,6 +568,8 @@ def launch_opencode_server_bridge(
                 launch_mode=launch_mode,
                 owner_wrapper_pid=resolved_owner_pid,
                 owner_wrapper_start_time=owner_identity[0] if owner_identity else "",
+                connection_id=str(uuid4()),
+                lease_generation=str(uuid4()),
             )
             _write_private_json(_opencode_server_state_path(normalized_session_id, config_dir), asdict(state))
         except Exception:

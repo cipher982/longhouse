@@ -227,6 +227,11 @@ def _write_state(
     ) or _process_start_time(launcher_pid)
     if not launcher_process_start_time:
         raise RuntimeError("could not capture Cursor Helm launcher process identity")
+    same_launch = (
+        existing.get("launcher_pid") == launcher_pid and existing.get("launcher_process_start_time") == launcher_process_start_time
+    )
+    connection_id = str(existing.get("connection_id") or "").strip() if same_launch else ""
+    lease_generation = str(existing.get("lease_generation") or "").strip() if same_launch else ""
     cursor_process_start_time = None
     if cursor_pid > 0:
         cursor_process_start_time = (
@@ -237,6 +242,8 @@ def _write_state(
     payload = {
         "schema_version": 1,
         "session_id": session_id,
+        "connection_id": connection_id or str(uuid.uuid4()),
+        "lease_generation": lease_generation or str(uuid.uuid4()),
         "provider": _PROVIDER,
         "control_plane": _CONTROL_PLANE,
         "socket_path": str(socket_path),
