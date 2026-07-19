@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from dataclasses import dataclass
 from datetime import datetime
 from datetime import timedelta
@@ -12,19 +13,55 @@ from typing import Literal
 from uuid import UUID
 from uuid import uuid4
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from zerg.catalogd.models import FactHead
 from zerg.models.live_store import LiveRuntimeState
 from zerg.models.live_store import LiveSessionCatalog
 from zerg.models.live_store import LiveSessionConnection
 from zerg.models.live_store import LiveSessionRun
 from zerg.models.live_store import LiveSessionThread
 from zerg.services.managed_control_state import DEFAULT_MANAGED_CONTROL_LEASE_TTL_MS
+from zerg.services.managed_provider_contracts import contract_for_provider
+from zerg.services.session_state_facts_projector import authorize_exact_control_fact
 from zerg.utils.time import normalize_utc
 
 logger = logging.getLogger(__name__)
 _QUEUE_DRAINABLE_PHASES = frozenset({"idle", "needs_user", "blocked"})
 _CONTROL_ACQUISITION_KINDS = ("spawned_control", "adopted_control")
+_COMMAND_AUTH_ENV = "LONGHOUSE_SESSION_STATE_COMMAND_AUTH"
+_COMMAND_AUTH_PROVIDERS_ENV = "LONGHOUSE_SESSION_STATE_COMMAND_AUTH_PROVIDERS"
+_SHADOW_REDUCER_INGEST_ENV = "LONGHOUSE_SHADOW_REDUCER_INGEST_ENABLED"
+_TRUTHY_ENV = frozenset({"1", "true", "yes", "on"})
+_CANONICAL_AUTH_PROVIDERS = frozenset({"codex", "claude", "opencode", "cursor"})
+
+
+def canonical_command_authorization_providers() -> tuple[str, ...]:
+    """Return providers explicitly eligible for the canonical authority path."""
+
+    if os.getenv(_COMMAND_AUTH_ENV, "legacy").strip().lower() != "canonical":
+        return ()
+    configured = {
+        provider.strip().lower()
+        for provider in os.getenv(
+            _COMMAND_AUTH_PROVIDERS_ENV,
+            ",".join(sorted(_CANONICAL_AUTH_PROVIDERS)),
+        ).split(",")
+        if provider.strip()
+    }
+    return tuple(sorted(configured & _CANONICAL_AUTH_PROVIDERS))
+
+
+def canonical_command_authorization_enabled(provider: str | None = None) -> bool:
+    providers = canonical_command_authorization_providers()
+    if provider is None:
+        return bool(providers)
+    return str(provider or "").strip().lower() in providers
+
+
+def shadow_reducer_ingest_enabled() -> bool:
+    return os.getenv(_SHADOW_REDUCER_INGEST_ENV, "").strip().lower() in _TRUTHY_ENV
 
 
 @dataclass(frozen=True)
@@ -142,6 +179,7 @@ def get_live_control_grant(
     *,
     session_id: UUID | str,
     capability: str,
+    now: datetime | None = None,
 ) -> LiveControlGrant | None:
     """Return the exact grant on the primary latest open run, or fail closed."""
 
@@ -152,7 +190,8 @@ def get_live_control_grant(
     }.get(capability)
     if column is None:
         raise ValueError(f"unknown live control capability: {capability}")
-    freshness_cutoff = datetime.now(timezone.utc) - timedelta(milliseconds=DEFAULT_MANAGED_CONTROL_LEASE_TTL_MS)
+    observed_at = normalize_utc(now) or datetime.now(timezone.utc)
+    freshness_cutoff = observed_at - timedelta(milliseconds=DEFAULT_MANAGED_CONTROL_LEASE_TTL_MS)
     latest_open_run = (
         db.query(LiveSessionRun.id)
         .join(LiveSessionThread, LiveSessionThread.id == LiveSessionRun.thread_id)
@@ -219,6 +258,131 @@ def get_live_control_grant(
         lease_generation=generation,
         identity_source="legacy_synthetic",
     )
+
+
+def get_bound_live_control_identity(
+    db: Session,
+    *,
+    session_id: UUID | str,
+) -> LiveControlGrant | None:
+    """Resolve the current catalog binding without consulting legacy grants."""
+
+    latest_open_run = (
+        db.query(LiveSessionRun.id)
+        .join(LiveSessionThread, LiveSessionThread.id == LiveSessionRun.thread_id)
+        .filter(
+            LiveSessionThread.session_id == str(session_id),
+            LiveSessionThread.is_primary == 1,
+            LiveSessionRun.ended_at.is_(None),
+        )
+        .order_by(LiveSessionRun.started_at.desc(), LiveSessionRun.id.desc())
+        .limit(1)
+        .scalar_subquery()
+    )
+    row = (
+        db.query(
+            LiveSessionConnection.id,
+            LiveSessionConnection.run_id,
+            LiveSessionConnection.adapter_connection_id,
+            LiveSessionConnection.lease_generation,
+        )
+        .join(LiveSessionRun, LiveSessionRun.id == LiveSessionConnection.run_id)
+        .join(LiveSessionThread, LiveSessionThread.id == LiveSessionRun.thread_id)
+        .filter(
+            LiveSessionThread.session_id == str(session_id),
+            LiveSessionThread.is_primary == 1,
+            LiveSessionRun.id == latest_open_run,
+            LiveSessionRun.ended_at.is_(None),
+            LiveSessionConnection.acquisition_kind.in_(_CONTROL_ACQUISITION_KINDS),
+            LiveSessionConnection.state == "attached",
+            LiveSessionConnection.released_at.is_(None),
+            LiveSessionConnection.adapter_connection_id.is_not(None),
+            LiveSessionConnection.lease_generation.is_not(None),
+        )
+        .order_by(LiveSessionConnection.last_health_at.desc(), LiveSessionConnection.id.desc())
+        .limit(1)
+        .first()
+    )
+    if row is None:
+        return None
+    connection_id = str(row.adapter_connection_id or "").strip()
+    generation = str(row.lease_generation or "").strip()
+    if not connection_id or not generation:
+        return None
+    return LiveControlGrant(
+        catalog_connection_id=int(row.id),
+        connection_id=connection_id,
+        run_id=str(row.run_id),
+        lease_generation=generation,
+        identity_source="adapter_bound",
+    )
+
+
+def get_canonical_live_control_grant(
+    db: Session,
+    *,
+    session_id: UUID | str,
+    provider: str,
+    device_id: str,
+    capability: str,
+    now: datetime,
+) -> tuple[LiveControlGrant | None, str | None]:
+    """Require exact agreement between the catalog lease and reducer evidence."""
+
+    if not shadow_reducer_ingest_enabled():
+        return None, "canonical_ingest_disabled"
+    operation = {
+        "send": "send_input",
+        "interrupt": "interrupt",
+        "terminate": "terminate",
+    }.get(capability)
+    if operation is None:
+        return None, "unsupported"
+    normalized_provider = str(provider or "").strip().lower()
+    contract = contract_for_provider(normalized_provider)
+    if contract is None or not bool(getattr(contract, operation, False)):
+        return None, "unsupported"
+    session = db.query(LiveSessionCatalog).filter(LiveSessionCatalog.session_id == str(session_id)).one_or_none()
+    if session is None:
+        return None, "control_unavailable"
+    if session.closed_at is not None or session.ended_at is not None:
+        return None, "session_closed"
+    if str(session.provider or "").strip().lower() != normalized_provider:
+        return None, "identity_diverged"
+    if device_id and str(session.device_id or "").strip() != str(device_id).strip():
+        return None, "identity_diverged"
+    grant = get_bound_live_control_identity(db, session_id=session_id)
+    if grant is None:
+        return None, "identity_unbound"
+    connection_id = str(grant.connection_id)
+    subject_key = f"connection:{connection_id}:{grant.lease_generation}"
+    heads = [
+        dict(row)
+        for row in db.execute(
+            select(FactHead.__table__)
+            .where(FactHead.family == "control", FactHead.subject_key == subject_key)
+            .order_by(FactHead.source, FactHead.source_epoch)
+        ).mappings()
+    ]
+    supported_operations = {
+        name
+        for name in ("send_input", "interrupt", "terminate", "tail_output", "resume")
+        if bool(getattr(contract, "can_resume" if name == "resume" else name, False))
+    }
+    authorization = authorize_exact_control_fact(
+        session_id=str(session_id),
+        run_id=grant.run_id,
+        provider=normalized_provider,
+        connection_id=connection_id,
+        lease_generation=grant.lease_generation,
+        operation=operation,
+        heads=heads,
+        supported_operations=supported_operations,
+        now=now,
+    )
+    if not authorization.allowed:
+        return None, authorization.reason or "control_unavailable"
+    return grant, None
 
 
 def live_control_capability_available(

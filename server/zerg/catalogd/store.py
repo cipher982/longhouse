@@ -2048,6 +2048,8 @@ class CatalogStore:
     ) -> dict[str, Any]:
         """Validate the command-time lease and durably reserve one operation."""
 
+        from zerg.services.live_control_catalog import canonical_command_authorization_enabled
+        from zerg.services.live_control_catalog import get_canonical_live_control_grant
         from zerg.services.live_control_catalog import get_live_control_grant
         from zerg.services.machine_control_operations import MACHINE_OPERATION_TIMEOUT_GRACE_SECS
 
@@ -2055,11 +2057,33 @@ class CatalogStore:
         with _write_transaction(self.engine) as connection:
             orm = Session(bind=connection, join_transaction_mode="create_savepoint", expire_on_commit=False)
             try:
+                canonical_auth = canonical_command_authorization_enabled(provider)
+
+                def resolve_grant():
+                    if canonical_auth:
+                        return get_canonical_live_control_grant(
+                            orm,
+                            session_id=session_id,
+                            provider=provider,
+                            device_id=device_id,
+                            capability=capability,
+                            now=observed_at,
+                        )
+                    return (
+                        get_live_control_grant(
+                            orm,
+                            session_id=session_id,
+                            capability=capability,
+                            now=observed_at,
+                        ),
+                        None,
+                    )
+
                 existing = orm.query(LiveMachineControlOperation).filter(LiveMachineControlOperation.command_id == command_id).one_or_none()
                 if existing is not None:
                     stored_request = _decode_json_object(existing.request_json)
                     stored_grant = stored_request.pop("longhouse_control_grant", None)
-                    exact_replay = (
+                    request_matches = (
                         str(existing.id) == operation_id
                         and existing.owner_id == owner_id
                         and str(existing.session_id or "") == session_id
@@ -2070,23 +2094,51 @@ class CatalogStore:
                         and stored_request == request_payload
                         and isinstance(stored_grant, dict)
                     )
+                    if not request_matches:
+                        orm.rollback()
+                        return {
+                            "allowed": False,
+                            "reason": "idempotency_conflict",
+                            "operation_id": None,
+                            "grant": None,
+                            "exact_replay": False,
+                            "commit_seq": str(_current_commit_seq(connection)),
+                        }
+                    if str(existing.status) != "running":
+                        orm.rollback()
+                        return {
+                            "allowed": False,
+                            "reason": "operation_finished",
+                            "operation_id": None,
+                            "grant": None,
+                            "exact_replay": False,
+                            "commit_seq": str(_current_commit_seq(connection)),
+                        }
+                    grant, denial_reason = resolve_grant()
+                    current_grant = _live_control_grant_payload(grant) if grant is not None else None
+                    exact_replay = bool(
+                        current_grant is not None
+                        and isinstance(stored_grant, dict)
+                        and _stored_live_control_grant_matches(stored_grant, current_grant)
+                    )
                     orm.rollback()
                     return {
                         "allowed": exact_replay,
-                        "reason": None if exact_replay else "idempotency_conflict",
+                        "reason": None if exact_replay else denial_reason or "grant_revoked",
                         "operation_id": str(existing.id) if exact_replay else None,
-                        "grant": stored_grant if exact_replay else None,
+                        "grant": current_grant if exact_replay else None,
                         "exact_replay": exact_replay,
                         "commit_seq": str(_current_commit_seq(connection)),
                     }
-                grant = get_live_control_grant(orm, session_id=session_id, capability=capability)
+                grant, denial_reason = resolve_grant()
                 if grant is None:
                     orm.rollback()
                     return {
                         "allowed": False,
-                        "reason": "control_unavailable",
+                        "reason": denial_reason or "control_unavailable",
                         "commit_seq": str(_current_commit_seq(connection)),
                     }
+                grant_payload = _live_control_grant_payload(grant)
                 operation = LiveMachineControlOperation(
                     id=operation_id,
                     owner_id=owner_id,
@@ -2099,13 +2151,7 @@ class CatalogStore:
                     request_json=json.dumps(
                         {
                             **request_payload,
-                            "longhouse_control_grant": {
-                                "connection_id": grant.connection_id,
-                                "catalog_connection_id": grant.catalog_connection_id,
-                                "run_id": grant.run_id,
-                                "lease_generation": grant.lease_generation,
-                                "identity_source": grant.identity_source,
-                            },
+                            "longhouse_control_grant": grant_payload,
                         },
                         sort_keys=True,
                         separators=(",", ":"),
@@ -2128,13 +2174,7 @@ class CatalogStore:
                 "allowed": True,
                 "reason": None,
                 "operation_id": operation_id,
-                "grant": {
-                    "connection_id": grant.connection_id,
-                    "catalog_connection_id": grant.catalog_connection_id,
-                    "run_id": grant.run_id,
-                    "lease_generation": grant.lease_generation,
-                    "identity_source": grant.identity_source,
-                },
+                "grant": grant_payload,
                 "exact_replay": False,
                 "commit_seq": str(commit_seq),
             }
@@ -8145,6 +8185,33 @@ def _decode_json_object(value: object) -> dict[str, Any]:
     if not isinstance(decoded, dict):
         raise RuntimeError("catalog receipt JSON is not an object")
     return decoded
+
+
+def _live_control_grant_payload(grant: object) -> dict[str, Any]:
+    return {
+        "connection_id": getattr(grant, "connection_id"),
+        "catalog_connection_id": int(getattr(grant, "catalog_connection_id")),
+        "run_id": str(getattr(grant, "run_id")),
+        "lease_generation": str(getattr(grant, "lease_generation")),
+        "identity_source": str(getattr(grant, "identity_source")),
+    }
+
+
+def _stored_live_control_grant_matches(stored: dict[str, Any], current: dict[str, Any]) -> bool:
+    connection_id = stored.get("connection_id")
+    catalog_connection_id = stored.get("catalog_connection_id")
+    identity_source = str(stored.get("identity_source") or "").strip()
+    if catalog_connection_id is None and isinstance(connection_id, int):
+        catalog_connection_id = connection_id
+        identity_source = "legacy_synthetic"
+    return bool(
+        isinstance(catalog_connection_id, int)
+        and catalog_connection_id == current["catalog_connection_id"]
+        and str(connection_id) == str(current["connection_id"])
+        and str(stored.get("run_id") or "") == current["run_id"]
+        and str(stored.get("lease_generation") or "") == current["lease_generation"]
+        and identity_source == current["identity_source"]
+    )
 
 
 def _non_negative_int(value: object, field: str) -> int:

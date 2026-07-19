@@ -333,6 +333,36 @@ fn managed_provider_contract_items() -> &'static Vec<Value> {
         .expect("managed provider contract manifest must contain providers[]")
 }
 
+pub(crate) fn granted_control_operations(provider: &str, attached: bool) -> Vec<String> {
+    if !attached {
+        return Vec::new();
+    }
+    let Some(contract) = managed_provider_contract_items()
+        .iter()
+        .find(|contract| contract.get("provider").and_then(Value::as_str) == Some(provider))
+    else {
+        return Vec::new();
+    };
+    let supports = contract
+        .get("machine_control_supports")
+        .and_then(Value::as_array);
+    let supports_operation = |operation: &str| {
+        let expected = format!("{provider}.{operation}");
+        supports.is_some_and(|items| items.iter().any(|item| item.as_str() == Some(&expected)))
+    };
+    let mut granted = Vec::new();
+    if supports_operation("interrupt") {
+        granted.push("interrupt".to_string());
+    }
+    if supports_operation("send") {
+        granted.push("send_input".to_string());
+    }
+    if supports_operation("terminate") {
+        granted.push("terminate".to_string());
+    }
+    granted
+}
+
 fn validate_managed_provider_contract_manifest(payload: &Value) -> Result<(), String> {
     if payload.get("schema_version").and_then(Value::as_u64) != Some(1) {
         return Err("schema_version must be 1".to_string());
@@ -3084,6 +3114,24 @@ mod tests {
                 "manifest advertises {support}, but engine dispatch has no provider operation path"
             );
         }
+    }
+
+    #[test]
+    fn reducer_control_grants_follow_dispatch_manifest_and_connection_state() {
+        assert_eq!(
+            granted_control_operations("cursor", true),
+            vec![
+                "interrupt".to_string(),
+                "send_input".to_string(),
+                "terminate".to_string()
+            ]
+        );
+        assert_eq!(
+            granted_control_operations("antigravity", true),
+            vec!["send_input".to_string()]
+        );
+        assert!(granted_control_operations("cursor", false).is_empty());
+        assert!(granted_control_operations("unknown", true).is_empty());
     }
 
     #[test]

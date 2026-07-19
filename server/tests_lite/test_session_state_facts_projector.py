@@ -14,6 +14,7 @@ from zerg.catalogd.schema import initialize_catalog_schema
 from zerg.services.agents.kernel_capabilities import KernelSessionCapabilities
 from zerg.services.session_state_contract import SessionHostFacts
 from zerg.services.session_state_contract import SessionTranscriptFacts
+from zerg.services.session_state_facts_projector import authorize_exact_control_fact
 from zerg.services.session_state_facts_projector import project_served_session_state_facts
 from zerg.services.session_state_facts_projector import project_shadow_session_state_facts
 
@@ -432,3 +433,62 @@ def test_served_projector_without_control_head_fails_actions_closed():
     assert served.control.actions.terminate.reason == "control_unknown"
     assert served.control.actions.reattach.state == "available"
     assert served.control.actions.resume.state == "available"
+
+
+def test_exact_control_authorization_rejects_expiry_divergence_and_tampering():
+    head = _control(observed_at=NOW, grants=["send_input"])
+    allowed = authorize_exact_control_fact(
+        session_id="session-1",
+        run_id="run-1",
+        provider="codex",
+        connection_id="connection-1",
+        lease_generation="lease-1",
+        operation="send_input",
+        heads=[head],
+        supported_operations={"send_input"},
+        now=NOW,
+    )
+    assert allowed.allowed is True
+
+    expired = authorize_exact_control_fact(
+        session_id="session-1",
+        run_id="run-1",
+        provider="codex",
+        connection_id="connection-1",
+        lease_generation="lease-1",
+        operation="send_input",
+        heads=[head],
+        supported_operations={"send_input"},
+        now=NOW + timedelta(minutes=2),
+    )
+    assert expired.allowed is False
+    assert expired.reason == "lease_expired"
+
+    diverged = authorize_exact_control_fact(
+        session_id="session-1",
+        run_id="different-run",
+        provider="codex",
+        connection_id="connection-1",
+        lease_generation="lease-1",
+        operation="send_input",
+        heads=[head],
+        supported_operations={"send_input"},
+        now=NOW,
+    )
+    assert diverged.allowed is False
+    assert diverged.reason == "identity_diverged"
+
+    tampered = {**head, "evidence_hash": "0" * 64}
+    rejected = authorize_exact_control_fact(
+        session_id="session-1",
+        run_id="run-1",
+        provider="codex",
+        connection_id="connection-1",
+        lease_generation="lease-1",
+        operation="send_input",
+        heads=[tampered],
+        supported_operations={"send_input"},
+        now=NOW,
+    )
+    assert rejected.allowed is False
+    assert rejected.reason == "control_head_rejected"

@@ -93,6 +93,17 @@ class ShadowSessionStateProjection(BaseModel):
     unsupported_families: tuple[UnsupportedFactFamily, ...] = SHADOW_UNSUPPORTED_FAMILIES
 
 
+class ControlFactAuthorization(BaseModel):
+    """Fail-closed authorization result for one exact reducer subject."""
+
+    model_config = ConfigDict(frozen=True)
+
+    allowed: bool
+    reason: str | None = None
+    control: SessionControlFacts | None = None
+    run_id: str | None = None
+
+
 def project_shadow_session_state_facts(
     *,
     session_id: str,
@@ -170,6 +181,62 @@ def project_served_session_state_facts(
         transcript=transcript,
         host=host,
         commit_seq=commit_seq,
+    )
+
+
+def authorize_exact_control_fact(
+    *,
+    session_id: str,
+    run_id: str,
+    provider: str,
+    connection_id: str,
+    lease_generation: str,
+    operation: Literal["send_input", "interrupt", "terminate"],
+    heads: Collection[Mapping[str, Any]],
+    supported_operations: Collection[str],
+    now: datetime,
+) -> ControlFactAuthorization:
+    """Authorize from the exact bound control subject, never a session-wide winner."""
+
+    expected_subject = f"connection:{connection_id}:{lease_generation}"
+    exact_heads = [head for head in heads if head.get("family") == "control" and head.get("subject_key") == expected_subject]
+    if not exact_heads:
+        return ControlFactAuthorization(allowed=False, reason="control_head_missing")
+    winner, rejected = _effective_head(
+        exact_heads,
+        session_id=session_id,
+        family="control",
+        now=_aware(now, "now"),
+    )
+    if rejected:
+        return ControlFactAuthorization(allowed=False, reason="control_head_rejected")
+    if winner is None:
+        return ControlFactAuthorization(allowed=False, reason="lease_expired")
+    _head, value, _observed_at, _valid_until = winner
+    if (
+        _text(value.get("provider")) != provider
+        or _text(value.get("run_id")) != run_id
+        or _text(value.get("connection_id")) != connection_id
+        or _text(value.get("lease_generation")) != lease_generation
+    ):
+        return ControlFactAuthorization(allowed=False, reason="identity_diverged")
+    if operation not in supported_operations:
+        return ControlFactAuthorization(allowed=False, reason="unsupported")
+    control = _project_control(winner, supported_operations=set(supported_operations))
+    if control is None:
+        return ControlFactAuthorization(allowed=False, reason="control_head_missing")
+    action = getattr(control.actions, operation)
+    if action.state != "available":
+        return ControlFactAuthorization(
+            allowed=False,
+            reason=action.reason or "control_unavailable",
+            control=control,
+            run_id=_control_run_id(winner),
+        )
+    return ControlFactAuthorization(
+        allowed=True,
+        control=control,
+        run_id=_control_run_id(winner),
     )
 
 
@@ -509,7 +576,9 @@ def _aware(value: datetime, field: str) -> datetime:
 
 
 __all__ = [
+    "ControlFactAuthorization",
     "ShadowSessionStateProjection",
+    "authorize_exact_control_fact",
     "project_served_session_state_facts",
     "project_shadow_session_state_facts",
 ]

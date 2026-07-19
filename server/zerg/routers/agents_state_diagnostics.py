@@ -23,6 +23,8 @@ from zerg.services.catalog_read_gateway import shadow_session_state_health
 from zerg.services.catalog_read_gateway import shadow_session_state_snapshot
 from zerg.services.live_catalog_timeline import canonical_session_detail_enabled
 from zerg.services.live_catalog_timeline import project_catalog_session_facts
+from zerg.services.live_control_catalog import canonical_command_authorization_enabled
+from zerg.services.live_control_catalog import canonical_command_authorization_providers
 from zerg.services.managed_provider_contracts import contract_for_provider
 from zerg.services.session_state_diagnostics import SessionStateComparison
 from zerg.services.session_state_diagnostics import compare_session_state_axes
@@ -40,6 +42,10 @@ def _served_path() -> Literal["legacy_session_state", "canonical_session_detail"
     return "canonical_session_detail" if canonical_session_detail_enabled() else "legacy_session_state"
 
 
+def _authorization_path() -> Literal["legacy_capabilities", "provider_scoped_canonical_control"]:
+    return "provider_scoped_canonical_control" if canonical_command_authorization_enabled() else "legacy_capabilities"
+
+
 class SessionStateDiagnosticsResponse(UTCBaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -49,8 +55,10 @@ class SessionStateDiagnosticsResponse(UTCBaseModel):
     observed_at: datetime
     head_count: int
     served_path: Literal["legacy_session_state", "canonical_session_detail"] = Field(default_factory=_served_path)
-    authorization_path: Literal["legacy_capabilities"] = "legacy_capabilities"
+    authorization_path: Literal["legacy_capabilities", "provider_scoped_canonical_control"] = Field(default_factory=_authorization_path)
+    canonical_authorization_providers: tuple[str, ...] = Field(default_factory=canonical_command_authorization_providers)
     cutover_active: bool = Field(default_factory=canonical_session_detail_enabled)
+    authorization_cutover_active: bool = Field(default_factory=canonical_command_authorization_enabled)
     shadow: ShadowSessionStateProjection
     comparison: SessionStateComparison
 
@@ -96,8 +104,10 @@ class SessionStateReducerHealthResponse(UTCBaseModel):
     ingest_enabled: bool
     parity_enabled: bool
     served_path: Literal["legacy_session_state", "canonical_session_detail"] = Field(default_factory=_served_path)
-    authorization_path: Literal["legacy_capabilities"] = "legacy_capabilities"
+    authorization_path: Literal["legacy_capabilities", "provider_scoped_canonical_control"] = Field(default_factory=_authorization_path)
+    canonical_authorization_providers: tuple[str, ...] = Field(default_factory=canonical_command_authorization_providers)
     cutover_active: bool = Field(default_factory=canonical_session_detail_enabled)
+    authorization_cutover_active: bool = Field(default_factory=canonical_command_authorization_enabled)
     projected_families: tuple[str, ...] = SHADOW_SUPPORTED_FAMILIES
     unsupported_families: tuple[str, ...] = SHADOW_UNSUPPORTED_FAMILIES
     storage: SessionStateReducerStorageResponse

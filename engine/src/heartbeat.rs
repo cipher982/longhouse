@@ -24,6 +24,7 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use crate::build_identity::BuildIdentity;
+use crate::control_channel::granted_control_operations;
 use crate::managed_antigravity_scan::AntigravityHookObservation;
 use crate::managed_bridge_scan::CodexBridgeObservation;
 use crate::managed_claude_scan::ClaudeChannelObservation;
@@ -1098,14 +1099,14 @@ pub(crate) fn machine_evidence_from_observations(
                 connection_id: obs.connection_id.clone(),
                 lease_generation: obs.lease_generation.clone(),
                 run_id: obs.run_id.clone(),
-                granted_operations: Vec::new(),
+                granted_operations: granted_control_operations("codex", state == "attached"),
                 ownership: "managed".to_string(),
                 state: state.to_string(),
                 bridge_status: Some(obs.status.clone()),
                 thread_subscription_status: obs.thread_subscription_status.clone(),
                 lease_ttl_ms: 15 * 60 * 1000,
                 source: "codex_bridge_scan".to_string(),
-                observed_at: at.clone(),
+                observed_at: envelope_observed_at.clone(),
             });
         }
         if let Some(provider_session_id) = obs
@@ -1167,6 +1168,13 @@ pub(crate) fn machine_evidence_from_observations(
             });
         }
         if let Some(run_id) = &obs.run_id {
+            let state = if !obs.claude_alive {
+                "detached"
+            } else if obs.ready && obs.bridge_alive {
+                "attached"
+            } else {
+                "degraded"
+            };
             control.push(ControlEvidence {
                 authority_class: "provider_control".to_string(),
                 provider: "claude".to_string(),
@@ -1175,16 +1183,9 @@ pub(crate) fn machine_evidence_from_observations(
                 connection_id: obs.connection_id.clone(),
                 lease_generation: obs.lease_generation.clone(),
                 run_id: Some(run_id.clone()),
-                granted_operations: Vec::new(),
+                granted_operations: granted_control_operations("claude", state == "attached"),
                 ownership: "managed".to_string(),
-                state: if !obs.claude_alive {
-                    "detached"
-                } else if obs.ready && obs.bridge_alive {
-                    "attached"
-                } else {
-                    "degraded"
-                }
-                .to_string(),
+                state: state.to_string(),
                 bridge_status: Some(
                     if obs.ready && obs.bridge_alive {
                         "ready"
@@ -1198,7 +1199,7 @@ pub(crate) fn machine_evidence_from_observations(
                 thread_subscription_status: None,
                 lease_ttl_ms: 15 * 60 * 1000,
                 source: "claude_channel_scan".to_string(),
-                observed_at: at.clone(),
+                observed_at: envelope_observed_at.clone(),
             });
         }
         if let Some(provider_session_id) = obs
@@ -1243,6 +1244,13 @@ pub(crate) fn machine_evidence_from_observations(
             });
         }
         if let Some(run_id) = &obs.run_id {
+            let state = if !obs.server_alive {
+                "detached"
+            } else if obs.health_ready {
+                "attached"
+            } else {
+                "degraded"
+            };
             control.push(ControlEvidence {
                 authority_class: "provider_control".to_string(),
                 provider: "opencode".to_string(),
@@ -1251,16 +1259,9 @@ pub(crate) fn machine_evidence_from_observations(
                 connection_id: obs.connection_id.clone(),
                 lease_generation: obs.lease_generation.clone(),
                 run_id: Some(run_id.clone()),
-                granted_operations: Vec::new(),
+                granted_operations: granted_control_operations("opencode", state == "attached"),
                 ownership: "managed".to_string(),
-                state: if !obs.server_alive {
-                    "detached"
-                } else if obs.health_ready {
-                    "attached"
-                } else {
-                    "degraded"
-                }
-                .to_string(),
+                state: state.to_string(),
                 bridge_status: Some(
                     if obs.health_ready {
                         "ready"
@@ -1272,7 +1273,7 @@ pub(crate) fn machine_evidence_from_observations(
                 thread_subscription_status: None,
                 lease_ttl_ms: 15 * 60 * 1000,
                 source: "opencode_server_scan".to_string(),
-                observed_at: at.clone(),
+                observed_at: envelope_observed_at.clone(),
             });
         }
         transcript.push(TranscriptEvidence {
@@ -1324,6 +1325,7 @@ pub(crate) fn machine_evidence_from_observations(
             }
         }
         if let Some(run_id) = &obs.run_id {
+            let state = if obs.live { "attached" } else { "detached" };
             control.push(ControlEvidence {
                 authority_class: "provider_control".to_string(),
                 provider: "cursor".to_string(),
@@ -1332,14 +1334,14 @@ pub(crate) fn machine_evidence_from_observations(
                 connection_id: obs.connection_id.clone(),
                 lease_generation: obs.lease_generation.clone(),
                 run_id: Some(run_id.clone()),
-                granted_operations: Vec::new(),
+                granted_operations: granted_control_operations("cursor", state == "attached"),
                 ownership: "managed".to_string(),
-                state: if obs.live { "attached" } else { "detached" }.to_string(),
+                state: state.to_string(),
                 bridge_status: Some(if obs.live { "ready" } else { "unavailable" }.to_string()),
                 thread_subscription_status: None,
                 lease_ttl_ms: 15 * 60 * 1000,
                 source: "cursor_helm_scan".to_string(),
-                observed_at: at,
+                observed_at: envelope_observed_at.clone(),
             });
         }
     }
@@ -4717,6 +4719,35 @@ mod tests {
             .control
             .iter()
             .all(|fact| fact.provider != "antigravity"));
+        let control_grants = |provider: &str| {
+            evidence
+                .control
+                .iter()
+                .find(|fact| fact.provider == provider)
+                .map(|fact| fact.granted_operations.clone())
+                .unwrap()
+        };
+        assert!(evidence
+            .control
+            .iter()
+            .all(|fact| fact.observed_at == "2026-05-08T12:00:02+00:00"));
+        assert_eq!(
+            control_grants("codex"),
+            vec!["interrupt".to_string(), "send_input".to_string()]
+        );
+        assert_eq!(
+            control_grants("claude"),
+            vec!["interrupt".to_string(), "send_input".to_string()]
+        );
+        assert_eq!(
+            control_grants("opencode"),
+            vec![
+                "interrupt".to_string(),
+                "send_input".to_string(),
+                "terminate".to_string()
+            ]
+        );
+        assert!(control_grants("cursor").is_empty());
         assert!(evidence.process.iter().any(|fact| {
             fact.provider == "antigravity"
                 && fact.source == "antigravity_hook_state"
