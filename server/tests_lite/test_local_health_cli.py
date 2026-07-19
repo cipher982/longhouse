@@ -1936,7 +1936,8 @@ def test_collect_local_health_flags_detached_managed_session(monkeypatch, tmp_pa
 
     assert snapshot["health_state"] == "degraded"
     assert snapshot["severity"] == "yellow"
-    assert snapshot["headline"] == "Managed session is running in background"
+    assert snapshot["headline"] == "Managed session control is detached"
+    assert snapshot["projection_authority"] == "machine_preview"
     assert "managed_session_detached" in snapshot["reasons"]
     assert snapshot["managed_summary"] == {
         "attached_count": 0,
@@ -1970,6 +1971,18 @@ def test_collect_local_health_flags_detached_managed_session(monkeypatch, tmp_pa
             "thread_subscription_attempts": 0,
             "thread_subscription_last_error": None,
             "reason_codes": [],
+            "authority": "machine_preview",
+            "state_contract_version": 1,
+            "presentation_policy_version": 1,
+            "commit_seq": None,
+            "control": {
+                "actions": {
+                    "terminate": {
+                        "state": "unknown",
+                        "reason": "machine_preview_non_authoritative",
+                    }
+                }
+            },
         }
     ]
     assert snapshot["orphan_bridges"] == []
@@ -4766,6 +4779,18 @@ def test_collect_local_health_reports_process_scan_payload_contract(monkeypatch,
             "bridge_pid": None,
             "bridge_heartbeat_at": None,
             "reason_codes": [],
+            "authority": "machine_preview",
+            "state_contract_version": 1,
+            "presentation_policy_version": 1,
+            "commit_seq": None,
+            "control": {
+                "actions": {
+                    "terminate": {
+                        "state": "unknown",
+                        "reason": "machine_preview_non_authoritative",
+                    }
+                }
+            },
         }
     ]
     assert snapshot["orphan_bridges"] == []

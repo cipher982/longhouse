@@ -308,7 +308,7 @@ public struct MenuBarPanelView: View {
 
             if !unmanagedActivityEntries.isEmpty {
                 sectionDivider.padding(.horizontal, 4)
-                PanelSection(title: "Other agent processes", trailing: snapshot.liveUnmanagedSummaryLabel) {
+                PanelSection(title: "Observed agents", trailing: snapshot.liveUnmanagedSummaryLabel) {
                     UnmanagedActivityList(entries: unmanagedActivityEntries)
                 }
             }
@@ -391,35 +391,15 @@ public struct MenuBarPanelView: View {
 
     private var managedRuntimeSurface: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if !needsUserManagedSessionEntries.isEmpty {
-                PanelSection(title: "Needs you", trailing: "\(needsUserManagedSessionEntries.count)") {
-                    ManagedSessionList(entries: needsUserManagedSessionEntries)
-                }
-            }
-
-            if !workingManagedSessionEntries.isEmpty {
-                if !needsUserManagedSessionEntries.isEmpty {
-                    sectionDivider.padding(.horizontal, 4)
-                }
-                PanelSection(title: "Working", trailing: "\(workingManagedSessionEntries.count)") {
-                    ManagedSessionList(entries: workingManagedSessionEntries)
-                }
-            }
-
-            if !readyManagedSessionEntries.isEmpty {
-                if !needsUserManagedSessionEntries.isEmpty || !workingManagedSessionEntries.isEmpty {
-                    sectionDivider.padding(.horizontal, 4)
-                }
-                PanelSection(title: "Ready and background", trailing: "\(readyManagedSessionEntries.count)") {
-                    ManagedSessionList(entries: readyManagedSessionEntries)
-                }
-            }
-
             if snapshot.currentManagedSessions.isEmpty {
                 PanelSection(title: "Sessions") {
                     Text("No managed sessions are running on this Mac.")
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(Color.secondary)
+                }
+            } else {
+                PanelSection(title: "Sessions", trailing: "\(managedSessionEntries.count)") {
+                    ManagedSessionList(entries: managedSessionEntries)
                 }
             }
 
@@ -437,22 +417,8 @@ public struct MenuBarPanelView: View {
         }
     }
 
-    private var needsUserManagedSessionEntries: [ManagedSessionEntry] {
-        snapshot.currentManagedSessions
-            .filter { $0.explicitlyNeedsUser }
-            .map { managedSessionEntry(for: $0) }
-    }
-
-    private var workingManagedSessionEntries: [ManagedSessionEntry] {
-        snapshot.currentManagedSessions
-            .filter { !$0.explicitlyNeedsUser && $0.menuBarAttentionKind == .working }
-            .map { managedSessionEntry(for: $0) }
-    }
-
-    private var readyManagedSessionEntries: [ManagedSessionEntry] {
-        snapshot.currentManagedSessions
-            .filter { !$0.explicitlyNeedsUser && $0.menuBarAttentionKind != .working }
-            .map { managedSessionEntry(for: $0) }
+    private var managedSessionEntries: [ManagedSessionEntry] {
+        snapshot.currentManagedSessions.map { managedSessionEntry(for: $0) }
     }
 
     /// Live provider CLIs Longhouse does not own on this Mac right now.
@@ -633,7 +599,7 @@ public struct MenuBarPanelView: View {
         case "attached":
             return workspaceContext
         case "detached":
-            return compactDetailParts([workspaceContext, "Window closed. Session still running in background."])
+            return compactDetailParts([workspaceContext, "Terminal control detached."])
         case "degraded":
             let reasons = (session.reasonCodes ?? []).prefix(2).map { HealthSnapshot.humanizeManagedReason($0) }
             if reasons.isEmpty {

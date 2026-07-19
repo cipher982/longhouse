@@ -311,15 +311,57 @@ struct LonghouseMenuBarCoreTests {
                 runtimePhase: "thinking",
                 displayPhase: "Thinking",
                 lastActivityAt: "2026-07-14T05:00:00Z",
-                source: "runtime_host"
+                source: "runtime_host",
+                authority: "runtime_host",
+                stateContractVersion: 1,
+                presentationPolicyVersion: 1,
+                commitSeq: "42",
+                mode: "helm",
+                presentation: SessionPresentationSnapshot(
+                    primary: SessionPresentationLabelSnapshot(key: "thinking", label: "Thinking", tone: "active"),
+                    access: SessionPresentationLabelSnapshot(key: "live_control", label: "Live control", tone: "positive")
+                ),
+                activity: SessionActivitySnapshot(
+                    state: "thinking", rawKind: "assistant_working", tool: nil,
+                    observedAt: "2026-07-14T05:00:00Z"
+                ),
+                control: SessionControlSnapshot(
+                    ownership: "longhouse", connection: "connected",
+                    actions: SessionControlActionsSnapshot(
+                        terminate: SessionActionSnapshot(state: "available", reason: nil),
+                        reattach: SessionActionSnapshot(state: "available", reason: nil)
+                    )
+                )
             )
         )
 
         #expect(updated.resolvedTitleText == "Make titles immediate")
-        #expect(updated.phase == "idle")
+        #expect(updated.phase == "Thinking")
         #expect(updated.titleSource == "prompt")
         #expect(updated.titleProvenance == "runtime_host")
-        #expect(updated.phaseProvenance == "machine_agent")
+        #expect(updated.phaseProvenance == "runtime_host")
+        #expect(updated.canStopFromMenuBar)
+
+        let titleOnlyUpdate = updated.applying(
+            SessionProjection(
+                sessionId: "session-1",
+                timelineTitle: "A newer title",
+                summaryTitle: nil,
+                firstUserMessage: nil,
+                titleState: "ready",
+                titleSource: "summary",
+                runtimePhase: "idle",
+                displayPhase: "Idle",
+                lastActivityAt: "2026-07-14T05:01:00Z",
+                source: "runtime_host"
+            )
+        )
+        #expect(titleOnlyUpdate.timelineTitle == "A newer title")
+        #expect(titleOnlyUpdate.authority == "runtime_host")
+        #expect(titleOnlyUpdate.presentation == updated.presentation)
+        #expect(titleOnlyUpdate.activity == updated.activity)
+        #expect(titleOnlyUpdate.control == updated.control)
+        #expect(titleOnlyUpdate.canStopFromMenuBar)
     }
 
     @Test
@@ -1721,7 +1763,7 @@ struct LonghouseMenuBarCoreTests {
         #expect(snapshot.detachedManagedCount == 1)
         #expect(snapshot.orphanBridgeCount == 0)
         #expect(snapshot.managedNeedsAttention == true)
-        #expect(snapshot.managedSummaryLabel == "1 attached · 1 detached")
+        #expect(snapshot.managedSummaryLabel == "2 sessions · 1 detached")
         #expect(snapshot.currentManagedSessions.count == 2)
     }
 
@@ -1775,7 +1817,7 @@ struct LonghouseMenuBarCoreTests {
         #expect(snapshot.attachedManagedCount == 2)
         #expect(snapshot.foregroundManagedCount == 1)
         #expect(snapshot.backgroundManagedCount == 1)
-        #expect(snapshot.managedSummaryLabel == "1 terminal · 1 background")
+        #expect(snapshot.managedSummaryLabel == "2 sessions")
         #expect(terminal.launchMode == "tui")
         #expect(terminal.uiAttached == true)
         #expect(terminal.normalizedUIPresence == "foreground_tui")
@@ -1789,7 +1831,7 @@ struct LonghouseMenuBarCoreTests {
         #expect(background.isConsoleManagedSession == true)
         #expect(background.needsManagedSessionAttention == false)
         #expect(background.isBackgroundManagedSession == true)
-        #expect(background.canStopFromMenuBar == true)
+        #expect(background.canStopFromMenuBar == false)
     }
 
     @Test
@@ -2087,7 +2129,7 @@ struct LonghouseMenuBarCoreTests {
         #expect(session.needsManagedSessionAttention == true)
         #expect(session.isBackgroundManagedSession == true)
         #expect(session.menuBarAttentionKind == .detached)
-        #expect(session.canStopFromMenuBar == true)
+        #expect(session.canStopFromMenuBar == false)
     }
 
     @Test

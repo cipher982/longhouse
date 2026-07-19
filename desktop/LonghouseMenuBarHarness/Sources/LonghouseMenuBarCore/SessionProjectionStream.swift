@@ -11,6 +11,56 @@ struct SessionProjection: Sendable {
     let displayPhase: String?
     let lastActivityAt: String?
     let source: String
+    let authority: String?
+    let stateContractVersion: Int?
+    let presentationPolicyVersion: Int?
+    let commitSeq: String?
+    let mode: String?
+    let presentation: SessionPresentationSnapshot?
+    let activity: SessionActivitySnapshot?
+    let control: SessionControlSnapshot?
+
+    var activityObservedAt: String? { activity?.observedAt }
+
+    init(
+        sessionId: String,
+        timelineTitle: String?,
+        summaryTitle: String?,
+        firstUserMessage: String?,
+        titleState: String?,
+        titleSource: String?,
+        runtimePhase: String?,
+        displayPhase: String?,
+        lastActivityAt: String?,
+        source: String,
+        authority: String? = nil,
+        stateContractVersion: Int? = nil,
+        presentationPolicyVersion: Int? = nil,
+        commitSeq: String? = nil,
+        mode: String? = nil,
+        presentation: SessionPresentationSnapshot? = nil,
+        activity: SessionActivitySnapshot? = nil,
+        control: SessionControlSnapshot? = nil
+    ) {
+        self.sessionId = sessionId
+        self.timelineTitle = timelineTitle
+        self.summaryTitle = summaryTitle
+        self.firstUserMessage = firstUserMessage
+        self.titleState = titleState
+        self.titleSource = titleSource
+        self.runtimePhase = runtimePhase
+        self.displayPhase = displayPhase
+        self.lastActivityAt = lastActivityAt
+        self.source = source
+        self.authority = authority
+        self.stateContractVersion = stateContractVersion
+        self.presentationPolicyVersion = presentationPolicyVersion
+        self.commitSeq = commitSeq
+        self.mode = mode
+        self.presentation = presentation
+        self.activity = activity
+        self.control = control
+    }
 }
 
 enum SessionProjectionEvent: Sendable {
@@ -30,6 +80,14 @@ enum SessionProjectionStream {
         let displayPhase: String?
         let lastActivityAt: String?
         let source: String
+        let authority: String?
+        let stateContractVersion: Int?
+        let presentationPolicyVersion: Int?
+        let commitSeq: String?
+        let mode: String?
+        let presentation: SessionPresentationSnapshot?
+        let activity: SessionActivitySnapshot?
+        let control: SessionControlSnapshot?
     }
 
     private struct Remove: Decodable { let sessionId: String }
@@ -108,7 +166,15 @@ enum SessionProjectionStream {
                             runtimePhase: delta.runtimePhase,
                             displayPhase: delta.displayPhase,
                             lastActivityAt: delta.lastActivityAt,
-                            source: delta.source
+                            source: delta.source,
+                            authority: delta.authority,
+                            stateContractVersion: delta.stateContractVersion,
+                            presentationPolicyVersion: delta.presentationPolicyVersion,
+                            commitSeq: delta.commitSeq,
+                            mode: delta.mode,
+                            presentation: delta.presentation,
+                            activity: delta.activity,
+                            control: delta.control
                         ))
                     )
                 } else if eventName == "session_remove", !dataLines.isEmpty {

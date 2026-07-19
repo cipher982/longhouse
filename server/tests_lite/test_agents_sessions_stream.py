@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 import zerg.routers.agents_sessions as agents_sessions
 from zerg.services.live_catalog_timeline import project_machine_session_delta
+from zerg.services.session_state_contract import SessionStateFacts
 
 
 class _Request:
@@ -74,3 +75,56 @@ def test_machine_session_delta_is_small_and_contains_no_browser_card_copies():
     assert "head" not in payload
     assert "detail" not in payload
     assert "root" not in payload
+
+
+def test_canonical_machine_session_delta_carries_server_presentation_and_action_state():
+    state = SessionStateFacts.model_validate(
+        {
+            "mode": "helm",
+            "disposition": {"state": "open"},
+            "run": {"id": "run-1", "lifecycle": "running"},
+            "activity": {"state": "unknown", "raw_kind": "quiet"},
+            "control": {
+                "ownership": "owned",
+                "connection": "connected",
+                "actions": {
+                    "send_input": {"state": "available"},
+                    "interrupt": {"state": "available"},
+                    "terminate": {"state": "available"},
+                    "reattach": {"state": "unavailable", "reason": "already_attached"},
+                    "resume": {"state": "unavailable", "reason": "unsupported"},
+                },
+            },
+            "transcript": {"convergence": "current"},
+            "host": {"state": "online"},
+            "presentation": {
+                "primary": {"key": "activity_unknown", "label": "Activity unknown", "tone": "unknown"},
+                "access": {"key": "live_control", "label": "Live control", "tone": "control"},
+            },
+            "commit_seq": 91,
+        }
+    )
+    session = SimpleNamespace(
+        id="633a0114-de2d-4b3d-b1b9-dfa7f314e300",
+        device_id="cinder",
+        timeline_title="Investigate state",
+        title_state="ready",
+        title_source="ai",
+        runtime_phase="quiet",
+        display_phase="Idle",
+        last_activity_at=datetime(2026, 7, 14, 5, 0, tzinfo=timezone.utc),
+        runtime_version=91,
+        session_state=state,
+    )
+
+    payload = project_machine_session_delta(session, commit_seq=91, canonical=True)
+    encoded = json.dumps(payload, separators=(",", ":")).encode()
+
+    assert len(encoded) <= 2_048
+    assert payload["authority"] == "runtime_host"
+    assert payload["presentation"]["primary"]["key"] == "activity_unknown"
+    assert payload["presentation"]["access"]["key"] == "live_control"
+    assert payload["control"]["actions"]["terminate"]["state"] == "available"
+    assert payload["activity"]["state"] == "unknown"
+    assert payload["commit_seq"] == "91"
+    assert "head" not in payload and "detail" not in payload and "root" not in payload

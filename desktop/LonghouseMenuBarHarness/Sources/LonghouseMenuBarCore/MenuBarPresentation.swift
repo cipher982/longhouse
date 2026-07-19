@@ -73,7 +73,7 @@ extension HealthSnapshot {
         let degraded = sessions.filter {
             $0.menuBarAttentionKind == .degraded || $0.menuBarAttentionKind == .detached
         }.count
-        let ready = max(0, sessions.count - needsUser - working - blocked - degraded - unknown)
+        let idle = max(0, sessions.count - needsUser - working - blocked - degraded - unknown)
 
         let repairReasons: Set<String> = [
             "storage_v2_sources_blocked", "storage_v2_outbox_unreadable",
@@ -130,7 +130,7 @@ extension HealthSnapshot {
         var counts: [String] = []
         if working > 0 { counts.append("\(working) working") }
         if needsUser > 0 { counts.append("\(needsUser) waiting") }
-        if ready > 0 { counts.append("\(ready) ready") }
+        if idle > 0 { counts.append("\(idle) idle") }
         if blocked > 0 { counts.append("\(blocked) blocked") }
         if degraded > 0 { counts.append("\(degraded) limited") }
         if unknown > 0 { counts.append("\(unknown) phase unavailable") }

@@ -181,7 +181,7 @@ def _add_managed_session_reasons(
 ) -> None:
     if orphan_bridge_count > 0:
         reasons.append("orphaned_managed_bridge")
-        _with_action(actions, "Stop orphaned background managed sessions from Longhouse.app")
+        _with_action(actions, "Stop orphaned managed processes from Longhouse.app")
 
     if managed_degraded > 0:
         reasons.append("managed_session_control_degraded")
@@ -490,9 +490,9 @@ def _degraded_health_headline(
         headline = "Source upload state unavailable"
     elif "managed_session_detached" in reasons:
         if managed_detached == 1 and managed_attached == 0:
-            headline = "Managed session is running in background"
+            headline = "Managed session control is detached"
         else:
-            headline = "Managed sessions are running in background"
+            headline = "Managed session control is detached"
     return headline
 
 

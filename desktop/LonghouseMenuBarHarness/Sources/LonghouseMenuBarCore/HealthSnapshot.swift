@@ -109,8 +109,15 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
     }
 
     func applying(_ projection: SessionProjection) -> HealthSnapshot {
-        let sessions = managedSessions?.map { session in
-            session.sessionId == projection.sessionId ? session.applying(projection) : session
+        var matched = false
+        var sessions = (managedSessions ?? []).map { session in
+            if session.sessionId == projection.sessionId {
+                matched = true
+            }
+            return session.sessionId == projection.sessionId ? session.applying(projection) : session
+        }
+        if !matched {
+            sessions.append(ManagedSessionSnapshot(projection: projection))
         }
         return HealthSnapshot(
             schemaVersion: schemaVersion,
@@ -635,34 +642,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         if !hasManagedRuntimeTruth {
             return "No managed sessions"
         }
-
-        if hasManagedUIPresence {
-            var parts: [String] = []
-            if foregroundManagedCount > 0 {
-                parts.append(Self.countLabel(foregroundManagedCount, singular: "terminal", plural: "terminal"))
-            }
-            if legacyAttachedManagedCount > 0 {
-                parts.append(Self.countLabel(legacyAttachedManagedCount, singular: "attached", plural: "attached"))
-            }
-            if backgroundManagedCount > 0 {
-                parts.append(Self.countLabel(backgroundManagedCount, singular: "background", plural: "background"))
-            }
-            if detachedManagedCount > 0 {
-                parts.append(Self.countLabel(detachedManagedCount, singular: "detached", plural: "detached"))
-            }
-            if degradedManagedCount > 0 {
-                parts.append(Self.countLabel(degradedManagedCount, singular: "degraded", plural: "degraded"))
-            }
-            if orphanBridgeCount > 0 {
-                parts.append(Self.countLabel(orphanBridgeCount, singular: "orphan bridge", plural: "orphan bridges"))
-            }
-            return parts.isEmpty ? "No managed sessions" : parts.joined(separator: " · ")
-        }
-
-        var parts: [String] = []
-        if attachedManagedCount > 0 {
-            parts.append(Self.countLabel(attachedManagedCount, singular: "attached", plural: "attached"))
-        }
+        var parts = [Self.countLabel(currentManagedSessions.count, singular: "session", plural: "sessions")]
         if detachedManagedCount > 0 {
             parts.append(Self.countLabel(detachedManagedCount, singular: "detached", plural: "detached"))
         }
@@ -672,7 +652,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         if orphanBridgeCount > 0 {
             parts.append(Self.countLabel(orphanBridgeCount, singular: "orphan bridge", plural: "orphan bridges"))
         }
-        return parts.isEmpty ? "No managed sessions" : parts.joined(separator: " · ")
+        return parts.joined(separator: " · ")
     }
 
     public var managedHeaderChipLabel: String? {
@@ -688,21 +668,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         if detachedManagedCount > 0 {
             return Self.countLabel(detachedManagedCount, singular: "detached", plural: "detached").uppercased()
         }
-        if hasManagedUIPresence {
-            if backgroundManagedCount > 0 {
-                return Self.countLabel(backgroundManagedCount, singular: "background", plural: "background").uppercased()
-            }
-            if foregroundManagedCount > 0 {
-                return Self.countLabel(foregroundManagedCount, singular: "terminal", plural: "terminal").uppercased()
-            }
-            if legacyAttachedManagedCount > 0 {
-                return Self.countLabel(legacyAttachedManagedCount, singular: "attached", plural: "attached").uppercased()
-            }
-        }
-        if attachedManagedCount > 0 {
-            return Self.countLabel(attachedManagedCount, singular: "attached", plural: "attached").uppercased()
-        }
-        return "NO MANAGED SESSIONS"
+        return Self.countLabel(currentManagedSessions.count, singular: "session", plural: "sessions").uppercased()
     }
 
     public var updateAvailableChipLabel: String? {
@@ -1511,6 +1477,40 @@ public struct ManagedSummarySnapshot: Codable, Equatable, Sendable {
     public let latestActivityAt: String?
 }
 
+public struct SessionPresentationLabelSnapshot: Codable, Equatable, Sendable {
+    public let key: String
+    public let label: String
+    public let tone: String
+}
+
+public struct SessionPresentationSnapshot: Codable, Equatable, Sendable {
+    public let primary: SessionPresentationLabelSnapshot?
+    public let access: SessionPresentationLabelSnapshot?
+}
+
+public struct SessionActivitySnapshot: Codable, Equatable, Sendable {
+    public let state: String
+    public let rawKind: String?
+    public let tool: String?
+    public let observedAt: String?
+}
+
+public struct SessionActionSnapshot: Codable, Equatable, Sendable {
+    public let state: String
+    public let reason: String?
+}
+
+public struct SessionControlActionsSnapshot: Codable, Equatable, Sendable {
+    public let terminate: SessionActionSnapshot?
+    public let reattach: SessionActionSnapshot?
+}
+
+public struct SessionControlSnapshot: Codable, Equatable, Sendable {
+    public let ownership: String?
+    public let connection: String?
+    public let actions: SessionControlActionsSnapshot
+}
+
 public struct ManagedSessionSnapshot: Codable, Equatable, Identifiable, Sendable {
     public let sessionId: String?
     public let provider: String?
@@ -1535,6 +1535,14 @@ public struct ManagedSessionSnapshot: Codable, Equatable, Identifiable, Sendable
     public let uiAttached: Bool?
     public let uiPresence: String?
     public let reasonCodes: [String]?
+    public let authority: String?
+    public let stateContractVersion: Int?
+    public let presentationPolicyVersion: Int?
+    public let commitSeq: String?
+    public let mode: String?
+    public let presentation: SessionPresentationSnapshot?
+    public let activity: SessionActivitySnapshot?
+    public let control: SessionControlSnapshot?
 
     public init(
         sessionId: String?,
@@ -1559,7 +1567,15 @@ public struct ManagedSessionSnapshot: Codable, Equatable, Identifiable, Sendable
         launchMode: String? = nil,
         uiAttached: Bool? = nil,
         uiPresence: String? = nil,
-        reasonCodes: [String]?
+        reasonCodes: [String]?,
+        authority: String? = nil,
+        stateContractVersion: Int? = nil,
+        presentationPolicyVersion: Int? = nil,
+        commitSeq: String? = nil,
+        mode: String? = nil,
+        presentation: SessionPresentationSnapshot? = nil,
+        activity: SessionActivitySnapshot? = nil,
+        control: SessionControlSnapshot? = nil
     ) {
         self.sessionId = sessionId
         self.provider = provider
@@ -1584,15 +1600,54 @@ public struct ManagedSessionSnapshot: Codable, Equatable, Identifiable, Sendable
         self.uiAttached = uiAttached
         self.uiPresence = uiPresence
         self.reasonCodes = reasonCodes
+        self.authority = authority
+        self.stateContractVersion = stateContractVersion
+        self.presentationPolicyVersion = presentationPolicyVersion
+        self.commitSeq = commitSeq
+        self.mode = mode
+        self.presentation = presentation
+        self.activity = activity
+        self.control = control
     }
 
     public var id: String {
         sessionId ?? "\(provider ?? "unknown")-\(workspaceLabel ?? "workspace")-\(lastActivityAt ?? "never")"
     }
 
+    init(projection: SessionProjection) {
+        self.init(
+            sessionId: projection.sessionId,
+            provider: nil,
+            workspaceLabel: nil,
+            timelineTitle: projection.timelineTitle,
+            summaryTitle: projection.summaryTitle,
+            firstUserMessage: projection.firstUserMessage,
+            titleState: projection.titleState,
+            titleSource: projection.titleSource,
+            titleProvenance: projection.source,
+            branch: nil,
+            state: nil,
+            phase: projection.presentation?.primary?.label,
+            rawPhase: projection.activity?.state,
+            phaseProvenance: projection.authority,
+            phaseObservedAt: projection.activityObservedAt,
+            lastActivityAt: projection.lastActivityAt,
+            bridgeStatus: nil,
+            bridgePid: nil,
+            bridgeHeartbeatAt: nil,
+            reasonCodes: nil,
+            authority: projection.authority,
+            stateContractVersion: projection.stateContractVersion,
+            presentationPolicyVersion: projection.presentationPolicyVersion,
+            commitSeq: projection.commitSeq,
+            mode: projection.mode,
+            presentation: projection.presentation,
+            activity: projection.activity,
+            control: projection.control
+        )
+    }
+
     func applying(_ projection: SessionProjection) -> ManagedSessionSnapshot {
-        let localPhaseIsAuthoritative = normalizedState == "attached"
-            || bridgeStatus?.lowercased() == "connected"
         return ManagedSessionSnapshot(
             sessionId: sessionId,
             provider: provider,
@@ -1605,10 +1660,10 @@ public struct ManagedSessionSnapshot: Codable, Equatable, Identifiable, Sendable
             titleProvenance: projection.timelineTitle == nil ? titleProvenance : projection.source,
             branch: branch,
             state: state,
-            phase: localPhaseIsAuthoritative ? phase : (projection.runtimePhase ?? phase),
-            rawPhase: localPhaseIsAuthoritative ? rawPhase : (projection.runtimePhase ?? rawPhase),
-            phaseProvenance: localPhaseIsAuthoritative ? (phaseProvenance ?? "machine_agent") : projection.source,
-            phaseObservedAt: phaseObservedAt,
+            phase: projection.presentation?.primary?.label ?? phase,
+            rawPhase: projection.activity?.state ?? rawPhase,
+            phaseProvenance: projection.authority ?? phaseProvenance,
+            phaseObservedAt: projection.activityObservedAt ?? phaseObservedAt,
             lastActivityAt: projection.lastActivityAt ?? lastActivityAt,
             bridgeStatus: bridgeStatus,
             bridgePid: bridgePid,
@@ -1616,12 +1671,21 @@ public struct ManagedSessionSnapshot: Codable, Equatable, Identifiable, Sendable
             launchMode: launchMode,
             uiAttached: uiAttached,
             uiPresence: uiPresence,
-            reasonCodes: reasonCodes
+            reasonCodes: reasonCodes,
+            authority: projection.authority ?? authority,
+            stateContractVersion: projection.stateContractVersion ?? stateContractVersion,
+            presentationPolicyVersion: projection.presentationPolicyVersion ?? presentationPolicyVersion,
+            commitSeq: projection.commitSeq ?? commitSeq,
+            mode: projection.mode ?? mode,
+            presentation: projection.presentation ?? presentation,
+            activity: projection.activity ?? activity,
+            control: projection.control ?? control
         )
     }
 
     func applying(_ local: LocalStatusMonitor.SessionState) -> ManagedSessionSnapshot {
-        ManagedSessionSnapshot(
+        guard authority != "runtime_host" else { return self }
+        return ManagedSessionSnapshot(
             sessionId: sessionId, provider: provider, workspaceLabel: workspaceLabel,
             timelineTitle: timelineTitle, summaryTitle: summaryTitle, firstUserMessage: firstUserMessage,
             titleState: titleState, titleSource: titleSource, titleProvenance: titleProvenance,
@@ -1631,7 +1695,10 @@ public struct ManagedSessionSnapshot: Codable, Equatable, Identifiable, Sendable
             lastActivityAt: local.observedAt ?? lastActivityAt,
             bridgeStatus: local.bridgeStatus ?? bridgeStatus, bridgePid: bridgePid,
             bridgeHeartbeatAt: bridgeHeartbeatAt, launchMode: launchMode, uiAttached: uiAttached,
-            uiPresence: uiPresence, reasonCodes: reasonCodes
+            uiPresence: uiPresence, reasonCodes: reasonCodes,
+            authority: authority, stateContractVersion: stateContractVersion,
+            presentationPolicyVersion: presentationPolicyVersion, commitSeq: commitSeq,
+            mode: mode, presentation: presentation, activity: activity, control: control
         )
     }
 
@@ -1648,7 +1715,10 @@ public struct ManagedSessionSnapshot: Codable, Equatable, Identifiable, Sendable
             phaseProvenance: phaseProvenance, phaseObservedAt: phaseObservedAt,
             lastActivityAt: lastActivityAt, bridgeStatus: bridgeStatus, bridgePid: bridgePid,
             bridgeHeartbeatAt: bridgeHeartbeatAt, launchMode: launchMode,
-            uiAttached: uiAttached, uiPresence: uiPresence, reasonCodes: reasonCodes
+            uiAttached: uiAttached, uiPresence: uiPresence, reasonCodes: reasonCodes,
+            authority: authority, stateContractVersion: stateContractVersion,
+            presentationPolicyVersion: presentationPolicyVersion, commitSeq: commitSeq,
+            mode: mode, presentation: presentation, activity: activity, control: control
         )
     }
 
@@ -1695,12 +1765,21 @@ public struct ManagedSessionSnapshot: Codable, Equatable, Identifiable, Sendable
     }
 
     public var canStopFromMenuBar: Bool {
-        // Console sessions are healthy enough to avoid bulk cleanup, but still
-        // stoppable per item because they may own a detached-ui provider runtime.
-        normalizedUIPresence == "background" || normalizedState == "detached" || normalizedState == "degraded"
+        authority == "runtime_host" && control?.actions.terminate?.state == "available"
     }
 
     var menuBarAttentionKind: ManagedAttentionKind {
+        if let key = presentation?.primary?.key {
+            switch key {
+            case "thinking", "executing", "starting": return .working
+            case "needs_answer", "needs_approval": return .needsYou
+            case "blocked": return .blocked
+            case "stalled": return .blocked
+            case "idle", "ended", "closed": return .idle
+            case "activity_unknown": return .unknown("activity unknown")
+            default: return .unknown(key)
+            }
+        }
         switch normalizedState {
         case "detached":
             return .detached

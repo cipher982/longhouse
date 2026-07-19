@@ -370,6 +370,28 @@ def _merge_managed_sessions(
     return managed_summary, sessions, bridge_orphans
 
 
+def _mark_machine_preview_sessions(managed_sessions: list[dict[str, Any]]) -> None:
+    """Tag local rows as non-authoritative previews and never grant actions."""
+
+    for session in managed_sessions:
+        session.update(
+            {
+                "authority": "machine_preview",
+                "state_contract_version": 1,
+                "presentation_policy_version": 1,
+                "commit_seq": None,
+                "control": {
+                    "actions": {
+                        "terminate": {
+                            "state": "unknown",
+                            "reason": "machine_preview_non_authoritative",
+                        }
+                    }
+                },
+            }
+        )
+
+
 _MANAGED_SESSION_TITLE_FETCH_LIMIT = 8
 _MANAGED_SESSION_TITLE_FETCH_TIMEOUT_SECONDS = 0.8
 
@@ -650,9 +672,11 @@ def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = F
         suggested_actions=suggested_actions,
         context=attention_context,
     )
+    _mark_machine_preview_sessions(managed_sessions)
 
     return {
         "schema_version": SCHEMA_VERSION,
+        "projection_authority": "machine_preview",
         "collection_tier": "fast" if fast else "deep",
         "collected_at": _to_rfc3339(now),
         "health_state": health_state,

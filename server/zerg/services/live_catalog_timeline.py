@@ -771,6 +771,7 @@ def project_machine_session_delta(
     *,
     commit_seq: str | int | None,
     fanout: dict[str, Any] | None = None,
+    canonical: bool = False,
 ) -> dict[str, Any]:
     """Project only the facts an ambient machine client can render."""
 
@@ -787,6 +788,41 @@ def project_machine_session_delta(
         "commit_seq": str(commit_seq) if commit_seq is not None else None,
         "source": "runtime_host",
     }
+    if canonical:
+        state = session.session_state
+        payload.update(
+            {
+                "authority": "runtime_host",
+                "state_contract_version": state.state_contract_version,
+                "presentation_policy_version": state.presentation_policy_version,
+                "mode": state.mode,
+                "presentation": {
+                    "primary": state.presentation.primary.model_dump(mode="json") if state.presentation.primary else None,
+                    "access": state.presentation.access.model_dump(mode="json") if state.presentation.access else None,
+                },
+                "activity": state.activity.model_dump(
+                    mode="json",
+                    include={"state", "raw_kind", "tool", "source", "observed_at", "valid_until"},
+                ),
+                "control": {
+                    "ownership": state.control.ownership,
+                    "connection": state.control.connection,
+                    "actions": {
+                        "terminate": state.control.actions.terminate.model_dump(mode="json"),
+                        "reattach": state.control.actions.reattach.model_dump(mode="json"),
+                    },
+                },
+                "run": state.run.model_dump(mode="json", include={"id", "lifecycle"}) if state.run else None,
+                "pending_interaction": (
+                    state.pending_interaction.model_dump(
+                        mode="json",
+                        include={"id", "kind", "opened_at", "can_respond"},
+                    )
+                    if state.pending_interaction
+                    else None
+                ),
+            }
+        )
     if fanout:
         payload["fanout_kind"] = fanout.get("kind")
         payload["server_fanout_at_ms"] = fanout.get("server_fanout_at_ms")
@@ -813,15 +849,16 @@ async def stream_live_catalog_machine_sessions(
     yield {"event": "connected", "data": json.dumps({"source": "runtime_host"})}
 
     if not skip_initial_replay:
+        canonical = canonical_session_detail_enabled()
         response = await asyncio.to_thread(
             list_live_catalog_timeline,
             params=params,
             owner_id=owner_id,
-            serve_mode="canonical" if canonical_session_detail_enabled() else "legacy",
+            serve_mode="canonical" if canonical else "legacy",
         )
         for card in response.sessions:
-            initial_commit_seq = card.head.session_state.commit_seq if canonical_session_detail_enabled() else None
-            delta = project_machine_session_delta(card.head, commit_seq=initial_commit_seq)
+            initial_commit_seq = card.head.session_state.commit_seq if canonical else None
+            delta = project_machine_session_delta(card.head, commit_seq=initial_commit_seq, canonical=canonical)
             signature = _machine_session_delta_signature(delta)
             previous[card.head.id] = signature
             yield {"event": "session_delta", "data": signature}
@@ -839,12 +876,13 @@ async def stream_live_catalog_machine_sessions(
             if not session_id:
                 continue
             try:
+                canonical = canonical_session_detail_enabled()
                 session, _provider_alias, commit_seq = await asyncio.to_thread(
                     read_live_catalog_session,
                     UUID(session_id),
                     include_hidden=False,
                     owner_id=owner_id,
-                    serve_mode="canonical" if canonical_session_detail_enabled() else "legacy",
+                    serve_mode="canonical" if canonical else "legacy",
                 )
             except (ValueError, TypeError):
                 continue
@@ -856,7 +894,7 @@ async def stream_live_catalog_machine_sessions(
                         "data": json.dumps({"session_id": session_id, "source": "runtime_host"}),
                     }
                 continue
-            delta = project_machine_session_delta(session, commit_seq=commit_seq)
+            delta = project_machine_session_delta(session, commit_seq=commit_seq, canonical=canonical)
             signature = _machine_session_delta_signature(delta)
             if previous.get(session_id) == signature:
                 continue
@@ -865,6 +903,7 @@ async def stream_live_catalog_machine_sessions(
                 session,
                 commit_seq=commit_seq,
                 fanout=message.payload,
+                canonical=canonical,
             )
             yield {
                 "event": "session_delta",
