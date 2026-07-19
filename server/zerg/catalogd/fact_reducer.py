@@ -336,6 +336,16 @@ def read_fact_heads(connection: Connection, *, family: str, subject_key: str) ->
     return commit_seq, [dict(row) for row in rows]
 
 
+def read_session_fact_heads(connection: Connection, *, session_id: str) -> tuple[int, list[dict[str, Any]]]:
+    """Read all bounded candidates for one session at one catalog snapshot."""
+
+    if not session_id or len(session_id) > 255:
+        raise ValueError("session_id is missing or too long")
+    commit_seq = _current_commit_seq(connection)
+    rows = connection.execute(select(FactHead.__table__).where(FactHead.session_id == session_id)).mappings()
+    return commit_seq, [dict(row) for row in rows]
+
+
 def _validate_fact(fact: ReducerFact) -> ReducerFact:
     if not fact.family or len(fact.family) > 32:
         raise ValueError("fact family is missing or too long")
@@ -503,6 +513,7 @@ __all__ = [
     "canonical_evidence_hash",
     "canonical_value_json",
     "read_fact_heads",
+    "read_session_fact_heads",
     "reducer_facts_from_machine_evidence",
     "reduce_fact_batch",
 ]

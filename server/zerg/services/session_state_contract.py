@@ -100,7 +100,7 @@ class SessionControlActions(_FrozenModel):
 class SessionControlFacts(_FrozenModel):
     ownership: Literal["owned", "unowned"]
     connection: ConnectionState
-    connection_id: int | None = None
+    connection_id: int | str | None = None
     lease_generation: str | None = None
     control_plane: str | None = None
     observed_at: datetime | None = None
@@ -517,7 +517,12 @@ def _primary(
 
 
 def _access(*, control: SessionControlFacts, transcript: SessionTranscriptFacts) -> SessionPresentationLabel | None:
-    live_actions = (control.actions.start_turn, control.actions.send_input, control.actions.interrupt, control.actions.terminate)
+    live_actions = (
+        control.actions.start_turn,
+        control.actions.send_input,
+        control.actions.interrupt,
+        control.actions.terminate,
+    )
     if control.ownership == "owned" and any(action.state == "available" for action in live_actions):
         return SessionPresentationLabel(
             key="live_control",
