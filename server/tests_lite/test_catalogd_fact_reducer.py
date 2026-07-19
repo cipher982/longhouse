@@ -329,6 +329,13 @@ def test_failed_outer_transaction_rolls_back_head_and_commit_sequence(tmp_path):
     assert heads == []
 
 
+def test_commit_sequence_override_must_match_current_catalog_commit(tmp_path):
+    engine = _engine(tmp_path)
+    with engine.begin() as connection:
+        with pytest.raises(ValueError, match="must equal the current catalog commit"):
+            reduce_fact_batch(connection, [_fact()], received_at=NOW, commit_seq_override=1)
+
+
 def test_hash_mismatch_is_rejected_before_any_write(tmp_path):
     engine = _engine(tmp_path)
     bad = _fact()

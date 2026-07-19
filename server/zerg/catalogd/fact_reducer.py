@@ -88,6 +88,7 @@ def reduce_fact_batch(
     facts: list[ReducerFact],
     *,
     received_at: datetime,
+    commit_seq_override: int | None = None,
 ) -> ReducerResult:
     """Reduce one validated batch inside the caller's catalog transaction."""
 
@@ -96,6 +97,8 @@ def reduce_fact_batch(
     received_at = _aware(received_at, "received_at")
     prepared, batch_duplicates, batch_conflicts = _prepare_batch(facts)
     current_commit = _current_commit_seq(connection)
+    if commit_seq_override is not None and commit_seq_override != current_commit:
+        raise ValueError("reducer commit_seq_override must equal the current catalog commit")
     allocated_commit: int | None = None
     changed_heads = stale = conflicts = 0
     duplicates = batch_duplicates
@@ -104,7 +107,7 @@ def reduce_fact_batch(
     def commit_seq() -> int:
         nonlocal allocated_commit
         if allocated_commit is None:
-            allocated_commit = _advance_commit_seq(connection, received_at)
+            allocated_commit = commit_seq_override if commit_seq_override is not None else _advance_commit_seq(connection, received_at)
         return allocated_commit
 
     for fact, value_json in prepared:

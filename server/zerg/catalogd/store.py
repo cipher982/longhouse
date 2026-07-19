@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import os
 from contextlib import contextmanager
 from datetime import UTC
 from datetime import datetime
@@ -27,8 +28,13 @@ from sqlalchemy import select
 from sqlalchemy import tuple_
 from sqlalchemy import union_all
 from sqlalchemy import update
+from sqlalchemy.exc import DBAPIError
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from zerg.catalogd.fact_reducer import MAX_REDUCER_FACTS
+from zerg.catalogd.fact_reducer import reduce_fact_batch
+from zerg.catalogd.fact_reducer import reducer_facts_from_machine_evidence
 from zerg.catalogd.models import LegacyMigrationRun
 from zerg.catalogd.models import LegacyMigrationSession
 from zerg.catalogd.models import MediaObject
@@ -84,6 +90,9 @@ WORKSPACE_CANDIDATE_LIMIT = 5_000
 SESSION_CONNECTION_LIMIT = 1
 _CONTROL_LEASE_TTL = timedelta(minutes=15)
 _EXCLUDED_WORKSPACE_ENVIRONMENTS = ("test", "e2e")
+_TRUTHY_ENV = frozenset({"1", "true", "yes", "on"})
+_SHADOW_REDUCER_INGEST_ENV = "LONGHOUSE_SHADOW_REDUCER_INGEST_ENABLED"
+_SHADOW_REDUCER_DISABLED_SOURCES_ENV = "LONGHOUSE_SHADOW_REDUCER_DISABLED_SOURCES"
 _RECENCY_BUCKETS: tuple[tuple[float, int], ...] = (
     (1.0, 100),
     (4.0, 70),
@@ -1578,11 +1587,18 @@ class CatalogStore:
                 orm.close()
 
             commit_seq = _advance_commit_seq(connection, received_at)
+            shadow_reducer = _apply_shadow_reducer(
+                connection,
+                heartbeat=heartbeat,
+                received_at=received_at,
+                commit_seq=commit_seq,
+            )
             result = {
                 "previous_sessions_digest": previous_sessions_digest,
                 "commit_seq": str(commit_seq),
                 "touched_session_ids": sorted(str(session_id) for session_id in touched),
                 "exact_replay": False,
+                "shadow_reducer": shadow_reducer,
             }
             connection.execute(
                 update(stamp)
@@ -8274,6 +8290,58 @@ def _read_snapshot(engine: Engine):
             yield connection
         finally:
             connection.rollback()
+
+
+def _apply_shadow_reducer(
+    connection,
+    *,
+    heartbeat: dict[str, Any],
+    received_at: datetime,
+    commit_seq: int,
+) -> dict[str, Any]:
+    """Reduce retained schema-v2 evidence without affecting legacy heartbeat writes."""
+
+    if os.getenv(_SHADOW_REDUCER_INGEST_ENV, "").strip().lower() not in _TRUTHY_ENV:
+        return {"status": "disabled"}
+    raw_json = heartbeat.get("raw_json")
+    if not isinstance(raw_json, str) or not raw_json:
+        return {"status": "no_evidence"}
+    disabled_sources = {source.strip() for source in os.getenv(_SHADOW_REDUCER_DISABLED_SOURCES_ENV, "").split(",") if source.strip()}
+    try:
+        with connection.begin_nested():
+            payload = json.loads(raw_json)
+            if not isinstance(payload, dict) or "machine_evidence" not in payload:
+                return {"status": "no_evidence"}
+            evidence = payload["machine_evidence"]
+            if not isinstance(evidence, dict) or evidence.get("schema_version") != 2:
+                return {"status": "unsupported_schema"}
+            facts = [fact for fact in reducer_facts_from_machine_evidence(evidence) if fact.source not in disabled_sources]
+            if len(facts) > MAX_REDUCER_FACTS:
+                raise ValueError(f"shadow reducer batch exceeds {MAX_REDUCER_FACTS} facts")
+            reduced = reduce_fact_batch(
+                connection,
+                facts,
+                received_at=received_at,
+                commit_seq_override=commit_seq,
+            )
+            return {
+                "status": "applied",
+                "changed_heads": reduced.changed_heads,
+                "duplicates": reduced.duplicates,
+                "stale": reduced.stale,
+                "conflicts": reduced.conflicts,
+                "disabled_sources": len(disabled_sources),
+            }
+    except DBAPIError as exc:
+        if exc.connection_invalidated or connection.invalidated:
+            raise
+        return {"status": "failed", "reason": "database_error"}
+    except SQLAlchemyError:
+        if connection.invalidated:
+            raise
+        return {"status": "failed", "reason": "database_error"}
+    except (RecursionError, TypeError, ValueError):
+        return {"status": "failed", "reason": "invalid_evidence"}
 
 
 @contextmanager

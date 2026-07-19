@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import UTC
 from datetime import datetime
@@ -8,12 +9,17 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
+from sqlalchemy.exc import DBAPIError
+from sqlalchemy.exc import SQLAlchemyError
 
+import zerg.catalogd.store as catalog_store
 from zerg.catalogd.client import CatalogClient
 from zerg.catalogd.client import CatalogRemoteError
 from zerg.catalogd.schema import create_catalog_engine
 from zerg.catalogd.schema import initialize_catalog_schema
 from zerg.catalogd.server import CatalogDaemon
+from zerg.catalogd.models import FactHead
+from zerg.machine_evidence import canonical_evidence_hash
 from zerg.models.live_store import LiveArchiveOutbox
 from zerg.models.live_store import LiveControlLease
 from zerg.models.live_store import LiveHeartbeatStamp
@@ -75,6 +81,37 @@ def _lease(*, session_id: str, observed_at: datetime) -> dict:
         "thread_subscription_status": "subscribed",
         "observed_at": observed_at.isoformat(),
         "lease_ttl_ms": 900_000,
+    }
+
+
+def _schema_v2_evidence(*, session_id: str, run_id: str, observed_at: datetime) -> dict:
+    fact = {
+        "provider": "codex",
+        "session_id": session_id,
+        "run_id": run_id,
+        "kind": "idle",
+        "raw_kind": "idle",
+        "source": "phase_ledger",
+        "observed_at": observed_at.isoformat(),
+        "valid_until": (observed_at + timedelta(minutes=2)).isoformat(),
+    }
+    evidence_hash = canonical_evidence_hash(fact)
+    return {
+        "schema_version": 2,
+        "activity": [fact],
+        "identities": [
+            {
+                "fact_family": "activity",
+                "fact_index": 0,
+                "subject_key": f"run:{run_id}",
+                "source": "phase_ledger",
+                "source_epoch": run_id,
+                "source_seq": 1,
+                "sequenced": True,
+                "dedupe_key": hashlib.sha256(f"{run_id}:1".encode()).hexdigest(),
+                "evidence_hash": evidence_hash,
+            }
+        ],
     }
 
 
@@ -207,3 +244,222 @@ async def test_heartbeat_apply_rejects_unbounded_or_malformed_contract(daemon_pa
     finally:
         await client.close()
         await daemon.close()
+
+
+@pytest.mark.asyncio
+async def test_shadow_reducer_uses_heartbeat_transaction_and_one_commit_sequence(
+    daemon_paths, monkeypatch
+):
+    monkeypatch.setenv("LONGHOUSE_SHADOW_REDUCER_INGEST_ENABLED", "1")
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    session_id = str(uuid4())
+    run_id = str(uuid4())
+    evidence = _schema_v2_evidence(session_id=session_id, run_id=run_id, observed_at=now)
+    heartbeat = _heartbeat(device_id="cinder", received_at=now, digest="digest-1")
+    heartbeat["raw_json"] = json.dumps({"machine_evidence": evidence})
+    params = {
+        "heartbeat": heartbeat,
+        "managed_leases": [_lease(session_id=session_id, observed_at=now)],
+        "managed_leases_present": True,
+        "owner_id": 7,
+    }
+
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        first = await client.call("machine.heartbeat.apply.v2", params)
+        replay = await client.call("machine.heartbeat.apply.v2", params)
+        duplicate_params = {
+            **params,
+            "heartbeat": {
+                **heartbeat,
+                "received_at": (now + timedelta(seconds=1)).isoformat(),
+                "sessions_digest": "digest-2",
+            },
+        }
+        duplicate = await client.call("machine.heartbeat.apply.v2", duplicate_params)
+    finally:
+        await client.close()
+        await daemon.close()
+
+    assert first["commit_seq"] == "1"
+    assert first["shadow_reducer"] == {
+        "status": "applied",
+        "changed_heads": 1,
+        "duplicates": 0,
+        "stale": 0,
+        "conflicts": 0,
+        "disabled_sources": 0,
+    }
+    assert replay == {**first, "exact_replay": True}
+    assert duplicate["commit_seq"] == "2"
+    assert duplicate["shadow_reducer"]["changed_heads"] == 0
+    assert duplicate["shadow_reducer"]["duplicates"] == 1
+
+    engine = create_catalog_engine(database_path)
+    with engine.connect() as connection:
+        head = connection.execute(FactHead.__table__.select()).mappings().one()
+        assert head["subject_key"] == f"run:{run_id}"
+        assert head["updated_commit_seq"] == 1
+        assert connection.execute(LiveHeartbeatStamp.__table__.select()).fetchall()
+    engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_shadow_reducer_validation_failure_preserves_legacy_heartbeat(daemon_paths, monkeypatch):
+    monkeypatch.setenv("LONGHOUSE_SHADOW_REDUCER_INGEST_ENABLED", "true")
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    session_id = str(uuid4())
+    evidence = _schema_v2_evidence(session_id=session_id, run_id=str(uuid4()), observed_at=now)
+    evidence["identities"][0]["evidence_hash"] = "0" * 64
+    heartbeat = _heartbeat(device_id="cinder", received_at=now, digest="invalid-evidence")
+    heartbeat["raw_json"] = json.dumps({"machine_evidence": evidence})
+    params = {
+        "heartbeat": heartbeat,
+        "managed_leases": [_lease(session_id=session_id, observed_at=now)],
+        "managed_leases_present": True,
+        "owner_id": 7,
+    }
+
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        result = await client.call("machine.heartbeat.apply.v2", params)
+    finally:
+        await client.close()
+        await daemon.close()
+
+    assert result["commit_seq"] == "1"
+    assert result["shadow_reducer"] == {"status": "failed", "reason": "invalid_evidence"}
+    engine = create_catalog_engine(database_path)
+    with engine.connect() as connection:
+        assert connection.execute(FactHead.__table__.select()).first() is None
+        assert connection.execute(LiveHeartbeatStamp.__table__.select()).first() is not None
+        assert connection.execute(LiveControlLease.__table__.select()).first() is not None
+    engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_shadow_reducer_statement_failure_rolls_back_only_savepoint(daemon_paths, monkeypatch):
+    monkeypatch.setenv("LONGHOUSE_SHADOW_REDUCER_INGEST_ENABLED", "1")
+    original_reduce = catalog_store.reduce_fact_batch
+
+    def fail_after_reducer_writes(*args, **kwargs):
+        original_reduce(*args, **kwargs)
+        raise SQLAlchemyError("forced reducer statement failure")
+
+    monkeypatch.setattr(catalog_store, "reduce_fact_batch", fail_after_reducer_writes)
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    session_id = str(uuid4())
+    evidence = _schema_v2_evidence(session_id=session_id, run_id=str(uuid4()), observed_at=now)
+    heartbeat = _heartbeat(device_id="cinder", received_at=now, digest="statement-failure")
+    heartbeat["raw_json"] = json.dumps({"machine_evidence": evidence})
+    params = {
+        "heartbeat": heartbeat,
+        "managed_leases": [_lease(session_id=session_id, observed_at=now)],
+        "managed_leases_present": True,
+        "owner_id": 7,
+    }
+
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        result = await client.call("machine.heartbeat.apply.v2", params)
+    finally:
+        await client.close()
+        await daemon.close()
+
+    assert result["commit_seq"] == "1"
+    assert result["shadow_reducer"] == {"status": "failed", "reason": "database_error"}
+    engine = create_catalog_engine(database_path)
+    with engine.connect() as connection:
+        assert connection.execute(FactHead.__table__.select()).first() is None
+        assert connection.execute(LiveHeartbeatStamp.__table__.select()).first() is not None
+        assert connection.execute(LiveControlLease.__table__.select()).first() is not None
+    engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_shadow_reducer_invalidated_connection_aborts_outer_heartbeat(daemon_paths, monkeypatch):
+    monkeypatch.setenv("LONGHOUSE_SHADOW_REDUCER_INGEST_ENABLED", "1")
+
+    def fail_with_invalidated_connection(*_args, **_kwargs):
+        raise DBAPIError(
+            "forced",
+            {},
+            RuntimeError("connection lost"),
+            connection_invalidated=True,
+        )
+
+    monkeypatch.setattr(catalog_store, "reduce_fact_batch", fail_with_invalidated_connection)
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    session_id = str(uuid4())
+    evidence = _schema_v2_evidence(session_id=session_id, run_id=str(uuid4()), observed_at=now)
+    heartbeat = _heartbeat(device_id="cinder", received_at=now, digest="invalidated")
+    heartbeat["raw_json"] = json.dumps({"machine_evidence": evidence})
+    params = {
+        "heartbeat": heartbeat,
+        "managed_leases": [_lease(session_id=session_id, observed_at=now)],
+        "managed_leases_present": True,
+        "owner_id": 7,
+    }
+
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        with pytest.raises(CatalogRemoteError):
+            await client.call("machine.heartbeat.apply.v2", params)
+    finally:
+        await client.close()
+        await daemon.close()
+
+    engine = create_catalog_engine(database_path)
+    with engine.connect() as connection:
+        assert connection.execute(FactHead.__table__.select()).first() is None
+        assert connection.execute(LiveHeartbeatStamp.__table__.select()).first() is None
+        assert connection.execute(LiveControlLease.__table__.select()).first() is None
+    engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_shadow_reducer_disabled_source_skips_only_reducer_writes(daemon_paths, monkeypatch):
+    monkeypatch.setenv("LONGHOUSE_SHADOW_REDUCER_INGEST_ENABLED", "yes")
+    monkeypatch.setenv("LONGHOUSE_SHADOW_REDUCER_DISABLED_SOURCES", "phase_ledger")
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    session_id = str(uuid4())
+    evidence = _schema_v2_evidence(session_id=session_id, run_id=str(uuid4()), observed_at=now)
+    heartbeat = _heartbeat(device_id="cinder", received_at=now, digest="disabled-source")
+    heartbeat["raw_json"] = json.dumps({"machine_evidence": evidence})
+    params = {
+        "heartbeat": heartbeat,
+        "managed_leases": [_lease(session_id=session_id, observed_at=now)],
+        "managed_leases_present": True,
+        "owner_id": 7,
+    }
+
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        result = await client.call("machine.heartbeat.apply.v2", params)
+    finally:
+        await client.close()
+        await daemon.close()
+
+    assert result["commit_seq"] == "1"
+    assert result["shadow_reducer"]["changed_heads"] == 0
+    assert result["shadow_reducer"]["disabled_sources"] == 1
+    engine = create_catalog_engine(database_path)
+    with engine.connect() as connection:
+        assert connection.execute(FactHead.__table__.select()).first() is None
+        assert connection.execute(LiveHeartbeatStamp.__table__.select()).first() is not None
+    engine.dispose()
