@@ -28,6 +28,28 @@ means machine fungibility must actually be true, not aspirational.
    `~/git/me` checkout + Infisical machine token + Tailscale reach. Any box
    with those qualifies. Longhouse's machine abstraction already routes to it.
 
+## Product framing — designation, not a fourth mode
+
+The companion is the missing quadrant of the Shadow/Helm/Console taxonomy:
+system-launched + persistent + no human terminal. It is honestly not Helm
+(nobody is at the helm) and not Console (not one-shot). But its entire value
+comes from being a plain managed session on the existing pipeline — steer,
+ingest, search, recall, capabilities. Minting a fourth *execution mode* now
+would fork that plumbing on zero dogfood data.
+
+Decision: **"Companion" is a product designation one layer above modes** — a
+role pinned to whichever managed session currently holds it, plus a client
+surface (the Talk screen) that never exposes the session noun. Underneath,
+the session is Helm (managed, persistent, steerable); user-facing copy never
+says Helm. Same pattern as the wall/widgets: a surface over sessions, not a
+new kind of session.
+
+Graduation path: if dogfood proves the loop and the pty hack proves fragile,
+build a true resident primitive (persistent headless + real control channel)
+and promote this to a real fourth mode. Reserved mode name for that day:
+**Hearth** — the fire that's always burning in the longhouse. Do not use the
+word in product until the primitive exists.
+
 ## Design
 
 ### Companion session
