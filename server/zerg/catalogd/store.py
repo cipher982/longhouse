@@ -7868,6 +7868,8 @@ _CONNECTION_FIELDS = frozenset(
     {
         "id",
         "run_id",
+        "adapter_connection_id",
+        "lease_generation",
         "control_plane",
         "acquisition_kind",
         "state",
@@ -8605,6 +8607,7 @@ def _apply_shadow_reducer(
                 received_at=received_at,
                 commit_seq_override=commit_seq,
             )
+            identity_binding = _bind_control_evidence_identities(connection, facts)
             return {
                 "status": "applied",
                 "changed_heads": reduced.changed_heads,
@@ -8612,6 +8615,7 @@ def _apply_shadow_reducer(
                 "stale": reduced.stale,
                 "conflicts": reduced.conflicts,
                 "disabled_sources": disabled_source_count,
+                "identity_binding": identity_binding,
             }
     except DBAPIError as exc:
         if exc.connection_invalidated or connection.invalidated:
@@ -8623,6 +8627,93 @@ def _apply_shadow_reducer(
         return {"status": "failed", "reason": "database_error"}
     except (RecursionError, TypeError, ValueError):
         return {"status": "failed", "reason": "invalid_evidence"}
+
+
+def _bind_control_evidence_identities(connection, facts) -> dict[str, int]:
+    """Bind adapter UUIDs to their exact catalog connection, once.
+
+    The binding is diagnostic-only in Phase 4C. Command authorization keeps
+    using the legacy integer connection identity until a later explicit cut.
+    """
+
+    from zerg.services.managed_provider_contracts import contract_for_provider
+
+    connection_table = LiveSessionConnection.__table__
+    run_table = LiveSessionRun.__table__
+    thread_table = LiveSessionThread.__table__
+    counts = {"bound": 0, "matched": 0, "unbound": 0, "mismatched": 0}
+    for fact in facts:
+        if fact.family != "control":
+            continue
+        value = fact.value
+        try:
+            adapter_connection_id = str(UUID(str(value.get("connection_id"))))
+            lease_generation = str(UUID(str(value.get("lease_generation"))))
+            run_id = str(UUID(str(value.get("run_id"))))
+            session_id = str(UUID(str(value.get("session_id"))))
+        except (TypeError, ValueError):
+            counts["unbound"] += 1
+            continue
+        contract = contract_for_provider(str(value.get("provider") or "").strip().lower())
+        if contract is None:
+            counts["unbound"] += 1
+            continue
+        row = (
+            connection.execute(
+                select(
+                    connection_table.c.id,
+                    connection_table.c.adapter_connection_id,
+                    connection_table.c.lease_generation,
+                )
+                .select_from(
+                    connection_table.join(run_table, run_table.c.id == connection_table.c.run_id).join(
+                        thread_table, thread_table.c.id == run_table.c.thread_id
+                    )
+                )
+                .where(
+                    connection_table.c.run_id == run_id,
+                    connection_table.c.control_plane == contract.control_plane,
+                    thread_table.c.session_id == session_id,
+                )
+                .limit(1)
+            )
+            .mappings()
+            .first()
+        )
+        if row is None:
+            counts["unbound"] += 1
+            continue
+        current_adapter = str(row["adapter_connection_id"] or "")
+        current_generation = str(row["lease_generation"] or "")
+        if current_adapter == adapter_connection_id and current_generation == lease_generation:
+            counts["matched"] += 1
+            continue
+        if current_adapter or current_generation:
+            counts["mismatched"] += 1
+            continue
+        collision = connection.execute(
+            select(connection_table.c.id).where(connection_table.c.adapter_connection_id == adapter_connection_id).limit(1)
+        ).scalar_one_or_none()
+        if collision is not None:
+            counts["mismatched"] += 1
+            continue
+        updated = connection.execute(
+            update(connection_table)
+            .where(
+                connection_table.c.id == row["id"],
+                connection_table.c.adapter_connection_id.is_(None),
+                connection_table.c.lease_generation.is_(None),
+            )
+            .values(
+                adapter_connection_id=adapter_connection_id,
+                lease_generation=lease_generation,
+            )
+        ).rowcount
+        if updated == 1:
+            counts["bound"] += 1
+        else:
+            counts["mismatched"] += 1
+    return counts
 
 
 def _apply_shadow_parity(

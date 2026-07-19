@@ -420,6 +420,8 @@ class LiveSessionConnection(LiveBase):
 
     id = Column(Integer, primary_key=True)
     run_id = Column(String(36), nullable=False, index=True)
+    adapter_connection_id = Column(String(36), nullable=True)
+    lease_generation = Column(String(36), nullable=True)
     control_plane = Column(String(32), nullable=False)
     acquisition_kind = Column(String(32), nullable=False)
     state = Column(String(32), nullable=False, server_default=text("'attached'"), index=True)
@@ -435,7 +437,15 @@ class LiveSessionConnection(LiveBase):
     released_at = Column(DateTime(timezone=True), nullable=True)
     last_health_at = Column(DateTime(timezone=True), nullable=True)
 
-    __table_args__ = (UniqueConstraint("run_id", "control_plane", name="uq_live_connection_run_plane"),)
+    __table_args__ = (
+        UniqueConstraint("run_id", "control_plane", name="uq_live_connection_run_plane"),
+        Index(
+            "ux_live_connection_adapter_identity",
+            "adapter_connection_id",
+            unique=True,
+            sqlite_where=text("adapter_connection_id IS NOT NULL"),
+        ),
+    )
 
 
 class LiveSessionLaunchAttempt(LiveBase):

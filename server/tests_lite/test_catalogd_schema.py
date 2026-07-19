@@ -20,6 +20,7 @@ from zerg.catalogd.schema import CatalogSchemaMismatchError
 from zerg.catalogd.schema import create_catalog_engine
 from zerg.catalogd.schema import initialize_catalog_schema
 from zerg.models.live_store import LiveSessionCatalog
+from zerg.models.live_store import LiveSessionConnection
 from zerg.models.live_store import LiveTimelineCard
 
 
@@ -282,6 +283,26 @@ def test_existing_live_database_gets_safe_additive_columns(tmp_path):
     with engine.connect() as connection:
         columns = {row[1] for row in connection.exec_driver_sql("PRAGMA table_info(live_session_catalog)").all()}
     assert "device_name" in columns
+
+
+def test_connection_adapter_identity_columns_are_additive_and_uniquely_indexed(tmp_path):
+    engine = create_catalog_engine(tmp_path / "longhouse-live.db")
+    initialize_catalog_schema(engine)
+    with engine.begin() as connection:
+        connection.exec_driver_sql("DROP INDEX ux_live_connection_adapter_identity")
+        connection.exec_driver_sql("ALTER TABLE live_session_connections DROP COLUMN lease_generation")
+        connection.exec_driver_sql("ALTER TABLE live_session_connections DROP COLUMN adapter_connection_id")
+
+    initialize_catalog_schema(engine)
+
+    with engine.connect() as connection:
+        columns = {row[1]: row for row in connection.exec_driver_sql("PRAGMA table_info(live_session_connections)")}
+        indexes = {row[1]: row for row in connection.exec_driver_sql("PRAGMA index_list(live_session_connections)")}
+    assert columns["adapter_connection_id"][3] == 0
+    assert columns["lease_generation"][3] == 0
+    assert indexes["ux_live_connection_adapter_identity"][2] == 1
+    assert LiveSessionConnection.__table__.c.adapter_connection_id.nullable is True
+    assert LiveSessionConnection.__table__.c.lease_generation.nullable is True
 
 
 @pytest.mark.parametrize(

@@ -17,16 +17,20 @@ from sqlalchemy.exc import SQLAlchemyError
 import zerg.catalogd.store as catalog_store
 from zerg.catalogd.client import CatalogClient
 from zerg.catalogd.client import CatalogRemoteError
+from zerg.catalogd.models import FactHead
+from zerg.catalogd.models import FactParityDelta
 from zerg.catalogd.schema import create_catalog_engine
 from zerg.catalogd.schema import initialize_catalog_schema
 from zerg.catalogd.server import CatalogDaemon
-from zerg.catalogd.models import FactHead
-from zerg.catalogd.models import FactParityDelta
 from zerg.machine_evidence import canonical_evidence_hash
 from zerg.models.live_store import LiveArchiveOutbox
 from zerg.models.live_store import LiveControlLease
 from zerg.models.live_store import LiveHeartbeatStamp
 from zerg.models.live_store import LiveSession
+from zerg.models.live_store import LiveSessionCatalog
+from zerg.models.live_store import LiveSessionConnection
+from zerg.models.live_store import LiveSessionRun
+from zerg.models.live_store import LiveSessionThread
 
 
 @pytest.fixture
@@ -125,7 +129,7 @@ def _schema_v3_evidence(*, session_id: str, run_id: str, observed_at: datetime) 
     }
 
 
-def _schema_v3_control_evidence(*, session_id: str, observed_at: datetime) -> dict:
+def _schema_v3_control_evidence(*, session_id: str, observed_at: datetime, run_id: str | None = None) -> dict:
     connection_id = str(uuid4())
     lease_generation = str(uuid4())
     fact = {
@@ -135,7 +139,7 @@ def _schema_v3_control_evidence(*, session_id: str, observed_at: datetime) -> di
         "provider_session_id": f"provider-{session_id}",
         "connection_id": connection_id,
         "lease_generation": lease_generation,
-        "run_id": str(uuid4()),
+        "run_id": run_id or str(uuid4()),
         "granted_operations": [],
         "ownership": "managed",
         "state": "attached",
@@ -311,9 +315,7 @@ async def test_heartbeat_apply_rejects_unbounded_or_malformed_contract(daemon_pa
 
 
 @pytest.mark.asyncio
-async def test_shadow_reducer_uses_heartbeat_transaction_and_one_commit_sequence(
-    daemon_paths, monkeypatch
-):
+async def test_shadow_reducer_uses_heartbeat_transaction_and_one_commit_sequence(daemon_paths, monkeypatch):
     monkeypatch.setenv("LONGHOUSE_SHADOW_REDUCER_INGEST_ENABLED", "1")
     database_path, socket_path = daemon_paths
     now = datetime.now(UTC).replace(microsecond=0)
@@ -356,6 +358,7 @@ async def test_shadow_reducer_uses_heartbeat_transaction_and_one_commit_sequence
         "stale": 0,
         "conflicts": 0,
         "disabled_sources": 0,
+        "identity_binding": {"bound": 0, "matched": 0, "unbound": 0, "mismatched": 0},
     }
     assert replay == {**first, "exact_replay": True}
     assert duplicate["commit_seq"] == "2"
@@ -369,6 +372,95 @@ async def test_shadow_reducer_uses_heartbeat_transaction_and_one_commit_sequence
         assert head["session_id"] == session_id
         assert head["updated_commit_seq"] == 1
         assert connection.execute(LiveHeartbeatStamp.__table__.select()).fetchall()
+    engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_shadow_reducer_binds_control_identity_in_heartbeat_transaction(daemon_paths, monkeypatch):
+    monkeypatch.setenv("LONGHOUSE_SHADOW_REDUCER_INGEST_ENABLED", "1")
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    session_id = str(uuid4())
+    thread_id = str(uuid4())
+    run_id = str(uuid4())
+    engine = create_catalog_engine(database_path)
+    initialize_catalog_schema(engine)
+    with engine.begin() as connection:
+        connection.execute(
+            LiveSessionCatalog.__table__.insert().values(
+                session_id=session_id,
+                provider="codex",
+                environment="production",
+                device_id="cinder",
+                started_at=now,
+                primary_thread_id=thread_id,
+            )
+        )
+        connection.execute(
+            LiveSessionThread.__table__.insert().values(
+                id=thread_id,
+                session_id=session_id,
+                provider="codex",
+                branch_kind="root",
+                is_primary=1,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        connection.execute(
+            LiveSessionRun.__table__.insert().values(
+                id=run_id,
+                thread_id=thread_id,
+                provider="codex",
+                host_id="cinder",
+                launch_origin="longhouse_spawned",
+                started_at=now,
+            )
+        )
+        connection.execute(
+            LiveSessionConnection.__table__.insert().values(
+                run_id=run_id,
+                control_plane="codex_bridge",
+                acquisition_kind="spawned_control",
+                state="attached",
+                device_id="cinder",
+                acquired_at=now,
+                last_health_at=now,
+            )
+        )
+    engine.dispose()
+
+    evidence = _schema_v3_control_evidence(session_id=session_id, run_id=run_id, observed_at=now)
+    heartbeat = _heartbeat(device_id="cinder", received_at=now, digest="control-identity")
+    heartbeat["raw_json"] = json.dumps({"machine_evidence": evidence})
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        result = await client.call(
+            "machine.heartbeat.apply.v2",
+            {
+                "heartbeat": heartbeat,
+                "managed_leases": [_lease(session_id=session_id, observed_at=now)],
+                "managed_leases_present": True,
+                "owner_id": 7,
+            },
+        )
+    finally:
+        await client.close()
+        await daemon.close()
+
+    assert result["shadow_reducer"]["identity_binding"] == {
+        "bound": 1,
+        "matched": 0,
+        "unbound": 0,
+        "mismatched": 0,
+    }
+    engine = create_catalog_engine(database_path)
+    with engine.connect() as connection:
+        stored = connection.execute(LiveSessionConnection.__table__.select()).mappings().one()
+    assert stored["adapter_connection_id"] == evidence["control"][0]["connection_id"]
+    assert stored["lease_generation"] == evidence["control"][0]["lease_generation"]
     engine.dispose()
 
 
@@ -581,9 +673,7 @@ async def test_shadow_parity_is_independent_and_upserts_bounded_candidate_delta(
         stale_evidence["control"][0]["state"] = "attached"
         stale_evidence["control"][0]["observed_at"] = (now - timedelta(seconds=1)).isoformat()
         stale_evidence["identities"][0]["dedupe_key"] = hashlib.sha256(b"stale-position").hexdigest()
-        stale_evidence["identities"][0]["evidence_hash"] = canonical_evidence_hash(
-            stale_evidence["control"][0]
-        )
+        stale_evidence["identities"][0]["evidence_hash"] = canonical_evidence_hash(stale_evidence["control"][0])
         stale_params = {
             **params,
             "heartbeat": {
@@ -845,9 +935,7 @@ async def test_shadow_parity_explicitly_reports_activity_as_unsupported(daemon_p
         "compared_axes": 0,
         "deltas": 0,
         "missing_heads": 0,
-        "unsupported_families": [
-            {"family": "activity", "reason": "canonical_projector_unavailable"}
-        ],
+        "unsupported_families": [{"family": "activity", "reason": "canonical_projector_unavailable"}],
     }
     engine = create_catalog_engine(database_path)
     with engine.connect() as connection:
@@ -881,8 +969,6 @@ def test_shadow_parity_deltas_are_globally_bounded(tmp_path, monkeypatch):
         assert retained == 2
 
     with engine.connect() as connection:
-        rows = connection.execute(
-            FactParityDelta.__table__.select().order_by(FactParityDelta.commit_seq)
-        ).mappings()
+        rows = connection.execute(FactParityDelta.__table__.select().order_by(FactParityDelta.commit_seq)).mappings()
         assert [row["commit_seq"] for row in rows] == [2, 3]
     engine.dispose()
