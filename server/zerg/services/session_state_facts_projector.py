@@ -82,6 +82,7 @@ class ShadowSessionStateProjection(BaseModel):
     run: SessionRunFacts | None = None
     activity: SessionActivityFacts
     control: SessionControlFacts | None
+    control_run_id: str | None = None
     rejected_heads: int = 0
     unsupported_families: tuple[UnsupportedFactFamily, ...] = SHADOW_UNSUPPORTED_FAMILIES
 
@@ -119,6 +120,7 @@ def project_shadow_session_state_facts(
         run=_project_run(catalog_facts, launch=launch),
         activity=_project_activity(activity_head),
         control=_project_control(control_head, supported_operations=set(supported_operations)),
+        control_run_id=_control_run_id(control_head),
         rejected_heads=rejected_activity + rejected_control,
     )
 
@@ -309,6 +311,14 @@ def _project_control(
             resume=action("resume"),
         ),
     )
+
+
+def _control_run_id(
+    winner: tuple[Mapping[str, Any], dict[str, Any], datetime, datetime] | None,
+) -> str | None:
+    if winner is None:
+        return None
+    return _text(winner[1].get("run_id"))
 
 
 def _valid_until(

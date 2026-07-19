@@ -122,6 +122,105 @@ def test_comparison_reports_axis_drift_and_rejects_cross_commit_claims():
     assert raced.activity is None and raced.control is None
 
 
+def test_control_identity_comparison_distinguishes_bound_unbound_and_mismatch():
+    shadow = _shadow().model_copy(update={"control_run_id": "run-1"})
+    bound = {
+        "connections": [
+            {
+                "id": 7,
+                "run_id": "run-1",
+                "adapter_connection_id": "connection-1",
+                "lease_generation": "lease-1",
+                "acquired_at": NOW.isoformat(),
+            }
+        ]
+    }
+    matched = compare_session_state_axes(
+        legacy=_legacy(),
+        shadow=shadow,
+        legacy_commit_seq=12,
+        shadow_commit_seq=12,
+        catalog_facts=bound,
+    )
+    assert matched.control_identity is not None
+    assert matched.control_identity.status == "bound_matched"
+    assert matched.control_identity.legacy_grant == {
+        "catalog_connection_id": 7,
+        "synthetic_generation": f"7:{NOW.isoformat()}",
+    }
+    assert matched.control_identity.catalog_bound_count == 1
+
+    unbound = compare_session_state_axes(
+        legacy=_legacy(),
+        shadow=shadow,
+        legacy_commit_seq=12,
+        shadow_commit_seq=12,
+        catalog_facts={"connections": [{"id": 7, "run_id": "run-1", "acquired_at": NOW.isoformat()}]},
+    )
+    assert unbound.control_identity is not None and unbound.control_identity.status == "unbound"
+    assert unbound.control_identity.catalog is None
+    assert unbound.control_identity.legacy_grant is None
+    assert unbound.control_identity.catalog_bound_count == 0
+
+    unknown = compare_session_state_axes(
+        legacy=_legacy(),
+        shadow=shadow,
+        legacy_commit_seq=12,
+        shadow_commit_seq=12,
+        catalog_facts={
+            "connections": [
+                {
+                    "id": 7,
+                    "run_id": "run-1",
+                    "adapter_connection_id": "different-connection",
+                    "lease_generation": "different-lease",
+                    "acquired_at": NOW.isoformat(),
+                }
+            ]
+        },
+    )
+    assert unknown.control_identity is not None
+    assert unknown.control_identity.status == "binding_unknown"
+    assert unknown.control_identity.catalog is None
+    assert unknown.control_identity.catalog_bound_count == 1
+
+    diverged = compare_session_state_axes(
+        legacy=_legacy(),
+        shadow=shadow,
+        legacy_commit_seq=12,
+        shadow_commit_seq=12,
+        catalog_facts={
+            "connections": [
+                {
+                    "id": 7,
+                    "run_id": "different-run",
+                    "adapter_connection_id": "connection-1",
+                    "lease_generation": "different-lease",
+                    "acquired_at": NOW.isoformat(),
+                }
+            ]
+        },
+    )
+    assert diverged.control_identity is not None
+    assert diverged.control_identity.status == "identity_diverged"
+
+
+def test_control_identity_comparison_reports_legacy_only_without_control_evidence():
+    comparison = compare_session_state_axes(
+        legacy=_legacy(),
+        shadow=_shadow().model_copy(update={"control": None, "control_run_id": None}),
+        legacy_commit_seq=12,
+        shadow_commit_seq=12,
+        catalog_facts={"connections": []},
+    )
+
+    assert comparison.control_identity is not None
+    assert comparison.control_identity.status == "legacy_only"
+    assert comparison.control_identity.evidence is None
+    assert comparison.control_identity.catalog is None
+    assert comparison.control_identity.legacy_grant is None
+
+
 def test_diagnostics_route_is_explicitly_non_cutover(monkeypatch):
     session_id = "44444444-4444-4444-8444-444444444444"
     shadow = _shadow()
@@ -160,6 +259,7 @@ def test_diagnostics_route_is_explicitly_non_cutover(monkeypatch):
     payload = response.json()
     assert payload["catalog_commit_seq"] == 12
     assert payload["comparison"]["status"] == "matched"
+    assert payload["comparison"]["control_identity"]["status"] == "unbound"
     assert payload["served_path"] == "legacy_session_state"
     assert payload["authorization_path"] == "legacy_capabilities"
     assert payload["cutover_active"] is False

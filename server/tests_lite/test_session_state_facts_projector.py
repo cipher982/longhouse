@@ -207,6 +207,7 @@ def test_projector_expires_activity_and_derives_control_lease_from_ttl():
     assert projection.control is not None
     assert projection.control.connection == "connected"
     assert projection.control.connection_id == "connection-1"
+    assert projection.control_run_id == "run-1"
     assert projection.control.valid_until == NOW + timedelta(seconds=60)
     assert projection.control.actions.send_input.state == "available"
     assert projection.control.actions.interrupt.state == "available"

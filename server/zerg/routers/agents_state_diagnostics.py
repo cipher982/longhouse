@@ -229,6 +229,7 @@ def get_session_state_diagnostics(
             shadow=shadow,
             legacy_commit_seq=commit_seq,
             shadow_commit_seq=shadow.commit_seq,
+            catalog_facts=legacy_facts,
         )
         return SessionStateDiagnosticsResponse(
             session_id=session_id,
