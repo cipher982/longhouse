@@ -498,6 +498,7 @@ def test_launch_managed_local_from_api_sets_codex_provider(monkeypatch, tmp_path
             status_code=200,
             json_data={
                 "session_id": "session-123",
+                "run_id": "11111111-1111-4111-8111-111111111111",
                 "provider_session_id": "provider-123",
                 "attach_command": "",
                 "source_runner_name": "work-laptop",

@@ -80,6 +80,7 @@ def test_launch_managed_local_from_api_uses_this_device_endpoint(monkeypatch, tm
             status_code=200,
             json_data={
                 "session_id": "session-123",
+                "run_id": "11111111-1111-4111-8111-111111111111",
                 "provider_session_id": "provider-123",
                 "attach_command": "zsh -lc 'exec claude --resume provider-123'",
                 "source_runner_name": "work-laptop",
@@ -109,6 +110,7 @@ def test_launch_managed_local_from_api_uses_this_device_endpoint(monkeypatch, tm
     )
 
     assert result.session_id == "session-123"
+    assert result.run_id == "11111111-1111-4111-8111-111111111111"
     assert result.provider_session_id == "provider-123"
     assert result.attach_command == "zsh -lc 'exec claude --resume provider-123'"
     assert result.managed_transport == "claude_channel_bridge"
@@ -144,6 +146,7 @@ def test_launch_managed_local_from_api_preserves_missing_provider_session_id(mon
             status_code=200,
             json_data={
                 "session_id": "session-123",
+                "run_id": "11111111-1111-4111-8111-111111111111",
                 "provider_session_id": None,
                 "attach_command": "",
                 "source_runner_name": "work-laptop",
@@ -170,6 +173,36 @@ def test_launch_managed_local_from_api_preserves_missing_provider_session_id(mon
     assert result.session_id == "session-123"
     assert result.provider_session_id is None
     assert result.attach_command == ""
+
+
+def test_launch_managed_local_from_api_rejects_server_without_run_identity(monkeypatch, tmp_path, capsys):
+    fake_client = _FakeClient(
+        response=_FakeResponse(
+            status_code=200,
+            json_data={
+                "session_id": "session-123",
+                "provider_session_id": "provider-123",
+                "attach_command": "",
+                "source_runner_name": "work-laptop",
+            },
+        )
+    )
+    monkeypatch.setattr(managed_launch, "infer_git_context", lambda cwd: (None, None))
+    monkeypatch.setattr(claude_cli.httpx, "Client", lambda timeout: fake_client)
+
+    with pytest.raises(ClickExit) as exc_info:
+        claude_cli._launch_managed_local_from_api(
+            url="https://longhouse.test",
+            token="zdt_test_token",
+            cwd=tmp_path,
+            project=None,
+            loop_mode=SessionLoopMode.ASSIST,
+            name=None,
+            machine_name="work-laptop",
+        )
+
+    assert exc_info.value.exit_code == claude_cli.EXIT_SETUP_FAILED
+    assert "Update the server" in capsys.readouterr().out
 
 
 def test_launch_managed_local_from_api_timeout_says_no_provider_started(monkeypatch, tmp_path, capsys):

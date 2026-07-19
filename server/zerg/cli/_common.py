@@ -24,6 +24,7 @@ class ManagedLocalLaunchResponse:
     provider_session_id: str | None
     attach_command: str
     source_runner_name: str
+    run_id: str = ""
     managed_transport: str | None = None
     permission_mode: str = "bypass"
     # Session-scoped hook token for remote_approve launches; the launcher exports

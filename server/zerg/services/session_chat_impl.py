@@ -156,6 +156,7 @@ class ManagedLocalSessionLaunchResponse(BaseModel):
     """Response after successfully starting a managed local session."""
 
     session_id: str
+    run_id: str
     provider: str
     provider_session_id: str | None = None
     execution_home: SessionExecutionHome
@@ -221,6 +222,10 @@ def _validate_managed_local_launch_response_contract(
     transport = response.managed_transport
     if not sid or str(response.session_id) != sid:
         raise RuntimeError("Managed local launch response has mismatched session id")
+    try:
+        UUID(str(response.run_id))
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("Managed local launch response has invalid run id") from exc
     if not provider:
         raise RuntimeError("Managed local launch response is missing provider")
     if transport is None:
@@ -264,6 +269,8 @@ def _validate_managed_local_launch_response_contract(
 
 
 def _managed_local_launch_response(db: Session, result, *, owner_id: int | None = None) -> ManagedLocalSessionLaunchResponse:
+    from zerg.services.managed_local_launcher import managed_local_run_id_for_session
+
     session = result.session
     kernel_projection = project_session_kernel_fields(db, session)
     capabilities = kernel_projection.capabilities
@@ -291,6 +298,7 @@ def _managed_local_launch_response(db: Session, result, *, owner_id: int | None 
         )
     response = ManagedLocalSessionLaunchResponse(
         session_id=str(session.id),
+        run_id=str(managed_local_run_id_for_session(session.id)),
         provider=session.provider or "claude",
         provider_session_id=kernel_projection.provider_session_id,
         execution_home=capabilities.execution_home,
@@ -310,7 +318,12 @@ def _managed_local_launch_response(db: Session, result, *, owner_id: int | None 
     return response
 
 
-def _managed_local_launch_response_from_plan(plan, *, owner_id: int | None = None) -> ManagedLocalSessionLaunchResponse:
+def _managed_local_launch_response_from_plan(
+    plan,
+    *,
+    run_id: str,
+    owner_id: int | None = None,
+) -> ManagedLocalSessionLaunchResponse:
     """Build a managed-local launch response before archive projection exists."""
 
     hook_token: str | None = None
@@ -325,6 +338,7 @@ def _managed_local_launch_response_from_plan(plan, *, owner_id: int | None = Non
         )
     response = ManagedLocalSessionLaunchResponse(
         session_id=str(plan.session_id),
+        run_id=run_id,
         provider=plan.provider,
         provider_session_id=plan.provider_session_id,
         execution_home=SessionExecutionHome.MANAGED_LOCAL,

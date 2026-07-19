@@ -43,6 +43,7 @@ from zerg.services.managed_local_launcher import ManagedLocalLaunchParams
 from zerg.services.managed_local_launcher import _derive_project
 from zerg.services.managed_local_launcher import _initial_provider_session_id_for_spawn
 from zerg.services.managed_local_launcher import build_managed_local_launch_plan
+from zerg.services.managed_local_launcher import managed_local_run_id_for_session
 from zerg.services.session_kernel_projection import project_session_control_fields
 from zerg.services.session_pubsub import TOPIC_TIMELINE
 from zerg.services.session_pubsub import get_pubsub
@@ -194,6 +195,7 @@ def test_managed_local_launch_response_contract_rejects_missing_claude_provider_
 
     response = ManagedLocalSessionLaunchResponse(
         session_id="session-123",
+        run_id="11111111-1111-4111-8111-111111111111",
         provider="claude",
         provider_session_id=None,
         execution_home=SessionExecutionHome.MANAGED_LOCAL,
@@ -512,6 +514,7 @@ def test_this_device_launch_returns_hot_readiness_when_archive_writer_is_stale(m
     assert response.managed_transport.value == "codex_app_server"
     assert "codex-bridge attach --session-id" in response.attach_command
     assert response.session_id in response.attach_command
+    assert response.run_id == str(managed_local_run_id_for_session(response.session_id))
     with LiveSession() as live_db:
         row = live_db.get(LiveLaunchReadiness, response.session_id)
         assert row is not None
@@ -603,6 +606,7 @@ def test_this_device_launch_materializes_live_catalog_without_archive_db(
             assert attempt.command_id == f"managed-local-{response.session_id}"
             assert attempt.state == "pending"
             run = live_db.query(LiveSessionRun).one()
+            assert response.run_id == str(run.id)
             connection = live_db.query(LiveSessionConnection).one()
             assert connection.run_id == run.id
             assert connection.state == "detached"
@@ -749,7 +753,11 @@ def test_this_device_launch_skips_runtime_pubsub_for_hot_readiness(monkeypatch, 
 
     async def fake_launch(_db, params):
         plan = build_managed_local_launch_plan(params)
-        return None, _managed_local_launch_response_from_plan(plan, owner_id=params.owner_id)
+        return None, _managed_local_launch_response_from_plan(
+            plan,
+            run_id=str(managed_local_run_id_for_session(plan.session_id)),
+            owner_id=params.owner_id,
+        )
 
     with SessionLocal() as db:
         user = User(email="managed-local@test.local", role=UserRole.USER.value)

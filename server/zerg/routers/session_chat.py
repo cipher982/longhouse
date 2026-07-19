@@ -198,13 +198,17 @@ async def _launch_managed_local_session_serialized(
         else resolve_managed_local_launch_runner(db, params)
     )
     plan = build_managed_local_launch_plan(params, runner=runner)
-    launch_response = _managed_local_launch_response_from_plan(plan, owner_id=params.owner_id)
-    await _write_hot_managed_local_launch_readiness(
+    # Validate the provider-specific response contract before persisting the
+    # launch. Catalogd remains the authority for the returned run identity.
+    planned_run_id = str(managed_local_run_id_for_session(plan.session_id))
+    _managed_local_launch_response_from_plan(plan, run_id=planned_run_id)
+    run_id = await _write_hot_managed_local_launch_readiness(
         plan,
         owner_id=params.owner_id,
         git_repo=params.git_repo,
         git_branch=params.git_branch,
     )
+    launch_response = _managed_local_launch_response_from_plan(plan, run_id=run_id, owner_id=params.owner_id)
     return None, launch_response
 
 
@@ -214,7 +218,7 @@ async def _write_hot_managed_local_launch_readiness(
     owner_id: int,
     git_repo: str | None,
     git_branch: str | None,
-) -> None:
+) -> str:
     now = datetime.now(timezone.utc)
     expires_at = now + timedelta(seconds=_MANAGED_LOCAL_HOT_LAUNCH_LEASE_SECS)
     if database_module.live_catalog_enabled():
@@ -253,8 +257,11 @@ async def _write_hot_managed_local_launch_readiness(
             },
         }
         try:
-            await catalogd.call("session.launch.local.create.v2", {"launch": launch})
-            return
+            result = await catalogd.call("session.launch.local.create.v2", {"launch": launch})
+            run_id = str(result.get("run_id") or "").strip()
+            if not run_id:
+                raise RuntimeError("catalogd local launch response is missing run_id")
+            return run_id
         except CatalogUnavailable as exc:
             raise ManagedLocalLaunchError(
                 "Managed local launch is blocked because catalogd is unavailable; retry shortly.",
@@ -335,7 +342,7 @@ async def _write_hot_managed_local_launch_readiness(
                 provider_session_id=plan.provider_session_id,
                 observed_at=now,
             )
-        readiness = upsert_live_launch_readiness(
+        upsert_live_launch_readiness(
             live_db,
             session_id=plan.session_id,
             owner_id=owner_id,
@@ -358,10 +365,10 @@ async def _write_hot_managed_local_launch_readiness(
             git_branch=git_branch,
             started_at=now,
         )
-        return readiness
+        return str(managed_local_run_id_for_session(plan.session_id))
 
     try:
-        await live_ws.execute(_write, label="managed-launch-readiness")
+        return str(await live_ws.execute(_write, label="managed-launch-readiness"))
     except Exception as exc:
         logger.exception("Managed local hot launch readiness write failed")
         raise ManagedLocalLaunchError(

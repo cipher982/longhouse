@@ -200,10 +200,18 @@ def launch_managed_local_from_api(
         raise typer.Exit(code=EXIT_SETUP_FAILED)
 
     body = response.json()
+    run_id = str(body.get("run_id") or "").strip()
+    if not run_id:
+        typer.secho(
+            "Longhouse server did not return the managed run identity. Update the server before launching with this CLI.",
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(code=EXIT_SETUP_FAILED)
     raw_provider_session_id = body.get("provider_session_id")
     provider_session_id = str(raw_provider_session_id).strip() if raw_provider_session_id else None
     return ManagedLocalLaunchResponse(
         session_id=str(body["session_id"]),
+        run_id=run_id,
         provider_session_id=provider_session_id,
         attach_command=str(body["attach_command"]),
         source_runner_name=str(body.get("source_runner_name") or machine_name),

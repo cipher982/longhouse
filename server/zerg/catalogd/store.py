@@ -2823,6 +2823,7 @@ class CatalogStore:
                         "created": False,
                         "exact_replay": exact_replay,
                         "idempotency_conflict": not exact_replay,
+                        "run_id": str(run_id),
                         "launch": _json_launch_result(result) if result is not None else None,
                         "commit_seq": str(_current_commit_seq(connection)),
                     }
@@ -2898,6 +2899,7 @@ class CatalogStore:
                 "created": True,
                 "exact_replay": False,
                 "idempotency_conflict": False,
+                "run_id": str(run_id),
                 "launch": _json_launch_result(result),
                 "commit_seq": str(commit_seq),
             }
