@@ -260,7 +260,7 @@ async def test_catalogd_control_prepare_preserves_legacy_identity_for_unbound_co
     assert prepared["grant"]["identity_source"] == "legacy_synthetic"
 
 
-@pytest.mark.parametrize("provider", ["codex", "claude"])
+@pytest.mark.parametrize("provider", ["codex", "claude", "opencode", "cursor"])
 def test_canonical_control_prepare_allows_only_bound_matching_grant(monkeypatch, daemon_paths, provider):
     database_path, _socket_path = daemon_paths
     engine = create_catalog_engine(database_path)
@@ -294,7 +294,7 @@ def test_canonical_control_prepare_allows_only_bound_matching_grant(monkeypatch,
     engine.dispose()
 
 
-@pytest.mark.parametrize("provider", ["codex", "claude"])
+@pytest.mark.parametrize("provider", ["codex", "claude", "opencode", "cursor"])
 def test_canonical_control_prepare_ignores_transcript_ended_at(monkeypatch, daemon_paths, provider):
     database_path, _socket_path = daemon_paths
     engine = create_catalog_engine(database_path)
@@ -391,7 +391,7 @@ def test_canonical_control_prepare_rejects_unbound_and_ungranted(monkeypatch, da
     engine.dispose()
 
 
-@pytest.mark.parametrize("provider", ["codex", "claude"])
+@pytest.mark.parametrize("provider", ["codex", "claude", "opencode", "cursor"])
 def test_canonical_exact_replay_revalidates_current_grant(monkeypatch, daemon_paths, provider):
     database_path, _socket_path = daemon_paths
     engine = create_catalog_engine(database_path)
