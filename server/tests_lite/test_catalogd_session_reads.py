@@ -10,6 +10,10 @@ from uuid import uuid4
 import pytest
 from zerg.catalogd.client import CatalogClient
 from zerg.catalogd.client import CatalogRemoteError
+from zerg.catalogd.fact_reducer import ReducerFact
+from zerg.catalogd.fact_reducer import canonical_evidence_hash
+from zerg.catalogd.fact_reducer import reduce_fact_batch
+from zerg.catalogd.models import FactHead
 from zerg.catalogd.models import StorageSession
 from zerg.catalogd.protocol import HEADER_BYTES
 from zerg.catalogd.protocol import MAX_PAYLOAD_BYTES
@@ -33,6 +37,9 @@ from zerg.models.live_store import LiveSessionThreadAlias
 from zerg.models.live_store import LiveTimelineCard
 from zerg.models.live_store import LiveUser
 from zerg.services import catalog_read_gateway
+from zerg.services.live_catalog_timeline import project_catalog_session_facts
+from zerg.services.session_state_diagnostics import compare_session_state_axes
+from zerg.services.session_state_facts_projector import project_shadow_session_state_facts
 
 
 @pytest.fixture
@@ -45,7 +52,15 @@ def daemon_paths():
     root.rmdir()
 
 
-def _seed_session(connection, *, session_id: str, device_id: str, now: datetime, project: str = "zerg") -> None:
+def _seed_session(
+    connection,
+    *,
+    session_id: str,
+    device_id: str,
+    now: datetime,
+    project: str = "zerg",
+    owner_id: str | None = None,
+) -> None:
     thread_id = str(uuid4())
     run_id = str(uuid4())
     connection.execute(
@@ -67,6 +82,7 @@ def _seed_session(connection, *, session_id: str, device_id: str, now: datetime,
     connection.execute(
         LiveSession.__table__.insert().values(
             session_id=session_id,
+            owner_id=owner_id,
             provider="codex",
             device_id=device_id,
             state="attached",
@@ -204,6 +220,61 @@ def _seed_session(connection, *, session_id: str, device_id: str, now: datetime,
             source="codex_bridge_live",
             last_observation_id=f"observation:{session_id}:7",
         )
+    )
+
+
+def _reducer_fact(*, family: str, session_id: str, now: datetime) -> ReducerFact:
+    if family == "activity":
+        value = {
+            "authority_class": "provider_runtime",
+            "provider": "codex",
+            "session_id": session_id,
+            "run_id": "run-shadow",
+            "kind": "running",
+            "raw_kind": "running",
+            "tool_name": "Shell",
+            "source": "provider_runtime",
+            "observed_at": now.isoformat(),
+            "valid_until": (now + timedelta(minutes=2)).isoformat(),
+        }
+        return ReducerFact(
+            family=family,
+            subject_key="run:run-shadow",
+            source="provider_runtime",
+            source_epoch="run-shadow",
+            source_seq=1,
+            dedupe_key="a" * 64,
+            evidence_hash=canonical_evidence_hash(value),
+            value=value,
+            observed_at=now,
+            session_id=session_id,
+            valid_until=now + timedelta(minutes=2),
+        )
+    value = {
+        "authority_class": "provider_control",
+        "provider": "codex",
+        "session_id": session_id,
+        "run_id": "run-shadow",
+        "connection_id": "connection-shadow",
+        "lease_generation": "lease-shadow",
+        "granted_operations": ["interrupt", "send_input"],
+        "state": "attached",
+        "lease_ttl_ms": 120_000,
+        "source": "provider_control",
+        "observed_at": now.isoformat(),
+    }
+    return ReducerFact(
+        family=family,
+        subject_key="connection:connection-shadow:lease-shadow",
+        source="provider_control",
+        source_epoch="lease-shadow",
+        source_seq=1,
+        dedupe_key="b" * 64,
+        evidence_hash=canonical_evidence_hash(value),
+        value=value,
+        observed_at=now,
+        session_id=session_id,
+        valid_until=now + timedelta(minutes=2),
     )
 
 
@@ -401,6 +472,141 @@ async def test_session_timeline_and_read_return_assembled_snapshot_facts(daemon_
     finally:
         await client.close()
         await daemon.close()
+
+
+@pytest.mark.asyncio
+async def test_shadow_state_read_is_owner_scoped_and_commit_coherent(daemon_paths):
+    database_path, socket_path = daemon_paths
+    engine = create_catalog_engine(database_path)
+    initialize_catalog_schema(engine)
+    now = datetime.now(UTC).replace(microsecond=0)
+    session_id = "44444444-4444-4444-8444-444444444444"
+    ownerless_session_id = "55555555-5555-4555-8555-555555555555"
+    with engine.begin() as connection:
+        connection.execute(
+            LiveUser.__table__.insert(),
+            [
+                {"id": 7, "email": "owner@example.com", "role": "ADMIN", "is_active": True},
+                {"id": 8, "email": "other@example.com", "role": "USER", "is_active": True},
+            ],
+        )
+        _seed_session(connection, session_id=session_id, device_id="cinder", now=now, owner_id="7")
+        _seed_session(connection, session_id=ownerless_session_id, device_id="cinder", now=now)
+        reduced = reduce_fact_batch(
+            connection,
+            [
+                _reducer_fact(family="activity", session_id=session_id, now=now),
+                _reducer_fact(family="control", session_id=session_id, now=now),
+            ],
+            received_at=now,
+        )
+    engine.dispose()
+
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        result = await client.call(
+            "session.shadow_state.read.v2",
+            {"session_id": session_id, "owner_id": 7},
+        )
+        assert result["found"] is True
+        assert result["commit_seq"] == str(reduced.commit_seq)
+        assert result["head_count"] == 2
+        assert result["legacy_facts"]["catalog"]["session_id"] == session_id
+        assert {head["family"] for head in result["heads"]} == {"activity", "control"}
+        activity = next(head for head in result["heads"] if head["family"] == "activity")
+        assert json.loads(activity["value_json"])["tool_name"] == "Shell"
+        assert activity["updated_commit_seq"] == reduced.commit_seq
+        observed_at = datetime.fromisoformat(result["observed_at"])
+        legacy = project_catalog_session_facts(result["legacy_facts"], observed_at=observed_at).session_state
+        shadow = project_shadow_session_state_facts(
+            session_id=session_id,
+            commit_seq=int(result["commit_seq"]),
+            heads=result["heads"],
+            supported_operations={"send_input", "interrupt", "terminate", "resume"},
+            now=observed_at,
+        )
+        comparison = compare_session_state_axes(
+            legacy=legacy,
+            shadow=shadow,
+            legacy_commit_seq=int(result["commit_seq"]),
+            shadow_commit_seq=shadow.commit_seq,
+        )
+        assert shadow.activity.state == "executing"
+        assert shadow.control is not None and shadow.control.actions.send_input.state == "available"
+        assert comparison.status == "different"
+        assert comparison.same_commit is True
+
+        hidden = await client.call(
+            "session.shadow_state.read.v2",
+            {"session_id": session_id, "owner_id": 8},
+        )
+        assert hidden["found"] is False
+        assert hidden["heads"] == []
+        ownerless = await client.call(
+            "session.shadow_state.read.v2",
+            {"session_id": ownerless_session_id, "owner_id": 7},
+        )
+        assert ownerless["found"] is False
+        with pytest.raises(CatalogRemoteError) as exc_info:
+            await client.call(
+                "session.shadow_state.read.v2",
+                {"session_id": session_id, "owner_id": "7"},
+            )
+        assert exc_info.value.code == "invalid_request"
+    finally:
+        await client.close()
+        await daemon.close()
+
+
+def test_shadow_state_read_bounds_combined_rpc_payload(daemon_paths):
+    database_path, _socket_path = daemon_paths
+    engine = create_catalog_engine(database_path)
+    initialize_catalog_schema(engine)
+    now = datetime.now(UTC).replace(microsecond=0)
+    session_id = "66666666-6666-4666-8666-666666666666"
+    padded_value = json.dumps({"padding": "x" * 3_900})
+    with engine.begin() as connection:
+        connection.execute(
+            LiveUser.__table__.insert().values(
+                id=7,
+                email="owner@example.com",
+                role="ADMIN",
+                is_active=True,
+            )
+        )
+        _seed_session(connection, session_id=session_id, device_id="cinder", now=now, owner_id="7")
+        connection.execute(
+            FactHead.__table__.insert(),
+            [
+                {
+                    "family": "activity",
+                    "subject_key": f"run:bounded-{index}",
+                    "source": "provider_runtime",
+                    "source_epoch": f"epoch-{index}",
+                    "session_id": session_id,
+                    "ordering_mode": "sequenced",
+                    "source_seq": index,
+                    "evidence_hash": f"{index:064x}",
+                    "observed_at": now,
+                    "valid_until": now + timedelta(minutes=2),
+                    "value_json": padded_value,
+                    "updated_commit_seq": index,
+                    "received_at": now,
+                }
+                for index in range(257)
+            ],
+        )
+
+    result = CatalogStore(engine).read_shadow_session_state(session_id=session_id, owner_id=7)
+    frame = encode_frame(CatalogRpcResponse(id="f" * 32, result=result))
+    engine.dispose()
+
+    assert result["found"] is True
+    assert result["heads_truncated"] is True
+    assert result["head_count"] == 256
+    assert len(frame) < HEADER_BYTES + MAX_PAYLOAD_BYTES
 
 
 @pytest.mark.asyncio

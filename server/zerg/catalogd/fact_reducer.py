@@ -346,6 +346,37 @@ def read_session_fact_heads(connection: Connection, *, session_id: str) -> tuple
     return commit_seq, [dict(row) for row in rows]
 
 
+def read_bounded_session_fact_heads(
+    connection: Connection,
+    *,
+    session_id: str,
+    families: tuple[str, ...],
+    limit: int,
+) -> tuple[int, list[dict[str, Any]], bool]:
+    """Read a bounded, recent subset for diagnostic projection."""
+
+    if not session_id or len(session_id) > 255:
+        raise ValueError("session_id is missing or too long")
+    if not families or limit <= 0:
+        raise ValueError("fact head families and limit are required")
+    commit_seq = _current_commit_seq(connection)
+    rows = list(
+        connection.execute(
+            select(FactHead.__table__)
+            .where(FactHead.session_id == session_id, FactHead.family.in_(families))
+            .order_by(
+                FactHead.updated_commit_seq.desc(),
+                FactHead.family.asc(),
+                FactHead.subject_key.asc(),
+                FactHead.source.asc(),
+                FactHead.source_epoch.asc(),
+            )
+            .limit(limit + 1)
+        ).mappings()
+    )
+    return commit_seq, [dict(row) for row in rows[:limit]], len(rows) > limit
+
+
 def _validate_fact(fact: ReducerFact) -> ReducerFact:
     if not fact.family or len(fact.family) > 32:
         raise ValueError("fact family is missing or too long")
@@ -513,6 +544,7 @@ __all__ = [
     "canonical_evidence_hash",
     "canonical_value_json",
     "read_fact_heads",
+    "read_bounded_session_fact_heads",
     "read_session_fact_heads",
     "reducer_facts_from_machine_evidence",
     "reduce_fact_batch",

@@ -34,6 +34,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from zerg.catalogd.fact_reducer import MAX_REDUCER_FACTS
+from zerg.catalogd.fact_reducer import read_bounded_session_fact_heads
 from zerg.catalogd.fact_reducer import reduce_fact_batch
 from zerg.catalogd.fact_reducer import reducer_facts_from_machine_evidence
 from zerg.catalogd.models import FactHead
@@ -91,6 +92,7 @@ WORKSPACE_CANDIDATE_LIMIT = 5_000
 # ordering below is deliberately identical to that projector, so returning the
 # winner preserves semantics while keeping a 100-row page bounded.
 SESSION_CONNECTION_LIMIT = 1
+SHADOW_STATE_FACT_HEAD_LIMIT = 256
 _CONTROL_LEASE_TTL = timedelta(minutes=15)
 _EXCLUDED_WORKSPACE_ENVIRONMENTS = ("test", "e2e")
 _TRUTHY_ENV = frozenset({"1", "true", "yes", "on"})
@@ -2731,7 +2733,11 @@ class CatalogStore:
 
     def read_current_console_turn(self, *, session_id: str, owner_id: int) -> dict[str, Any]:
         with self.engine.connect() as connection:
-            if not self._session_belongs_to_owner(connection, session_id=session_id, owner_id=owner_id):
+            if not self._session_belongs_to_owner(
+                connection,
+                session_id=session_id,
+                owner_id=owner_id,
+            ):
                 return {"found": False}
             orm = Session(bind=connection)
             try:
@@ -3595,6 +3601,74 @@ class CatalogStore:
                 "facts": facts[0] if facts else None,
             }
 
+    def read_shadow_session_state(self, *, session_id: str, owner_id: int) -> dict[str, Any]:
+        """Read a diagnostic-only Phase 3 projection at one catalog snapshot."""
+
+        observed_at = datetime.now(UTC)
+        with _read_snapshot(self.engine) as connection:
+            if not self._session_explicitly_belongs_to_owner(
+                connection,
+                session_id=session_id,
+                owner_id=owner_id,
+            ):
+                return {
+                    "commit_seq": str(_current_commit_seq(connection)),
+                    "observed_at": observed_at.isoformat(),
+                    "found": False,
+                    "provider": None,
+                    "head_count": 0,
+                    "heads_truncated": False,
+                    "legacy_facts": None,
+                    "heads": [],
+                }
+            session_facts = _assemble_session_facts(
+                connection,
+                session_ids=[session_id],
+                observed_at=observed_at,
+                compact=False,
+            )
+            if not session_facts:
+                return {
+                    "commit_seq": str(_current_commit_seq(connection)),
+                    "observed_at": observed_at.isoformat(),
+                    "found": False,
+                    "provider": None,
+                    "head_count": 0,
+                    "heads_truncated": False,
+                    "legacy_facts": None,
+                    "heads": [],
+                }
+            provider = str(session_facts[0]["catalog"].get("provider") or "").strip().lower()
+            commit_seq, heads, heads_truncated = read_bounded_session_fact_heads(
+                connection,
+                session_id=session_id,
+                families=("activity", "control"),
+                limit=SHADOW_STATE_FACT_HEAD_LIMIT,
+            )
+            return {
+                "commit_seq": str(commit_seq),
+                "observed_at": observed_at.isoformat(),
+                "found": True,
+                "provider": provider or None,
+                "head_count": len(heads),
+                "heads_truncated": heads_truncated,
+                "legacy_facts": session_facts[0],
+                "heads": [
+                    {
+                        "family": head["family"],
+                        "session_id": head["session_id"],
+                        "subject_key": head["subject_key"],
+                        "source": head["source"],
+                        "source_epoch": head["source_epoch"],
+                        "evidence_hash": head["evidence_hash"],
+                        "value_json": head["value_json"],
+                        "valid_until": head["valid_until"].isoformat() if head["valid_until"] is not None else None,
+                        "updated_commit_seq": head["updated_commit_seq"],
+                    }
+                    for head in heads
+                ],
+            }
+
     def read_sessions(self, *, session_ids: list[str]) -> dict[str, Any]:
         observed_at = datetime.now(UTC)
         with _read_snapshot(self.engine) as connection:
@@ -3609,6 +3683,24 @@ class CatalogStore:
                 "observed_at": observed_at.isoformat(),
                 "facts": facts,
             }
+
+    @staticmethod
+    def _session_explicitly_belongs_to_owner(connection: Any, *, session_id: str, owner_id: int) -> bool:
+        """Fail closed when legacy catalog rows do not carry owner evidence."""
+
+        owner_exists = connection.execute(
+            select(LiveUser.id).where(LiveUser.id == owner_id, LiveUser.is_active.is_(True))
+        ).scalar_one_or_none()
+        if owner_exists is None:
+            return False
+        owner_text = str(owner_id)
+        live_owner = connection.execute(select(LiveSession.owner_id).where(LiveSession.session_id == session_id)).scalar_one_or_none()
+        if live_owner is not None:
+            return str(live_owner) == owner_text
+        storage_owner = connection.execute(
+            select(StorageSession.owner_id).where(StorageSession.session_id == session_id)
+        ).scalar_one_or_none()
+        return storage_owner is not None and str(storage_owner) == owner_text
 
     @staticmethod
     def _session_belongs_to_owner(connection: Any, *, session_id: str, owner_id: int) -> bool:

@@ -71,6 +71,7 @@ _SAFE_RETRY_METHODS = {
     "session.input.receipt.read.v2",
     "session.input.recent.list.v2",
     "session.read.v2",
+    "session.shadow_state.read.v2",
     "session.read.batch.v2",
     "session.preferences.update.v2",
     "session.active.list.v2",

@@ -37,6 +37,13 @@ def session_snapshot(session_id: str, *, owner_id: int | None = None) -> dict[st
     return _call("session.read.v2", params)
 
 
+def shadow_session_state_snapshot(session_id: str, *, owner_id: int) -> dict[str, Any]:
+    return _call(
+        "session.shadow_state.read.v2",
+        {"session_id": session_id, "owner_id": owner_id},
+    )
+
+
 def session_batch_snapshot(session_ids: list[str]) -> dict[str, Any]:
     return _call("session.read.batch.v2", {"session_ids": session_ids})
 
@@ -138,6 +145,7 @@ __all__ = [
     "rename_machine",
     "resolve_session_prefix",
     "session_snapshot",
+    "shadow_session_state_snapshot",
     "session_batch_snapshot",
     "timeline_snapshot",
 ]

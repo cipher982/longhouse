@@ -325,6 +325,8 @@ class CatalogDaemon:
             return await self._list_session_timeline(request)
         if request.method == "session.read.v2":
             return await self._read_session(request)
+        if request.method == "session.shadow_state.read.v2":
+            return await self._read_shadow_session_state(request)
         if request.method == "session.read.batch.v2":
             return await self._read_sessions(request)
         if request.method == "session.preferences.update.v2":
@@ -1730,6 +1732,27 @@ class CatalogDaemon:
         if owner_id is not None and (type(owner_id) is not int or owner_id <= 0):
             return self._error(request, "invalid_request", "owner_id must be a positive integer")
         result = await self._run_store(self._store.read_session, session_id=session_id, owner_id=owner_id)
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _read_shadow_session_state(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"session_id", "owner_id"}:
+            return self._error(
+                request,
+                "invalid_request",
+                "session.shadow_state.read.v2 requires session_id and owner_id",
+            )
+        session_id = request.params["session_id"]
+        owner_id = request.params["owner_id"]
+        if not _is_canonical_uuid(session_id):
+            return self._error(request, "invalid_request", "session_id must be a canonical UUID")
+        if type(owner_id) is not int or owner_id <= 0:
+            return self._error(request, "invalid_request", "owner_id must be a positive integer")
+        assert self._store is not None
+        result = await self._run_read_store(
+            self._store.read_shadow_session_state,
+            session_id=session_id,
+            owner_id=owner_id,
+        )
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _read_sessions(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
