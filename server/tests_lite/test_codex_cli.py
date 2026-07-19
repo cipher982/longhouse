@@ -453,6 +453,7 @@ def test_start_native_codex_bridge_can_prestart_initial_thread(monkeypatch, tmp_
 
     thread_id, ws_url, state_file = codex_cli._start_native_codex_bridge(
         session_id="session-123",
+        run_id="11111111-1111-4111-8111-111111111111",
         cwd=tmp_path,
         url="https://longhouse.test",
         token="zdt_test_token",
@@ -463,6 +464,8 @@ def test_start_native_codex_bridge_can_prestart_initial_thread(monkeypatch, tmp_
 
     assert (thread_id, ws_url, state_file) == ("thr_123", "ws://127.0.0.1:4800", "/tmp/state.json")
     assert "--create-initial-thread" in calls[0]["command"]
+    run_id_index = calls[0]["command"].index("--run-id")
+    assert calls[0]["command"][run_id_index + 1] == "11111111-1111-4111-8111-111111111111"
     assert "--token" not in calls[0]["command"]
     assert calls[0]["env"][codex_cli._CODEX_BRIDGE_TOKEN_ENV] == "zdt_test_token"
     launch_mode_index = calls[0]["command"].index("--launch-mode")
@@ -483,6 +486,7 @@ def test_start_native_codex_bridge_requires_thread_id_when_prestarting(monkeypat
     with pytest.raises(codex_cli._NativeBridgeError, match="did not return thread_id"):
         codex_cli._start_native_codex_bridge(
             session_id="session-123",
+            run_id="11111111-1111-4111-8111-111111111111",
             cwd=tmp_path,
             url="https://longhouse.test",
             token="zdt_test_token",
@@ -561,6 +565,7 @@ def test_codex_command_starts_native_bridge_and_attaches(monkeypatch, tmp_path):
         "_launch_managed_local_from_api",
         lambda **_kwargs: codex_cli.ManagedLocalLaunchResponse(
             session_id="session-123",
+            run_id="11111111-1111-4111-8111-111111111111",
             provider_session_id="provider-123",
             attach_command="",
             source_runner_name="work-laptop",
@@ -633,6 +638,7 @@ def test_codex_command_starts_native_bridge_and_attaches(monkeypatch, tmp_path):
     assert bridge_calls == [
         {
             "session_id": "session-123",
+            "run_id": "11111111-1111-4111-8111-111111111111",
             "cwd": tmp_path,
             "url": "https://longhouse.test",
             "token": "zdt_test_token",

@@ -102,6 +102,7 @@ impl BridgeLaunchMode {
 #[derive(Debug, Clone)]
 pub struct BridgeStartConfig {
     pub session_id: String,
+    pub run_id: Option<String>,
     pub cwd: PathBuf,
     pub api_url: String,
     pub api_token: String,
@@ -727,10 +728,12 @@ pub async fn cmd_codex_bridge_start(config: BridgeStartConfig) -> Result<BridgeS
         fs::create_dir_all(parent)?;
     }
 
+    let run_id = config.run_id.unwrap_or_else(|| Uuid::new_v4().to_string());
+    Uuid::parse_str(&run_id).context("invalid --run-id")?;
     let mut state = BridgeStateFile {
         schema_version: BRIDGE_STATE_SCHEMA_VERSION,
         session_id: config.session_id.clone(),
-        run_id: Some(Uuid::new_v4().to_string()),
+        run_id: Some(run_id),
         connection_id: Some(Uuid::new_v4().to_string()),
         lease_generation: Some(Uuid::new_v4().to_string()),
         cwd: config.cwd.display().to_string(),

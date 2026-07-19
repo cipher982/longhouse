@@ -1033,6 +1033,7 @@ async fn execute_command(
             let (approval_policy, sandbox) = remote_codex_bridge_defaults();
             let summary = cmd_codex_bridge_start(BridgeStartConfig {
                 session_id: session_id.clone(),
+                run_id: payload_optional_string(&payload, "run_id"),
                 cwd,
                 api_url,
                 api_token,

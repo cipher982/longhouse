@@ -365,6 +365,7 @@ class _NativeBridgeError(Exception):
 def _start_native_codex_bridge(
     *,
     session_id: str,
+    run_id: str,
     cwd: Path,
     url: str,
     token: str,
@@ -384,6 +385,8 @@ def _start_native_codex_bridge(
         "start",
         "--session-id",
         session_id,
+        "--run-id",
+        run_id,
         "--cwd",
         str(cwd),
         "--url",
@@ -852,6 +855,7 @@ def codex(
     try:
         thread_id, ws_url, state_file = _start_native_codex_bridge(
             session_id=result.session_id,
+            run_id=result.run_id,
             cwd=cwd,
             url=resolved_url,
             token=resolved_token,

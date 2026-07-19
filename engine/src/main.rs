@@ -737,6 +737,10 @@ enum CodexBridgeCommands {
         #[arg(long)]
         session_id: String,
 
+        /// Catalog-owned execution identity for this managed launch.
+        #[arg(long)]
+        run_id: Option<String>,
+
         #[arg(long)]
         cwd: PathBuf,
 
@@ -1640,6 +1644,7 @@ fn main() -> anyhow::Result<()> {
             match command {
                 CodexBridgeCommands::Start {
                     session_id,
+                    run_id,
                     cwd,
                     url,
                     codex_bin,
@@ -1672,6 +1677,7 @@ fn main() -> anyhow::Result<()> {
                     let launch_mode = parse_codex_bridge_launch_mode(&launch_mode)?;
                     let summary = rt.block_on(cmd_codex_bridge_start(BridgeStartConfig {
                         session_id,
+                        run_id,
                         cwd,
                         api_url: url,
                         api_token: token,
@@ -1942,6 +1948,8 @@ mod tests {
             "start",
             "--session-id",
             "00000000-0000-0000-0000-000000000001",
+            "--run-id",
+            "11111111-1111-4111-8111-111111111111",
             "--cwd",
             "/tmp",
             "--url",
@@ -1954,11 +1962,16 @@ mod tests {
             Commands::CodexBridge {
                 command:
                     CodexBridgeCommands::Start {
+                        run_id,
                         create_initial_thread,
                         launch_mode,
                         ..
                     },
             } => {
+                assert_eq!(
+                    run_id.as_deref(),
+                    Some("11111111-1111-4111-8111-111111111111")
+                );
                 assert!(create_initial_thread);
                 assert_eq!(
                     parse_codex_bridge_launch_mode(&launch_mode).unwrap(),
