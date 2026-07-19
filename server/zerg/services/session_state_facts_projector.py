@@ -37,7 +37,8 @@ UnsupportedFactFamily = Literal[
     "presentation",
 ]
 
-_UNSUPPORTED_FAMILIES: tuple[UnsupportedFactFamily, ...] = (
+SHADOW_SUPPORTED_FAMILIES: tuple[str, ...] = ("activity", "control")
+SHADOW_UNSUPPORTED_FAMILIES: tuple[UnsupportedFactFamily, ...] = (
     "mode",
     "disposition",
     "launch",
@@ -78,7 +79,7 @@ class ShadowSessionStateProjection(BaseModel):
     activity: SessionActivityFacts
     control: SessionControlFacts | None
     rejected_heads: int = 0
-    unsupported_families: tuple[UnsupportedFactFamily, ...] = _UNSUPPORTED_FAMILIES
+    unsupported_families: tuple[UnsupportedFactFamily, ...] = SHADOW_UNSUPPORTED_FAMILIES
 
 
 def project_shadow_session_state_facts(

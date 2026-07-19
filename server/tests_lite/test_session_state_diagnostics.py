@@ -156,3 +156,107 @@ def test_diagnostics_route_is_explicitly_non_cutover(monkeypatch):
     assert payload["served_path"] == "legacy_session_state"
     assert payload["authorization_path"] == "legacy_capabilities"
     assert payload["cutover_active"] is False
+
+
+def test_reducer_health_route_reports_failures_without_claiming_cutover(monkeypatch):
+    monkeypatch.setattr(diagnostics_router.database_module, "live_catalog_enabled", lambda: True)
+    monkeypatch.setattr(
+        diagnostics_router,
+        "shadow_session_state_health",
+        lambda owner_id: {
+            "found": True,
+            "commit_seq": "21",
+            "observed_at": NOW.isoformat(),
+            "ingest_enabled": True,
+            "parity_enabled": True,
+            "storage": {
+                "head_counts": {"activity": 4, "control": 2},
+                "head_capacity_per_family": 2_048,
+                "receipt_count": 8,
+                "conflict_count": 1,
+                "parity_delta_count": 2,
+            },
+            "recent_batches": {
+                "sample_size": 3,
+                "sample_limit": 100,
+                "window_seconds": 900,
+                "truncated": False,
+                "newest_received_at": NOW.isoformat(),
+                "oldest_received_at": (NOW - timedelta(seconds=2)).isoformat(),
+                "malformed_results": 0,
+                "reducer_status_counts": {"applied": 2, "failed": 1},
+                "parity_status_counts": {"compared": 3},
+                "changed_heads": 4,
+                "duplicates": 2,
+                "stale": 1,
+                "conflicts": 1,
+                "parity_deltas": 2,
+                "parity_missing_heads": 0,
+            },
+        },
+    )
+    app = FastAPI()
+    app.include_router(diagnostics_router.health_router, prefix="/api")
+    app.dependency_overrides[verify_agents_token] = lambda: SimpleNamespace(owner_id=7)
+    app.dependency_overrides[require_single_tenant] = lambda: None
+
+    response = TestClient(app).get("/api/agents/session-state/health")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "degraded"
+    assert payload["catalog_commit_seq"] == 21
+    assert payload["projected_families"] == ["activity", "control"]
+    assert "mode" in payload["unsupported_families"]
+    assert payload["cutover_active"] is False
+
+
+def test_reducer_health_distinguishes_not_reducing_from_not_comparable(monkeypatch):
+    snapshot = {
+        "found": True,
+        "commit_seq": "22",
+        "observed_at": NOW.isoformat(),
+        "ingest_enabled": True,
+        "parity_enabled": True,
+        "storage": {
+            "head_counts": {},
+            "head_capacity_per_family": 2_048,
+            "receipt_count": 0,
+            "conflict_count": 0,
+            "parity_delta_count": 0,
+        },
+        "recent_batches": {
+            "sample_size": 1,
+            "sample_limit": 100,
+            "window_seconds": 900,
+            "truncated": False,
+            "newest_received_at": NOW.isoformat(),
+            "oldest_received_at": NOW.isoformat(),
+            "malformed_results": 0,
+            "reducer_status_counts": {"no_evidence": 1},
+            "parity_status_counts": {"no_evidence": 1},
+            "changed_heads": 0,
+            "duplicates": 0,
+            "stale": 0,
+            "conflicts": 0,
+            "parity_deltas": 0,
+            "parity_missing_heads": 0,
+        },
+    }
+    monkeypatch.setattr(diagnostics_router.database_module, "live_catalog_enabled", lambda: True)
+    monkeypatch.setattr(diagnostics_router, "shadow_session_state_health", lambda owner_id: snapshot)
+    app = FastAPI()
+    app.include_router(diagnostics_router.health_router, prefix="/api")
+    app.dependency_overrides[verify_agents_token] = lambda: SimpleNamespace(owner_id=7)
+    app.dependency_overrides[require_single_tenant] = lambda: None
+    client = TestClient(app)
+
+    assert client.get("/api/agents/session-state/health").json()["status"] == "not_reducing"
+
+    snapshot["recent_batches"]["reducer_status_counts"] = {"applied": 1}
+    snapshot["recent_batches"]["parity_status_counts"] = {"legacy_unavailable": 1}
+    assert client.get("/api/agents/session-state/health").json()["status"] == "not_comparable"
+
+    snapshot["parity_enabled"] = False
+    snapshot["recent_batches"]["parity_status_counts"] = {"disabled": 1}
+    assert client.get("/api/agents/session-state/health").json()["status"] == "not_comparable"

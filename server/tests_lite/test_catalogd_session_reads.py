@@ -25,6 +25,7 @@ from zerg.catalogd.server import CatalogDaemon
 from zerg.catalogd.store import CatalogStore
 from zerg.models.live_store import LiveControlLease
 from zerg.models.live_store import LiveDeviceToken
+from zerg.models.live_store import LiveHeartbeatStamp
 from zerg.models.live_store import LiveLaunchReadiness
 from zerg.models.live_store import LiveRuntimeState
 from zerg.models.live_store import LiveSession
@@ -369,8 +370,20 @@ async def test_active_owner_read_is_catalog_owned(daemon_paths):
         connection.execute(
             LiveUser.__table__.insert(),
             [
-                {"id": 1, "email": "old@example.com", "role": "USER", "is_active": False},
-                {"id": 7, "email": "owner@example.com", "role": "ADMIN", "is_active": True},
+                {
+                    "id": 1,
+                    "email": "service@example.com",
+                    "role": "USER",
+                    "provider": "service",
+                    "is_active": True,
+                },
+                {
+                    "id": 7,
+                    "email": "owner@example.com",
+                    "role": "ADMIN",
+                    "provider": None,
+                    "is_active": True,
+                },
             ],
         )
     engine.dispose()
@@ -486,8 +499,20 @@ async def test_shadow_state_read_is_owner_scoped_and_commit_coherent(daemon_path
         connection.execute(
             LiveUser.__table__.insert(),
             [
-                {"id": 7, "email": "owner@example.com", "role": "ADMIN", "is_active": True},
-                {"id": 8, "email": "other@example.com", "role": "USER", "is_active": True},
+                {
+                    "id": 7,
+                    "email": "owner@example.com",
+                    "role": "ADMIN",
+                    "provider": None,
+                    "is_active": True,
+                },
+                {
+                    "id": 8,
+                    "email": "other@example.com",
+                    "role": "USER",
+                    "provider": None,
+                    "is_active": True,
+                },
             ],
         )
         _seed_session(connection, session_id=session_id, device_id="cinder", now=now, owner_id="7")
@@ -607,6 +632,164 @@ def test_shadow_state_read_bounds_combined_rpc_payload(daemon_paths):
     assert result["heads_truncated"] is True
     assert result["head_count"] == 256
     assert len(frame) < HEADER_BYTES + MAX_PAYLOAD_BYTES
+
+
+@pytest.mark.asyncio
+async def test_shadow_state_health_summarizes_bounded_recent_outcomes(daemon_paths, monkeypatch):
+    database_path, socket_path = daemon_paths
+    engine = create_catalog_engine(database_path)
+    initialize_catalog_schema(engine)
+    now = datetime.now(UTC).replace(microsecond=0)
+    session_id = "77777777-7777-4777-8777-777777777777"
+    monkeypatch.setenv("LONGHOUSE_SHADOW_REDUCER_INGEST_ENABLED", "1")
+    monkeypatch.setenv("LONGHOUSE_SHADOW_PARITY_ENABLED", "true")
+    with engine.begin() as connection:
+        connection.execute(
+            LiveUser.__table__.insert(),
+            [
+                {
+                    "id": 7,
+                    "email": "owner@example.com",
+                    "role": "ADMIN",
+                    "provider": None,
+                    "is_active": True,
+                },
+                {
+                    "id": 8,
+                    "email": "service@example.com",
+                    "role": "USER",
+                    "provider": "service",
+                    "is_active": True,
+                },
+            ],
+        )
+        connection.execute(
+            LiveDeviceToken.__table__.insert().values(
+                id=str(uuid4()),
+                owner_id=7,
+                device_id="cinder",
+                token_hash="d" * 64,
+                created_at=now,
+            )
+        )
+        _seed_session(connection, session_id=session_id, device_id="cinder", now=now, owner_id="7")
+        reduce_fact_batch(
+            connection,
+            [
+                _reducer_fact(family="activity", session_id=session_id, now=now),
+                _reducer_fact(family="control", session_id=session_id, now=now),
+            ],
+            received_at=now,
+        )
+        connection.execute(
+            LiveSession.__table__.insert().values(
+                session_id="88888888-8888-4888-8888-888888888888",
+                owner_id="8",
+                provider="codex",
+                device_id="service-device",
+                state="attached",
+                last_seen_at=now,
+                updated_at=now,
+            )
+        )
+        connection.execute(
+            FactHead.__table__.insert().values(
+                family="activity",
+                subject_key="run:service-run",
+                source="provider_runtime",
+                source_epoch="service-run",
+                session_id="88888888-8888-4888-8888-888888888888",
+                ordering_mode="sequenced",
+                source_seq=1,
+                evidence_hash="e" * 64,
+                observed_at=now,
+                valid_until=now + timedelta(minutes=2),
+                value_json="{}",
+                updated_commit_seq=1,
+                received_at=now,
+            )
+        )
+        connection.execute(
+            LiveHeartbeatStamp.__table__.insert(),
+            [
+                {
+                    "device_id": "cinder",
+                    "received_at": now,
+                    "catalog_result_json": json.dumps(
+                        {
+                            "shadow_reducer": {
+                                "status": "applied",
+                                "changed_heads": 2,
+                                "duplicates": 1,
+                                "stale": 0,
+                                "conflicts": 0,
+                            },
+                            "shadow_parity": {
+                                "status": "compared",
+                                "deltas": 1,
+                                "missing_heads": 0,
+                            },
+                        }
+                    ),
+                },
+                {
+                    "device_id": "cinder",
+                    "received_at": now - timedelta(seconds=1),
+                    "catalog_result_json": json.dumps(
+                        {
+                            "shadow_reducer": {"status": "failed"},
+                            "shadow_parity": {"status": "failed"},
+                        }
+                    ),
+                },
+                {
+                    "device_id": "cinder",
+                    "received_at": now - timedelta(seconds=2),
+                    "catalog_result_json": json.dumps(
+                        {
+                            "shadow_reducer": {"status": "applied", "changed_heads": True},
+                            "shadow_parity": {"status": "compared"},
+                        }
+                    ),
+                },
+                {
+                    "device_id": "service-device",
+                    "received_at": now,
+                    "catalog_result_json": json.dumps(
+                        {
+                            "shadow_reducer": {"status": "applied", "changed_heads": 99},
+                            "shadow_parity": {"status": "compared", "deltas": 99},
+                        }
+                    ),
+                },
+            ],
+        )
+    engine.dispose()
+
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        result = await client.call("session.shadow_state.health.v2", {"owner_id": 7})
+        assert result["found"] is True
+        assert result["ingest_enabled"] is True and result["parity_enabled"] is True
+        assert result["storage"]["head_counts"] == {"activity": 1, "control": 1}
+        assert result["storage"]["head_capacity_per_family"] == 2_048
+        assert result["recent_batches"]["sample_size"] == 3
+        assert result["recent_batches"]["sample_limit"] == 100
+        assert result["recent_batches"]["window_seconds"] == 900
+        assert result["recent_batches"]["truncated"] is False
+        assert result["recent_batches"]["oldest_received_at"] is not None
+        assert result["recent_batches"]["malformed_results"] == 1
+        assert result["recent_batches"]["reducer_status_counts"] == {"applied": 1, "failed": 1}
+        assert result["recent_batches"]["parity_status_counts"] == {"compared": 1, "failed": 1}
+        assert result["recent_batches"]["changed_heads"] == 2
+        assert result["recent_batches"]["duplicates"] == 1
+        assert result["recent_batches"]["parity_deltas"] == 1
+        assert (await client.call("session.shadow_state.health.v2", {"owner_id": 8}))["found"] is False
+    finally:
+        await client.close()
+        await daemon.close()
 
 
 @pytest.mark.asyncio

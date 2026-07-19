@@ -538,6 +538,7 @@ def _parse_wire_datetime(value: object, field: str, *, nullable: bool = False) -
 
 
 __all__ = [
+    "MAX_HEADS_PER_FAMILY",
     "MAX_REDUCER_FACTS",
     "ReducerFact",
     "ReducerResult",

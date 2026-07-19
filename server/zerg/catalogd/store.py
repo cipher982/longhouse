@@ -33,12 +33,15 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from zerg.catalogd.fact_reducer import MAX_HEADS_PER_FAMILY
 from zerg.catalogd.fact_reducer import MAX_REDUCER_FACTS
 from zerg.catalogd.fact_reducer import read_bounded_session_fact_heads
 from zerg.catalogd.fact_reducer import reduce_fact_batch
 from zerg.catalogd.fact_reducer import reducer_facts_from_machine_evidence
+from zerg.catalogd.models import FactConflict
 from zerg.catalogd.models import FactHead
 from zerg.catalogd.models import FactParityDelta
+from zerg.catalogd.models import FactReceipt
 from zerg.catalogd.models import LegacyMigrationRun
 from zerg.catalogd.models import LegacyMigrationSession
 from zerg.catalogd.models import MediaObject
@@ -93,6 +96,8 @@ WORKSPACE_CANDIDATE_LIMIT = 5_000
 # winner preserves semantics while keeping a 100-row page bounded.
 SESSION_CONNECTION_LIMIT = 1
 SHADOW_STATE_FACT_HEAD_LIMIT = 256
+SHADOW_STATE_HEALTH_SAMPLE_LIMIT = 100
+SHADOW_STATE_HEALTH_WINDOW = timedelta(minutes=15)
 _CONTROL_LEASE_TTL = timedelta(minutes=15)
 _EXCLUDED_WORKSPACE_ENVIRONMENTS = ("test", "e2e")
 _TRUTHY_ENV = frozenset({"1", "true", "yes", "on"})
@@ -501,7 +506,13 @@ class CatalogStore:
         user_table = LiveUser.__table__
         with _read_snapshot(self.engine) as connection:
             owner_id = connection.execute(
-                select(user_table.c.id).where(user_table.c.is_active.is_(True)).order_by(user_table.c.id.asc()).limit(1)
+                select(user_table.c.id)
+                .where(
+                    user_table.c.is_active.is_(True),
+                    or_(user_table.c.provider != "service", user_table.c.provider.is_(None)),
+                )
+                .order_by(user_table.c.id.asc())
+                .limit(1)
             ).scalar_one_or_none()
             return {
                 "found": owner_id is not None,
@@ -3682,6 +3693,172 @@ class CatalogStore:
                 "commit_seq": str(_current_commit_seq(connection)),
                 "observed_at": observed_at.isoformat(),
                 "facts": facts,
+            }
+
+    def read_shadow_session_state_health(self, *, owner_id: int) -> dict[str, Any]:
+        """Summarize bounded reducer storage and recent heartbeat outcomes."""
+
+        observed_at = datetime.now(UTC)
+        with _read_snapshot(self.engine) as connection:
+            canonical_owners = connection.execute(
+                select(LiveUser.id, LiveUser.is_active)
+                .where(or_(LiveUser.provider != "service", LiveUser.provider.is_(None)))
+                .order_by(LiveUser.id.asc())
+                .limit(2)
+            ).all()
+            if len(canonical_owners) != 1 or int(canonical_owners[0].id) != owner_id or canonical_owners[0].is_active is not True:
+                return {
+                    "found": False,
+                    "commit_seq": str(_current_commit_seq(connection)),
+                    "observed_at": observed_at.isoformat(),
+                }
+
+            device_ids = tuple(
+                str(value)
+                for value in connection.execute(
+                    select(LiveDeviceToken.device_id)
+                    .where(LiveDeviceToken.owner_id == owner_id, LiveDeviceToken.revoked_at.is_(None))
+                    .distinct()
+                    .order_by(LiveDeviceToken.device_id.asc())
+                    .limit(MACHINE_ENROLLMENT_LIMIT)
+                ).scalars()
+            )
+
+            owner_text = str(owner_id)
+            head_table = FactHead.__table__
+            live_sessions = LiveSession.__table__
+            storage_sessions = StorageSession.__table__
+            head_owner_scope = head_table.outerjoin(
+                live_sessions,
+                live_sessions.c.session_id == head_table.c.session_id,
+            ).outerjoin(
+                storage_sessions,
+                storage_sessions.c.session_id == head_table.c.session_id,
+            )
+            owner_predicate = or_(live_sessions.c.owner_id == owner_text, storage_sessions.c.owner_id == owner_text)
+            head_counts = {
+                str(family): int(count)
+                for family, count in connection.execute(
+                    select(head_table.c.family, func.count())
+                    .select_from(head_owner_scope)
+                    .where(owner_predicate)
+                    .group_by(head_table.c.family)
+                    .order_by(head_table.c.family.asc())
+                )
+            }
+
+            def owned_child_count(child_table, identity_column) -> int:
+                child_scope = (
+                    child_table.join(
+                        head_table,
+                        and_(
+                            child_table.c.family == head_table.c.family,
+                            child_table.c.subject_key == head_table.c.subject_key,
+                            child_table.c.source == head_table.c.source,
+                            child_table.c.source_epoch == head_table.c.source_epoch,
+                        ),
+                    )
+                    .outerjoin(live_sessions, live_sessions.c.session_id == head_table.c.session_id)
+                    .outerjoin(storage_sessions, storage_sessions.c.session_id == head_table.c.session_id)
+                )
+                return int(
+                    connection.execute(select(func.count(identity_column)).select_from(child_scope).where(owner_predicate)).scalar_one()
+                )
+
+            receipt_count = owned_child_count(FactReceipt.__table__, FactReceipt.id)
+            conflict_count = owned_child_count(FactConflict.__table__, FactConflict.id)
+            parity_delta_count = owned_child_count(FactParityDelta.__table__, FactParityDelta.delta_key)
+            recent_rows = (
+                connection.execute(
+                    select(LiveHeartbeatStamp.received_at, LiveHeartbeatStamp.catalog_result_json)
+                    .where(
+                        LiveHeartbeatStamp.device_id.in_(device_ids),
+                        LiveHeartbeatStamp.received_at >= observed_at - SHADOW_STATE_HEALTH_WINDOW,
+                        LiveHeartbeatStamp.catalog_result_json.is_not(None),
+                    )
+                    .order_by(LiveHeartbeatStamp.received_at.desc())
+                    .limit(SHADOW_STATE_HEALTH_SAMPLE_LIMIT + 1)
+                ).all()
+                if device_ids
+                else []
+            )
+            recent_truncated = len(recent_rows) > SHADOW_STATE_HEALTH_SAMPLE_LIMIT
+            recent_rows = recent_rows[:SHADOW_STATE_HEALTH_SAMPLE_LIMIT]
+
+            reducer_status_counts: dict[str, int] = {}
+            parity_status_counts: dict[str, int] = {}
+            totals = {
+                "changed_heads": 0,
+                "duplicates": 0,
+                "stale": 0,
+                "conflicts": 0,
+                "parity_deltas": 0,
+                "parity_missing_heads": 0,
+            }
+            malformed_results = 0
+            for row in recent_rows:
+                try:
+                    result = _decode_json_object(row.catalog_result_json)
+                    reducer = result.get("shadow_reducer")
+                    parity = result.get("shadow_parity")
+                    if not isinstance(reducer, dict) or not isinstance(parity, dict):
+                        raise ValueError("shadow outcome is missing")
+                    reducer_status = reducer.get("status")
+                    parity_status = parity.get("status")
+                    if reducer_status not in {"disabled", "no_evidence", "unsupported_schema", "applied", "failed"}:
+                        raise ValueError("unknown shadow reducer status")
+                    if parity_status not in {
+                        "disabled",
+                        "legacy_unavailable",
+                        "no_evidence",
+                        "unsupported_schema",
+                        "compared",
+                        "failed",
+                    }:
+                        raise ValueError("unknown shadow parity status")
+                    reducer_counters = {
+                        field: _non_negative_int(reducer.get(field, 0), field)
+                        for field in ("changed_heads", "duplicates", "stale", "conflicts")
+                    }
+                    parity_counters = {
+                        "parity_deltas": _non_negative_int(parity.get("deltas", 0), "deltas"),
+                        "parity_missing_heads": _non_negative_int(
+                            parity.get("missing_heads", 0),
+                            "missing_heads",
+                        ),
+                    }
+                    reducer_status_counts[reducer_status] = reducer_status_counts.get(reducer_status, 0) + 1
+                    parity_status_counts[parity_status] = parity_status_counts.get(parity_status, 0) + 1
+                    for field, value in {**reducer_counters, **parity_counters}.items():
+                        totals[field] += value
+                except (RuntimeError, TypeError, ValueError):
+                    malformed_results += 1
+
+            return {
+                "found": True,
+                "commit_seq": str(_current_commit_seq(connection)),
+                "observed_at": observed_at.isoformat(),
+                "ingest_enabled": os.getenv(_SHADOW_REDUCER_INGEST_ENV, "").strip().lower() in _TRUTHY_ENV,
+                "parity_enabled": os.getenv(_SHADOW_PARITY_ENV, "").strip().lower() in _TRUTHY_ENV,
+                "storage": {
+                    "head_counts": head_counts,
+                    "head_capacity_per_family": MAX_HEADS_PER_FAMILY,
+                    "receipt_count": receipt_count,
+                    "conflict_count": conflict_count,
+                    "parity_delta_count": parity_delta_count,
+                },
+                "recent_batches": {
+                    "sample_size": len(recent_rows),
+                    "sample_limit": SHADOW_STATE_HEALTH_SAMPLE_LIMIT,
+                    "window_seconds": int(SHADOW_STATE_HEALTH_WINDOW.total_seconds()),
+                    "truncated": recent_truncated,
+                    "newest_received_at": _encode_datetime(recent_rows[0].received_at) if recent_rows else None,
+                    "oldest_received_at": _encode_datetime(recent_rows[-1].received_at) if recent_rows else None,
+                    "malformed_results": malformed_results,
+                    "reducer_status_counts": reducer_status_counts,
+                    "parity_status_counts": parity_status_counts,
+                    **totals,
+                },
             }
 
     @staticmethod
@@ -7944,6 +8121,12 @@ def _decode_json_object(value: object) -> dict[str, Any]:
     if not isinstance(decoded, dict):
         raise RuntimeError("catalog receipt JSON is not an object")
     return decoded
+
+
+def _non_negative_int(value: object, field: str) -> int:
+    if type(value) is not int or value < 0:
+        raise ValueError(f"{field} must be a non-negative integer")
+    return value
 
 
 def _source_epoch_dto(row) -> dict[str, Any]:

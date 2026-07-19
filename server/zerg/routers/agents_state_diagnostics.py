@@ -18,16 +18,20 @@ from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.services.catalog_facts import decode_catalog_datetime
 from zerg.services.catalog_read_gateway import CatalogReadError
 from zerg.services.catalog_read_gateway import active_owner_id
+from zerg.services.catalog_read_gateway import shadow_session_state_health
 from zerg.services.catalog_read_gateway import shadow_session_state_snapshot
 from zerg.services.live_catalog_timeline import project_catalog_session_facts
 from zerg.services.managed_provider_contracts import contract_for_provider
 from zerg.services.session_state_diagnostics import SessionStateComparison
 from zerg.services.session_state_diagnostics import compare_session_state_axes
+from zerg.services.session_state_facts_projector import SHADOW_SUPPORTED_FAMILIES
+from zerg.services.session_state_facts_projector import SHADOW_UNSUPPORTED_FAMILIES
 from zerg.services.session_state_facts_projector import ShadowSessionStateProjection
 from zerg.services.session_state_facts_projector import project_shadow_session_state_facts
 from zerg.utils.time import UTCBaseModel
 
 router = APIRouter(prefix="/agents/sessions", tags=["agents"])
+health_router = APIRouter(prefix="/agents/session-state", tags=["agents"])
 
 
 class SessionStateDiagnosticsResponse(UTCBaseModel):
@@ -43,6 +47,47 @@ class SessionStateDiagnosticsResponse(UTCBaseModel):
     cutover_active: Literal[False] = False
     shadow: ShadowSessionStateProjection
     comparison: SessionStateComparison
+
+
+class SessionStateReducerStorageResponse(UTCBaseModel):
+    head_counts: dict[str, int]
+    head_capacity_per_family: int
+    receipt_count: int
+    conflict_count: int
+    parity_delta_count: int
+
+
+class SessionStateReducerBatchResponse(UTCBaseModel):
+    sample_size: int
+    sample_limit: int
+    window_seconds: int
+    truncated: bool
+    newest_received_at: datetime | None
+    oldest_received_at: datetime | None
+    malformed_results: int
+    reducer_status_counts: dict[str, int]
+    parity_status_counts: dict[str, int]
+    changed_heads: int
+    duplicates: int
+    stale: int
+    conflicts: int
+    parity_deltas: int
+    parity_missing_heads: int
+
+
+class SessionStateReducerHealthResponse(UTCBaseModel):
+    status: Literal["disabled", "no_samples", "not_reducing", "not_comparable", "observing", "degraded"]
+    catalog_commit_seq: int
+    observed_at: datetime
+    ingest_enabled: bool
+    parity_enabled: bool
+    served_path: Literal["legacy_session_state"] = "legacy_session_state"
+    authorization_path: Literal["legacy_capabilities"] = "legacy_capabilities"
+    cutover_active: Literal[False] = False
+    projected_families: tuple[str, ...] = SHADOW_SUPPORTED_FAMILIES
+    unsupported_families: tuple[str, ...] = SHADOW_UNSUPPORTED_FAMILIES
+    storage: SessionStateReducerStorageResponse
+    recent_batches: SessionStateReducerBatchResponse
 
 
 def _owner_id(auth: object | None) -> int:
@@ -67,6 +112,64 @@ def _supported_operations(provider: str | None) -> set[str]:
     if contract.can_resume or contract.reattach:
         operations.add("resume")
     return operations
+
+
+@health_router.get("/health", response_model=SessionStateReducerHealthResponse)
+def get_session_state_reducer_health(
+    auth: object | None = Depends(verify_agents_token),
+    _single: None = Depends(require_single_tenant),
+) -> SessionStateReducerHealthResponse:
+    """Expose bounded reducer health without claiming cutover readiness."""
+
+    if not database_module.live_catalog_enabled():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "canonical_catalog_required",
+                "message": "Session state reducer health requires the canonical live catalog.",
+            },
+        )
+    try:
+        snapshot = shadow_session_state_health(owner_id=_owner_id(auth))
+    except CatalogReadError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": exc.code, "message": exc.message},
+        ) from exc
+    if snapshot.get("found") is not True:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Owner not found")
+    try:
+        recent = SessionStateReducerBatchResponse.model_validate(snapshot["recent_batches"])
+        failed_batches = int(recent.reducer_status_counts.get("failed") or 0) + int(recent.parity_status_counts.get("failed") or 0)
+        if not snapshot.get("ingest_enabled"):
+            health_status = "disabled"
+        elif recent.sample_size == 0:
+            health_status = "no_samples"
+        elif failed_batches or recent.malformed_results:
+            health_status = "degraded"
+        elif not recent.reducer_status_counts.get("applied"):
+            health_status = "not_reducing"
+        elif not snapshot.get("parity_enabled") or not recent.parity_status_counts.get("compared"):
+            health_status = "not_comparable"
+        else:
+            health_status = "observing"
+        return SessionStateReducerHealthResponse(
+            status=health_status,
+            catalog_commit_seq=int(snapshot["commit_seq"]),
+            observed_at=decode_catalog_datetime(snapshot["observed_at"]),
+            ingest_enabled=bool(snapshot["ingest_enabled"]),
+            parity_enabled=bool(snapshot["parity_enabled"]),
+            storage=SessionStateReducerStorageResponse.model_validate(snapshot["storage"]),
+            recent_batches=recent,
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "invalid_catalog_snapshot",
+                "message": "Catalog reducer health returned an invalid snapshot.",
+            },
+        ) from exc
 
 
 @router.get("/{session_id}/state-diagnostics", response_model=SessionStateDiagnosticsResponse)
@@ -145,4 +248,9 @@ def get_session_state_diagnostics(
         ) from exc
 
 
-__all__ = ["SessionStateDiagnosticsResponse", "router"]
+__all__ = [
+    "SessionStateDiagnosticsResponse",
+    "SessionStateReducerHealthResponse",
+    "health_router",
+    "router",
+]
