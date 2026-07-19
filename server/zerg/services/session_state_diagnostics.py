@@ -27,6 +27,10 @@ class SessionStateComparison(BaseModel):
 
     status: Literal["matched", "different", "not_comparable"]
     same_commit: bool
+    mode: SessionStateAxisComparison | None = None
+    disposition: SessionStateAxisComparison | None = None
+    launch: SessionStateAxisComparison | None = None
+    run: SessionStateAxisComparison | None = None
     activity: SessionStateAxisComparison | None = None
     control: SessionStateAxisComparison | None = None
 
@@ -38,16 +42,25 @@ def compare_session_state_axes(
     legacy_commit_seq: int,
     shadow_commit_seq: int,
 ) -> SessionStateComparison:
-    """Compare only axes Phase 3 can project, never presentation or lifecycle."""
+    """Compare only axes the non-served projector can derive independently."""
 
     if legacy_commit_seq != shadow_commit_seq:
         return SessionStateComparison(status="not_comparable", same_commit=False)
 
+    mode = _axis({"state": legacy.mode}, {"state": shadow.mode})
+    disposition = _axis(_payload(legacy.disposition), _payload(shadow.disposition))
+    launch = _axis(_payload(legacy.launch), _payload(shadow.launch))
+    run = _axis(_payload(legacy.run), _payload(shadow.run))
     activity = _axis(_activity_payload(legacy.activity), _activity_payload(shadow.activity))
     control = _axis(_control_payload(legacy.control), _control_payload(shadow.control))
+    comparisons = (mode, disposition, launch, run, activity, control)
     return SessionStateComparison(
-        status="matched" if activity.matches and control.matches else "different",
+        status="matched" if all(comparison.matches for comparison in comparisons) else "different",
         same_commit=True,
+        mode=mode,
+        disposition=disposition,
+        launch=launch,
+        run=run,
         activity=activity,
         control=control,
     )
@@ -55,6 +68,10 @@ def compare_session_state_axes(
 
 def _axis(legacy: dict[str, Any] | None, shadow: dict[str, Any] | None) -> SessionStateAxisComparison:
     return SessionStateAxisComparison(matches=legacy == shadow, legacy=legacy, shadow=shadow)
+
+
+def _payload(value: BaseModel | None) -> dict[str, Any] | None:
+    return value.model_dump(mode="json") if value is not None else None
 
 
 def _activity_payload(activity: SessionActivityFacts) -> dict[str, Any]:

@@ -66,6 +66,8 @@ def _shadow(*, activity_state: str = "executing", commit_seq: int = 12) -> Shado
     return ShadowSessionStateProjection.model_validate(
         {
             "commit_seq": commit_seq,
+            "mode": "helm",
+            "disposition": {"state": "open"},
             "activity": {
                 "state": activity_state,
                 "raw_kind": "running",
@@ -89,6 +91,10 @@ def test_comparison_is_scoped_to_projected_axes():
 
     assert comparison.status == "matched"
     assert comparison.same_commit is True
+    assert comparison.mode is not None and comparison.mode.matches is True
+    assert comparison.disposition is not None and comparison.disposition.matches is True
+    assert comparison.launch is not None and comparison.launch.matches is True
+    assert comparison.run is not None and comparison.run.matches is True
     assert comparison.activity is not None and comparison.activity.matches is True
     assert comparison.control is not None and comparison.control.matches is True
 
@@ -112,6 +118,7 @@ def test_comparison_reports_axis_drift_and_rejects_cross_commit_claims():
     )
     assert raced.status == "not_comparable"
     assert raced.same_commit is False
+    assert raced.mode is None and raced.disposition is None
     assert raced.activity is None and raced.control is None
 
 
@@ -206,8 +213,8 @@ def test_reducer_health_route_reports_failures_without_claiming_cutover(monkeypa
     payload = response.json()
     assert payload["status"] == "degraded"
     assert payload["catalog_commit_seq"] == 21
-    assert payload["projected_families"] == ["activity", "control"]
-    assert "mode" in payload["unsupported_families"]
+    assert payload["projected_families"] == ["mode", "disposition", "launch", "run", "activity", "control"]
+    assert "transcript" in payload["unsupported_families"]
     assert payload["cutover_active"] is False
 
 

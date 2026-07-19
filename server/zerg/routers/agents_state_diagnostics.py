@@ -109,7 +109,7 @@ def _supported_operations(provider: str | None) -> set[str]:
     operations = {
         operation for operation in ("send_input", "interrupt", "terminate", "tail_output") if bool(getattr(contract, operation, False))
     }
-    if contract.can_resume or contract.reattach:
+    if contract.can_resume:
         operations.add("resume")
     return operations
 
@@ -219,6 +219,7 @@ def get_session_state_diagnostics(
         shadow = project_shadow_session_state_facts(
             session_id=str(session_id),
             commit_seq=commit_seq,
+            catalog_facts=legacy_facts,
             heads=heads,
             supported_operations=_supported_operations(snapshot.get("provider")),
             now=observed_at,

@@ -919,6 +919,25 @@ Phase 3B diagnostic limits:
 
 Goal: serve and authorize from the authoritative facts.
 
+Phase 4 is intentionally split so no change both flips a served read path and
+changes command authorization:
+
+1. complete the pure, non-served projector and same-snapshot axis diagnostics;
+2. remove rolled-up labels such as `control_label` as semantic inputs;
+3. prove that reducer evidence and command preparation resolve the same
+   `(run_id, connection_id, lease_generation, granted operation)`;
+4. cut one detail read behind an explicit rollback switch;
+5. cut command preparation in a separate change, failing closed on any identity
+   disagreement; and
+6. expand the served projection to timeline, SSE/workspace, and remaining API
+   surfaces before deriving compatibility aliases.
+
+Process evidence must not close a run until complete-snapshot absence is reduced
+to an explicit terminal fact. A stale process head is not negative evidence.
+Transcript source, durable, and render revisions remain unsupported until their
+independent coordinates are defined; byte offsets and event revisions must not
+be compared as if they shared a unit.
+
 Work:
 
 - make timeline, detail, SSE/workspace, `/api/agents/*`, and catalog surfaces

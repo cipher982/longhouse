@@ -1,8 +1,8 @@
-"""Pure shadow projection from bounded reducer heads.
+"""Pure, non-served session-state projection from one catalog snapshot.
 
-Phase 3 deliberately projects only the activity and control axes represented
-by schema-v3 machine evidence. Durable lifecycle, transcript, interaction,
-host, and presentation facts remain explicitly unsupported until cutover.
+Reducer heads provide expiring machine observations. Durable catalog rows in
+the same snapshot provide lifecycle facts. The projection remains diagnostic
+until every served and authorized path is cut over explicitly.
 """
 
 from __future__ import annotations
@@ -25,6 +25,10 @@ from zerg.services.session_state_contract import SessionActionAvailability
 from zerg.services.session_state_contract import SessionActivityFacts
 from zerg.services.session_state_contract import SessionControlActions
 from zerg.services.session_state_contract import SessionControlFacts
+from zerg.services.session_state_contract import SessionDispositionFacts
+from zerg.services.session_state_contract import SessionLaunchFacts
+from zerg.services.session_state_contract import SessionMode
+from zerg.services.session_state_contract import SessionRunFacts
 
 UnsupportedFactFamily = Literal[
     "mode",
@@ -37,12 +41,8 @@ UnsupportedFactFamily = Literal[
     "presentation",
 ]
 
-SHADOW_SUPPORTED_FAMILIES: tuple[str, ...] = ("activity", "control")
+SHADOW_SUPPORTED_FAMILIES: tuple[str, ...] = ("mode", "disposition", "launch", "run", "activity", "control")
 SHADOW_UNSUPPORTED_FAMILIES: tuple[UnsupportedFactFamily, ...] = (
-    "mode",
-    "disposition",
-    "launch",
-    "run",
     "pending_interaction",
     "transcript",
     "host",
@@ -70,12 +70,16 @@ _GRANTED_OPERATIONS = frozenset({"send_input", "interrupt", "terminate", "tail_o
 
 
 class ShadowSessionStateProjection(BaseModel):
-    """Non-served Phase 3 projection with unsupported axes named explicitly."""
+    """Non-served projection with unsupported axes named explicitly."""
 
     model_config = ConfigDict(frozen=True)
 
     state_contract_version: int = STATE_CONTRACT_VERSION
     commit_seq: int
+    mode: SessionMode
+    disposition: SessionDispositionFacts
+    launch: SessionLaunchFacts | None = None
+    run: SessionRunFacts | None = None
     activity: SessionActivityFacts
     control: SessionControlFacts | None
     rejected_heads: int = 0
@@ -86,11 +90,12 @@ def project_shadow_session_state_facts(
     *,
     session_id: str,
     commit_seq: int,
+    catalog_facts: Mapping[str, Any],
     heads: Collection[Mapping[str, Any]],
     supported_operations: Collection[str] = (),
     now: datetime,
 ) -> ShadowSessionStateProjection:
-    """Project activity/control from one coherent catalog snapshot."""
+    """Project durable and observed axes from one coherent catalog snapshot."""
 
     normalized_now = _aware(now, "now")
     activity_head, rejected_activity = _effective_head(
@@ -105,11 +110,103 @@ def project_shadow_session_state_facts(
         family="control",
         now=normalized_now,
     )
+    launch = _project_launch(catalog_facts)
     return ShadowSessionStateProjection(
         commit_seq=commit_seq,
+        mode=_project_mode(catalog_facts),
+        disposition=_project_disposition(catalog_facts),
+        launch=launch,
+        run=_project_run(catalog_facts, launch=launch),
         activity=_project_activity(activity_head),
         control=_project_control(control_head, supported_operations=set(supported_operations)),
         rejected_heads=rejected_activity + rejected_control,
+    )
+
+
+def _mapping(value: Any) -> Mapping[str, Any]:
+    return value if isinstance(value, Mapping) else {}
+
+
+def _text(value: Any) -> str | None:
+    normalized = str(value or "").strip()
+    return normalized or None
+
+
+def _project_mode(catalog_facts: Mapping[str, Any]) -> SessionMode:
+    catalog = _mapping(catalog_facts.get("catalog"))
+    readiness = _mapping(catalog_facts.get("readiness"))
+    run = _mapping(catalog_facts.get("latest_run"))
+    origin_kind = _text(catalog.get("origin_kind"))
+    launch_surface = _text(catalog.get("launch_surface"))
+    execution_lifetime = _text(readiness.get("execution_lifetime"))
+    launch_origin = _text(run.get("launch_origin"))
+    connections = catalog_facts.get("connections")
+
+    if origin_kind == "console" or execution_lifetime == "one_shot" or launch_surface in {"web", "ios", "api"}:
+        return "console"
+    if (
+        execution_lifetime == "live_control"
+        or (isinstance(connections, list) and bool(connections))
+        or launch_origin in {"longhouse_spawned", "longhouse_continued"}
+    ):
+        return "helm"
+    return "shadow"
+
+
+def _project_disposition(catalog_facts: Mapping[str, Any]) -> SessionDispositionFacts:
+    catalog = _mapping(catalog_facts.get("catalog"))
+    closed_at = _optional_wire_datetime(catalog.get("closed_at"), "catalog.closed_at")
+    if closed_at is None:
+        return SessionDispositionFacts(state="open")
+    return SessionDispositionFacts(
+        state="closed",
+        closed_at=closed_at,
+        close_reason=_text(catalog.get("close_reason")) or "user_closed",
+    )
+
+
+def _project_launch(catalog_facts: Mapping[str, Any]) -> SessionLaunchFacts | None:
+    readiness = _mapping(catalog_facts.get("readiness"))
+    raw_state = _text(readiness.get("state"))
+    state = {
+        "pending": "pending",
+        "dispatched": "dispatched",
+        "failed": "failed",
+        "adopted": "adopted",
+        "abandoned": "abandoned",
+    }.get(raw_state)
+    if state is None:
+        return None
+    return SessionLaunchFacts(
+        state=state,
+        error_code=_text(readiness.get("error_code")),
+        error_message=_text(readiness.get("error_message")),
+    )
+
+
+def _project_run(
+    catalog_facts: Mapping[str, Any],
+    *,
+    launch: SessionLaunchFacts | None,
+) -> SessionRunFacts | None:
+    run = _mapping(catalog_facts.get("latest_run"))
+    run_id = _text(run.get("id"))
+    if run_id is None:
+        if launch is not None and launch.state in {"pending", "dispatched"}:
+            catalog = _mapping(catalog_facts.get("catalog"))
+            return SessionRunFacts(
+                lifecycle="starting",
+                started_at=_optional_wire_datetime(catalog.get("started_at"), "catalog.started_at"),
+            )
+        return None
+    started_at = _optional_wire_datetime(run.get("started_at"), "latest_run.started_at")
+    ended_at = _optional_wire_datetime(run.get("ended_at"), "latest_run.ended_at")
+    return SessionRunFacts(
+        id=run_id,
+        lifecycle="ended" if ended_at is not None else "running",
+        started_at=started_at,
+        ended_at=ended_at,
+        end_reason=_text(run.get("exit_status")) if ended_at is not None else None,
     )
 
 
@@ -184,12 +281,7 @@ def _project_control(
         "degraded": "degraded",
         "detached": "disconnected",
     }.get(raw_state, "unknown")
-    raw_grants = value.get("granted_operations")
-    if not isinstance(raw_grants, list) or any(not isinstance(operation, str) for operation in raw_grants):
-        raise ValueError("control granted_operations must be a string list")
-    if raw_grants != sorted(set(raw_grants)) or any(operation not in _GRANTED_OPERATIONS for operation in raw_grants):
-        raise ValueError("control granted_operations must be sorted, unique, and supported")
-    grants = set(raw_grants)
+    grants = set(_validated_grants(value))
 
     def action(name: str) -> SessionActionAvailability:
         operation = _ACTION_OPERATION[name]
@@ -265,14 +357,19 @@ def _head_value(
         if not connection_id or not lease_generation:
             raise ValueError("control connection identity is missing")
         expected_subject = f"connection:{connection_id}:{lease_generation}"
-        raw_grants = value.get("granted_operations")
-        if not isinstance(raw_grants, list) or any(not isinstance(operation, str) for operation in raw_grants):
-            raise ValueError("control granted_operations must be a string list")
-        if raw_grants != sorted(set(raw_grants)) or any(operation not in _GRANTED_OPERATIONS for operation in raw_grants):
-            raise ValueError("control granted_operations must be sorted, unique, and supported")
+        _validated_grants(value)
     if head.get("subject_key") != expected_subject:
         raise ValueError("fact head subject_key does not match its value")
     return value
+
+
+def _validated_grants(value: Mapping[str, Any]) -> list[str]:
+    raw_grants = value.get("granted_operations")
+    if not isinstance(raw_grants, list) or any(not isinstance(operation, str) for operation in raw_grants):
+        raise ValueError("control granted_operations must be a string list")
+    if raw_grants != sorted(set(raw_grants)) or any(operation not in _GRANTED_OPERATIONS for operation in raw_grants):
+        raise ValueError("control granted_operations must be sorted, unique, and supported")
+    return raw_grants
 
 
 def _wire_datetime(value: Any, field: str) -> datetime:
@@ -284,6 +381,12 @@ def _wire_datetime(value: Any, field: str) -> datetime:
         return _aware(datetime.fromisoformat(value.replace("Z", "+00:00")), field)
     except ValueError as exc:
         raise ValueError(f"{field} must be an RFC3339 timestamp") from exc
+
+
+def _optional_wire_datetime(value: Any, field: str) -> datetime | None:
+    if value is None or value == "":
+        return None
+    return _wire_datetime(value, field)
 
 
 def _aware(value: datetime, field: str) -> datetime:

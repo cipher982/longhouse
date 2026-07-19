@@ -14,6 +14,17 @@ from zerg.catalogd.schema import initialize_catalog_schema
 from zerg.services.session_state_facts_projector import project_shadow_session_state_facts
 
 NOW = datetime(2026, 7, 18, 12, 0, tzinfo=UTC)
+CATALOG_FACTS = {
+    "catalog": {
+        "started_at": (NOW - timedelta(hours=1)).isoformat(),
+        "closed_at": None,
+        "origin_kind": None,
+        "launch_surface": None,
+    },
+    "readiness": None,
+    "latest_run": None,
+    "connections": [],
+}
 
 
 def _head(
@@ -93,6 +104,7 @@ def test_projector_selects_newest_unexpired_head_without_commit_or_receive_ranki
     projection = project_shadow_session_state_facts(
         session_id="session-1",
         commit_seq=42,
+        catalog_facts=CATALOG_FACTS,
         heads=[older, newer],
         now=NOW + timedelta(seconds=2),
     )
@@ -102,15 +114,87 @@ def test_projector_selects_newest_unexpired_head_without_commit_or_receive_ranki
     assert projection.activity.source == "a-source"
     assert projection.activity.tool == "Shell"
     assert projection.control is None
-    assert "mode" in projection.unsupported_families
-    assert "run" in projection.unsupported_families
+    assert projection.mode == "shadow"
+    assert projection.disposition.state == "open"
+    assert projection.run is None
+    assert "transcript" in projection.unsupported_families
     assert "presentation" in projection.unsupported_families
+
+
+def test_projector_derives_durable_mode_disposition_launch_and_run_without_process_inference():
+    ended_at = NOW - timedelta(minutes=1)
+    projection = project_shadow_session_state_facts(
+        session_id="session-1",
+        commit_seq=43,
+        catalog_facts={
+            "catalog": {
+                "started_at": (NOW - timedelta(hours=2)).isoformat(),
+                "closed_at": NOW.isoformat(),
+                "close_reason": "user_closed",
+                "origin_kind": "console",
+                "launch_surface": "web",
+            },
+            "readiness": {
+                "state": "adopted",
+                "execution_lifetime": "one_shot",
+                "error_code": None,
+                "error_message": None,
+            },
+            "latest_run": {
+                "id": "run-1",
+                "launch_origin": "longhouse_spawned",
+                "started_at": (NOW - timedelta(hours=1)).isoformat(),
+                "ended_at": ended_at.isoformat(),
+                "exit_status": "completed",
+            },
+            "connections": [],
+        },
+        heads=[],
+        now=NOW,
+    )
+
+    assert projection.mode == "console"
+    assert projection.disposition.state == "closed"
+    assert projection.disposition.closed_at == NOW
+    assert projection.launch is not None and projection.launch.state == "adopted"
+    assert projection.run is not None and projection.run.lifecycle == "ended"
+    assert projection.run.id == "run-1"
+    assert projection.run.ended_at == ended_at
+    assert projection.run.end_reason == "completed"
+    assert projection.activity.state == "unknown"
+    assert projection.control is None
+
+
+def test_projector_derives_helm_and_starting_from_durable_launch_facts():
+    projection = project_shadow_session_state_facts(
+        session_id="session-1",
+        commit_seq=44,
+        catalog_facts={
+            "catalog": {
+                "started_at": NOW.isoformat(),
+                "closed_at": None,
+                "origin_kind": None,
+                "launch_surface": None,
+            },
+            "readiness": {"state": "dispatched", "execution_lifetime": "live_control"},
+            "latest_run": None,
+            "connections": [],
+        },
+        heads=[],
+        now=NOW,
+    )
+
+    assert projection.mode == "helm"
+    assert projection.launch is not None and projection.launch.state == "dispatched"
+    assert projection.run is not None and projection.run.lifecycle == "starting"
+    assert projection.run.started_at == NOW
 
 
 def test_projector_expires_activity_and_derives_control_lease_from_ttl():
     projection = project_shadow_session_state_facts(
         session_id="session-1",
         commit_seq=9,
+        catalog_facts=CATALOG_FACTS,
         heads=[
             _activity(observed_at=NOW, valid_until=NOW + timedelta(seconds=1)),
             _control(observed_at=NOW, grants=["interrupt", "send_input"]),
@@ -132,6 +216,7 @@ def test_projector_expires_activity_and_derives_control_lease_from_ttl():
     expired = project_shadow_session_state_facts(
         session_id="session-1",
         commit_seq=9,
+        catalog_facts=CATALOG_FACTS,
         heads=[_control(observed_at=NOW, grants=["send_input"])],
         supported_operations={"send_input"},
         now=NOW + timedelta(seconds=60),
@@ -143,8 +228,12 @@ def test_projector_uses_stable_source_coordinate_for_exact_timestamp_tie():
     first = _activity(observed_at=NOW, valid_until=NOW + timedelta(minutes=1), source="a-source")
     second = _activity(observed_at=NOW, valid_until=NOW + timedelta(minutes=1), source="z-source")
 
-    forward = project_shadow_session_state_facts(session_id="session-1", commit_seq=1, heads=[first, second], now=NOW)
-    reverse = project_shadow_session_state_facts(session_id="session-1", commit_seq=1, heads=[second, first], now=NOW)
+    forward = project_shadow_session_state_facts(
+        session_id="session-1", commit_seq=1, catalog_facts=CATALOG_FACTS, heads=[first, second], now=NOW
+    )
+    reverse = project_shadow_session_state_facts(
+        session_id="session-1", commit_seq=1, catalog_facts=CATALOG_FACTS, heads=[second, first], now=NOW
+    )
 
     assert forward.activity.source == reverse.activity.source == "z-source"
 
@@ -166,6 +255,7 @@ def test_projector_skips_corrupt_or_cross_session_heads_without_granting_control
     projection = project_shadow_session_state_facts(
         session_id="session-1",
         commit_seq=3,
+        catalog_facts=CATALOG_FACTS,
         heads=[cross_session, malformed, indexed_other_session, missing_source, valid],
         supported_operations={"send_input"},
         now=NOW,
@@ -176,7 +266,25 @@ def test_projector_skips_corrupt_or_cross_session_heads_without_granting_control
     assert projection.rejected_heads == 4
 
 
-def test_session_head_read_and_projection_share_one_commit_snapshot(tmp_path):
+def test_projector_rejects_a_head_with_mismatched_evidence_hash():
+    tampered = _activity(observed_at=NOW, valid_until=NOW + timedelta(minutes=1))
+    value = json.loads(tampered["value_json"])
+    value["tool_name"] = "Changed after hashing"
+    tampered["value_json"] = json.dumps(value)
+
+    projection = project_shadow_session_state_facts(
+        session_id="session-1",
+        commit_seq=4,
+        catalog_facts=CATALOG_FACTS,
+        heads=[tampered],
+        now=NOW,
+    )
+
+    assert projection.activity.state == "unknown"
+    assert projection.rejected_heads == 1
+
+
+def test_session_head_read_and_projection_share_fact_commit_snapshot(tmp_path):
     engine = create_catalog_engine(tmp_path / "catalog.db")
     initialize_catalog_schema(engine)
     value = {
@@ -215,6 +323,7 @@ def test_session_head_read_and_projection_share_one_commit_snapshot(tmp_path):
         projection = project_shadow_session_state_facts(
             session_id="session-1",
             commit_seq=commit_seq,
+            catalog_facts=CATALOG_FACTS,
             heads=heads,
             now=NOW,
         )

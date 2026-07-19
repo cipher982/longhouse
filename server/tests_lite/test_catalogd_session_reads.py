@@ -8,6 +8,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
+
 from zerg.catalogd.client import CatalogClient
 from zerg.catalogd.client import CatalogRemoteError
 from zerg.catalogd.fact_reducer import ReducerFact
@@ -548,6 +549,7 @@ async def test_shadow_state_read_is_owner_scoped_and_commit_coherent(daemon_path
         shadow = project_shadow_session_state_facts(
             session_id=session_id,
             commit_seq=int(result["commit_seq"]),
+            catalog_facts=result["legacy_facts"],
             heads=result["heads"],
             supported_operations={"send_input", "interrupt", "terminate", "resume"},
             now=observed_at,
