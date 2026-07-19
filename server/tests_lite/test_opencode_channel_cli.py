@@ -18,6 +18,8 @@ os.environ.setdefault("INTERNAL_API_SECRET", "test-internal-secret-value")
 
 from zerg.cli import opencode_channel
 
+_RUN_ID = "11111111-1111-4111-8111-111111111111"
+
 
 class _FakePopen:
     def __init__(self, cmd, *, cwd, env, stdin, stdout, stderr, start_new_session):
@@ -108,6 +110,7 @@ def test_launch_opencode_server_bridge_writes_private_state_without_token_in_arg
 
     result = opencode_channel.launch_opencode_server_bridge(
         session_id=session_id,
+        run_id=_RUN_ID,
         cwd=tmp_path,
         api_url="https://longhouse.test",
         api_token="zdt_test_token",
@@ -139,6 +142,7 @@ def test_launch_opencode_server_bridge_writes_private_state_without_token_in_arg
     assert oct(state_path.stat().st_mode & 0o777) == "0o600"
     state = json.loads(state_path.read_text(encoding="utf-8"))
     assert state["provider_session_id"] == "ses_test123"
+    assert state["run_id"] == _RUN_ID
     assert state["password"] == proc.env["OPENCODE_SERVER_PASSWORD"]
     assert "zdt_test_token" not in state_path.read_text(encoding="utf-8")
     assert state["schema_version"] == 1
@@ -147,6 +151,7 @@ def test_launch_opencode_server_bridge_writes_private_state_without_token_in_arg
 
     second = opencode_channel.launch_opencode_server_bridge(
         session_id=session_id,
+        run_id=_RUN_ID,
         cwd=tmp_path,
         api_url="https://longhouse.test",
         api_token="zdt_test_token",
@@ -158,6 +163,17 @@ def test_launch_opencode_server_bridge_writes_private_state_without_token_in_arg
     assert second["provider_session_id"] == "ses_test123"
     assert len(popen_calls) == 1
     assert len(create_calls) == 1
+
+    with pytest.raises(opencode_channel.OpenCodeServerBridgeError, match="different run"):
+        opencode_channel.launch_opencode_server_bridge(
+            session_id=session_id,
+            run_id="22222222-2222-4222-8222-222222222222",
+            cwd=tmp_path,
+            api_url="https://longhouse.test",
+            api_token="zdt_test_token",
+            device_id="work-laptop",
+            config_dir=tmp_path / "config",
+        )
 
 
 def test_launch_opencode_server_bridge_writes_model_config(monkeypatch, tmp_path):
@@ -198,6 +214,7 @@ def test_launch_opencode_server_bridge_writes_model_config(monkeypatch, tmp_path
 
     opencode_channel.launch_opencode_server_bridge(
         session_id=session_id,
+        run_id=_RUN_ID,
         cwd=tmp_path,
         api_url="https://longhouse.test",
         api_token="zdt_test_token",
@@ -565,6 +582,7 @@ def test_launch_mode_and_owner_persisted_then_read_back(monkeypatch, tmp_path):
 
     opencode_channel.launch_opencode_server_bridge(
         session_id=session_id,
+        run_id=_RUN_ID,
         cwd=tmp_path,
         api_url="https://longhouse.test",
         api_token="zdt_test_token",
@@ -588,6 +606,7 @@ def test_launch_rejects_unknown_launch_mode(tmp_path):
     with pytest.raises(opencode_channel.OpenCodeServerBridgeError, match="launch_mode"):
         opencode_channel.launch_opencode_server_bridge(
             session_id=str(uuid4()),
+            run_id=_RUN_ID,
             cwd=tmp_path,
             api_url="https://longhouse.test",
             api_token="zdt_test_token",

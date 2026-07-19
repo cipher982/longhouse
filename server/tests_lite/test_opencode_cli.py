@@ -46,6 +46,7 @@ def _stub_managed_launch(monkeypatch, launch_calls: list[dict] | None = None):
             launch_calls.append(kwargs)
         return ManagedLocalLaunchResponse(
             session_id="session-123",
+            run_id="11111111-1111-4111-8111-111111111111",
             provider_session_id="provider-123",
             attach_command="",
             source_runner_name="work-laptop",
@@ -99,6 +100,7 @@ def test_opencode_command_launches_managed_session_and_passes_extra_args(monkeyp
     assert bridge_calls == [
         {
             "session_id": "session-123",
+            "run_id": "11111111-1111-4111-8111-111111111111",
             "api_url": "https://longhouse.test",
             "api_token": "zdt_test_token",
             "device_id": "work-laptop",
@@ -182,6 +184,7 @@ def test_opencode_funnels_model_flag_to_server(monkeypatch, tmp_path):
     assert bridge_calls == [
         {
             "session_id": "session-123",
+            "run_id": "11111111-1111-4111-8111-111111111111",
             "api_url": "https://longhouse.test",
             "api_token": "zdt_test_token",
             "device_id": "work-laptop",

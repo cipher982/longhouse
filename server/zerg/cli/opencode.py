@@ -854,6 +854,7 @@ def opencode(
     try:
         launch_opencode_server_bridge(
             session_id=result.session_id,
+            run_id=result.run_id,
             cwd=cwd,
             api_url=resolved_url,
             api_token=resolved_token,

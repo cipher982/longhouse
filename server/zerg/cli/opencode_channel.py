@@ -128,6 +128,15 @@ def _validate_session_id(session_id: str) -> str:
     return normalized
 
 
+def _validate_run_id(run_id: str) -> str:
+    normalized = str(run_id or "").strip()
+    try:
+        UUID(normalized)
+    except ValueError as exc:
+        raise OpenCodeServerBridgeError("run_id must be a UUID") from exc
+    return normalized
+
+
 def _opencode_server_state_dir(config_dir: Path | None = None) -> Path:
     return (config_dir or (Path.home() / ".claude")) / "managed-local" / "opencode-server"
 
@@ -432,6 +441,7 @@ def _state_result(state: OpenCodeServerBridgeState) -> dict:
         "provider": "opencode",
         "transport": OPENCODE_SERVER_BRIDGE_TRANSPORT,
         "provider_session_id": state.provider_session_id,
+        "run_id": state.run_id,
         "server_url": state.server_url,
         "pid": state.pid,
         "log_path": state.log_path,
@@ -462,6 +472,7 @@ def _existing_live_state_result(
 def launch_opencode_server_bridge(
     *,
     session_id: str,
+    run_id: str,
     cwd: Path,
     api_url: str,
     api_token: str,
@@ -480,6 +491,7 @@ def launch_opencode_server_bridge(
     model: str | None = None,
 ) -> dict:
     normalized_session_id = _validate_session_id(session_id)
+    normalized_run_id = _validate_run_id(run_id)
     if launch_mode not in _VALID_LAUNCH_MODES:
         raise OpenCodeServerBridgeError(f"unknown launch_mode: {launch_mode!r}")
     if not cwd.is_absolute() or not cwd.is_dir():
@@ -495,6 +507,8 @@ def launch_opencode_server_bridge(
     with _opencode_server_launch_lock(normalized_session_id, config_dir):
         existing = _existing_live_state_result(session_id=normalized_session_id, config_dir=config_dir)
         if existing is not None:
+            if str(existing.get("run_id") or "") != normalized_run_id:
+                raise OpenCodeServerBridgeError("existing OpenCode bridge belongs to a different run")
             return existing
 
         logs_dir.mkdir(parents=True, exist_ok=True)
@@ -570,7 +584,7 @@ def launch_opencode_server_bridge(
                 launch_mode=launch_mode,
                 owner_wrapper_pid=resolved_owner_pid,
                 owner_wrapper_start_time=owner_identity[0] if owner_identity else "",
-                run_id=str(uuid4()),
+                run_id=normalized_run_id,
                 connection_id=str(uuid4()),
                 lease_generation=str(uuid4()),
             )
@@ -725,6 +739,7 @@ def run_opencode_attach(
 @app.command(name="launch")
 def launch_command(
     session_id: str = typer.Option(..., "--session-id"),
+    run_id: str = typer.Option(..., "--run-id"),
     cwd: Path = typer.Option(..., "--cwd", exists=True, file_okay=False, dir_okay=True, resolve_path=True),
     api_url: str = typer.Option(..., "--api-url"),
     api_token: str | None = typer.Option(None, "--api-token", hidden=True),
@@ -738,6 +753,7 @@ def launch_command(
     try:
         payload = launch_opencode_server_bridge(
             session_id=session_id,
+            run_id=run_id,
             cwd=cwd,
             api_url=api_url,
             api_token=token,
