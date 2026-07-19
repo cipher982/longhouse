@@ -2101,8 +2101,10 @@ class CatalogStore:
                             **request_payload,
                             "longhouse_control_grant": {
                                 "connection_id": grant.connection_id,
+                                "catalog_connection_id": grant.catalog_connection_id,
                                 "run_id": grant.run_id,
                                 "lease_generation": grant.lease_generation,
+                                "identity_source": grant.identity_source,
                             },
                         },
                         sort_keys=True,
@@ -2128,8 +2130,10 @@ class CatalogStore:
                 "operation_id": operation_id,
                 "grant": {
                     "connection_id": grant.connection_id,
+                    "catalog_connection_id": grant.catalog_connection_id,
                     "run_id": grant.run_id,
                     "lease_generation": grant.lease_generation,
+                    "identity_source": grant.identity_source,
                 },
                 "exact_replay": False,
                 "commit_seq": str(commit_seq),
@@ -3797,6 +3801,12 @@ class CatalogStore:
                 "parity_deltas": 0,
                 "parity_missing_heads": 0,
             }
+            identity_binding_totals = {
+                "bound": 0,
+                "matched": 0,
+                "unbound": 0,
+                "mismatched": 0,
+            }
             malformed_results = 0
             for row in recent_rows:
                 try:
@@ -3829,6 +3839,15 @@ class CatalogStore:
                             "missing_heads",
                         ),
                     }
+                    identity_binding = reducer.get("identity_binding")
+                    if identity_binding is not None:
+                        if not isinstance(identity_binding, dict):
+                            raise ValueError("shadow identity binding outcome is invalid")
+                        for field in identity_binding_totals:
+                            identity_binding_totals[field] += _non_negative_int(
+                                identity_binding.get(field, 0),
+                                f"identity_binding.{field}",
+                            )
                     reducer_status_counts[reducer_status] = reducer_status_counts.get(reducer_status, 0) + 1
                     parity_status_counts[parity_status] = parity_status_counts.get(parity_status, 0) + 1
                     for field, value in {**reducer_counters, **parity_counters}.items():
@@ -3859,6 +3878,7 @@ class CatalogStore:
                     "malformed_results": malformed_results,
                     "reducer_status_counts": reducer_status_counts,
                     "parity_status_counts": parity_status_counts,
+                    "identity_binding": identity_binding_totals,
                     **totals,
                 },
             }
@@ -8634,8 +8654,9 @@ def _apply_shadow_reducer(
 def _bind_control_evidence_identities(connection, facts) -> dict[str, int]:
     """Bind adapter UUIDs to their exact catalog connection, once.
 
-    The binding is diagnostic-only in Phase 4C. Command authorization keeps
-    using the legacy integer connection identity until a later explicit cut.
+    The adapter identity is exposed to command preparation once bound. Boolean
+    capability grants remain the authorization authority until the explicit
+    Phase 4 command cutover.
     """
 
     from zerg.services.managed_provider_contracts import contract_for_provider

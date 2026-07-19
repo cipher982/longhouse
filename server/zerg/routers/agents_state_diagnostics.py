@@ -11,6 +11,7 @@ from fastapi import Depends
 from fastapi import HTTPException
 from fastapi import status
 from pydantic import ConfigDict
+from pydantic import Field
 
 import zerg.database as database_module
 from zerg.dependencies.agents_auth import require_single_tenant
@@ -67,6 +68,14 @@ class SessionStateReducerBatchResponse(UTCBaseModel):
     malformed_results: int
     reducer_status_counts: dict[str, int]
     parity_status_counts: dict[str, int]
+    identity_binding: dict[str, int] = Field(
+        default_factory=lambda: {
+            "bound": 0,
+            "matched": 0,
+            "unbound": 0,
+            "mismatched": 0,
+        }
+    )
     changed_heads: int
     duplicates: int
     stale: int

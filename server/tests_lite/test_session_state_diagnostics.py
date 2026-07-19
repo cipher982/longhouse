@@ -146,7 +146,9 @@ def test_control_identity_comparison_distinguishes_bound_unbound_and_mismatch():
     assert matched.control_identity.status == "bound_matched"
     assert matched.control_identity.legacy_grant == {
         "catalog_connection_id": 7,
-        "synthetic_generation": f"7:{NOW.isoformat()}",
+        "connection_id": "connection-1",
+        "lease_generation": "lease-1",
+        "identity_source": "adapter_bound",
     }
     assert matched.control_identity.catalog_bound_count == 1
 

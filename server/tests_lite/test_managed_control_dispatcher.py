@@ -464,9 +464,11 @@ def test_catalog_managed_control_uses_catalogd_for_grant_and_operation(monkeypat
                     "allowed": True,
                     "operation_id": params["operation_id"],
                     "grant": {
-                        "connection_id": 17,
+                        "connection_id": "adapter-17",
+                        "catalog_connection_id": 17,
                         "run_id": str(uuid4()),
-                        "lease_generation": "17:lease",
+                        "lease_generation": "adapter-lease",
+                        "identity_source": "adapter_bound",
                     },
                 }
             if method == "control.operation.finish.v2":
@@ -515,8 +517,71 @@ def test_catalog_managed_control_uses_catalogd_for_grant_and_operation(monkeypat
                 "control.operation.finish.v2",
             ]
             grant = websocket.sent[0]["payload"]["longhouse_control_grant"]
-            assert grant["connection_id"] == 17
-            assert grant["lease_generation"] == "17:lease"
+            assert grant["connection_id"] == "adapter-17"
+            assert grant["catalog_connection_id"] == 17
+            assert grant["lease_generation"] == "adapter-lease"
+            assert grant["identity_source"] == "adapter_bound"
+        finally:
+            await _clear_machine_registry()
+
+    asyncio.run(_run())
+
+
+def test_catalog_managed_control_normalizes_pre_identity_replay(monkeypatch):
+    calls = []
+    replay_run_id = str(uuid4())
+
+    class _CatalogClient:
+        async def call(self, method, params, **_kwargs):
+            calls.append((method, params))
+            if method == "control.command.prepare.v2":
+                return {
+                    "allowed": True,
+                    "operation_id": params["operation_id"],
+                    "exact_replay": True,
+                    "grant": {
+                        "connection_id": 17,
+                        "run_id": replay_run_id,
+                        "lease_generation": "17:legacy-lease",
+                    },
+                }
+            if method == "control.operation.finish.v2":
+                return {"found": True, "changed": True, "commit_seq": "2"}
+            raise AssertionError(method)
+
+    monkeypatch.setattr(dispatcher_module.database_module, "live_catalog_enabled", lambda: True)
+    monkeypatch.setattr(dispatcher_module.database_module, "live_store_configured", lambda: True)
+    monkeypatch.setattr("zerg.services.catalogd_supervisor.get_catalogd_client", lambda: _CatalogClient())
+
+    async def _run():
+        await _clear_machine_registry()
+        try:
+            websocket = await _connect_fake_engine(owner_id=42, supports=["codex.send"])
+            session = _session(source_runner_id=None)
+            completer = asyncio.create_task(
+                _complete_first_machine_command(
+                    websocket,
+                    {"ok": True, "result": {"exit_code": 0, "stdout": "accepted", "stderr": ""}},
+                )
+            )
+            result = await dispatch_managed_control_command(
+                db=object(),
+                owner_id=42,
+                session=session,
+                timeout_secs=15,
+                command_type=MANAGED_CONTROL_COMMAND_SEND_TEXT,
+                payload={"text": "continue"},
+                request_id="req-legacy-replay",
+            )
+            await completer
+            assert result.ok is True
+            assert websocket.sent[0]["payload"]["longhouse_control_grant"] == {
+                "catalog_connection_id": 17,
+                "connection_id": 17,
+                "run_id": replay_run_id,
+                "lease_generation": "17:legacy-lease",
+                "identity_source": "legacy_synthetic",
+            }
         finally:
             await _clear_machine_registry()
 

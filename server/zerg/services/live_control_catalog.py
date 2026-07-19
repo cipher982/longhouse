@@ -51,9 +51,11 @@ class LiveControlSession:
 
 @dataclass(frozen=True)
 class LiveControlGrant:
-    connection_id: int
+    catalog_connection_id: int
+    connection_id: str | int
     run_id: str
     lease_generation: str
+    identity_source: Literal["adapter_bound", "legacy_synthetic"]
 
 
 def load_live_control_session(db: Session, session_id: UUID | str) -> LiveControlSession | None:
@@ -164,7 +166,13 @@ def get_live_control_grant(
         .scalar_subquery()
     )
     row = (
-        db.query(LiveSessionConnection.id, LiveSessionConnection.run_id, LiveSessionConnection.acquired_at)
+        db.query(
+            LiveSessionConnection.id,
+            LiveSessionConnection.run_id,
+            LiveSessionConnection.adapter_connection_id,
+            LiveSessionConnection.lease_generation,
+            LiveSessionConnection.acquired_at,
+        )
         .join(LiveSessionRun, LiveSessionRun.id == LiveSessionConnection.run_id)
         .join(LiveSessionThread, LiveSessionThread.id == LiveSessionRun.thread_id)
         .filter(
@@ -179,14 +187,38 @@ def get_live_control_grant(
             LiveSessionConnection.last_health_at > freshness_cutoff,
             column == 1,
         )
+        .order_by(
+            LiveSessionConnection.adapter_connection_id.is_not(None).desc(),
+            LiveSessionConnection.last_health_at.desc(),
+            LiveSessionConnection.id.desc(),
+        )
         .limit(1)
         .first()
     )
     if row is None:
         return None
+    adapter_connection_id = str(row.adapter_connection_id or "").strip()
+    adapter_generation = str(row.lease_generation or "").strip()
+    if bool(adapter_connection_id) != bool(adapter_generation):
+        return None
+    if adapter_connection_id and adapter_generation:
+        return LiveControlGrant(
+            catalog_connection_id=int(row.id),
+            connection_id=adapter_connection_id,
+            run_id=str(row.run_id),
+            lease_generation=adapter_generation,
+            identity_source="adapter_bound",
+        )
+
     acquired_at = normalize_utc(row.acquired_at)
     generation = f"{row.id}:{acquired_at.isoformat()}" if acquired_at is not None else str(row.id)
-    return LiveControlGrant(connection_id=int(row.id), run_id=str(row.run_id), lease_generation=generation)
+    return LiveControlGrant(
+        catalog_connection_id=int(row.id),
+        connection_id=int(row.id),
+        run_id=str(row.run_id),
+        lease_generation=generation,
+        identity_source="legacy_synthetic",
+    )
 
 
 def live_control_capability_available(

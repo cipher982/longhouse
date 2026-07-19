@@ -397,7 +397,7 @@ def _control(
     return SessionControlFacts(
         ownership=ownership,
         connection=connection,
-        connection_id=capabilities.connection_id,
+        connection_id=capabilities.adapter_connection_id or capabilities.connection_id,
         lease_generation=capabilities.lease_generation,
         control_plane=_clean(capabilities.control_plane),
         observed_at=observed_at,

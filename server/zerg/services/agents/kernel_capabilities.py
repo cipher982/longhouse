@@ -146,6 +146,7 @@ class KernelSessionCapabilities:
 
     # Stable identity for the acquired connection lease. Health renewals move
     # freshness clocks but must not manufacture a new lease generation.
+    adapter_connection_id: Optional[str] = None
     lease_generation: Optional[str] = None
     control_owned: bool = False
     run_started_at: Optional[datetime] = None
@@ -538,8 +539,11 @@ def _payload_from_rows(
         can_tail_output=can_tail,
         can_resume=can_resume,
         staleness_reason=reason,
+        adapter_connection_id=(str(value) if (value := getattr(best, "adapter_connection_id", None)) else None),
         lease_generation=(
-            f"{best.id}:{normalize_utc(best.acquired_at).isoformat()}"
+            str(getattr(best, "lease_generation"))
+            if getattr(best, "adapter_connection_id", None) and getattr(best, "lease_generation", None)
+            else f"{best.id}:{normalize_utc(best.acquired_at).isoformat()}"
             if best.id is not None and normalize_utc(best.acquired_at) is not None
             else str(best.id)
             if best.id is not None

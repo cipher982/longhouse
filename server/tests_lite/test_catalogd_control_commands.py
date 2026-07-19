@@ -18,6 +18,7 @@ from zerg.models.live_store import LiveSessionCatalog
 from zerg.models.live_store import LiveSessionConnection
 from zerg.models.live_store import LiveSessionRun
 from zerg.models.live_store import LiveSessionThread
+from zerg.services.live_control_catalog import get_live_control_grant
 
 
 @pytest.fixture
@@ -30,7 +31,7 @@ def daemon_paths():
     root.rmdir()
 
 
-def _seed_control_grant(engine):
+def _seed_control_grant(engine, *, bind_adapter_identity: bool = True):
     now = datetime.now(UTC).replace(microsecond=0)
     session_id = uuid4()
     thread_id = uuid4()
@@ -69,8 +70,12 @@ def _seed_control_grant(engine):
                 started_at=now,
             )
         )
+        adapter_connection_id = str(uuid4()) if bind_adapter_identity else None
+        lease_generation = str(uuid4()) if bind_adapter_identity else None
         connection = LiveSessionConnection(
             run_id=str(run_id),
+            adapter_connection_id=adapter_connection_id,
+            lease_generation=lease_generation,
             control_plane="codex_bridge",
             acquisition_kind="spawned_control",
             state="attached",
@@ -83,7 +88,7 @@ def _seed_control_grant(engine):
         )
         db.add(connection)
         db.commit()
-        return session_id, run_id, connection.id
+        return session_id, run_id, connection.id, adapter_connection_id, lease_generation
 
 
 @pytest.mark.asyncio
@@ -91,7 +96,7 @@ async def test_catalogd_prepares_and_finishes_control_command_atomically(daemon_
     database_path, socket_path = daemon_paths
     engine = create_catalog_engine(database_path)
     initialize_catalog_schema(engine)
-    session_id, run_id, connection_id = _seed_control_grant(engine)
+    session_id, run_id, connection_id, adapter_connection_id, lease_generation = _seed_control_grant(engine)
     engine.dispose()
 
     daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
@@ -115,9 +120,11 @@ async def test_catalogd_prepares_and_finishes_control_command_atomically(daemon_
         prepared = await client.call("control.command.prepare.v2", params)
         assert prepared["allowed"] is True
         assert prepared["operation_id"] == operation_id
-        assert prepared["grant"]["connection_id"] == connection_id
+        assert prepared["grant"]["connection_id"] == adapter_connection_id
+        assert prepared["grant"]["catalog_connection_id"] == connection_id
         assert prepared["grant"]["run_id"] == str(run_id)
-        assert prepared["grant"]["lease_generation"].startswith(f"{connection_id}:")
+        assert prepared["grant"]["lease_generation"] == lease_generation
+        assert prepared["grant"]["identity_source"] == "adapter_bound"
         replay = await client.call("control.command.prepare.v2", params)
         assert replay["allowed"] is True
         assert replay["exact_replay"] is True
@@ -144,6 +151,74 @@ async def test_catalogd_prepares_and_finishes_control_command_atomically(daemon_
         assert operation.status == "succeeded"
         assert json.loads(operation.request_json)["longhouse_control_grant"]["run_id"] == str(run_id)
         assert json.loads(operation.result_json)["stdout"] == "accepted"
+    engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_catalogd_control_prepare_preserves_legacy_identity_for_unbound_connection(daemon_paths):
+    database_path, socket_path = daemon_paths
+    engine = create_catalog_engine(database_path)
+    initialize_catalog_schema(engine)
+    session_id, run_id, connection_id, _adapter_id, _generation = _seed_control_grant(
+        engine,
+        bind_adapter_identity=False,
+    )
+    engine.dispose()
+
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        prepared = await client.call(
+            "control.command.prepare.v2",
+            {
+                "operation_id": str(uuid4()),
+                "owner_id": 7,
+                "session_id": str(session_id),
+                "device_id": "cinder",
+                "provider": "codex",
+                "command_type": "session.send_text",
+                "command_id": f"managed-control:{session_id}:session.send_text:legacy",
+                "capability": "send",
+                "request_payload": {},
+                "timeout_secs": 15,
+            },
+        )
+    finally:
+        await client.close()
+        await daemon.close()
+
+    assert prepared["allowed"] is True
+    assert prepared["grant"]["connection_id"] == connection_id
+    assert prepared["grant"]["catalog_connection_id"] == connection_id
+    assert prepared["grant"]["run_id"] == str(run_id)
+    assert prepared["grant"]["lease_generation"].startswith(f"{connection_id}:")
+    assert prepared["grant"]["identity_source"] == "legacy_synthetic"
+
+
+@pytest.mark.parametrize(
+    ("adapter_connection_id", "lease_generation"),
+    [(str(uuid4()), None), (None, str(uuid4()))],
+)
+def test_control_grant_fails_closed_on_partial_adapter_identity(
+    daemon_paths,
+    adapter_connection_id,
+    lease_generation,
+):
+    database_path, _socket_path = daemon_paths
+    engine = create_catalog_engine(database_path)
+    initialize_catalog_schema(engine)
+    session_id, _run_id, connection_id, _adapter_id, _generation = _seed_control_grant(
+        engine,
+        bind_adapter_identity=False,
+    )
+    with Session(engine) as db:
+        connection = db.get(LiveSessionConnection, connection_id)
+        connection.adapter_connection_id = adapter_connection_id
+        connection.lease_generation = lease_generation
+        db.commit()
+
+        assert get_live_control_grant(db, session_id=session_id, capability="send") is None
     engine.dispose()
 
 

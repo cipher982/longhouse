@@ -182,12 +182,21 @@ def _legacy_grant_identity(connection: dict[str, Any] | None) -> dict[str, str |
     if connection is None:
         return None
     connection_id = connection.get("id")
+    adapter_connection_id = str(connection.get("adapter_connection_id") or "") or None
+    adapter_generation = str(connection.get("lease_generation") or "") or None
     acquired_at = str(connection.get("acquired_at") or "") or None
+    if adapter_connection_id and adapter_generation:
+        return {
+            "catalog_connection_id": connection_id if isinstance(connection_id, int) else None,
+            "connection_id": adapter_connection_id,
+            "lease_generation": adapter_generation,
+            "identity_source": "adapter_bound",
+        }
     return {
         "catalog_connection_id": connection_id if isinstance(connection_id, int) else None,
-        # The served control path synthesizes this token from catalog row identity.
-        # It is intentionally not comparable to the adapter's lease_generation.
-        "synthetic_generation": f"{connection_id}:{acquired_at}" if connection_id is not None and acquired_at else None,
+        "connection_id": connection_id if isinstance(connection_id, int) else None,
+        "lease_generation": f"{connection_id}:{acquired_at}" if connection_id is not None and acquired_at else None,
+        "identity_source": "legacy_synthetic",
     }
 
 

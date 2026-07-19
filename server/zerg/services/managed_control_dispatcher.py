@@ -202,11 +202,41 @@ async def _prepare_catalog_managed_control_operation(
     except Exception:
         logger.warning("Failed to prepare catalog managed-control operation %s", command_id, exc_info=True)
         return None
-    grant = result.get("grant")
+    grant = _normalize_catalog_control_grant(result.get("grant"))
     prepared_operation_id = result.get("operation_id")
-    if result.get("allowed") is not True or not isinstance(grant, Mapping) or not prepared_operation_id:
+    if result.get("allowed") is not True or grant is None or not prepared_operation_id:
         return None
     return str(prepared_operation_id), grant
+
+
+def _normalize_catalog_control_grant(raw: object) -> dict[str, Any] | None:
+    """Normalize pre-4.3 replay rows without inventing adapter identity."""
+
+    if not isinstance(raw, Mapping):
+        return None
+    connection_id = raw.get("connection_id")
+    catalog_connection_id = raw.get("catalog_connection_id")
+    identity_source = str(raw.get("identity_source") or "").strip()
+    if catalog_connection_id is None and isinstance(connection_id, int):
+        catalog_connection_id = connection_id
+        identity_source = "legacy_synthetic"
+    if not isinstance(catalog_connection_id, int) or catalog_connection_id <= 0:
+        return None
+    if not isinstance(connection_id, (int, str)) or not str(connection_id).strip():
+        return None
+    run_id = str(raw.get("run_id") or "").strip()
+    lease_generation = str(raw.get("lease_generation") or "").strip()
+    if not run_id or not lease_generation:
+        return None
+    if identity_source not in {"adapter_bound", "legacy_synthetic"}:
+        return None
+    return {
+        "catalog_connection_id": catalog_connection_id,
+        "connection_id": connection_id,
+        "run_id": run_id,
+        "lease_generation": lease_generation,
+        "identity_source": identity_source,
+    }
 
 
 async def _finish_live_managed_control_operation(
@@ -341,9 +371,11 @@ async def dispatch_managed_control_command(
             prepared_operation_id, grant = prepared
             run_id = str(grant["run_id"])
             dispatch_payload["longhouse_control_grant"] = {
-                "connection_id": int(grant["connection_id"]),
+                "connection_id": grant["connection_id"],
+                "catalog_connection_id": int(grant["catalog_connection_id"]),
                 "run_id": run_id,
                 "lease_generation": str(grant["lease_generation"]),
+                "identity_source": str(grant["identity_source"]),
             }
         return await _dispatch_engine_channel(
             owner_id=owner_id,

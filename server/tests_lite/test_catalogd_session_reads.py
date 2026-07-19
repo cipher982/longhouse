@@ -725,6 +725,12 @@ async def test_shadow_state_health_summarizes_bounded_recent_outcomes(daemon_pat
                                 "duplicates": 1,
                                 "stale": 0,
                                 "conflicts": 0,
+                                "identity_binding": {
+                                    "bound": 1,
+                                    "matched": 2,
+                                    "unbound": 0,
+                                    "mismatched": 0,
+                                },
                             },
                             "shadow_parity": {
                                 "status": "compared",
@@ -785,6 +791,12 @@ async def test_shadow_state_health_summarizes_bounded_recent_outcomes(daemon_pat
         assert result["recent_batches"]["malformed_results"] == 1
         assert result["recent_batches"]["reducer_status_counts"] == {"applied": 1, "failed": 1}
         assert result["recent_batches"]["parity_status_counts"] == {"compared": 1, "failed": 1}
+        assert result["recent_batches"]["identity_binding"] == {
+            "bound": 1,
+            "matched": 2,
+            "unbound": 0,
+            "mismatched": 0,
+        }
         assert result["recent_batches"]["changed_heads"] == 2
         assert result["recent_batches"]["duplicates"] == 1
         assert result["recent_batches"]["parity_deltas"] == 1

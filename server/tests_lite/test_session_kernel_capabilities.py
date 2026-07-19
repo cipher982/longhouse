@@ -220,6 +220,22 @@ def test_lease_generation_is_stable_across_health_renewals(db):
     assert second.lease_generation == first.lease_generation
 
 
+def test_bound_adapter_identity_replaces_synthetic_generation(db):
+    s = _make_session(db)
+    t = _make_thread(db, s)
+    r = _make_run(db, t)
+    connection = _make_conn(db, r, state="attached", caps={"send": 1})
+    connection.adapter_connection_id = "adapter-connection"
+    connection.lease_generation = "adapter-generation"
+    db.commit()
+
+    caps = project_session_capabilities(db, session_id=s.id)
+
+    assert caps.connection_id == connection.id
+    assert caps.adapter_connection_id == "adapter-connection"
+    assert caps.lease_generation == "adapter-generation"
+
+
 @pytest.mark.parametrize("control_plane", ["codex_bridge", "claude_channel_bridge"])
 def test_live_send_capable_channel_bridges_can_steer_active_turn(db, control_plane):
     s = _make_session(db, provider="claude" if control_plane == "claude_channel_bridge" else "codex")
