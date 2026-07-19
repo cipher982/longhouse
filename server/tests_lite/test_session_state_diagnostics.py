@@ -11,7 +11,9 @@ from fastapi.testclient import TestClient
 import zerg.routers.agents_state_diagnostics as diagnostics_router
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
+from zerg.services.session_state_contract import SessionActivityFacts
 from zerg.services.session_state_contract import SessionStateFacts
+from zerg.services.session_state_contract import SessionRunFacts
 from zerg.services.session_state_diagnostics import compare_session_state_axes
 from zerg.services.session_state_diagnostics import compare_session_state_projections
 from zerg.services.session_state_facts_projector import ShadowSessionStateProjection
@@ -98,6 +100,8 @@ def test_comparison_is_scoped_to_projected_axes():
     assert comparison.run is not None and comparison.run.matches is True
     assert comparison.activity is not None and comparison.activity.matches is True
     assert comparison.control is not None and comparison.control.matches is True
+    assert comparison.deltas == ()
+    assert comparison.gate_status == "clear"
 
 
 def test_comparison_reports_axis_drift_and_rejects_cross_commit_claims():
@@ -110,6 +114,9 @@ def test_comparison_reports_axis_drift_and_rejects_cross_commit_claims():
     assert drift.status == "different"
     assert drift.activity is not None and drift.activity.matches is False
     assert drift.control is not None and drift.control.matches is True
+    assert drift.gate_status == "blocked"
+    assert drift.deltas[0].family == "activity"
+    assert drift.deltas[0].resolution == "block_deletion"
 
     raced = compare_session_state_axes(
         legacy=_legacy(),
@@ -135,6 +142,126 @@ def test_comparison_reports_axis_drift_and_rejects_cross_commit_claims():
     )
     assert action_drift.status == "different"
     assert action_drift.control is not None and action_drift.control.matches is False
+    assert action_drift.gate_status == "blocked"
+    assert [(delta.family, delta.relation, delta.resolution) for delta in action_drift.deltas] == [
+        ("control", "semantic_divergence", "block_deletion")
+    ]
+
+
+def test_delta_classification_accepts_only_exact_freshness_and_historical_terminal_corrections():
+    shadow = _shadow()
+    freshness_only = shadow.model_copy(
+        update={
+            "activity": shadow.activity.model_copy(update={"valid_until": NOW + timedelta(seconds=30)}),
+        }
+    )
+    freshness = compare_session_state_axes(
+        legacy=_legacy(),
+        shadow=freshness_only,
+        legacy_commit_seq=12,
+        shadow_commit_seq=12,
+    )
+    assert freshness.gate_status == "clear"
+    assert [(delta.family, delta.relation, delta.resolution) for delta in freshness.deltas] == [
+        ("activity", "same_coordinate", "accept_canonical")
+    ]
+
+    expired_legacy = _legacy().model_copy(
+        update={
+            "activity": SessionActivityFacts(
+                state="unknown",
+                raw_kind="unknown",
+                source="legacy_runtime",
+                observed_at=NOW - timedelta(minutes=2),
+                valid_until=NOW - timedelta(minutes=1),
+            )
+        }
+    )
+    no_typed_activity = shadow.model_copy(update={"activity": SessionActivityFacts(state="unknown")})
+    expired = compare_session_state_axes(
+        legacy=expired_legacy,
+        shadow=no_typed_activity,
+        legacy_commit_seq=12,
+        shadow_commit_seq=12,
+        now=NOW,
+    )
+    assert expired.gate_status == "clear"
+    assert [(delta.family, delta.relation, delta.resolution) for delta in expired.deltas] == [
+        ("activity", "expired", "accept_canonical")
+    ]
+
+    not_yet_expired = compare_session_state_axes(
+        legacy=expired_legacy.model_copy(
+            update={
+                "activity": expired_legacy.activity.model_copy(update={"valid_until": NOW + timedelta(seconds=1)})
+            }
+        ),
+        shadow=no_typed_activity,
+        legacy_commit_seq=12,
+        shadow_commit_seq=12,
+        now=NOW,
+    )
+    assert not_yet_expired.gate_status == "blocked"
+
+    legacy_ended = _legacy().model_copy(
+        update={"run": SessionRunFacts(id="run-1", lifecycle="ended", started_at=NOW, ended_at=None)}
+    )
+    shadow_running = shadow.model_copy(update={"run": SessionRunFacts(id="run-1", lifecycle="running", started_at=NOW)})
+    terminal = compare_session_state_axes(
+        legacy=legacy_ended,
+        shadow=shadow_running,
+        legacy_commit_seq=12,
+        shadow_commit_seq=12,
+    )
+    assert terminal.gate_status == "clear"
+    assert [(delta.family, delta.relation, delta.resolution) for delta in terminal.deltas] == [
+        ("run", "historical_only", "accept_canonical")
+    ]
+
+    durable_ended = shadow.model_copy(
+        update={
+            "run": SessionRunFacts(
+                id="run-1",
+                lifecycle="ended",
+                started_at=NOW,
+                ended_at=NOW + timedelta(minutes=1),
+                end_reason="process_exit",
+            )
+        }
+    )
+    ended = compare_session_state_axes(
+        legacy=_legacy().model_copy(
+            update={"run": SessionRunFacts(id="run-1", lifecycle="running", started_at=NOW)}
+        ),
+        shadow=durable_ended,
+        legacy_commit_seq=12,
+        shadow_commit_seq=12,
+    )
+    assert ended.gate_status == "clear"
+    assert [(delta.family, delta.relation, delta.resolution) for delta in ended.deltas] == [
+        ("run", "historical_only", "accept_canonical")
+    ]
+
+
+def test_delta_classification_requires_targeted_proof_for_missing_control_and_blocks_rejected_evidence():
+    shadow = _shadow().model_copy(update={"control": None, "control_run_id": None})
+    missing = compare_session_state_axes(
+        legacy=_legacy(),
+        shadow=shadow,
+        legacy_commit_seq=12,
+        shadow_commit_seq=12,
+    )
+    assert missing.gate_status == "targeted_proof_required"
+    assert missing.deltas[0].resolution == "require_targeted_proof"
+
+    rejected = compare_session_state_axes(
+        legacy=_legacy(),
+        shadow=shadow.model_copy(update={"rejected_control_heads": 1, "rejected_heads": 1}),
+        legacy_commit_seq=12,
+        shadow_commit_seq=12,
+    )
+    assert rejected.gate_status == "blocked"
+    assert rejected.deltas[0].relation == "rejected_typed_evidence"
 
 
 def test_projection_parity_detects_version_and_presentation_key_divergence():

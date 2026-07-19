@@ -137,6 +137,7 @@ def assess(
     require_canonical: bool,
     live_surface_parity: dict[str, Any] | None,
     allow_cross_commit_equivalence: bool,
+    allow_targeted_proof_required: bool,
 ) -> tuple[dict[str, Any], list[str]]:
     errors: list[str] = []
     if require_canonical:
@@ -151,6 +152,7 @@ def assess(
 
     provider_counts: dict[str, int] = {}
     sessions: list[dict[str, Any]] = []
+    targeted_proof_sessions: list[str] = []
     if not diagnostics:
         errors.append("no sessions were sampled; deep health cannot pass vacuously")
     for diagnostic in diagnostics:
@@ -165,8 +167,14 @@ def assess(
         projection = explain.get("projection_parity")
         if require_canonical and (not isinstance(projection, dict) or projection.get("status") != "matched"):
             errors.append(f"{session_id}: canonical compact projection is not matched")
-        if isinstance(comparison, dict) and comparison.get("status") == "different":
-            errors.append(f"{session_id}: reducer comparison has unexplained deltas")
+        if isinstance(comparison, dict):
+            gate_status = comparison.get("gate_status")
+            if gate_status == "blocked" or (comparison.get("status") == "different" and gate_status is None):
+                errors.append(f"{session_id}: reducer comparison has deletion-blocking deltas")
+            elif gate_status == "targeted_proof_required":
+                targeted_proof_sessions.append(session_id)
+                if not allow_targeted_proof_required:
+                    errors.append(f"{session_id}: reducer comparison requires targeted proof")
         if explain.get("state_contract_version") != contract.get("state_contract_version"):
             errors.append(f"{session_id}: state contract version diverged")
         if explain.get("presentation_policy_version") != contract.get("presentation_policy_version"):
@@ -204,6 +212,7 @@ def assess(
         "canonical_authorization_providers": reducer_health.get("canonical_authorization_providers"),
         "provider_counts": provider_counts,
         "missing_providers": missing_providers,
+        "targeted_proof_sessions": targeted_proof_sessions,
         "sessions": sessions,
         "live_surface_parity": live_surface_parity,
         "errors": errors,
@@ -225,6 +234,7 @@ def main() -> int:
     parser.add_argument("--require-provider", action="append", default=[])
     parser.add_argument("--allow-legacy", action="store_true")
     parser.add_argument("--allow-cross-commit-equivalence", action="store_true")
+    parser.add_argument("--allow-targeted-proof-required", action="store_true")
     parser.add_argument("--artifact", type=Path)
     args = parser.parse_args()
     if not args.api_url:
@@ -268,6 +278,7 @@ def main() -> int:
             require_canonical=not args.allow_legacy,
             live_surface_parity=live_surface_parity,
             allow_cross_commit_equivalence=args.allow_cross_commit_equivalence,
+            allow_targeted_proof_required=args.allow_targeted_proof_required,
         )
     except (OSError, ValueError, json.JSONDecodeError, urllib.error.URLError, urllib.error.HTTPError) as exc:
         artifact = {"schema_version": 1, "status": "fail", "errors": [str(exc)]}

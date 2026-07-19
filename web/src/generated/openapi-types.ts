@@ -9730,6 +9730,17 @@ export interface components {
             activity?: components["schemas"]["SessionStateAxisComparison"] | null;
             control?: components["schemas"]["SessionStateAxisComparison"] | null;
             control_identity?: components["schemas"]["SessionControlIdentityComparison"] | null;
+            /**
+             * Deltas
+             * @default []
+             */
+            deltas: components["schemas"]["SessionStateDeltaClassification"][];
+            /**
+             * Gate Status
+             * @default clear
+             * @enum {string}
+             */
+            gate_status: "clear" | "targeted_proof_required" | "blocked";
         };
         /** SessionStateContractHealthResponse */
         SessionStateContractHealthResponse: {
@@ -9743,6 +9754,36 @@ export interface components {
             };
             /** Fingerprint */
             fingerprint: string;
+        };
+        /** SessionStateDeltaClassification */
+        SessionStateDeltaClassification: {
+            /**
+             * Family
+             * @enum {string}
+             */
+            family: "mode" | "disposition" | "launch" | "run" | "activity" | "control" | "control_identity";
+            /**
+             * Legacy Source
+             * @enum {string}
+             */
+            legacy_source: "legacy_runtime" | "legacy_semantic" | "legacy_capability" | "none";
+            /**
+             * Canonical Source
+             * @enum {string}
+             */
+            canonical_source: "durable_catalog" | "activity_head" | "control_head" | "catalog_binding" | "none";
+            /**
+             * Relation
+             * @enum {string}
+             */
+            relation: "same_coordinate" | "expired" | "historical_only" | "missing_typed_evidence" | "rejected_typed_evidence" | "identity_mismatch" | "semantic_divergence";
+            /**
+             * Resolution
+             * @enum {string}
+             */
+            resolution: "accept_canonical" | "require_targeted_proof" | "block_deletion";
+            /** Reason */
+            reason: string;
         };
         /** SessionStateDiagnosticsResponse */
         SessionStateDiagnosticsResponse: {
@@ -10458,6 +10499,16 @@ export interface components {
              * @default 0
              */
             rejected_heads: number;
+            /**
+             * Rejected Activity Heads
+             * @default 0
+             */
+            rejected_activity_heads: number;
+            /**
+             * Rejected Control Heads
+             * @default 0
+             */
+            rejected_control_heads: number;
             /**
              * Unsupported Families
              * @default [

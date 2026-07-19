@@ -30,6 +30,26 @@ CATALOG_FACTS = {
     "latest_run": None,
     "connections": [],
 }
+RUN_CATALOG_FACTS = {
+    **CATALOG_FACTS,
+    "latest_run": {
+        "id": "run-1",
+        "started_at": (NOW - timedelta(minutes=5)).isoformat(),
+        "ended_at": None,
+    },
+}
+BOUND_CONTROL_CATALOG_FACTS = {
+    **RUN_CATALOG_FACTS,
+    "connections": [
+        {
+            "run_id": "run-1",
+            "adapter_connection_id": "connection-1",
+            "lease_generation": "lease-1",
+            "state": "attached",
+            "released_at": None,
+        }
+    ],
+}
 
 
 def _capabilities(**overrides) -> KernelSessionCapabilities:
@@ -132,7 +152,7 @@ def test_projector_selects_newest_unexpired_head_without_commit_or_receive_ranki
     projection = project_shadow_session_state_facts(
         session_id="session-1",
         commit_seq=42,
-        catalog_facts=CATALOG_FACTS,
+        catalog_facts=RUN_CATALOG_FACTS,
         heads=[older, newer],
         now=NOW + timedelta(seconds=2),
     )
@@ -148,7 +168,7 @@ def test_projector_selects_newest_unexpired_head_without_commit_or_receive_ranki
     assert "control" not in projection.fact_sources
     assert projection.mode == "shadow"
     assert projection.disposition.state == "open"
-    assert projection.run is None
+    assert projection.run is not None and projection.run.id == "run-1"
     assert "transcript" in projection.unsupported_families
     assert "presentation" in projection.unsupported_families
 
@@ -226,7 +246,7 @@ def test_projector_expires_activity_and_derives_control_lease_from_ttl():
     projection = project_shadow_session_state_facts(
         session_id="session-1",
         commit_seq=9,
-        catalog_facts=CATALOG_FACTS,
+        catalog_facts=BOUND_CONTROL_CATALOG_FACTS,
         heads=[
             _activity(observed_at=NOW, valid_until=NOW + timedelta(seconds=1)),
             _control(observed_at=NOW, grants=["interrupt", "send_input"]),
@@ -251,7 +271,7 @@ def test_projector_expires_activity_and_derives_control_lease_from_ttl():
     expired = project_shadow_session_state_facts(
         session_id="session-1",
         commit_seq=9,
-        catalog_facts=CATALOG_FACTS,
+        catalog_facts=BOUND_CONTROL_CATALOG_FACTS,
         heads=[_control(observed_at=NOW, grants=["send_input"])],
         supported_operations={"send_input"},
         now=NOW + timedelta(seconds=60),
@@ -259,15 +279,74 @@ def test_projector_expires_activity_and_derives_control_lease_from_ttl():
     assert expired.control is None
 
 
+def test_projector_rejects_heads_not_bound_to_durable_run_and_connection():
+    wrong_run_activity = _activity(observed_at=NOW, valid_until=NOW + timedelta(minutes=1))
+    wrong_run_value = json.loads(wrong_run_activity["value_json"])
+    wrong_run_value["run_id"] = "run-old"
+    wrong_run_activity.update(
+        subject_key="run:run-old",
+        value_json=json.dumps(wrong_run_value),
+        evidence_hash=canonical_evidence_hash(wrong_run_value),
+    )
+    unbound_control = _control(observed_at=NOW, grants=["send_input"])
+
+    projection = project_shadow_session_state_facts(
+        session_id="session-1",
+        commit_seq=10,
+        catalog_facts=RUN_CATALOG_FACTS,
+        heads=[wrong_run_activity, unbound_control],
+        supported_operations={"send_input"},
+        now=NOW,
+    )
+
+    assert projection.activity.state == "unknown"
+    assert projection.control is None
+    assert projection.fact_sources == {}
+    assert projection.rejected_heads == 2
+    assert projection.rejected_activity_heads == 1
+    assert projection.rejected_control_heads == 1
+
+    ended_run = project_shadow_session_state_facts(
+        session_id="session-1",
+        commit_seq=11,
+        catalog_facts={
+            **BOUND_CONTROL_CATALOG_FACTS,
+            "latest_run": {**RUN_CATALOG_FACTS["latest_run"], "ended_at": NOW.isoformat()},
+        },
+        heads=[_activity(observed_at=NOW, valid_until=NOW + timedelta(minutes=1)), unbound_control],
+        supported_operations={"send_input"},
+        now=NOW,
+    )
+    assert ended_run.rejected_activity_heads == 1
+    assert ended_run.rejected_control_heads == 1
+    assert ended_run.control is None
+
+    released_connection = project_shadow_session_state_facts(
+        session_id="session-1",
+        commit_seq=12,
+        catalog_facts={
+            **BOUND_CONTROL_CATALOG_FACTS,
+            "connections": [
+                {**BOUND_CONTROL_CATALOG_FACTS["connections"][0], "state": "released", "released_at": NOW.isoformat()}
+            ],
+        },
+        heads=[unbound_control],
+        supported_operations={"send_input"},
+        now=NOW,
+    )
+    assert released_connection.rejected_control_heads == 1
+    assert released_connection.control is None
+
+
 def test_projector_uses_stable_source_coordinate_for_exact_timestamp_tie():
     first = _activity(observed_at=NOW, valid_until=NOW + timedelta(minutes=1), source="a-source")
     second = _activity(observed_at=NOW, valid_until=NOW + timedelta(minutes=1), source="z-source")
 
     forward = project_shadow_session_state_facts(
-        session_id="session-1", commit_seq=1, catalog_facts=CATALOG_FACTS, heads=[first, second], now=NOW
+        session_id="session-1", commit_seq=1, catalog_facts=RUN_CATALOG_FACTS, heads=[first, second], now=NOW
     )
     reverse = project_shadow_session_state_facts(
-        session_id="session-1", commit_seq=1, catalog_facts=CATALOG_FACTS, heads=[second, first], now=NOW
+        session_id="session-1", commit_seq=1, catalog_facts=RUN_CATALOG_FACTS, heads=[second, first], now=NOW
     )
 
     assert forward.activity.source == reverse.activity.source == "z-source"
@@ -290,7 +369,7 @@ def test_projector_skips_corrupt_or_cross_session_heads_without_granting_control
     projection = project_shadow_session_state_facts(
         session_id="session-1",
         commit_seq=3,
-        catalog_facts=CATALOG_FACTS,
+        catalog_facts=RUN_CATALOG_FACTS,
         heads=[cross_session, malformed, indexed_other_session, missing_source, valid],
         supported_operations={"send_input"},
         now=NOW,
@@ -310,7 +389,7 @@ def test_projector_rejects_a_head_with_mismatched_evidence_hash():
     projection = project_shadow_session_state_facts(
         session_id="session-1",
         commit_seq=4,
-        catalog_facts=CATALOG_FACTS,
+        catalog_facts=RUN_CATALOG_FACTS,
         heads=[tampered],
         now=NOW,
     )
@@ -358,7 +437,7 @@ def test_session_head_read_and_projection_share_fact_commit_snapshot(tmp_path):
         projection = project_shadow_session_state_facts(
             session_id="session-1",
             commit_seq=commit_seq,
-            catalog_facts=CATALOG_FACTS,
+            catalog_facts=RUN_CATALOG_FACTS,
             heads=heads,
             now=NOW,
         )
@@ -373,7 +452,7 @@ def test_served_projector_assembles_full_contract_at_snapshot_commit():
     served = project_served_session_state_facts(
         session_id="session-1",
         commit_seq=81,
-        catalog_facts=CATALOG_FACTS,
+        catalog_facts=BOUND_CONTROL_CATALOG_FACTS,
         heads=[
             _activity(observed_at=NOW, valid_until=NOW + timedelta(minutes=1)),
             _control(observed_at=NOW, grants=["interrupt", "send_input"]),
@@ -395,7 +474,7 @@ def test_served_projector_assembles_full_contract_at_snapshot_commit():
     )
 
     assert served.commit_seq == 81
-    assert served.mode == "shadow"
+    assert served.mode == "helm"
     assert served.activity.state == "executing"
     assert served.control.connection_id == "connection-1"
     assert served.control.control_plane == "codex_app_server"

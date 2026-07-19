@@ -92,6 +92,8 @@ class ShadowSessionStateProjection(BaseModel):
     control_run_id: str | None = None
     fact_sources: dict[str, "FactHeadDiagnostic"] = Field(default_factory=dict)
     rejected_heads: int = 0
+    rejected_activity_heads: int = 0
+    rejected_control_heads: int = 0
     unsupported_families: tuple[UnsupportedFactFamily, ...] = SHADOW_UNSUPPORTED_FAMILIES
 
 
@@ -133,17 +135,23 @@ def project_shadow_session_state_facts(
     """Project durable and observed axes from one coherent catalog snapshot."""
 
     normalized_now = _aware(now, "now")
+    durable_run_id = _active_run_id(catalog_facts)
     activity_head, rejected_activity = _effective_head(
         heads,
         session_id=session_id,
         family="activity",
         now=normalized_now,
+        expected_run_id=durable_run_id,
+        require_run_binding=True,
     )
     control_head, rejected_control = _effective_head(
         heads,
         session_id=session_id,
         family="control",
         now=normalized_now,
+        expected_run_id=durable_run_id,
+        require_run_binding=True,
+        allowed_control_coordinates=_bound_control_coordinates(catalog_facts),
     )
     fact_sources = {
         family: diagnostic
@@ -162,6 +170,8 @@ def project_shadow_session_state_facts(
         control_run_id=_control_run_id(control_head),
         fact_sources=fact_sources,
         rejected_heads=rejected_activity + rejected_control,
+        rejected_activity_heads=rejected_activity,
+        rejected_control_heads=rejected_control,
     )
 
 
@@ -411,6 +421,9 @@ def _effective_head(
     session_id: str,
     family: Literal["activity", "control"],
     now: datetime,
+    expected_run_id: str | None = None,
+    require_run_binding: bool = False,
+    allowed_control_coordinates: set[tuple[str, str, str]] | None = None,
 ) -> tuple[tuple[Mapping[str, Any], dict[str, Any], datetime, datetime] | None, int]:
     candidates: list[tuple[tuple[Any, ...], Mapping[str, Any], dict[str, Any], datetime, datetime]] = []
     rejected = 0
@@ -427,6 +440,17 @@ def _effective_head(
                 raise ValueError(f"unsupported {family} authority_class")
             observed_at = _wire_datetime(value.get("observed_at"), "observed_at")
             valid_until = _valid_until(family, head=head, value=value, observed_at=observed_at)
+            run_id = _text(value.get("run_id"))
+            if require_run_binding and (expected_run_id is None or run_id != expected_run_id):
+                raise ValueError(f"{family} run_id is not bound to the durable latest run")
+            if family == "control" and allowed_control_coordinates is not None:
+                coordinate = (
+                    run_id or "",
+                    _text(value.get("connection_id")) or "",
+                    _text(value.get("lease_generation")) or "",
+                )
+                if coordinate not in allowed_control_coordinates:
+                    raise ValueError("control identity is not bound to a durable connection")
         except (TypeError, ValueError):
             rejected += 1
             continue
@@ -442,6 +466,32 @@ def _effective_head(
         return None, rejected
     _key, head, value, observed_at, valid_until = max(candidates, key=lambda candidate: candidate[0])
     return (head, value, observed_at, valid_until), rejected
+
+
+def _active_run_id(catalog_facts: Mapping[str, Any]) -> str | None:
+    latest_run = _mapping(catalog_facts.get("latest_run"))
+    if latest_run.get("ended_at") is not None:
+        return None
+    return _text(latest_run.get("id"))
+
+
+def _bound_control_coordinates(catalog_facts: Mapping[str, Any]) -> set[tuple[str, str, str]]:
+    connections = catalog_facts.get("connections")
+    if not isinstance(connections, list):
+        return set()
+    coordinates: set[tuple[str, str, str]] = set()
+    for connection in connections:
+        row = _mapping(connection)
+        if row.get("released_at") is not None or _text(row.get("state")) not in {"attached", "degraded"}:
+            continue
+        coordinate = (
+            _text(row.get("run_id")) or "",
+            _text(row.get("adapter_connection_id")) or "",
+            _text(row.get("lease_generation")) or "",
+        )
+        if all(coordinate):
+            coordinates.add(coordinate)
+    return coordinates
 
 
 def _project_activity(

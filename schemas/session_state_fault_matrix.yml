@@ -73,6 +73,8 @@ scenarios:
     fault: cross_surface_contract_drift
     deterministic:
       - server/tests_lite/test_session_state_diagnostics.py::test_projection_parity_detects_version_and_presentation_key_divergence
+      - server/tests_lite/test_session_state_diagnostics.py::test_delta_classification_accepts_only_exact_freshness_and_historical_terminal_corrections
+      - server/tests_lite/test_session_state_diagnostics.py::test_delta_classification_requires_targeted_proof_for_missing_control_and_blocks_rejected_evidence
       - server/tests_lite/test_agents_sessions_stream.py::test_canonical_machine_stream_initial_replay_preserves_commit_coordinate
     live: required
     expect: [same_commit, same_versions, same_primary_and_access_keys]
@@ -80,6 +82,7 @@ scenarios:
     fault: expired_control_revalidation
     deterministic:
       - server/tests_lite/test_session_state_facts_projector.py::test_exact_control_authorization_rejects_expiry_divergence_and_tampering
+      - server/tests_lite/test_session_state_facts_projector.py::test_projector_rejects_heads_not_bound_to_durable_run_and_connection
     live: required
     expect: [explicit_denial_reason, no_cached_capability_bypass]
 

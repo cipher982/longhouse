@@ -52,6 +52,7 @@ def test_assess_passes_only_with_canonical_same_commit_surface_proof():
         require_canonical=True,
         live_surface_parity={"status": "matched_same_commit"},
         allow_cross_commit_equivalence=False,
+        allow_targeted_proof_required=False,
     )
     assert errors == []
     assert artifact["status"] == "pass"
@@ -73,12 +74,13 @@ def test_assess_fails_closed_on_surface_version_provider_or_cutover_drift():
         require_canonical=True,
         live_surface_parity={"status": "matched_equivalent_different_commit"},
         allow_cross_commit_equivalence=False,
+        allow_targeted_proof_required=False,
     )
     assert artifact["status"] == "fail"
     assert "canonical detail serving is not active" in errors
     assert any("compact projection" in error for error in errors)
     assert any("version diverged" in error for error in errors)
-    assert any("unexplained deltas" in error for error in errors)
+    assert any("deletion-blocking deltas" in error for error in errors)
     assert any("claude" in error for error in errors)
     assert any("API/machine-stream" in error for error in errors)
 
@@ -118,9 +120,41 @@ def test_assess_rejects_zero_session_sample():
         require_canonical=True,
         live_surface_parity={"status": "matched_same_commit"},
         allow_cross_commit_equivalence=False,
+        allow_targeted_proof_required=False,
     )
     assert artifact["status"] == "fail"
     assert errors == ["no sessions were sampled; deep health cannot pass vacuously"]
+
+
+def test_assess_requires_explicit_opt_in_for_targeted_proof_sessions():
+    diagnostic = _diagnostic()
+    diagnostic["comparison"] = {"status": "different", "gate_status": "targeted_proof_required"}
+    blocked, errors = MODULE.assess(
+        reducer_health=_health(),
+        diagnostics=[diagnostic],
+        build={"git_sha": "abc"},
+        required_providers={"codex"},
+        require_canonical=True,
+        live_surface_parity={"status": "matched_same_commit"},
+        allow_cross_commit_equivalence=False,
+        allow_targeted_proof_required=False,
+    )
+    assert blocked["status"] == "fail"
+    assert errors == ["11111111-1111-4111-8111-111111111111: reducer comparison requires targeted proof"]
+
+    allowed, errors = MODULE.assess(
+        reducer_health=_health(),
+        diagnostics=[diagnostic],
+        build={"git_sha": "abc"},
+        required_providers={"codex"},
+        require_canonical=True,
+        live_surface_parity={"status": "matched_same_commit"},
+        allow_cross_commit_equivalence=False,
+        allow_targeted_proof_required=True,
+    )
+    assert errors == []
+    assert allowed["status"] == "pass"
+    assert allowed["targeted_proof_sessions"] == ["11111111-1111-4111-8111-111111111111"]
 
 
 if __name__ == "__main__":
@@ -128,4 +162,5 @@ if __name__ == "__main__":
     test_assess_fails_closed_on_surface_version_provider_or_cutover_drift()
     test_live_surface_comparison_distinguishes_same_commit_race_and_drift()
     test_assess_rejects_zero_session_sample()
+    test_assess_requires_explicit_opt_in_for_targeted_proof_sessions()
     print("session-state deep-health tests OK")
