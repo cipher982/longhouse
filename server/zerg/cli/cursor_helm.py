@@ -108,6 +108,7 @@ _IDLE_PHASE_MAX_AGE = timedelta(hours=24)
 class _RegistrationOutcome:
     session_id: str
     registered: bool
+    run_id: str | None = None
     attach_command: str = ""
     error: str | None = None
     hook_token: str | None = None
@@ -202,6 +203,7 @@ def _process_start_time(pid: int) -> str | None:
 def _write_state(
     session_id: str,
     *,
+    run_id: str | None = None,
     socket_path: Path,
     cursor_pid: int,
     cwd: Path,
@@ -232,7 +234,10 @@ def _write_state(
     )
     connection_id = str(existing.get("connection_id") or "").strip() if same_launch else ""
     lease_generation = str(existing.get("lease_generation") or "").strip() if same_launch else ""
-    run_id = str(existing.get("run_id") or "").strip() if same_launch else ""
+    existing_run_id = str(existing.get("run_id") or "").strip() if same_launch else ""
+    effective_run_id = str(run_id or existing_run_id).strip()
+    if effective_run_id:
+        effective_run_id = str(uuid.UUID(effective_run_id))
     cursor_process_start_time = None
     if cursor_pid > 0:
         cursor_process_start_time = (
@@ -243,7 +248,7 @@ def _write_state(
     payload = {
         "schema_version": 1,
         "session_id": session_id,
-        "run_id": run_id or str(uuid.uuid4()),
+        "run_id": effective_run_id,
         "connection_id": connection_id or str(uuid.uuid4()),
         "lease_generation": lease_generation or str(uuid.uuid4()),
         "provider": _PROVIDER,
@@ -468,9 +473,19 @@ def _register_session(
             registered=False,
             error=f"server returned different session_id {returned_id}",
         )
+    run_id = str(body.get("run_id") or "").strip()
+    try:
+        run_id = str(uuid.UUID(run_id))
+    except ValueError:
+        return _RegistrationOutcome(
+            session_id=session_id,
+            registered=False,
+            error="server response is missing a valid run_id",
+        )
     return _RegistrationOutcome(
         session_id=session_id,
         registered=True,
+        run_id=run_id,
         attach_command=str(body.get("attach_command") or ""),
         hook_token=str(body.get("hook_token") or "") or None,
     )
@@ -525,6 +540,7 @@ def _registration_worker(
                 current = json.loads(_state_file_path(session_id).read_text())
                 _write_state(
                     session_id,
+                    run_id=outcome.run_id,
                     socket_path=sock_path,
                     cursor_pid=int(current.get("cursor_pid") or 0),
                     cwd=cwd,
@@ -534,6 +550,7 @@ def _registration_worker(
             except (OSError, ValueError, TypeError, json.JSONDecodeError):
                 _write_state(
                     session_id,
+                    run_id=outcome.run_id,
                     socket_path=sock_path,
                     cursor_pid=0,
                     cwd=cwd,

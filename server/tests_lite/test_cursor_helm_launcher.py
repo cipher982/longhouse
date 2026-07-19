@@ -32,6 +32,8 @@ import pytest
 
 from zerg.cli import cursor_helm
 
+_RUN_ID = "33333333-3333-4333-8333-333333333333"
+
 
 def _state_dir_for(monkeypatch, tmp_path) -> "object":
     monkeypatch.setenv("LONGHOUSE_HOME", str(tmp_path))
@@ -45,6 +47,7 @@ def test_state_file_round_trip(monkeypatch, tmp_path):
     sock = cursor_helm._socket_path(session_id)
     cursor_helm._write_state(
         session_id,
+        run_id=_RUN_ID,
         socket_path=sock,
         cursor_pid=123,
         cwd=tmp_path,
@@ -64,6 +67,7 @@ def test_state_file_round_trip(monkeypatch, tmp_path):
     assert state["cursor_process_start_time"] == "start-123"
     assert state["ready"] is True
     assert state["registration"] == "registered"
+    assert state["run_id"] == _RUN_ID
     assert uuid.UUID(state["connection_id"])
     assert uuid.UUID(state["lease_generation"])
 
@@ -80,6 +84,7 @@ def test_state_file_round_trip(monkeypatch, tmp_path):
     assert refreshed["started_at"] == started_at
     assert refreshed["connection_id"] == state["connection_id"]
     assert refreshed["lease_generation"] == state["lease_generation"]
+    assert refreshed["run_id"] == _RUN_ID
 
     cursor_helm._remove_state(session_id, sock)
     assert not cursor_helm._state_file_path(session_id).exists()
@@ -164,6 +169,43 @@ def test_register_session_soft_fails_on_connect_error(monkeypatch, tmp_path):
     assert outcome.session_id.endswith("1111")
     assert "connect failed" in (outcome.error or "")
     assert cursor_helm._panel_capability_for_registration(outcome) == "local_only"
+
+
+def test_register_session_accepts_server_owned_run_identity(monkeypatch, tmp_path):
+    session_id = "11111111-1111-4111-8111-111111111111"
+
+    class SuccessClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def post(self, *args, **kwargs):
+            return cursor_helm.httpx.Response(
+                200,
+                request=cursor_helm.httpx.Request("POST", "https://x"),
+                json={"session_id": session_id, "run_id": _RUN_ID, "attach_command": "attach"},
+            )
+
+    monkeypatch.setattr(cursor_helm.httpx, "Client", SuccessClient)
+    outcome = cursor_helm._register_session(
+        url="https://example.invalid",
+        token="tok",
+        cwd=tmp_path,
+        project="demo",
+        name=None,
+        loop_mode=cursor_helm.SessionLoopMode.ASSIST,
+        machine_name="cinder",
+        permission_mode="bypass",
+        session_id=session_id,
+    )
+
+    assert outcome.registered is True
+    assert outcome.run_id == _RUN_ID
 
 
 @pytest.mark.parametrize(
