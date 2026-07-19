@@ -1361,6 +1361,10 @@ pub(crate) fn machine_evidence_from_observations(
                 observed_at: observed_at(&binding.observed_at),
             });
         }
+        let source_mtime = nonempty(binding.source_mtime.as_deref());
+        if binding.source_offset.is_some() && source_mtime.is_none() {
+            continue;
+        }
         transcript.push(TranscriptEvidence {
             authority_class: "source_cursor".to_string(),
             provider: binding.provider.clone(),
@@ -1370,9 +1374,11 @@ pub(crate) fn machine_evidence_from_observations(
             source_inode: binding.source_inode,
             source_device: binding.source_device,
             source_offset: binding.source_offset,
-            source_mtime: binding.source_mtime.clone(),
+            source_mtime: source_mtime.map(str::to_string),
             source: "unmanaged_transcript_scan".to_string(),
-            observed_at: observed_at(&binding.observed_at),
+            observed_at: source_mtime
+                .map(&observed_at)
+                .unwrap_or_else(|| observed_at(&binding.observed_at)),
         });
     }
 
@@ -1552,7 +1558,7 @@ fn reducer_evidence_identities(
 
     for (fact_index, fact) in transcript.iter().enumerate() {
         let epoch_material = format!(
-            "{}:{}:{}",
+            "transcript-evidence-v2:{}:{}:{}",
             fact.source_path.as_deref().unwrap_or(""),
             fact.source_device
                 .map(|value| value.to_string())
@@ -1580,12 +1586,16 @@ fn reducer_evidence_identities(
 
     for (fact_index, fact) in readiness.iter().enumerate() {
         let claim = nonempty(fact.claim_message_id.as_deref()).map(stable_component);
+        let source_epoch = stable_component(&format!(
+            "readiness-evidence-v2:{}",
+            claim.as_deref().unwrap_or("")
+        ));
         families[4].push(evidence_identity(
             "readiness",
             fact_index,
             format!("readiness:{}:{}", fact.session_id, fact.operation),
             &fact.source,
-            claim,
+            Some(source_epoch),
             None,
             fact,
         ));
@@ -1802,12 +1812,13 @@ fn antigravity_readiness_evidence(
     observation: &AntigravityHookObservation,
     now: DateTime<Utc>,
 ) -> ReadinessEvidence {
+    let as_of = parse_utc(Some(&observation.updated_at)).unwrap_or(now);
     let hook_time = parse_utc(observation.last_hook_observed_at.as_deref());
     let claim_time = parse_utc(observation.last_claimed_at.as_deref());
     let response_time = parse_utc(observation.last_response_at.as_deref());
     let is_fresh = |value: Option<DateTime<Utc>>| {
         value.is_some_and(|at| {
-            now >= at && now - at <= chrono::Duration::seconds(ANTIGRAVITY_READINESS_TTL_SECS)
+            as_of >= at && as_of - at <= chrono::Duration::seconds(ANTIGRAVITY_READINESS_TTL_SECS)
         })
     };
     let recent_hook_observed = is_fresh(hook_time);
@@ -1845,7 +1856,7 @@ fn antigravity_readiness_evidence(
         .flatten()
         .map(|at| at + chrono::Duration::seconds(ANTIGRAVITY_READINESS_TTL_SECS))
         .min()
-        .unwrap_or(now)
+        .unwrap_or(as_of)
         .to_rfc3339();
 
     ReadinessEvidence {
@@ -4829,16 +4840,147 @@ mod tests {
             assert!(!serialized.contains(forbidden), "leaked {forbidden}");
         }
 
-        let expired = antigravity_readiness_evidence(
+        let reevaluated = antigravity_readiness_evidence(
             &antigravity_observations[0],
             now + chrono::Duration::minutes(5),
         );
-        assert!(!expired.recent_hook_observed);
-        assert!(!expired.claim_observed);
-        assert!(!expired.response_observed);
-        assert!(expired
-            .reason_codes
-            .contains(&"hook_observation_missing_or_expired".to_string()));
+        assert_eq!(reevaluated, evidence.readiness[0]);
+
+        let mut stale_at_observation = antigravity_observations[0].clone();
+        stale_at_observation.updated_at = "2026-05-08T12:03:00Z".to_string();
+        let stale = antigravity_readiness_evidence(&stale_at_observation, now);
+        assert!(!stale.recent_hook_observed);
+        assert!(!stale.claim_observed);
+        assert!(!stale.response_observed);
+        assert_eq!(
+            stale,
+            antigravity_readiness_evidence(
+                &stale_at_observation,
+                now + chrono::Duration::minutes(5)
+            )
+        );
+    }
+
+    #[test]
+    fn antigravity_readiness_without_proofs_is_stable_across_heartbeats() {
+        let now = DateTime::parse_from_rfc3339("2026-05-08T12:05:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let observation = AntigravityHookObservation {
+            state_file: PathBuf::from("/tmp/antigravity-stale.json"),
+            schema_version: 1,
+            session_id: "antigravity-stale".to_string(),
+            provider_session_id: None,
+            cwd: None,
+            transcript_path: None,
+            state: None,
+            updated_at: "2026-05-08T12:00:00Z".to_string(),
+            last_hook_event: None,
+            last_hook_observed_at: None,
+            last_claimed_message_id: None,
+            last_claimed_at: None,
+            last_claim_event: None,
+            last_response_event: None,
+            last_response_at: None,
+            last_response_status: None,
+            last_response_claimed_message_ids: Vec::new(),
+            last_continuation_requested: false,
+        };
+
+        let first = antigravity_readiness_evidence(&observation, now);
+        let second =
+            antigravity_readiness_evidence(&observation, now + chrono::Duration::minutes(5));
+        assert_eq!(first, second);
+        assert_eq!(
+            parse_utc(Some(&first.valid_until)),
+            parse_utc(Some(&observation.updated_at))
+        );
+
+        let first_identity = reducer_evidence_identities("cinder", &[], &[], &[], &[], &[first]);
+        let second_identity = reducer_evidence_identities("cinder", &[], &[], &[], &[], &[second]);
+        assert_eq!(first_identity, second_identity);
+        assert_eq!(first_identity.len(), 1);
+        assert!(first_identity[0].source_epoch.is_some());
+    }
+
+    #[test]
+    fn unmanaged_transcript_identity_uses_source_time_not_scan_time() {
+        let first_now = DateTime::parse_from_rfc3339("2026-05-08T12:05:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let binding = UnmanagedSessionBinding {
+            machine_id: "cinder".to_string(),
+            provider: "codex".to_string(),
+            provider_session_id: "codex-unmanaged".to_string(),
+            source_path: Some("/tmp/codex-unmanaged.jsonl".to_string()),
+            source_inode: Some(7),
+            source_device: Some(8),
+            pid: Some(123),
+            process_start_time: Some("2026-05-08T11:00:00Z".to_string()),
+            cwd: Some("/tmp".to_string()),
+            source_offset: Some(99),
+            source_mtime: Some("2026-05-08T12:00:00Z".to_string()),
+            observed_at: first_now.to_rfc3339(),
+        };
+        let mut rescanned = binding.clone();
+        rescanned.observed_at = (first_now + chrono::Duration::minutes(5)).to_rfc3339();
+
+        let first = machine_evidence_from_observations(
+            "cinder",
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[binding.clone()],
+            &[],
+            true,
+            first_now,
+        );
+        let second = machine_evidence_from_observations(
+            "cinder",
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[rescanned],
+            &[],
+            true,
+            first_now + chrono::Duration::minutes(5),
+        );
+        assert_eq!(first.transcript, second.transcript);
+        let first_identity = first
+            .identities
+            .iter()
+            .find(|identity| identity.fact_family == "transcript")
+            .unwrap();
+        let second_identity = second
+            .identities
+            .iter()
+            .find(|identity| identity.fact_family == "transcript")
+            .unwrap();
+        assert_eq!(first_identity, second_identity);
+        assert_ne!(
+            first_identity.source_epoch.as_deref(),
+            Some(stable_component("/tmp/codex-unmanaged.jsonl:8:7").as_str())
+        );
+
+        let mut missing_mtime = binding;
+        missing_mtime.source_mtime = None;
+        let without_stable_position = machine_evidence_from_observations(
+            "cinder",
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[missing_mtime],
+            &[],
+            true,
+            first_now,
+        );
+        assert!(without_stable_position.transcript.is_empty());
     }
 
     #[test]
