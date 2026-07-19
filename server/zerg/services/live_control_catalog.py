@@ -318,6 +318,34 @@ def get_bound_live_control_identity(
     )
 
 
+def live_control_command_block_reason(db: Session, *, session_id: UUID | str) -> str | None:
+    """Revalidate disposition and the latest run before any control grant.
+
+    This gate is shared by legacy and canonical authorization. Session-level
+    ``ended_at`` is deliberately ignored: it is reversible archive/launch
+    metadata, not explicit disposition.
+    """
+
+    session = db.query(LiveSessionCatalog.closed_at).filter(LiveSessionCatalog.session_id == str(session_id)).first()
+    if session is None:
+        return "control_unavailable"
+    if normalize_utc(session.closed_at) is not None:
+        return "session_closed"
+    latest_run = (
+        db.query(LiveSessionRun.ended_at)
+        .join(LiveSessionThread, LiveSessionThread.id == LiveSessionRun.thread_id)
+        .filter(
+            LiveSessionThread.session_id == str(session_id),
+            LiveSessionThread.is_primary == 1,
+        )
+        .order_by(LiveSessionRun.started_at.desc(), LiveSessionRun.id.desc())
+        .first()
+    )
+    if latest_run is not None and normalize_utc(latest_run.ended_at) is not None:
+        return "run_ended"
+    return None
+
+
 def get_canonical_live_control_grant(
     db: Session,
     *,
@@ -342,11 +370,12 @@ def get_canonical_live_control_grant(
     contract = contract_for_provider(normalized_provider)
     if contract is None or not bool(getattr(contract, operation, False)):
         return None, "unsupported"
+    block_reason = live_control_command_block_reason(db, session_id=session_id)
+    if block_reason is not None:
+        return None, block_reason
     session = db.query(LiveSessionCatalog).filter(LiveSessionCatalog.session_id == str(session_id)).one_or_none()
-    if session is None:
+    if session is None:  # Defensive: the shared transaction-time gate already checked this.
         return None, "control_unavailable"
-    if session.closed_at is not None or session.ended_at is not None:
-        return None, "session_closed"
     if str(session.provider or "").strip().lower() != normalized_provider:
         return None, "identity_diverged"
     if device_id and str(session.device_id or "").strip() != str(device_id).strip():
@@ -425,9 +454,10 @@ def live_session_input_block_reason(db: Session, session: LiveControlSession) ->
         terminal_state = str(runtime.get("terminal_state") or "").strip() if isinstance(runtime, dict) else ""
         if terminal_state == "user_closed":
             return "session_closed"
-        if terminal_state in {"", "finished", "host_expired"}:
-            return None
-        return "run_ended"
+        latest_run = session.catalog_facts.get("latest_run")
+        if isinstance(latest_run, dict) and latest_run.get("ended_at") is not None:
+            return "run_ended"
+        return None
     row = (
         db.query(LiveRuntimeState.terminal_state)
         .filter(LiveRuntimeState.session_id == session.id)

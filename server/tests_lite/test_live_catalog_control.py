@@ -28,6 +28,7 @@ from zerg.routers.session_chat import SessionInputRequest
 from zerg.routers.session_chat import _create_session_input_response
 from zerg.routers.session_chat import _respond_to_live_pause_request
 from zerg.services.live_control_catalog import live_control_capability_available
+from zerg.services.live_control_catalog import live_session_input_block_reason
 from zerg.services.live_control_catalog import load_live_control_session
 from zerg.services.live_control_catalog import wake_next_live_catalog_input
 from zerg.services.live_session_inputs import upsert_live_input_receipt
@@ -147,7 +148,6 @@ def test_live_control_grant_never_uses_stale_or_observe_only_run(tmp_path):
         db.add(newer_run)
         db.commit()
         assert live_control_capability_available(db, session_id=session_id, capability="send") is False
-
         db.add(
             LiveSessionConnection(
                 run_id=newer_run.id,
@@ -163,6 +163,27 @@ def test_live_control_grant_never_uses_stale_or_observe_only_run(tmp_path):
         old_run.ended_at = now
         db.commit()
         assert live_control_capability_available(db, session_id=session_id, capability="send") is False
+
+
+def test_catalog_input_block_reason_uses_disposition_and_latest_run_not_legacy_runtime():
+    session = SimpleNamespace(
+        closed_at=None,
+        ended_at=datetime.now(timezone.utc),
+        catalog_facts={
+            "runtime": {"terminal_state": "session_ended"},
+            "latest_run": {"ended_at": None},
+        },
+    )
+
+    for legacy_terminal in ("session_ended", "process_gone", "host_expired"):
+        session.catalog_facts["runtime"]["terminal_state"] = legacy_terminal
+        assert live_session_input_block_reason(None, session) is None
+
+    session.catalog_facts["latest_run"]["ended_at"] = datetime.now(timezone.utc).isoformat()
+    assert live_session_input_block_reason(None, session) == "run_ended"
+
+    session.catalog_facts["runtime"]["terminal_state"] = "user_closed"
+    assert live_session_input_block_reason(None, session) == "session_closed"
 
 
 @pytest.mark.asyncio

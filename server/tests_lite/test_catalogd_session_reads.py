@@ -302,6 +302,7 @@ async def test_canonical_session_reads_prefer_storage_v2_facts_without_legacy_ca
                 git_branch="main",
                 started_at=now - timedelta(hours=1),
                 last_activity_at=now,
+                ended_at=now,
                 user_messages=2,
                 assistant_messages=3,
                 tool_calls=4,
@@ -328,6 +329,11 @@ async def test_canonical_session_reads_prefer_storage_v2_facts_without_legacy_ca
         assert read["found"] is True
         assert read["facts"]["catalog"]["device_id"] == "cinder"
         assert read["facts"]["catalog"]["summary_title"] == "Storage v2 session"
+        assert read["facts"]["catalog"]["ended_at"] == now.isoformat()
+        assert read["facts"]["catalog"]["closed_at"] is None
+        assert project_catalog_session_facts(
+            read["facts"], observed_at=datetime.fromisoformat(read["observed_at"])
+        ).session_state.disposition.state == "open"
         assert read["facts"]["card"]["archive_state"] == "current"
         assert read["facts"]["card"]["tool_calls"] == 4
         timeline = await client.call(
@@ -347,6 +353,72 @@ async def test_canonical_session_reads_prefer_storage_v2_facts_without_legacy_ca
         )
         assert timeline["total"] == 1
         assert timeline["rows"][0]["facts"]["catalog"]["session_id"] == session_id
+    finally:
+        await client.close()
+        await daemon.close()
+
+
+@pytest.mark.asyncio
+async def test_storage_archive_progress_cannot_close_or_overwrite_live_session_identity(daemon_paths):
+    database_path, socket_path = daemon_paths
+    engine = create_catalog_engine(database_path)
+    initialize_catalog_schema(engine)
+    now = datetime.now(UTC).replace(microsecond=0)
+    open_session_id = str(uuid4())
+    closed_session_id = str(uuid4())
+    explicit_closed_at = now - timedelta(minutes=1)
+    with engine.begin() as connection:
+        for session_id in (open_session_id, closed_session_id):
+            _seed_session(connection, session_id=session_id, device_id="cinder", now=now)
+            connection.execute(
+                StorageSession.__table__.insert().values(
+                    session_id=session_id,
+                    tenant_id="default",
+                    provider="codex",
+                    environment="prod",
+                    machine_id="archive-machine",
+                    project="archive-project",
+                    cwd="/archive/cwd",
+                    started_at=now - timedelta(hours=3),
+                    last_activity_at=now,
+                    ended_at=now,
+                    transcript_revision=9,
+                    raw_state="durable",
+                    render_state="ready",
+                    media_state="complete",
+                    commit_seq=9,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+        connection.execute(
+            LiveSessionCatalog.__table__.update()
+            .where(LiveSessionCatalog.session_id == closed_session_id)
+            .values(closed_at=explicit_closed_at, close_reason="user_closed")
+        )
+    engine.dispose()
+
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        open_read = await client.call("session.read.v2", {"session_id": open_session_id})
+        open_facts = open_read["facts"]
+        assert open_facts["catalog"]["ended_at"] == now.isoformat()
+        assert open_facts["catalog"]["closed_at"] is None
+        assert open_facts["catalog"]["device_id"] == "cinder"
+        assert open_facts["catalog"]["device_name"] == "Cinder"
+        assert open_facts["catalog"]["primary_thread_id"] is not None
+        assert open_facts["latest_run"]["ended_at"] is None
+        open_state = project_catalog_session_facts(
+            open_facts, observed_at=datetime.fromisoformat(open_read["observed_at"])
+        ).session_state
+        assert open_state.disposition.state == "open"
+        assert open_state.run is not None and open_state.run.lifecycle != "ended"
+
+        closed_read = await client.call("session.read.v2", {"session_id": closed_session_id})
+        assert closed_read["facts"]["catalog"]["closed_at"] == explicit_closed_at.isoformat()
+        assert closed_read["facts"]["catalog"]["close_reason"] == "user_closed"
     finally:
         await client.close()
         await daemon.close()

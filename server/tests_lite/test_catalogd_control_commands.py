@@ -294,6 +294,73 @@ def test_canonical_control_prepare_allows_only_bound_matching_grant(monkeypatch,
     engine.dispose()
 
 
+@pytest.mark.parametrize("provider", ["codex", "claude"])
+def test_canonical_control_prepare_ignores_transcript_ended_at(monkeypatch, daemon_paths, provider):
+    database_path, _socket_path = daemon_paths
+    engine = create_catalog_engine(database_path)
+    initialize_catalog_schema(engine)
+    session_id, run_id, _connection_id, adapter_id, generation = _seed_control_grant(engine, provider=provider)
+    _reduce_control_fact(
+        engine,
+        session_id=session_id,
+        run_id=run_id,
+        adapter_connection_id=adapter_id,
+        lease_generation=generation,
+        provider=provider,
+    )
+    with Session(engine) as db:
+        session = db.get(LiveSessionCatalog, str(session_id))
+        session.ended_at = datetime.now(UTC)
+        db.commit()
+    monkeypatch.setenv("LONGHOUSE_SESSION_STATE_COMMAND_AUTH", "canonical")
+    monkeypatch.setenv("LONGHOUSE_SHADOW_REDUCER_INGEST_ENABLED", "1")
+
+    prepared = CatalogStore(engine).prepare_control_command(**_prepare_params(session_id, provider=provider))
+
+    assert prepared["allowed"] is True
+    engine.dispose()
+
+
+@pytest.mark.parametrize("canonical", [False, True])
+@pytest.mark.parametrize("terminal_axis", ["session", "run"])
+def test_control_prepare_revalidates_explicit_session_and_latest_run_terminal(
+    monkeypatch,
+    daemon_paths,
+    canonical,
+    terminal_axis,
+):
+    database_path, _socket_path = daemon_paths
+    engine = create_catalog_engine(database_path)
+    initialize_catalog_schema(engine)
+    session_id, run_id, _connection_id, adapter_id, generation = _seed_control_grant(engine)
+    if canonical:
+        _reduce_control_fact(
+            engine,
+            session_id=session_id,
+            run_id=run_id,
+            adapter_connection_id=adapter_id,
+            lease_generation=generation,
+        )
+        monkeypatch.setenv("LONGHOUSE_SESSION_STATE_COMMAND_AUTH", "canonical")
+        monkeypatch.setenv("LONGHOUSE_SHADOW_REDUCER_INGEST_ENABLED", "1")
+    with Session(engine) as db:
+        if terminal_axis == "session":
+            session = db.get(LiveSessionCatalog, str(session_id))
+            session.closed_at = datetime.now(UTC)
+            session.close_reason = "user_closed"
+        else:
+            run = db.get(LiveSessionRun, str(run_id))
+            run.ended_at = datetime.now(UTC)
+            run.exit_status = "completed"
+        db.commit()
+
+    prepared = CatalogStore(engine).prepare_control_command(**_prepare_params(session_id))
+
+    assert prepared["allowed"] is False
+    assert prepared["reason"] == ("session_closed" if terminal_axis == "session" else "run_ended")
+    engine.dispose()
+
+
 def test_canonical_control_prepare_rejects_unbound_and_ungranted(monkeypatch, daemon_paths):
     database_path, _socket_path = daemon_paths
     engine = create_catalog_engine(database_path)

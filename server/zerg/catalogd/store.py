@@ -2051,6 +2051,7 @@ class CatalogStore:
         from zerg.services.live_control_catalog import canonical_command_authorization_enabled
         from zerg.services.live_control_catalog import get_canonical_live_control_grant
         from zerg.services.live_control_catalog import get_live_control_grant
+        from zerg.services.live_control_catalog import live_control_command_block_reason
         from zerg.services.machine_control_operations import MACHINE_OPERATION_TIMEOUT_GRACE_SECS
 
         observed_at = datetime.now(UTC)
@@ -2069,6 +2070,9 @@ class CatalogStore:
                             capability=capability,
                             now=observed_at,
                         )
+                    block_reason = live_control_command_block_reason(orm, session_id=session_id)
+                    if block_reason is not None:
+                        return None, block_reason
                     return (
                         get_live_control_grant(
                             orm,
@@ -7356,7 +7360,10 @@ def _storage_catalog_compat_row(row) -> dict[str, Any]:
         "git_branch": row["git_branch"],
         "started_at": row["started_at"],
         "ended_at": row["ended_at"],
-        "closed_at": row["ended_at"],
+        # Storage ``ended_at`` is the transcript/source high-water timestamp.
+        # Session closure is explicit, monotonic catalog state and must never
+        # be inferred from a quiet or fully shipped transcript.
+        "closed_at": None,
         "close_reason": None,
         "last_activity_at": row["last_activity_at"],
         "user_messages": int(row["user_messages"]),
@@ -7381,6 +7388,57 @@ def _storage_catalog_compat_row(row) -> dict[str, Any]:
         "launch_surface": row["launch_surface"],
         "permission_mode": "bypass",
     }
+
+
+_STORAGE_CATALOG_OVERLAY_FIELDS = frozenset(
+    {
+        "ended_at",
+        "last_activity_at",
+        "user_messages",
+        "assistant_messages",
+        "tool_calls",
+        "summary_title",
+        "anchor_title",
+        "title_retry_at",
+        "title_last_error",
+        "first_user_message_preview",
+        "transcript_revision",
+    }
+)
+_STORAGE_CATALOG_FALLBACK_FIELDS = frozenset(
+    {
+        "project",
+        "cwd",
+        "git_repo",
+        "git_branch",
+        "device_name",
+        "origin_kind",
+        "launch_actor",
+        "launch_surface",
+    }
+)
+
+
+def _merge_storage_catalog_row(storage_row, live_catalog_row) -> dict[str, Any]:
+    """Combine archive facts with live session identity and disposition.
+
+    Storage owns transcript/archive progress. The live catalog owns explicit
+    closure, control identity, launch provenance, and user preferences. A
+    storage-only historical session remains open at the session level even if
+    its transcript has an ``ended_at`` high-water mark.
+    """
+
+    storage_catalog = _storage_catalog_compat_row(storage_row)
+    if live_catalog_row is None:
+        return storage_catalog
+
+    merged = dict(live_catalog_row)
+    for field in _STORAGE_CATALOG_OVERLAY_FIELDS:
+        merged[field] = storage_catalog[field]
+    for field in _STORAGE_CATALOG_FALLBACK_FIELDS:
+        if merged.get(field) is None:
+            merged[field] = storage_catalog[field]
+    return merged
 
 
 def _legacy_migration_run_dto(row) -> dict[str, Any]:
@@ -7563,7 +7621,7 @@ def _assemble_session_facts(
             if row["owner_id"] is not None:
                 owner_by_session[str(row["idempotency_key"]).rsplit(":", 1)[-1]] = int(row["owner_id"])
     for session_id, row in storage_rows.items():
-        catalogs[session_id] = _storage_catalog_compat_row(row)
+        catalogs[session_id] = _merge_storage_catalog_row(row, catalogs.get(session_id))
         cards[session_id] = _storage_card_compat_row(row)
     runtime_by_session: dict[str, Any] = {}
     for row in connection.execute(
