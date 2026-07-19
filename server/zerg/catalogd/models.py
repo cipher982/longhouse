@@ -128,6 +128,29 @@ class FactConflict(CatalogBase):
     )
 
 
+class FactParityDelta(CatalogBase):
+    """Bounded candidate-level diagnostic; never a served state projection."""
+
+    __tablename__ = "fact_parity_deltas"
+
+    delta_key = Column(String(64), primary_key=True)
+    family = Column(String(32), nullable=False)
+    subject_key = Column(String(1024), nullable=False)
+    source = Column(String(64), nullable=False)
+    source_epoch = Column(String(255), nullable=False, server_default=text("''"))
+    axis = Column(String(64), nullable=False)
+    reason = Column(String(32), nullable=False)
+    legacy_fingerprint = Column(String(64), nullable=False)
+    shadow_head_hash = Column(String(64), nullable=False)
+    detected_at = Column(DateTime(timezone=True), nullable=False)
+    commit_seq = Column(BigInteger, nullable=False)
+
+    __table_args__ = (
+        Index("ix_fact_parity_deltas_recent", "commit_seq", "delta_key"),
+        Index("ix_fact_parity_deltas_candidate", "family", "subject_key"),
+    )
+
+
 class StorageSession(CatalogBase):
     """One denormalized session row for timeline and storage convergence."""
 
@@ -520,6 +543,7 @@ __all__ = [
     "CatalogBase",
     "FactConflict",
     "FactHead",
+    "FactParityDelta",
     "FactReceipt",
     "LegacyMigrationRun",
     "LegacyMigrationSession",

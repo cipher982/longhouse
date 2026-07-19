@@ -28,6 +28,7 @@ from sqlalchemy import select
 from sqlalchemy import tuple_
 from sqlalchemy import union_all
 from sqlalchemy import update
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -35,6 +36,8 @@ from sqlalchemy.orm import Session
 from zerg.catalogd.fact_reducer import MAX_REDUCER_FACTS
 from zerg.catalogd.fact_reducer import reduce_fact_batch
 from zerg.catalogd.fact_reducer import reducer_facts_from_machine_evidence
+from zerg.catalogd.models import FactHead
+from zerg.catalogd.models import FactParityDelta
 from zerg.catalogd.models import LegacyMigrationRun
 from zerg.catalogd.models import LegacyMigrationSession
 from zerg.catalogd.models import MediaObject
@@ -93,6 +96,8 @@ _EXCLUDED_WORKSPACE_ENVIRONMENTS = ("test", "e2e")
 _TRUTHY_ENV = frozenset({"1", "true", "yes", "on"})
 _SHADOW_REDUCER_INGEST_ENV = "LONGHOUSE_SHADOW_REDUCER_INGEST_ENABLED"
 _SHADOW_REDUCER_DISABLED_SOURCES_ENV = "LONGHOUSE_SHADOW_REDUCER_DISABLED_SOURCES"
+_SHADOW_PARITY_ENV = "LONGHOUSE_SHADOW_PARITY_ENABLED"
+_MAX_PARITY_DELTAS = 2_048
 _RECENCY_BUCKETS: tuple[tuple[float, int], ...] = (
     (1.0, 100),
     (4.0, 70),
@@ -437,6 +442,7 @@ class CatalogStore:
 
     def __init__(self, engine: Engine) -> None:
         self.engine = engine
+        self._shadow_parity_delta_count: int | None = None
 
     def authenticate_device(self, *, token_hash: str) -> dict[str, Any]:
         """Validate one machine credential without turning auth into a write."""
@@ -1593,19 +1599,29 @@ class CatalogStore:
                 received_at=received_at,
                 commit_seq=commit_seq,
             )
+            shadow_parity, next_shadow_parity_delta_count = _apply_shadow_parity(
+                connection,
+                heartbeat=heartbeat,
+                managed_leases_present=managed_leases_present,
+                received_at=received_at,
+                commit_seq=commit_seq,
+                known_delta_count=self._shadow_parity_delta_count,
+            )
             result = {
                 "previous_sessions_digest": previous_sessions_digest,
                 "commit_seq": str(commit_seq),
                 "touched_session_ids": sorted(str(session_id) for session_id in touched),
                 "exact_replay": False,
                 "shadow_reducer": shadow_reducer,
+                "shadow_parity": shadow_parity,
             }
             connection.execute(
                 update(stamp)
                 .where(stamp.c.id == stamp_id)
                 .values(catalog_result_json=json.dumps(result, sort_keys=True, separators=(",", ":")))
             )
-            return result
+        self._shadow_parity_delta_count = next_shadow_parity_delta_count
+        return result
 
     def apply_session_runtime(self, *, events: list[Any]) -> dict[str, Any]:
         """Atomically reduce one bounded runtime batch."""
@@ -8303,21 +8319,11 @@ def _apply_shadow_reducer(
 
     if os.getenv(_SHADOW_REDUCER_INGEST_ENV, "").strip().lower() not in _TRUTHY_ENV:
         return {"status": "disabled"}
-    raw_json = heartbeat.get("raw_json")
-    if not isinstance(raw_json, str) or not raw_json:
-        return {"status": "no_evidence"}
-    disabled_sources = {source.strip() for source in os.getenv(_SHADOW_REDUCER_DISABLED_SOURCES_ENV, "").split(",") if source.strip()}
     try:
         with connection.begin_nested():
-            payload = json.loads(raw_json)
-            if not isinstance(payload, dict) or "machine_evidence" not in payload:
-                return {"status": "no_evidence"}
-            evidence = payload["machine_evidence"]
-            if not isinstance(evidence, dict) or evidence.get("schema_version") != 2:
-                return {"status": "unsupported_schema"}
-            facts = [fact for fact in reducer_facts_from_machine_evidence(evidence) if fact.source not in disabled_sources]
-            if len(facts) > MAX_REDUCER_FACTS:
-                raise ValueError(f"shadow reducer batch exceeds {MAX_REDUCER_FACTS} facts")
+            evidence_status, facts, disabled_source_count = _shadow_facts_from_heartbeat(heartbeat, filter_disabled_sources=True)
+            if evidence_status != "ready":
+                return {"status": evidence_status}
             reduced = reduce_fact_batch(
                 connection,
                 facts,
@@ -8330,7 +8336,7 @@ def _apply_shadow_reducer(
                 "duplicates": reduced.duplicates,
                 "stale": reduced.stale,
                 "conflicts": reduced.conflicts,
-                "disabled_sources": len(disabled_sources),
+                "disabled_sources": disabled_source_count,
             }
     except DBAPIError as exc:
         if exc.connection_invalidated or connection.invalidated:
@@ -8342,6 +8348,231 @@ def _apply_shadow_reducer(
         return {"status": "failed", "reason": "database_error"}
     except (RecursionError, TypeError, ValueError):
         return {"status": "failed", "reason": "invalid_evidence"}
+
+
+def _apply_shadow_parity(
+    connection,
+    *,
+    heartbeat: dict[str, Any],
+    managed_leases_present: bool,
+    received_at: datetime,
+    commit_seq: int,
+    known_delta_count: int | None,
+) -> tuple[dict[str, Any], int | None]:
+    """Persist bounded candidate-level deltas without creating served state."""
+
+    original_delta_count = known_delta_count
+    if os.getenv(_SHADOW_PARITY_ENV, "").strip().lower() not in _TRUTHY_ENV:
+        return {"status": "disabled"}, known_delta_count
+    if not managed_leases_present:
+        return {"status": "legacy_unavailable"}, known_delta_count
+    try:
+        with connection.begin_nested():
+            evidence_status, facts, _disabled_source_count = _shadow_facts_from_heartbeat(heartbeat, filter_disabled_sources=False)
+            if evidence_status != "ready":
+                return {"status": evidence_status}, known_delta_count
+            candidates = {
+                (fact.family, fact.subject_key, fact.source, fact.source_epoch): fact for fact in facts if fact.family == "control"
+            }
+            unsupported_families = [
+                {"family": family, "reason": "canonical_projector_unavailable"}
+                for family in sorted({fact.family for fact in facts if fact.family != "control"})
+            ]
+            compared_axes = deltas = missing_heads = 0
+            for fact in (candidates[key] for key in sorted(candidates)):
+                head = (
+                    connection.execute(
+                        select(FactHead.__table__).where(
+                            FactHead.family == fact.family,
+                            FactHead.subject_key == fact.subject_key,
+                            FactHead.source == fact.source,
+                            FactHead.source_epoch == fact.source_epoch,
+                        )
+                    )
+                    .mappings()
+                    .first()
+                )
+                if head is None:
+                    missing_heads += 1
+                    continue
+                shadow_value = json.loads(str(head["value_json"]))
+                if not isinstance(shadow_value, dict):
+                    raise ValueError("shadow fact head value must be an object")
+                session_id = str(shadow_value.get("session_id") or "")
+                provider = str(shadow_value.get("provider") or "").strip().lower()
+                legacy = (
+                    connection.execute(
+                        select(LiveControlLease.__table__).where(
+                            LiveControlLease.session_id == session_id,
+                            LiveControlLease.provider == provider,
+                            LiveControlLease.device_id == str(heartbeat["device_id"]).strip(),
+                        )
+                    )
+                    .mappings()
+                    .first()
+                )
+                if legacy is None:
+                    compared_axes += 1
+                    deltas += _record_shadow_parity_delta(
+                        connection,
+                        fact=fact,
+                        head_hash=str(head["evidence_hash"]),
+                        axis="managed_lease",
+                        legacy_value=None,
+                        reason="legacy_missing",
+                        received_at=received_at,
+                        commit_seq=commit_seq,
+                    )
+                    continue
+                legacy_payload = json.loads(str(legacy["payload_json"] or "{}"))
+                if not isinstance(legacy_payload, dict):
+                    raise ValueError("legacy control lease payload must be an object")
+                axes = (
+                    ("state", legacy["state"], "state"),
+                    ("bridge_status", legacy_payload.get("bridge_status"), "bridge_status"),
+                    (
+                        "thread_subscription_status",
+                        legacy_payload.get("thread_subscription_status"),
+                        "thread_subscription_status",
+                    ),
+                )
+                for legacy_axis, legacy_value, shadow_axis in axes:
+                    compared_axes += 1
+                    legacy_value = _normalized_parity_axis(legacy_axis, legacy_value)
+                    shadow_axis_value = _normalized_parity_axis(legacy_axis, shadow_value.get(shadow_axis))
+                    if legacy_value == shadow_axis_value:
+                        continue
+                    deltas += _record_shadow_parity_delta(
+                        connection,
+                        fact=fact,
+                        head_hash=str(head["evidence_hash"]),
+                        axis=legacy_axis,
+                        legacy_value=legacy_value,
+                        reason="value_mismatch",
+                        received_at=received_at,
+                        commit_seq=commit_seq,
+                    )
+            if deltas:
+                if known_delta_count is None:
+                    known_delta_count = int(connection.execute(select(func.count()).select_from(FactParityDelta.__table__)).scalar_one())
+                else:
+                    known_delta_count += deltas
+                if known_delta_count > _MAX_PARITY_DELTAS:
+                    known_delta_count = _prune_shadow_parity_deltas(connection, known_delta_count=known_delta_count)
+            return (
+                {
+                    "status": "compared",
+                    "compared_axes": compared_axes,
+                    "deltas": deltas,
+                    "missing_heads": missing_heads,
+                    "unsupported_families": unsupported_families,
+                },
+                known_delta_count,
+            )
+    except DBAPIError as exc:
+        if exc.connection_invalidated or connection.invalidated:
+            raise
+        return {"status": "failed", "reason": "database_error"}, original_delta_count
+    except SQLAlchemyError:
+        if connection.invalidated:
+            raise
+        return {"status": "failed", "reason": "database_error"}, original_delta_count
+    except (RecursionError, TypeError, ValueError):
+        return {"status": "failed", "reason": "invalid_evidence"}, original_delta_count
+
+
+def _shadow_facts_from_heartbeat(heartbeat: dict[str, Any], *, filter_disabled_sources: bool):
+    raw_json = heartbeat.get("raw_json")
+    if not isinstance(raw_json, str) or not raw_json:
+        return "no_evidence", [], 0
+    payload = json.loads(raw_json)
+    if not isinstance(payload, dict) or "machine_evidence" not in payload:
+        return "no_evidence", [], 0
+    evidence = payload["machine_evidence"]
+    if not isinstance(evidence, dict) or evidence.get("schema_version") != 2:
+        return "unsupported_schema", [], 0
+    disabled_sources = (
+        {source.strip() for source in os.getenv(_SHADOW_REDUCER_DISABLED_SOURCES_ENV, "").split(",") if source.strip()}
+        if filter_disabled_sources
+        else set()
+    )
+    facts = [fact for fact in reducer_facts_from_machine_evidence(evidence) if fact.source not in disabled_sources]
+    if len(facts) > MAX_REDUCER_FACTS:
+        raise ValueError(f"shadow reducer batch exceeds {MAX_REDUCER_FACTS} facts")
+    return "ready", facts, len(disabled_sources)
+
+
+def _record_shadow_parity_delta(
+    connection,
+    *,
+    fact,
+    head_hash: str,
+    axis: str,
+    legacy_value: object,
+    reason: str,
+    received_at: datetime,
+    commit_seq: int,
+) -> int:
+    legacy_fingerprint = hashlib.sha256(
+        json.dumps(
+            {"axis": axis, "value": legacy_value},
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode()
+    ).hexdigest()
+    delta_key = hashlib.sha256(
+        "\0".join(
+            (
+                fact.family,
+                fact.subject_key,
+                fact.source,
+                fact.source_epoch,
+                axis,
+                reason,
+                legacy_fingerprint,
+                head_hash,
+            )
+        ).encode()
+    ).hexdigest()
+    table = FactParityDelta.__table__
+    inserted = connection.execute(
+        sqlite_insert(table)
+        .values(
+            delta_key=delta_key,
+            family=fact.family,
+            subject_key=fact.subject_key,
+            source=fact.source,
+            source_epoch=fact.source_epoch,
+            axis=axis,
+            reason=reason,
+            legacy_fingerprint=legacy_fingerprint,
+            shadow_head_hash=head_hash,
+            detected_at=received_at,
+            commit_seq=commit_seq,
+        )
+        .on_conflict_do_nothing(index_elements=[table.c.delta_key])
+        .returning(table.c.delta_key)
+    ).scalar_one_or_none()
+    return 1 if inserted is not None else 0
+
+
+def _prune_shadow_parity_deltas(connection, *, known_delta_count: int) -> int:
+    table = FactParityDelta.__table__
+    if known_delta_count <= _MAX_PARITY_DELTAS:
+        return known_delta_count
+    keep = select(table.c.delta_key).order_by(table.c.commit_seq.desc(), table.c.delta_key).limit(_MAX_PARITY_DELTAS)
+    connection.execute(delete(table).where(table.c.delta_key.not_in(keep)))
+    return _MAX_PARITY_DELTAS
+
+
+def _normalized_parity_axis(axis: str, value: object) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    if not normalized:
+        return None
+    return normalized.lower() if axis == "state" else normalized
 
 
 @contextmanager

@@ -6,9 +6,11 @@ from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from sqlalchemy import event
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -19,6 +21,7 @@ from zerg.catalogd.schema import create_catalog_engine
 from zerg.catalogd.schema import initialize_catalog_schema
 from zerg.catalogd.server import CatalogDaemon
 from zerg.catalogd.models import FactHead
+from zerg.catalogd.models import FactParityDelta
 from zerg.machine_evidence import canonical_evidence_hash
 from zerg.models.live_store import LiveArchiveOutbox
 from zerg.models.live_store import LiveControlLease
@@ -68,13 +71,19 @@ def _heartbeat(*, device_id: str, received_at: datetime, digest: str) -> dict:
     }
 
 
-def _lease(*, session_id: str, observed_at: datetime) -> dict:
+def _lease(
+    *,
+    session_id: str,
+    observed_at: datetime,
+    provider: str = "codex",
+    state: str = "attached",
+) -> dict:
     return {
         "session_id": session_id,
-        "provider": "codex",
+        "provider": provider,
         "machine_id": "cinder",
         "sequence": 4,
-        "state": "attached",
+        "state": state,
         "phase": "idle",
         "tool_name": None,
         "bridge_status": "ready",
@@ -109,6 +118,43 @@ def _schema_v2_evidence(*, session_id: str, run_id: str, observed_at: datetime) 
                 "source_seq": 1,
                 "sequenced": True,
                 "dedupe_key": hashlib.sha256(f"{run_id}:1".encode()).hexdigest(),
+                "evidence_hash": evidence_hash,
+            }
+        ],
+    }
+
+
+def _schema_v2_control_evidence(*, session_id: str, observed_at: datetime) -> dict:
+    connection_id = str(uuid4())
+    lease_generation = str(uuid4())
+    fact = {
+        "provider": "codex",
+        "session_id": session_id,
+        "provider_session_id": f"provider-{session_id}",
+        "connection_id": connection_id,
+        "lease_generation": lease_generation,
+        "ownership": "managed",
+        "state": "attached",
+        "bridge_status": "ready",
+        "thread_subscription_status": "subscribed",
+        "lease_ttl_ms": 900_000,
+        "source": "provider_control_scan",
+        "observed_at": observed_at.isoformat(),
+    }
+    evidence_hash = canonical_evidence_hash(fact)
+    return {
+        "schema_version": 2,
+        "control": [fact],
+        "identities": [
+            {
+                "fact_family": "control",
+                "fact_index": 0,
+                "subject_key": f"connection:{connection_id}:{lease_generation}",
+                "source": "provider_control_scan",
+                "source_epoch": lease_generation,
+                "source_seq": None,
+                "sequenced": False,
+                "dedupe_key": hashlib.sha256(f"{connection_id}:{lease_generation}".encode()).hexdigest(),
                 "evidence_hash": evidence_hash,
             }
         ],
@@ -462,4 +508,362 @@ async def test_shadow_reducer_disabled_source_skips_only_reducer_writes(daemon_p
     with engine.connect() as connection:
         assert connection.execute(FactHead.__table__.select()).first() is None
         assert connection.execute(LiveHeartbeatStamp.__table__.select()).first() is not None
+    engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_shadow_parity_is_independent_and_upserts_bounded_candidate_delta(daemon_paths, monkeypatch):
+    monkeypatch.setenv("LONGHOUSE_SHADOW_REDUCER_INGEST_ENABLED", "1")
+    monkeypatch.delenv("LONGHOUSE_SHADOW_PARITY_ENABLED", raising=False)
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    session_id = str(uuid4())
+    evidence = _schema_v2_control_evidence(session_id=session_id, observed_at=now)
+    evidence["control"][0]["state"] = "degraded"
+    evidence["identities"][0]["evidence_hash"] = canonical_evidence_hash(evidence["control"][0])
+    heartbeat = _heartbeat(device_id="cinder", received_at=now, digest="parity-seed")
+    heartbeat["raw_json"] = json.dumps({"machine_evidence": evidence})
+    params = {
+        "heartbeat": heartbeat,
+        "managed_leases": [_lease(session_id=session_id, observed_at=now)],
+        "managed_leases_present": True,
+        "owner_id": 7,
+    }
+
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        seeded = await client.call("machine.heartbeat.apply.v2", params)
+        monkeypatch.setenv("LONGHOUSE_SHADOW_REDUCER_INGEST_ENABLED", "0")
+        monkeypatch.setenv("LONGHOUSE_SHADOW_PARITY_ENABLED", "true")
+        monkeypatch.setenv("LONGHOUSE_SHADOW_REDUCER_DISABLED_SOURCES", "provider_control_scan")
+        compared_params = {
+            **params,
+            "heartbeat": {
+                **heartbeat,
+                "received_at": (now + timedelta(seconds=1)).isoformat(),
+                "sessions_digest": "parity-compare",
+            },
+        }
+        compared = await client.call("machine.heartbeat.apply.v2", compared_params)
+        repeated_params = {
+            **compared_params,
+            "heartbeat": {
+                **compared_params["heartbeat"],
+                "received_at": (now + timedelta(seconds=2)).isoformat(),
+                "sessions_digest": "parity-repeat",
+            },
+        }
+        repeated = await client.call("machine.heartbeat.apply.v2", repeated_params)
+        monkeypatch.setenv("LONGHOUSE_SHADOW_REDUCER_INGEST_ENABLED", "1")
+        monkeypatch.delenv("LONGHOUSE_SHADOW_REDUCER_DISABLED_SOURCES")
+        stale_evidence = json.loads(json.dumps(evidence))
+        stale_evidence["control"][0]["state"] = "attached"
+        stale_evidence["control"][0]["observed_at"] = (now - timedelta(seconds=1)).isoformat()
+        stale_evidence["identities"][0]["dedupe_key"] = hashlib.sha256(b"stale-position").hexdigest()
+        stale_evidence["identities"][0]["evidence_hash"] = canonical_evidence_hash(
+            stale_evidence["control"][0]
+        )
+        stale_params = {
+            **params,
+            "heartbeat": {
+                **heartbeat,
+                "received_at": (now + timedelta(seconds=3)).isoformat(),
+                "sessions_digest": "parity-stale",
+                "raw_json": json.dumps({"machine_evidence": stale_evidence}),
+            },
+        }
+        stale = await client.call("machine.heartbeat.apply.v2", stale_params)
+        exact_replay = await client.call("machine.heartbeat.apply.v2", stale_params)
+    finally:
+        await client.close()
+        await daemon.close()
+
+    assert seeded["shadow_reducer"]["changed_heads"] == 1
+    assert seeded["shadow_parity"] == {"status": "disabled"}
+    assert compared["shadow_reducer"] == {"status": "disabled"}
+    assert compared["shadow_parity"] == {
+        "status": "compared",
+        "compared_axes": 3,
+        "deltas": 1,
+        "missing_heads": 0,
+        "unsupported_families": [],
+    }
+    assert repeated["shadow_parity"]["deltas"] == 0
+    assert stale["shadow_reducer"]["stale"] == 1
+    assert stale["shadow_parity"]["deltas"] == 0
+    assert exact_replay == {**stale, "exact_replay": True}
+
+    engine = create_catalog_engine(database_path)
+    with engine.connect() as connection:
+        delta = connection.execute(FactParityDelta.__table__.select()).mappings().one()
+        assert delta["family"] == "control"
+        assert delta["subject_key"] == evidence["identities"][0]["subject_key"]
+        assert delta["source"] == "provider_control_scan"
+        assert delta["source_epoch"] == evidence["identities"][0]["source_epoch"]
+        assert delta["axis"] == "state"
+        assert delta["reason"] == "value_mismatch"
+        assert delta["commit_seq"] == 2
+    engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_shadow_parity_uses_normalized_legacy_control_rows(daemon_paths, monkeypatch):
+    monkeypatch.setenv("LONGHOUSE_SHADOW_REDUCER_INGEST_ENABLED", "1")
+    monkeypatch.setenv("LONGHOUSE_SHADOW_PARITY_ENABLED", "1")
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    session_id = str(uuid4())
+    evidence = _schema_v2_control_evidence(session_id=session_id, observed_at=now)
+    heartbeat = _heartbeat(device_id="cinder", received_at=now, digest="normalized-parity")
+    heartbeat["raw_json"] = json.dumps({"machine_evidence": evidence})
+    params = {
+        "heartbeat": heartbeat,
+        "managed_leases": [
+            _lease(
+                session_id=session_id,
+                observed_at=now,
+                provider=" CoDeX ",
+                state=" ATTACHED ",
+            )
+        ],
+        "managed_leases_present": True,
+        "owner_id": 7,
+    }
+
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        result = await client.call("machine.heartbeat.apply.v2", params)
+    finally:
+        await client.close()
+        await daemon.close()
+
+    assert result["shadow_parity"] == {
+        "status": "compared",
+        "compared_axes": 3,
+        "deltas": 0,
+        "missing_heads": 0,
+        "unsupported_families": [],
+    }
+    engine = create_catalog_engine(database_path)
+    with engine.connect() as connection:
+        assert connection.execute(FactParityDelta.__table__.select()).first() is None
+    engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_shadow_parity_skips_when_legacy_snapshot_is_unavailable(daemon_paths, monkeypatch):
+    monkeypatch.setenv("LONGHOUSE_SHADOW_REDUCER_INGEST_ENABLED", "1")
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    session_id = str(uuid4())
+    evidence = _schema_v2_control_evidence(session_id=session_id, observed_at=now)
+    heartbeat = _heartbeat(device_id="cinder", received_at=now, digest="snapshot-seed")
+    heartbeat["raw_json"] = json.dumps({"machine_evidence": evidence})
+    seed = {
+        "heartbeat": heartbeat,
+        "managed_leases": [_lease(session_id=session_id, observed_at=now)],
+        "managed_leases_present": True,
+        "owner_id": 7,
+    }
+
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        await client.call("machine.heartbeat.apply.v2", seed)
+        monkeypatch.setenv("LONGHOUSE_SHADOW_REDUCER_INGEST_ENABLED", "0")
+        monkeypatch.setenv("LONGHOUSE_SHADOW_PARITY_ENABLED", "1")
+        unavailable = await client.call(
+            "machine.heartbeat.apply.v2",
+            {
+                **seed,
+                "heartbeat": {
+                    **heartbeat,
+                    "received_at": (now + timedelta(seconds=1)).isoformat(),
+                    "sessions_digest": "snapshot-unavailable",
+                },
+                "managed_leases": [],
+                "managed_leases_present": False,
+            },
+        )
+    finally:
+        await client.close()
+        await daemon.close()
+
+    assert unavailable["shadow_parity"] == {"status": "legacy_unavailable"}
+    engine = create_catalog_engine(database_path)
+    with engine.connect() as connection:
+        assert connection.execute(FactParityDelta.__table__.select()).first() is None
+    engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_shadow_parity_failure_rolls_back_only_parity_savepoint(daemon_paths, monkeypatch):
+    monkeypatch.setenv("LONGHOUSE_SHADOW_REDUCER_INGEST_ENABLED", "1")
+    monkeypatch.setenv("LONGHOUSE_SHADOW_PARITY_ENABLED", "1")
+
+    original_record_delta = catalog_store._record_shadow_parity_delta
+
+    def fail_after_delta_insert(*args, **kwargs):
+        original_record_delta(*args, **kwargs)
+        raise SQLAlchemyError("forced parity write failure")
+
+    monkeypatch.setattr(catalog_store, "_record_shadow_parity_delta", fail_after_delta_insert)
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    session_id = str(uuid4())
+    evidence = _schema_v2_control_evidence(session_id=session_id, observed_at=now)
+    evidence["control"][0]["state"] = "degraded"
+    evidence["identities"][0]["evidence_hash"] = canonical_evidence_hash(evidence["control"][0])
+    heartbeat = _heartbeat(device_id="cinder", received_at=now, digest="parity-failure")
+    heartbeat["raw_json"] = json.dumps({"machine_evidence": evidence})
+    params = {
+        "heartbeat": heartbeat,
+        "managed_leases": [_lease(session_id=session_id, observed_at=now)],
+        "managed_leases_present": True,
+        "owner_id": 7,
+    }
+
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        result = await client.call("machine.heartbeat.apply.v2", params)
+    finally:
+        await client.close()
+        await daemon.close()
+
+    assert result["shadow_reducer"]["changed_heads"] == 1
+    assert result["shadow_parity"] == {"status": "failed", "reason": "database_error"}
+    engine = create_catalog_engine(database_path)
+    with engine.connect() as connection:
+        assert connection.execute(FactParityDelta.__table__.select()).first() is None
+        assert connection.execute(FactHead.__table__.select()).first() is not None
+        assert connection.execute(LiveHeartbeatStamp.__table__.select()).first() is not None
+        assert connection.execute(LiveControlLease.__table__.select()).first() is not None
+    engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_outer_rollback_does_not_advance_shadow_parity_count_cache(daemon_paths, monkeypatch):
+    monkeypatch.setenv("LONGHOUSE_SHADOW_REDUCER_INGEST_ENABLED", "1")
+    monkeypatch.setenv("LONGHOUSE_SHADOW_PARITY_ENABLED", "1")
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    session_id = str(uuid4())
+    evidence = _schema_v2_control_evidence(session_id=session_id, observed_at=now)
+    evidence["control"][0]["state"] = "degraded"
+    evidence["identities"][0]["evidence_hash"] = canonical_evidence_hash(evidence["control"][0])
+    heartbeat = _heartbeat(device_id="cinder", received_at=now, digest="outer-rollback")
+    heartbeat["raw_json"] = json.dumps({"machine_evidence": evidence})
+    params = {
+        "heartbeat": heartbeat,
+        "managed_leases": [_lease(session_id=session_id, observed_at=now)],
+        "managed_leases_present": True,
+        "owner_id": 7,
+    }
+
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    assert daemon._engine is not None
+
+    def fail_result_receipt(_connection, _cursor, statement, _parameters, _context, _executemany):
+        if statement.startswith("UPDATE live_heartbeat_stamps SET catalog_result_json"):
+            raise SQLAlchemyError("forced outer rollback")
+
+    event.listen(daemon._engine, "before_cursor_execute", fail_result_receipt)
+    client = CatalogClient(socket_path)
+    try:
+        with pytest.raises(CatalogRemoteError):
+            await client.call("machine.heartbeat.apply.v2", params)
+        assert daemon._store is not None
+        assert daemon._store._shadow_parity_delta_count is None
+    finally:
+        await client.close()
+        event.remove(daemon._engine, "before_cursor_execute", fail_result_receipt)
+        await daemon.close()
+
+    engine = create_catalog_engine(database_path)
+    with engine.connect() as connection:
+        assert connection.execute(FactParityDelta.__table__.select()).first() is None
+        assert connection.execute(FactHead.__table__.select()).first() is None
+        assert connection.execute(LiveHeartbeatStamp.__table__.select()).first() is None
+    engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_shadow_parity_explicitly_reports_activity_as_unsupported(daemon_paths, monkeypatch):
+    monkeypatch.setenv("LONGHOUSE_SHADOW_REDUCER_INGEST_ENABLED", "1")
+    monkeypatch.setenv("LONGHOUSE_SHADOW_PARITY_ENABLED", "1")
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    session_id = str(uuid4())
+    evidence = _schema_v2_evidence(session_id=session_id, run_id=str(uuid4()), observed_at=now)
+    heartbeat = _heartbeat(device_id="cinder", received_at=now, digest="activity-unsupported")
+    heartbeat["raw_json"] = json.dumps({"machine_evidence": evidence})
+    params = {
+        "heartbeat": heartbeat,
+        "managed_leases": [_lease(session_id=session_id, observed_at=now)],
+        "managed_leases_present": True,
+        "owner_id": 7,
+    }
+
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        result = await client.call("machine.heartbeat.apply.v2", params)
+    finally:
+        await client.close()
+        await daemon.close()
+
+    assert result["shadow_parity"] == {
+        "status": "compared",
+        "compared_axes": 0,
+        "deltas": 0,
+        "missing_heads": 0,
+        "unsupported_families": [
+            {"family": "activity", "reason": "canonical_projector_unavailable"}
+        ],
+    }
+    engine = create_catalog_engine(database_path)
+    with engine.connect() as connection:
+        assert connection.execute(FactParityDelta.__table__.select()).first() is None
+    engine.dispose()
+
+
+def test_shadow_parity_deltas_are_globally_bounded(tmp_path, monkeypatch):
+    monkeypatch.setattr(catalog_store, "_MAX_PARITY_DELTAS", 2)
+    engine = create_catalog_engine(tmp_path / "bounded-parity.db")
+    initialize_catalog_schema(engine)
+    now = datetime.now(UTC).replace(microsecond=0)
+    with engine.begin() as connection:
+        for index in range(3):
+            catalog_store._record_shadow_parity_delta(
+                connection,
+                fact=SimpleNamespace(
+                    family="activity",
+                    subject_key=f"run:{index}",
+                    source="phase_ledger",
+                    source_epoch=f"epoch-{index}",
+                ),
+                head_hash=hashlib.sha256(f"head-{index}".encode()).hexdigest(),
+                axis="phase",
+                legacy_value="idle",
+                reason="value_mismatch",
+                received_at=now + timedelta(seconds=index),
+                commit_seq=index + 1,
+            )
+        retained = catalog_store._prune_shadow_parity_deltas(connection, known_delta_count=3)
+        assert retained == 2
+
+    with engine.connect() as connection:
+        rows = connection.execute(
+            FactParityDelta.__table__.select().order_by(FactParityDelta.commit_seq)
+        ).mappings()
+        assert [row["commit_seq"] for row in rows] == [2, 3]
     engine.dispose()

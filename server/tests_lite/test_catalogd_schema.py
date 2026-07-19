@@ -80,6 +80,7 @@ def test_existing_v2_adopts_reducer_tables_without_advancing_global_version(tmp_
     engine = create_catalog_engine(tmp_path / "longhouse-live.db")
     initialize_catalog_schema(engine)
     with engine.begin() as connection:
+        connection.exec_driver_sql("DROP TABLE fact_parity_deltas")
         connection.exec_driver_sql("DROP TABLE fact_conflicts")
         connection.exec_driver_sql("DROP TABLE fact_receipts")
         connection.exec_driver_sql("DROP TABLE fact_heads")
@@ -90,7 +91,7 @@ def test_existing_v2_adopts_reducer_tables_without_advancing_global_version(tmp_
     assert metadata.schema_version == 2
     with engine.connect() as connection:
         tables = {row[0] for row in connection.exec_driver_sql("SELECT name FROM sqlite_master WHERE type='table'")}
-        assert {"fact_heads", "fact_receipts", "fact_conflicts"}.issubset(tables)
+        assert {"fact_heads", "fact_receipts", "fact_conflicts", "fact_parity_deltas"}.issubset(tables)
         assert connection.exec_driver_sql(
             "SELECT fact_reducer_generation FROM catalog_meta WHERE singleton = 1"
         ).scalar_one()
@@ -100,6 +101,7 @@ def test_interrupted_reducer_adoption_rolls_back_without_partial_marker(tmp_path
     engine = create_catalog_engine(tmp_path / "longhouse-live.db")
     initialize_catalog_schema(engine)
     with engine.begin() as connection:
+        connection.exec_driver_sql("DROP TABLE fact_parity_deltas")
         connection.exec_driver_sql("DROP TABLE fact_conflicts")
         connection.exec_driver_sql("DROP TABLE fact_receipts")
         connection.exec_driver_sql("DROP TABLE fact_heads")
@@ -119,11 +121,50 @@ def test_interrupted_reducer_adoption_rolls_back_without_partial_marker(tmp_path
     with engine.connect() as connection:
         tables = set(connection.exec_driver_sql("SELECT name FROM sqlite_master WHERE type='table'").scalars())
         columns = {row[1] for row in connection.exec_driver_sql("PRAGMA table_info(catalog_meta)")}
-    assert not ({"fact_heads", "fact_receipts", "fact_conflicts"} & tables)
+    assert not ({"fact_heads", "fact_receipts", "fact_conflicts", "fact_parity_deltas"} & tables)
     assert "fact_reducer_generation" not in columns
 
     metadata = initialize_catalog_schema(engine)
     assert metadata.schema_version == 2
+
+
+def test_existing_reducer_generation_atomically_adopts_parity_diagnostics(tmp_path):
+    engine = create_catalog_engine(tmp_path / "longhouse-live.db")
+    initialize_catalog_schema(engine)
+    with engine.begin() as connection:
+        connection.exec_driver_sql("DROP TABLE fact_parity_deltas")
+        connection.exec_driver_sql(
+            "UPDATE catalog_meta SET fact_reducer_generation = ? WHERE singleton = 1",
+            (catalog_schema._FACT_REDUCER_V1_GENERATION,),
+        )
+
+    def fail_parity_adoption(_connection, _cursor, statement, _parameters, _context, _executemany):
+        if "CREATE TABLE" in statement and "fact_parity_deltas" in statement:
+            raise RuntimeError("simulated parity adoption interruption")
+
+    event.listen(engine, "before_cursor_execute", fail_parity_adoption)
+    try:
+        with pytest.raises(RuntimeError, match="simulated parity adoption interruption"):
+            initialize_catalog_schema(engine)
+    finally:
+        event.remove(engine, "before_cursor_execute", fail_parity_adoption)
+
+    with engine.connect() as connection:
+        tables = set(connection.exec_driver_sql("SELECT name FROM sqlite_master WHERE type='table'").scalars())
+        marker = connection.exec_driver_sql(
+            "SELECT fact_reducer_generation FROM catalog_meta WHERE singleton = 1"
+        ).scalar_one()
+    assert "fact_parity_deltas" not in tables
+    assert marker == catalog_schema._FACT_REDUCER_V1_GENERATION
+
+    initialize_catalog_schema(engine)
+    with engine.connect() as connection:
+        tables = set(connection.exec_driver_sql("SELECT name FROM sqlite_master WHERE type='table'").scalars())
+        marker = connection.exec_driver_sql(
+            "SELECT fact_reducer_generation FROM catalog_meta WHERE singleton = 1"
+        ).scalar_one()
+    assert "fact_parity_deltas" in tables
+    assert marker == catalog_schema.FACT_REDUCER_GENERATION
 
 
 def test_reducer_schema_validation_rejects_matching_names_without_constraints(tmp_path):
@@ -200,6 +241,7 @@ def test_concurrent_reducer_adoption_serializes_without_partial_schema(tmp_path)
     engine = create_catalog_engine(database)
     initialize_catalog_schema(engine)
     with engine.begin() as connection:
+        connection.exec_driver_sql("DROP TABLE fact_parity_deltas")
         connection.exec_driver_sql("DROP TABLE fact_conflicts")
         connection.exec_driver_sql("DROP TABLE fact_receipts")
         connection.exec_driver_sql("DROP TABLE fact_heads")

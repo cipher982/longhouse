@@ -838,17 +838,21 @@ Acceptance criteria:
 - duplicate evidence is idempotent;
 - same current or retained source position/different content creates a typed
   conflict, while older positions outside the bounded window are stale;
-- session closure and run termination remain monotonic under reordered events;
+- Phase 3B does not mutate session closure or run termination; monotonic
+  terminal reduction remains a Phase 4 cutover gate once run facts exist;
 - evidence for run N cannot mutate run N+1;
 - control, activity, transcript, and interaction heads advance independently;
-- parity tooling identifies the exact source/fact responsible for a delta; and
+- Phase 3B parity identifies candidate-level control deltas by exact
+  source/fact coordinates and hashes; canonical cross-family parity waits for
+  the pure `SessionStateFacts` projector; and
 - shadow operation adds bounded storage, not unbounded growth.
 
 SQLite health contract:
 
 - one catalogd RPC mutation and one SQLite transaction per heartbeat batch;
 - no second shadow writer, asynchronous replay queue, or stored projection;
-- no `commit_seq` advance for a duplicate or unchanged reducer batch;
+- no reducer-added `commit_seq` advance for a duplicate or unchanged reducer
+  batch (a new durable heartbeat still advances the enclosing transaction once);
 - freshness and expiry are derived at read time and never create timer-driven
   writes;
 - reducer input is capped at 256 total facts per heartbeat after Machine Agent
@@ -899,6 +903,17 @@ Rollout/backout:
   heartbeat path; and
 - served reads and command authorization have no Phase 3 switch and remain on
   the legacy path until the Phase 4 cutover gate passes.
+
+Phase 3B diagnostic limits:
+
+- parity compares only control axes backed by the just-written normalized
+  legacy control lease; activity and other families remain explicitly
+  unsupported until the canonical projector exists;
+- an omitted legacy lease snapshot is `legacy_unavailable`, never evidence of
+  absence;
+- readiness remains a shadow-only pre-cutover extension; and
+- stale/conflict guarantees apply to retained candidates and their bounded
+  receipt window. Evicted candidates do not retain an unbounded high-watermark.
 
 ### Phase 4 — Canonical Server and Command Cutover
 

@@ -140,7 +140,9 @@ def _hide_empty_human_launch_shells(connection: Connection) -> None:
     )
 
 
-_FACT_REDUCER_TABLES = ("fact_heads", "fact_receipts", "fact_conflicts")
+_FACT_REDUCER_V1_TABLES = ("fact_heads", "fact_receipts", "fact_conflicts")
+_FACT_REDUCER_TABLES = (*_FACT_REDUCER_V1_TABLES, "fact_parity_deltas")
+_FACT_REDUCER_V1_GENERATION = "edc85ddb74216aec3eca96e055a821bcd317f6ab8563c02e786f99556b1bea92"
 
 
 def _fact_reducer_generation() -> str:
@@ -265,6 +267,16 @@ def _initialize_fact_reducer_schema_in_transaction(connection: Connection) -> No
     tables = set(inspect(connection).get_table_names())
     present = set(_FACT_REDUCER_TABLES) & tables
     if marker is not None:
+        if marker == _FACT_REDUCER_V1_GENERATION:
+            if present != set(_FACT_REDUCER_V1_TABLES):
+                raise CatalogSchemaMismatchError("catalog fact reducer v1 schema is partial")
+            CatalogBase.metadata.tables["fact_parity_deltas"].create(bind=connection)
+            _validate_fact_reducer_schema(connection)
+            connection.exec_driver_sql(
+                "UPDATE catalog_meta SET fact_reducer_generation = ? WHERE singleton = 1",
+                (FACT_REDUCER_GENERATION,),
+            )
+            return
         if marker != FACT_REDUCER_GENERATION:
             raise CatalogSchemaMismatchError("catalog fact reducer generation does not match this build")
         _validate_fact_reducer_schema(connection)
