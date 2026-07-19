@@ -1017,9 +1017,13 @@ def test_heartbeat_legacy_managed_sessions_still_materialize_control(tmp_path):
         assert response.status_code == 204, response.text
         with SessionLocal() as db:
             connection = db.query(SessionConnection).one()
+            heartbeat = db.query(AgentHeartbeat).one()
+            retained_lease = json.loads(heartbeat.raw_json)["managed_sessions"][0]
             assert connection.control_plane == "claude_channel_bridge"
             assert connection.state == "attached"
             assert connection.device_id == "testclient"
+            assert "phase" not in retained_lease
+            assert "tool_name" not in retained_lease
     finally:
         api_app_ref.dependency_overrides = {}
 

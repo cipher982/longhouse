@@ -6286,10 +6286,6 @@ export interface components {
             sequence: number;
             /** State */
             state: string;
-            /** Phase */
-            phase?: string | null;
-            /** Tool Name */
-            tool_name?: string | null;
             /** Bridge Status */
             bridge_status?: string | null;
             /** Thread Subscription Status */

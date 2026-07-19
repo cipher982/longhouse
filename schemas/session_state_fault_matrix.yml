@@ -102,6 +102,7 @@ scenarios:
       - server/tests_lite/test_agents_storage_v2_session_reads.py::test_machine_session_detail_uses_token_owner_and_marks_canonical_serve
       - server/tests_lite/test_storage_v2_workspace.py::test_storage_v2_workspace_composes_catalog_shell_and_tail
       - server/tests_lite/test_session_state_diagnostics.py::test_diagnostics_route_reports_only_canonical_serve_and_authorization
+      - server/tests_lite/test_heartbeat_endpoint.py::test_heartbeat_legacy_managed_sessions_still_materialize_control
     live: required
     expect: [canonical_ingest_always_on, legacy_identity_never_authorizes]
 

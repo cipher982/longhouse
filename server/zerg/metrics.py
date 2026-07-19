@@ -183,7 +183,7 @@ try:
     managed_session_heartbeat_lease_rows_total = Counter(
         "managed_session_heartbeat_lease_rows_total",
         "Managed session lease rows observed in agent heartbeat payloads before observation dedupe",
-        labelnames=("provider", "state", "phase"),
+        labelnames=("provider", "state"),
     )
 
     agents_heartbeat_snapshot_skipped_total = Counter(

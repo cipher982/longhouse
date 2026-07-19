@@ -525,9 +525,11 @@ pub struct ManagedSessionLease {
     pub machine_id: String,
     pub sequence: u64,
     pub state: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Local-only compatibility overlay for `machine_preview`; activity ships
+    /// through typed evidence and must never ride the control lease wire.
+    #[serde(skip)]
     pub phase: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip)]
     pub tool_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bridge_status: Option<String>,
@@ -3100,7 +3102,8 @@ mod tests {
 
         assert_eq!(parsed["managed_sessions"][0]["provider"], "codex");
         assert_eq!(parsed["managed_sessions"][0]["state"], "attached");
-        assert_eq!(parsed["managed_sessions"][0]["phase"], "idle");
+        assert!(parsed["managed_sessions"][0].get("phase").is_none());
+        assert!(parsed["managed_sessions"][0].get("tool_name").is_none());
         assert_eq!(parsed["managed_sessions"][0]["lease_ttl_ms"], 900_000);
     }
 

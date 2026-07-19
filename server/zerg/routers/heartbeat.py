@@ -84,7 +84,6 @@ MAX_MANAGED_SESSION_LEASE_TTL_MS = 60 * 60 * 1000
 MAX_MACHINE_EVIDENCE_FACTS_PER_FAMILY = 2_048
 MAX_REDUCER_EVIDENCE_FACTS = 256
 MANAGED_SESSION_LEASE_STATES = {"attached", "detached", "degraded"}
-MANAGED_SESSION_LEASE_PHASES = {"idle", "thinking", "running", "blocked", "needs_user", "none"}
 MANAGED_SESSION_LEASE_PROVIDERS = {"codex", "claude", "opencode", "antigravity"}
 CODEX_ROLLOUT_ID_RE = re.compile(r"^rollout-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-(.+)$")
 # One Codex phase freshness window. A complete process snapshot can close
@@ -140,8 +139,6 @@ class ManagedSessionLeaseIn(UTCBaseModel):
     machine_id: str | None = Field(None, max_length=255)
     sequence: int = Field(..., ge=0)
     state: str = Field(..., max_length=32)
-    phase: str | None = Field(None, max_length=32)
-    tool_name: str | None = Field(None, max_length=128)
     bridge_status: str | None = Field(None, max_length=64)
     thread_subscription_status: str | None = Field(None, max_length=64)
     observed_at: datetime | None = None
@@ -425,18 +422,10 @@ def _managed_lease_state_label(lease: ManagedSessionLeaseIn) -> str:
     return state if state in MANAGED_SESSION_LEASE_STATES else "other"
 
 
-def _managed_lease_phase_label(lease: ManagedSessionLeaseIn) -> str:
-    if lease.phase is None or not str(lease.phase).strip():
-        return "none"
-    phase = str(lease.phase).strip().lower()
-    return phase if phase in MANAGED_SESSION_LEASE_PHASES else "other"
-
-
 def _record_managed_session_lease(lease: ManagedSessionLeaseIn) -> None:
     managed_session_heartbeat_lease_rows_total.labels(
         provider=_managed_lease_provider_label(lease),
         state=_managed_lease_state_label(lease),
-        phase=_managed_lease_phase_label(lease),
     ).inc()
 
 
@@ -479,8 +468,6 @@ def _managed_leases_from_resolved_sessions(
                 machine_id=(legacy.machine_id if legacy else None) or device_id,
                 sequence=(legacy.sequence if legacy else sequence),
                 state=session.state,
-                phase=session.phase,
-                tool_name=session.tool_name,
                 bridge_status=session.bridge.status,
                 thread_subscription_status=session.bridge.thread_subscription_status,
                 observed_at=observed_at,
