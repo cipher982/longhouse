@@ -214,7 +214,7 @@ struct APISessionControlActions: Codable, Hashable, Sendable {
 struct APISessionControlFacts: Codable, Hashable, Sendable {
     let ownership: String
     let connection: String
-    let connectionId: Int?
+    let connectionId: JSONValue?
     let leaseGeneration: String?
     let controlPlane: String?
     let observedAt: String?

@@ -3518,6 +3518,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/agents/session-state/health": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Session State Reducer Health
+         * @description Expose bounded reducer health without claiming cutover readiness.
+         */
+        get: operations["get_session_state_reducer_health_agents_session_state_health_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/sessions/{session_id}/state-diagnostics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Session State Diagnostics
+         * @description Compare canonical reducer axes without changing served or authorized state.
+         */
+        get: operations["get_session_state_diagnostics_agents_sessions__session_id__state_diagnostics_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/agents/source-lines/claims": {
         parameters: {
             query?: never;
@@ -4529,10 +4569,14 @@ export interface components {
         };
         /** ActivityEvidenceIn */
         ActivityEvidenceIn: {
+            /** Authority Class */
+            authority_class?: "provider_runtime" | null;
             /** Provider */
             provider: string;
             /** Session Id */
             session_id: string;
+            /** Run Id */
+            run_id?: string | null;
             /** Kind */
             kind: string;
             /** Raw Kind */
@@ -4983,6 +5027,8 @@ export interface components {
         };
         /** ControlEvidenceIn */
         ControlEvidenceIn: {
+            /** Authority Class */
+            authority_class?: "provider_control" | null;
             /**
              * Provider
              * @enum {string}
@@ -4990,6 +5036,14 @@ export interface components {
             provider: "codex" | "claude" | "opencode" | "cursor";
             /** Session Id */
             session_id: string;
+            /** Connection Id */
+            connection_id?: string | null;
+            /** Lease Generation */
+            lease_generation?: string | null;
+            /** Run Id */
+            run_id?: string | null;
+            /** Granted Operations */
+            granted_operations?: ("send_input" | "interrupt" | "terminate" | "tail_output" | "resume")[];
             /** Provider Session Id */
             provider_session_id?: string | null;
             /**
@@ -5406,6 +5460,30 @@ export interface components {
              */
             has_more: boolean;
         };
+        /** EvidenceIdentityIn */
+        EvidenceIdentityIn: {
+            /**
+             * Fact Family
+             * @enum {string}
+             */
+            fact_family: "process" | "activity" | "control" | "transcript" | "readiness";
+            /** Fact Index */
+            fact_index: number;
+            /** Subject Key */
+            subject_key: string;
+            /** Source */
+            source: string;
+            /** Source Epoch */
+            source_epoch?: string | null;
+            /** Source Seq */
+            source_seq?: number | null;
+            /** Sequenced */
+            sequenced: boolean;
+            /** Dedupe Key */
+            dedupe_key: string;
+            /** Evidence Hash */
+            evidence_hash: string;
+        };
         /**
          * FiltersResponse
          * @description Response for filters endpoint.
@@ -5808,14 +5886,16 @@ export interface components {
         MachineEvidenceIn: {
             /**
              * Schema Version
-             * @constant
+             * @enum {integer}
              */
-            schema_version: 1;
+            schema_version: 1 | 2 | 3;
             /**
              * Observed At
              * Format: date-time
              */
             observed_at: string;
+            /** Identities */
+            identities?: components["schemas"]["EvidenceIdentityIn"][];
             /** Process */
             process?: components["schemas"]["ProcessEvidenceIn"][];
             /** Activity */
@@ -6055,6 +6135,8 @@ export interface components {
         ManagedLocalSessionLaunchResponse: {
             /** Session Id */
             session_id: string;
+            /** Run Id */
+            run_id: string;
             /** Provider */
             provider: string;
             /** Provider Session Id */
@@ -6608,6 +6690,8 @@ export interface components {
         PresenceState: "thinking" | "running" | "idle" | "needs_user" | "blocked" | "stalled";
         /** ProcessEvidenceIn */
         ProcessEvidenceIn: {
+            /** Authority Class */
+            authority_class?: "exact_process_identity" | null;
             /** Provider */
             provider: string;
             /** Session Id */
@@ -6930,6 +7014,8 @@ export interface components {
         };
         /** ReadinessEvidenceIn */
         ReadinessEvidenceIn: {
+            /** Authority Class */
+            authority_class?: "operation_proof" | null;
             /**
              * Provider
              * @constant
@@ -8521,7 +8607,7 @@ export interface components {
              */
             connection: "connected" | "degraded" | "disconnected" | "unknown" | "not_applicable";
             /** Connection Id */
-            connection_id?: number | null;
+            connection_id?: number | string | null;
             /** Lease Generation */
             lease_generation?: string | null;
             /** Control Plane */
@@ -8531,6 +8617,31 @@ export interface components {
             /** Valid Until */
             valid_until?: string | null;
             actions: components["schemas"]["SessionControlActions"];
+        };
+        /** SessionControlIdentityComparison */
+        SessionControlIdentityComparison: {
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "legacy_only" | "unbound" | "bound_matched" | "identity_diverged" | "binding_unknown";
+            /** Evidence */
+            evidence?: {
+                [key: string]: string | null;
+            } | null;
+            /** Catalog */
+            catalog?: {
+                [key: string]: string | null;
+            } | null;
+            /** Legacy Grant */
+            legacy_grant?: {
+                [key: string]: string | number | null;
+            } | null;
+            /**
+             * Catalog Bound Count
+             * @default 0
+             */
+            catalog_bound_count: number;
         };
         /** SessionControlResponse */
         SessionControlResponse: {
@@ -9559,6 +9670,73 @@ export interface components {
              */
             display_name?: string | null;
         };
+        /** SessionStateAxisComparison */
+        SessionStateAxisComparison: {
+            /** Matches */
+            matches: boolean;
+            /** Legacy */
+            legacy: {
+                [key: string]: unknown;
+            } | null;
+            /** Shadow */
+            shadow: {
+                [key: string]: unknown;
+            } | null;
+        };
+        /** SessionStateComparison */
+        SessionStateComparison: {
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "matched" | "different" | "not_comparable";
+            /** Same Commit */
+            same_commit: boolean;
+            mode?: components["schemas"]["SessionStateAxisComparison"] | null;
+            disposition?: components["schemas"]["SessionStateAxisComparison"] | null;
+            launch?: components["schemas"]["SessionStateAxisComparison"] | null;
+            run?: components["schemas"]["SessionStateAxisComparison"] | null;
+            activity?: components["schemas"]["SessionStateAxisComparison"] | null;
+            control?: components["schemas"]["SessionStateAxisComparison"] | null;
+            control_identity?: components["schemas"]["SessionControlIdentityComparison"] | null;
+        };
+        /** SessionStateDiagnosticsResponse */
+        SessionStateDiagnosticsResponse: {
+            /**
+             * Session Id
+             * Format: uuid
+             */
+            session_id: string;
+            /** Provider */
+            provider: string | null;
+            /** Catalog Commit Seq */
+            catalog_commit_seq: number;
+            /**
+             * Observed At
+             * Format: date-time
+             */
+            observed_at: string;
+            /** Head Count */
+            head_count: number;
+            /**
+             * Served Path
+             * @enum {string}
+             */
+            served_path?: "legacy_session_state" | "canonical_session_detail";
+            /**
+             * Authorization Path
+             * @enum {string}
+             */
+            authorization_path?: "legacy_capabilities" | "provider_scoped_canonical_control";
+            /** Canonical Authorization Providers */
+            canonical_authorization_providers?: string[];
+            /** Cutover Active */
+            cutover_active?: boolean;
+            /** Authorization Cutover Active */
+            authorization_cutover_active?: boolean;
+            shadow: components["schemas"]["ShadowSessionStateProjection"];
+            comparison: components["schemas"]["SessionStateComparison"];
+        };
         /** SessionStateFacts */
         SessionStateFacts: {
             /**
@@ -9587,6 +9765,121 @@ export interface components {
             presentation: components["schemas"]["SessionPresentation"];
             /** Commit Seq */
             commit_seq?: number | null;
+        };
+        /** SessionStateReducerBatchResponse */
+        SessionStateReducerBatchResponse: {
+            /** Sample Size */
+            sample_size: number;
+            /** Sample Limit */
+            sample_limit: number;
+            /** Window Seconds */
+            window_seconds: number;
+            /** Truncated */
+            truncated: boolean;
+            /** Newest Received At */
+            newest_received_at: string | null;
+            /** Oldest Received At */
+            oldest_received_at: string | null;
+            /** Malformed Results */
+            malformed_results: number;
+            /** Reducer Status Counts */
+            reducer_status_counts: {
+                [key: string]: number;
+            };
+            /** Parity Status Counts */
+            parity_status_counts: {
+                [key: string]: number;
+            };
+            /** Identity Binding */
+            identity_binding?: {
+                [key: string]: number;
+            };
+            /** Changed Heads */
+            changed_heads: number;
+            /** Duplicates */
+            duplicates: number;
+            /** Stale */
+            stale: number;
+            /** Conflicts */
+            conflicts: number;
+            /** Parity Deltas */
+            parity_deltas: number;
+            /** Parity Missing Heads */
+            parity_missing_heads: number;
+        };
+        /** SessionStateReducerHealthResponse */
+        SessionStateReducerHealthResponse: {
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "disabled" | "no_samples" | "not_reducing" | "not_comparable" | "observing" | "degraded";
+            /** Catalog Commit Seq */
+            catalog_commit_seq: number;
+            /**
+             * Observed At
+             * Format: date-time
+             */
+            observed_at: string;
+            /** Ingest Enabled */
+            ingest_enabled: boolean;
+            /** Parity Enabled */
+            parity_enabled: boolean;
+            /**
+             * Served Path
+             * @enum {string}
+             */
+            served_path?: "legacy_session_state" | "canonical_session_detail";
+            /**
+             * Authorization Path
+             * @enum {string}
+             */
+            authorization_path?: "legacy_capabilities" | "provider_scoped_canonical_control";
+            /** Canonical Authorization Providers */
+            canonical_authorization_providers?: string[];
+            /** Cutover Active */
+            cutover_active?: boolean;
+            /** Authorization Cutover Active */
+            authorization_cutover_active?: boolean;
+            /**
+             * Projected Families
+             * @default [
+             *       "mode",
+             *       "disposition",
+             *       "launch",
+             *       "run",
+             *       "activity",
+             *       "control"
+             *     ]
+             */
+            projected_families: string[];
+            /**
+             * Unsupported Families
+             * @default [
+             *       "pending_interaction",
+             *       "transcript",
+             *       "host",
+             *       "presentation"
+             *     ]
+             */
+            unsupported_families: string[];
+            storage: components["schemas"]["SessionStateReducerStorageResponse"];
+            recent_batches: components["schemas"]["SessionStateReducerBatchResponse"];
+        };
+        /** SessionStateReducerStorageResponse */
+        SessionStateReducerStorageResponse: {
+            /** Head Counts */
+            head_counts: {
+                [key: string]: number;
+            };
+            /** Head Capacity Per Family */
+            head_capacity_per_family: number;
+            /** Receipt Count */
+            receipt_count: number;
+            /** Conflict Count */
+            conflict_count: number;
+            /** Parity Delta Count */
+            parity_delta_count: number;
         };
         /**
          * SessionSummaryResponse
@@ -10035,6 +10328,46 @@ export interface components {
             sessions: components["schemas"]["SessionSummaryResponse"][];
             /** Total */
             total: number;
+        };
+        /**
+         * ShadowSessionStateProjection
+         * @description Non-served projection with unsupported axes named explicitly.
+         */
+        ShadowSessionStateProjection: {
+            /**
+             * State Contract Version
+             * @default 1
+             */
+            state_contract_version: number;
+            /** Commit Seq */
+            commit_seq: number;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "shadow" | "helm" | "console" | "unknown";
+            disposition: components["schemas"]["SessionDispositionFacts"];
+            launch?: components["schemas"]["SessionLaunchFacts"] | null;
+            run?: components["schemas"]["SessionRunFacts"] | null;
+            activity: components["schemas"]["SessionActivityFacts"];
+            control: components["schemas"]["SessionControlFacts"] | null;
+            /** Control Run Id */
+            control_run_id?: string | null;
+            /**
+             * Rejected Heads
+             * @default 0
+             */
+            rejected_heads: number;
+            /**
+             * Unsupported Families
+             * @default [
+             *       "pending_interaction",
+             *       "transcript",
+             *       "host",
+             *       "presentation"
+             *     ]
+             */
+            unsupported_families: ("mode" | "disposition" | "launch" | "run" | "pending_interaction" | "transcript" | "host" | "presentation")[];
         };
         /**
          * SignalTier
@@ -10670,6 +11003,8 @@ export interface components {
         };
         /** TranscriptEvidenceIn */
         TranscriptEvidenceIn: {
+            /** Authority Class */
+            authority_class?: "source_cursor" | null;
             /** Provider */
             provider: string;
             /** Session Id */
@@ -17436,6 +17771,57 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_session_state_reducer_health_agents_session_state_health_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionStateReducerHealthResponse"];
+                };
+            };
+        };
+    };
+    get_session_state_diagnostics_agents_sessions__session_id__state_diagnostics_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionStateDiagnosticsResponse"];
                 };
             };
             /** @description Validation Error */
