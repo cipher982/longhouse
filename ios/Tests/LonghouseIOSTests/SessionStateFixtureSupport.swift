@@ -33,7 +33,9 @@ func makeSessionStateFacts(
         launchState: launchState,
         runLifecycle: closed ? "ended" : "running",
         activityState: activity,
+        activityRawKind: nil,
         activityTool: tool,
+        activitySource: nil,
         activityObservedAt: nil,
         activityValidUntil: nil,
         controlOwnership: owned ? "owned" : "unowned",
@@ -115,6 +117,8 @@ private func canonicalFixtureFacts(
     let live = capabilities?["live_control_available"] as? Bool == true
     let reattach = capabilities?["host_reattach_available"] as? Bool == true
     let canReply = capabilities?["reply_to_live_session_available"] as? Bool == true
+    let console = capabilities?["input_mode"] as? String == "console"
+    let canStartTurn = capabilities?["can_start_turn"] as? Bool == true
     let action = { (available: Bool) -> [String: Any] in
         available ? ["state": "available"] : ["state": "unavailable", "reason": "fixture_not_granted"]
     }
@@ -135,7 +139,7 @@ private func canonicalFixtureFacts(
         }
     }
     let access: [String: Any]
-    if owned && live {
+    if owned && (live || (console && canStartTurn)) {
         access = ["key": "live_control", "label": "Live control", "tone": "live"]
     } else if owned && reattach {
         access = ["key": "reattach", "label": "Reattach", "tone": "reattach"]
@@ -145,7 +149,7 @@ private func canonicalFixtureFacts(
         access = ["key": "search_only", "label": "Search only", "tone": "search"]
     }
     let actions = [
-        "start_turn": action(false),
+        "start_turn": action(console && canStartTurn),
         "send_input": action(live && canReply),
         "interrupt": action(live),
         "terminate": action(live),
@@ -157,13 +161,13 @@ private func canonicalFixtureFacts(
     var api: [String: Any] = [
         "state_contract_version": 1,
         "presentation_policy_version": 1,
-        "mode": owned ? "helm" : "shadow",
+        "mode": owned ? (console ? "console" : "helm") : "shadow",
         "disposition": ["state": closed ? "closed" : "open"],
         "run": ["lifecycle": closed ? "ended" : (activity == "unknown" ? "unknown" : "running")],
         "activity": activityFacts,
         "control": [
             "ownership": owned ? "owned" : "unowned",
-            "connection": owned ? (live ? "connected" : reattach ? "disconnected" : "unknown") : "not_applicable",
+            "connection": console ? "not_applicable" : owned ? (live ? "connected" : reattach ? "disconnected" : "unknown") : "not_applicable",
             "actions": actions,
         ],
         "transcript": ["convergence": "current", "searchable": true, "live_observation": false],
@@ -183,13 +187,14 @@ private func canonicalFixtureFacts(
     var domain: [String: Any] = [
         "contract_version": 1,
         "presentation_policy_version": 1,
-        "mode": owned ? "helm" : "shadow",
+        "mode": owned ? (console ? "console" : "helm") : "shadow",
         "disposition_state": closed ? "closed" : "open",
         "launch_state": runtime["headline"] as? String == "Launching" ? "pending" : NSNull(),
         "run_lifecycle": closed ? "ended" : (activity == "unknown" ? "unknown" : "running"),
         "activity_state": activity,
         "control_ownership": owned ? "owned" : "unowned",
-        "control_connection": owned ? (live ? "connected" : reattach ? "disconnected" : "unknown") : "not_applicable",
+        "control_connection": console ? "not_applicable" : owned ? (live ? "connected" : reattach ? "disconnected" : "unknown") : "not_applicable",
+        "start_turn": actions["start_turn"]!,
         "send_input": actions["send_input"]!,
         "interrupt": actions["interrupt"]!,
         "terminate": actions["terminate"]!,

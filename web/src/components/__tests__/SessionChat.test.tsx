@@ -5,6 +5,7 @@ import { describe, expect, it, beforeEach, vi } from "vitest";
 import { SessionChat, type SessionChatTarget } from "../SessionChat";
 import type { SessionLockInfo } from "../../services/api";
 import type { TimelineItem } from "../../lib/sessionWorkspace";
+import { makeSessionStateFacts } from "../../test/sessionState";
 
 const { fetchWithRefreshMock } = vi.hoisted(() => ({
   fetchWithRefreshMock: vi.fn(),
@@ -56,6 +57,7 @@ function makeSession(overrides: Partial<SessionChatTarget> = {}): SessionChatTar
     id: "sess-1",
     project: "zerg",
     provider: "claude",
+    session_state: makeSessionStateFacts({ access: "live_control", interruptAvailable: true }),
     ...overrides,
   };
 }
@@ -282,8 +284,6 @@ describe("SessionChat", () => {
     });
 
     expect(await screen.findByRole("button", { name: /stop/i })).toBeEnabled();
-    expect(screen.getByText(/stop to interrupt/i)).toBeInTheDocument();
-
     await user.click(screen.getByRole("button", { name: /stop/i }));
     await waitFor(() => expect(interruptCalls).toBe(1));
   });
@@ -306,6 +306,13 @@ describe("SessionChat", () => {
       chatMode: "managed_local",
       session: makeSession({
         provider: "cursor",
+        session_state: makeSessionStateFacts({
+          access: "live_control",
+          mode: "console",
+          startTurnAvailable: true,
+          sendAvailable: false,
+          interruptAvailable: true,
+        }),
         capabilities: {
           control_label: "console",
           can_interrupt_active_turn: true,

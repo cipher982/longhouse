@@ -5,6 +5,7 @@ import {
   resolveSessionOwnershipLabel,
   resolveSessionRuntimeState,
   resolveTimelineSignal,
+  timelineSignalLabel,
 } from "../sessionRuntime";
 import { getRuntimeDisplayCopy, getRuntimeOutcomeLabel } from "../sessionUtils";
 import { makeSessionStateFacts } from "../../test/sessionState";
@@ -89,6 +90,14 @@ describe("resolveSessionRuntimeState", () => {
     expect(runtime.displayPhase).toBe("Idle");
     expect(runtime.isExecuting).toBe(false);
     expect(resolveSessionOwnershipLabel(runtime)).toBe("Unmanaged");
+  });
+
+  it("preserves the server-owned quiet tone for unknown activity", () => {
+    const runtime = resolveSessionRuntimeState(makeSession({
+      session_state: makeSessionStateFacts({ activity: "unknown" }),
+    }));
+    expect(runtime.displayPhase).toBe("Activity unknown");
+    expect(runtime.tone).toBe("quiet");
   });
 
   it("reads canonical state facts instead of legacy display aliases", () => {
@@ -193,12 +202,12 @@ describe("resolveTimelineSignal", () => {
   });
 
   it("transcript convergence never fabricates working activity", () => {
-    expect(sig({ tone: "active", activity_recency: "live" })).toBe("quiet");
-    expect(sig({ tone: "active", activity_recency: "stale" })).toBe("quiet");
+    expect(sig({ tone: "active", activity_recency: "live" })).toBe("unknown");
+    expect(sig({ tone: "active", activity_recency: "stale" })).toBe("unknown");
   });
 
-  it("stale running does NOT pulse — falls to quiet", () => {
-    expect(sig({ tone: "running", activity_recency: "stale" })).toBe("quiet");
+  it("stale running does NOT pulse and remains unknown", () => {
+    expect(sig({ tone: "running", activity_recency: "stale" })).toBe("unknown");
   });
 
   it("blocked/stalled map to attention", () => {
@@ -207,7 +216,14 @@ describe("resolveTimelineSignal", () => {
   });
 
   it("idle is quiet", () => {
-    expect(sig({ tone: "idle" })).toBe("quiet");
+    expect(resolveTimelineSignal({
+      session_state: makeSessionStateFacts({ activity: "quiescent" }),
+      user_state: "active",
+    })).toBe("quiet");
+  });
+
+  it("announces unknown activity honestly", () => {
+    expect(timelineSignalLabel("unknown")).toBe("Activity unknown");
   });
 
   it("a global connectivity banner suppresses attention", () => {
@@ -219,7 +235,7 @@ describe("resolveTimelineSignal", () => {
       session_state: makeSessionStateFacts({ pendingInteraction: true }),
       user_state: "parked",
     });
-    expect(parked).toBe("quiet");
+    expect(parked).toBe("unknown");
     const active = resolveTimelineSignal({
       session_state: makeSessionStateFacts({ pendingInteraction: true }),
       user_state: "active",

@@ -381,7 +381,8 @@
     animation: inbox-dot-pulse 1.2s ease-in-out infinite;
   }
 
-  .inbox-row-status-dot[data-signal="quiet"] {
+  .inbox-row-status-dot[data-signal="quiet"],
+  .inbox-row-status-dot[data-signal="unknown"] {
     background: var(--text-muted);
   }
 

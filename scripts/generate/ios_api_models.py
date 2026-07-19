@@ -30,12 +30,7 @@ ROOT_SCHEMAS = [
     "SessionTurnTimingResponse",
 ]
 
-# Read-only rolling compatibility. These values are never advertised by the
-# current server contract, but a newly installed client must still decode a
-# cached/older-server payload during server-first rollout.
-LEGACY_ENUM_VALUES = {
-    "PresenceState": ["syncing_transcript"],
-}
+LEGACY_ENUM_VALUES: dict[str, list[str]] = {}
 
 SWIFT_RESERVED = {
     "associatedtype",

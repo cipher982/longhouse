@@ -23,7 +23,9 @@ struct SessionStateFacts: Hashable, Codable, Sendable {
     let launchState: String?
     let runLifecycle: String?
     let activityState: String
+    let activityRawKind: String?
     let activityTool: String?
+    let activitySource: String?
     let activityObservedAt: String?
     let activityValidUntil: String?
     let controlOwnership: String
@@ -48,7 +50,9 @@ struct SessionStateFacts: Hashable, Codable, Sendable {
         launchState: nil,
         runLifecycle: nil,
         activityState: "unknown",
+        activityRawKind: nil,
         activityTool: nil,
+        activitySource: nil,
         activityObservedAt: nil,
         activityValidUntil: nil,
         controlOwnership: "unowned",
@@ -334,6 +338,7 @@ enum TimelineSignal {
     case attention
     case working
     case quiet
+    case unknown
     case closed
 
     /// Amber for "needs you". Separated from teal/grey on luminance + hue so it
@@ -346,7 +351,7 @@ enum TimelineSignal {
         switch self {
         case .attention: return Self.amber
         case .working: return Self.teal
-        case .quiet: return .secondary
+        case .quiet, .unknown: return .secondary
         case .closed: return .secondary.opacity(0.6)
         }
     }
@@ -357,7 +362,7 @@ enum TimelineSignal {
         switch self {
         case .attention: return Self.amber
         case .working: return Self.teal.opacity(0.8)
-        case .quiet: return .secondary.opacity(0.4)
+        case .quiet, .unknown: return .secondary.opacity(0.4)
         case .closed: return .secondary.opacity(0.3)
         }
     }
@@ -368,7 +373,7 @@ enum TimelineSignal {
         case .attention: return Self.amber
         case .working: return Self.teal
         case .closed: return .secondary.opacity(0.7)
-        case .quiet: return .secondary
+        case .quiet, .unknown: return .secondary
         }
     }
 
@@ -383,6 +388,7 @@ enum TimelineSignal {
         case .attention: return "Waiting on you"
         case .working: return "Working"
         case .quiet: return "Idle"
+        case .unknown: return "Activity unknown"
         case .closed: return "Closed"
         }
     }
@@ -401,8 +407,10 @@ enum TimelineSignal {
             return .working
         case "blocked", "stalled":
             return .attention
-        default:
+        case "quiescent":
             return .quiet
+        default:
+            return .unknown
         }
     }
 }
@@ -868,7 +876,10 @@ struct SessionDetail: Codable, Identifiable, Sendable {
 
     var canSendLive: Bool {
         if isClosed { return false }
-        return capabilities.composerEnabled == true || stateFacts.sendInput.isAvailable
+        if stateFacts.mode == "console" {
+            return stateFacts.startTurn?.isAvailable == true
+        }
+        return stateFacts.sendInput.isAvailable
     }
 
     /// The archive is still converging with a live/catalog session. This is a
@@ -929,14 +940,11 @@ struct SessionDetail: Codable, Identifiable, Sendable {
     }
 
     var runtimeCapabilityLabel: String {
+        if let label = stateFacts.access?.label.trimmingCharacters(in: .whitespacesAndNewlines), !label.isEmpty {
+            return label
+        }
         if stateFacts.launchState == "pending" || stateFacts.launchState == "dispatched" {
             return "Launching"
-        }
-        if canSendLive { return "Send" }
-        if let label = stateFacts.access?.label.trimmingCharacters(in: .whitespacesAndNewlines), !label.isEmpty {
-            if label.caseInsensitiveCompare("Live control") == .orderedSame { return "Send" }
-            if label.caseInsensitiveCompare("Search only") == .orderedSame { return "Read only" }
-            return label
         }
         if isControlOffline { return "Control offline" }
         return "Read only"

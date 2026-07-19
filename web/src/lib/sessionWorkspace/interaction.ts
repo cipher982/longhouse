@@ -51,7 +51,10 @@ export function getSessionInteractionCapabilities({
     throw new Error("Session workspace interactions require session.capabilities");
   }
   const facts = session.session_state;
-  const liveControlAvailable = facts.control.actions.send_input.state === "available";
+  const inputAction = facts.mode === "console"
+    ? facts.control.actions.start_turn
+    : facts.control.actions.send_input;
+  const liveControlAvailable = inputAction?.state === "available";
   const hostReattachAvailable = facts.control.actions.reattach.state === "available";
   const canChatFromBrowser = liveControlAvailable;
   const isManagedLocalSession = facts.control.ownership === "owned";
@@ -101,13 +104,7 @@ export function getSessionInteractionCapabilities({
   const rawAccessLabel = facts.presentation.access?.label?.trim();
   const capabilityLabel = facts.disposition.state === "closed"
     ? "Closed"
-    : mode === "unsupported" && isManagedLocalSession
-      ? "Read only"
-    : rawAccessLabel === "Live control"
-    ? "Send"
-    : rawAccessLabel === "Search only"
-      ? "Read only"
-      : rawAccessLabel || (mode === "managed_local_unavailable" ? "Control unavailable" : "Read only");
+    : rawAccessLabel || (mode === "managed_local_unavailable" ? "Control unavailable" : "Read only");
 
   const capabilityVariant =
     mode === "managed_local"
@@ -187,7 +184,7 @@ export function getSessionInteractionCapabilities({
     capabilityVariant,
     capabilityDescription,
     composerDisabledReason,
-    sendDisabledReason: liveControlAvailable ? null : facts.control.actions.send_input.reason ?? null,
+    sendDisabledReason: liveControlAvailable ? null : inputAction?.reason ?? null,
     primaryActionLabel: mode === "managed_local" ? "Open live dock" : "Unavailable",
     submitLabel,
     title,

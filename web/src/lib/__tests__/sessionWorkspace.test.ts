@@ -366,11 +366,46 @@ describe("getSessionInteractionCapabilities", () => {
     expect(capabilities.managementLabel).toBe("Managed");
     expect(capabilities.managementDescription).toMatch(/owns the control path/i);
     expect(capabilities.managedLaunchSuggestion).toBeNull();
-    expect(capabilities.capabilityLabel).toBe("Send");
+    expect(capabilities.capabilityLabel).toBe("Live control");
     expect(capabilities.composerDisabledReason).toBeNull();
     expect(capabilities.sendDisabledReason).toBeNull();
     expect(capabilities.primaryActionLabel).toBe("Open live dock");
     expect(capabilities.submitLabel).toBe("Send");
+  });
+
+  it("uses Console start_turn independently from Helm send_input", () => {
+    const consoleCapabilities = makeCapabilities({
+      composer_enabled: false,
+      can_start_turn: false,
+      can_send_input: false,
+    });
+    const enabled = getSessionInteractionCapabilities({
+      session: makeSession({
+        capabilities: consoleCapabilities,
+        session_state: makeSessionStateFacts({
+          mode: "console",
+          access: "live_control",
+          startTurnAvailable: true,
+          sendAvailable: false,
+        }),
+      }),
+    });
+    expect(enabled.mode).toBe("managed_local");
+    expect(enabled.canChatFromBrowser).toBe(true);
+
+    const legacyOnly = getSessionInteractionCapabilities({
+      session: makeSession({
+        capabilities: makeCapabilities({ composer_enabled: true, can_start_turn: true }),
+        session_state: makeSessionStateFacts({
+          mode: "console",
+          access: "live_control",
+          startTurnAvailable: false,
+          sendAvailable: false,
+        }),
+      }),
+    });
+    expect(legacyOnly.mode).toBe("managed_local_unavailable");
+    expect(legacyOnly.canChatFromBrowser).toBe(false);
   });
 
   it("uses canonical control ownership instead of runtime display aliases", () => {
@@ -452,7 +487,7 @@ describe("getSessionInteractionCapabilities", () => {
     expect(capabilities.canChatFromBrowser).toBe(false);
     expect(capabilities.managementLabel).toBe("Managed");
     expect(capabilities.managedLaunchSuggestion).toBeNull();
-    expect(capabilities.capabilityLabel).toBe("Read only");
+    expect(capabilities.capabilityLabel).toBe("Live control");
     expect(capabilities.composerDisabledReason).toMatch(/managed Antigravity session is read-only/i);
     expect(capabilities.primaryActionLabel).toBe("Unavailable");
   });
@@ -562,7 +597,7 @@ describe("getSessionInteractionCapabilities", () => {
     expect(capabilities.managementLabel).toBe("Unmanaged");
     expect(capabilities.capabilityDescription).toMatch(/cannot steer it/i);
     expect(capabilities.capabilityDescription).not.toMatch(/longhouse claude/i);
-    expect(capabilities.capabilityLabel).toBe("Read only");
+    expect(capabilities.capabilityLabel).toBe("Search only");
     expect(capabilities.primaryActionLabel).toBe("Unavailable");
     expect(capabilities.notice?.title).toBe("Claude session — unmanaged");
     expect(capabilities.managementDescription).toBe("Longhouse imported this Claude session.");
@@ -583,7 +618,7 @@ describe("getSessionInteractionCapabilities", () => {
     expect(capabilities.mode).toBe("unsupported");
     expect(capabilities.canChatFromBrowser).toBe(false);
     expect(capabilities.managementLabel).toBe("Unmanaged");
-    expect(capabilities.capabilityLabel).toBe("Read only");
+    expect(capabilities.capabilityLabel).toBe("Search only");
     expect(capabilities.composerDisabledReason).toBe(
       "This unmanaged Antigravity session is read-only in Longhouse.",
     );

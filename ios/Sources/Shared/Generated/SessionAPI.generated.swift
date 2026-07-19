@@ -91,7 +91,6 @@ enum APIPresenceState: String, Codable, Hashable, Sendable, CaseIterable {
     case needsUser = "needs_user"
     case blocked = "blocked"
     case stalled = "stalled"
-    case syncingTranscript = "syncing_transcript"
 }
 
 struct APISessionPauseQuestionOptionResponse: Codable, Hashable, Sendable {

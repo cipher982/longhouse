@@ -130,7 +130,7 @@ interface SessionChatProps {
   timelineItems?: TimelineItem[];
 }
 
-export type SessionChatTarget = Pick<AgentSession, "id" | "project" | "provider" | "capabilities">;
+export type SessionChatTarget = Pick<AgentSession, "id" | "project" | "provider" | "capabilities" | "session_state">;
 
 function getToolPrefix(toolNotices?: string[]): string {
   return toolNotices?.length ? toolNotices.join("\n") + "\n\n" : "";
@@ -525,11 +525,11 @@ export function SessionChat({
   );
 
   const handleInterrupt = useCallback(async () => {
-    if (!isManagedLocal || isInterrupting) return;
+    if (!isManagedLocal || isInterrupting || session.session_state.control.actions.interrupt.state !== "available") return;
     setIsInterrupting(true);
     setError(null);
     try {
-      await (session.capabilities?.control_label === "console"
+      await (session.session_state.mode === "console"
         ? interruptConsoleTurn(session.id)
         : interruptLiveSession(session.id));
       queryClient.setQueryData<SessionLockInfo | null>(["session-lock", session.id], {
@@ -544,12 +544,12 @@ export function SessionChat({
     } finally {
       setIsInterrupting(false);
     }
-  }, [isInterrupting, isManagedLocal, queryClient, refreshCurrentSessionWorkspace, session.capabilities?.control_label, session.id]);
+  }, [isInterrupting, isManagedLocal, queryClient, refreshCurrentSessionWorkspace, session.id, session.session_state]);
 
   const canSteerNow = isSendLocked && canSteerActiveTurn;
   const canQueueNow = isSendLocked && canQueueNextInput && !queueFull;
   const canInterruptTurn =
-    isManagedLocal && (isSendLocked || Boolean(session.capabilities?.can_interrupt_active_turn));
+    isManagedLocal && session.session_state.control.actions.interrupt.state === "available";
   const attachmentInputEnabled = attachImagesEnabled && !isSendLocked;
   // Inline interrupt is offered for any locked managed-local turn. When the
   // stall-recovery card is showing it already exposes the same action, so we

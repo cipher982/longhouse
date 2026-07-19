@@ -13,7 +13,7 @@ export type KnownPresenceState =
   | "blocked"
   | "stalled";
 export type RuntimeTruthTier = "none" | "stale" | "fresh" | "managed-local";
-export type RuntimeTone = "inactive" | "active" | "thinking" | "running" | "blocked" | "stalled" | "idle" | "closed";
+export type RuntimeTone = "inactive" | "quiet" | "active" | "thinking" | "running" | "blocked" | "stalled" | "idle" | "closed";
 
 type TimelineRuntimeOverlay = {
   timeline_anchor_at?: string | null;
@@ -52,7 +52,7 @@ export function isSessionClosed(
  * Drives `data-signal` on the row; CSS owns the colors. Keep in lockstep with
  * `timelineSignal` in ios/.../InboxView.swift.
  */
-export type TimelineSignal = "attention" | "working" | "quiet" | "closed";
+export type TimelineSignal = "attention" | "working" | "quiet" | "unknown" | "closed";
 
 export function resolveTimelineSignal(
   session: Pick<AgentSession, "session_state" | "user_state">,
@@ -67,6 +67,7 @@ export function resolveTimelineSignal(
   if (userActive && facts.pending_interaction != null) return "attention";
   if (facts.activity.state === "thinking" || facts.activity.state === "executing") return "working";
   if (facts.activity.state === "blocked" || facts.activity.state === "stalled") return "attention";
+  if (facts.activity.state === "unknown") return "unknown";
   return "quiet";
 }
 
@@ -83,6 +84,8 @@ export function timelineSignalLabel(signal: TimelineSignal): string {
       return "Working";
     case "quiet":
       return "Idle";
+    case "unknown":
+      return "Activity unknown";
     case "closed":
       return "Closed";
   }
@@ -189,6 +192,7 @@ function normalizeRuntimeTruthTier(value: string | null | undefined): RuntimeTru
 function normalizeRuntimeTone(value: string | null | undefined): RuntimeTone | null {
   if (
     value === "inactive" ||
+    value === "quiet" ||
     value === "active" ||
     value === "thinking" ||
     value === "running" ||

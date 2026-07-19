@@ -188,10 +188,13 @@ function SessionDetailWorkspaceRoute({
   const continuationSession = currentThreadSession || session;
   const continueTarget =
     continuationSession?.capabilities?.continue_targets?.[0] ?? null;
+  const continuationInputAction = continuationSession?.session_state.mode === "console"
+    ? continuationSession.session_state.control.actions.start_turn
+    : continuationSession?.session_state.control.actions.send_input;
   const canContinueSession = Boolean(
     continuationSession?.capabilities?.can_continue &&
       continueTarget &&
-      !continuationSession.capabilities?.can_send_input,
+      continuationInputAction?.state !== "available",
   );
   // Adopting an unmanaged/raw transcript starts a fresh managed process — be
   // honest about that vs. re-launching an already-managed session.
@@ -349,6 +352,8 @@ function SessionDetailWorkspaceRoute({
     id: branchSourceSession.id,
     project: branchSourceSession.project,
     provider: branchSourceSession.provider,
+    capabilities: branchSourceSession.capabilities,
+    session_state: branchSourceSession.session_state,
   };
   const runtimeHostLabel =
     displaySession.control?.source_runner_name?.trim() ||

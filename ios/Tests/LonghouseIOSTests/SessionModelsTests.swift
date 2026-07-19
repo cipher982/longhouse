@@ -38,12 +38,6 @@ struct SessionModelsTests {
         #expect(event.transcript_preview?.is_provisional == true)
     }
 
-    @Test
-    func generatedPresenceStateKeepsOlderServerDecodeCompatibility() throws {
-        let decoded = try JSONDecoder().decode(APIPresenceState.self, from: Data(#""syncing_transcript""#.utf8))
-        #expect(decoded == .syncingTranscript)
-    }
-
     private func runtimeDisplay(activityRecency: String, lifecycle: String = "open") -> SessionRuntimeDisplay {
         SessionRuntimeDisplay(
             truthTier: "managed-local",
@@ -188,6 +182,39 @@ struct SessionModelsTests {
           }
         }
         """
+    }
+
+    @Test
+    func canonicalActivityPreservesRawEvidenceAndUnknownAccessibility() throws {
+        let migrated = try sessionStateFixtureData(Data(apiSessionJSON().utf8))
+        var object = try #require(JSONSerialization.jsonObject(with: migrated) as? [String: Any])
+        var state = try #require(object["session_state"] as? [String: Any])
+        var activity = try #require(state["activity"] as? [String: Any])
+        activity["state"] = "unknown"
+        activity["raw_kind"] = "provider_future_phase"
+        activity["source"] = "claude_native_channel"
+        state["activity"] = activity
+        object["session_state"] = state
+        let data = try JSONSerialization.data(withJSONObject: object)
+
+        let detail = try JSONDecoder.snakeCase.decode(APISessionResponse.self, from: data).sessionDetail
+        #expect(detail.stateFacts.activityRawKind == "provider_future_phase")
+        #expect(detail.stateFacts.activitySource == "claude_native_channel")
+
+        let summary = timelineSummary(activityRecency: "none")
+        let unknown = SessionSummary(
+            id: summary.id,
+            title: summary.title,
+            presenceState: summary.presenceState,
+            provider: summary.provider,
+            project: summary.project,
+            lastActivityAt: summary.lastActivityAt,
+            runtimeDisplay: summary.runtimeDisplay,
+            timelineCard: summary.timelineCard,
+            stateFacts: makeSessionStateFacts(activity: "unknown")
+        )
+        let signal = TimelineSignal.resolve(for: unknown)
+        #expect(signal.accessibilityState == "Activity unknown")
     }
 
     @Test
@@ -817,7 +844,7 @@ struct SessionModelsTests {
 
         #expect(detail.effectiveLoopMode == .assist)
         #expect(detail.canSendLive)
-        #expect(detail.runtimeCapabilityLabel == "Send")
+        #expect(detail.runtimeCapabilityLabel == "Live control")
         #expect(detail.runtimeCapabilityTone == "success")
         #expect(detail.runtimePhaseLabel == "Idle")
         #expect(detail.controlHealthMessage == nil)
@@ -1092,7 +1119,7 @@ struct SessionModelsTests {
         let detail = try JSONDecoder.snakeCase.decodeSessionFixture(SessionDetail.self, from: json)
 
         #expect(detail.isReadOnly)
-        #expect(detail.runtimeCapabilityLabel == "Read only")
+        #expect(detail.runtimeCapabilityLabel == "Search only")
         #expect(detail.runtimeCapabilityTone == "neutral")
         #expect(detail.runtimeHeadline == "Activity unknown")
         #expect(detail.runtimeDetail == nil)
@@ -1161,13 +1188,21 @@ struct SessionModelsTests {
         #expect(!detail.canSendLive)
         #expect(!detail.isControlOffline)
         #expect(detail.isReadOnly)
-        #expect(detail.runtimeCapabilityLabel == "Read only")
+        #expect(detail.runtimeCapabilityLabel == "Search only")
         #expect(detail.runtimeCapabilityTone == "neutral")
         #expect(detail.runtimeHeadline == "Activity unknown")
         #expect(detail.controlHealthMessage == "Read-only imported session.")
 
+        let legacyComposerPayload = String(decoding: json, as: UTF8.self)
+            .replacingOccurrences(of: #""composer_enabled": false"#, with: #""composer_enabled": true"#)
+        let legacyComposer = try JSONDecoder.snakeCase.decodeSessionFixture(
+            SessionDetail.self,
+            from: Data(legacyComposerPayload.utf8)
+        )
+        #expect(!legacyComposer.canSendLive)
+
         let consolePayload = String(decoding: json, as: UTF8.self)
-            .replacingOccurrences(of: #""input_mode": "read_only""#, with: #""input_mode": "console""#)
+            .replacingOccurrences(of: #""input_mode": "read_only""#, with: #""input_mode": "console", "can_start_turn": true"#)
             .replacingOccurrences(of: #""composer_enabled": false"#, with: #""composer_enabled": true"#)
         let console = try JSONDecoder.snakeCase.decodeSessionFixture(
             SessionDetail.self,
@@ -1175,7 +1210,7 @@ struct SessionModelsTests {
         )
         #expect(console.canSendLive)
         #expect(!console.isReadOnly)
-        #expect(console.runtimeCapabilityLabel == "Send")
+        #expect(console.runtimeCapabilityLabel == "Live control")
         #expect(console.controlHealthMessage == nil)
     }
 
@@ -1384,7 +1419,7 @@ struct SessionModelsTests {
 
         #expect(!detail.canSendLive)
         #expect(detail.canDraftBeforeSendReady)
-        #expect(detail.runtimeCapabilityLabel == "Launching")
+        #expect(detail.runtimeCapabilityLabel == "Control unknown")
         #expect(detail.controlHealthMessage == "Session is still starting.")
         #expect(detail.launchSetupStatusLabel == "Setting up Codex")
     }

@@ -2137,10 +2137,9 @@ final class SessionViewModel: ObservableObject {
                 }
                 let managed = await MainActor.run {
                     if self.detail?.canDraftBeforeSendReady == true { return true }
-                    guard let caps = self.detail?.capabilities else { return false }
-                    return caps.liveControlAvailable == true
-                        || caps.hostReattachAvailable == true
-                        || caps.inputMode == "console"
+                    guard let facts = self.detail?.stateFacts else { return false }
+                    return facts.controlOwnership == "owned"
+                        || facts.mode == "console"
                 }
                 // Polling is a correctness fallback, not a second live lane.
                 // A healthy stream applies provisional transcript patches
