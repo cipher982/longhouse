@@ -331,9 +331,25 @@ async def test_canonical_session_reads_prefer_storage_v2_facts_without_legacy_ca
         assert read["facts"]["catalog"]["summary_title"] == "Storage v2 session"
         assert read["facts"]["catalog"]["ended_at"] == now.isoformat()
         assert read["facts"]["catalog"]["closed_at"] is None
-        assert project_catalog_session_facts(
+        assert read["facts"]["transcript_coordinates"] == {
+            "source_revision": None,
+            "durable_revision": 7,
+            "render_revision": None,
+            "last_append_at": None,
+        }
+        projected = project_catalog_session_facts(
             read["facts"], observed_at=datetime.fromisoformat(read["observed_at"])
-        ).session_state.disposition.state == "open"
+        )
+        assert projected.session_state.disposition.state == "open"
+        canonical = project_catalog_session_facts(
+            read["facts"],
+            observed_at=datetime.fromisoformat(read["observed_at"]),
+            canonical_heads=[],
+            commit_seq=int(read["commit_seq"]),
+        )
+        assert canonical.session_state.transcript.source_revision is None
+        assert canonical.session_state.transcript.durable_revision == 7
+        assert canonical.session_state.transcript.render_revision is None
         assert read["facts"]["card"]["archive_state"] == "current"
         assert read["facts"]["card"]["tool_calls"] == 4
         timeline = await client.call(

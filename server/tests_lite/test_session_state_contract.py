@@ -23,6 +23,7 @@ from zerg.services.session_liveness_facts import ProcessObservation
 from zerg.services.session_liveness_facts import SessionLivenessFacts
 from zerg.services.session_runtime import SessionRuntimeView
 from zerg.services.session_state_contract import build_session_state_facts
+from zerg.services.session_state_contract import project_transcript_facts
 
 NOW = datetime(2026, 7, 11, 18, 0, tzinfo=timezone.utc)
 
@@ -222,6 +223,25 @@ def test_transcript_lag_never_becomes_provider_working():
     assert facts.presentation.transcript is not None
     assert facts.presentation.transcript.label == "Transcript catching up"
     assert "Working" not in facts.model_dump_json()
+
+
+def test_transcript_coordinates_advance_independently():
+    facts = project_transcript_facts(
+        session=_session(),
+        last_activity_at=NOW,
+        user_messages=3,
+        assistant_messages=2,
+        archive_state="pending",
+        source_revision=11,
+        durable_revision=17,
+        render_revision=13,
+        transcript_last_append_at=NOW - timedelta(seconds=3),
+    )
+
+    assert facts.source_revision == 11
+    assert facts.durable_revision == 17
+    assert facts.render_revision == 13
+    assert facts.last_append_at == NOW - timedelta(seconds=3)
 
 
 def test_process_gone_ends_run_but_does_not_close_session():

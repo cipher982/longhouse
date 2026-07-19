@@ -7669,6 +7669,32 @@ def _assemble_session_facts(
     for session_id, row in storage_rows.items():
         catalogs[session_id] = _merge_storage_catalog_row(row, catalogs.get(session_id))
         cards[session_id] = _storage_card_compat_row(row)
+    raw_transcript_by_session = {
+        str(row["session_id"]): row
+        for row in connection.execute(
+            select(
+                LiveRawObject.session_id,
+                func.max(LiveRawObject.commit_seq).label("source_revision"),
+                func.max(LiveRawObject.sealed_at).label("last_append_at"),
+            )
+            .where(
+                LiveRawObject.session_id.in_(session_ids),
+                LiveRawObject.retired_at.is_(None),
+            )
+            .group_by(LiveRawObject.session_id)
+        ).mappings()
+    }
+    current_render_ids = [
+        str(row["current_render_generation"]) for row in storage_rows.values() if row.get("current_render_generation") is not None
+    ]
+    render_revision_by_generation = {
+        str(row["generation_id"]): int(row["commit_seq"])
+        for row in connection.execute(
+            select(RenderGeneration.generation_id, RenderGeneration.commit_seq).where(
+                RenderGeneration.generation_id.in_(current_render_ids)
+            )
+        ).mappings()
+    }
     runtime_by_session: dict[str, Any] = {}
     for row in connection.execute(
         select(runtime_table)
@@ -7811,6 +7837,22 @@ def _assemble_session_facts(
                 "owner_id": owner_by_session.get(session_id),
                 "catalog": _row_dto(catalog, fields=_CATALOG_FIELDS, text_limits=_CATALOG_TEXT_LIMITS),
                 "card": _row_dto(card, fields=_CARD_FIELDS, text_limits=_CARD_TEXT_LIMITS),
+                "transcript_coordinates": (
+                    {
+                        "source_revision": (
+                            int(raw_transcript_by_session[session_id]["source_revision"])
+                            if session_id in raw_transcript_by_session
+                            else None
+                        ),
+                        "durable_revision": int(storage_rows[session_id]["commit_seq"]),
+                        "render_revision": render_revision_by_generation.get(str(storage_rows[session_id]["current_render_generation"])),
+                        "last_append_at": _encode_datetime(raw_transcript_by_session[session_id]["last_append_at"])
+                        if session_id in raw_transcript_by_session
+                        else None,
+                    }
+                    if session_id in storage_rows
+                    else None
+                ),
                 "runtime": _runtime_dto(runtime_by_session.get(session_id), compact=compact),
                 "readiness": _row_dto(
                     readiness_by_session.get(session_id),

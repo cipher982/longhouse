@@ -441,8 +441,12 @@ def _transcript(
     assistant_messages: int,
     archive_state: str | None,
     live_observation: bool,
+    source_revision: int | None = None,
+    durable_revision: int | None = None,
+    render_revision: int | None = None,
+    last_append_at: datetime | None = None,
 ) -> SessionTranscriptFacts:
-    revision = int(getattr(session, "transcript_revision", 0) or 0)
+    legacy_revision = int(getattr(session, "transcript_revision", 0) or 0)
     normalized_archive = _clean(archive_state)
     lagging = bool(
         normalized_archive == "pending"
@@ -456,11 +460,11 @@ def _transcript(
         convergence = "unknown"
     return SessionTranscriptFacts(
         convergence=convergence,
-        source_revision=revision,
-        durable_revision=revision,
-        render_revision=revision,
-        last_append_at=normalize_utc(last_activity_at),
-        searchable=bool(revision > 0 or user_messages > 0 or assistant_messages > 0),
+        source_revision=source_revision,
+        durable_revision=durable_revision,
+        render_revision=render_revision,
+        last_append_at=normalize_utc(last_append_at),
+        searchable=bool(legacy_revision > 0 or user_messages > 0 or assistant_messages > 0),
         live_observation=live_observation,
     )
 
@@ -483,6 +487,10 @@ def project_transcript_facts(
     assistant_messages: int = 0,
     archive_state: str | None = None,
     live_observation: bool = False,
+    source_revision: int | None = None,
+    durable_revision: int | None = None,
+    render_revision: int | None = None,
+    transcript_last_append_at: datetime | None = None,
 ) -> SessionTranscriptFacts:
     """Project the current bounded transcript axis from catalog coordinates."""
 
@@ -495,6 +503,10 @@ def project_transcript_facts(
         assistant_messages=assistant_messages,
         archive_state=archive_state,
         live_observation=live_observation,
+        source_revision=source_revision,
+        durable_revision=durable_revision,
+        render_revision=render_revision,
+        last_append_at=transcript_last_append_at,
     )
 
 

@@ -293,6 +293,10 @@ def _project_session_state(
             assistant_messages=int(card.assistant_messages or 0),
             archive_state=card.archive_state,
             live_observation=bool(capability_flags.observe_only),
+            source_revision=(catalog_facts.get("transcript_coordinates") or {}).get("source_revision"),
+            durable_revision=(catalog_facts.get("transcript_coordinates") or {}).get("durable_revision"),
+            render_revision=(catalog_facts.get("transcript_coordinates") or {}).get("render_revision"),
+            transcript_last_append_at=decode_catalog_datetime((catalog_facts.get("transcript_coordinates") or {}).get("last_append_at")),
         )
         return project_served_session_state_facts(
             session_id=str(session.session_id),
