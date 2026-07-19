@@ -282,10 +282,12 @@ async def stream_agent_sessions(
         context_mode="forensic",
     )
     if database_module.live_catalog_enabled():
+        owner_id = getattr(_auth, "owner_id", None)
         stream = stream_live_catalog_machine_sessions(
             request,
             params=params,
             skip_initial_replay=skip_initial_replay,
+            owner_id=owner_id if isinstance(owner_id, int) else None,
         )
     else:
         owner_id = getattr(_auth, "owner_id", None)

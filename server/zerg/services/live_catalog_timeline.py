@@ -781,6 +781,7 @@ async def stream_live_catalog_machine_sessions(
     *,
     params: TimelineSessionListParams,
     skip_initial_replay: bool,
+    owner_id: int | None = None,
 ):
     """Slim, targeted machine session stream; never serializes browser cards."""
 
@@ -814,6 +815,8 @@ async def stream_live_catalog_machine_sessions(
                     read_live_catalog_session,
                     UUID(session_id),
                     include_hidden=False,
+                    owner_id=owner_id,
+                    serve_mode="canonical" if canonical_session_detail_enabled() else "legacy",
                 )
             except (ValueError, TypeError):
                 continue

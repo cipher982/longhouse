@@ -19,10 +19,11 @@ class _Request:
 def test_machine_session_stream_uses_commit_driven_catalog_projection(monkeypatch):
     captured = {}
 
-    async def fake_stream(request, *, params, skip_initial_replay):
+    async def fake_stream(request, *, params, skip_initial_replay, owner_id):
         captured["request"] = request
         captured["params"] = params
         captured["skip_initial_replay"] = skip_initial_replay
+        captured["owner_id"] = owner_id
         yield {"event": "connected", "data": "{}"}
 
     monkeypatch.setattr(agents_sessions.database_module, "live_catalog_enabled", lambda: True)
@@ -48,6 +49,7 @@ def test_machine_session_stream_uses_commit_driven_catalog_projection(monkeypatc
     assert captured["params"].device_id == "cinder"
     assert captured["params"].limit == 8
     assert captured["skip_initial_replay"] is False
+    assert captured["owner_id"] == 1
 
 
 def test_machine_session_delta_is_small_and_contains_no_browser_card_copies():

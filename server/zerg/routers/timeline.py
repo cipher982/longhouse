@@ -58,6 +58,7 @@ from zerg.services.agents import AgentsStore
 from zerg.services.catalog_read_gateway import CatalogReadError
 from zerg.services.catalog_read_gateway import enrolled_machines
 from zerg.services.catalog_read_gateway import machine_workspaces
+from zerg.services.live_catalog_timeline import canonical_session_detail_enabled
 from zerg.services.live_catalog_timeline import list_live_catalog_sessions
 from zerg.services.live_catalog_timeline import list_live_catalog_timeline
 from zerg.services.live_catalog_timeline import read_live_catalog_session
@@ -863,7 +864,12 @@ async def get_timeline_session_thread(
     current_user=Depends(get_current_browser_user),
 ):
     if database_module.live_catalog_enabled():
-        session, _provider_alias, commit_seq = read_live_catalog_session(session_id)
+        owner_id = _browser_owner_id(current_user)
+        session, _provider_alias, commit_seq = read_live_catalog_session(
+            session_id,
+            owner_id=owner_id,
+            serve_mode="canonical" if canonical_session_detail_enabled() else "legacy",
+        )
         if session is None:
             raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
         response.headers["X-Catalog-Commit-Seq"] = commit_seq

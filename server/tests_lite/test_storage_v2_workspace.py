@@ -76,7 +76,14 @@ async def test_storage_v2_workspace_composes_catalog_shell_and_tail(monkeypatch)
         }
 
     monkeypatch.setattr(workspace_module, "get_catalogd_client", lambda: _Catalog())
-    monkeypatch.setattr(workspace_module, "read_live_catalog_session", lambda _session_id, **_kwargs: (session, None, "7"))
+    read_args = {}
+
+    def read_session(_session_id, **kwargs):
+        read_args.update(kwargs)
+        return session, None, "7"
+
+    monkeypatch.setattr(workspace_module, "canonical_session_detail_enabled", lambda: True)
+    monkeypatch.setattr(workspace_module, "read_live_catalog_session", read_session)
     monkeypatch.setattr(workspace_module, "read_storage_v2_session_events_page", read_page)
 
     result = await workspace_module.build_storage_v2_workspace(
@@ -91,6 +98,7 @@ async def test_storage_v2_workspace_composes_catalog_shell_and_tail(monkeypatch)
     assert result["projection"]["next_cursor"] == "cursor-1"
     assert result["projection"]["page_offset"] == 74
     assert result["workspace_revision"]["latest_event_id"] == "event-1"
+    assert read_args == {"owner_id": 42, "serve_mode": "canonical"}
 
 
 @pytest.mark.asyncio

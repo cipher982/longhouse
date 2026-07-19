@@ -16,6 +16,7 @@ from zerg.config import get_settings
 from zerg.routers.agents_storage_v2 import read_storage_v2_session_events_page
 from zerg.services.catalog_read_gateway import CatalogReadError
 from zerg.services.catalogd_supervisor import get_catalogd_client
+from zerg.services.live_catalog_timeline import canonical_session_detail_enabled
 from zerg.services.live_catalog_timeline import read_live_catalog_session
 
 
@@ -178,6 +179,7 @@ async def build_storage_v2_workspace(
             read_live_catalog_session,
             session_id,
             owner_id=owner_id,
+            serve_mode="canonical" if canonical_session_detail_enabled() else "legacy",
         )
     except CatalogReadError as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="The session catalog is unavailable.") from exc
