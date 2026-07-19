@@ -196,6 +196,68 @@ def test_canonical_detail_requires_owner_scope_before_catalog_read(monkeypatch):
     assert raised.value.code == "canonical_owner_required"
 
 
+def test_canonical_timeline_projects_all_rows_at_snapshot_commit(monkeypatch):
+    projected = SimpleNamespace(
+        id=str(uuid4()),
+        timeline_anchor_at=datetime.now(timezone.utc),
+        origin_label="prod",
+        environment="prod",
+    )
+    heads = [{"family": "activity"}]
+    snapshot = {
+        "commit_seq": "31",
+        "observed_at": datetime.now(timezone.utc).isoformat(),
+        "rows": [{"thread_id": projected.id, "facts": {"catalog": {}}, "heads": heads, "heads_truncated": False}],
+        "total": 1,
+        "has_real_sessions": True,
+    }
+    captured = {}
+
+    def canonical(params, *, owner_id):
+        captured.update(params=params, owner_id=owner_id)
+        return snapshot
+
+    def project(facts, *, observed_at, canonical_heads=None, commit_seq=None):
+        assert facts is snapshot["rows"][0]["facts"]
+        assert canonical_heads is heads
+        assert commit_seq == 31
+        return projected
+
+    monkeypatch.setattr(live_catalog_timeline, "canonical_timeline_snapshot", canonical)
+    monkeypatch.setattr(live_catalog_timeline, "project_catalog_session_facts", project)
+    monkeypatch.setattr(
+        live_catalog_timeline,
+        "TimelineSessionCardResponse",
+        lambda **kwargs: SimpleNamespace(**kwargs),
+    )
+    monkeypatch.setattr(
+        live_catalog_timeline,
+        "TimelineSessionsListResponse",
+        lambda **kwargs: SimpleNamespace(**kwargs),
+    )
+
+    result = list_live_catalog_timeline(params=_params(), owner_id=7, serve_mode="canonical")
+
+    assert result.total == 1
+    assert captured["owner_id"] == 7
+    assert captured["params"]["limit"] == 20
+
+
+def test_canonical_timeline_fails_closed_on_truncated_heads():
+    snapshot = {
+        "commit_seq": "31",
+        "observed_at": datetime.now(timezone.utc).isoformat(),
+        "rows": [{"facts": {}, "heads": [], "heads_truncated": True}],
+        "total": 1,
+        "has_real_sessions": True,
+    }
+
+    with pytest.raises(CatalogReadError) as raised:
+        project_catalog_timeline_snapshot(snapshot)
+
+    assert raised.value.code == "shadow_fact_head_limit_exceeded"
+
+
 def _add_live_kernel(
     db,
     *,

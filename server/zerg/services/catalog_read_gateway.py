@@ -30,6 +30,13 @@ def timeline_snapshot(params: dict[str, Any]) -> dict[str, Any]:
     return _call("session.timeline.list.v2", params)
 
 
+def canonical_timeline_snapshot(params: dict[str, Any], *, owner_id: int) -> dict[str, Any]:
+    return _call(
+        "session.timeline.list.v2",
+        {**params, "owner_id": owner_id, "include_state_heads": True},
+    )
+
+
 def session_snapshot(session_id: str, *, owner_id: int | None = None) -> dict[str, Any]:
     params: dict[str, Any] = {"session_id": session_id}
     if owner_id is not None:

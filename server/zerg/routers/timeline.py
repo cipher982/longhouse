@@ -477,7 +477,12 @@ async def list_timeline_sessions(
                     owner_id=int(current_user.id),
                     params=params,
                 )
-            return await asyncio.to_thread(list_live_catalog_timeline, params=params)
+            return await asyncio.to_thread(
+                list_live_catalog_timeline,
+                params=params,
+                owner_id=int(current_user.id),
+                serve_mode="canonical" if canonical_session_detail_enabled() else "legacy",
+            )
         except CatalogReadError as exc:
             raise HTTPException(
                 status_code=503,
@@ -569,6 +574,7 @@ async def stream_timeline_sessions(
             request,
             params=params,
             skip_initial_replay=skip_initial_replay,
+            owner_id=current_user_id if isinstance(current_user_id, int) else None,
         )
     else:
         stream = stream_timeline_sessions_for_browser(
@@ -630,7 +636,12 @@ async def list_timeline_session_summaries(
             listed_sessions = [card.head for card in searched.sessions]
             listed_total = searched.total
         else:
-            listed = await asyncio.to_thread(list_live_catalog_sessions, params=params)
+            listed = await asyncio.to_thread(
+                list_live_catalog_sessions,
+                params=params,
+                owner_id=int(current_user.id),
+                serve_mode="canonical" if canonical_session_detail_enabled() else "legacy",
+            )
             listed_sessions = listed.sessions
             listed_total = listed.total
         summaries = []

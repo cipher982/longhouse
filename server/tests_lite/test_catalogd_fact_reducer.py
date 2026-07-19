@@ -16,6 +16,7 @@ import zerg.catalogd.fact_reducer as fact_reducer
 from zerg.catalogd.fact_reducer import ReducerFact
 from zerg.catalogd.fact_reducer import canonical_evidence_hash
 from zerg.catalogd.fact_reducer import canonical_value_json
+from zerg.catalogd.fact_reducer import read_bounded_sessions_fact_heads
 from zerg.catalogd.fact_reducer import read_fact_heads
 from zerg.catalogd.fact_reducer import reduce_fact_batch
 from zerg.catalogd.fact_reducer import reducer_facts_from_machine_evidence
@@ -335,6 +336,29 @@ def test_commit_sequence_override_must_match_current_catalog_commit(tmp_path):
     with engine.begin() as connection:
         with pytest.raises(ValueError, match="must equal the current catalog commit"):
             reduce_fact_batch(connection, [_fact()], received_at=NOW, commit_seq_override=1)
+
+
+def test_bounded_multi_session_head_read_groups_and_truncates_in_one_snapshot(tmp_path):
+    engine = _engine(tmp_path)
+    facts = [
+        replace(_fact(subject="run:a", run_id="a"), session_id="session-1"),
+        replace(_fact(subject="run:b", run_id="b"), session_id="session-1"),
+        replace(_fact(subject="run:c", run_id="c"), session_id="session-2"),
+    ]
+    with engine.begin() as connection:
+        reduced = reduce_fact_batch(connection, facts, received_at=NOW)
+        commit_seq, grouped, truncated = read_bounded_sessions_fact_heads(
+            connection,
+            session_ids=["session-1", "session-2", "session-3"],
+            families=("activity",),
+            limit_per_session=1,
+        )
+
+    assert commit_seq == reduced.commit_seq
+    assert len(grouped["session-1"]) == 1
+    assert len(grouped["session-2"]) == 1
+    assert grouped["session-3"] == []
+    assert truncated == {"session-1"}
 
 
 def test_hash_mismatch_is_rejected_before_any_write(tmp_path):

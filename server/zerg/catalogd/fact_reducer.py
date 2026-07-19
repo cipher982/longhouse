@@ -377,6 +377,46 @@ def read_bounded_session_fact_heads(
     return commit_seq, [dict(row) for row in rows[:limit]], len(rows) > limit
 
 
+def read_bounded_sessions_fact_heads(
+    connection: Connection,
+    *,
+    session_ids: list[str],
+    families: tuple[str, ...],
+    limit_per_session: int,
+) -> tuple[int, dict[str, list[dict[str, Any]]], set[str]]:
+    """Read one bounded page of session heads without an N+1 query loop."""
+
+    if len(session_ids) > 200 or any(not session_id or len(session_id) > 255 for session_id in session_ids):
+        raise ValueError("session_ids must contain at most 200 bounded identifiers")
+    if not families or limit_per_session <= 0:
+        raise ValueError("fact head families and limit_per_session are required")
+    commit_seq = _current_commit_seq(connection)
+    grouped = {session_id: [] for session_id in session_ids}
+    truncated: set[str] = set()
+    if not session_ids:
+        return commit_seq, grouped, truncated
+    rows = connection.execute(
+        select(FactHead.__table__)
+        .where(FactHead.session_id.in_(session_ids), FactHead.family.in_(families))
+        .order_by(
+            FactHead.session_id.asc(),
+            FactHead.updated_commit_seq.desc(),
+            FactHead.family.asc(),
+            FactHead.subject_key.asc(),
+            FactHead.source.asc(),
+            FactHead.source_epoch.asc(),
+        )
+    ).mappings()
+    for row in rows:
+        session_id = str(row["session_id"])
+        heads = grouped[session_id]
+        if len(heads) < limit_per_session:
+            heads.append(dict(row))
+        else:
+            truncated.add(session_id)
+    return commit_seq, grouped, truncated
+
+
 def _validate_fact(fact: ReducerFact) -> ReducerFact:
     if not fact.family or len(fact.family) > 32:
         raise ValueError("fact family is missing or too long")

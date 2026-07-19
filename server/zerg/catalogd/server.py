@@ -1699,7 +1699,8 @@ class CatalogDaemon:
             "limit",
             "offset",
         }
-        if set(request.params) != expected:
+        canonical_expected = expected | {"owner_id", "include_state_heads"}
+        if set(request.params) not in (expected, canonical_expected):
             return self._error(request, "invalid_request", "session.timeline.list.v2 has invalid parameters")
         params = dict(request.params)
         for field, maximum in (("project", 255), ("provider", 64), ("environment", 32), ("device_id", 255)):
@@ -1715,6 +1716,11 @@ class CatalogDaemon:
             return self._error(request, "invalid_request", "limit must be an integer from 1 through 200")
         if type(params["offset"]) is not int or not 0 <= params["offset"] <= 1_000_000:
             return self._error(request, "invalid_request", "offset must be an integer from 0 through 1000000")
+        if set(params) == canonical_expected:
+            if type(params["owner_id"]) is not int or params["owner_id"] <= 0:
+                return self._error(request, "invalid_request", "owner_id must be a positive integer")
+            if params["include_state_heads"] is not True:
+                return self._error(request, "invalid_request", "include_state_heads must be true")
         assert self._store is not None
         result = await self._run_store(self._store.list_session_timeline, **params)
         return CatalogRpcResponse(id=request.id, result=result)

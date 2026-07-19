@@ -670,6 +670,71 @@ async def test_shadow_state_read_is_owner_scoped_and_commit_coherent(daemon_path
         await daemon.close()
 
 
+@pytest.mark.asyncio
+async def test_canonical_timeline_is_owner_scoped_and_commit_coherent(daemon_paths):
+    database_path, socket_path = daemon_paths
+    engine = create_catalog_engine(database_path)
+    initialize_catalog_schema(engine)
+    now = datetime.now(UTC).replace(microsecond=0)
+    session_id = "66666666-6666-4666-8666-666666666666"
+    ownerless_session_id = "77777777-7777-4777-8777-777777777777"
+    with engine.begin() as connection:
+        connection.execute(
+            LiveUser.__table__.insert().values(
+                id=7,
+                email="owner@example.com",
+                role="ADMIN",
+                provider=None,
+                is_active=True,
+            )
+        )
+        _seed_session(connection, session_id=session_id, device_id="cinder", now=now, owner_id="7")
+        _seed_session(connection, session_id=ownerless_session_id, device_id="cinder", now=now)
+        reduced = reduce_fact_batch(
+            connection,
+            [
+                _reducer_fact(family="activity", session_id=session_id, now=now),
+                _reducer_fact(family="control", session_id=session_id, now=now),
+            ],
+            received_at=now,
+        )
+    engine.dispose()
+
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        result = await client.call(
+            "session.timeline.list.v2",
+            {
+                "project": "zerg",
+                "provider": None,
+                "environment": None,
+                "include_test": False,
+                "hide_autonomous": True,
+                "include_automation": False,
+                "device_id": None,
+                "days_back": 7,
+                "limit": 20,
+                "offset": 0,
+                "owner_id": 7,
+                "include_state_heads": True,
+            },
+        )
+    finally:
+        await client.close()
+        await daemon.close()
+
+    assert result["commit_seq"] == str(reduced.commit_seq)
+    assert result["total"] == 1
+    assert len(result["rows"]) == 1
+    row = result["rows"][0]
+    assert row["facts"]["catalog"]["session_id"] == session_id
+    assert row["heads_truncated"] is False
+    assert {head["family"] for head in row["heads"]} == {"activity", "control"}
+    assert {head["updated_commit_seq"] for head in row["heads"]} == {reduced.commit_seq}
+
+
 def test_shadow_state_read_bounds_combined_rpc_payload(daemon_paths):
     database_path, _socket_path = daemon_paths
     engine = create_catalog_engine(database_path)

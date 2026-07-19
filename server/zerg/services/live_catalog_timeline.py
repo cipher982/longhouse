@@ -25,6 +25,7 @@ from zerg.services.agents.kernel_capabilities import project_console_turn_capabi
 from zerg.services.catalog_facts import decode_catalog_datetime
 from zerg.services.catalog_facts import hydrate_catalog_row
 from zerg.services.catalog_read_gateway import CatalogReadError
+from zerg.services.catalog_read_gateway import canonical_timeline_snapshot
 from zerg.services.catalog_read_gateway import session_snapshot
 from zerg.services.catalog_read_gateway import shadow_session_state_snapshot
 from zerg.services.catalog_read_gateway import timeline_snapshot
@@ -603,25 +604,34 @@ def _response_from_catalog(
 def list_live_catalog_timeline(
     *,
     params: TimelineSessionListParams,
+    owner_id: int | None = None,
+    serve_mode: Literal["legacy", "canonical"] = "legacy",
 ) -> TimelineSessionsListResponse:
     """List timeline cards from one catalogd-owned SQLite snapshot."""
 
     if params.query is not None or (params.mode or "lexical") != "lexical":
         raise ValueError("search_requires_archive")
-    snapshot = timeline_snapshot(
-        {
-            "project": params.project,
-            "provider": params.provider,
-            "environment": params.environment,
-            "include_test": params.include_test,
-            "hide_autonomous": params.hide_autonomous,
-            "include_automation": params.include_automation,
-            "device_id": params.device_id,
-            "days_back": params.days_back,
-            "limit": params.limit,
-            "offset": params.offset,
-        }
-    )
+    snapshot_params = {
+        "project": params.project,
+        "provider": params.provider,
+        "environment": params.environment,
+        "include_test": params.include_test,
+        "hide_autonomous": params.hide_autonomous,
+        "include_automation": params.include_automation,
+        "device_id": params.device_id,
+        "days_back": params.days_back,
+        "limit": params.limit,
+        "offset": params.offset,
+    }
+    if serve_mode == "canonical":
+        if owner_id is None:
+            raise CatalogReadError(
+                "canonical_owner_required",
+                "Canonical timeline projection requires an owner-scoped request.",
+            )
+        snapshot = canonical_timeline_snapshot(snapshot_params, owner_id=owner_id)
+    else:
+        snapshot = timeline_snapshot(snapshot_params)
     return project_catalog_timeline_snapshot(snapshot)
 
 
@@ -632,8 +642,20 @@ def project_catalog_timeline_snapshot(snapshot: dict[str, Any]) -> TimelineSessi
     if not isinstance(observed_at, datetime):
         raise ValueError("catalog timeline snapshot is missing observed_at")
     cards: list[TimelineSessionCardResponse] = []
+    commit_seq = int(snapshot.get("commit_seq") or 0)
     for row in snapshot.get("rows") or []:
-        projected = project_catalog_session_facts(row["facts"], observed_at=observed_at)
+        canonical_heads = row.get("heads")
+        if row.get("heads_truncated") is True:
+            raise CatalogReadError(
+                "shadow_fact_head_limit_exceeded",
+                "Canonical session facts exceed the bounded timeline projection limit.",
+            )
+        projected = project_catalog_session_facts(
+            row["facts"],
+            observed_at=observed_at,
+            canonical_heads=canonical_heads if isinstance(canonical_heads, list) else None,
+            commit_seq=commit_seq if isinstance(canonical_heads, list) else None,
+        )
         thread_id = str(row.get("thread_id") or projected.id)
         cards.append(
             TimelineSessionCardResponse(
@@ -654,26 +676,22 @@ def project_catalog_timeline_snapshot(snapshot: dict[str, Any]) -> TimelineSessi
     )
 
 
-def list_live_catalog_sessions(*, params: TimelineSessionListParams) -> SessionsListResponse:
+def list_live_catalog_sessions(
+    *,
+    params: TimelineSessionListParams,
+    owner_id: int | None = None,
+    serve_mode: Literal["legacy", "canonical"] = "legacy",
+) -> SessionsListResponse:
     """Machine-facing flat session list from the same bounded card projection."""
 
     if params.query is not None or (params.mode or "lexical") != "lexical":
         raise ValueError("search_requires_archive")
-    snapshot = timeline_snapshot(
-        {
-            "project": params.project,
-            "provider": params.provider,
-            "environment": params.environment,
-            "include_test": params.include_test,
-            "hide_autonomous": params.hide_autonomous,
-            "include_automation": params.include_automation,
-            "device_id": params.device_id,
-            "days_back": params.days_back,
-            "limit": params.limit,
-            "offset": params.offset,
-        }
+    timeline = list_live_catalog_timeline(params=params, owner_id=owner_id, serve_mode=serve_mode)
+    return SessionsListResponse(
+        sessions=[card.head for card in timeline.sessions],
+        total=timeline.total,
+        has_real_sessions=timeline.has_real_sessions,
     )
-    return project_catalog_sessions_snapshot(snapshot)
 
 
 def project_catalog_sessions_snapshot(snapshot: dict[str, Any]) -> SessionsListResponse:
@@ -791,9 +809,15 @@ async def stream_live_catalog_machine_sessions(
     yield {"event": "connected", "data": json.dumps({"source": "runtime_host"})}
 
     if not skip_initial_replay:
-        response = await asyncio.to_thread(list_live_catalog_timeline, params=params)
+        response = await asyncio.to_thread(
+            list_live_catalog_timeline,
+            params=params,
+            owner_id=owner_id,
+            serve_mode="canonical" if canonical_session_detail_enabled() else "legacy",
+        )
         for card in response.sessions:
-            delta = project_machine_session_delta(card.head, commit_seq=None)
+            initial_commit_seq = card.head.session_state.commit_seq if canonical_session_detail_enabled() else None
+            delta = project_machine_session_delta(card.head, commit_seq=initial_commit_seq)
             signature = _machine_session_delta_signature(delta)
             previous[card.head.id] = signature
             yield {"event": "session_delta", "data": signature}
@@ -849,6 +873,7 @@ async def stream_live_catalog_timeline(
     *,
     params: TimelineSessionListParams,
     skip_initial_replay: bool,
+    owner_id: int | None = None,
 ):
     """SSE list stream driven by the existing timeline pubsub wake signal."""
 
@@ -864,7 +889,12 @@ async def stream_live_catalog_timeline(
             if skip_initial_replay:
                 skip_initial_replay = False
             else:
-                response = await asyncio.to_thread(list_live_catalog_timeline, params=params)
+                response = await asyncio.to_thread(
+                    list_live_catalog_timeline,
+                    params=params,
+                    owner_id=owner_id,
+                    serve_mode="canonical" if canonical_session_detail_enabled() else "legacy",
+                )
                 current = {
                     card.thread_id: json.dumps(card.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
                     for card in response.sessions

@@ -36,6 +36,7 @@ from sqlalchemy.orm import Session
 from zerg.catalogd.fact_reducer import MAX_HEADS_PER_FAMILY
 from zerg.catalogd.fact_reducer import MAX_REDUCER_FACTS
 from zerg.catalogd.fact_reducer import read_bounded_session_fact_heads
+from zerg.catalogd.fact_reducer import read_bounded_sessions_fact_heads
 from zerg.catalogd.fact_reducer import reduce_fact_batch
 from zerg.catalogd.fact_reducer import reducer_facts_from_machine_evidence
 from zerg.catalogd.models import FactConflict
@@ -3538,6 +3539,8 @@ class CatalogStore:
         days_back: int,
         limit: int,
         offset: int,
+        owner_id: int | None = None,
+        include_state_heads: bool = False,
     ) -> dict[str, Any]:
         """Return one bounded timeline page and all raw facts in one snapshot."""
 
@@ -3593,6 +3596,19 @@ class CatalogStore:
             if not include_automation:
                 legacy_where.append(or_(card.c.origin_kind.is_(None), card.c.origin_kind != "hatch_automation"))
                 storage_where.append(or_(storage.c.origin_kind.is_(None), storage.c.origin_kind != "hatch_automation"))
+            if include_state_heads:
+                if owner_id is None:
+                    raise ValueError("canonical timeline projection requires owner_id")
+                owner_text = str(owner_id)
+                legacy_where.append(
+                    select(LiveSession.session_id)
+                    .where(
+                        LiveSession.session_id == card.c.session_id,
+                        LiveSession.owner_id == owner_text,
+                    )
+                    .exists()
+                )
+                storage_where.append(storage.c.owner_id == owner_text)
 
             joined = card.join(catalog, catalog.c.session_id == card.c.session_id)
             candidates = union_all(
@@ -3620,6 +3636,15 @@ class CatalogStore:
                 observed_at=observed_at,
                 compact=True,
             )
+            heads_by_session: dict[str, tuple[list[dict[str, Any]], bool]] = {}
+            if include_state_heads:
+                _head_commit_seq, grouped_heads, truncated_sessions = read_bounded_sessions_fact_heads(
+                    connection,
+                    session_ids=session_ids,
+                    families=("activity", "control"),
+                    limit_per_session=SHADOW_STATE_FACT_HEAD_LIMIT,
+                )
+                heads_by_session = {session_id: (heads, session_id in truncated_sessions) for session_id, heads in grouped_heads.items()}
             has_real_sessions = total == 0 or any((item["catalog"].get("device_id") or "") != "demo-mac" for item in facts)
             return {
                 "commit_seq": str(_current_commit_seq(connection)),
@@ -3628,6 +3653,27 @@ class CatalogStore:
                     {
                         "thread_id": item["primary_thread"]["id"] if item["primary_thread"] is not None else None,
                         "facts": item,
+                        **(
+                            {
+                                "heads_truncated": heads_by_session[str(item["catalog"]["session_id"])][1],
+                                "heads": [
+                                    {
+                                        "family": head["family"],
+                                        "session_id": head["session_id"],
+                                        "subject_key": head["subject_key"],
+                                        "source": head["source"],
+                                        "source_epoch": head["source_epoch"],
+                                        "evidence_hash": head["evidence_hash"],
+                                        "value_json": head["value_json"],
+                                        "valid_until": (head["valid_until"].isoformat() if head["valid_until"] is not None else None),
+                                        "updated_commit_seq": head["updated_commit_seq"],
+                                    }
+                                    for head in heads_by_session[str(item["catalog"]["session_id"])][0]
+                                ],
+                            }
+                            if include_state_heads
+                            else {}
+                        ),
                     }
                     for item in facts
                 ],
