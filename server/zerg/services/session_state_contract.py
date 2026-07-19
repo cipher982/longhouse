@@ -183,17 +183,12 @@ def _mode(
     execution_home = _clean(getattr(raw_execution_home, "value", raw_execution_home))
     if origin_kind == "console" or execution_lifetime == "one_shot" or surface in {"web", "ios", "api"}:
         return "console"
-    has_owned_kernel_connection = bool(
-        capabilities.connection_id is not None
-        and capabilities.run_id is not None
-        and _clean(capabilities.control_plane)
-        and capabilities.control_label in {"live", "reattach"}
-    )
     if (
         execution_lifetime == "live_control"
         or execution_home == "managed_local"
         or capabilities.control_owned
-        or has_owned_kernel_connection
+        or capabilities.live_control_available
+        or capabilities.host_reattach_available
     ):
         return "helm"
     if execution_home in {None, "local", "imported", "unmanaged", "unmanaged_local"}:

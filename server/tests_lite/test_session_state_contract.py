@@ -13,6 +13,7 @@ os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 
 from zerg.services.agents.kernel_capabilities import KernelSessionCapabilities
+from zerg.services.managed_provider_contracts import managed_provider_names
 from zerg.services.session_liveness_facts import ActivityObservation
 from zerg.services.session_liveness_facts import ControlObservation
 from zerg.services.session_liveness_facts import HostObservation
@@ -22,7 +23,6 @@ from zerg.services.session_liveness_facts import ProcessObservation
 from zerg.services.session_liveness_facts import SessionLivenessFacts
 from zerg.services.session_runtime import SessionRuntimeView
 from zerg.services.session_state_contract import build_session_state_facts
-from zerg.services.managed_provider_contracts import managed_provider_names
 
 NOW = datetime(2026, 7, 11, 18, 0, tzinfo=timezone.utc)
 
@@ -146,6 +146,36 @@ def test_expired_activity_with_live_control_is_unknown_plus_live_control():
     assert facts.presentation.access is not None
     assert facts.presentation.access.label == "Live control"
     assert "Ready" not in facts.model_dump_json()
+
+
+def test_mode_does_not_consume_the_rolled_up_control_label():
+    live = _facts(
+        runtime=None,
+        capabilities=_capabilities(label="deliberately-wrong-label", live=True, reattach=False),
+    )
+    reattachable = _facts(
+        runtime=None,
+        capabilities=_capabilities(label="imported", live=False, reattach=True),
+    )
+    shadow = _facts(
+        runtime=None,
+        capabilities=_capabilities(label="live", live=False, reattach=False, observe=True, run_id=None),
+        liveness=_liveness(managed=False),
+    )
+    console = _facts(
+        runtime=None,
+        session=_session(origin_kind="console"),
+        capabilities=replace(
+            _capabilities(label="live", live=False, reattach=False),
+            control_owned=True,
+        ),
+        execution_lifetime="one_shot",
+    )
+
+    assert live.mode == "helm"
+    assert reattachable.mode == "helm"
+    assert shadow.mode == "shadow"
+    assert console.mode == "console"
 
 
 def test_idle_and_ordinary_needs_user_normalize_to_quiescent_idle():
