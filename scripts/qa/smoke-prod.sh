@@ -347,7 +347,7 @@ test_config() {
 test_caddy() {
     local errors
     # grep -c returns exit code 1 if no matches (but still outputs "0")
-    errors=$(ssh runtime-host "docker logs coolify-proxy 2>&1 | tail -50 | grep -c 'ambiguous site definition'" 2>/dev/null) || true
+    errors=$(ssh runtime-host "docker logs zerg-caddy 2>&1 | tail -50 | grep -c 'ambiguous site definition'" 2>/dev/null) || true
     # Trim whitespace
     errors=$(echo "$errors" | tr -d '[:space:]')
 
