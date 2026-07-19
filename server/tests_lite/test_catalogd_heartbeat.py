@@ -173,14 +173,12 @@ def test_schema_v2_evidence_is_retained_but_not_shadow_reduced():
     evidence = _schema_v3_evidence(session_id=str(uuid4()), run_id=str(uuid4()), observed_at=datetime.now(UTC))
     evidence["schema_version"] = 2
 
-    status, facts, disabled_sources = catalog_store._shadow_facts_from_heartbeat(
+    status, facts = catalog_store._shadow_facts_from_heartbeat(
         {"raw_json": json.dumps({"machine_evidence": evidence})},
-        filter_disabled_sources=False,
     )
 
     assert status == "unsupported_schema"
     assert facts == []
-    assert disabled_sources == 0
 
 
 @pytest.mark.asyncio
@@ -357,7 +355,6 @@ async def test_shadow_reducer_uses_heartbeat_transaction_and_one_commit_sequence
         "duplicates": 0,
         "stale": 0,
         "conflicts": 0,
-        "disabled_sources": 0,
         "identity_binding": {"bound": 0, "matched": 0, "unbound": 0, "mismatched": 0},
     }
     assert replay == {**first, "exact_replay": True}
@@ -587,8 +584,7 @@ async def test_shadow_reducer_invalidated_connection_aborts_outer_heartbeat(daem
 
 
 @pytest.mark.asyncio
-async def test_shadow_reducer_disabled_source_skips_only_reducer_writes(daemon_paths, monkeypatch):
-    monkeypatch.setenv("LONGHOUSE_SHADOW_REDUCER_INGEST_ENABLED", "yes")
+async def test_shadow_reducer_has_no_source_disable_kill_switch(daemon_paths, monkeypatch):
     monkeypatch.setenv("LONGHOUSE_SHADOW_REDUCER_DISABLED_SOURCES", "phase_ledger")
     database_path, socket_path = daemon_paths
     now = datetime.now(UTC).replace(microsecond=0)
@@ -613,11 +609,10 @@ async def test_shadow_reducer_disabled_source_skips_only_reducer_writes(daemon_p
         await daemon.close()
 
     assert result["commit_seq"] == "1"
-    assert result["shadow_reducer"]["changed_heads"] == 0
-    assert result["shadow_reducer"]["disabled_sources"] == 1
+    assert result["shadow_reducer"]["changed_heads"] == 1
     engine = create_catalog_engine(database_path)
     with engine.connect() as connection:
-        assert connection.execute(FactHead.__table__.select()).first() is None
+        assert connection.execute(FactHead.__table__.select()).first() is not None
         assert connection.execute(LiveHeartbeatStamp.__table__.select()).first() is not None
     engine.dispose()
 
@@ -646,9 +641,7 @@ async def test_shadow_parity_is_independent_and_upserts_bounded_candidate_delta(
     client = CatalogClient(socket_path)
     try:
         seeded = await client.call("machine.heartbeat.apply.v2", params)
-        monkeypatch.setenv("LONGHOUSE_SHADOW_REDUCER_INGEST_ENABLED", "0")
         monkeypatch.setenv("LONGHOUSE_SHADOW_PARITY_ENABLED", "true")
-        monkeypatch.setenv("LONGHOUSE_SHADOW_REDUCER_DISABLED_SOURCES", "provider_control_scan")
         compared_params = {
             **params,
             "heartbeat": {
@@ -667,8 +660,6 @@ async def test_shadow_parity_is_independent_and_upserts_bounded_candidate_delta(
             },
         }
         repeated = await client.call("machine.heartbeat.apply.v2", repeated_params)
-        monkeypatch.setenv("LONGHOUSE_SHADOW_REDUCER_INGEST_ENABLED", "1")
-        monkeypatch.delenv("LONGHOUSE_SHADOW_REDUCER_DISABLED_SOURCES")
         stale_evidence = json.loads(json.dumps(evidence))
         stale_evidence["control"][0]["state"] = "attached"
         stale_evidence["control"][0]["observed_at"] = (now - timedelta(seconds=1)).isoformat()
@@ -691,7 +682,8 @@ async def test_shadow_parity_is_independent_and_upserts_bounded_candidate_delta(
 
     assert seeded["shadow_reducer"]["changed_heads"] == 1
     assert seeded["shadow_parity"] == {"status": "disabled"}
-    assert compared["shadow_reducer"] == {"status": "disabled"}
+    assert compared["shadow_reducer"]["status"] == "applied"
+    assert compared["shadow_reducer"]["duplicates"] == 1
     assert compared["shadow_parity"] == {
         "status": "compared",
         "compared_axes": 3,

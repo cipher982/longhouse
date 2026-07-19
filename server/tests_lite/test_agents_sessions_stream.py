@@ -174,7 +174,6 @@ def test_canonical_machine_stream_initial_replay_preserves_commit_coordinate(mon
         runtime_version=91,
         session_state=state,
     )
-    monkeypatch.setenv("LONGHOUSE_SESSION_STATE_DETAIL_SERVE", "canonical")
     monkeypatch.setattr(
         live_catalog_timeline,
         "list_live_catalog_timeline",

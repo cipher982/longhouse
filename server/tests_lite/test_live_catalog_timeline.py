@@ -66,28 +66,29 @@ def _snapshot(db, params: TimelineSessionListParams):
     )
 
 
-def test_detail_read_defaults_to_legacy_snapshot(monkeypatch):
+def test_detail_read_has_no_legacy_serve_kill_switch(monkeypatch):
     session_id = str(uuid4())
     projected = object()
-    legacy_snapshot = {
+    canonical_snapshot = {
         "found": True,
         "commit_seq": "7",
         "observed_at": datetime.now(timezone.utc).isoformat(),
-        "facts": {"session": {"session_id": session_id}},
+        "legacy_facts": {"session": {"session_id": session_id}},
+        "heads": [],
+        "heads_truncated": False,
     }
-    monkeypatch.setenv("LONGHOUSE_SESSION_STATE_DETAIL_SERVE", "canonical")
-    monkeypatch.setattr(live_catalog_timeline, "session_snapshot", lambda requested, owner_id: legacy_snapshot)
+    monkeypatch.setenv("LONGHOUSE_SESSION_STATE_DETAIL_SERVE", "legacy")
     monkeypatch.setattr(
         live_catalog_timeline,
         "shadow_session_state_snapshot",
-        lambda *_args, **_kwargs: pytest.fail("legacy detail must not call the reducer snapshot"),
+        lambda *_args, **_kwargs: canonical_snapshot,
     )
 
     def project(facts, *, observed_at, canonical_heads=None, commit_seq=None):
-        assert facts is legacy_snapshot["facts"]
+        assert facts is canonical_snapshot["legacy_facts"]
         assert observed_at.tzinfo is not None
-        assert canonical_heads is None
-        assert commit_seq is None
+        assert canonical_heads == []
+        assert commit_seq == 7
         return projected
 
     monkeypatch.setattr(live_catalog_timeline, "project_catalog_session_facts", project)
@@ -121,13 +122,6 @@ def test_canonical_detail_projects_one_owner_scoped_snapshot(monkeypatch):
         "heads": heads,
         "heads_truncated": False,
     }
-    monkeypatch.setenv("LONGHOUSE_SESSION_STATE_DETAIL_SERVE", "canonical")
-    monkeypatch.setattr(
-        live_catalog_timeline,
-        "session_snapshot",
-        lambda *_args, **_kwargs: pytest.fail("canonical detail must not issue a second snapshot read"),
-    )
-
     def shadow(requested, *, owner_id):
         assert requested == session_id
         assert owner_id == 3
@@ -142,7 +136,7 @@ def test_canonical_detail_projects_one_owner_scoped_snapshot(monkeypatch):
     monkeypatch.setattr(live_catalog_timeline, "shadow_session_state_snapshot", shadow)
     monkeypatch.setattr(live_catalog_timeline, "project_catalog_session_facts", project)
 
-    result, provider_alias, commit_seq = read_live_catalog_session(session_id, owner_id=3, serve_mode="canonical")
+    result, provider_alias, commit_seq = read_live_catalog_session(session_id, owner_id=3)
 
     assert result is projected
     assert provider_alias == "thread-1"
@@ -168,22 +162,14 @@ def test_canonical_detail_fails_closed_on_incomplete_snapshot(monkeypatch, snaps
         "heads_truncated": False,
         **snapshot_update,
     }
-    monkeypatch.setenv("LONGHOUSE_SESSION_STATE_DETAIL_SERVE", "canonical")
     monkeypatch.setattr(live_catalog_timeline, "shadow_session_state_snapshot", lambda *_args, **_kwargs: snapshot)
-    monkeypatch.setattr(
-        live_catalog_timeline,
-        "session_snapshot",
-        lambda *_args, **_kwargs: pytest.fail("canonical failure must not fall back to legacy"),
-    )
-
     with pytest.raises(CatalogReadError) as raised:
-        read_live_catalog_session(session_id, owner_id=3, serve_mode="canonical")
+        read_live_catalog_session(session_id, owner_id=3)
 
     assert raised.value.code == expected_code
 
 
 def test_canonical_detail_requires_owner_scope_before_catalog_read(monkeypatch):
-    monkeypatch.setenv("LONGHOUSE_SESSION_STATE_DETAIL_SERVE", "canonical")
     monkeypatch.setattr(
         live_catalog_timeline,
         "shadow_session_state_snapshot",
@@ -191,7 +177,7 @@ def test_canonical_detail_requires_owner_scope_before_catalog_read(monkeypatch):
     )
 
     with pytest.raises(CatalogReadError) as raised:
-        read_live_catalog_session(uuid4(), serve_mode="canonical")
+        read_live_catalog_session(uuid4())
 
     assert raised.value.code == "canonical_owner_required"
 
@@ -236,7 +222,7 @@ def test_canonical_timeline_projects_all_rows_at_snapshot_commit(monkeypatch):
         lambda **kwargs: SimpleNamespace(**kwargs),
     )
 
-    result = list_live_catalog_timeline(params=_params(), owner_id=7, serve_mode="canonical")
+    result = list_live_catalog_timeline(params=_params(), owner_id=7)
 
     assert result.total == 1
     assert captured["owner_id"] == 7

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 from dataclasses import dataclass
 from datetime import datetime
 from datetime import timedelta
@@ -30,38 +29,13 @@ from zerg.utils.time import normalize_utc
 logger = logging.getLogger(__name__)
 _QUEUE_DRAINABLE_PHASES = frozenset({"idle", "needs_user", "blocked"})
 _CONTROL_ACQUISITION_KINDS = ("spawned_control", "adopted_control")
-_COMMAND_AUTH_ENV = "LONGHOUSE_SESSION_STATE_COMMAND_AUTH"
-_COMMAND_AUTH_PROVIDERS_ENV = "LONGHOUSE_SESSION_STATE_COMMAND_AUTH_PROVIDERS"
-_SHADOW_REDUCER_INGEST_ENV = "LONGHOUSE_SHADOW_REDUCER_INGEST_ENABLED"
-_TRUTHY_ENV = frozenset({"1", "true", "yes", "on"})
 _CANONICAL_AUTH_PROVIDERS = frozenset({"codex", "claude", "opencode", "cursor"})
 
 
 def canonical_command_authorization_providers() -> tuple[str, ...]:
-    """Return providers explicitly eligible for the canonical authority path."""
+    """Return providers whose adapters can produce canonical control facts."""
 
-    if os.getenv(_COMMAND_AUTH_ENV, "legacy").strip().lower() != "canonical":
-        return ()
-    configured = {
-        provider.strip().lower()
-        for provider in os.getenv(
-            _COMMAND_AUTH_PROVIDERS_ENV,
-            ",".join(sorted(_CANONICAL_AUTH_PROVIDERS)),
-        ).split(",")
-        if provider.strip()
-    }
-    return tuple(sorted(configured & _CANONICAL_AUTH_PROVIDERS))
-
-
-def canonical_command_authorization_enabled(provider: str | None = None) -> bool:
-    providers = canonical_command_authorization_providers()
-    if provider is None:
-        return bool(providers)
-    return str(provider or "").strip().lower() in providers
-
-
-def shadow_reducer_ingest_enabled() -> bool:
-    return os.getenv(_SHADOW_REDUCER_INGEST_ENV, "").strip().lower() in _TRUTHY_ENV
+    return tuple(sorted(_CANONICAL_AUTH_PROVIDERS))
 
 
 @dataclass(frozen=True)
@@ -357,8 +331,6 @@ def get_canonical_live_control_grant(
 ) -> tuple[LiveControlGrant | None, str | None]:
     """Require exact agreement between the catalog lease and reducer evidence."""
 
-    if not shadow_reducer_ingest_enabled():
-        return None, "canonical_ingest_disabled"
     operation = {
         "send": "send_input",
         "interrupt": "interrupt",
@@ -367,6 +339,8 @@ def get_canonical_live_control_grant(
     if operation is None:
         return None, "unsupported"
     normalized_provider = str(provider or "").strip().lower()
+    if normalized_provider not in _CANONICAL_AUTH_PROVIDERS:
+        return None, "unsupported"
     contract = contract_for_provider(normalized_provider)
     if contract is None or not bool(getattr(contract, operation, False)):
         return None, "unsupported"

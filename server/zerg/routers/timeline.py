@@ -58,7 +58,6 @@ from zerg.services.agents import AgentsStore
 from zerg.services.catalog_read_gateway import CatalogReadError
 from zerg.services.catalog_read_gateway import enrolled_machines
 from zerg.services.catalog_read_gateway import machine_workspaces
-from zerg.services.live_catalog_timeline import canonical_session_detail_enabled
 from zerg.services.live_catalog_timeline import list_live_catalog_sessions
 from zerg.services.live_catalog_timeline import list_live_catalog_timeline
 from zerg.services.live_catalog_timeline import read_live_catalog_session
@@ -481,7 +480,6 @@ async def list_timeline_sessions(
                 list_live_catalog_timeline,
                 params=params,
                 owner_id=int(current_user.id),
-                serve_mode="canonical" if canonical_session_detail_enabled() else "legacy",
             )
         except CatalogReadError as exc:
             raise HTTPException(
@@ -640,7 +638,6 @@ async def list_timeline_session_summaries(
                 list_live_catalog_sessions,
                 params=params,
                 owner_id=int(current_user.id),
-                serve_mode="canonical" if canonical_session_detail_enabled() else "legacy",
             )
             listed_sessions = listed.sessions
             listed_total = listed.total
@@ -879,7 +876,6 @@ async def get_timeline_session_thread(
         session, _provider_alias, commit_seq = read_live_catalog_session(
             session_id,
             owner_id=owner_id,
-            serve_mode="canonical" if canonical_session_detail_enabled() else "legacy",
         )
         if session is None:
             raise HTTPException(status_code=404, detail=f"Session {session_id} not found")

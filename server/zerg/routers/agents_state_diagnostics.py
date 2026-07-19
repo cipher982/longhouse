@@ -21,10 +21,8 @@ from zerg.services.catalog_read_gateway import CatalogReadError
 from zerg.services.catalog_read_gateway import active_owner_id
 from zerg.services.catalog_read_gateway import shadow_session_state_health
 from zerg.services.catalog_read_gateway import shadow_session_state_snapshot
-from zerg.services.live_catalog_timeline import canonical_session_detail_enabled
 from zerg.services.live_catalog_timeline import project_catalog_session_facts
 from zerg.services.live_catalog_timeline import project_machine_session_delta
-from zerg.services.live_control_catalog import canonical_command_authorization_enabled
 from zerg.services.live_control_catalog import canonical_command_authorization_providers
 from zerg.services.managed_provider_contracts import contract_for_provider
 from zerg.services.session_state_contract import SessionActionAvailability
@@ -44,12 +42,12 @@ router = APIRouter(prefix="/agents/sessions", tags=["agents"])
 health_router = APIRouter(prefix="/agents/session-state", tags=["agents"])
 
 
-def _served_path() -> Literal["legacy_session_state", "canonical_session_detail"]:
-    return "canonical_session_detail" if canonical_session_detail_enabled() else "legacy_session_state"
+def _served_path() -> Literal["canonical_session_detail"]:
+    return "canonical_session_detail"
 
 
-def _authorization_path() -> Literal["legacy_capabilities", "provider_scoped_canonical_control"]:
-    return "provider_scoped_canonical_control" if canonical_command_authorization_enabled() else "legacy_capabilities"
+def _authorization_path() -> Literal["provider_scoped_canonical_control"]:
+    return "provider_scoped_canonical_control"
 
 
 class SessionStateContractHealthResponse(UTCBaseModel):
@@ -81,11 +79,9 @@ class SessionStateDiagnosticsResponse(UTCBaseModel):
     catalog_commit_seq: int
     observed_at: datetime
     head_count: int
-    served_path: Literal["legacy_session_state", "canonical_session_detail"] = Field(default_factory=_served_path)
-    authorization_path: Literal["legacy_capabilities", "provider_scoped_canonical_control"] = Field(default_factory=_authorization_path)
+    served_path: Literal["canonical_session_detail"] = Field(default_factory=_served_path)
+    authorization_path: Literal["provider_scoped_canonical_control"] = Field(default_factory=_authorization_path)
     canonical_authorization_providers: tuple[str, ...] = Field(default_factory=canonical_command_authorization_providers)
-    cutover_active: bool = Field(default_factory=canonical_session_detail_enabled)
-    authorization_cutover_active: bool = Field(default_factory=canonical_command_authorization_enabled)
     shadow: ShadowSessionStateProjection
     comparison: SessionStateComparison
     explain: SessionStateExplainResponse
@@ -135,11 +131,9 @@ class SessionStateReducerHealthResponse(UTCBaseModel):
     observed_at: datetime
     ingest_enabled: bool
     parity_enabled: bool
-    served_path: Literal["legacy_session_state", "canonical_session_detail"] = Field(default_factory=_served_path)
-    authorization_path: Literal["legacy_capabilities", "provider_scoped_canonical_control"] = Field(default_factory=_authorization_path)
+    served_path: Literal["canonical_session_detail"] = Field(default_factory=_served_path)
+    authorization_path: Literal["provider_scoped_canonical_control"] = Field(default_factory=_authorization_path)
     canonical_authorization_providers: tuple[str, ...] = Field(default_factory=canonical_command_authorization_providers)
-    cutover_active: bool = Field(default_factory=canonical_session_detail_enabled)
-    authorization_cutover_active: bool = Field(default_factory=canonical_command_authorization_enabled)
     contract: SessionStateContractHealthResponse = Field(default_factory=_contract_health)
     projected_families: tuple[str, ...] = SHADOW_SUPPORTED_FAMILIES
     unsupported_families: tuple[str, ...] = SHADOW_UNSUPPORTED_FAMILIES
@@ -274,15 +268,11 @@ def get_session_state_diagnostics(
             raise ValueError("catalog diagnostic fact heads are incomplete")
         legacy_response = project_catalog_session_facts(legacy_facts, observed_at=observed_at)
         legacy = legacy_response.session_state
-        served_response = (
-            project_catalog_session_facts(
-                legacy_facts,
-                observed_at=observed_at,
-                canonical_heads=heads,
-                commit_seq=commit_seq,
-            )
-            if canonical_session_detail_enabled()
-            else legacy_response
+        served_response = project_catalog_session_facts(
+            legacy_facts,
+            observed_at=observed_at,
+            canonical_heads=heads,
+            commit_seq=commit_seq,
         )
         served = served_response.session_state
         shadow = project_shadow_session_state_facts(
@@ -322,17 +312,13 @@ def get_session_state_diagnostics(
                     name: getattr(served.control.actions, name)
                     for name in ("start_turn", "send_input", "interrupt", "terminate", "reattach", "resume")
                 },
-                projection_parity=(
-                    compare_session_state_projections(
-                        session_state=served,
-                        machine_payload=project_machine_session_delta(
-                            served_response,
-                            commit_seq=commit_seq,
-                            canonical=True,
-                        ),
-                    )
-                    if canonical_session_detail_enabled()
-                    else None
+                projection_parity=compare_session_state_projections(
+                    session_state=served,
+                    machine_payload=project_machine_session_delta(
+                        served_response,
+                        commit_seq=commit_seq,
+                        canonical=True,
+                    ),
                 ),
             ),
         )

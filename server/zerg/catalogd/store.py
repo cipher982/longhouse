@@ -102,8 +102,6 @@ SHADOW_STATE_HEALTH_WINDOW = timedelta(minutes=15)
 _CONTROL_LEASE_TTL = timedelta(minutes=15)
 _EXCLUDED_WORKSPACE_ENVIRONMENTS = ("test", "e2e")
 _TRUTHY_ENV = frozenset({"1", "true", "yes", "on"})
-_SHADOW_REDUCER_INGEST_ENV = "LONGHOUSE_SHADOW_REDUCER_INGEST_ENABLED"
-_SHADOW_REDUCER_DISABLED_SOURCES_ENV = "LONGHOUSE_SHADOW_REDUCER_DISABLED_SOURCES"
 _SHADOW_PARITY_ENV = "LONGHOUSE_SHADOW_PARITY_ENABLED"
 _MAX_PARITY_DELTAS = 2_048
 _RECENCY_BUCKETS: tuple[tuple[float, int], ...] = (
@@ -2049,39 +2047,22 @@ class CatalogStore:
     ) -> dict[str, Any]:
         """Validate the command-time lease and durably reserve one operation."""
 
-        from zerg.services.live_control_catalog import canonical_command_authorization_enabled
         from zerg.services.live_control_catalog import get_canonical_live_control_grant
-        from zerg.services.live_control_catalog import get_live_control_grant
-        from zerg.services.live_control_catalog import live_control_command_block_reason
         from zerg.services.machine_control_operations import MACHINE_OPERATION_TIMEOUT_GRACE_SECS
 
         observed_at = datetime.now(UTC)
         with _write_transaction(self.engine) as connection:
             orm = Session(bind=connection, join_transaction_mode="create_savepoint", expire_on_commit=False)
             try:
-                canonical_auth = canonical_command_authorization_enabled(provider)
 
                 def resolve_grant():
-                    if canonical_auth:
-                        return get_canonical_live_control_grant(
-                            orm,
-                            session_id=session_id,
-                            provider=provider,
-                            device_id=device_id,
-                            capability=capability,
-                            now=observed_at,
-                        )
-                    block_reason = live_control_command_block_reason(orm, session_id=session_id)
-                    if block_reason is not None:
-                        return None, block_reason
-                    return (
-                        get_live_control_grant(
-                            orm,
-                            session_id=session_id,
-                            capability=capability,
-                            now=observed_at,
-                        ),
-                        None,
+                    return get_canonical_live_control_grant(
+                        orm,
+                        session_id=session_id,
+                        provider=provider,
+                        device_id=device_id,
+                        capability=capability,
+                        now=observed_at,
                     )
 
                 existing = orm.query(LiveMachineControlOperation).filter(LiveMachineControlOperation.command_id == command_id).one_or_none()
@@ -3949,7 +3930,7 @@ class CatalogStore:
                 "found": True,
                 "commit_seq": str(_current_commit_seq(connection)),
                 "observed_at": observed_at.isoformat(),
-                "ingest_enabled": os.getenv(_SHADOW_REDUCER_INGEST_ENV, "").strip().lower() in _TRUTHY_ENV,
+                "ingest_enabled": True,
                 "parity_enabled": os.getenv(_SHADOW_PARITY_ENV, "").strip().lower() in _TRUTHY_ENV,
                 "storage": {
                     "head_counts": head_counts,
@@ -8829,11 +8810,9 @@ def _apply_shadow_reducer(
 ) -> dict[str, Any]:
     """Reduce retained schema-v3 evidence without affecting legacy heartbeat writes."""
 
-    if os.getenv(_SHADOW_REDUCER_INGEST_ENV, "").strip().lower() not in _TRUTHY_ENV:
-        return {"status": "disabled"}
     try:
         with connection.begin_nested():
-            evidence_status, facts, disabled_source_count = _shadow_facts_from_heartbeat(heartbeat, filter_disabled_sources=True)
+            evidence_status, facts = _shadow_facts_from_heartbeat(heartbeat)
             if evidence_status != "ready":
                 return {"status": evidence_status}
             reduced = reduce_fact_batch(
@@ -8849,7 +8828,6 @@ def _apply_shadow_reducer(
                 "duplicates": reduced.duplicates,
                 "stale": reduced.stale,
                 "conflicts": reduced.conflicts,
-                "disabled_sources": disabled_source_count,
                 "identity_binding": identity_binding,
             }
     except DBAPIError as exc:
@@ -8970,7 +8948,7 @@ def _apply_shadow_parity(
         return {"status": "legacy_unavailable"}, known_delta_count
     try:
         with connection.begin_nested():
-            evidence_status, facts, _disabled_source_count = _shadow_facts_from_heartbeat(heartbeat, filter_disabled_sources=False)
+            evidence_status, facts = _shadow_facts_from_heartbeat(heartbeat)
             if evidence_status != "ready":
                 return {"status": evidence_status}, known_delta_count
             candidates = {
@@ -9083,25 +9061,20 @@ def _apply_shadow_parity(
         return {"status": "failed", "reason": "invalid_evidence"}, original_delta_count
 
 
-def _shadow_facts_from_heartbeat(heartbeat: dict[str, Any], *, filter_disabled_sources: bool):
+def _shadow_facts_from_heartbeat(heartbeat: dict[str, Any]):
     raw_json = heartbeat.get("raw_json")
     if not isinstance(raw_json, str) or not raw_json:
-        return "no_evidence", [], 0
+        return "no_evidence", []
     payload = json.loads(raw_json)
     if not isinstance(payload, dict) or "machine_evidence" not in payload:
-        return "no_evidence", [], 0
+        return "no_evidence", []
     evidence = payload["machine_evidence"]
     if not isinstance(evidence, dict) or evidence.get("schema_version") != 3:
-        return "unsupported_schema", [], 0
-    disabled_sources = (
-        {source.strip() for source in os.getenv(_SHADOW_REDUCER_DISABLED_SOURCES_ENV, "").split(",") if source.strip()}
-        if filter_disabled_sources
-        else set()
-    )
-    facts = [fact for fact in reducer_facts_from_machine_evidence(evidence) if fact.source not in disabled_sources]
+        return "unsupported_schema", []
+    facts = reducer_facts_from_machine_evidence(evidence)
     if len(facts) > MAX_REDUCER_FACTS:
         raise ValueError(f"shadow reducer batch exceeds {MAX_REDUCER_FACTS} facts")
-    return "ready", facts, len(disabled_sources)
+    return "ready", facts
 
 
 def _record_shadow_parity_delta(

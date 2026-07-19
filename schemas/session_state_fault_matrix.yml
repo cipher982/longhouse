@@ -85,9 +85,28 @@ scenarios:
       - server/tests_lite/test_session_state_facts_projector.py::test_projector_rejects_heads_not_bound_to_durable_run_and_connection
     live: required
     expect: [explicit_denial_reason, no_cached_capability_bypass]
+  - id: F13
+    fault: compatibility_authority_reenabled
+    deterministic:
+      - server/tests_lite/test_catalogd_heartbeat.py::test_shadow_reducer_uses_heartbeat_transaction_and_one_commit_sequence
+      - server/tests_lite/test_catalogd_heartbeat.py::test_shadow_reducer_has_no_source_disable_kill_switch
+      - server/tests_lite/test_catalogd_heartbeat.py::test_shadow_parity_is_independent_and_upserts_bounded_candidate_delta
+      - server/tests_lite/test_catalogd_heartbeat.py::test_shadow_parity_skips_when_legacy_snapshot_is_unavailable
+      - server/tests_lite/test_catalogd_control_commands.py::test_catalogd_prepares_and_finishes_control_command_atomically
+      - server/tests_lite/test_catalogd_control_commands.py::test_catalogd_control_prepare_rejects_unbound_legacy_identity
+      - server/tests_lite/test_catalogd_control_commands.py::test_canonical_control_prepare_has_no_ingest_disable_kill_switch
+      - server/tests_lite/test_catalogd_control_commands.py::test_canonical_control_prepare_rejects_antigravity_as_unsupported
+      - server/tests_lite/test_live_catalog_timeline.py::test_detail_read_has_no_legacy_serve_kill_switch
+      - server/tests_lite/test_live_catalog_timeline.py::test_canonical_detail_projects_one_owner_scoped_snapshot
+      - server/tests_lite/test_live_catalog_timeline.py::test_canonical_timeline_projects_all_rows_at_snapshot_commit
+      - server/tests_lite/test_agents_storage_v2_session_reads.py::test_machine_session_detail_uses_token_owner_and_marks_canonical_serve
+      - server/tests_lite/test_storage_v2_workspace.py::test_storage_v2_workspace_composes_catalog_shell_and_tail
+      - server/tests_lite/test_session_state_diagnostics.py::test_diagnostics_route_reports_only_canonical_serve_and_authorization
+    live: required
+    expect: [canonical_ingest_always_on, legacy_identity_never_authorizes]
 
 deletion_gate:
-  exact_build_live_scenarios: [F01, F02, F03, F04, F05, F06, F07, F10, F11, F12]
+  exact_build_live_scenarios: [F01, F02, F03, F04, F05, F06, F07, F10, F11, F12, F13]
   required_providers: [codex, claude, opencode, cursor, antigravity]
   canonical_serve_path: canonical_session_detail
   canonical_authorization_path: provider_scoped_canonical_control

@@ -402,7 +402,7 @@ def test_control_identity_comparison_reports_legacy_only_without_control_evidenc
     assert comparison.control_identity.legacy_grant is None
 
 
-def test_diagnostics_route_reports_detail_cutover_without_claiming_authorization_cutover(monkeypatch):
+def test_diagnostics_route_reports_only_canonical_serve_and_authorization(monkeypatch):
     session_id = "44444444-4444-4444-8444-444444444444"
     shadow = _shadow()
     monkeypatch.setattr(diagnostics_router.database_module, "live_catalog_enabled", lambda: True)
@@ -422,7 +422,9 @@ def test_diagnostics_route_reports_detail_cutover_without_claiming_authorization
     monkeypatch.setattr(
         diagnostics_router,
         "project_catalog_session_facts",
-        lambda _facts, observed_at, **_kwargs: SimpleNamespace(session_state=_legacy()),
+        lambda _facts, observed_at, **_kwargs: SimpleNamespace(
+            session_state=_legacy().model_copy(update={"commit_seq": 12})
+        ),
     )
     monkeypatch.setattr(
         diagnostics_router,
@@ -451,11 +453,11 @@ def test_diagnostics_route_reports_detail_cutover_without_claiming_authorization
     assert payload["catalog_commit_seq"] == 12
     assert payload["comparison"]["status"] == "matched"
     assert payload["comparison"]["control_identity"]["status"] == "unbound"
-    assert payload["served_path"] == "legacy_session_state"
-    assert payload["authorization_path"] == "legacy_capabilities"
-    assert payload["canonical_authorization_providers"] == []
-    assert payload["cutover_active"] is False
-    assert payload["authorization_cutover_active"] is False
+    assert payload["served_path"] == "canonical_session_detail"
+    assert payload["authorization_path"] == "provider_scoped_canonical_control"
+    assert payload["canonical_authorization_providers"] == ["claude", "codex", "cursor", "opencode"]
+    assert "cutover_active" not in payload
+    assert "authorization_cutover_active" not in payload
     assert payload["explain"]["commit_seq"] == 12
     assert payload["explain"]["state_contract_version"] == 1
     assert payload["explain"]["presentation_policy_version"] == 1
@@ -466,26 +468,7 @@ def test_diagnostics_route_reports_detail_cutover_without_claiming_authorization
     }
     assert payload["explain"]["actions"]["send_input"] == {"state": "available", "reason": None}
 
-    monkeypatch.setenv("LONGHOUSE_SESSION_STATE_DETAIL_SERVE", "canonical")
-    canonical_response = TestClient(app).get(f"/api/agents/sessions/{session_id}/state-diagnostics")
-
-    assert canonical_response.status_code == 200
-    canonical_payload = canonical_response.json()
-    assert canonical_payload["served_path"] == "canonical_session_detail"
-    assert canonical_payload["authorization_path"] == "legacy_capabilities"
-    assert canonical_payload["cutover_active"] is True
-    assert canonical_payload["authorization_cutover_active"] is False
-    assert canonical_payload["explain"]["projection_parity"]["status"] == "matched"
-
-    monkeypatch.setenv("LONGHOUSE_SESSION_STATE_COMMAND_AUTH", "canonical")
-    command_response = TestClient(app).get(f"/api/agents/sessions/{session_id}/state-diagnostics")
-
-    assert command_response.status_code == 200
-    command_payload = command_response.json()
-    assert command_payload["served_path"] == "canonical_session_detail"
-    assert command_payload["authorization_path"] == "provider_scoped_canonical_control"
-    assert command_payload["canonical_authorization_providers"] == ["claude", "codex", "cursor", "opencode"]
-    assert command_payload["authorization_cutover_active"] is True
+    assert payload["explain"]["projection_parity"]["status"] == "matched"
 
 
 def test_reducer_health_route_reports_failures_without_claiming_cutover(monkeypatch):

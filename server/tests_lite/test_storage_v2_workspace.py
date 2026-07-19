@@ -82,7 +82,6 @@ async def test_storage_v2_workspace_composes_catalog_shell_and_tail(monkeypatch)
         read_args.update(kwargs)
         return session, None, "7"
 
-    monkeypatch.setattr(workspace_module, "canonical_session_detail_enabled", lambda: True)
     monkeypatch.setattr(workspace_module, "read_live_catalog_session", read_session)
     monkeypatch.setattr(workspace_module, "read_storage_v2_session_events_page", read_page)
 
@@ -98,7 +97,7 @@ async def test_storage_v2_workspace_composes_catalog_shell_and_tail(monkeypatch)
     assert result["projection"]["next_cursor"] == "cursor-1"
     assert result["projection"]["page_offset"] == 74
     assert result["workspace_revision"]["latest_event_id"] == "event-1"
-    assert read_args == {"owner_id": 42, "serve_mode": "canonical"}
+    assert read_args == {"owner_id": 42}
 
 
 @pytest.mark.asyncio
@@ -219,8 +218,8 @@ async def test_empty_console_session_is_openable_before_archive_outbox_drains(mo
     archive = ArchiveProjection()
     monkeypatch.setattr(workspace_module, "get_catalogd_client", lambda: archive)
     monkeypatch.setattr(
-        "zerg.services.live_catalog_timeline.session_snapshot",
-        lambda candidate, *, owner_id=None: store.read_session(session_id=candidate, owner_id=owner_id),
+        "zerg.services.live_catalog_timeline.shadow_session_state_snapshot",
+        lambda candidate, *, owner_id: store.read_shadow_session_state(session_id=candidate, owner_id=owner_id),
     )
     monkeypatch.setattr(
         "zerg.services.catalog_read_gateway.session_snapshot",

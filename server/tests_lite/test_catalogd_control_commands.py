@@ -161,6 +161,13 @@ async def test_catalogd_prepares_and_finishes_control_command_atomically(daemon_
     engine = create_catalog_engine(database_path)
     initialize_catalog_schema(engine)
     session_id, run_id, connection_id, adapter_connection_id, lease_generation = _seed_control_grant(engine)
+    _reduce_control_fact(
+        engine,
+        session_id=session_id,
+        run_id=run_id,
+        adapter_connection_id=adapter_connection_id,
+        lease_generation=lease_generation,
+    )
     engine.dispose()
 
     daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
@@ -219,7 +226,7 @@ async def test_catalogd_prepares_and_finishes_control_command_atomically(daemon_
 
 
 @pytest.mark.asyncio
-async def test_catalogd_control_prepare_preserves_legacy_identity_for_unbound_connection(daemon_paths):
+async def test_catalogd_control_prepare_rejects_unbound_legacy_identity(daemon_paths):
     database_path, socket_path = daemon_paths
     engine = create_catalog_engine(database_path)
     initialize_catalog_schema(engine)
@@ -252,12 +259,8 @@ async def test_catalogd_control_prepare_preserves_legacy_identity_for_unbound_co
         await client.close()
         await daemon.close()
 
-    assert prepared["allowed"] is True
-    assert prepared["grant"]["connection_id"] == connection_id
-    assert prepared["grant"]["catalog_connection_id"] == connection_id
-    assert prepared["grant"]["run_id"] == str(run_id)
-    assert prepared["grant"]["lease_generation"].startswith(f"{connection_id}:")
-    assert prepared["grant"]["identity_source"] == "legacy_synthetic"
+    assert prepared["allowed"] is False
+    assert prepared["reason"] == "identity_unbound"
 
 
 @pytest.mark.parametrize("provider", ["codex", "claude", "opencode", "cursor"])
@@ -278,8 +281,6 @@ def test_canonical_control_prepare_allows_only_bound_matching_grant(monkeypatch,
         connection = db.get(LiveSessionConnection, connection_id)
         connection.can_send_input = 0
         db.commit()
-    monkeypatch.setenv("LONGHOUSE_SESSION_STATE_COMMAND_AUTH", "canonical")
-    monkeypatch.setenv("LONGHOUSE_SHADOW_REDUCER_INGEST_ENABLED", "1")
 
     prepared = CatalogStore(engine).prepare_control_command(**_prepare_params(session_id, provider=provider))
 
@@ -312,8 +313,6 @@ def test_canonical_control_prepare_ignores_transcript_ended_at(monkeypatch, daem
         session = db.get(LiveSessionCatalog, str(session_id))
         session.ended_at = datetime.now(UTC)
         db.commit()
-    monkeypatch.setenv("LONGHOUSE_SESSION_STATE_COMMAND_AUTH", "canonical")
-    monkeypatch.setenv("LONGHOUSE_SHADOW_REDUCER_INGEST_ENABLED", "1")
 
     prepared = CatalogStore(engine).prepare_control_command(**_prepare_params(session_id, provider=provider))
 
@@ -321,28 +320,23 @@ def test_canonical_control_prepare_ignores_transcript_ended_at(monkeypatch, daem
     engine.dispose()
 
 
-@pytest.mark.parametrize("canonical", [False, True])
 @pytest.mark.parametrize("terminal_axis", ["session", "run"])
 def test_control_prepare_revalidates_explicit_session_and_latest_run_terminal(
     monkeypatch,
     daemon_paths,
-    canonical,
     terminal_axis,
 ):
     database_path, _socket_path = daemon_paths
     engine = create_catalog_engine(database_path)
     initialize_catalog_schema(engine)
     session_id, run_id, _connection_id, adapter_id, generation = _seed_control_grant(engine)
-    if canonical:
-        _reduce_control_fact(
-            engine,
-            session_id=session_id,
-            run_id=run_id,
-            adapter_connection_id=adapter_id,
-            lease_generation=generation,
-        )
-        monkeypatch.setenv("LONGHOUSE_SESSION_STATE_COMMAND_AUTH", "canonical")
-        monkeypatch.setenv("LONGHOUSE_SHADOW_REDUCER_INGEST_ENABLED", "1")
+    _reduce_control_fact(
+        engine,
+        session_id=session_id,
+        run_id=run_id,
+        adapter_connection_id=adapter_id,
+        lease_generation=generation,
+    )
     with Session(engine) as db:
         if terminal_axis == "session":
             session = db.get(LiveSessionCatalog, str(session_id))
@@ -366,8 +360,6 @@ def test_canonical_control_prepare_rejects_unbound_and_ungranted(monkeypatch, da
     engine = create_catalog_engine(database_path)
     initialize_catalog_schema(engine)
     unbound_session, *_rest = _seed_control_grant(engine, bind_adapter_identity=False)
-    monkeypatch.setenv("LONGHOUSE_SESSION_STATE_COMMAND_AUTH", "canonical")
-    monkeypatch.setenv("LONGHOUSE_SHADOW_REDUCER_INGEST_ENABLED", "1")
 
     unbound = CatalogStore(engine).prepare_control_command(**_prepare_params(unbound_session))
 
@@ -407,8 +399,6 @@ def test_canonical_exact_replay_revalidates_current_grant(monkeypatch, daemon_pa
         observed_at=observed_at,
         provider=provider,
     )
-    monkeypatch.setenv("LONGHOUSE_SESSION_STATE_COMMAND_AUTH", "canonical")
-    monkeypatch.setenv("LONGHOUSE_SHADOW_REDUCER_INGEST_ENABLED", "1")
     params = _prepare_params(session_id, provider=provider)
     store = CatalogStore(engine)
     prepared = store.prepare_control_command(**params)
@@ -432,7 +422,7 @@ def test_canonical_exact_replay_revalidates_current_grant(monkeypatch, daemon_pa
     engine.dispose()
 
 
-def test_canonical_control_prepare_requires_reducer_ingest(monkeypatch, daemon_paths):
+def test_canonical_control_prepare_has_no_ingest_disable_kill_switch(monkeypatch, daemon_paths):
     database_path, _socket_path = daemon_paths
     engine = create_catalog_engine(database_path)
     initialize_catalog_schema(engine)
@@ -444,12 +434,25 @@ def test_canonical_control_prepare_requires_reducer_ingest(monkeypatch, daemon_p
         adapter_connection_id=adapter_id,
         lease_generation=generation,
     )
-    monkeypatch.setenv("LONGHOUSE_SESSION_STATE_COMMAND_AUTH", "canonical")
+    monkeypatch.setenv("LONGHOUSE_SHADOW_REDUCER_INGEST_ENABLED", "0")
 
     prepared = CatalogStore(engine).prepare_control_command(**_prepare_params(session_id))
 
+    assert prepared["allowed"] is True
+    engine.dispose()
+
+
+def test_canonical_control_prepare_rejects_antigravity_as_unsupported(daemon_paths):
+    database_path, _socket_path = daemon_paths
+    engine = create_catalog_engine(database_path)
+    initialize_catalog_schema(engine)
+
+    prepared = CatalogStore(engine).prepare_control_command(
+        **_prepare_params(uuid4(), provider="antigravity")
+    )
+
     assert prepared["allowed"] is False
-    assert prepared["reason"] == "canonical_ingest_disabled"
+    assert prepared["reason"] == "unsupported"
     engine.dispose()
 
 
@@ -457,7 +460,14 @@ def test_finished_control_operation_cannot_be_rearmed(monkeypatch, daemon_paths)
     database_path, _socket_path = daemon_paths
     engine = create_catalog_engine(database_path)
     initialize_catalog_schema(engine)
-    session_id, _run_id, _connection_id, _adapter_id, _generation = _seed_control_grant(engine)
+    session_id, run_id, _connection_id, adapter_id, generation = _seed_control_grant(engine)
+    _reduce_control_fact(
+        engine,
+        session_id=session_id,
+        run_id=run_id,
+        adapter_connection_id=adapter_id,
+        lease_generation=generation,
+    )
     params = _prepare_params(session_id)
     store = CatalogStore(engine)
     prepared = store.prepare_control_command(**params)

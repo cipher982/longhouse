@@ -79,10 +79,9 @@ def test_machine_session_detail_uses_token_owner_and_marks_canonical_serve(monke
     projected = SimpleNamespace(id=str(session_id))
     call = {}
     monkeypatch.setattr(agents_sessions.database_module, "live_catalog_enabled", lambda: True)
-    monkeypatch.setattr(agents_sessions, "canonical_session_detail_enabled", lambda: True)
 
-    def read(requested, *, owner_id, serve_mode):
-        call.update(session_id=requested, owner_id=owner_id, serve_mode=serve_mode)
+    def read(requested, *, owner_id):
+        call.update(session_id=requested, owner_id=owner_id)
         return projected, "provider-thread", "31"
 
     monkeypatch.setattr(agents_sessions, "read_live_catalog_session", read)
@@ -98,7 +97,7 @@ def test_machine_session_detail_uses_token_owner_and_marks_canonical_serve(monke
     )
 
     assert result is projected
-    assert call == {"session_id": session_id, "owner_id": 42, "serve_mode": "canonical"}
+    assert call == {"session_id": session_id, "owner_id": 42}
     assert response.headers["X-Catalog-Commit-Seq"] == "31"
     assert response.headers["X-Provider-Session-ID"] == "provider-thread"
     assert response.headers["X-Session-State-Serve"] == "canonical_session_detail"

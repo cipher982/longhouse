@@ -4,12 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 from datetime import datetime
 from datetime import timezone
 from time import monotonic
 from typing import Any
-from typing import Literal
 from uuid import UUID
 
 from zerg.models.live_store import LiveLaunchReadiness
@@ -26,9 +24,7 @@ from zerg.services.catalog_facts import decode_catalog_datetime
 from zerg.services.catalog_facts import hydrate_catalog_row
 from zerg.services.catalog_read_gateway import CatalogReadError
 from zerg.services.catalog_read_gateway import canonical_timeline_snapshot
-from zerg.services.catalog_read_gateway import session_snapshot
 from zerg.services.catalog_read_gateway import shadow_session_state_snapshot
-from zerg.services.catalog_read_gateway import timeline_snapshot
 from zerg.services.live_launch_readiness import LiveLaunchReadinessView
 from zerg.services.live_launch_readiness import project_live_launch_readiness
 from zerg.services.machine_control_channel import get_machine_control_channel_registry
@@ -59,12 +55,6 @@ from zerg.services.timeline_session_listing import TimelineSessionCardResponse
 from zerg.services.timeline_session_listing import TimelineSessionListParams
 from zerg.services.timeline_session_listing import TimelineSessionsListResponse
 from zerg.utils.time import normalize_utc
-
-_DETAIL_SERVE_ENV = "LONGHOUSE_SESSION_STATE_DETAIL_SERVE"
-
-
-def canonical_session_detail_enabled() -> bool:
-    return os.getenv(_DETAIL_SERVE_ENV, "legacy").strip().lower() == "canonical"
 
 
 def _supported_operations(provider: str | None) -> set[str]:
@@ -609,7 +599,6 @@ def list_live_catalog_timeline(
     *,
     params: TimelineSessionListParams,
     owner_id: int | None = None,
-    serve_mode: Literal["legacy", "canonical"] = "legacy",
 ) -> TimelineSessionsListResponse:
     """List timeline cards from one catalogd-owned SQLite snapshot."""
 
@@ -627,15 +616,12 @@ def list_live_catalog_timeline(
         "limit": params.limit,
         "offset": params.offset,
     }
-    if serve_mode == "canonical":
-        if owner_id is None:
-            raise CatalogReadError(
-                "canonical_owner_required",
-                "Canonical timeline projection requires an owner-scoped request.",
-            )
-        snapshot = canonical_timeline_snapshot(snapshot_params, owner_id=owner_id)
-    else:
-        snapshot = timeline_snapshot(snapshot_params)
+    if owner_id is None:
+        raise CatalogReadError(
+            "canonical_owner_required",
+            "Canonical timeline projection requires an owner-scoped request.",
+        )
+    snapshot = canonical_timeline_snapshot(snapshot_params, owner_id=owner_id)
     return project_catalog_timeline_snapshot(snapshot)
 
 
@@ -684,13 +670,12 @@ def list_live_catalog_sessions(
     *,
     params: TimelineSessionListParams,
     owner_id: int | None = None,
-    serve_mode: Literal["legacy", "canonical"] = "legacy",
 ) -> SessionsListResponse:
     """Machine-facing flat session list from the same bounded card projection."""
 
     if params.query is not None or (params.mode or "lexical") != "lexical":
         raise ValueError("search_requires_archive")
-    timeline = list_live_catalog_timeline(params=params, owner_id=owner_id, serve_mode=serve_mode)
+    timeline = list_live_catalog_timeline(params=params, owner_id=owner_id)
     return SessionsListResponse(
         sessions=[card.head for card in timeline.sessions],
         total=timeline.total,
@@ -712,37 +697,32 @@ def read_live_catalog_session(
     *,
     owner_id: int | None = None,
     include_hidden: bool = True,
-    serve_mode: Literal["legacy", "canonical"] = "legacy",
 ) -> tuple[SessionResponse | None, str | None, str]:
     """Read one session shell and its provider alias from one catalog snapshot."""
 
-    canonical_detail = serve_mode == "canonical"
-    if canonical_detail:
-        if owner_id is None:
-            raise CatalogReadError(
-                "canonical_owner_required",
-                "Canonical session detail requires an owner-scoped request.",
-            )
-        snapshot = shadow_session_state_snapshot(str(session_id), owner_id=owner_id)
-    else:
-        snapshot = session_snapshot(str(session_id), owner_id=owner_id) if owner_id is not None else session_snapshot(str(session_id))
+    if owner_id is None:
+        raise CatalogReadError(
+            "canonical_owner_required",
+            "Canonical session detail requires an owner-scoped request.",
+        )
+    snapshot = shadow_session_state_snapshot(str(session_id), owner_id=owner_id)
     commit_seq = str(snapshot.get("commit_seq") or "0")
     if snapshot.get("found") is not True:
         return None, None, commit_seq
     observed_at = decode_catalog_datetime(snapshot.get("observed_at"))
-    if canonical_detail and snapshot.get("heads_truncated") is True:
+    if snapshot.get("heads_truncated") is True:
         raise CatalogReadError(
             "shadow_fact_head_limit_exceeded",
             "Canonical session facts exceed the bounded detail projection limit.",
         )
-    facts = snapshot.get("legacy_facts") if canonical_detail else snapshot.get("facts")
+    facts = snapshot.get("legacy_facts")
     if not isinstance(observed_at, datetime) or not isinstance(facts, dict):
         raise CatalogReadError(
             "invalid_catalog_snapshot",
             "Catalog session snapshot is incomplete.",
         )
-    heads = snapshot.get("heads") if canonical_detail else None
-    if canonical_detail and not isinstance(heads, list):
+    heads = snapshot.get("heads")
+    if not isinstance(heads, list):
         raise CatalogReadError(
             "invalid_catalog_snapshot",
             "Catalog session snapshot is missing reducer fact heads.",
@@ -755,7 +735,7 @@ def read_live_catalog_session(
             facts,
             observed_at=observed_at,
             canonical_heads=heads,
-            commit_seq=int(commit_seq) if canonical_detail else None,
+            commit_seq=int(commit_seq),
         )
     except (TypeError, ValueError) as exc:
         raise CatalogReadError(
@@ -849,16 +829,14 @@ async def stream_live_catalog_machine_sessions(
     yield {"event": "connected", "data": json.dumps({"source": "runtime_host"})}
 
     if not skip_initial_replay:
-        canonical = canonical_session_detail_enabled()
         response = await asyncio.to_thread(
             list_live_catalog_timeline,
             params=params,
             owner_id=owner_id,
-            serve_mode="canonical" if canonical else "legacy",
         )
         for card in response.sessions:
-            initial_commit_seq = card.head.session_state.commit_seq if canonical else None
-            delta = project_machine_session_delta(card.head, commit_seq=initial_commit_seq, canonical=canonical)
+            initial_commit_seq = card.head.session_state.commit_seq
+            delta = project_machine_session_delta(card.head, commit_seq=initial_commit_seq, canonical=True)
             signature = _machine_session_delta_signature(delta)
             previous[card.head.id] = signature
             yield {
@@ -879,13 +857,11 @@ async def stream_live_catalog_machine_sessions(
             if not session_id:
                 continue
             try:
-                canonical = canonical_session_detail_enabled()
                 session, _provider_alias, commit_seq = await asyncio.to_thread(
                     read_live_catalog_session,
                     UUID(session_id),
                     include_hidden=False,
                     owner_id=owner_id,
-                    serve_mode="canonical" if canonical else "legacy",
                 )
             except (ValueError, TypeError):
                 continue
@@ -897,7 +873,7 @@ async def stream_live_catalog_machine_sessions(
                         "data": json.dumps({"session_id": session_id, "source": "runtime_host"}),
                     }
                 continue
-            delta = project_machine_session_delta(session, commit_seq=commit_seq, canonical=canonical)
+            delta = project_machine_session_delta(session, commit_seq=commit_seq, canonical=True)
             signature = _machine_session_delta_signature(delta)
             if previous.get(session_id) == signature:
                 continue
@@ -906,7 +882,7 @@ async def stream_live_catalog_machine_sessions(
                 session,
                 commit_seq=commit_seq,
                 fanout=message.payload,
-                canonical=canonical,
+                canonical=True,
             )
             yield {
                 "event": "session_delta",
@@ -939,7 +915,6 @@ async def stream_live_catalog_timeline(
                     list_live_catalog_timeline,
                     params=params,
                     owner_id=owner_id,
-                    serve_mode="canonical" if canonical_session_detail_enabled() else "legacy",
                 )
                 current = {
                     card.thread_id: json.dumps(card.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))

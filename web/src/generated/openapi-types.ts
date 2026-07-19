@@ -9805,20 +9805,16 @@ export interface components {
             head_count: number;
             /**
              * Served Path
-             * @enum {string}
+             * @constant
              */
-            served_path?: "legacy_session_state" | "canonical_session_detail";
+            served_path?: "canonical_session_detail";
             /**
              * Authorization Path
-             * @enum {string}
+             * @constant
              */
-            authorization_path?: "legacy_capabilities" | "provider_scoped_canonical_control";
+            authorization_path?: "provider_scoped_canonical_control";
             /** Canonical Authorization Providers */
             canonical_authorization_providers?: string[];
-            /** Cutover Active */
-            cutover_active?: boolean;
-            /** Authorization Cutover Active */
-            authorization_cutover_active?: boolean;
             shadow: components["schemas"]["ShadowSessionStateProjection"];
             comparison: components["schemas"]["SessionStateComparison"];
             explain: components["schemas"]["SessionStateExplainResponse"];
@@ -9963,20 +9959,16 @@ export interface components {
             parity_enabled: boolean;
             /**
              * Served Path
-             * @enum {string}
+             * @constant
              */
-            served_path?: "legacy_session_state" | "canonical_session_detail";
+            served_path?: "canonical_session_detail";
             /**
              * Authorization Path
-             * @enum {string}
+             * @constant
              */
-            authorization_path?: "legacy_capabilities" | "provider_scoped_canonical_control";
+            authorization_path?: "provider_scoped_canonical_control";
             /** Canonical Authorization Providers */
             canonical_authorization_providers?: string[];
-            /** Cutover Active */
-            cutover_active?: boolean;
-            /** Authorization Cutover Active */
-            authorization_cutover_active?: boolean;
             contract?: components["schemas"]["SessionStateContractHealthResponse"];
             /**
              * Projected Families

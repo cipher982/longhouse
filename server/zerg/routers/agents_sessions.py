@@ -53,7 +53,6 @@ from zerg.services.console_turns import ConsoleTurnUnavailable
 from zerg.services.console_turns import dispatch_next_console_turn
 from zerg.services.console_turns import enqueue_catalog_console_turn
 from zerg.services.console_turns import enqueue_console_turn
-from zerg.services.live_catalog_timeline import canonical_session_detail_enabled
 from zerg.services.live_catalog_timeline import list_live_catalog_sessions
 from zerg.services.live_catalog_timeline import read_live_catalog_session
 from zerg.services.live_catalog_timeline import stream_live_catalog_machine_sessions
@@ -634,7 +633,6 @@ async def list_sessions(
                 list_live_catalog_sessions,
                 params=params,
                 owner_id=owner_id if isinstance(owner_id, int) else None,
-                serve_mode="canonical" if canonical_session_detail_enabled() else "legacy",
             )
         assert db is not None
         owner_id = _owner_id_from_agents_auth(db, _auth)
@@ -1531,11 +1529,9 @@ def get_session(
             raw_owner_id = getattr(_auth, "owner_id", None)
             effective_owner_id = int(raw_owner_id) if raw_owner_id is not None else None
         try:
-            serve_mode = "canonical" if canonical_session_detail_enabled() else "legacy"
             result, provider_session_id, commit_seq = read_live_catalog_session(
                 session_id,
                 owner_id=effective_owner_id,
-                serve_mode=serve_mode,
             )
         except CatalogReadError as exc:
             response_status = {
@@ -1552,7 +1548,7 @@ def get_session(
                 detail=f"Session {session_id} not found",
             )
         response.headers["X-Catalog-Commit-Seq"] = commit_seq
-        response.headers["X-Session-State-Serve"] = "canonical_session_detail" if serve_mode == "canonical" else "legacy_session_state"
+        response.headers["X-Session-State-Serve"] = "canonical_session_detail"
         if provider_session_id:
             response.headers["X-Provider-Session-ID"] = provider_session_id
         return result
