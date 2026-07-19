@@ -194,6 +194,7 @@ def build_claude_channel_exec_command(
     *,
     provider_session_id: str,
     longhouse_session_id: str,
+    longhouse_run_id: str | None = None,
     cwd: str,
     resume: bool,
     hook_url: str | None = None,
@@ -233,6 +234,8 @@ def build_claude_channel_exec_command(
         f"export LONGHOUSE_PROVIDER_SESSION_ID={_quote(provider_sid)}",
         f"export LONGHOUSE_CHANNEL_CWD={_quote(working_dir)}",
     ]
+    if longhouse_run_id:
+        inner.append(f"export LONGHOUSE_RUN_ID={_quote(str(UUID(longhouse_run_id)))}")
     if hook_url:
         inner.append(f"export LONGHOUSE_HOOK_URL={_quote(str(hook_url).strip())}")
     # Engage the permission gate ONLY in remote-approve mode. In bypass mode we

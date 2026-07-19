@@ -55,6 +55,7 @@ def _exec_engine(args: list[str], env: dict[str, str]) -> None:
 @app.command("serve")
 def serve(
     session_id: str | None = typer.Option(None, "--session-id", envvar="LONGHOUSE_CHANNEL_SESSION_ID"),
+    run_id: str | None = typer.Option(None, "--run-id", envvar="LONGHOUSE_RUN_ID"),
     provider_session_id: str | None = typer.Option(
         None,
         "--provider-session-id",
@@ -69,6 +70,7 @@ def serve(
 
     argv = _engine_command("serve")
     _append_option(argv, "--session-id", session_id)
+    _append_option(argv, "--run-id", run_id)
     _append_option(argv, "--provider-session-id", provider_session_id)
     _append_option(argv, "--state-root", state_root)
     _append_option(argv, "--port", port)
@@ -80,6 +82,7 @@ def serve(
 @app.command("launch", hidden=True)
 def launch(
     session_id: str = typer.Option(..., "--session-id", help="Longhouse session ID."),
+    run_id: str = typer.Option(..., "--run-id", help="Catalog-owned Longhouse run ID."),
     provider_session_id: str | None = typer.Option(None, "--provider-session-id", help="Claude provider session ID."),
     cwd: Path = typer.Option(..., "--cwd", exists=True, file_okay=False, dir_okay=True, resolve_path=True),
     api_url: str = typer.Option(..., "--api-url", help="Longhouse API URL."),
@@ -131,6 +134,7 @@ def launch(
     try:
         result = _launch_detached_native_claude_channel(
             session_id=session_id,
+            run_id=run_id,
             provider_session_id=normalized_provider_session_id,
             cwd=cwd,
             base_url=api_url,

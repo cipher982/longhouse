@@ -393,6 +393,7 @@ def test_claude_command_starts_native_channel_bridge_when_api_returns_native_tra
         "_launch_managed_local_from_api",
         lambda **_kwargs: claude_cli.ManagedLocalLaunchResponse(
             session_id="session-123",
+            run_id="11111111-1111-4111-8111-111111111111",
             provider_session_id="provider-123",
             attach_command=(
                 "zsh -lc 'exec claude --dangerously-skip-permissions --session-id provider-123 "
@@ -415,8 +416,8 @@ def test_claude_command_starts_native_channel_bridge_when_api_returns_native_tra
     monkeypatch.setattr(
         claude_cli,
         "_run_native_claude_tui",
-        lambda *, session_id, provider_session_id, cwd, base_url, token, hook_token=None, permission_mode="bypass": native_launch_calls.append(
-            (session_id, provider_session_id, str(cwd), base_url, token, hook_token, permission_mode)
+        lambda *, session_id, run_id, provider_session_id, cwd, base_url, token, hook_token=None, permission_mode="bypass": native_launch_calls.append(
+            (session_id, run_id, provider_session_id, str(cwd), base_url, token, hook_token, permission_mode)
         )
         or 0,
     )
@@ -454,7 +455,16 @@ def test_claude_command_starts_native_channel_bridge_when_api_returns_native_tra
     assert "The hearth banked" in result.output
     assert prepare_calls == [("https://longhouse.test", "zdt_test_token", str(tmp_path), str(provider_home))]
     assert native_launch_calls == [
-        ("session-123", "provider-123", str(tmp_path), "https://longhouse.test", "zdt_test_token", None, "bypass")
+        (
+            "session-123",
+            "11111111-1111-4111-8111-111111111111",
+            "provider-123",
+            str(tmp_path),
+            "https://longhouse.test",
+            "zdt_test_token",
+            None,
+            "bypass",
+        )
     ]
     assert open_calls == ["https://longhouse.test/timeline/session-123"]
     assert list_managed_session_contracts(tmp_path / ".longhouse") == []
@@ -571,6 +581,7 @@ def test_launch_detached_native_claude_channel_waits_for_channel_state(monkeypat
 
     result = claude_cli._launch_detached_native_claude_channel(
         session_id="11111111-1111-4111-8111-111111111111",
+        run_id="33333333-3333-4333-8333-333333333333",
         provider_session_id="22222222-2222-4222-8222-222222222222",
         cwd=tmp_path,
         base_url="https://longhouse.test",
@@ -591,6 +602,7 @@ def test_launch_detached_native_claude_channel_waits_for_channel_state(monkeypat
     command_text = " ".join(popen_calls[0]["cmd"])
     assert "claude" in command_text
     assert "11111111-1111-4111-8111-111111111111" in command_text
+    assert "LONGHOUSE_RUN_ID=33333333-3333-4333-8333-333333333333" in command_text
     assert "zdt_test_token" not in command_text
 
 

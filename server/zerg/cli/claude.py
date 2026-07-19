@@ -200,6 +200,7 @@ def _ensure_native_claude_prereqs(
 def _run_native_claude_tui(
     *,
     session_id: str,
+    run_id: str,
     provider_session_id: str,
     cwd: Path,
     base_url: str,
@@ -210,6 +211,7 @@ def _run_native_claude_tui(
     command = build_claude_channel_exec_command(
         provider_session_id=provider_session_id,
         longhouse_session_id=session_id,
+        longhouse_run_id=run_id,
         cwd=str(cwd),
         resume=False,
         hook_url=base_url,
@@ -265,6 +267,7 @@ def _build_detached_claude_pty_command(command: str, log_path: Path) -> list[str
 def _launch_detached_native_claude_channel(
     *,
     session_id: str,
+    run_id: str,
     provider_session_id: str,
     cwd: Path,
     base_url: str,
@@ -284,6 +287,7 @@ def _launch_detached_native_claude_channel(
     command = build_claude_channel_exec_command(
         provider_session_id=provider_session_id,
         longhouse_session_id=session_id,
+        longhouse_run_id=run_id,
         cwd=str(cwd),
         resume=resume,
         hook_url=base_url,
@@ -466,6 +470,7 @@ def _finalize_native_claude_launch(
     try:
         exit_code = _run_native_claude_tui(
             session_id=result.session_id,
+            run_id=result.run_id,
             provider_session_id=result.provider_session_id,
             cwd=cwd,
             base_url=base_url,

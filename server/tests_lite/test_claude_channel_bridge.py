@@ -89,6 +89,7 @@ def test_build_claude_channel_exec_command_uses_development_channel_flag():
     command = build_claude_channel_exec_command(
         provider_session_id="provider-123",
         longhouse_session_id="11111111-1111-1111-1111-111111111111",
+        longhouse_run_id="22222222-2222-4222-8222-222222222222",
         cwd="/tmp/demo",
         resume=False,
         claude_command="claude",
@@ -97,6 +98,7 @@ def test_build_claude_channel_exec_command_uses_development_channel_flag():
     assert "--dangerously-load-development-channels server:longhouse-channel" in command
     assert "--channels server:longhouse-channel" not in command
     assert "LONGHOUSE_CHANNEL_CWD=/tmp/demo" in command
+    assert "LONGHOUSE_RUN_ID=22222222-2222-4222-8222-222222222222" in command
 
 
 def test_build_claude_channel_exec_command_defaults_to_bypass():

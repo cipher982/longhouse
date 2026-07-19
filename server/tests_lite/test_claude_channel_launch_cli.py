@@ -12,6 +12,7 @@ from typer.testing import CliRunner
 from zerg.cli.claude_channel import app
 
 _SESSION_ID = "11111111-1111-1111-1111-111111111111"
+_RUN_ID = "22222222-2222-4222-8222-222222222222"
 
 
 def _invoke_launch(monkeypatch, tmp_path, extra_args):
@@ -35,6 +36,8 @@ def _invoke_launch(monkeypatch, tmp_path, extra_args):
             "launch",
             "--session-id",
             _SESSION_ID,
+            "--run-id",
+            _RUN_ID,
             "--cwd",
             str(tmp_path),
             "--api-url",
@@ -51,6 +54,7 @@ def test_launch_without_resume_passes_resume_false(monkeypatch, tmp_path):
     result, captured = _invoke_launch(monkeypatch, tmp_path, [])
     assert result.exit_code == 0, result.output
     assert captured["resume"] is False
+    assert captured["run_id"] == _RUN_ID
     assert captured["provider_session_id"]
     assert captured["provider_session_id"] != _SESSION_ID
 

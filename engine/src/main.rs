@@ -638,6 +638,9 @@ enum ClaudeChannelCommands {
         session_id: Option<String>,
 
         #[arg(long)]
+        run_id: Option<String>,
+
+        #[arg(long)]
         provider_session_id: Option<String>,
 
         #[arg(long)]
@@ -1489,6 +1492,7 @@ fn main() -> anyhow::Result<()> {
         Commands::ClaudeChannel { command } => match command {
             ClaudeChannelCommands::Serve {
                 session_id,
+                run_id,
                 provider_session_id,
                 state_root,
                 port,
@@ -1500,6 +1504,7 @@ fn main() -> anyhow::Result<()> {
                     claude_channel_server::ClaudeChannelServeConfig {
                         session_id: session_id
                             .or_else(|| env_string("LONGHOUSE_CHANNEL_SESSION_ID")),
+                        run_id: run_id.or_else(|| env_string("LONGHOUSE_RUN_ID")),
                         provider_session_id: provider_session_id
                             .or_else(|| env_string("LONGHOUSE_PROVIDER_SESSION_ID")),
                         state_root,

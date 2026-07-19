@@ -22,6 +22,7 @@ const DEFAULT_HTTP_TIMEOUT: Duration = Duration::from_secs(5);
 #[derive(Clone, Debug)]
 pub struct ClaudeChannelServeConfig {
     pub session_id: Option<String>,
+    pub run_id: Option<String>,
     pub provider_session_id: Option<String>,
     pub state_root: Option<PathBuf>,
     pub port: u16,
@@ -253,13 +254,16 @@ impl BridgeState {
             Uuid::parse_str(session_id).context("session_id must be a UUID")?;
         }
         let provider_session_id = normalize_optional(config.provider_session_id);
+        let run_id =
+            normalize_optional(config.run_id).unwrap_or_else(|| Uuid::new_v4().to_string());
+        Uuid::parse_str(&run_id).context("run_id must be a UUID")?;
         let state_root = config.state_root.unwrap_or_else(default_state_root);
         let auth_token = normalize_optional(config.auth_token).unwrap_or_else(random_token);
         let cwd = normalize_optional(config.cwd);
         Ok(Self {
             inner: Arc::new(Mutex::new(BridgeStateInner {
                 session_id,
-                run_id: Uuid::new_v4().to_string(),
+                run_id,
                 connection_id: Uuid::new_v4().to_string(),
                 lease_generation: Uuid::new_v4().to_string(),
                 provider_session_id,
@@ -731,6 +735,7 @@ mod tests {
     fn test_config(state_root: &Path) -> ClaudeChannelServeConfig {
         ClaudeChannelServeConfig {
             session_id: Some(SESSION_ID.to_string()),
+            run_id: Some("22222222-2222-4222-8222-222222222222".to_string()),
             provider_session_id: Some("provider-123".to_string()),
             state_root: Some(state_root.to_path_buf()),
             port: 0,
@@ -814,6 +819,7 @@ mod tests {
         let state: Value =
             serde_json::from_slice(&std::fs::read(state_path(temp.path())).unwrap()).unwrap();
         assert_eq!(state["session_id"], SESSION_ID);
+        assert_eq!(state["run_id"], "22222222-2222-4222-8222-222222222222");
         assert_eq!(state["provider_session_id"], "provider-123");
         assert_eq!(state["auth_token"], "bridge-test-token");
         assert_eq!(state["cwd"], "/tmp/demo");
@@ -832,6 +838,10 @@ mod tests {
         assert!(!health_text.contains("bridge-test-token"));
         let health_json: Value = serde_json::from_str(&health_text).unwrap();
         assert!(health_json.get("auth_token").is_none());
+        assert_eq!(
+            health_json["run_id"],
+            "22222222-2222-4222-8222-222222222222"
+        );
         assert_eq!(health_json["ready"], true);
 
         let rejected = client
