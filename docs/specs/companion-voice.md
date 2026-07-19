@@ -1,183 +1,179 @@
-# Companion Voice — spec
+# Companion — native-adapter concierge thread with voice entry
 
-One durable agent thread ("the companion") on a 24/7 home-base machine, driven
-by a one-tap voice screen on iOS. Siri-feel latency for conversation; heavy
-work delegated off the voice path. **v0 ownership statement: this is a managed
-Helm session retained in a detached pty** — not Console (one-shot per turn),
-and not a new session architecture.
+Status: draft v2 (2026-07-19), rewritten after codebase research; supersedes
+the v1 "designation over Helm pty" draft entirely.
 
-## Problem
+## Context
 
-Talking to a fully-contextualized agent (AGENTS.md + skills + life hub +
-repos) from the phone today means launching a Console session in `~` via the
-iOS app: pick machine, spawn session, wait for cold start, read a transcript.
-That is 20s+ of ceremony per thought. The desired interaction is: tap, talk,
-hear an answer in ~2s, walk away. Cinder (laptop) cannot be the host — it is
-closed in a backpack; the host must be an always-on box (clifford/cube), which
-means machine fungibility must actually be true, not aspirational.
+David wants a zero-friction, on-the-go way to talk to an agent that has his
+full context (global AGENTS.md, skills, life hub, sauron, email, repos): tap
+a button on iOS, speak, hear an answer in ~2s, walk away. Both "ephemeral
+Siri-style question" and "long-running single thread" collapse into one
+durable thread with zero per-interaction setup. The host must be always-on
+(laptop is closed in a backpack); cinder must be fungible computation — agent
+identity is `~/git/me` + secrets + network reach, not a specific machine.
 
-## First principles
+Today's path — launch a Console session in `~` from iOS — is 20s+ of ceremony
+per thought and exposes session mechanics the user shouldn't see.
 
-1. **Voice loop ≠ agent loop.** Voice needs 1–3s turns; agent turns take
-   10s–minutes. The companion answers directly with a fast model and
-   *delegates* heavy work asynchronously (via hatch), narrating the handoff.
-2. **Ephemeral vs long-running is a false split.** One durable thread with
-   zero per-interaction setup gives both. "Ephemeral" = a quick question to
-   the standing thread. Memory across the day is a feature, not a cost.
-3. **Machine fungibility is provisioning, not architecture.** Agent identity =
-   `~/git/me` checkout + Infisical machine token + Tailscale reach. Any box
-   with those qualifies. Longhouse's machine abstraction already routes to it.
+### The structural insight
 
-## Product framing — designation, not a fourth mode
+Shadow/Helm/Console derive their entire complexity from wrapping **foreign
+agent harnesses** (Claude Code, Codex, Cursor, OpenCode) that Longhouse does
+not control. That is the product wedge: people already have agents typing in
+terminals, and Longhouse works with them. But it also means Longhouse is at
+the mercy of those harnesses: no token stream, no context control, no model
+choice, per-invocation prefill and spawn cost.
 
-The companion is the missing quadrant of the Shadow/Helm/Console taxonomy:
-system-launched + persistent + no human terminal. It is honestly not Helm
-(nobody is at the helm) and not Console (not one-shot). But its entire value
-comes from being a plain managed session on the existing pipeline — steer,
-ingest, search, recall, capabilities. Minting a fourth *execution mode* now
-would fork that plumbing on zero dogfood data.
+A companion sidecar has **no terminal to respect**. It is the first surface
+free of the foreign-harness constraint — and it should spend that freedom on
+latency, voice, and context engineering, NOT on rebuilding a coding harness.
 
-Decision: **"Companion" is a product designation one layer above modes** — a
-role pinned to whichever managed session currently holds it, plus a client
-surface (the Talk screen) that never exposes the session noun. Underneath,
-the session is Helm (managed, persistent, steerable); user-facing copy never
-says Helm. Same pattern as the wall/widgets: a surface over sessions, not a
-new kind of session.
+### Verified primitives (as of 2026-07-19)
 
-Graduation path: if dogfood proves the loop and the pty hack proves fragile,
-build a true resident primitive (persistent headless + real control channel)
-and promote this to a real fourth mode. Reserved mode name for that day:
-**Hearth** — the fire that's always burning in the longhouse. Do not use the
-word in product until the primitive exists.
+- **Turn-scoped Console execution is canon** (`turn-scoped-console-execution.md`,
+  locked 2026-07-14): Console persists conversation *threads*, not idle
+  provider processes. Five nouns: Session / Thread / Turn / Invocation /
+  Adapter. FIFO turns, single execution owner, interrupt semantics, typed
+  adapter-unavailable results.
+- **Native LLM client lanes exist in prod** (`config/models.json`,
+  `models_config.get_llm_client_for_use_case`): OpenRouter-backed tiers,
+  including a low-latency `gemini-flash-lite:nitro` lane already live for
+  session titles.
+- **Builtin tool registry exists** (`server/zerg/tools/builtin/`, contracts
+  generated from `schemas/tools.yml`): session tools, session-coordination
+  tools, memory tools, web search/fetch, MCP adapter. No active native agent
+  loop consumes them today.
+- **Server-side turn execution has precedent**: `session_chat` spawns a
+  `claude` CLI subprocess on the Runtime Host (SESSION_CHAT_BACKEND) to fake
+  exactly this capability. A native adapter is its one-path replacement, not
+  a parallel stack.
+- **No assistant-delta stream exists for foreign-harness sessions** (iOS SSE
+  is workspace invalidation; Claude channel is input-only). For a *native*
+  invocation this constraint disappears: we own the loop, we emit deltas.
+
+## Goals
+
+1. End-of-speech → audio-start ≤3s for conversational turns, engineered (not
+   hoped): streaming tokens, bounded context, prompt caching, no process
+   spawn per turn.
+2. One durable companion thread; the client never exposes session mechanics.
+3. Full personal context via tools + curated prompt, equal on any qualified
+   home base (clifford first).
+4. Heavy work is **dispatched to the fleet** (foreign-harness sessions via
+   existing turn dispatch / hatch), never executed inside the voice loop.
+5. Everything rides the existing pipeline: thread/turn kernel, ingest,
+   archive, search, recall, capabilities, iOS surfaces.
+
+## Non-goals
+
+- A Longhouse coding harness. The native adapter gets NO Bash/Edit/file
+  tools. If a request needs repo mutation or long tool chains, the companion
+  dispatches it to a real provider session and says so. This boundary is
+  what keeps the launch story ("works with your existing agents") intact.
+- A fourth session mode. The companion is a Console thread whose Adapter is
+  native. Taxonomy holds. ("Hearth" stays reserved if a resident primitive is
+  ever truly needed; current canon suggests it is not — threads, not
+  processes, are the durable thing.)
+- Realtime speech-to-speech models (breaks the text-thread contract that
+  makes the pipeline valuable).
+- Multi-companion, other-user generalization, barge-in. Dogfood first.
 
 ## Design
 
-### Companion session
-- One persistent managed session on the home-base machine (default:
-  clifford). Long-lived process, NOT `run_once` per turn — per-turn spawn
-  latency can never feel like Siri.
-- **Mode reality check:** a "persistent headless steerable session" is not a
-  primitive today — Helm is persistent (TUI in a pty), Console is one-shot.
-  v0 uses **invisible Helm**: `longhouse claude` with a fast model in a
-  detached tmux/pty kept alive by launchd/systemd on clifford. Fully managed,
-  steerable, zero new product code. A true headless-persistent mode is a
-  later refactor only if the pty hack proves fragile.
-- Runtime: stock `claude` CLI with a fast non-reasoning model (haiku-class).
-  Reuses skills, tools, and the shipped steer/send path wholesale. A bespoke
-  API loop is explicitly rejected for v1 (second agent runtime, one-path rule).
-- System prompt: global AGENTS.md + a `companion` skill in `~/git/me` defining
-  voice register (short spoken answers), delegation posture (hand slow work to
-  hatch and say so — no numeric threshold; a prompt-level time rule is
-  unreliable), and what evidence layers to reach for (life hub, recall).
-  v0 delegation has no result-routing contract: fired work is simply
-  mentioned, and results come up next time you ask. A real delegation
-  contract (task identity, completion notification, readback) is deferred.
-- Voice turns are steer messages into this session. Nothing new on the send
-  path — Epic 1 shipped it.
+### Native Adapter (new)
 
-### Lifecycle (deliberately manual in v0)
-- launchd keeps the tmux/pty alive; David restarts the session manually when
-  context gets fat; iOS pins the session manually after a restart.
-- A server-side `companion` alias (stable name → current live session id) and
-  an automatic recycle-with-summary policy are **deferred until manual
-  re-pinning has actually annoyed us** and we have real data on context
-  growth. Do not build supervisor product code on day one.
-- Safety: the companion skill carries the consequential-action gate from day
-  one — a 24/7 agent with full personal-data reach, steerable from an
-  unlocked phone, must confirm before purchases/portal actions/irreversible
-  side effects.
+A turn executor implementing the existing Console turn contract, running on
+the **Runtime Host** (where durability lives; hosted david010 for David):
 
-### iOS Talk screen
-- A dedicated button → full-screen voice UI. No machine picker, no session
-  picker, no "new session" — the button binds to the `companion` alias.
-- STT: on-device Apple Speech framework, streaming. Needs authorization +
-  locale/device availability checks and an honest degraded state; must never
-  silently fall back to server transcription.
-- TTS: v0 AVSpeech (zero dependency) → v1 streaming API voice (OpenAI TTS or
-  ElevenLabs) if AVSpeech grates.
-- Reply path v1: **whole-message granularity is the reality.** Today's iOS
-  SSE is a workspace-invalidation feed with transcript preview, not a
-  token/transcript protocol, and the Claude channel is an input-only control
-  seam (send/interrupt/steer). There is no assistant-delta source anywhere in
-  the stack today. v1 therefore TTS's the completed assistant message as it
-  lands via ingest.
+- Claims a queued Turn under the normal execution-owner lease; runs an LLM
+  tool-loop (client from `models.json` lane `companion`, fast non-reasoning
+  model) against the thread's bounded context; settles the turn through the
+  normal state machine (`queued → starting → active → draining → completed`).
+- Emits **incremental assistant deltas** to a streaming sink as first-class
+  runtime events; whole events land in ingest/archive exactly like any other
+  session. Foreign-harness sessions stay whole-message; native turns stream.
+- Tool allowlist (curated, small): recall/search sessions, session
+  coordination (create/dispatch turns on other threads, steer managed
+  sessions), life hub evidence, notify/push, web search, memory. All via
+  existing builtin registry + `/api/agents/*` semantics.
+- Context policy is owned code: system prompt = companion skill (voice
+  register, delegation posture, consequential-action gate) + distilled
+  personal context; bounded rolling history + provider prompt caching;
+  recycle-with-summary is an adapter concern, invisible to the client.
 
-### Streaming relay (contingent, and currently source-less)
-- If measured latency blows the budget, the fix is NOT "add a relay" — it is
-  first a **spike to find where incremental assistant text can be tapped**
-  (engine-side transcript tail? provider stream inside the Helm wrapper?),
-  then the thinnest relay on top of whatever that spike finds. Ingest/archive
-  unchanged either way. Do not design this until the spike runs.
+### Machine reach
 
-## Latency budget — a hypothesis, not a fact
+The adapter runs server-side, but machine work flows through the existing
+machine surface: dispatching a coding task = creating a Console turn on a
+thread whose adapter is a foreign harness on clifford; steering = existing
+send paths. The companion needs clifford to be a qualified agent home
+(synced `~/git/me`, machine token, Machine Agent, hatch) for dispatched work,
+not for its own conversational loop.
 
-Target: **≤3s end-of-speech → audio starting**. Current console flow: 20s+.
+### iOS Talk surface
 
-The weakest assumption is fast-model first token in 0.5–1s: the companion
-carries global AGENTS.md + skills + a growing thread, and a warm CLI process
-does not imply provider-side KV/prompt-cache persistence — prefill cost is
-paid per turn. Whole-message reply granularity (above) further delays "first
-sentence" by full generation time.
+- One button → full-screen voice UI bound to the companion thread (server
+  resolves "the companion thread" for the account; no picker, no session id).
+- On-device streaming STT (Apple Speech; authorization/locale checks, honest
+  degraded state, never silent server fallback).
+- Sentence-boundary TTS over the delta stream (v0 AVSpeech → v1 streaming
+  API voice if it grates).
+- Later: App Intents ("Hey Siri…"), widget entry.
 
-**Spike gate before any UI work:** instrument, on the actual home-base host,
-p50/p95 for each stage — end-of-speech, transcription final, input accepted,
-provider first output, first usable assistant sentence, client receipt, TTS
-first audio. The measured numbers, not this budget, decide whether the relay
-spike happens and whether the model/harness choice must change.
+## Tradeoffs
 
-## Out of scope (v1)
+**Accepted costs**
 
-- Siri/App Intents entry ("Hey Siri, ask Longhouse…") — phase 2 polish.
-- Barge-in / full-duplex audio.
-- Realtime speech-to-speech models (breaks the text-session contract that
-  makes Longhouse the backbone here).
-- Multi-companion / per-project companions. One thread.
-- Any generalization to other users' machines. This is dogfood-first.
+- Real product code pre-launch (adapter, streaming sink, Talk surface) while
+  the wedge demo still needs hardening. Mitigations: the adapter replaces the
+  `session_chat` claude-subprocess hack (debt already owed); the streaming
+  sink is scoped to native turns only; slices are gated so each ships value
+  alone.
+- A second answer-quality surface to keep honest: the companion can be wrong
+  in ways a wrapped Claude session wouldn't be (smaller model, curated
+  tools). Accepted for conversational/dispatch use; bounded by the non-goal
+  wall (no coding tools).
+- Server-side execution means hosted-instance secrets (OpenRouter key, life
+  hub access) and a 24/7 personal-data-capable endpoint reachable from a
+  phone. Consequential-action gate lives in the companion skill from day one;
+  device auth is the existing iOS auth path.
 
-## Implementation slices
+**Rejected alternatives**
 
-0. **Zero-code dogfood loop** — provision clifford (synced `~/git/me`,
-   machine token, Machine Agent, hatch; Agent Home Epic work), start
-   invisible-Helm companion under tmux+launchd, write the `companion` skill,
-   drive it from the **existing iOS session reply UI with the dictation
-   keyboard**. This validates the control path, textual turn latency,
-   machine fungibility, and daily usefulness — NOT the audio loop (the app
-   has no STT/TTS today). Gate: if the text loop doesn't feel good after a
-   few days, stop and rethink — voice polish won't save a bad loop. Includes
-   the latency spike-gate instrumentation from the budget section.
-1. **iOS Talk screen v1** — dedicated button bound to the pinned companion:
-   on-device STT → steer → tail → TTS. First real product code.
-2. **Measure, then maybe relay** — instrument end-of-speech → first-audio;
-   build the streaming relay only if the number demands it.
-3. **Lifecycle hardening** — `companion` alias + recycle policy, only once
-   manual re-pinning has demonstrably annoyed us.
-4. **Polish** — App Intents ("Hey Siri…"), better TTS voice, delegated-task
-   status readback ("your two background tasks finished").
+- *Invisible-Helm pty hack* (v1 of this spec): inherits every foreign-harness
+  constraint — no deltas, no context control, per-turn prefill, fragile pty
+  lifecycle — and contradicts turn-scoped canon (idle processes are not
+  session identity). Zero-code was its only virtue and it spent that virtue
+  on the wrong bottleneck.
+- *Foreign-harness Console turns as the companion* (e.g. `claude -p` per turn
+  via the codex_exec-style adapter): canon-compliant but voice-hostile:
+  process spawn + full prefill per turn, whole-message replies, no latency
+  ceiling engineering possible.
+- *Own coding harness*: strategic treadmill; violates the wedge. Explicit
+  non-goal.
 
-## Failure & recovery (v0 answers, deliberately crude)
+## Slices
 
-- Host reboot: launchd restarts tmux + session; new session id; re-pin in iOS.
-- Stale pinned session / expired iOS auth: existing app behavior; re-pin or
-  re-auth manually. Acceptable until it annoys.
-- Steer during a busy active turn: existing steer semantics apply; the
-  companion skill tells the model to acknowledge queued input briefly.
+0. **Native adapter, text only, existing UI.** Adapter + `companion` models
+   lane + tool allowlist behind the existing Console composer (web/iOS as-is,
+   whole-message). Proves turn mechanics, tool loop, answer quality, and
+   measures server-side TTFT honestly. Gate: daily-driver useful in text.
+1. **Delta streaming sink** for native turns + latency instrumentation
+   (p50/p95: input-accepted → first delta → first sentence).
+2. **iOS Talk surface v1**: STT → companion thread → sentence-boundary TTS
+   over the stream.
+3. **Dispatch polish**: delegation contract (task identity, completion
+   notification, readback of finished background work).
+4. **Entry polish**: App Intents, widget, TTS voice upgrade.
 
-## Decisions
+## Open questions
 
-- Home-base machine: **clifford** (decided 2026-07-19). Second home base
-  (cube) only after slice 0 proves the loop.
-- Model + harness: researched 2026-07-19 (exa landscape, primary sources).
-  Latency/cost winner: **Gemini 2.5 Flash-Lite via OpenRouter** (0.38s p50
-  TTFT, 75 tok/s, $0.10/$0.40 per M on Vertex-EU route; do NOT use `:nitro` —
-  it sorts by throughput and overrides tool-quality routing). Runner-up:
-  Cerebras `gpt-oss-120b` (~3,000 tok/s, generation effectively free after
-  first token). **But both need OpenCode as harness, and OpenCode is not a
-  managed Longhouse provider today** — choosing them makes "add managed
-  OpenCode support" a prerequisite, killing the zero-code slice 0.
-  **Call: slice 0 runs Haiku 4.5 via `longhouse claude` on Bedrock** (native
-  managed path, ~0.5–1s TTFT observed, works today) and treats the
-  Flash-Lite/OpenCode switch as a measurement-gated upgrade — justified only
-  if slice-0 numbers say model TTFT (not ingest/reply-path lag) is the
-  bottleneck. Adding managed OpenCode may be strategically worthwhile for
-  Longhouse regardless; that's a separate product decision.
-- TTS voice: decide after slice 1 dogfood, not before.
+- Model lane for `companion` (fast non-reasoning; gemini-flash-lite-class vs
+  Cerebras-class throughput) — pick from measured TTFT after slice 0.
+- Thread recycle policy (size-based summary rollover) — decide from slice-0
+  context-growth data.
+- Where the companion thread's durable "home" is when self-hosted (Runtime
+  Host is always the answer; hosted david010 for dogfood).
+- Whether the native adapter later subsumes `session_chat` continuation
+  entirely (one-path consolidation) — likely yes, separate effort.
