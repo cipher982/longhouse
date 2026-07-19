@@ -2,12 +2,18 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from builtins import anext
 from datetime import datetime
 from datetime import timezone
 from types import SimpleNamespace
 
+os.environ.setdefault("DATABASE_URL", "sqlite://")
+os.environ.setdefault("TESTING", "1")
+os.environ.setdefault("AUTH_DISABLED", "1")
+
 import zerg.routers.agents_sessions as agents_sessions
+import zerg.services.live_catalog_timeline as live_catalog_timeline
 from zerg.services.live_catalog_timeline import project_machine_session_delta
 from zerg.services.session_state_contract import SessionStateFacts
 
@@ -128,3 +134,63 @@ def test_canonical_machine_session_delta_carries_server_presentation_and_action_
     assert payload["activity"]["state"] == "unknown"
     assert payload["commit_seq"] == "91"
     assert "head" not in payload and "detail" not in payload and "root" not in payload
+
+
+def test_canonical_machine_stream_initial_replay_preserves_commit_coordinate(monkeypatch):
+    state = SessionStateFacts.model_validate(
+        {
+            "mode": "helm",
+            "disposition": {"state": "open"},
+            "activity": {"state": "unknown"},
+            "control": {
+                "ownership": "owned",
+                "connection": "unknown",
+                "actions": {
+                    "send_input": {"state": "unknown", "reason": "control_freshness_unknown"},
+                    "interrupt": {"state": "unknown", "reason": "control_freshness_unknown"},
+                    "terminate": {"state": "unknown", "reason": "control_freshness_unknown"},
+                    "reattach": {"state": "unavailable", "reason": "not_granted"},
+                    "resume": {"state": "unavailable", "reason": "not_granted"},
+                },
+            },
+            "transcript": {"convergence": "unknown"},
+            "host": {"state": "unknown"},
+            "presentation": {
+                "primary": {"key": "activity_unknown", "label": "Activity unknown", "tone": "quiet"},
+                "access": {"key": "control_unknown", "label": "Control unknown", "tone": "inactive"},
+            },
+            "commit_seq": 91,
+        }
+    )
+    session = SimpleNamespace(
+        id="633a0114-de2d-4b3d-b1b9-dfa7f314e300",
+        device_id="cinder",
+        timeline_title="Investigate state",
+        title_state="ready",
+        title_source="ai",
+        runtime_phase=None,
+        display_phase="Activity unknown",
+        last_activity_at=datetime(2026, 7, 14, 5, 0, tzinfo=timezone.utc),
+        runtime_version=91,
+        session_state=state,
+    )
+    monkeypatch.setenv("LONGHOUSE_SESSION_STATE_DETAIL_SERVE", "canonical")
+    monkeypatch.setattr(
+        live_catalog_timeline,
+        "list_live_catalog_timeline",
+        lambda **_kwargs: SimpleNamespace(sessions=[SimpleNamespace(head=session)]),
+    )
+
+    async def read_initial_events():
+        stream = live_catalog_timeline.stream_live_catalog_machine_sessions(
+            _Request(),
+            params=SimpleNamespace(device_id=None),
+            skip_initial_replay=False,
+            owner_id=1,
+        )
+        return await anext(stream), await anext(stream)
+
+    connected, delta = asyncio.run(read_initial_events())
+    assert connected["event"] == "connected"
+    assert delta["event"] == "session_delta"
+    assert json.loads(delta["data"])["commit_seq"] == "91"

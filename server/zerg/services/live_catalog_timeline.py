@@ -861,7 +861,10 @@ async def stream_live_catalog_machine_sessions(
             delta = project_machine_session_delta(card.head, commit_seq=initial_commit_seq, canonical=canonical)
             signature = _machine_session_delta_signature(delta)
             previous[card.head.id] = signature
-            yield {"event": "session_delta", "data": signature}
+            yield {
+                "event": "session_delta",
+                "data": json.dumps(delta, sort_keys=True, separators=(",", ":")),
+            }
 
     with bus.subscribe(TOPIC_TIMELINE, since_seq=sequence) as subscription:
         while not await request.is_disconnected():

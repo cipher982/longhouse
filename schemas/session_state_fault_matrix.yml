@@ -73,6 +73,7 @@ scenarios:
     fault: cross_surface_contract_drift
     deterministic:
       - server/tests_lite/test_session_state_diagnostics.py::test_projection_parity_detects_version_and_presentation_key_divergence
+      - server/tests_lite/test_agents_sessions_stream.py::test_canonical_machine_stream_initial_replay_preserves_commit_coordinate
     live: required
     expect: [same_commit, same_versions, same_primary_and_access_keys]
   - id: F12
