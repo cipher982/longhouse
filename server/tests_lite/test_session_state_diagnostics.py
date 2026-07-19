@@ -13,6 +13,7 @@ from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.services.session_state_contract import SessionStateFacts
 from zerg.services.session_state_diagnostics import compare_session_state_axes
+from zerg.services.session_state_diagnostics import compare_session_state_projections
 from zerg.services.session_state_facts_projector import ShadowSessionStateProjection
 
 NOW = datetime(2026, 7, 18, 12, 0, tzinfo=UTC)
@@ -120,6 +121,57 @@ def test_comparison_reports_axis_drift_and_rejects_cross_commit_claims():
     assert raced.same_commit is False
     assert raced.mode is None and raced.disposition is None
     assert raced.activity is None and raced.control is None
+
+    shadow = _shadow()
+    assert shadow.control is not None
+    changed_actions = shadow.control.actions.model_copy(
+        update={"start_turn": shadow.control.actions.start_turn.model_copy(update={"state": "available", "reason": None})}
+    )
+    action_drift = compare_session_state_axes(
+        legacy=_legacy(),
+        shadow=shadow.model_copy(update={"control": shadow.control.model_copy(update={"actions": changed_actions})}),
+        legacy_commit_seq=12,
+        shadow_commit_seq=12,
+    )
+    assert action_drift.status == "different"
+    assert action_drift.control is not None and action_drift.control.matches is False
+
+
+def test_projection_parity_detects_version_and_presentation_key_divergence():
+    state = _legacy().model_copy(update={"commit_seq": 12})
+    matched = compare_session_state_projections(
+        session_state=state,
+        machine_payload={
+            "commit_seq": "12",
+            "state_contract_version": 1,
+            "presentation_policy_version": 1,
+            "presentation": {"primary": None, "access": None},
+        },
+    )
+    assert matched.status == "matched"
+
+    diverged = compare_session_state_projections(
+        session_state=state,
+        machine_payload={
+            "commit_seq": "12",
+            "state_contract_version": 2,
+            "presentation_policy_version": 1,
+            "presentation": {"primary": {"key": "idle"}, "access": None},
+        },
+    )
+    assert diverged.status == "diverged"
+    assert diverged.mismatched_fields == ("state_contract_version", "primary_key")
+
+    raced = compare_session_state_projections(
+        session_state=state,
+        machine_payload={
+            "commit_seq": "13",
+            "state_contract_version": 1,
+            "presentation_policy_version": 1,
+            "presentation": {"primary": None, "access": None},
+        },
+    )
+    assert raced.status == "not_comparable"
 
 
 def test_control_identity_comparison_distinguishes_bound_unbound_and_mismatch():
@@ -243,12 +295,22 @@ def test_diagnostics_route_reports_detail_cutover_without_claiming_authorization
     monkeypatch.setattr(
         diagnostics_router,
         "project_catalog_session_facts",
-        lambda _facts, observed_at: SimpleNamespace(session_state=_legacy()),
+        lambda _facts, observed_at, **_kwargs: SimpleNamespace(session_state=_legacy()),
     )
     monkeypatch.setattr(
         diagnostics_router,
         "project_shadow_session_state_facts",
         lambda **_kwargs: shadow,
+    )
+    monkeypatch.setattr(
+        diagnostics_router,
+        "project_machine_session_delta",
+        lambda _session, *, commit_seq, canonical: {
+            "commit_seq": str(commit_seq),
+            "state_contract_version": 1,
+            "presentation_policy_version": 1,
+            "presentation": {"primary": None, "access": None},
+        },
     )
     app = FastAPI()
     app.include_router(diagnostics_router.router, prefix="/api")
@@ -267,6 +329,15 @@ def test_diagnostics_route_reports_detail_cutover_without_claiming_authorization
     assert payload["canonical_authorization_providers"] == []
     assert payload["cutover_active"] is False
     assert payload["authorization_cutover_active"] is False
+    assert payload["explain"]["commit_seq"] == 12
+    assert payload["explain"]["state_contract_version"] == 1
+    assert payload["explain"]["presentation_policy_version"] == 1
+    assert payload["explain"]["presentation_keys"] == {
+        "primary": None,
+        "access": None,
+        "transcript": None,
+    }
+    assert payload["explain"]["actions"]["send_input"] == {"state": "available", "reason": None}
 
     monkeypatch.setenv("LONGHOUSE_SESSION_STATE_DETAIL_SERVE", "canonical")
     canonical_response = TestClient(app).get(f"/api/agents/sessions/{session_id}/state-diagnostics")
@@ -277,6 +348,7 @@ def test_diagnostics_route_reports_detail_cutover_without_claiming_authorization
     assert canonical_payload["authorization_path"] == "legacy_capabilities"
     assert canonical_payload["cutover_active"] is True
     assert canonical_payload["authorization_cutover_active"] is False
+    assert canonical_payload["explain"]["projection_parity"]["status"] == "matched"
 
     monkeypatch.setenv("LONGHOUSE_SESSION_STATE_COMMAND_AUTH", "canonical")
     command_response = TestClient(app).get(f"/api/agents/sessions/{session_id}/state-diagnostics")
@@ -340,6 +412,10 @@ def test_reducer_health_route_reports_failures_without_claiming_cutover(monkeypa
     assert payload["projected_families"] == ["mode", "disposition", "launch", "run", "activity", "control"]
     assert "transcript" in payload["unsupported_families"]
     assert payload["cutover_active"] is False
+    assert payload["contract"]["state_contract_version"] == 1
+    assert payload["contract"]["presentation_policy_version"] == 1
+    assert payload["contract"]["presentation_keys"]["primary"][-1] == "activity_unknown"
+    assert len(payload["contract"]["fingerprint"]) == 64
 
 
 def test_reducer_health_distinguishes_not_reducing_from_not_comparable(monkeypatch):

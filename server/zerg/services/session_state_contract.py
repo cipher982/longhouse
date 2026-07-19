@@ -10,6 +10,8 @@ See ``docs/specs/runtime-display-contract.md``.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import datetime
 from datetime import timezone
 from typing import Any
@@ -29,6 +31,49 @@ from zerg.utils.time import normalize_utc
 
 STATE_CONTRACT_VERSION = 1
 PRESENTATION_POLICY_VERSION = 1
+
+PRIMARY_PRESENTATION_KEYS: tuple[str, ...] = (
+    "closed",
+    "launch_failed",
+    "starting",
+    "needs_answer",
+    "needs_approval",
+    "thinking",
+    "executing",
+    "stalled",
+    "blocked",
+    "idle",
+    "ended",
+    "activity_unknown",
+)
+ACCESS_PRESENTATION_KEYS: tuple[str, ...] = (
+    "live_control",
+    "reattach",
+    "control_degraded",
+    "control_disconnected",
+    "control_unknown",
+    "read_only",
+    "observe_only",
+    "search_only",
+)
+TRANSCRIPT_PRESENTATION_KEYS: tuple[str, ...] = ("transcript_lagging",)
+
+
+def session_state_contract_manifest() -> dict[str, Any]:
+    """Return the small stable manifest clients compare during deep health."""
+
+    payload: dict[str, Any] = {
+        "state_contract_version": STATE_CONTRACT_VERSION,
+        "presentation_policy_version": PRESENTATION_POLICY_VERSION,
+        "presentation_keys": {
+            "primary": list(PRIMARY_PRESENTATION_KEYS),
+            "access": list(ACCESS_PRESENTATION_KEYS),
+            "transcript": list(TRANSCRIPT_PRESENTATION_KEYS),
+        },
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return {**payload, "fingerprint": hashlib.sha256(encoded).hexdigest()}
+
 
 ActivityState = Literal["thinking", "executing", "quiescent", "blocked", "stalled", "unknown"]
 RunLifecycle = Literal["starting", "running", "ended", "unknown"]
@@ -738,8 +783,11 @@ def build_session_state_facts(
 
 
 __all__ = [
+    "ACCESS_PRESENTATION_KEYS",
     "PRESENTATION_POLICY_VERSION",
+    "PRIMARY_PRESENTATION_KEYS",
     "STATE_CONTRACT_VERSION",
+    "TRANSCRIPT_PRESENTATION_KEYS",
     "SessionActionAvailability",
     "SessionActivityFacts",
     "SessionControlFacts",
@@ -755,4 +803,5 @@ __all__ = [
     "build_session_state_facts",
     "project_pending_interaction_facts",
     "project_transcript_facts",
+    "session_state_contract_manifest",
 ]

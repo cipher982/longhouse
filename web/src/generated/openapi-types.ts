@@ -5485,6 +5485,37 @@ export interface components {
             evidence_hash: string;
         };
         /**
+         * FactHeadDiagnostic
+         * @description Winning reducer coordinate used by the pure projection.
+         */
+        FactHeadDiagnostic: {
+            /**
+             * Family
+             * @enum {string}
+             */
+            family: "activity" | "control";
+            /** Subject Key */
+            subject_key: string;
+            /** Source */
+            source: string;
+            /** Source Epoch */
+            source_epoch: string;
+            /** Evidence Hash */
+            evidence_hash: string;
+            /**
+             * Observed At
+             * Format: date-time
+             */
+            observed_at: string;
+            /**
+             * Valid Until
+             * Format: date-time
+             */
+            valid_until: string;
+            /** Updated Commit Seq */
+            updated_commit_seq?: number | null;
+        };
+        /**
          * FiltersResponse
          * @description Response for filters endpoint.
          */
@@ -9700,6 +9731,19 @@ export interface components {
             control?: components["schemas"]["SessionStateAxisComparison"] | null;
             control_identity?: components["schemas"]["SessionControlIdentityComparison"] | null;
         };
+        /** SessionStateContractHealthResponse */
+        SessionStateContractHealthResponse: {
+            /** State Contract Version */
+            state_contract_version: number;
+            /** Presentation Policy Version */
+            presentation_policy_version: number;
+            /** Presentation Keys */
+            presentation_keys: {
+                [key: string]: string[];
+            };
+            /** Fingerprint */
+            fingerprint: string;
+        };
         /** SessionStateDiagnosticsResponse */
         SessionStateDiagnosticsResponse: {
             /**
@@ -9736,6 +9780,29 @@ export interface components {
             authorization_cutover_active?: boolean;
             shadow: components["schemas"]["ShadowSessionStateProjection"];
             comparison: components["schemas"]["SessionStateComparison"];
+            explain: components["schemas"]["SessionStateExplainResponse"];
+        };
+        /** SessionStateExplainResponse */
+        SessionStateExplainResponse: {
+            /** Commit Seq */
+            commit_seq: number;
+            /** State Contract Version */
+            state_contract_version: number;
+            /** Presentation Policy Version */
+            presentation_policy_version: number;
+            /** Presentation Keys */
+            presentation_keys: {
+                [key: string]: string | null;
+            };
+            /** Fact Sources */
+            fact_sources: {
+                [key: string]: components["schemas"]["FactHeadDiagnostic"];
+            };
+            /** Actions */
+            actions: {
+                [key: string]: components["schemas"]["SessionActionAvailability"];
+            };
+            projection_parity?: components["schemas"]["SessionStateProjectionParity"] | null;
         };
         /** SessionStateFacts */
         SessionStateFacts: {
@@ -9765,6 +9832,34 @@ export interface components {
             presentation: components["schemas"]["SessionPresentation"];
             /** Commit Seq */
             commit_seq?: number | null;
+        };
+        /** SessionStateProjectionParity */
+        SessionStateProjectionParity: {
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "matched" | "diverged" | "not_comparable";
+            canonical_facts: components["schemas"]["SessionStateProjectionSignature"];
+            compact_projection: components["schemas"]["SessionStateProjectionSignature"];
+            /**
+             * Mismatched Fields
+             * @default []
+             */
+            mismatched_fields: string[];
+        };
+        /** SessionStateProjectionSignature */
+        SessionStateProjectionSignature: {
+            /** Commit Seq */
+            commit_seq: number | null;
+            /** State Contract Version */
+            state_contract_version: number;
+            /** Presentation Policy Version */
+            presentation_policy_version: number;
+            /** Primary Key */
+            primary_key: string | null;
+            /** Access Key */
+            access_key: string | null;
         };
         /** SessionStateReducerBatchResponse */
         SessionStateReducerBatchResponse: {
@@ -9841,6 +9936,7 @@ export interface components {
             cutover_active?: boolean;
             /** Authorization Cutover Active */
             authorization_cutover_active?: boolean;
+            contract?: components["schemas"]["SessionStateContractHealthResponse"];
             /**
              * Projected Families
              * @default [
@@ -10353,6 +10449,10 @@ export interface components {
             control: components["schemas"]["SessionControlFacts"] | null;
             /** Control Run Id */
             control_run_id?: string | null;
+            /** Fact Sources */
+            fact_sources?: {
+                [key: string]: components["schemas"]["FactHeadDiagnostic"];
+            };
             /**
              * Rejected Heads
              * @default 0

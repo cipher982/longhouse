@@ -1,0 +1,89 @@
+schema_version: 1
+
+# Phase 7 conformance inventory. `validate-session-state-fault-matrix` checks
+# that every proof link remains resolvable; `test-session-state` executes the
+# linked tests. Topology faults that cannot be simulated honestly remain live
+# requirements on the exact build proposed for Phase 8 deletion.
+scenarios:
+  - id: F01
+    fault: network_loss_retry
+    deterministic:
+      - server/tests_lite/test_heartbeat_endpoint.py::test_heartbeat_omission_detaches_managed_control_without_ending_the_run
+      - server/tests_lite/test_timeline_runtime_overlay.py::test_late_phase_and_progress_do_not_reopen_ended_run_without_new_run_id
+    live: required
+    expect: [no_terminal_reopen_storm, stale_actions_denied]
+  - id: F02
+    fault: runtime_host_restart
+    deterministic:
+      - server/tests_lite/test_catalogd_process.py::test_kill_restart_recovers_wal_and_preserves_catalog_identity
+    live: required
+    expect: [durable_lifecycle_preserved, ephemeral_freshness_unknown, stale_actions_denied]
+  - id: F03
+    fault: machine_agent_restart
+    deterministic:
+      - server/tests_lite/test_catalogd_fact_reducer.py::test_unsequenced_receipts_are_bounded_and_restart_replays_same_head
+    live: required
+    expect: [durable_lifecycle_preserved, expired_heads_ignored, stale_actions_denied]
+  - id: F04
+    fault: terminal_close
+    deterministic:
+      - server/tests_lite/test_session_state_contract.py::test_process_gone_ends_run_but_does_not_close_session
+      - server/tests_lite/test_session_state_contract.py::test_explicit_user_close_dominates_all_other_axes
+    live: required
+    expect: [session_identity_preserved, run_terminal_monotonic]
+  - id: F05
+    fault: tui_gone_app_server_survives
+    deterministic:
+      - server/tests_lite/test_session_state_facts_projector.py::test_served_projector_without_control_head_fails_actions_closed
+    live: required
+    expect: [run_not_ended_by_client_loss, control_unknown_or_reattachable]
+  - id: F06
+    fault: bridge_death_execution_survives
+    deterministic:
+      - server/tests_lite/test_local_health_cli.py::test_collect_local_health_flags_dead_codex_bridge_with_orphan_app_server
+      - server/tests_lite/test_session_state_facts_projector.py::test_served_projector_without_control_head_fails_actions_closed
+    live: required
+    expect: [execution_not_called_residue, control_actions_denied]
+  - id: F07
+    fault: process_exit
+    deterministic:
+      - server/tests_lite/test_session_state_contract.py::test_process_gone_ends_run_but_does_not_close_session
+    live: required
+    expect: [run_ended_once, session_remains_open]
+  - id: F08
+    fault: stale_pid_or_state_file
+    deterministic:
+      - server/tests_lite/test_local_health_cli.py::test_opencode_server_not_live_when_pid_reused_by_other_command
+      - server/tests_lite/test_catalogd_fact_reducer.py::test_stale_position_and_old_run_cannot_mutate_current_head
+    live: optional
+    expect: [old_identity_cannot_grant_control, residue_localized]
+  - id: F09
+    fault: transcript_lag
+    deterministic:
+      - server/tests_lite/test_session_state_contract.py::test_transcript_lag_never_becomes_provider_working
+    live: optional
+    expect: [activity_unchanged, transcript_convergence_independent]
+  - id: F10
+    fault: mixed_current_and_residue
+    deterministic:
+      - server/tests_lite/test_local_health_cli.py::test_collect_local_health_flags_orphaned_managed_bridge
+    live: required
+    expect: [five_current_rows_stable, three_residues_cleanup_only]
+  - id: F11
+    fault: cross_surface_contract_drift
+    deterministic:
+      - server/tests_lite/test_session_state_diagnostics.py::test_projection_parity_detects_version_and_presentation_key_divergence
+    live: required
+    expect: [same_commit, same_versions, same_primary_and_access_keys]
+  - id: F12
+    fault: expired_control_revalidation
+    deterministic:
+      - server/tests_lite/test_session_state_facts_projector.py::test_exact_control_authorization_rejects_expiry_divergence_and_tampering
+    live: required
+    expect: [explicit_denial_reason, no_cached_capability_bypass]
+
+deletion_gate:
+  exact_build_live_scenarios: [F01, F02, F03, F04, F05, F06, F07, F10, F11, F12]
+  required_providers: [codex, claude, opencode, cursor, antigravity]
+  canonical_serve_path: canonical_session_detail
+  canonical_authorization_path: provider_scoped_canonical_control

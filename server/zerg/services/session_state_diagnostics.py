@@ -52,6 +52,88 @@ class SessionStateComparison(BaseModel):
     control_identity: SessionControlIdentityComparison | None = None
 
 
+class SessionStateProjectionSignature(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    commit_seq: int | None
+    state_contract_version: int
+    presentation_policy_version: int
+    primary_key: str | None
+    access_key: str | None
+
+
+class SessionStateProjectionParity(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    status: Literal["matched", "diverged", "not_comparable"]
+    canonical_facts: SessionStateProjectionSignature
+    compact_projection: SessionStateProjectionSignature
+    mismatched_fields: tuple[str, ...] = ()
+
+
+def compare_session_state_projections(
+    *,
+    session_state: SessionStateFacts,
+    machine_payload: dict[str, Any],
+) -> SessionStateProjectionParity:
+    """Check compact serialization against facts from one catalog snapshot."""
+
+    canonical = SessionStateProjectionSignature(
+        commit_seq=session_state.commit_seq,
+        state_contract_version=session_state.state_contract_version,
+        presentation_policy_version=session_state.presentation_policy_version,
+        primary_key=session_state.presentation.primary.key if session_state.presentation.primary else None,
+        access_key=session_state.presentation.access.key if session_state.presentation.access else None,
+    )
+    presentation = machine_payload.get("presentation")
+    if not isinstance(presentation, dict):
+        presentation = {}
+    primary = presentation.get("primary")
+    access = presentation.get("access")
+    compact = SessionStateProjectionSignature(
+        commit_seq=_optional_int(machine_payload.get("commit_seq")),
+        state_contract_version=_required_int(machine_payload.get("state_contract_version"), "state_contract_version"),
+        presentation_policy_version=_required_int(
+            machine_payload.get("presentation_policy_version"),
+            "presentation_policy_version",
+        ),
+        primary_key=primary.get("key") if isinstance(primary, dict) else None,
+        access_key=access.get("key") if isinstance(access, dict) else None,
+    )
+    if canonical.commit_seq is None or compact.commit_seq is None or canonical.commit_seq != compact.commit_seq:
+        return SessionStateProjectionParity(
+            status="not_comparable",
+            canonical_facts=canonical,
+            compact_projection=compact,
+        )
+    mismatched = tuple(
+        field
+        for field in ("state_contract_version", "presentation_policy_version", "primary_key", "access_key")
+        if getattr(canonical, field) != getattr(compact, field)
+    )
+    return SessionStateProjectionParity(
+        status="diverged" if mismatched else "matched",
+        canonical_facts=canonical,
+        compact_projection=compact,
+        mismatched_fields=mismatched,
+    )
+
+
+def _required_int(value: Any, field: str) -> int:
+    parsed = _optional_int(value)
+    if parsed is None:
+        raise ValueError(f"compact projection is missing {field}")
+    return parsed
+
+
+def _optional_int(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        raise ValueError("boolean is not an integer contract coordinate")
+    return int(value)
+
+
 def compare_session_state_axes(
     *,
     legacy: SessionStateFacts,
@@ -107,7 +189,7 @@ def _control_payload(control: SessionControlFacts | None) -> dict[str, Any] | No
         payload["connection_id"] = str(connection_id)
     actions = payload.get("actions")
     if isinstance(actions, dict):
-        payload["actions"] = {name: actions.get(name) for name in ("send_input", "interrupt", "terminate", "reattach", "resume")}
+        payload["actions"] = {name: actions[name] for name in sorted(actions)}
     return payload
 
 
@@ -204,5 +286,8 @@ __all__ = [
     "SessionStateAxisComparison",
     "SessionStateComparison",
     "SessionControlIdentityComparison",
+    "SessionStateProjectionParity",
+    "SessionStateProjectionSignature",
     "compare_session_state_axes",
+    "compare_session_state_projections",
 ]

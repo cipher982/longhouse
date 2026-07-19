@@ -23,13 +23,19 @@ from zerg.services.catalog_read_gateway import shadow_session_state_health
 from zerg.services.catalog_read_gateway import shadow_session_state_snapshot
 from zerg.services.live_catalog_timeline import canonical_session_detail_enabled
 from zerg.services.live_catalog_timeline import project_catalog_session_facts
+from zerg.services.live_catalog_timeline import project_machine_session_delta
 from zerg.services.live_control_catalog import canonical_command_authorization_enabled
 from zerg.services.live_control_catalog import canonical_command_authorization_providers
 from zerg.services.managed_provider_contracts import contract_for_provider
+from zerg.services.session_state_contract import SessionActionAvailability
+from zerg.services.session_state_contract import session_state_contract_manifest
 from zerg.services.session_state_diagnostics import SessionStateComparison
+from zerg.services.session_state_diagnostics import SessionStateProjectionParity
 from zerg.services.session_state_diagnostics import compare_session_state_axes
+from zerg.services.session_state_diagnostics import compare_session_state_projections
 from zerg.services.session_state_facts_projector import SHADOW_SUPPORTED_FAMILIES
 from zerg.services.session_state_facts_projector import SHADOW_UNSUPPORTED_FAMILIES
+from zerg.services.session_state_facts_projector import FactHeadDiagnostic
 from zerg.services.session_state_facts_projector import ShadowSessionStateProjection
 from zerg.services.session_state_facts_projector import project_shadow_session_state_facts
 from zerg.utils.time import UTCBaseModel
@@ -44,6 +50,27 @@ def _served_path() -> Literal["legacy_session_state", "canonical_session_detail"
 
 def _authorization_path() -> Literal["legacy_capabilities", "provider_scoped_canonical_control"]:
     return "provider_scoped_canonical_control" if canonical_command_authorization_enabled() else "legacy_capabilities"
+
+
+class SessionStateContractHealthResponse(UTCBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    state_contract_version: int
+    presentation_policy_version: int
+    presentation_keys: dict[str, tuple[str, ...]]
+    fingerprint: str
+
+
+class SessionStateExplainResponse(UTCBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    commit_seq: int
+    state_contract_version: int
+    presentation_policy_version: int
+    presentation_keys: dict[str, str | None]
+    fact_sources: dict[str, FactHeadDiagnostic]
+    actions: dict[str, SessionActionAvailability]
+    projection_parity: SessionStateProjectionParity | None = None
 
 
 class SessionStateDiagnosticsResponse(UTCBaseModel):
@@ -61,6 +88,11 @@ class SessionStateDiagnosticsResponse(UTCBaseModel):
     authorization_cutover_active: bool = Field(default_factory=canonical_command_authorization_enabled)
     shadow: ShadowSessionStateProjection
     comparison: SessionStateComparison
+    explain: SessionStateExplainResponse
+
+
+def _contract_health() -> SessionStateContractHealthResponse:
+    return SessionStateContractHealthResponse.model_validate(session_state_contract_manifest())
 
 
 class SessionStateReducerStorageResponse(UTCBaseModel):
@@ -108,6 +140,7 @@ class SessionStateReducerHealthResponse(UTCBaseModel):
     canonical_authorization_providers: tuple[str, ...] = Field(default_factory=canonical_command_authorization_providers)
     cutover_active: bool = Field(default_factory=canonical_session_detail_enabled)
     authorization_cutover_active: bool = Field(default_factory=canonical_command_authorization_enabled)
+    contract: SessionStateContractHealthResponse = Field(default_factory=_contract_health)
     projected_families: tuple[str, ...] = SHADOW_SUPPORTED_FAMILIES
     unsupported_families: tuple[str, ...] = SHADOW_UNSUPPORTED_FAMILIES
     storage: SessionStateReducerStorageResponse
@@ -236,10 +269,22 @@ def get_session_state_diagnostics(
         legacy_facts = snapshot["legacy_facts"]
         if not isinstance(observed_at, datetime) or not isinstance(legacy_facts, dict):
             raise ValueError("catalog diagnostic snapshot is incomplete")
-        legacy = project_catalog_session_facts(legacy_facts, observed_at=observed_at).session_state
         heads = snapshot["heads"]
         if not isinstance(heads, list):
             raise ValueError("catalog diagnostic fact heads are incomplete")
+        legacy_response = project_catalog_session_facts(legacy_facts, observed_at=observed_at)
+        legacy = legacy_response.session_state
+        served_response = (
+            project_catalog_session_facts(
+                legacy_facts,
+                observed_at=observed_at,
+                canonical_heads=heads,
+                commit_seq=commit_seq,
+            )
+            if canonical_session_detail_enabled()
+            else legacy_response
+        )
+        served = served_response.session_state
         shadow = project_shadow_session_state_facts(
             session_id=str(session_id),
             commit_seq=commit_seq,
@@ -263,6 +308,33 @@ def get_session_state_diagnostics(
             head_count=int(snapshot.get("head_count") or 0),
             shadow=shadow,
             comparison=comparison,
+            explain=SessionStateExplainResponse(
+                commit_seq=commit_seq,
+                state_contract_version=served.state_contract_version,
+                presentation_policy_version=served.presentation_policy_version,
+                presentation_keys={
+                    "primary": served.presentation.primary.key if served.presentation.primary else None,
+                    "access": served.presentation.access.key if served.presentation.access else None,
+                    "transcript": served.presentation.transcript.key if served.presentation.transcript else None,
+                },
+                fact_sources=shadow.fact_sources,
+                actions={
+                    name: getattr(served.control.actions, name)
+                    for name in ("start_turn", "send_input", "interrupt", "terminate", "reattach", "resume")
+                },
+                projection_parity=(
+                    compare_session_state_projections(
+                        session_state=served,
+                        machine_payload=project_machine_session_delta(
+                            served_response,
+                            commit_seq=commit_seq,
+                            canonical=True,
+                        ),
+                    )
+                    if canonical_session_detail_enabled()
+                    else None
+                ),
+            ),
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise HTTPException(

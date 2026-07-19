@@ -18,6 +18,7 @@ from typing import Literal
 
 from pydantic import BaseModel
 from pydantic import ConfigDict
+from pydantic import Field
 
 from zerg.machine_evidence import canonical_evidence_hash
 from zerg.services.agents.kernel_capabilities import KernelSessionCapabilities
@@ -89,8 +90,24 @@ class ShadowSessionStateProjection(BaseModel):
     activity: SessionActivityFacts
     control: SessionControlFacts | None
     control_run_id: str | None = None
+    fact_sources: dict[str, "FactHeadDiagnostic"] = Field(default_factory=dict)
     rejected_heads: int = 0
     unsupported_families: tuple[UnsupportedFactFamily, ...] = SHADOW_UNSUPPORTED_FAMILIES
+
+
+class FactHeadDiagnostic(BaseModel):
+    """Winning reducer coordinate used by the pure projection."""
+
+    model_config = ConfigDict(frozen=True)
+
+    family: Literal["activity", "control"]
+    subject_key: str
+    source: str
+    source_epoch: str
+    evidence_hash: str
+    observed_at: datetime
+    valid_until: datetime
+    updated_commit_seq: int | None = None
 
 
 class ControlFactAuthorization(BaseModel):
@@ -128,6 +145,11 @@ def project_shadow_session_state_facts(
         family="control",
         now=normalized_now,
     )
+    fact_sources = {
+        family: diagnostic
+        for family, winner in (("activity", activity_head), ("control", control_head))
+        if (diagnostic := _head_diagnostic(family, winner)) is not None
+    }
     launch = _project_launch(catalog_facts)
     return ShadowSessionStateProjection(
         commit_seq=commit_seq,
@@ -138,6 +160,7 @@ def project_shadow_session_state_facts(
         activity=_project_activity(activity_head),
         control=_project_control(control_head, supported_operations=set(supported_operations)),
         control_run_id=_control_run_id(control_head),
+        fact_sources=fact_sources,
         rejected_heads=rejected_activity + rejected_control,
     )
 
@@ -491,6 +514,26 @@ def _control_run_id(
     return _text(winner[1].get("run_id"))
 
 
+def _head_diagnostic(
+    family: Literal["activity", "control"],
+    winner: tuple[Mapping[str, Any], dict[str, Any], datetime, datetime] | None,
+) -> FactHeadDiagnostic | None:
+    if winner is None:
+        return None
+    head, _value, observed_at, valid_until = winner
+    updated_commit_seq = head.get("updated_commit_seq")
+    return FactHeadDiagnostic(
+        family=family,
+        subject_key=str(head.get("subject_key") or ""),
+        source=str(head.get("source") or ""),
+        source_epoch=str(head.get("source_epoch") or ""),
+        evidence_hash=str(head.get("evidence_hash") or ""),
+        observed_at=observed_at,
+        valid_until=valid_until,
+        updated_commit_seq=updated_commit_seq if isinstance(updated_commit_seq, int) else None,
+    )
+
+
 def _valid_until(
     family: str,
     *,
@@ -577,6 +620,7 @@ def _aware(value: datetime, field: str) -> datetime:
 
 __all__ = [
     "ControlFactAuthorization",
+    "FactHeadDiagnostic",
     "ShadowSessionStateProjection",
     "authorize_exact_control_fact",
     "project_served_session_state_facts",

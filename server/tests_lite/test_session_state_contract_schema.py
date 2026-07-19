@@ -6,7 +6,11 @@ import yaml
 
 from zerg.services.managed_provider_contracts import managed_provider_names
 from zerg.services.session_state_contract import PRESENTATION_POLICY_VERSION
+from zerg.services.session_state_contract import ACCESS_PRESENTATION_KEYS
+from zerg.services.session_state_contract import PRIMARY_PRESENTATION_KEYS
 from zerg.services.session_state_contract import STATE_CONTRACT_VERSION
+from zerg.services.session_state_contract import TRANSCRIPT_PRESENTATION_KEYS
+from zerg.services.session_state_contract import session_state_contract_manifest
 
 
 def test_session_state_contract_schema_matches_versions_and_provider_adapters():
@@ -19,3 +23,7 @@ def test_session_state_contract_schema_matches_versions_and_provider_adapters():
     assert set(schema["providers"]) == managed_provider_names()
     assert "unsupported" in schema["enums"]["action_reason"]
     assert schema["presentation"]["primary_keys"][-1] == "activity_unknown"
+    assert tuple(schema["presentation"]["primary_keys"]) == PRIMARY_PRESENTATION_KEYS
+    assert tuple(schema["presentation"]["access_keys"]) == ACCESS_PRESENTATION_KEYS
+    assert tuple(schema["presentation"]["transcript_keys"]) == TRANSCRIPT_PRESENTATION_KEYS
+    assert len(session_state_contract_manifest()["fingerprint"]) == 64

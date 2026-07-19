@@ -142,6 +142,10 @@ def test_projector_selects_newest_unexpired_head_without_commit_or_receive_ranki
     assert projection.activity.source == "a-source"
     assert projection.activity.tool == "Shell"
     assert projection.control is None
+    assert projection.fact_sources["activity"].source == "a-source"
+    assert projection.fact_sources["activity"].subject_key == "run:run-1"
+    assert projection.fact_sources["activity"].valid_until == NOW + timedelta(minutes=5)
+    assert "control" not in projection.fact_sources
     assert projection.mode == "shadow"
     assert projection.disposition.state == "open"
     assert projection.run is None
@@ -237,6 +241,8 @@ def test_projector_expires_activity_and_derives_control_lease_from_ttl():
     assert projection.control.connection_id == "connection-1"
     assert projection.control_run_id == "run-1"
     assert projection.control.valid_until == NOW + timedelta(seconds=60)
+    assert projection.fact_sources["control"].source == "provider_control"
+    assert projection.fact_sources["control"].subject_key == "connection:connection-1:lease-1"
     assert projection.control.actions.send_input.state == "available"
     assert projection.control.actions.interrupt.state == "available"
     assert projection.control.actions.terminate.reason == "not_granted"
