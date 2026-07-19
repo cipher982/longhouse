@@ -16,13 +16,12 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 use anyhow::Result;
-use chrono::Datelike;
 use chrono::DateTime;
+use chrono::Datelike;
 use chrono::SecondsFormat;
 use chrono::Utc;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use uuid::Uuid;
 
 use crate::build_identity::BuildIdentity;
 use crate::managed_antigravity_scan::AntigravityHookObservation;
@@ -224,6 +223,7 @@ pub struct ProcessSnapshotScope {
 
 #[derive(Debug, Serialize, Clone, PartialEq, Eq)]
 pub struct ReadinessEvidence {
+    pub authority_class: String,
     pub provider: String,
     pub session_id: String,
     pub operation: String,
@@ -257,6 +257,7 @@ pub struct ReadinessEvidence {
 
 #[derive(Debug, Serialize, Clone, PartialEq, Eq)]
 pub struct ProcessEvidence {
+    pub authority_class: String,
     pub provider: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
@@ -278,6 +279,7 @@ pub struct ProcessEvidence {
 
 #[derive(Debug, Serialize, Clone, PartialEq, Eq)]
 pub struct ActivityEvidence {
+    pub authority_class: String,
     pub provider: String,
     pub session_id: String,
     /// Durable run authority. Absent phase-only observations remain
@@ -301,8 +303,11 @@ pub struct ActivityEvidence {
 
 #[derive(Debug, Serialize, Clone, PartialEq, Eq)]
 pub struct ControlEvidence {
+    pub authority_class: String,
     pub provider: String,
     pub session_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provider_session_id: Option<String>,
     /// Immutable adapter connection identity plus its scoped lease epoch.
@@ -318,12 +323,15 @@ pub struct ControlEvidence {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thread_subscription_status: Option<String>,
     pub lease_ttl_ms: u64,
+    #[serde(default)]
+    pub granted_operations: Vec<String>,
     pub source: String,
     pub observed_at: String,
 }
 
 #[derive(Debug, Serialize, Clone, PartialEq, Eq)]
 pub struct TranscriptEvidence {
+    pub authority_class: String,
     pub provider: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
@@ -1028,6 +1036,7 @@ pub(crate) fn machine_evidence_from_observations(
     for obs in codex_observations {
         let at = observed_at(&obs.updated_at);
         process.push(ProcessEvidence {
+            authority_class: "exact_process_identity".to_string(),
             provider: "codex".to_string(),
             session_id: Some(obs.session_id.clone()),
             provider_session_id: obs.thread_id.clone(),
@@ -1042,6 +1051,7 @@ pub(crate) fn machine_evidence_from_observations(
         });
         if let Some(pid) = obs.app_server_pid {
             process.push(ProcessEvidence {
+                authority_class: "exact_process_identity".to_string(),
                 provider: "codex".to_string(),
                 session_id: Some(obs.session_id.clone()),
                 provider_session_id: obs.thread_id.clone(),
@@ -1055,7 +1065,7 @@ pub(crate) fn machine_evidence_from_observations(
                 observed_at: at.clone(),
             });
         }
-        if !codex_bridge_observation_is_stopped(obs) {
+        if !codex_bridge_observation_is_stopped(obs) && obs.run_id.is_some() {
             let thread_failed = matches!(
                 obs.thread_subscription_status.as_deref(),
                 Some("failed") | Some("provider_thread_switched")
@@ -1081,11 +1091,14 @@ pub(crate) fn machine_evidence_from_observations(
                 "degraded"
             };
             control.push(ControlEvidence {
+                authority_class: "provider_control".to_string(),
                 provider: "codex".to_string(),
                 session_id: obs.session_id.clone(),
                 provider_session_id: obs.thread_id.clone(),
                 connection_id: obs.connection_id.clone(),
                 lease_generation: obs.lease_generation.clone(),
+                run_id: obs.run_id.clone(),
+                granted_operations: Vec::new(),
                 ownership: "managed".to_string(),
                 state: state.to_string(),
                 bridge_status: Some(obs.status.clone()),
@@ -1102,6 +1115,7 @@ pub(crate) fn machine_evidence_from_observations(
             .filter(|value| !value.is_empty())
         {
             transcript.push(TranscriptEvidence {
+                authority_class: "source_cursor".to_string(),
                 provider: "codex".to_string(),
                 session_id: Some(obs.session_id.clone()),
                 provider_session_id: provider_session_id.to_string(),
@@ -1120,6 +1134,7 @@ pub(crate) fn machine_evidence_from_observations(
         let at = observed_at(&obs.updated_at);
         if let Some(pid) = obs.claude_pid {
             process.push(ProcessEvidence {
+                authority_class: "exact_process_identity".to_string(),
                 provider: "claude".to_string(),
                 session_id: Some(obs.session_id.clone()),
                 provider_session_id: obs.provider_session_id.clone(),
@@ -1136,6 +1151,7 @@ pub(crate) fn machine_evidence_from_observations(
         }
         if let Some(pid) = obs.bridge_pid {
             process.push(ProcessEvidence {
+                authority_class: "exact_process_identity".to_string(),
                 provider: "claude".to_string(),
                 session_id: Some(obs.session_id.clone()),
                 provider_session_id: obs.provider_session_id.clone(),
@@ -1150,36 +1166,41 @@ pub(crate) fn machine_evidence_from_observations(
                 observed_at: at.clone(),
             });
         }
-        control.push(ControlEvidence {
-            provider: "claude".to_string(),
-            session_id: obs.session_id.clone(),
-            provider_session_id: obs.provider_session_id.clone(),
-            connection_id: obs.connection_id.clone(),
-            lease_generation: obs.lease_generation.clone(),
-            ownership: "managed".to_string(),
-            state: if !obs.claude_alive {
-                "detached"
-            } else if obs.ready && obs.bridge_alive {
-                "attached"
-            } else {
-                "degraded"
-            }
-            .to_string(),
-            bridge_status: Some(
-                if obs.ready && obs.bridge_alive {
-                    "ready"
-                } else if obs.bridge_alive {
-                    "not_ready"
+        if let Some(run_id) = &obs.run_id {
+            control.push(ControlEvidence {
+                authority_class: "provider_control".to_string(),
+                provider: "claude".to_string(),
+                session_id: obs.session_id.clone(),
+                provider_session_id: obs.provider_session_id.clone(),
+                connection_id: obs.connection_id.clone(),
+                lease_generation: obs.lease_generation.clone(),
+                run_id: Some(run_id.clone()),
+                granted_operations: Vec::new(),
+                ownership: "managed".to_string(),
+                state: if !obs.claude_alive {
+                    "detached"
+                } else if obs.ready && obs.bridge_alive {
+                    "attached"
                 } else {
-                    "bridge_down"
+                    "degraded"
                 }
                 .to_string(),
-            ),
-            thread_subscription_status: None,
-            lease_ttl_ms: 15 * 60 * 1000,
-            source: "claude_channel_scan".to_string(),
-            observed_at: at.clone(),
-        });
+                bridge_status: Some(
+                    if obs.ready && obs.bridge_alive {
+                        "ready"
+                    } else if obs.bridge_alive {
+                        "not_ready"
+                    } else {
+                        "bridge_down"
+                    }
+                    .to_string(),
+                ),
+                thread_subscription_status: None,
+                lease_ttl_ms: 15 * 60 * 1000,
+                source: "claude_channel_scan".to_string(),
+                observed_at: at.clone(),
+            });
+        }
         if let Some(provider_session_id) = obs
             .provider_session_id
             .as_deref()
@@ -1187,6 +1208,7 @@ pub(crate) fn machine_evidence_from_observations(
             .filter(|value| !value.is_empty())
         {
             transcript.push(TranscriptEvidence {
+                authority_class: "source_cursor".to_string(),
                 provider: "claude".to_string(),
                 session_id: Some(obs.session_id.clone()),
                 provider_session_id: provider_session_id.to_string(),
@@ -1205,6 +1227,7 @@ pub(crate) fn machine_evidence_from_observations(
         let at = observed_at(&obs.updated_at);
         if let Some(pid) = obs.pid {
             process.push(ProcessEvidence {
+                authority_class: "exact_process_identity".to_string(),
                 provider: "opencode".to_string(),
                 session_id: Some(obs.session_id.clone()),
                 provider_session_id: Some(obs.provider_session_id.clone()),
@@ -1219,35 +1242,41 @@ pub(crate) fn machine_evidence_from_observations(
                 observed_at: at.clone(),
             });
         }
-        control.push(ControlEvidence {
-            provider: "opencode".to_string(),
-            session_id: obs.session_id.clone(),
-            provider_session_id: Some(obs.provider_session_id.clone()),
-            connection_id: obs.connection_id.clone(),
-            lease_generation: obs.lease_generation.clone(),
-            ownership: "managed".to_string(),
-            state: if !obs.server_alive {
-                "detached"
-            } else if obs.health_ready {
-                "attached"
-            } else {
-                "degraded"
-            }
-            .to_string(),
-            bridge_status: Some(
-                if obs.health_ready {
-                    "ready"
+        if let Some(run_id) = &obs.run_id {
+            control.push(ControlEvidence {
+                authority_class: "provider_control".to_string(),
+                provider: "opencode".to_string(),
+                session_id: obs.session_id.clone(),
+                provider_session_id: Some(obs.provider_session_id.clone()),
+                connection_id: obs.connection_id.clone(),
+                lease_generation: obs.lease_generation.clone(),
+                run_id: Some(run_id.clone()),
+                granted_operations: Vec::new(),
+                ownership: "managed".to_string(),
+                state: if !obs.server_alive {
+                    "detached"
+                } else if obs.health_ready {
+                    "attached"
                 } else {
-                    "health_unavailable"
+                    "degraded"
                 }
                 .to_string(),
-            ),
-            thread_subscription_status: None,
-            lease_ttl_ms: 15 * 60 * 1000,
-            source: "opencode_server_scan".to_string(),
-            observed_at: at.clone(),
-        });
+                bridge_status: Some(
+                    if obs.health_ready {
+                        "ready"
+                    } else {
+                        "health_unavailable"
+                    }
+                    .to_string(),
+                ),
+                thread_subscription_status: None,
+                lease_ttl_ms: 15 * 60 * 1000,
+                source: "opencode_server_scan".to_string(),
+                observed_at: at.clone(),
+            });
+        }
         transcript.push(TranscriptEvidence {
+            authority_class: "source_cursor".to_string(),
             provider: "opencode".to_string(),
             session_id: Some(obs.session_id.clone()),
             provider_session_id: obs.provider_session_id.clone(),
@@ -1279,6 +1308,7 @@ pub(crate) fn machine_evidence_from_observations(
         ] {
             if let Some(pid) = pid {
                 process.push(ProcessEvidence {
+                    authority_class: "exact_process_identity".to_string(),
                     provider: "cursor".to_string(),
                     session_id: Some(obs.session_id.clone()),
                     provider_session_id: None,
@@ -1293,25 +1323,31 @@ pub(crate) fn machine_evidence_from_observations(
                 });
             }
         }
-        control.push(ControlEvidence {
-            provider: "cursor".to_string(),
-            session_id: obs.session_id.clone(),
-            provider_session_id: None,
-            connection_id: obs.connection_id.clone(),
-            lease_generation: obs.lease_generation.clone(),
-            ownership: "managed".to_string(),
-            state: if obs.live { "attached" } else { "detached" }.to_string(),
-            bridge_status: Some(if obs.live { "ready" } else { "unavailable" }.to_string()),
-            thread_subscription_status: None,
-            lease_ttl_ms: 15 * 60 * 1000,
-            source: "cursor_helm_scan".to_string(),
-            observed_at: at,
-        });
+        if let Some(run_id) = &obs.run_id {
+            control.push(ControlEvidence {
+                authority_class: "provider_control".to_string(),
+                provider: "cursor".to_string(),
+                session_id: obs.session_id.clone(),
+                provider_session_id: None,
+                connection_id: obs.connection_id.clone(),
+                lease_generation: obs.lease_generation.clone(),
+                run_id: Some(run_id.clone()),
+                granted_operations: Vec::new(),
+                ownership: "managed".to_string(),
+                state: if obs.live { "attached" } else { "detached" }.to_string(),
+                bridge_status: Some(if obs.live { "ready" } else { "unavailable" }.to_string()),
+                thread_subscription_status: None,
+                lease_ttl_ms: 15 * 60 * 1000,
+                source: "cursor_helm_scan".to_string(),
+                observed_at: at,
+            });
+        }
     }
 
     for binding in unmanaged_bindings {
         if binding.pid.is_some() {
             process.push(ProcessEvidence {
+                authority_class: "exact_process_identity".to_string(),
                 provider: binding.provider.clone(),
                 session_id: None,
                 provider_session_id: Some(binding.provider_session_id.clone()),
@@ -1326,6 +1362,7 @@ pub(crate) fn machine_evidence_from_observations(
             });
         }
         transcript.push(TranscriptEvidence {
+            authority_class: "source_cursor".to_string(),
             provider: binding.provider.clone(),
             session_id: None,
             provider_session_id: binding.provider_session_id.clone(),
@@ -1345,6 +1382,7 @@ pub(crate) fn machine_evidence_from_observations(
         // a provider process. Emit that limitation honestly instead of
         // manufacturing liveness from hook readiness.
         process.push(ProcessEvidence {
+            authority_class: "exact_process_identity".to_string(),
             provider: "antigravity".to_string(),
             session_id: Some(obs.session_id.clone()),
             provider_session_id: obs.provider_session_id.clone(),
@@ -1364,6 +1402,7 @@ pub(crate) fn machine_evidence_from_observations(
             .filter(|value| !value.is_empty())
         {
             transcript.push(TranscriptEvidence {
+                authority_class: "source_cursor".to_string(),
                 provider: "antigravity".to_string(),
                 session_id: Some(obs.session_id.clone()),
                 provider_session_id: provider_session_id.to_string(),
@@ -1378,16 +1417,41 @@ pub(crate) fn machine_evidence_from_observations(
         }
     }
 
-    let managed_session_ids = codex_observations
+    let managed_run_ids = codex_observations
         .iter()
-        .map(|observation| observation.session_id.as_str())
-        .chain(claude_observations.iter().map(|observation| observation.session_id.as_str()))
-        .chain(opencode_observations.iter().map(|observation| observation.session_id.as_str()))
-        .chain(cursor_observations.iter().map(|observation| observation.session_id.as_str()))
-        .collect::<HashSet<_>>();
+        .filter_map(|observation| {
+            observation
+                .run_id
+                .as_deref()
+                .map(|run_id| (observation.session_id.as_str(), run_id))
+        })
+        .chain(claude_observations.iter().filter_map(|observation| {
+            observation
+                .run_id
+                .as_deref()
+                .map(|run_id| (observation.session_id.as_str(), run_id))
+        }))
+        .chain(opencode_observations.iter().filter_map(|observation| {
+            observation
+                .run_id
+                .as_deref()
+                .map(|run_id| (observation.session_id.as_str(), run_id))
+        }))
+        .chain(cursor_observations.iter().filter_map(|observation| {
+            observation
+                .run_id
+                .as_deref()
+                .map(|run_id| (observation.session_id.as_str(), run_id))
+        }))
+        .collect::<HashMap<_, _>>();
     let mut activity = phase_rows
         .iter()
-        .map(|row| activity_evidence_from_phase_row(row, managed_session_ids.contains(row.session_id.as_str())))
+        .filter_map(|row| {
+            managed_run_ids
+                .get(row.session_id.as_str())
+                .copied()
+                .map(|run_id| activity_evidence_from_phase_row(row, Some(run_id)))
+        })
         .collect::<Vec<_>>();
 
     process.sort_by(|a, b| {
@@ -1420,7 +1484,7 @@ pub(crate) fn machine_evidence_from_observations(
     );
 
     MachineEvidence {
-        schema_version: 2,
+        schema_version: 3,
         observed_at: envelope_observed_at.clone(),
         identities,
         process,
@@ -1785,6 +1849,7 @@ fn antigravity_readiness_evidence(
         .to_rfc3339();
 
     ReadinessEvidence {
+        authority_class: "operation_proof".to_string(),
         provider: "antigravity".to_string(),
         session_id: observation.session_id.clone(),
         operation: "send_input".to_string(),
@@ -1814,7 +1879,10 @@ fn parse_utc(value: Option<&str>) -> Option<DateTime<Utc>> {
         .map(|at| at.with_timezone(&Utc))
 }
 
-fn activity_evidence_from_phase_row(row: &PhaseLedgerRow, managed: bool) -> ActivityEvidence {
+fn activity_evidence_from_phase_row(
+    row: &PhaseLedgerRow,
+    run_id: Option<&str>,
+) -> ActivityEvidence {
     let raw_kind = row.phase.trim().to_string();
     let kind = match raw_kind.as_str() {
         "thinking" | "running" | "blocked" | "stalled" | "needs_user" | "idle" => raw_kind.clone(),
@@ -1830,9 +1898,10 @@ fn activity_evidence_from_phase_row(row: &PhaseLedgerRow, managed: bool) -> Acti
         Vec::new()
     };
     ActivityEvidence {
+        authority_class: "provider_runtime".to_string(),
         provider: row.provider.clone(),
         session_id: row.session_id.clone(),
-        run_id: managed.then(|| managed_local_run_id(&row.session_id)),
+        run_id: run_id.map(str::to_string),
         kind,
         raw_kind,
         tool_name: row.tool_name.clone(),
@@ -1843,14 +1912,6 @@ fn activity_evidence_from_phase_row(row: &PhaseLedgerRow, managed: bool) -> Acti
         raw_locator: None,
         reason_codes,
     }
-}
-
-fn managed_local_run_id(session_id: &str) -> String {
-    Uuid::new_v5(
-        &Uuid::NAMESPACE_URL,
-        format!("longhouse:managed-local-run:{session_id}").as_bytes(),
-    )
-    .to_string()
 }
 
 pub fn resolved_sessions_from_observations(
@@ -3033,6 +3094,7 @@ mod tests {
     fn test_observation(session_id: &str, ws_url: &str) -> CodexBridgeObservation {
         CodexBridgeObservation {
             session_id: session_id.to_string(),
+            run_id: Some(format!("run-{session_id}")),
             connection_id: Some(format!("connection-{session_id}")),
             lease_generation: Some(format!("lease-{session_id}")),
             state_file: PathBuf::from(format!("/tmp/{session_id}.json")),
@@ -3209,6 +3271,7 @@ mod tests {
         fn claude_obs(alive: bool, foreground: bool) -> ClaudeChannelObservation {
             ClaudeChannelObservation {
                 session_id: "claude-presence".to_string(),
+                run_id: None,
                 connection_id: None,
                 lease_generation: None,
                 provider_session_id: Some("provider-claude".to_string()),
@@ -3255,6 +3318,7 @@ mod tests {
     fn test_opencode_observation(session_id: &str, launch_mode: &str) -> OpenCodeServerObservation {
         OpenCodeServerObservation {
             session_id: session_id.to_string(),
+            run_id: Some(format!("run-{session_id}")),
             connection_id: Some(format!("connection-{session_id}")),
             lease_generation: Some(format!("lease-{session_id}")),
             provider_session_id: format!("provider-{session_id}"),
@@ -3486,6 +3550,7 @@ mod tests {
 
         let live = ClaudeChannelObservation {
             session_id: session_id.to_string(),
+            run_id: None,
             connection_id: None,
             lease_generation: None,
             provider_session_id: Some(session_id.to_string()),
@@ -3502,6 +3567,7 @@ mod tests {
         };
         let dead = ClaudeChannelObservation {
             session_id: "19b68f98-1e31-458e-b78a-6dfd062ead75".to_string(),
+            run_id: None,
             connection_id: None,
             lease_generation: None,
             provider_session_id: None,
@@ -3676,6 +3742,7 @@ mod tests {
 
         let obs = ClaudeChannelObservation {
             session_id: "managed-claude".to_string(),
+            run_id: None,
             connection_id: None,
             lease_generation: None,
             provider_session_id: Some("claude-provider-session".to_string()),
@@ -3825,6 +3892,7 @@ mod tests {
 
         let obs = ClaudeChannelObservation {
             session_id: "managed-claude".to_string(),
+            run_id: None,
             connection_id: None,
             lease_generation: None,
             provider_session_id: Some("claude-provider-session".to_string()),
@@ -3869,6 +3937,7 @@ mod tests {
     fn test_cursor_observation(session_id: &str) -> CursorHelmObservation {
         CursorHelmObservation {
             session_id: session_id.to_string(),
+            run_id: Some(format!("run-{session_id}")),
             connection_id: Some(format!("connection-{session_id}")),
             lease_generation: Some(format!("lease-{session_id}")),
             state_file: PathBuf::from(format!("/tmp/{session_id}.json")),
@@ -4038,6 +4107,7 @@ mod tests {
         };
         let obs = OpenCodeServerObservation {
             session_id: "managed-opencode".to_string(),
+            run_id: None,
             connection_id: None,
             lease_generation: None,
             provider_session_id: "opencode-native-session".to_string(),
@@ -4500,6 +4570,7 @@ mod tests {
         let codex = test_observation("codex-session", "ws://127.0.0.1:45681/session");
         let claude = ClaudeChannelObservation {
             session_id: "claude-session".to_string(),
+            run_id: Some("run-claude-session".to_string()),
             connection_id: Some("connection-claude-session".to_string()),
             lease_generation: Some("lease-claude-session".to_string()),
             provider_session_id: Some("claude-provider-session".to_string()),
@@ -4592,10 +4663,9 @@ mod tests {
             now,
         );
 
-        assert_eq!(evidence.schema_version, 2);
+        assert_eq!(evidence.schema_version, 3);
         assert!(evidence.identities.iter().any(|identity| {
-            identity.fact_family == "activity"
-                && identity.subject_key == format!("run:{}", managed_local_run_id("codex-session"))
+            identity.fact_family == "activity" && identity.subject_key == "run:run-codex-session"
         }));
         for provider in ["codex", "claude", "opencode", "cursor"] {
             assert!(evidence.identities.iter().any(|identity| {
@@ -4667,9 +4737,10 @@ mod tests {
         assert_eq!(
             evidence.activity,
             vec![ActivityEvidence {
+                authority_class: "provider_runtime".to_string(),
                 provider: "codex".to_string(),
                 session_id: "codex-session".to_string(),
-                run_id: Some(managed_local_run_id("codex-session")),
+                run_id: Some("run-codex-session".to_string()),
                 kind: "running".to_string(),
                 raw_kind: "running".to_string(),
                 tool_name: Some("Shell".to_string()),
@@ -4685,15 +4756,18 @@ mod tests {
             .process_snapshot_scopes
             .iter()
             .all(|scope| scope.complete));
-        let unknown_activity = activity_evidence_from_phase_row(&PhaseLedgerRow {
-            session_id: "future-session".to_string(),
-            provider: "future-provider".to_string(),
-            phase: "provider_custom_phase".to_string(),
-            tool_name: None,
-            source: "future_hook".to_string(),
-            observed_at: "2026-05-08T12:00:00Z".to_string(),
-            valid_until: "2026-05-08T12:01:00Z".to_string(),
-        }, false);
+        let unknown_activity = activity_evidence_from_phase_row(
+            &PhaseLedgerRow {
+                session_id: "future-session".to_string(),
+                provider: "future-provider".to_string(),
+                phase: "provider_custom_phase".to_string(),
+                tool_name: None,
+                source: "future_hook".to_string(),
+                observed_at: "2026-05-08T12:00:00Z".to_string(),
+                valid_until: "2026-05-08T12:01:00Z".to_string(),
+            },
+            None,
+        );
         assert_eq!(unknown_activity.kind, "unknown");
         assert_eq!(unknown_activity.raw_kind, "provider_custom_phase");
         assert_eq!(
@@ -4701,15 +4775,18 @@ mod tests {
             vec!["unknown_provider_activity"]
         );
 
-        let unauthoritative_terminal = activity_evidence_from_phase_row(&PhaseLedgerRow {
-            session_id: "terminal-session".to_string(),
-            provider: "codex".to_string(),
-            phase: "finished".to_string(),
-            tool_name: None,
-            source: "codex_bridge".to_string(),
-            observed_at: "2026-05-08T12:00:00Z".to_string(),
-            valid_until: "2026-05-08T12:10:00Z".to_string(),
-        }, false);
+        let unauthoritative_terminal = activity_evidence_from_phase_row(
+            &PhaseLedgerRow {
+                session_id: "terminal-session".to_string(),
+                provider: "codex".to_string(),
+                phase: "finished".to_string(),
+                tool_name: None,
+                source: "codex_bridge".to_string(),
+                observed_at: "2026-05-08T12:00:00Z".to_string(),
+                valid_until: "2026-05-08T12:10:00Z".to_string(),
+            },
+            None,
+        );
         assert_eq!(unauthoritative_terminal.kind, "unknown");
         assert_eq!(unauthoritative_terminal.raw_kind, "finished");
         assert_eq!(
@@ -4765,6 +4842,43 @@ mod tests {
     }
 
     #[test]
+    fn schema_v3_omits_authority_facts_for_pre_v3_managed_state() {
+        let now = DateTime::parse_from_rfc3339("2026-05-08T12:00:02Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let mut codex = test_observation("legacy-codex", "ws://127.0.0.1:45681/session");
+        codex.run_id = None;
+        let phase = PhaseLedgerRow {
+            session_id: codex.session_id.clone(),
+            provider: "codex".to_string(),
+            phase: "running".to_string(),
+            tool_name: None,
+            source: "codex_bridge".to_string(),
+            observed_at: "2026-05-08T12:00:00Z".to_string(),
+            valid_until: "2026-05-08T12:10:00Z".to_string(),
+        };
+
+        let evidence = machine_evidence_from_observations(
+            "cinder",
+            &[codex],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[phase],
+            true,
+            now,
+        );
+
+        assert_eq!(evidence.schema_version, 3);
+        assert!(evidence.control.is_empty());
+        assert!(evidence.activity.is_empty());
+        assert!(!evidence.process.is_empty());
+        assert!(!evidence.transcript.is_empty());
+    }
+
+    #[test]
     fn canonical_evidence_hash_matches_server_golden_vector() {
         let vector: serde_json::Value =
             serde_json::from_str(include_str!("../../schemas/machine-evidence-hash-v1.json"))
@@ -4776,10 +4890,6 @@ mod tests {
         assert_eq!(canonical, vector["canonical_json"].as_str().unwrap());
         assert_eq!(digest, vector["sha256"].as_str().unwrap());
         assert!(canonical_evidence_value(serde_json::json!({"float": 1.5})).is_err());
-        assert_eq!(
-            managed_local_run_id("codex-session"),
-            "02e1f76d-677e-5125-b577-002efa1a0fe5"
-        );
         for raw in ["-9223372036854775808", "18446744073709551615"] {
             let value: serde_json::Value = serde_json::from_str(raw).unwrap();
             assert!(canonical_evidence_value(value).is_ok());

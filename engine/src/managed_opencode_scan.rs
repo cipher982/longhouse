@@ -26,6 +26,7 @@ const DEFAULT_USERNAME: &str = "opencode";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpenCodeServerObservation {
     pub session_id: String,
+    pub run_id: Option<String>,
     pub connection_id: Option<String>,
     pub lease_generation: Option<String>,
     pub provider_session_id: String,
@@ -56,6 +57,7 @@ pub struct OpenCodeServerObservation {
 #[derive(Debug, Deserialize)]
 struct OpenCodeServerStateFile {
     session_id: Option<String>,
+    run_id: Option<String>,
     connection_id: Option<String>,
     lease_generation: Option<String>,
     provider_session_id: Option<String>,
@@ -212,6 +214,7 @@ fn observations_from_candidates(
         .zip(health)
         .map(|(candidate, health_ready)| OpenCodeServerObservation {
             session_id: candidate.session_id,
+            run_id: candidate.state.run_id,
             connection_id: candidate.state.connection_id,
             lease_generation: candidate.state.lease_generation,
             provider_session_id: candidate.provider_session_id,

@@ -143,6 +143,7 @@ def _hide_empty_human_launch_shells(connection: Connection) -> None:
 _FACT_REDUCER_V1_TABLES = ("fact_heads", "fact_receipts", "fact_conflicts")
 _FACT_REDUCER_TABLES = (*_FACT_REDUCER_V1_TABLES, "fact_parity_deltas")
 _FACT_REDUCER_V1_GENERATION = "edc85ddb74216aec3eca96e055a821bcd317f6ab8563c02e786f99556b1bea92"
+_FACT_REDUCER_V2_GENERATION = "cb7f217f33511609b328bc480d7e63325ecafb95504bd28ffae3eb80b8c142e7"
 
 
 def _fact_reducer_generation() -> str:
@@ -271,6 +272,24 @@ def _initialize_fact_reducer_schema_in_transaction(connection: Connection) -> No
             if present != set(_FACT_REDUCER_V1_TABLES):
                 raise CatalogSchemaMismatchError("catalog fact reducer v1 schema is partial")
             CatalogBase.metadata.tables["fact_parity_deltas"].create(bind=connection)
+            present = set(_FACT_REDUCER_TABLES)
+            marker = _FACT_REDUCER_V2_GENERATION
+        if marker == _FACT_REDUCER_V2_GENERATION:
+            if present != set(_FACT_REDUCER_TABLES):
+                raise CatalogSchemaMismatchError("catalog fact reducer v2 schema is partial")
+            head_columns = {row[1] for row in connection.exec_driver_sql("PRAGMA table_info(fact_heads)")}
+            head_indexes = {row[1] for row in connection.exec_driver_sql("PRAGMA index_list(fact_heads)")}
+            if "session_id" in head_columns or "ix_fact_heads_session_family_recent" in head_indexes:
+                raise CatalogSchemaMismatchError("catalog fact reducer v2 schema is ambiguous")
+            connection.exec_driver_sql("ALTER TABLE fact_heads ADD COLUMN session_id VARCHAR(255)")
+            connection.exec_driver_sql(
+                "CREATE INDEX ix_fact_heads_session_family_recent " "ON fact_heads(session_id, family, updated_commit_seq)"
+            )
+            # Schema-v2 facts lack authority classes and true launch-scoped run
+            # identities. Rebuild shadow-only state instead of projecting mixed
+            # generations. The surrounding BEGIN IMMEDIATE makes this atomic.
+            for table_name in ("fact_parity_deltas", "fact_conflicts", "fact_receipts", "fact_heads"):
+                connection.exec_driver_sql(f"DELETE FROM {table_name}")
             _validate_fact_reducer_schema(connection)
             connection.exec_driver_sql(
                 "UPDATE catalog_meta SET fact_reducer_generation = ? WHERE singleton = 1",

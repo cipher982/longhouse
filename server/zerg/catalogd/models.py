@@ -28,6 +28,7 @@ class FactHead(CatalogBase):
     subject_key = Column(String(1024), primary_key=True)
     source = Column(String(64), primary_key=True)
     source_epoch = Column(String(255), primary_key=True, server_default=text("''"))
+    session_id = Column(String(255), nullable=True)
     ordering_mode = Column(String(16), nullable=False)
     source_seq = Column(BigInteger, nullable=True)
     evidence_hash = Column(String(64), nullable=False)
@@ -41,6 +42,7 @@ class FactHead(CatalogBase):
     __table_args__ = (
         Index("ix_fact_heads_subject", "family", "subject_key"),
         Index("ix_fact_heads_family_recent", "family", "updated_commit_seq"),
+        Index("ix_fact_heads_session_family_recent", "session_id", "family", "updated_commit_seq"),
     )
 
 

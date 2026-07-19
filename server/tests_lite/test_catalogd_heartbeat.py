@@ -93,8 +93,9 @@ def _lease(
     }
 
 
-def _schema_v2_evidence(*, session_id: str, run_id: str, observed_at: datetime) -> dict:
+def _schema_v3_evidence(*, session_id: str, run_id: str, observed_at: datetime) -> dict:
     fact = {
+        "authority_class": "provider_runtime",
         "provider": "codex",
         "session_id": session_id,
         "run_id": run_id,
@@ -106,7 +107,7 @@ def _schema_v2_evidence(*, session_id: str, run_id: str, observed_at: datetime) 
     }
     evidence_hash = canonical_evidence_hash(fact)
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "activity": [fact],
         "identities": [
             {
@@ -124,15 +125,18 @@ def _schema_v2_evidence(*, session_id: str, run_id: str, observed_at: datetime) 
     }
 
 
-def _schema_v2_control_evidence(*, session_id: str, observed_at: datetime) -> dict:
+def _schema_v3_control_evidence(*, session_id: str, observed_at: datetime) -> dict:
     connection_id = str(uuid4())
     lease_generation = str(uuid4())
     fact = {
+        "authority_class": "provider_control",
         "provider": "codex",
         "session_id": session_id,
         "provider_session_id": f"provider-{session_id}",
         "connection_id": connection_id,
         "lease_generation": lease_generation,
+        "run_id": str(uuid4()),
+        "granted_operations": [],
         "ownership": "managed",
         "state": "attached",
         "bridge_status": "ready",
@@ -143,7 +147,7 @@ def _schema_v2_control_evidence(*, session_id: str, observed_at: datetime) -> di
     }
     evidence_hash = canonical_evidence_hash(fact)
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "control": [fact],
         "identities": [
             {
@@ -159,6 +163,20 @@ def _schema_v2_control_evidence(*, session_id: str, observed_at: datetime) -> di
             }
         ],
     }
+
+
+def test_schema_v2_evidence_is_retained_but_not_shadow_reduced():
+    evidence = _schema_v3_evidence(session_id=str(uuid4()), run_id=str(uuid4()), observed_at=datetime.now(UTC))
+    evidence["schema_version"] = 2
+
+    status, facts, disabled_sources = catalog_store._shadow_facts_from_heartbeat(
+        {"raw_json": json.dumps({"machine_evidence": evidence})},
+        filter_disabled_sources=False,
+    )
+
+    assert status == "unsupported_schema"
+    assert facts == []
+    assert disabled_sources == 0
 
 
 @pytest.mark.asyncio
@@ -301,7 +319,7 @@ async def test_shadow_reducer_uses_heartbeat_transaction_and_one_commit_sequence
     now = datetime.now(UTC).replace(microsecond=0)
     session_id = str(uuid4())
     run_id = str(uuid4())
-    evidence = _schema_v2_evidence(session_id=session_id, run_id=run_id, observed_at=now)
+    evidence = _schema_v3_evidence(session_id=session_id, run_id=run_id, observed_at=now)
     heartbeat = _heartbeat(device_id="cinder", received_at=now, digest="digest-1")
     heartbeat["raw_json"] = json.dumps({"machine_evidence": evidence})
     params = {
@@ -348,6 +366,7 @@ async def test_shadow_reducer_uses_heartbeat_transaction_and_one_commit_sequence
     with engine.connect() as connection:
         head = connection.execute(FactHead.__table__.select()).mappings().one()
         assert head["subject_key"] == f"run:{run_id}"
+        assert head["session_id"] == session_id
         assert head["updated_commit_seq"] == 1
         assert connection.execute(LiveHeartbeatStamp.__table__.select()).fetchall()
     engine.dispose()
@@ -359,7 +378,7 @@ async def test_shadow_reducer_validation_failure_preserves_legacy_heartbeat(daem
     database_path, socket_path = daemon_paths
     now = datetime.now(UTC).replace(microsecond=0)
     session_id = str(uuid4())
-    evidence = _schema_v2_evidence(session_id=session_id, run_id=str(uuid4()), observed_at=now)
+    evidence = _schema_v3_evidence(session_id=session_id, run_id=str(uuid4()), observed_at=now)
     evidence["identities"][0]["evidence_hash"] = "0" * 64
     heartbeat = _heartbeat(device_id="cinder", received_at=now, digest="invalid-evidence")
     heartbeat["raw_json"] = json.dumps({"machine_evidence": evidence})
@@ -402,7 +421,7 @@ async def test_shadow_reducer_statement_failure_rolls_back_only_savepoint(daemon
     database_path, socket_path = daemon_paths
     now = datetime.now(UTC).replace(microsecond=0)
     session_id = str(uuid4())
-    evidence = _schema_v2_evidence(session_id=session_id, run_id=str(uuid4()), observed_at=now)
+    evidence = _schema_v3_evidence(session_id=session_id, run_id=str(uuid4()), observed_at=now)
     heartbeat = _heartbeat(device_id="cinder", received_at=now, digest="statement-failure")
     heartbeat["raw_json"] = json.dumps({"machine_evidence": evidence})
     params = {
@@ -447,7 +466,7 @@ async def test_shadow_reducer_invalidated_connection_aborts_outer_heartbeat(daem
     database_path, socket_path = daemon_paths
     now = datetime.now(UTC).replace(microsecond=0)
     session_id = str(uuid4())
-    evidence = _schema_v2_evidence(session_id=session_id, run_id=str(uuid4()), observed_at=now)
+    evidence = _schema_v3_evidence(session_id=session_id, run_id=str(uuid4()), observed_at=now)
     heartbeat = _heartbeat(device_id="cinder", received_at=now, digest="invalidated")
     heartbeat["raw_json"] = json.dumps({"machine_evidence": evidence})
     params = {
@@ -482,7 +501,7 @@ async def test_shadow_reducer_disabled_source_skips_only_reducer_writes(daemon_p
     database_path, socket_path = daemon_paths
     now = datetime.now(UTC).replace(microsecond=0)
     session_id = str(uuid4())
-    evidence = _schema_v2_evidence(session_id=session_id, run_id=str(uuid4()), observed_at=now)
+    evidence = _schema_v3_evidence(session_id=session_id, run_id=str(uuid4()), observed_at=now)
     heartbeat = _heartbeat(device_id="cinder", received_at=now, digest="disabled-source")
     heartbeat["raw_json"] = json.dumps({"machine_evidence": evidence})
     params = {
@@ -518,7 +537,7 @@ async def test_shadow_parity_is_independent_and_upserts_bounded_candidate_delta(
     database_path, socket_path = daemon_paths
     now = datetime.now(UTC).replace(microsecond=0)
     session_id = str(uuid4())
-    evidence = _schema_v2_control_evidence(session_id=session_id, observed_at=now)
+    evidence = _schema_v3_control_evidence(session_id=session_id, observed_at=now)
     evidence["control"][0]["state"] = "degraded"
     evidence["identities"][0]["evidence_hash"] = canonical_evidence_hash(evidence["control"][0])
     heartbeat = _heartbeat(device_id="cinder", received_at=now, digest="parity-seed")
@@ -615,7 +634,7 @@ async def test_shadow_parity_uses_normalized_legacy_control_rows(daemon_paths, m
     database_path, socket_path = daemon_paths
     now = datetime.now(UTC).replace(microsecond=0)
     session_id = str(uuid4())
-    evidence = _schema_v2_control_evidence(session_id=session_id, observed_at=now)
+    evidence = _schema_v3_control_evidence(session_id=session_id, observed_at=now)
     heartbeat = _heartbeat(device_id="cinder", received_at=now, digest="normalized-parity")
     heartbeat["raw_json"] = json.dumps({"machine_evidence": evidence})
     params = {
@@ -660,7 +679,7 @@ async def test_shadow_parity_skips_when_legacy_snapshot_is_unavailable(daemon_pa
     database_path, socket_path = daemon_paths
     now = datetime.now(UTC).replace(microsecond=0)
     session_id = str(uuid4())
-    evidence = _schema_v2_control_evidence(session_id=session_id, observed_at=now)
+    evidence = _schema_v3_control_evidence(session_id=session_id, observed_at=now)
     heartbeat = _heartbeat(device_id="cinder", received_at=now, digest="snapshot-seed")
     heartbeat["raw_json"] = json.dumps({"machine_evidence": evidence})
     seed = {
@@ -716,7 +735,7 @@ async def test_shadow_parity_failure_rolls_back_only_parity_savepoint(daemon_pat
     database_path, socket_path = daemon_paths
     now = datetime.now(UTC).replace(microsecond=0)
     session_id = str(uuid4())
-    evidence = _schema_v2_control_evidence(session_id=session_id, observed_at=now)
+    evidence = _schema_v3_control_evidence(session_id=session_id, observed_at=now)
     evidence["control"][0]["state"] = "degraded"
     evidence["identities"][0]["evidence_hash"] = canonical_evidence_hash(evidence["control"][0])
     heartbeat = _heartbeat(device_id="cinder", received_at=now, digest="parity-failure")
@@ -755,7 +774,7 @@ async def test_outer_rollback_does_not_advance_shadow_parity_count_cache(daemon_
     database_path, socket_path = daemon_paths
     now = datetime.now(UTC).replace(microsecond=0)
     session_id = str(uuid4())
-    evidence = _schema_v2_control_evidence(session_id=session_id, observed_at=now)
+    evidence = _schema_v3_control_evidence(session_id=session_id, observed_at=now)
     evidence["control"][0]["state"] = "degraded"
     evidence["identities"][0]["evidence_hash"] = canonical_evidence_hash(evidence["control"][0])
     heartbeat = _heartbeat(device_id="cinder", received_at=now, digest="outer-rollback")
@@ -802,7 +821,7 @@ async def test_shadow_parity_explicitly_reports_activity_as_unsupported(daemon_p
     database_path, socket_path = daemon_paths
     now = datetime.now(UTC).replace(microsecond=0)
     session_id = str(uuid4())
-    evidence = _schema_v2_evidence(session_id=session_id, run_id=str(uuid4()), observed_at=now)
+    evidence = _schema_v3_evidence(session_id=session_id, run_id=str(uuid4()), observed_at=now)
     heartbeat = _heartbeat(device_id="cinder", received_at=now, digest="activity-unsupported")
     heartbeat["raw_json"] = json.dumps({"machine_evidence": evidence})
     params = {

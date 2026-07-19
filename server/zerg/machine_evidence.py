@@ -1,4 +1,4 @@
-"""Pure schema-v2 machine-evidence identity and hashing contract."""
+"""Pure machine-evidence identity, authority, and hashing contract."""
 
 from __future__ import annotations
 
@@ -23,6 +23,14 @@ _SUBJECT_PREFIX = {
     "transcript": "thread:",
     "readiness": "readiness:",
 }
+_AUTHORITY_CLASS = {
+    "process": "exact_process_identity",
+    "activity": "provider_runtime",
+    "control": "provider_control",
+    "transcript": "source_cursor",
+    "readiness": "operation_proof",
+}
+_GRANTED_OPERATIONS = frozenset({"send_input", "interrupt", "terminate", "tail_output", "resume"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,12 +76,21 @@ def _canonical_value(value: Any, field: str | None = None) -> Any:
 def validate_machine_evidence_identities(evidence: object) -> list[ValidatedEvidenceIdentity]:
     """Validate every reducer identity against its typed fact and content."""
 
-    if not isinstance(evidence, dict) or evidence.get("schema_version") != 2:
+    if not isinstance(evidence, dict) or evidence.get("schema_version") not in {2, 3}:
         return []
+    schema_version = evidence["schema_version"]
     identities = evidence.get("identities")
     if not isinstance(identities, list) or len(identities) > MAX_REDUCER_EVIDENCE_FACTS:
         raise ValueError(f"machine evidence identities must contain at most {MAX_REDUCER_EVIDENCE_FACTS} rows")
     families = {family: evidence.get(family) for family in _SUBJECT_PREFIX}
+    if schema_version == 3:
+        for family, rows in families.items():
+            if not isinstance(rows, list):
+                continue
+            for value in rows:
+                if not isinstance(value, dict):
+                    raise ValueError("machine evidence fact must be an object")
+                _validate_v3_authority(family, value)
     validated: list[ValidatedEvidenceIdentity] = []
     seen: set[tuple[str, int]] = set()
     for identity in identities:
@@ -130,6 +147,20 @@ def validate_machine_evidence_identities(evidence: object) -> list[ValidatedEvid
             )
         )
     return validated
+
+
+def _validate_v3_authority(family: str, value: dict[str, Any]) -> None:
+    expected = _AUTHORITY_CLASS[family]
+    if value.get("authority_class") != expected:
+        raise ValueError(f"machine evidence {family} authority_class must be {expected}")
+    if family != "control":
+        return
+    _required_component(value, "run_id")
+    operations = value.get("granted_operations")
+    if not isinstance(operations, list) or any(not isinstance(operation, str) for operation in operations):
+        raise ValueError("machine evidence control granted_operations must be a string list")
+    if operations != sorted(set(operations)) or any(operation not in _GRANTED_OPERATIONS for operation in operations):
+        raise ValueError("machine evidence control granted_operations must be sorted, unique, and supported")
 
 
 def _validate_subject_key(family: str, subject_key: str, value: dict[str, Any]) -> None:

@@ -4455,6 +4455,7 @@ mod tests {
     ) -> managed_bridge_scan::CodexBridgeObservation {
         managed_bridge_scan::CodexBridgeObservation {
             session_id: "sess-codex-managed".to_string(),
+            run_id: None,
             connection_id: None,
             lease_generation: None,
             state_file: PathBuf::from("/tmp/sess-codex-managed.json"),

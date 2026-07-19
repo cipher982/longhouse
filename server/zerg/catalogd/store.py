@@ -8315,7 +8315,7 @@ def _apply_shadow_reducer(
     received_at: datetime,
     commit_seq: int,
 ) -> dict[str, Any]:
-    """Reduce retained schema-v2 evidence without affecting legacy heartbeat writes."""
+    """Reduce retained schema-v3 evidence without affecting legacy heartbeat writes."""
 
     if os.getenv(_SHADOW_REDUCER_INGEST_ENV, "").strip().lower() not in _TRUTHY_ENV:
         return {"status": "disabled"}
@@ -8489,7 +8489,7 @@ def _shadow_facts_from_heartbeat(heartbeat: dict[str, Any], *, filter_disabled_s
     if not isinstance(payload, dict) or "machine_evidence" not in payload:
         return "no_evidence", [], 0
     evidence = payload["machine_evidence"]
-    if not isinstance(evidence, dict) or evidence.get("schema_version") != 2:
+    if not isinstance(evidence, dict) or evidence.get("schema_version") != 3:
         return "unsupported_schema", [], 0
     disabled_sources = (
         {source.strip() for source in os.getenv(_SHADOW_REDUCER_DISABLED_SOURCES_ENV, "").split(",") if source.strip()}

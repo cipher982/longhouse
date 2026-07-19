@@ -133,6 +133,8 @@ def test_existing_reducer_generation_atomically_adopts_parity_diagnostics(tmp_pa
     initialize_catalog_schema(engine)
     with engine.begin() as connection:
         connection.exec_driver_sql("DROP TABLE fact_parity_deltas")
+        connection.exec_driver_sql("DROP INDEX ix_fact_heads_session_family_recent")
+        connection.exec_driver_sql("ALTER TABLE fact_heads DROP COLUMN session_id")
         connection.exec_driver_sql(
             "UPDATE catalog_meta SET fact_reducer_generation = ? WHERE singleton = 1",
             (catalog_schema._FACT_REDUCER_V1_GENERATION,),

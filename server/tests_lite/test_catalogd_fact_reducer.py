@@ -103,6 +103,7 @@ def test_canonical_hash_preserves_unparseable_declared_timestamps(value):
 
 def test_extraction_rejects_subject_that_does_not_match_explicit_run_id():
     value = {
+        "authority_class": "provider_runtime",
         "provider": "codex",
         "session_id": "session-1",
         "run_id": "run-1",
@@ -112,7 +113,7 @@ def test_extraction_rejects_subject_that_does_not_match_explicit_run_id():
     }
     evidence_hash = canonical_evidence_hash(value)
     envelope = {
-        "schema_version": 2,
+        "schema_version": 3,
         "activity": [value],
         "identities": [
             {

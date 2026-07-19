@@ -149,6 +149,7 @@ class ManagedSessionLeaseIn(UTCBaseModel):
 
 
 class ProcessEvidenceIn(UTCBaseModel):
+    authority_class: Literal["exact_process_identity"] | None = None
     provider: str = Field(..., max_length=64)
     session_id: str | None = Field(None, max_length=255)
     provider_session_id: str | None = Field(None, max_length=255)
@@ -164,6 +165,7 @@ class ProcessEvidenceIn(UTCBaseModel):
 
 
 class ActivityEvidenceIn(UTCBaseModel):
+    authority_class: Literal["provider_runtime"] | None = None
     provider: str = Field(..., max_length=64)
     session_id: str = Field(..., max_length=255)
     run_id: str | None = Field(None, min_length=1, max_length=255)
@@ -179,12 +181,17 @@ class ActivityEvidenceIn(UTCBaseModel):
 
 
 class ControlEvidenceIn(UTCBaseModel):
+    authority_class: Literal["provider_control"] | None = None
     # Antigravity has transcript/process observation but no managed control
     # scanner in schema v1. Do not retain claims the Machine Agent cannot make.
     provider: Literal["codex", "claude", "opencode", "cursor"]
     session_id: str = Field(..., max_length=255)
     connection_id: str | None = Field(None, min_length=1, max_length=255)
     lease_generation: str | None = Field(None, min_length=1, max_length=255)
+    run_id: str | None = Field(None, min_length=1, max_length=255)
+    granted_operations: list[Literal["send_input", "interrupt", "terminate", "tail_output", "resume"]] = Field(
+        default_factory=list, max_length=5
+    )
     provider_session_id: str | None = Field(None, max_length=255)
     ownership: Literal["managed"]
     state: Literal["attached", "detached", "degraded"]
@@ -196,6 +203,7 @@ class ControlEvidenceIn(UTCBaseModel):
 
 
 class TranscriptEvidenceIn(UTCBaseModel):
+    authority_class: Literal["source_cursor"] | None = None
     provider: str = Field(..., max_length=64)
     session_id: str | None = Field(None, max_length=255)
     provider_session_id: str = Field(..., max_length=255)
@@ -218,6 +226,7 @@ class ProcessSnapshotScopeIn(UTCBaseModel):
 
 
 class ReadinessEvidenceIn(UTCBaseModel):
+    authority_class: Literal["operation_proof"] | None = None
     provider: Literal["antigravity"]
     session_id: str = Field(..., max_length=255)
     operation: Literal["send_input"]
@@ -253,7 +262,7 @@ class EvidenceIdentityIn(UTCBaseModel):
 
 
 class MachineEvidenceIn(UTCBaseModel):
-    schema_version: Literal[1, 2]
+    schema_version: Literal[1, 2, 3]
     observed_at: datetime
     identities: list[EvidenceIdentityIn] = Field(default_factory=list, max_length=MAX_REDUCER_EVIDENCE_FACTS)
     process: list[ProcessEvidenceIn] = Field(default_factory=list, max_length=MAX_MACHINE_EVIDENCE_FACTS_PER_FAMILY)

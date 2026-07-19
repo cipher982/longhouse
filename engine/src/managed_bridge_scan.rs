@@ -23,6 +23,7 @@ use crate::process_identity::{command_contains_basename, lstart_matches_recorded
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CodexBridgeObservation {
     pub session_id: String,
+    pub run_id: Option<String>,
     pub connection_id: Option<String>,
     pub lease_generation: Option<String>,
     pub state_file: PathBuf,
@@ -171,6 +172,7 @@ pub(crate) fn collect_observations_from_paths(
 
         out.push(CodexBridgeObservation {
             session_id,
+            run_id: state.run_id,
             connection_id: state.connection_id,
             lease_generation: state.lease_generation,
             state_file: path.to_path_buf(),

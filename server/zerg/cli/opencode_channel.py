@@ -80,6 +80,7 @@ class OpenCodeServerBridgeState:
     launch_mode: str = ""
     owner_wrapper_pid: int = 0
     owner_wrapper_start_time: str = ""
+    run_id: str = ""
     connection_id: str = ""
     lease_generation: str = ""
 
@@ -103,6 +104,7 @@ class OpenCodeServerBridgeState:
             launch_mode=str(payload.get("launch_mode") or ""),
             owner_wrapper_pid=int(payload.get("owner_wrapper_pid") or 0),
             owner_wrapper_start_time=str(payload.get("owner_wrapper_start_time") or ""),
+            run_id=str(payload.get("run_id") or ""),
             connection_id=str(payload.get("connection_id") or ""),
             lease_generation=str(payload.get("lease_generation") or ""),
         )
@@ -568,6 +570,7 @@ def launch_opencode_server_bridge(
                 launch_mode=launch_mode,
                 owner_wrapper_pid=resolved_owner_pid,
                 owner_wrapper_start_time=owner_identity[0] if owner_identity else "",
+                run_id=str(uuid4()),
                 connection_id=str(uuid4()),
                 lease_generation=str(uuid4()),
             )

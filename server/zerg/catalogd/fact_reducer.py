@@ -43,6 +43,7 @@ class ReducerFact:
     evidence_hash: str
     value: dict[str, Any]
     observed_at: datetime | None
+    session_id: str | None = None
     valid_until: datetime | None = None
     raw_locator: str | None = None
 
@@ -57,7 +58,10 @@ class ReducerResult:
 
 
 def reducer_facts_from_machine_evidence(evidence: object) -> list[ReducerFact]:
-    """Validate and extract the bounded reducer-eligible subset of schema v2."""
+    """Validate and extract the bounded reducer-eligible subset of schema v3."""
+
+    if not isinstance(evidence, dict) or evidence.get("schema_version") != 3:
+        return []
 
     facts: list[ReducerFact] = []
     for identity in validate_machine_evidence_identities(evidence):
@@ -76,6 +80,7 @@ def reducer_facts_from_machine_evidence(evidence: object) -> list[ReducerFact]:
                 evidence_hash=identity.evidence_hash,
                 value=value,
                 observed_at=observed_at,
+                session_id=value.get("session_id") if isinstance(value.get("session_id"), str) else None,
                 valid_until=valid_until,
                 raw_locator=raw_locator if isinstance(raw_locator, str) else None,
             )
@@ -215,6 +220,7 @@ def reduce_fact_batch(
 
         seq = commit_seq()
         values = {
+            "session_id": fact.session_id,
             "ordering_mode": ordering_mode,
             "source_seq": fact.source_seq,
             "evidence_hash": fact.evidence_hash,
@@ -337,6 +343,8 @@ def _validate_fact(fact: ReducerFact) -> ReducerFact:
         raise ValueError("fact subject_key is missing or too long")
     if not fact.source or len(fact.source) > 64:
         raise ValueError("fact source is missing or too long")
+    if fact.session_id is not None and (not fact.session_id.strip() or len(fact.session_id) > 255):
+        raise ValueError("fact session_id is empty or too long")
     if len(fact.source_epoch) > 255:
         raise ValueError("fact source_epoch is too long")
     if fact.source_seq is not None and fact.source_seq < 0:

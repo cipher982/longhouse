@@ -45,7 +45,7 @@ const THREAD_SUBSCRIBE_RETRY_ATTEMPTS: usize = 8;
 const THREAD_SUBSCRIBE_RETRY_DELAY_MS: u64 = 250;
 const CODEX_DISABLE_UPDATE_CHECK_CONFIG: &str = "check_for_update_on_startup=false";
 pub const CODEX_BRIDGE_TOKEN_ENV: &str = "LONGHOUSE_CODEX_BRIDGE_TOKEN";
-pub const BRIDGE_STATE_SCHEMA_VERSION: u32 = 3;
+pub const BRIDGE_STATE_SCHEMA_VERSION: u32 = 4;
 pub const LAUNCH_MODE_DETACHED_UI: &str = "detached_ui";
 pub const LAUNCH_MODE_TUI: &str = "tui";
 const PAUSE_KIND_STRUCTURED_QUESTION: &str = "structured_question";
@@ -141,6 +141,7 @@ pub struct BridgeRunConfig {
     /// invocations leave both fields unset and receive a fresh identity.
     pub connection_id: Option<String>,
     pub lease_generation: Option<String>,
+    pub run_id: Option<String>,
     pub cwd: PathBuf,
     pub api_url: String,
     pub api_token: String,
@@ -243,6 +244,8 @@ pub struct BridgeStateFile {
     #[serde(default = "default_bridge_state_schema_version")]
     pub schema_version: u32,
     pub session_id: String,
+    #[serde(default)]
+    pub run_id: Option<String>,
     #[serde(default)]
     pub connection_id: Option<String>,
     #[serde(default)]
@@ -727,6 +730,7 @@ pub async fn cmd_codex_bridge_start(config: BridgeStartConfig) -> Result<BridgeS
     let mut state = BridgeStateFile {
         schema_version: BRIDGE_STATE_SCHEMA_VERSION,
         session_id: config.session_id.clone(),
+        run_id: Some(Uuid::new_v4().to_string()),
         connection_id: Some(Uuid::new_v4().to_string()),
         lease_generation: Some(Uuid::new_v4().to_string()),
         cwd: config.cwd.display().to_string(),
@@ -793,8 +797,15 @@ pub async fn cmd_codex_bridge_start(config: BridgeStartConfig) -> Result<BridgeS
         .stdin(Stdio::null())
         .env(CODEX_BRIDGE_TOKEN_ENV, &config.api_token);
     child
+        .arg("--run-id")
+        .arg(state.run_id.as_deref().expect("new bridge run id"))
         .arg("--connection-id")
-        .arg(state.connection_id.as_deref().expect("new bridge connection id"))
+        .arg(
+            state
+                .connection_id
+                .as_deref()
+                .expect("new bridge connection id"),
+        )
         .arg("--lease-generation")
         .arg(
             state
@@ -923,13 +934,15 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
         resume_thread_id.as_deref(),
         resume_thread_path.as_deref(),
     )?;
-    let (connection_id, lease_generation) = resolve_launch_control_identity(
+    let (run_id, connection_id, lease_generation) = resolve_launch_identity(
+        config.run_id.clone(),
         config.connection_id.clone(),
         config.lease_generation.clone(),
     )?;
     let initial_state = BridgeStateFile {
         schema_version: BRIDGE_STATE_SCHEMA_VERSION,
         session_id: config.session_id.clone(),
+        run_id: Some(run_id),
         connection_id: Some(connection_id),
         lease_generation: Some(lease_generation),
         cwd: config.cwd.display().to_string(),
@@ -1142,6 +1155,7 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
         state: BridgeStateFile {
             schema_version: BRIDGE_STATE_SCHEMA_VERSION,
             session_id: config.session_id.clone(),
+            run_id: initial_state.run_id.clone(),
             connection_id: initial_state.connection_id.clone(),
             lease_generation: initial_state.lease_generation.clone(),
             cwd: config.cwd.display().to_string(),
@@ -1355,18 +1369,24 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
     Ok(())
 }
 
-fn resolve_launch_control_identity(
+fn resolve_launch_identity(
+    run_id: Option<String>,
     connection_id: Option<String>,
     lease_generation: Option<String>,
-) -> Result<(String, String)> {
-    match (connection_id, lease_generation) {
-        (None, None) => Ok((Uuid::new_v4().to_string(), Uuid::new_v4().to_string())),
-        (Some(connection_id), Some(lease_generation)) => {
+) -> Result<(String, String, String)> {
+    match (run_id, connection_id, lease_generation) {
+        (None, None, None) => Ok((
+            Uuid::new_v4().to_string(),
+            Uuid::new_v4().to_string(),
+            Uuid::new_v4().to_string(),
+        )),
+        (Some(run_id), Some(connection_id), Some(lease_generation)) => {
+            Uuid::parse_str(&run_id).context("invalid --run-id")?;
             Uuid::parse_str(&connection_id).context("invalid --connection-id")?;
             Uuid::parse_str(&lease_generation).context("invalid --lease-generation")?;
-            Ok((connection_id, lease_generation))
+            Ok((run_id, connection_id, lease_generation))
         }
-        _ => bail!("--connection-id and --lease-generation must be supplied together"),
+        _ => bail!("--run-id, --connection-id, and --lease-generation must be supplied together"),
     }
 }
 
@@ -5343,6 +5363,7 @@ mod tests {
             state: BridgeStateFile {
                 schema_version: BRIDGE_STATE_SCHEMA_VERSION,
                 session_id: "session-123".to_string(),
+                run_id: None,
                 connection_id: None,
                 lease_generation: None,
                 cwd: temp.path().display().to_string(),
@@ -5440,6 +5461,7 @@ mod tests {
         let state = BridgeStateFile {
             schema_version: BRIDGE_STATE_SCHEMA_VERSION,
             session_id: "session-123".to_string(),
+            run_id: Some("run-1".to_string()),
             connection_id: Some("connection-1".to_string()),
             lease_generation: Some("lease-1".to_string()),
             cwd: temp.path().display().to_string(),
@@ -5500,6 +5522,7 @@ mod tests {
         let state = BridgeStateFile {
             schema_version: BRIDGE_STATE_SCHEMA_VERSION,
             session_id: session_id.to_string(),
+            run_id: None,
             connection_id: None,
             lease_generation: None,
             cwd: temp.path().display().to_string(),
@@ -5572,6 +5595,7 @@ mod tests {
         let state = BridgeStateFile {
             schema_version: BRIDGE_STATE_SCHEMA_VERSION,
             session_id: session_id.to_string(),
+            run_id: None,
             connection_id: None,
             lease_generation: None,
             cwd: temp.path().display().to_string(),
@@ -5677,6 +5701,7 @@ mod tests {
     fn make_test_run_config(temp: &tempfile::TempDir) -> BridgeRunConfig {
         BridgeRunConfig {
             session_id: "session-123".to_string(),
+            run_id: None,
             connection_id: None,
             lease_generation: None,
             cwd: temp.path().to_path_buf(),
@@ -5704,19 +5729,21 @@ mod tests {
 
     #[test]
     fn bridge_run_control_identity_rotates_unless_explicitly_forwarded() {
-        let first = resolve_launch_control_identity(None, None).unwrap();
-        let second = resolve_launch_control_identity(None, None).unwrap();
+        let first = resolve_launch_identity(None, None, None).unwrap();
+        let second = resolve_launch_identity(None, None, None).unwrap();
         assert_ne!(first, second);
         assert!(Uuid::parse_str(&first.0).is_ok());
         assert!(Uuid::parse_str(&first.1).is_ok());
+        assert!(Uuid::parse_str(&first.2).is_ok());
 
-        let forwarded = resolve_launch_control_identity(
+        let forwarded = resolve_launch_identity(
             Some(first.0.clone()),
             Some(first.1.clone()),
+            Some(first.2.clone()),
         )
         .unwrap();
         assert_eq!(forwarded, first);
-        assert!(resolve_launch_control_identity(Some(first.0), None).is_err());
+        assert!(resolve_launch_identity(Some(first.0), None, None).is_err());
     }
 
     fn codex_plan_approval_params() -> Value {
@@ -5929,6 +5956,7 @@ mod tests {
         let state = BridgeStateFile {
             schema_version: BRIDGE_STATE_SCHEMA_VERSION,
             session_id: session_id.to_string(),
+            run_id: None,
             connection_id: None,
             lease_generation: None,
             cwd: temp.path().display().to_string(),
@@ -5979,6 +6007,7 @@ mod tests {
         let state = BridgeStateFile {
             schema_version: BRIDGE_STATE_SCHEMA_VERSION,
             session_id: session_id.to_string(),
+            run_id: None,
             connection_id: None,
             lease_generation: None,
             cwd: temp.path().display().to_string(),
@@ -6971,6 +7000,7 @@ mod tests {
         let state = BridgeStateFile {
             schema_version: BRIDGE_STATE_SCHEMA_VERSION,
             session_id: session_id.to_string(),
+            run_id: None,
             connection_id: None,
             lease_generation: None,
             cwd: temp.path().display().to_string(),

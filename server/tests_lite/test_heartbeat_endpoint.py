@@ -278,7 +278,7 @@ def test_heartbeat_machine_evidence_rejects_invalid_and_unbounded_claims(tmp_pat
         invalid_evidence = []
 
         unknown_schema = _machine_evidence_payload()
-        unknown_schema["schema_version"] = 3
+        unknown_schema["schema_version"] = 4
         invalid_evidence.append(unknown_schema)
 
         mismatched_identity = _machine_evidence_payload()
