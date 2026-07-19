@@ -53,6 +53,7 @@ from zerg.services.console_turns import ConsoleTurnUnavailable
 from zerg.services.console_turns import dispatch_next_console_turn
 from zerg.services.console_turns import enqueue_catalog_console_turn
 from zerg.services.console_turns import enqueue_console_turn
+from zerg.services.live_catalog_timeline import canonical_session_detail_enabled
 from zerg.services.live_catalog_timeline import list_live_catalog_sessions
 from zerg.services.live_catalog_timeline import read_live_catalog_session
 from zerg.services.live_catalog_timeline import stream_live_catalog_machine_sessions
@@ -1517,11 +1518,24 @@ def get_session(
 ) -> SessionResponse:
     """Get a single session by ID."""
     if database_module.live_catalog_enabled():
+        effective_owner_id = owner_id
+        if effective_owner_id is None:
+            raw_owner_id = getattr(_auth, "owner_id", None)
+            effective_owner_id = int(raw_owner_id) if raw_owner_id is not None else None
         try:
-            result, provider_session_id, commit_seq = read_live_catalog_session(session_id)
+            serve_mode = "canonical" if canonical_session_detail_enabled() else "legacy"
+            result, provider_session_id, commit_seq = read_live_catalog_session(
+                session_id,
+                owner_id=effective_owner_id,
+                serve_mode=serve_mode,
+            )
         except CatalogReadError as exc:
+            response_status = {
+                "canonical_owner_required": status.HTTP_401_UNAUTHORIZED,
+                "shadow_fact_head_limit_exceeded": status.HTTP_409_CONFLICT,
+            }.get(exc.code, status.HTTP_503_SERVICE_UNAVAILABLE)
             raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                status_code=response_status,
                 detail={"code": exc.code, "message": exc.message},
             ) from exc
         if result is None:
@@ -1530,6 +1544,7 @@ def get_session(
                 detail=f"Session {session_id} not found",
             )
         response.headers["X-Catalog-Commit-Seq"] = commit_seq
+        response.headers["X-Session-State-Serve"] = "canonical_session_detail" if serve_mode == "canonical" else "legacy_session_state"
         if provider_session_id:
             response.headers["X-Provider-Session-ID"] = provider_session_id
         return result

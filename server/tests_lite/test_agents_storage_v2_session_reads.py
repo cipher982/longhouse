@@ -7,6 +7,7 @@ from fastapi import HTTPException
 from fastapi import Response
 
 from zerg.routers import agents_sessions
+from zerg.services.catalog_read_gateway import CatalogReadError
 
 
 def _workspace(session_id):
@@ -71,6 +72,66 @@ def _workspace(session_id):
         },
         "projection": projection,
     }
+
+
+def test_machine_session_detail_uses_token_owner_and_marks_canonical_serve(monkeypatch):
+    session_id = uuid4()
+    projected = SimpleNamespace(id=str(session_id))
+    call = {}
+    monkeypatch.setattr(agents_sessions.database_module, "live_catalog_enabled", lambda: True)
+    monkeypatch.setattr(agents_sessions, "canonical_session_detail_enabled", lambda: True)
+
+    def read(requested, *, owner_id, serve_mode):
+        call.update(session_id=requested, owner_id=owner_id, serve_mode=serve_mode)
+        return projected, "provider-thread", "31"
+
+    monkeypatch.setattr(agents_sessions, "read_live_catalog_session", read)
+    response = Response()
+
+    result = agents_sessions.get_session(
+        session_id=session_id,
+        response=response,
+        db=None,
+        _auth=SimpleNamespace(owner_id=42),
+        _single=None,
+        owner_id=None,
+    )
+
+    assert result is projected
+    assert call == {"session_id": session_id, "owner_id": 42, "serve_mode": "canonical"}
+    assert response.headers["X-Catalog-Commit-Seq"] == "31"
+    assert response.headers["X-Provider-Session-ID"] == "provider-thread"
+    assert response.headers["X-Session-State-Serve"] == "canonical_session_detail"
+
+
+@pytest.mark.parametrize(
+    ("code", "expected_status"),
+    [
+        ("canonical_owner_required", 401),
+        ("shadow_fact_head_limit_exceeded", 409),
+        ("invalid_catalog_snapshot", 503),
+    ],
+)
+def test_machine_session_detail_maps_fail_closed_catalog_errors(monkeypatch, code, expected_status):
+    monkeypatch.setattr(agents_sessions.database_module, "live_catalog_enabled", lambda: True)
+
+    def fail(*_args, **_kwargs):
+        raise CatalogReadError(code, "canonical detail unavailable")
+
+    monkeypatch.setattr(agents_sessions, "read_live_catalog_session", fail)
+
+    with pytest.raises(HTTPException) as raised:
+        agents_sessions.get_session(
+            session_id=uuid4(),
+            response=Response(),
+            db=None,
+            _auth=SimpleNamespace(owner_id=42),
+            _single=None,
+            owner_id=None,
+        )
+
+    assert raised.value.status_code == expected_status
+    assert raised.value.detail["code"] == code
 
 
 @pytest.mark.asyncio

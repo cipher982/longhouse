@@ -20,15 +20,21 @@ from pydantic import BaseModel
 from pydantic import ConfigDict
 
 from zerg.machine_evidence import canonical_evidence_hash
+from zerg.services.agents.kernel_capabilities import KernelSessionCapabilities
 from zerg.services.session_state_contract import STATE_CONTRACT_VERSION
 from zerg.services.session_state_contract import SessionActionAvailability
 from zerg.services.session_state_contract import SessionActivityFacts
 from zerg.services.session_state_contract import SessionControlActions
 from zerg.services.session_state_contract import SessionControlFacts
 from zerg.services.session_state_contract import SessionDispositionFacts
+from zerg.services.session_state_contract import SessionHostFacts
 from zerg.services.session_state_contract import SessionLaunchFacts
 from zerg.services.session_state_contract import SessionMode
+from zerg.services.session_state_contract import SessionPendingInteractionFacts
 from zerg.services.session_state_contract import SessionRunFacts
+from zerg.services.session_state_contract import SessionStateFacts
+from zerg.services.session_state_contract import SessionTranscriptFacts
+from zerg.services.session_state_contract import assemble_session_state_facts
 
 UnsupportedFactFamily = Literal[
     "mode",
@@ -122,6 +128,103 @@ def project_shadow_session_state_facts(
         control=_project_control(control_head, supported_operations=set(supported_operations)),
         control_run_id=_control_run_id(control_head),
         rejected_heads=rejected_activity + rejected_control,
+    )
+
+
+def project_served_session_state_facts(
+    *,
+    session_id: str,
+    commit_seq: int,
+    catalog_facts: Mapping[str, Any],
+    heads: Collection[Mapping[str, Any]],
+    supported_operations: Collection[str],
+    catalog_capabilities: KernelSessionCapabilities,
+    pending_interaction: SessionPendingInteractionFacts | None,
+    transcript: SessionTranscriptFacts,
+    host: SessionHostFacts,
+    now: datetime,
+) -> SessionStateFacts:
+    """Project the full served contract from one bounded catalog snapshot."""
+
+    shadow = project_shadow_session_state_facts(
+        session_id=session_id,
+        commit_seq=commit_seq,
+        catalog_facts=catalog_facts,
+        heads=heads,
+        supported_operations=supported_operations,
+        now=now,
+    )
+    control = _served_control(
+        shadow.control,
+        mode=shadow.mode,
+        capabilities=catalog_capabilities,
+    )
+    return assemble_session_state_facts(
+        mode=shadow.mode,
+        disposition=shadow.disposition,
+        launch=shadow.launch,
+        run=shadow.run,
+        activity=shadow.activity,
+        control=control,
+        pending_interaction=pending_interaction,
+        transcript=transcript,
+        host=host,
+        commit_seq=commit_seq,
+    )
+
+
+def _served_control(
+    observed: SessionControlFacts | None,
+    *,
+    mode: SessionMode,
+    capabilities: KernelSessionCapabilities,
+) -> SessionControlFacts:
+    def availability(available: bool, reason: str) -> SessionActionAvailability:
+        if available:
+            return SessionActionAvailability(state="available")
+        return SessionActionAvailability(state="unavailable", reason=reason)
+
+    start_turn = availability(
+        mode == "console" and capabilities.can_start_turn,
+        capabilities.start_turn_blocked_by or ("not_console" if mode != "console" else "start_turn_unavailable"),
+    )
+    if observed is not None:
+        reattach = availability(
+            observed.connection != "connected" and capabilities.host_reattach_available,
+            "already_connected" if observed.connection == "connected" else "reattach_unavailable",
+        )
+        return observed.model_copy(
+            update={
+                "control_plane": capabilities.control_plane,
+                "actions": observed.actions.model_copy(
+                    update={"start_turn": start_turn, "reattach": reattach},
+                ),
+            }
+        )
+
+    owned = mode in {"helm", "console"} or capabilities.control_owned or capabilities.host_reattach_available
+    connection = "not_applicable" if mode in {"shadow", "console"} else "unknown"
+    unavailable_reason = "observe_only" if not owned else "control_unknown"
+    reattach = availability(
+        mode == "helm" and capabilities.host_reattach_available,
+        "reattach_unavailable",
+    )
+    resume = availability(
+        mode == "helm" and capabilities.host_reattach_available and capabilities.can_resume,
+        "resume_unavailable",
+    )
+    return SessionControlFacts(
+        ownership="owned" if owned else "unowned",
+        connection=connection,
+        control_plane=capabilities.control_plane,
+        actions=SessionControlActions(
+            start_turn=start_turn,
+            send_input=availability(False, unavailable_reason),
+            interrupt=availability(False, unavailable_reason),
+            terminate=availability(False, unavailable_reason),
+            reattach=reattach,
+            resume=resume,
+        ),
     )
 
 
@@ -405,4 +508,8 @@ def _aware(value: datetime, field: str) -> datetime:
     return value.astimezone(UTC)
 
 
-__all__ = ["ShadowSessionStateProjection", "project_shadow_session_state_facts"]
+__all__ = [
+    "ShadowSessionStateProjection",
+    "project_served_session_state_facts",
+    "project_shadow_session_state_facts",
+]

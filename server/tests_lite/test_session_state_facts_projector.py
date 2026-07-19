@@ -11,6 +11,10 @@ from zerg.catalogd.fact_reducer import read_session_fact_heads
 from zerg.catalogd.fact_reducer import reduce_fact_batch
 from zerg.catalogd.schema import create_catalog_engine
 from zerg.catalogd.schema import initialize_catalog_schema
+from zerg.services.agents.kernel_capabilities import KernelSessionCapabilities
+from zerg.services.session_state_contract import SessionHostFacts
+from zerg.services.session_state_contract import SessionTranscriptFacts
+from zerg.services.session_state_facts_projector import project_served_session_state_facts
 from zerg.services.session_state_facts_projector import project_shadow_session_state_facts
 
 NOW = datetime(2026, 7, 18, 12, 0, tzinfo=UTC)
@@ -25,6 +29,29 @@ CATALOG_FACTS = {
     "latest_run": None,
     "connections": [],
 }
+
+
+def _capabilities(**overrides) -> KernelSessionCapabilities:
+    values = {
+        "session_id": "session-1",
+        "thread_id": "thread-1",
+        "run_id": None,
+        "connection_id": None,
+        "control_plane": None,
+        "connection_state": None,
+        "control_label": "imported",
+        "live_control_available": False,
+        "host_reattach_available": False,
+        "observe_only": False,
+        "search_only": True,
+        "can_send_input": False,
+        "can_interrupt": False,
+        "can_terminate": False,
+        "can_tail_output": False,
+        "can_resume": False,
+    }
+    values.update(overrides)
+    return KernelSessionCapabilities(**values)
 
 
 def _head(
@@ -333,3 +360,75 @@ def test_session_head_read_and_projection_share_fact_commit_snapshot(tmp_path):
     assert commit_seq == reduced.commit_seq == projection.commit_seq
     assert projection.activity.state == "quiescent"
     assert any("ix_fact_heads_session_family_recent" in str(row) for row in query_plan)
+
+
+def test_served_projector_assembles_full_contract_at_snapshot_commit():
+    served = project_served_session_state_facts(
+        session_id="session-1",
+        commit_seq=81,
+        catalog_facts=CATALOG_FACTS,
+        heads=[
+            _activity(observed_at=NOW, valid_until=NOW + timedelta(minutes=1)),
+            _control(observed_at=NOW, grants=["interrupt", "send_input"]),
+        ],
+        supported_operations={"send_input", "interrupt", "terminate"},
+        catalog_capabilities=_capabilities(
+            run_id="run-1",
+            control_plane="codex_app_server",
+            control_label="live",
+            live_control_available=True,
+            can_send_input=True,
+            can_interrupt=True,
+            can_terminate=True,
+        ),
+        pending_interaction=None,
+        transcript=SessionTranscriptFacts(convergence="current", last_append_at=NOW),
+        host=SessionHostFacts(state="online", observed_at=NOW),
+        now=NOW,
+    )
+
+    assert served.commit_seq == 81
+    assert served.mode == "shadow"
+    assert served.activity.state == "executing"
+    assert served.control.connection_id == "connection-1"
+    assert served.control.control_plane == "codex_app_server"
+    assert served.control.actions.send_input.state == "available"
+    assert served.control.actions.terminate.reason == "not_granted"
+    assert served.transcript.convergence == "current"
+    assert served.host.state == "online"
+    assert served.presentation.primary is not None
+    assert served.presentation.primary.key == "executing"
+    assert served.presentation.access is not None
+    assert served.presentation.access.key == "live_control"
+
+
+def test_served_projector_without_control_head_fails_actions_closed():
+    served = project_served_session_state_facts(
+        session_id="session-1",
+        commit_seq=82,
+        catalog_facts={
+            **CATALOG_FACTS,
+            "readiness": {"state": "adopted", "execution_lifetime": "live_control"},
+        },
+        heads=[],
+        supported_operations={"send_input", "interrupt", "terminate"},
+        catalog_capabilities=_capabilities(
+            control_label="reattach",
+            host_reattach_available=True,
+            can_resume=True,
+            control_owned=True,
+        ),
+        pending_interaction=None,
+        transcript=SessionTranscriptFacts(convergence="unknown"),
+        host=SessionHostFacts(state="unknown"),
+        now=NOW,
+    )
+
+    assert served.mode == "helm"
+    assert served.control.ownership == "owned"
+    assert served.control.connection == "unknown"
+    assert served.control.actions.send_input.reason == "control_unknown"
+    assert served.control.actions.interrupt.reason == "control_unknown"
+    assert served.control.actions.terminate.reason == "control_unknown"
+    assert served.control.actions.reattach.state == "available"
+    assert served.control.actions.resume.state == "available"

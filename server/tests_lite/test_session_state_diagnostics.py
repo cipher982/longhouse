@@ -223,7 +223,7 @@ def test_control_identity_comparison_reports_legacy_only_without_control_evidenc
     assert comparison.control_identity.legacy_grant is None
 
 
-def test_diagnostics_route_is_explicitly_non_cutover(monkeypatch):
+def test_diagnostics_route_reports_detail_cutover_without_claiming_authorization_cutover(monkeypatch):
     session_id = "44444444-4444-4444-8444-444444444444"
     shadow = _shadow()
     monkeypatch.setattr(diagnostics_router.database_module, "live_catalog_enabled", lambda: True)
@@ -265,6 +265,15 @@ def test_diagnostics_route_is_explicitly_non_cutover(monkeypatch):
     assert payload["served_path"] == "legacy_session_state"
     assert payload["authorization_path"] == "legacy_capabilities"
     assert payload["cutover_active"] is False
+
+    monkeypatch.setenv("LONGHOUSE_SESSION_STATE_DETAIL_SERVE", "canonical")
+    canonical_response = TestClient(app).get(f"/api/agents/sessions/{session_id}/state-diagnostics")
+
+    assert canonical_response.status_code == 200
+    canonical_payload = canonical_response.json()
+    assert canonical_payload["served_path"] == "canonical_session_detail"
+    assert canonical_payload["authorization_path"] == "legacy_capabilities"
+    assert canonical_payload["cutover_active"] is True
 
 
 def test_reducer_health_route_reports_failures_without_claiming_cutover(monkeypatch):

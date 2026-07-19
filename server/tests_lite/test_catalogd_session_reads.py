@@ -546,6 +546,12 @@ async def test_shadow_state_read_is_owner_scoped_and_commit_coherent(daemon_path
         assert activity["updated_commit_seq"] == reduced.commit_seq
         observed_at = datetime.fromisoformat(result["observed_at"])
         legacy = project_catalog_session_facts(result["legacy_facts"], observed_at=observed_at).session_state
+        canonical = project_catalog_session_facts(
+            result["legacy_facts"],
+            observed_at=observed_at,
+            canonical_heads=result["heads"],
+            commit_seq=int(result["commit_seq"]),
+        )
         shadow = project_shadow_session_state_facts(
             session_id=session_id,
             commit_seq=int(result["commit_seq"]),
@@ -562,6 +568,11 @@ async def test_shadow_state_read_is_owner_scoped_and_commit_coherent(daemon_path
         )
         assert shadow.activity.state == "executing"
         assert shadow.control is not None and shadow.control.actions.send_input.state == "available"
+        assert canonical.session_state.commit_seq == reduced.commit_seq
+        assert canonical.display_phase == canonical.runtime_display.phase_label
+        assert canonical.session_state.presentation.primary is not None
+        assert canonical.display_phase == canonical.session_state.presentation.primary.label
+        assert canonical.runtime_version == reduced.commit_seq
         assert comparison.status == "different"
         assert comparison.same_commit is True
 
@@ -973,7 +984,9 @@ def test_maximum_timeline_page_fits_one_protocol_frame(daemon_paths):
                             "id": oversized,
                             "header": oversized,
                             "question": oversized,
-                            "options": [{"label": oversized, "description": oversized, "value": oversized} for _ in range(20)],
+                            "options": [
+                                {"label": oversized, "description": oversized, "value": oversized} for _ in range(20)
+                            ],
                         }
                         for _ in range(20)
                     ],
@@ -981,7 +994,9 @@ def test_maximum_timeline_page_fits_one_protocol_frame(daemon_paths):
             )
         )
         connection.execute(
-            LiveLaunchReadiness.__table__.update().where(LiveLaunchReadiness.session_id == session_id).values(error_message=oversized)
+            LiveLaunchReadiness.__table__.update()
+            .where(LiveLaunchReadiness.session_id == session_id)
+            .values(error_message=oversized)
         )
         connection.execute(
             LiveSessionLivePreview.__table__.update()
@@ -994,7 +1009,9 @@ def test_maximum_timeline_page_fits_one_protocol_frame(daemon_paths):
             .where(LiveSessionCatalog.session_id == session_id)
         ).scalar_one()
         run_id = connection.execute(
-            LiveSessionRun.__table__.select().with_only_columns(LiveSessionRun.id).where(LiveSessionRun.thread_id == thread_id)
+            LiveSessionRun.__table__.select()
+            .with_only_columns(LiveSessionRun.id)
+            .where(LiveSessionRun.thread_id == thread_id)
         ).scalar_one()
         for connection_index in range(7):
             connection.execute(
@@ -1030,7 +1047,9 @@ def test_maximum_timeline_page_fits_one_protocol_frame(daemon_paths):
     result["rows"] *= 100
     result["total"] = 100
     response = CatalogRpcResponse(id="0" * 32, result=result)
-    payload_bytes = len(json.dumps(response.to_wire(), ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8"))
+    payload_bytes = len(
+        json.dumps(response.to_wire(), ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")
+    )
     batch_response = CatalogRpcResponse(
         id="1" * 32,
         result={

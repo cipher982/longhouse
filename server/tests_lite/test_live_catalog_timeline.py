@@ -3,10 +3,12 @@ from __future__ import annotations
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
 
+import zerg.services.live_catalog_timeline as live_catalog_timeline
 from zerg.catalogd.models import StorageSession
 from zerg.catalogd.schema import initialize_catalog_schema
 from zerg.catalogd.store import CatalogStore
@@ -19,10 +21,12 @@ from zerg.models.live_store import LiveSessionConnection
 from zerg.models.live_store import LiveSessionRun
 from zerg.models.live_store import LiveSessionThread
 from zerg.models.live_store import LiveTimelineCard
+from zerg.services.catalog_read_gateway import CatalogReadError
 from zerg.services.live_catalog_timeline import list_live_catalog_timeline
 from zerg.services.live_catalog_timeline import project_catalog_session_facts
 from zerg.services.live_catalog_timeline import project_catalog_sessions_snapshot
 from zerg.services.live_catalog_timeline import project_catalog_timeline_snapshot
+from zerg.services.live_catalog_timeline import read_live_catalog_session
 from zerg.services.timeline_session_listing import TimelineSessionListParams
 
 
@@ -60,6 +64,136 @@ def _snapshot(db, params: TimelineSessionListParams):
         limit=params.limit,
         offset=params.offset,
     )
+
+
+def test_detail_read_defaults_to_legacy_snapshot(monkeypatch):
+    session_id = str(uuid4())
+    projected = object()
+    legacy_snapshot = {
+        "found": True,
+        "commit_seq": "7",
+        "observed_at": datetime.now(timezone.utc).isoformat(),
+        "facts": {"session": {"session_id": session_id}},
+    }
+    monkeypatch.setenv("LONGHOUSE_SESSION_STATE_DETAIL_SERVE", "canonical")
+    monkeypatch.setattr(live_catalog_timeline, "session_snapshot", lambda requested, owner_id: legacy_snapshot)
+    monkeypatch.setattr(
+        live_catalog_timeline,
+        "shadow_session_state_snapshot",
+        lambda *_args, **_kwargs: pytest.fail("legacy detail must not call the reducer snapshot"),
+    )
+
+    def project(facts, *, observed_at, canonical_heads=None, commit_seq=None):
+        assert facts is legacy_snapshot["facts"]
+        assert observed_at.tzinfo is not None
+        assert canonical_heads is None
+        assert commit_seq is None
+        return projected
+
+    monkeypatch.setattr(live_catalog_timeline, "project_catalog_session_facts", project)
+
+    result, provider_alias, commit_seq = read_live_catalog_session(session_id, owner_id=3)
+
+    assert result is projected
+    assert provider_alias is None
+    assert commit_seq == "7"
+
+
+def test_canonical_host_projection_preserves_same_snapshot_liveness():
+    observed_at = datetime.now(timezone.utc)
+    host = live_catalog_timeline._host_facts(
+        SimpleNamespace(host=SimpleNamespace(state="online", last_seen_at=observed_at))
+    )
+
+    assert host.state == "online"
+    assert host.observed_at == observed_at
+
+
+def test_canonical_detail_projects_one_owner_scoped_snapshot(monkeypatch):
+    session_id = str(uuid4())
+    projected = object()
+    heads = [{"family": "activity"}]
+    canonical_snapshot = {
+        "found": True,
+        "commit_seq": "19",
+        "observed_at": datetime.now(timezone.utc).isoformat(),
+        "legacy_facts": {"session": {"session_id": session_id}, "provider_alias": "thread-1"},
+        "heads": heads,
+        "heads_truncated": False,
+    }
+    monkeypatch.setenv("LONGHOUSE_SESSION_STATE_DETAIL_SERVE", "canonical")
+    monkeypatch.setattr(
+        live_catalog_timeline,
+        "session_snapshot",
+        lambda *_args, **_kwargs: pytest.fail("canonical detail must not issue a second snapshot read"),
+    )
+
+    def shadow(requested, *, owner_id):
+        assert requested == session_id
+        assert owner_id == 3
+        return canonical_snapshot
+
+    def project(facts, *, observed_at, canonical_heads=None, commit_seq=None):
+        assert facts is canonical_snapshot["legacy_facts"]
+        assert canonical_heads is heads
+        assert commit_seq == 19
+        return projected
+
+    monkeypatch.setattr(live_catalog_timeline, "shadow_session_state_snapshot", shadow)
+    monkeypatch.setattr(live_catalog_timeline, "project_catalog_session_facts", project)
+
+    result, provider_alias, commit_seq = read_live_catalog_session(session_id, owner_id=3, serve_mode="canonical")
+
+    assert result is projected
+    assert provider_alias == "thread-1"
+    assert commit_seq == "19"
+
+
+@pytest.mark.parametrize(
+    ("snapshot_update", "expected_code"),
+    [
+        ({"heads_truncated": True}, "shadow_fact_head_limit_exceeded"),
+        ({"heads": None}, "invalid_catalog_snapshot"),
+        ({"legacy_facts": None}, "invalid_catalog_snapshot"),
+    ],
+)
+def test_canonical_detail_fails_closed_on_incomplete_snapshot(monkeypatch, snapshot_update, expected_code):
+    session_id = str(uuid4())
+    snapshot = {
+        "found": True,
+        "commit_seq": "23",
+        "observed_at": datetime.now(timezone.utc).isoformat(),
+        "legacy_facts": {"session": {"session_id": session_id}},
+        "heads": [],
+        "heads_truncated": False,
+        **snapshot_update,
+    }
+    monkeypatch.setenv("LONGHOUSE_SESSION_STATE_DETAIL_SERVE", "canonical")
+    monkeypatch.setattr(live_catalog_timeline, "shadow_session_state_snapshot", lambda *_args, **_kwargs: snapshot)
+    monkeypatch.setattr(
+        live_catalog_timeline,
+        "session_snapshot",
+        lambda *_args, **_kwargs: pytest.fail("canonical failure must not fall back to legacy"),
+    )
+
+    with pytest.raises(CatalogReadError) as raised:
+        read_live_catalog_session(session_id, owner_id=3, serve_mode="canonical")
+
+    assert raised.value.code == expected_code
+
+
+def test_canonical_detail_requires_owner_scope_before_catalog_read(monkeypatch):
+    monkeypatch.setenv("LONGHOUSE_SESSION_STATE_DETAIL_SERVE", "canonical")
+    monkeypatch.setattr(
+        live_catalog_timeline,
+        "shadow_session_state_snapshot",
+        lambda *_args, **_kwargs: pytest.fail("unscoped canonical detail must not read catalog state"),
+    )
+
+    with pytest.raises(CatalogReadError) as raised:
+        read_live_catalog_session(uuid4(), serve_mode="canonical")
+
+    assert raised.value.code == "canonical_owner_required"
 
 
 def _add_live_kernel(

@@ -465,6 +465,87 @@ def _transcript(
     )
 
 
+def project_pending_interaction_facts(
+    pause_request: dict[str, Any] | None,
+) -> SessionPendingInteractionFacts | None:
+    """Project one durable interaction axis without presentation policy."""
+
+    return _interaction(pause_request)
+
+
+def project_transcript_facts(
+    *,
+    session: Any,
+    last_activity_at: datetime | None,
+    has_visible_transcript_preview: bool = False,
+    has_pending_response_turn: bool = False,
+    user_messages: int = 0,
+    assistant_messages: int = 0,
+    archive_state: str | None = None,
+    live_observation: bool = False,
+) -> SessionTranscriptFacts:
+    """Project the current bounded transcript axis from catalog coordinates."""
+
+    return _transcript(
+        session=session,
+        last_activity_at=last_activity_at,
+        has_visible_transcript_preview=has_visible_transcript_preview,
+        has_pending_response_turn=has_pending_response_turn,
+        user_messages=user_messages,
+        assistant_messages=assistant_messages,
+        archive_state=archive_state,
+        live_observation=live_observation,
+    )
+
+
+def assemble_session_state_facts(
+    *,
+    mode: SessionMode,
+    disposition: SessionDispositionFacts,
+    launch: SessionLaunchFacts | None,
+    run: SessionRunFacts | None,
+    activity: SessionActivityFacts,
+    control: SessionControlFacts,
+    pending_interaction: SessionPendingInteractionFacts | None,
+    transcript: SessionTranscriptFacts,
+    host: SessionHostFacts,
+    commit_seq: int | None = None,
+) -> SessionStateFacts:
+    """Assemble orthogonal axes and apply the single presentation policy."""
+
+    primary = _primary(
+        disposition=disposition,
+        launch=launch,
+        run=run,
+        activity=activity,
+        interaction=pending_interaction,
+    )
+    access = _access(control=control, transcript=transcript)
+    transcript_label = (
+        SessionPresentationLabel(
+            key="transcript_lagging",
+            label="Transcript catching up",
+            tone="inactive",
+            observed_at=transcript.last_append_at,
+        )
+        if transcript.convergence == "lagging"
+        else None
+    )
+    return SessionStateFacts(
+        mode=mode,
+        disposition=disposition,
+        launch=launch,
+        run=run,
+        activity=activity,
+        control=control,
+        pending_interaction=pending_interaction,
+        transcript=transcript,
+        host=host,
+        presentation=SessionPresentation(primary=primary, access=access, transcript=transcript_label),
+        commit_seq=commit_seq,
+    )
+
+
 def _primary(
     *,
     disposition: SessionDispositionFacts,
@@ -621,28 +702,10 @@ def build_session_state_facts(
         archive_state=archive_state,
         live_observation=bool(has_visible_transcript_preview or capabilities.observe_only),
     )
-    primary = _primary(
-        disposition=disposition,
-        launch=launch,
-        run=run,
-        activity=activity,
-        interaction=interaction,
-    )
-    access = _access(control=control, transcript=transcript)
-    transcript_label = (
-        SessionPresentationLabel(
-            key="transcript_lagging",
-            label="Transcript catching up",
-            tone="inactive",
-            observed_at=transcript.last_append_at,
-        )
-        if transcript.convergence == "lagging"
-        else None
-    )
     host_state = _clean(liveness.host.state)
     if host_state not in {"online", "stale", "offline"}:
         host_state = "unknown"
-    return SessionStateFacts(
+    return assemble_session_state_facts(
         mode=_mode(
             session=session,
             execution_lifetime=execution_lifetime,
@@ -659,7 +722,6 @@ def build_session_state_facts(
             state=host_state,
             observed_at=normalize_utc(liveness.host.last_seen_at),
         ),
-        presentation=SessionPresentation(primary=primary, access=access, transcript=transcript_label),
     )
 
 
@@ -677,5 +739,8 @@ __all__ = [
     "SessionRunFacts",
     "SessionStateFacts",
     "SessionTranscriptFacts",
+    "assemble_session_state_facts",
     "build_session_state_facts",
+    "project_pending_interaction_facts",
+    "project_transcript_facts",
 ]
