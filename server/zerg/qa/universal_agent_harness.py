@@ -5899,7 +5899,9 @@ def ingest_canonical_events_into_longhouse_db(
                     include_test=True,
                     hide_autonomous=False,
                     device_id=None,
-                    days_back=30,
+                    # Provider fixtures use stable historical timestamps; the
+                    # harness should validate projection, not wall-clock age.
+                    days_back=3650,
                     query=None,
                     limit=10,
                     offset=0,
