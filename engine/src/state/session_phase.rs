@@ -37,19 +37,6 @@ impl PhaseSource {
     }
 }
 
-/// Canonical phase vocabulary the runtime reducer understands. Duplicated on
-/// the server in `session_runtime.PHASE_FRESHNESS`; keep the two lists in lock
-/// step or the overlay will silently drop observations.
-pub const KNOWN_PHASES: &[&str] = &[
-    "thinking",
-    "running",
-    "blocked",
-    "stalled",
-    "needs_user",
-    "idle",
-    "finished",
-];
-
 /// Phase freshness windows in seconds. MUST stay in lock-step with
 /// `server/zerg/services/local_health.py::_PHASE_FRESHNESS_SECONDS` and
 /// `server/zerg/services/session_runtime.py::PHASE_FRESHNESS`. Used by the

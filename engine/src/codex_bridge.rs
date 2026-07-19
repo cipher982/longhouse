@@ -4567,23 +4567,6 @@ impl BridgeRuntimeSink {
                 self.session_id
             );
         }
-        let managed_signal = crate::state::managed_session_state::ManagedSessionPhaseSignal {
-            session_id: self.session_id.clone(),
-            provider: "codex".to_string(),
-            workspace_path: Some(self.cwd.clone()),
-            phase_kind: phase.to_string(),
-            tool_name: signal.tool_name.clone(),
-            phase_source: BRIDGE_RUNTIME_SOURCE.to_string(),
-            observed_at,
-        };
-        if let Err(err) = crate::state::managed_session_state::ManagedSessionStateStore::new(&conn)
-            .record_phase(&managed_signal)
-        {
-            eprintln!(
-                "[codex-bridge] persist managed session state failed for {}: {err}",
-                self.session_id
-            );
-        }
     }
 
     async fn post_progress(&self, dedupe_key: String) {
@@ -6102,29 +6085,7 @@ mod tests {
         assert_eq!(row.1, Some("shell".to_string()));
         assert_eq!(row.2, BRIDGE_RUNTIME_SOURCE);
 
-        let managed_row: (String, String, String, Option<String>, String) = conn
-            .query_row(
-                "SELECT provider, workspace_path, workspace_label, tool_name, phase_kind
-                 FROM managed_session_state
-                 WHERE session_id = 'session-123'",
-                [],
-                |row| {
-                    Ok((
-                        row.get(0)?,
-                        row.get(1)?,
-                        row.get(2)?,
-                        row.get(3)?,
-                        row.get(4)?,
-                    ))
-                },
-            )
-            .unwrap();
-
-        assert_eq!(managed_row.0, "codex");
-        assert_eq!(managed_row.1, "/Users/test/git/assistants-service");
-        assert_eq!(managed_row.2, "assistants-service");
-        assert_eq!(managed_row.3, Some("shell".to_string()));
-        assert_eq!(managed_row.4, "running");
+        assert!(conn.prepare("SELECT 1 FROM managed_session_state").is_err());
     }
 
     #[test]

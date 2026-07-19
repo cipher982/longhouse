@@ -2620,9 +2620,8 @@ pub(crate) fn load_managed_phase_overlay(
 ) -> HashMap<String, ManagedPhaseOverlay> {
     let mut rows = HashMap::new();
     let Ok(mut stmt) = conn.prepare(
-        "SELECT session_id, phase_kind, tool_name, phase_observed_at
-         FROM managed_session_state
-         WHERE provider IN ('codex', 'claude')",
+        "SELECT session_id, phase, tool_name, observed_at
+         FROM session_phase_state",
     ) else {
         return rows;
     };

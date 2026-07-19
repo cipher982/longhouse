@@ -353,56 +353,40 @@ def _write_managed_session_state_rows(
     conn = sqlite3.connect(db_path)
     conn.execute(
         """
-        CREATE TABLE IF NOT EXISTS managed_session_state (
+        CREATE TABLE IF NOT EXISTS session_phase_state (
             session_id TEXT PRIMARY KEY,
             provider TEXT NOT NULL,
-            workspace_path TEXT,
-            workspace_label TEXT,
-            phase_kind TEXT,
+            phase TEXT NOT NULL,
             tool_name TEXT,
-            phase_source TEXT,
-            phase_observed_at TEXT,
-            last_activity_at TEXT,
-            updated_at TEXT NOT NULL
+            source TEXT NOT NULL,
+            observed_at TEXT NOT NULL
         )
         """
     )
     conn.executemany(
         """
-        INSERT INTO managed_session_state (
+        INSERT INTO session_phase_state (
             session_id,
             provider,
-            workspace_path,
-            workspace_label,
-            phase_kind,
+            phase,
             tool_name,
-            phase_source,
-            phase_observed_at,
-            last_activity_at,
-            updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            source,
+            observed_at
+        ) VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT(session_id) DO UPDATE SET
             provider = excluded.provider,
-            workspace_path = excluded.workspace_path,
-            workspace_label = excluded.workspace_label,
-            phase_kind = excluded.phase_kind,
+            phase = excluded.phase,
             tool_name = excluded.tool_name,
-            phase_source = excluded.phase_source,
-            phase_observed_at = excluded.phase_observed_at,
-            last_activity_at = excluded.last_activity_at,
-            updated_at = excluded.updated_at
+            source = excluded.source,
+            observed_at = excluded.observed_at
         """,
         [
             (
                 session_id,
                 provider,
-                workspace_path,
-                workspace_label,
                 phase_kind,
                 tool_name,
                 phase_source,
-                phase_observed_at,
-                last_activity_at,
                 phase_observed_at,
             )
             for (
@@ -2275,7 +2259,7 @@ def test_collect_local_health_uses_managed_session_phase_state_for_codex_bridge_
     assert snapshot["managed_sessions"][0]["last_activity_at"] == "2026-04-17T17:31:30Z"
 
 
-def test_collect_local_health_keeps_attached_codex_idle_from_managed_session_state(monkeypatch, tmp_path: Path):
+def test_collect_local_health_keeps_attached_codex_idle_from_single_phase_ledger(monkeypatch, tmp_path: Path):
     _disable_real_runner_env(monkeypatch, tmp_path)
     monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
     _write_engine_status(tmp_path, age_seconds=5)

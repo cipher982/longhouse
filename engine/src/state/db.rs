@@ -121,19 +121,6 @@ pub fn open_db(db_path: Option<&Path>) -> Result<Connection> {
             updated_at TEXT NOT NULL
         );
 
-        CREATE TABLE IF NOT EXISTS managed_session_state (
-            session_id TEXT PRIMARY KEY,
-            provider TEXT NOT NULL,
-            workspace_path TEXT,
-            workspace_label TEXT,
-            phase_kind TEXT,
-            tool_name TEXT,
-            phase_source TEXT,
-            phase_observed_at TEXT,
-            last_activity_at TEXT,
-            updated_at TEXT NOT NULL
-        );
-
         CREATE TABLE IF NOT EXISTS unmanaged_process_binding_state (
             provider TEXT NOT NULL,
             provider_session_id TEXT NOT NULL,
@@ -296,9 +283,6 @@ pub fn open_db(db_path: Option<&Path>) -> Result<Connection> {
 
          CREATE INDEX IF NOT EXISTS idx_live_file_state_updated
          ON live_file_state(provider, updated_at DESC);
-
-         CREATE INDEX IF NOT EXISTS idx_managed_session_state_provider_updated
-         ON managed_session_state(provider, updated_at DESC);
 
          CREATE INDEX IF NOT EXISTS idx_unmanaged_process_binding_observed
          ON unmanaged_process_binding_state(provider, observed_at DESC);

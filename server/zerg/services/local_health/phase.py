@@ -36,15 +36,15 @@ def _load_persisted_managed_session_phase_rows(base_dir: Path) -> dict[str, dict
             SELECT
                 session_id,
                 provider,
-                workspace_path,
-                workspace_label,
-                phase_kind,
+                NULL AS workspace_path,
+                NULL AS workspace_label,
+                phase,
                 tool_name,
-                phase_source,
-                phase_observed_at,
-                last_activity_at
-            FROM managed_session_state
-            ORDER BY phase_observed_at DESC
+                source,
+                observed_at,
+                observed_at AS last_activity_at
+            FROM session_phase_state
+            ORDER BY observed_at DESC
             """
         ).fetchall()
     except sqlite3.Error:

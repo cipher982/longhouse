@@ -732,17 +732,6 @@ impl OpenCodeRunSink {
             observed_at,
         };
         let _ = crate::state::session_phase::SessionPhaseStore::new(&conn).record(&signal);
-        let managed = crate::state::managed_session_state::ManagedSessionPhaseSignal {
-            session_id: self.session_id.clone(),
-            provider: "opencode".to_string(),
-            workspace_path: Some(self.cwd.clone()),
-            phase_kind: phase.to_string(),
-            tool_name,
-            phase_source: OPENCODE_RUN_ADAPTER.to_string(),
-            observed_at,
-        };
-        let _ = crate::state::managed_session_state::ManagedSessionStateStore::new(&conn)
-            .record_phase(&managed);
     }
 
     async fn post_events(&self, events: Vec<Value>) {
