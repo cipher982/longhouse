@@ -184,6 +184,11 @@ try:
     claim = json.loads((home / "managed-local" / "cursor-helm" / "binding-probes" / f"{sid}.json").read_text())
 except (OSError, ValueError, TypeError):
     deny("Longhouse launch identity could not be verified; command blocked", "identity_unverified")
+if not claim.get("permission_policy"):
+    # Pre-policy claims cannot distinguish default-remote from explicit bypass.
+    # Match resume behavior: never silently activate remote authority.
+    print("{}")
+    raise SystemExit(0)
 if not (
     claim.get("session_id") == sid
     and claim.get("conversation_uuid") == conversation_id

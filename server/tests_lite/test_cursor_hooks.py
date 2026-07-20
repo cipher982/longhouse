@@ -383,6 +383,37 @@ def test_cursor_permission_hook_is_inert_without_remote_policy(tmp_path: Path) -
     assert not home.exists()
 
 
+def test_cursor_permission_hook_is_inert_for_ambiguous_legacy_claim(tmp_path: Path) -> None:
+    cursor = tmp_path / ".cursor"
+    cursor.mkdir()
+    install_cursor_hooks(cursor)
+    script = cursor / "hooks" / "longhouse-cursor-permission-hook.py"
+    home = tmp_path / "longhouse"
+    launch_id = _seed_launch(home)
+    claim_path = home / "managed-local" / "cursor-helm" / "binding-probes" / "managed-session.json"
+    claim = json.loads(claim_path.read_text())
+    claim.pop("permission_policy")
+    claim_path.write_text(json.dumps(claim))
+
+    result = subprocess.run(
+        [str(script), "beforeShellExecution"],
+        input=json.dumps({"conversation_id": "cursor-id", "command": "pwd"}),
+        text=True,
+        capture_output=True,
+        env={
+            **os.environ,
+            "LONGHOUSE_HOME": str(home),
+            "LONGHOUSE_SESSION_ID": "managed-session",
+            "LONGHOUSE_CURSOR_LAUNCH_ID": launch_id,
+            "LONGHOUSE_PERMISSION_HOOK_ENABLED": "1",
+        },
+        timeout=5,
+        check=True,
+    )
+
+    assert json.loads(result.stdout) == {}
+
+
 def test_cursor_stop_wakes_engine_with_exact_managed_store(tmp_path: Path) -> None:
     cursor = tmp_path / ".cursor"
     cursor.mkdir()
