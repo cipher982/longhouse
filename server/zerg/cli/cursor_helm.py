@@ -324,7 +324,7 @@ def _cursor_helm_argv(
     permission_policy: str,
     cursor_args: list[str] | None,
 ) -> list[str]:
-    policy_args = ["--force"] if permission_policy == "auto_approve" else []
+    policy_args = ["--force", "--approve-mcps"] if permission_policy == "auto_approve" else []
     return [cursor_bin, "--resume", provider_conversation_id, *policy_args, *(cursor_args or [])]
 
 
@@ -373,6 +373,25 @@ def _resume_cursor_claim(longhouse_session_id: str) -> dict:
     except ValueError as exc:
         raise RuntimeError(f"Cursor identity claim for {session_id} is invalid") from exc
     return {**claim, "conversation_uuid": normalized_provider_id}
+
+
+def _resolve_resume_permission_policy(
+    requested_policy: str,
+    *,
+    permission_policy_explicit: bool,
+    resume_claim: dict,
+) -> tuple[str, bool]:
+    from zerg.services.cursor_permission_policy import normalize_cursor_permission_policy
+
+    recorded_value = resume_claim.get("permission_policy")
+    if not recorded_value:
+        # Old claims cannot distinguish the historical default from explicit
+        # bypass. Never silently enable remote Longhouse authority.
+        return "provider_local", True
+    recorded_policy = normalize_cursor_permission_policy(str(recorded_value), surface="helm")
+    if permission_policy_explicit and requested_policy != recorded_policy:
+        raise RuntimeError(f"resume policy conflict: session uses {recorded_policy}, requested {requested_policy}")
+    return recorded_policy, False
 
 
 def _write_pending_binding(
@@ -981,13 +1000,14 @@ def run_helm(
         if resume_session_id:
             resume_claim = _resume_cursor_claim(resume_session_id)
             provider_conversation_id = str(resume_claim["conversation_uuid"])
-            recorded_value = resume_claim.get("permission_policy") or "remote_approve"
-            recorded_policy = normalize_cursor_permission_policy(str(recorded_value), surface="helm")
-            if permission_policy_explicit and permission_policy != recorded_policy:
-                raise RuntimeError(f"resume policy conflict: session uses {recorded_policy}, requested {permission_policy}")
-            permission_policy = recorded_policy
+            permission_policy, legacy_policy_ambiguous = _resolve_resume_permission_policy(
+                permission_policy,
+                permission_policy_explicit=permission_policy_explicit,
+                resume_claim=resume_claim,
+            )
         else:
             provider_conversation_id = _create_cursor_chat(cursor_bin, cwd)
+            legacy_policy_ambiguous = False
     except (OSError, RuntimeError, subprocess.TimeoutExpired) as exc:
         typer.secho(f"Could not create native Cursor conversation: {exc}", fg=typer.colors.RED)
         raise typer.Exit(code=EXIT_SETUP_FAILED) from exc
@@ -1121,13 +1141,19 @@ def run_helm(
     if permission_policy == REMOTE_HUMAN:
         typer.secho(
             "Permission policy: remote_human. Shell and MCP calls pause for your approval in Longhouse "
-            f"({build_session_url(resolved_url, session_id)}).",
+            f"for up to 20 seconds ({build_session_url(resolved_url, session_id)}).",
             fg=typer.colors.YELLOW,
         )
     elif permission_policy == AUTO_APPROVE:
         typer.secho("Permission policy: auto_approve.", fg=typer.colors.YELLOW)
     else:
         assert permission_policy == PROVIDER_LOCAL
+        if legacy_policy_ambiguous:
+            typer.secho(
+                "This legacy session did not record its permission mode; resuming with provider_local. "
+                "Start a new session to select another policy explicitly.",
+                fg=typer.colors.YELLOW,
+            )
 
     launch_ui.launch_panel(
         provider_label=launch_ui.PROVIDER_LABELS["cursor"],

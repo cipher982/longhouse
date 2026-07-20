@@ -72,7 +72,10 @@ in Longhouse. The session URL and wait budget are visible.
 
 Resume reuses the recorded policy from the local binding claim. An explicit
 conflicting CLI policy fails with a clear error; resume never silently changes
-permission authority.
+permission authority. Claims created before policy recording are ambiguous
+because historical default-remote and explicit-bypass launches used the same
+claim shape. Those resumes warn and select `provider_local`; they never silently
+activate remote Longhouse authority.
 
 ### Console
 

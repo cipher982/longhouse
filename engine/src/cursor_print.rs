@@ -136,6 +136,7 @@ pub async fn start_cursor_print_turn(
         args.extend(["--model".to_string(), model]);
     }
     args.push("--force".to_string());
+    args.push("--approve-mcps".to_string());
     args.push(provider_prompt);
     let argv = std::iter::once(config.cursor_bin.clone())
         .chain(args.iter().cloned())

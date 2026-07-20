@@ -528,13 +528,35 @@ def test_resume_cursor_identity_uses_exact_hook_claim(tmp_path, monkeypatch):
     assert cursor_helm._resume_cursor_claim(session_id)["permission_policy"] == "remote_human"
 
 
+def test_resume_permission_policy_preserves_recorded_authority_and_rejects_conflicts():
+    policy, ambiguous = cursor_helm._resolve_resume_permission_policy(
+        "provider_local",
+        permission_policy_explicit=False,
+        resume_claim={"permission_policy": "remote_human"},
+    )
+    assert (policy, ambiguous) == ("remote_human", False)
+    with pytest.raises(RuntimeError, match="resume policy conflict"):
+        cursor_helm._resolve_resume_permission_policy(
+            "provider_local",
+            permission_policy_explicit=True,
+            resume_claim={"permission_policy": "remote_human"},
+        )
+    assert cursor_helm._resolve_resume_permission_policy(
+        "remote_human",
+        permission_policy_explicit=True,
+        resume_claim={},
+    ) == ("provider_local", True)
+
+
 def test_cursor_helm_policy_owns_provider_args_and_permission_env() -> None:
     assert cursor_helm._cursor_helm_argv("cursor-agent", "cursor-id", "provider_local", []) == [
         "cursor-agent",
         "--resume",
         "cursor-id",
     ]
-    assert cursor_helm._cursor_helm_argv("cursor-agent", "cursor-id", "auto_approve", [])[-1] == "--force"
+    auto_argv = cursor_helm._cursor_helm_argv("cursor-agent", "cursor-id", "auto_approve", [])
+    assert "--force" in auto_argv
+    assert "--approve-mcps" in auto_argv
 
     inherited = {
         "PATH": "/bin",

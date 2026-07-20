@@ -162,7 +162,8 @@ if os.environ.get("LONGHOUSE_PERMISSION_HOOK_ENABLED") != "1":
     print("{}")
     raise SystemExit(0)
 
-def deny(message):
+def deny(message, diagnostic_code):
+    print(f"Longhouse permission denial: {diagnostic_code}", file=sys.stderr)
     print(json.dumps({"permission": "deny", "user_message": message}))
     raise SystemExit(0)
 
@@ -170,19 +171,19 @@ event = sys.argv[1] if len(sys.argv) > 1 else "unknown"
 try:
     payload = json.load(sys.stdin)
 except Exception:
-    deny("Longhouse received malformed Cursor hook input; command blocked")
+    deny("Longhouse received malformed Cursor hook input; command blocked", "malformed_hook_input")
 
 sid = os.environ.get("LONGHOUSE_SESSION_ID", "").strip()
 conversation_id = str(payload.get("conversation_id") or "").strip()
 launch_id = os.environ.get("LONGHOUSE_CURSOR_LAUNCH_ID", "").strip()
 if not sid or not conversation_id or not launch_id:
-    deny("Longhouse launch identity is incomplete; command blocked")
+    deny("Longhouse launch identity is incomplete; command blocked", "identity_incomplete")
 
 home = Path(os.environ.get("LONGHOUSE_HOME") or (Path.home() / ".longhouse"))
 try:
     claim = json.loads((home / "managed-local" / "cursor-helm" / "binding-probes" / f"{sid}.json").read_text())
 except (OSError, ValueError, TypeError):
-    deny("Longhouse launch identity could not be verified; command blocked")
+    deny("Longhouse launch identity could not be verified; command blocked", "identity_unverified")
 if not (
     claim.get("session_id") == sid
     and claim.get("conversation_uuid") == conversation_id
@@ -190,16 +191,16 @@ if not (
     and claim.get("status") in {"pending", "observed"}
     and claim.get("permission_policy") in {"remote_human", "remote_approve"}
 ):
-    deny("Longhouse launch identity or permission policy does not match; command blocked")
+    deny("Longhouse launch identity or permission policy does not match; command blocked", "identity_policy_mismatch")
 
 base = os.environ.get("LONGHOUSE_HOOK_URL", "").rstrip("/")
 token = os.environ.get("LONGHOUSE_HOOK_TOKEN", "")
 if not base or not token:
-    deny("Longhouse approval service is not configured; command blocked")
+    deny("Longhouse approval service is not configured; command blocked", "approval_not_configured")
 try:
     timeout_s = min(120.0, max(1.0, float(os.environ.get("LONGHOUSE_PERMISSION_HOOK_TIMEOUT_S", "20"))))
 except ValueError:
-    deny("Longhouse approval timeout is invalid; command blocked")
+    deny("Longhouse approval timeout is invalid; command blocked", "invalid_timeout")
 
 invocation_id = str(payload.get("tool_call_id") or payload.get("toolCallId") or payload.get("invocation_id") or payload.get("call_id") or f"{time.time_ns()}:{os.getpid()}")
 material = "|".join([conversation_id, str(payload.get("generation_id") or ""), event, invocation_id, str(payload.get("command") or payload.get("tool_name") or "")])
@@ -214,15 +215,15 @@ try:
     with urllib.request.urlopen(request, timeout=5) as response:
         ack = json.loads(response.read().decode() or "{}")
 except urllib.error.HTTPError as exc:
-    deny(f"Longhouse approval service rejected authentication or registration (HTTP {exc.code}); command blocked")
+    deny(f"Longhouse approval service rejected authentication or registration (HTTP {exc.code}); command blocked", "registration_rejected")
 except (OSError, urllib.error.URLError):
-    deny("Longhouse approval service could not be reached; command blocked")
+    deny("Longhouse approval service could not be reached; command blocked", "registration_unreachable")
 except (ValueError, TypeError):
-    deny("Longhouse approval service returned malformed registration data; command blocked")
+    deny("Longhouse approval service returned malformed registration data; command blocked", "registration_malformed")
 
 pause_id = str(ack.get("pause_request_id") or "")
 if not pause_id:
-    deny("Longhouse approval service returned an incomplete registration; command blocked")
+    deny("Longhouse approval service returned an incomplete registration; command blocked", "registration_incomplete")
 query = urllib.parse.urlencode({"session_id": sid, "tool_use_id": request_id, "pause_request_id": pause_id, "provider": "cursor"})
 deadline = time.monotonic() + timeout_s
 try:
@@ -233,7 +234,7 @@ try:
         if result.get("resolved"):
             decision = str(result.get("decision") or "").lower()
             if decision not in {"allow", "deny"}:
-                deny("Longhouse approval service returned a malformed decision; command blocked")
+                deny("Longhouse approval service returned a malformed decision; command blocked", "decision_malformed")
             output = {"permission": decision}
             if result.get("reason"):
                 output["user_message"] = result["reason"]
@@ -243,11 +244,11 @@ try:
 except SystemExit:
     raise
 except urllib.error.HTTPError as exc:
-    deny(f"Longhouse approval polling was rejected (HTTP {exc.code}); command blocked")
+    deny(f"Longhouse approval polling was rejected (HTTP {exc.code}); command blocked", "poll_rejected")
 except (OSError, urllib.error.URLError):
-    deny("Longhouse approval service became unreachable while waiting; command blocked")
+    deny("Longhouse approval service became unreachable while waiting; command blocked", "poll_unreachable")
 except (ValueError, TypeError):
-    deny("Longhouse approval service returned malformed decision data; command blocked")
+    deny("Longhouse approval service returned malformed decision data; command blocked", "poll_malformed")
 
 try:
     expire_body = json.dumps({"session_id": sid, "reason": "Approval deadline expired before a human decision"}).encode()
@@ -255,7 +256,7 @@ try:
     urllib.request.urlopen(request, timeout=2).close()
 except Exception:
     pass
-deny("No human approval was received before the Longhouse deadline; command blocked")
+deny("No human approval was received before the Longhouse deadline; command blocked", "timeout_no_decision")
 """
 
 

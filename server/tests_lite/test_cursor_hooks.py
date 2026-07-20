@@ -255,6 +255,7 @@ def test_cursor_permission_transport_failure_blocks_instead_of_failing_open(tmp_
 
     assert json.loads(result.stdout)["permission"] == "deny"
     assert "could not be reached" in json.loads(result.stdout)["user_message"]
+    assert "registration_unreachable" in result.stderr
 
 
 def test_cursor_permission_hook_returns_exact_remote_allow_and_deny(tmp_path: Path) -> None:
@@ -354,6 +355,7 @@ def test_cursor_permission_deadline_expires_exact_remote_prompt(tmp_path: Path) 
     output = json.loads(result.stdout)
     assert output["permission"] == "deny"
     assert "No human approval" in output["user_message"]
+    assert "timeout_no_decision" in result.stderr
     assert "/api/agents/permission-requests/pause-1/expire" in server.paths
 
 
