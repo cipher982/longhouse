@@ -251,6 +251,7 @@ def _initialize_schema(connection: sqlite3.Connection) -> None:
             content_rowid='id',
             tokenize='unicode61 remove_diacritics 2'
         );
+        CREATE VIRTUAL TABLE IF NOT EXISTS events_fts_vocab USING fts5vocab(events_fts, row);
         CREATE TRIGGER IF NOT EXISTS events_ai AFTER INSERT ON events BEGIN
             INSERT INTO events_fts(rowid, content_text, tool_output_text)
             VALUES (new.id, new.content_text, new.tool_output_text);
@@ -310,7 +311,6 @@ class SearchStore:
         self._worklog_snapshots: dict[str, _WorklogSnapshot] = {}
         self._term_document_counts: dict[str, int] = {}
         self._term_document_total: int | None = None
-        self._term_vocabulary_ready = False
         self._last_optimize_mono = 0.0
 
     def startup_maintenance(self) -> None:
@@ -770,14 +770,11 @@ class SearchStore:
         return _fts_query(" ".join(compiled_tokens)), len(tokens), len(compiled_tokens)
 
     def _term_frequencies(self, tokens: list[str]) -> dict[str, int]:
-        if not self._term_vocabulary_ready:
-            self.connection.execute("CREATE VIRTUAL TABLE temp.events_fts_vocab USING fts5vocab(main, events_fts, row)")
-            self._term_vocabulary_ready = True
         uncached = sorted({token for token in tokens if token not in self._term_document_counts})
         if uncached:
             placeholders = ", ".join("?" for _ in uncached)
             rows = self.connection.execute(
-                f"SELECT term, doc FROM temp.events_fts_vocab WHERE term IN ({placeholders})",
+                f"SELECT term, doc FROM events_fts_vocab WHERE term IN ({placeholders})",
                 uncached,
             ).fetchall()
             self._term_document_counts.update({str(row["term"]): int(row["doc"]) for row in rows})
