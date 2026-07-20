@@ -6,6 +6,7 @@ import asyncio
 import fcntl
 import os
 import re
+import sqlite3
 import stat
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -26,6 +27,10 @@ from zerg.searchd.store import open_search_database
 _HASH = re.compile(r"[0-9a-f]{64}\Z")
 _PROVIDER = re.compile(r"[a-z0-9][a-z0-9_-]{0,31}\Z")
 _ROLES = {"user", "assistant", "tool", "system"}
+
+
+class _ReadDeadlineExceeded(RuntimeError):
+    pass
 
 
 class SearchDaemon:
@@ -157,7 +162,10 @@ class SearchDaemon:
             return self._error(request, "catalog_unavailable", "search index is not ready", retryable=True)
         try:
             if request.method == "search.ping.v2":
-                ping = await self._run_read(self._read_store.ping)
+                ping = await self._run_read(
+                    self._read_store.ping,
+                    deadline_mono_ns=int(request.deadline_mono_ns),
+                )
                 return self._result(request, {**ping, "pid": os.getpid()})
             if request.method == "search.index.object.v2":
                 params = _index_object_params(request.params)
@@ -167,16 +175,31 @@ class SearchDaemon:
                 return self._result(request, await self._run(self._store.publish_generation, **params))
             if request.method == "search.query.v2":
                 params = _search_params(request.params)
-                return self._result(request, await self._run_read(self._read_store.search, **params))
+                return self._result(
+                    request,
+                    await self._run_read(
+                        self._read_store.search,
+                        deadline_mono_ns=int(request.deadline_mono_ns),
+                        **params,
+                    ),
+                )
             if request.method == "worklog.day.v2":
                 params = _worklog_params(request.params)
-                return self._result(request, await self._run_read(self._read_store.worklog_day, **params))
+                return self._result(
+                    request,
+                    await self._run_read(
+                        self._read_store.worklog_day,
+                        deadline_mono_ns=int(request.deadline_mono_ns),
+                        **params,
+                    ),
+                )
             if request.method == "worklog.snapshot.release.v2":
                 _exact_keys(request.params, {"snapshot_id", "owner_id"})
                 return self._result(
                     request,
                     await self._run_read(
                         self._read_store.release_worklog_snapshot,
+                        deadline_mono_ns=int(request.deadline_mono_ns),
                         snapshot_id=_uuid(request.params["snapshot_id"], "snapshot_id"),
                         owner_id=_text(request.params["owner_id"], "owner_id", 64),
                     ),
@@ -194,6 +217,8 @@ class SearchDaemon:
             return self._error(request, "record_too_large", str(exc))
         except WorklogSnapshotError as exc:
             return self._error(request, exc.code, str(exc), retryable=exc.code in {"snapshot_capacity", "stale_snapshot"})
+        except _ReadDeadlineExceeded:
+            return self._error(request, "deadline_exceeded", "search read deadline exceeded", retryable=True)
         except Exception:
             return self._error(request, "internal", "searchd operation failed")
 
@@ -201,9 +226,31 @@ class SearchDaemon:
         assert self._executor is not None
         return await asyncio.get_running_loop().run_in_executor(self._executor, lambda: function(**kwargs))
 
-    async def _run_read(self, function, **kwargs):
+    async def _run_read(self, function, *, deadline_mono_ns: int, **kwargs):
         assert self._read_executor is not None
-        return await asyncio.get_running_loop().run_in_executor(self._read_executor, lambda: function(**kwargs))
+        assert self._read_connection is not None
+
+        def execute():
+            if time.monotonic_ns() >= deadline_mono_ns:
+                raise _ReadDeadlineExceeded
+            interrupted = False
+            self._read_connection.set_progress_handler(
+                lambda: int(time.monotonic_ns() >= deadline_mono_ns),
+                1_000,
+            )
+            try:
+                return function(**kwargs)
+            except sqlite3.OperationalError as exc:
+                if str(exc) == "interrupted":
+                    interrupted = True
+                    raise _ReadDeadlineExceeded from exc
+                raise
+            finally:
+                self._read_connection.set_progress_handler(None, 0)
+                if interrupted and self._read_connection.in_transaction:
+                    self._read_connection.rollback()
+
+        return await asyncio.get_running_loop().run_in_executor(self._read_executor, execute)
 
     @staticmethod
     def _result(request: CatalogRpcRequest, result: dict[str, object]) -> CatalogRpcResponse:

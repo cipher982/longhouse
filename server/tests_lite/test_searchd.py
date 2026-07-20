@@ -12,8 +12,10 @@ import pytest
 
 from zerg.catalogd.client import CatalogClient
 from zerg.catalogd.client import CatalogRemoteError
+from zerg.catalogd.client import CatalogUnavailable
 from zerg.searchd.server import SearchDaemon
 from zerg.searchd.store import _PUBLISH_AGGREGATES_SQL
+from zerg.searchd.store import _SEARCH_SQL
 from zerg.searchd.store import SearchStore
 from zerg.searchd.store import object_set_hash
 from zerg.searchd.store import open_search_database
@@ -96,6 +98,20 @@ def test_publish_aggregate_uses_session_generation_index(tmp_path):
         connection.close()
 
 
+def test_search_uses_fts_rank_top_k_without_temp_sort(tmp_path):
+    connection = open_search_database(tmp_path / "search.db")
+    try:
+        plan = connection.execute(
+            f"EXPLAIN QUERY PLAN {_SEARCH_SQL}",
+            ("search db", "42", None, None, None, None, None, None, None, None, None, None, 10),
+        ).fetchall()
+        details = [str(row[3]) for row in plan]
+        assert any("VIRTUAL TABLE INDEX 32:" in detail for detail in details)
+        assert not any("TEMP B-TREE FOR ORDER BY" in detail for detail in details)
+    finally:
+        connection.close()
+
+
 @pytest.mark.asyncio
 async def test_search_reads_remain_live_while_projection_writer_is_busy(tmp_path):
     socket_parent = Path("/tmp") / f"lhs-{uuid4().hex[:8]}"
@@ -135,6 +151,46 @@ async def test_search_reads_remain_live_while_projection_writer_is_busy(tmp_path
     finally:
         release_writer.set()
         await blocked
+        await client.close()
+        await daemon.close()
+        socket_parent.rmdir()
+
+
+@pytest.mark.asyncio
+async def test_timed_out_search_is_interrupted_before_later_reads(tmp_path):
+    socket_parent = Path("/tmp") / f"lhs-{uuid4().hex[:8]}"
+    socket_parent.mkdir(mode=0o700)
+    socket_path = socket_parent / "s"
+    daemon = SearchDaemon(database_path=tmp_path / "search.db", socket_path=socket_path)
+    await daemon.start()
+    assert daemon._read_store is not None
+    assert daemon._read_connection is not None
+    client = CatalogClient(socket_path)
+
+    def slow_search(**_params):
+        daemon._read_connection.execute("BEGIN")
+        return daemon._read_connection.execute(
+            """
+            WITH RECURSIVE counter(value) AS (
+                SELECT 0 UNION ALL SELECT value + 1 FROM counter WHERE value < 100000000
+            )
+            SELECT SUM(value) FROM counter
+            """
+        ).fetchone()
+
+    original_search = daemon._read_store.search
+    daemon._read_store.search = slow_search
+    try:
+        with pytest.raises((CatalogRemoteError, CatalogUnavailable)) as timeout:
+            await client.call("search.query.v2", _search_params("slow"), timeout_seconds=0.05)
+        if isinstance(timeout.value, CatalogRemoteError):
+            assert timeout.value.code == "deadline_exceeded"
+        daemon._read_store.search = original_search
+        ping = await client.call("search.ping.v2", timeout_seconds=0.2)
+        assert ping["ready"] is True
+        assert daemon._read_connection.in_transaction is False
+    finally:
+        daemon._read_store.search = original_search
         await client.close()
         await daemon.close()
         socket_parent.rmdir()

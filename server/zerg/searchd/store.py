@@ -39,6 +39,32 @@ _PUBLISH_AGGREGATES_SQL = """
       AND e.session_id = ? AND e.generation_id = ?
 """
 
+_SEARCH_SQL = """
+    SELECT e.session_id, e.generation_id, e.source_object_id,
+           e.record_ordinal, e.event_id, e.order_time_us,
+           e.role, e.tool_name,
+           snippet(events_fts, 0, '', '', ' … ', 24) AS content_snippet,
+           snippet(events_fts, 1, '', '', ' … ', 24) AS tool_output_snippet,
+           s.project, s.provider, s.environment, s.indexed_through,
+           events_fts.rank AS rank
+    FROM events_fts
+    JOIN events e ON e.id = events_fts.rowid
+    JOIN session_index s ON s.session_id = e.session_id AND s.generation_id = e.generation_id
+    JOIN projection_membership m
+      ON m.session_id = e.session_id
+     AND m.generation_id = e.generation_id
+     AND m.desired_revision = s.indexed_through
+     AND m.object_id = e.source_object_id
+    WHERE events_fts MATCH ? AND s.owner_id = ?
+      AND (? IS NULL OR s.project = ?)
+      AND (? IS NULL OR s.provider = ?)
+      AND (? IS NULL OR s.environment = ?)
+      AND (? IS NULL OR e.order_time_us >= ?)
+      AND (? IS NULL OR e.order_time_us < ?)
+    ORDER BY events_fts.rank ASC
+    LIMIT ?
+"""
+
 
 class WorklogPageTooLarge(RuntimeError):
     pass
@@ -586,31 +612,7 @@ class SearchStore:
         if not fts_query:
             return {"results": []}
         rows = self.connection.execute(
-            """
-            SELECT e.session_id, e.generation_id, e.source_object_id,
-                   e.record_ordinal, e.event_id, e.order_time_us,
-                   e.role, e.tool_name,
-                   snippet(events_fts, 0, '', '', ' … ', 24) AS content_snippet,
-                   snippet(events_fts, 1, '', '', ' … ', 24) AS tool_output_snippet,
-                   s.project, s.provider, s.environment, s.indexed_through,
-                   bm25(events_fts) AS rank
-            FROM events_fts
-            JOIN events e ON e.id = events_fts.rowid
-            JOIN session_index s ON s.session_id = e.session_id AND s.generation_id = e.generation_id
-            JOIN projection_membership m
-              ON m.session_id = e.session_id
-             AND m.generation_id = e.generation_id
-             AND m.desired_revision = s.indexed_through
-             AND m.object_id = e.source_object_id
-            WHERE events_fts MATCH ? AND s.owner_id = ?
-              AND (? IS NULL OR s.project = ?)
-              AND (? IS NULL OR s.provider = ?)
-              AND (? IS NULL OR s.environment = ?)
-              AND (? IS NULL OR e.order_time_us >= ?)
-              AND (? IS NULL OR e.order_time_us < ?)
-            ORDER BY rank ASC, e.order_time_us DESC, e.event_key ASC
-            LIMIT ?
-            """,
+            _SEARCH_SQL,
             (
                 fts_query,
                 owner_id,
