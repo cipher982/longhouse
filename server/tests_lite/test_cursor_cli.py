@@ -27,7 +27,7 @@ def test_unknown_options_after_separator_are_forwarded_to_cursor(monkeypatch) ->
 
     assert result.exit_code == 0
     assert calls[0]["cursor_args"] == ["--model", "gpt-5.3-codex-low", "hello"]
-    assert calls[0]["permission_policy"] == "provider_local"
+    assert calls[0]["permission_policy"] == "auto_approve"
     assert calls[0]["permission_policy_explicit"] is False
 
 

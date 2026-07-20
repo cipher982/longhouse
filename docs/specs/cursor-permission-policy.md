@@ -1,17 +1,19 @@
 # Cursor Permission Policy
 
-Status: implementation plan
+Status: active decision
 Owner: Longhouse managed-provider surfaces
 Date: 2026-07-20
 
 ## Outcome
 
-Longhouse treats permission handling as an explicit launch policy, not an
-implicit consequence of a managed session.
+Longhouse treats permission handling as an explicit launch policy. New managed
+Cursor sessions are remote-ready by default: routine Shell and MCP permission
+prompts are approved automatically so a Helm or Console session cannot become
+stranded when the user leaves the terminal.
 
-The human user is the only remote approver. Longhouse carries a pending
-provider request to web or iOS and returns the user's Allow or Deny decision;
-Longhouse and its agents do not approve tools autonomously.
+This is a deliberate product contract, not a fallback. The user can explicitly
+select provider-local or remote-human approval for Helm, and deterministic local
+guards such as DCG remain independent.
 
 Cursor exposes three product policies:
 
@@ -21,9 +23,9 @@ Cursor exposes three product policies:
 | `provider_local` | The provider's native local permission behavior remains in the interactive TUI. Longhouse does not route approvals. |
 | `remote_human` | The provider pauses and the human answers through Longhouse web or iOS. |
 
-The defaults are surface-specific:
+The defaults are:
 
-- Cursor Helm defaults to `provider_local`.
+- Cursor Helm defaults to `auto_approve`.
 - Cursor Console defaults to `auto_approve`; `provider_local` is invalid because
   Console has no local TUI.
 - Cursor Shadow has no Longhouse permission authority.
@@ -36,15 +38,22 @@ bounded wait. A live incident registered ten permission requests and received
 successful HTTP responses for every decision poll, but no human answered. The
 hook called that state "Longhouse approval unavailable" and denied each tool.
 
-The permission transport worked. The product default and failure taxonomy were
-wrong. The July 17 parity work correctly proved that remote Allow and Deny were
-possible, then incorrectly promoted that capability into Helm's default policy.
+The permission transport worked, but the product default and failure taxonomy
+were wrong. Changing the default to `provider_local` removed the accidental
+remote gate but left the core remote-control promise incomplete: a user could
+start a managed Helm session, leave the terminal, and have no way to clear the
+next native Cursor permission prompt.
+
+Managed Cursor therefore defaults to autonomous permission handling. Remote
+human approval remains an explicit policy, not the launch default and not a
+headline feature.
 
 ## Surface Contract
 
 ### Helm
 
-`longhouse cursor` launches with `provider_local`. It does not set
+`longhouse cursor` launches with `auto_approve`. It passes Cursor's proven stock
+`--force --approve-mcps` flags, does not set
 `LONGHOUSE_PERMISSION_HOOK_ENABLED`, `LONGHOUSE_HOOK_URL`, or
 `LONGHOUSE_HOOK_TOKEN`, and it performs no permission API requests.
 
@@ -70,7 +79,9 @@ When `remote_human` is selected, launch waits for a registered session-scoped
 hook token and clearly prints that Shell and MCP calls pause for human approval
 in Longhouse. The session URL and wait budget are visible.
 
-Resume reuses the recorded policy from the local binding claim. An explicit
+Resume reuses the recorded policy from the local binding claim. Changing the
+default affects new sessions only; an existing session recorded as
+`provider_local` remains provider-local. An explicit
 conflicting CLI policy fails with a clear error; resume never silently changes
 permission authority. Claims created before policy recording are ambiguous
 because historical default-remote and explicit-bypass launches used the same
@@ -146,25 +157,21 @@ change.
 
 ## Implementation Plan
 
-1. Add surface-aware Cursor policy normalization and Helm CLI options.
-2. Persist the canonical Helm policy in binding claims and enforce it on resume.
-3. Map canonical policies to existing wire values only at compatibility
-   boundaries; preserve existing stored sessions.
-4. Correct Console defaults and reject unsupported policies before provider
-   spawn.
-5. Split the minimal permission hook path from lifecycle telemetry.
-6. Add typed timeout, transport/auth, malformed-result, and identity-mismatch
-   outcomes.
-7. Add interaction expiry plus best-effort hook abandonment using the existing
-   terminal `expired` status.
-8. Correct Cursor prompt copy and launch messaging.
-9. Update the Cursor Helm parity specification to reference this policy.
-10. Run targeted provider-boundary tests and the focused Cursor product canary.
+1. Default new Helm policy normalization to `auto_approve`, matching Console.
+2. Keep explicit `provider_local`, `remote_human`, and legacy aliases working.
+3. Preserve the recorded canonical policy on resume and keep legacy unrecorded
+   claims fail-safe at `provider_local`.
+4. Launch autonomous Helm through stock Cursor `--force --approve-mcps` and keep
+   the Longhouse permission hook dormant.
+5. Prove the CLI default, provider argv, child environment, and resume behavior
+   with focused tests.
 
 ## Acceptance Tests
 
-- Bare Cursor Helm selects `provider_local`, exports no approval environment,
-  and makes zero permission HTTP requests.
+- Bare Cursor Helm selects `auto_approve`, launches stock Cursor with `--force
+  --approve-mcps`, exports no approval environment, and makes zero permission
+  HTTP requests.
+- Explicit Helm `provider_local` preserves Cursor's native terminal approvals.
 - Explicit Helm `remote_human` obtains a session-scoped hook token and proves
   Allow, Deny, no-decision timeout, transport failure, malformed response, and
   identity mismatch.
@@ -172,6 +179,8 @@ change.
 - Parent-shell permission variables cannot re-enable the gate under
   `provider_local` or `auto_approve`.
 - Helm resume reuses the recorded policy and rejects an explicit conflict.
+- Existing recorded `provider_local` sessions and ambiguous legacy claims do not
+  silently switch to autonomous execution on resume.
 - Cursor Console defaults `auto_approve`, rejects `provider_local`, and does not
   claim `remote_human` without a session-scoped token path.
 - Hook installation preserves DCG ahead of Longhouse, keeps telemetry

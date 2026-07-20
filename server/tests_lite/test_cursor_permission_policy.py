@@ -8,7 +8,7 @@ from zerg.services.cursor_permission_policy import normalize_cursor_permission_p
 @pytest.mark.parametrize(
     ("value", "surface", "expected"),
     [
-        (None, "helm", "provider_local"),
+        (None, "helm", "auto_approve"),
         (None, "console", "auto_approve"),
         ("bypass", "helm", "provider_local"),
         ("bypass", "console", "auto_approve"),

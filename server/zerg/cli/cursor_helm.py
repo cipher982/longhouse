@@ -398,7 +398,7 @@ def _write_pending_binding(
     session_id: str,
     provider_conversation_id: str,
     launch_id: str,
-    permission_policy: str = "provider_local",
+    permission_policy: str = "auto_approve",
 ) -> None:
     claims = _state_dir() / "binding-probes"
     claims.mkdir(parents=True, exist_ok=True)
@@ -1145,7 +1145,11 @@ def run_helm(
             fg=typer.colors.YELLOW,
         )
     elif permission_policy == AUTO_APPROVE:
-        typer.secho("Permission policy: auto_approve.", fg=typer.colors.YELLOW)
+        typer.secho(
+            "Permission policy: auto_approve. Cursor Shell and MCP calls run without individual confirmation; "
+            "use --permission-policy provider_local to restore native terminal prompts.",
+            fg=typer.colors.YELLOW,
+        )
     else:
         assert permission_policy == PROVIDER_LOCAL
         if legacy_policy_ambiguous:

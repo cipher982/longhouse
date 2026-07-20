@@ -109,6 +109,17 @@ def test_pending_binding_reserves_native_conversation_before_cursor_launch(monke
     assert claim["expires_at"] > cursor_helm._now_iso()
 
 
+def test_pending_binding_defaults_new_cursor_helm_sessions_to_auto_approve(monkeypatch, tmp_path):
+    _state_dir_for(monkeypatch, tmp_path)
+    session_id = "11111111-1111-4111-8111-111111111111"
+    cursor_id = "22222222-2222-4222-8222-222222222222"
+
+    cursor_helm._write_pending_binding(session_id, cursor_id, "launch-1")
+
+    claim = json.loads((cursor_helm._state_dir() / "binding-probes" / f"{session_id}.json").read_text())
+    assert claim["permission_policy"] == "auto_approve"
+
+
 def test_failed_resume_restores_last_observed_binding(monkeypatch, tmp_path):
     _state_dir_for(monkeypatch, tmp_path)
     claims = cursor_helm._state_dir() / "binding-probes"
@@ -530,20 +541,20 @@ def test_resume_cursor_identity_uses_exact_hook_claim(tmp_path, monkeypatch):
 
 def test_resume_permission_policy_preserves_recorded_authority_and_rejects_conflicts():
     policy, ambiguous = cursor_helm._resolve_resume_permission_policy(
-        "provider_local",
+        "auto_approve",
         permission_policy_explicit=False,
-        resume_claim={"permission_policy": "remote_human"},
+        resume_claim={"permission_policy": "provider_local"},
     )
-    assert (policy, ambiguous) == ("remote_human", False)
+    assert (policy, ambiguous) == ("provider_local", False)
     with pytest.raises(RuntimeError, match="resume policy conflict"):
         cursor_helm._resolve_resume_permission_policy(
-            "provider_local",
+            "auto_approve",
             permission_policy_explicit=True,
-            resume_claim={"permission_policy": "remote_human"},
+            resume_claim={"permission_policy": "provider_local"},
         )
     assert cursor_helm._resolve_resume_permission_policy(
-        "remote_human",
-        permission_policy_explicit=True,
+        "auto_approve",
+        permission_policy_explicit=False,
         resume_claim={},
     ) == ("provider_local", True)
 
@@ -554,9 +565,13 @@ def test_cursor_helm_policy_owns_provider_args_and_permission_env() -> None:
         "--resume",
         "cursor-id",
     ]
-    auto_argv = cursor_helm._cursor_helm_argv("cursor-agent", "cursor-id", "auto_approve", [])
-    assert "--force" in auto_argv
-    assert "--approve-mcps" in auto_argv
+    assert cursor_helm._cursor_helm_argv("cursor-agent", "cursor-id", "auto_approve", []) == [
+        "cursor-agent",
+        "--resume",
+        "cursor-id",
+        "--force",
+        "--approve-mcps",
+    ]
 
     inherited = {
         "PATH": "/bin",
@@ -576,10 +591,22 @@ def test_cursor_helm_policy_owns_provider_args_and_permission_env() -> None:
     assert "LONGHOUSE_HOOK_URL" not in local
     assert "LONGHOUSE_HOOK_TOKEN" not in local
 
-    remote = cursor_helm._cursor_helm_child_env(
+    automatic = cursor_helm._cursor_helm_child_env(
         inherited,
         session_id="session-2",
         launch_id="launch-2",
+        permission_policy="auto_approve",
+        hook_url="https://longhouse.example",
+        hook_token="inner-token",
+    )
+    assert "LONGHOUSE_PERMISSION_HOOK_ENABLED" not in automatic
+    assert "LONGHOUSE_HOOK_URL" not in automatic
+    assert "LONGHOUSE_HOOK_TOKEN" not in automatic
+
+    remote = cursor_helm._cursor_helm_child_env(
+        inherited,
+        session_id="session-3",
+        launch_id="launch-3",
         permission_policy="remote_human",
         hook_url="https://longhouse.example",
         hook_token="inner-token",

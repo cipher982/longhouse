@@ -2,7 +2,7 @@
 
 Status: implemented; release qualification still requires Runtime Host outage recovery, and stock Cursor has no active-turn steer surface
 Owner: Longhouse Machine Agent + provider launchers
-Last updated: 2026-07-17
+Last updated: 2026-07-20
 Supersedes the Cursor Helm product conclusions in
 `cursor-transcript-format.md`, `cursor-storage-v2-source-fidelity.md`, and
 `capability-gated-degraded-helm.md` where they conflict with this document.
@@ -17,7 +17,7 @@ same user outcomes it promises for Claude and Codex:
    stable identity;
 3. the transcript is visible live, durable, searchable, and reconstructable;
 4. remote send, active-turn steer, graceful turn cancellation, permission
-   response, resume, and control-path recovery have truthful semantics;
+   policy, resume, and control-path recovery have truthful semantics;
 5. a Longhouse failure never terminates or corrupts provider execution.
 
 Provider-specific mechanics may differ. Product semantics may not. A control
@@ -40,7 +40,9 @@ hooks and `store.db` provide phase and transcript evidence:
   Cursor is idle;
 - interrupt writes Ctrl-C to cancel the active generation while preserving the
   TUI and conversation; terminate remains an explicit process kill;
-- permission allow/deny is resolved through Longhouse's pause-request API;
+- new Helm sessions default to autonomous Shell/MCP approval through stock
+  Cursor flags; explicit `remote_human` allow/deny is resolved through
+  Longhouse's pause-request API;
 - native `--resume` restores the same Cursor and Longhouse identities;
 - the storage-v2 renderer emits readable text, reasoning, tool calls, and tool
   results, and native hooks wake the Machine Agent at turn boundaries.

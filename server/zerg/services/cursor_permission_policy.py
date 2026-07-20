@@ -20,7 +20,7 @@ def normalize_cursor_permission_policy(
 ) -> CursorPermissionPolicy:
     normalized = str(value or "").strip().lower().replace("-", "_")
     if not normalized:
-        return PROVIDER_LOCAL if surface == "helm" else AUTO_APPROVE
+        return AUTO_APPROVE
     if normalized in {AUTO_APPROVE, PROVIDER_LOCAL, REMOTE_HUMAN}:
         policy = normalized
     elif normalized == "remote_approve":

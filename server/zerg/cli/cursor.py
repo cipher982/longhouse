@@ -96,7 +96,7 @@ def launch(
         None,
         "--permission-policy",
         "--permission-mode",
-        help="provider_local (default), auto_approve, or remote_human. Legacy mode names remain accepted.",
+        help="auto_approve (default), provider_local, or remote_human. Legacy mode names remain accepted.",
     ),
     remote_approve: bool = typer.Option(
         False,
