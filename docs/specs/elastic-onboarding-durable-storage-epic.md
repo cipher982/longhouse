@@ -46,6 +46,15 @@ choose a shared database, eliminate per-tenant runtimes, or hard-code a tenant
 count based on an imagined average customer. Those are later decisions made
 from observed bytes, requests, latency, contention, recovery behavior, and cost.
 
+While hosted Longhouse has zero external users, planned availability is not a
+migration constraint. Storage or database cutovers default to a declared offline
+maintenance window: pause writes and control, take verified recoverable
+snapshots, run the migration with full machine capacity, validate the complete
+product, switch authority, and resume. We protect data and rollback, not an
+unused uptime number. Prolonged dual-write, shadow-serving, tenant-by-tenant
+canaries, and online schema choreography are deferred until external customers
+make downtime consequential.
+
 The 80/20 launch architecture is:
 
 ```text
@@ -229,6 +238,10 @@ invalidate raw durability, live control, or the session identity catalog.
     and import compute can be attributed at least per tenant and workload lane.
 12. **No hidden fallback.** A degraded search or object store reports its actual
     state; it never silently queries a legacy monolith or customer source.
+13. **Prelaunch cutovers optimize for completion, not availability.** While
+    there are zero external users, planned maintenance may stop ingest, control,
+    reads, and projectors. Data protection, deterministic validation, and
+    rollback remain mandatory; live coexistence machinery does not.
 
 ## Target Architecture
 
@@ -477,6 +490,12 @@ Cold/detail/search targets are evaluated under controlled background onboarding,
 not on an idle host. We do not declare a target achieved until enough samples
 exist to show a distribution and its error rate.
 
+These service levels apply before and after a cutover, not during an explicitly
+declared prelaunch maintenance window. Migration throughput may use the full
+host while the product is paused. Reopening requires the post-cutover checks to
+pass; keeping the product responsive while bytes are being transformed is not a
+gate until external users exist.
+
 Architecture changes require evidence:
 
 - **Choose remote object storage:** backend passes checksum/idempotency/restore
@@ -511,6 +530,8 @@ Architecture changes require evidence:
 | Runtime version rolls back | Catalog/object protocol compatibility gate rejects unsupported writes; immutable raw objects remain readable/exportable. |
 | Tenant deletion races projection | Tombstone/revision prevents new derived outputs and drives object/index cleanup idempotently. |
 | Metrics pipeline fails | Product continues; telemetry health reports the gap so missing evidence is not interpreted as success. |
+| Maintenance begins with in-flight writes | Stop admission, wait for or reject bounded in-flight work, flush durable state, and only then snapshot. Machine Agents retain unacknowledged envelopes. |
+| Offline migration or validation fails | Keep production paused; preserve failed output for diagnosis; restore the verified pre-cutover snapshot or rerun from it. |
 
 ## Security and Privacy
 
@@ -561,28 +582,50 @@ operator controls, configurable, and visible to the admission controller.
 
 ## Migration Strategy
 
-Migration is additive and reversible until raw restore proof passes.
+### Prelaunch default: offline replacement
 
-1. Measure the current filesystem storage-v2 serving path.
-2. Ship progressive inventory/admission against that existing path so backend
-   migration is not a prerequisite for safe onboarding.
-3. Implement and contract-test the object-store interface without changing the
-   production source of truth.
-4. Mirror newly sealed raw/render/media objects to the candidate backend and
-   verify identity, checksum, inventory, and delete isolation.
-5. Restore a disposable tenant from remote objects plus catalog backup and prove
-   timeline, detail, raw export, search rebuild, and recall rebuild.
-6. During transition, require both local and remote durability before receipt.
-   Rollback means ceasing the remote requirement for new receipts; it never
-   abandons envelopes acknowledged only in the remote backend.
-7. After the remote backend, catalog backup, tombstones, and restore path pass
-   their gates, make remote raw objects the hosted authority for new envelopes.
-8. Backfill existing storage-v2 objects by manifest priority and byte budget,
-   never by re-requesting customer logs.
-9. Cut reads to the remote adapter only after warm/recent/cold mixed-load proof.
-10. Remove obsolete duplicate hosted raw storage only after two independent
-   restore proofs and an explicit operator cutover. Deletion is not implied by
-   successful copy.
+Before every destructive or authority-changing operation, verify that hosted
+still has zero external users. If that fact changes, stop and redesign the
+cutover around customer communication and bounded availability. While it remains
+true, use this sequence:
+
+1. **Prove the target offline.** Contract-test the destination, migrate a
+   disposable copy, restore it independently, and run timeline/detail/export/
+   search/recall checks before touching production.
+2. **Capture a short baseline.** Record the deployed build, storage inventory,
+   object/session counts, representative warm/cold/read timings, and outstanding
+   worker/projector state. This is a comparison point, not a multi-day soak.
+3. **Declare maintenance and stop mutation.** Put hosted Longhouse in an
+   explicit maintenance state; stop new ingest and control admission, archive
+   repair, projectors, indexers, and background cleanup. Drain or reject bounded
+   in-flight work and flush durable state. Machine Agents keep unacknowledged
+   frozen envelopes for retry after resume.
+4. **Take verified recovery snapshots.** Snapshot catalogs, tombstones,
+   filesystem objects, configuration, and build identity. Record manifests and
+   checksums, copy the recovery set outside the migration target, and prove that
+   the snapshot can be opened or sampled before proceeding.
+5. **Run the migration at full capacity.** Bulk copy, transform, pack, rebuild,
+   or replace without live-traffic throttles. The migration reads only the
+   frozen snapshot/source generation and writes a new destination generation;
+   it never mutates the sole recovery copy in place.
+6. **Validate before authority changes.** Compare manifests, counts, checksums,
+   source ranges, sessions, tombstones, and media. Exercise newest, recent, cold,
+   paginated, raw export, search, recall, rebuild, and restart paths against the
+   candidate destination.
+7. **Switch once.** Change configuration/authority to the new store, start a
+   clean Runtime Host, and repeat the critical product checks. Do not maintain a
+   long-lived old/new serving split.
+8. **Resume and reconcile.** Re-enable Machine Agents and admission. Their
+   durable outboxes retry everything not acknowledged before maintenance;
+   exact-retry receipts prevent duplication. Observe post-cutover telemetry and
+   reconcile any attributable orphan or projection lag.
+9. **Rollback cleanly if a gate fails.** Pause again, restore the verified
+   snapshot and prior build/configuration, then resume. Never patch the old and
+   new authorities concurrently to make a failed cutover look green.
+
+This is intentionally a rip-the-bandage-off migration. The rollback unit is the
+complete frozen production generation, not a complicated record-by-record
+reverse migrator.
 
 Remote backup/mirroring plus tested restore is an explicit launch-quality
 stopping point. Remote authority cutover proceeds only when its measured
@@ -629,6 +672,11 @@ Acceptance:
 - Phase 2 receives a measured baseline, and Phase 3 receives a backend benchmark
   workload.
 
+Phase 1 is an instrumentation and control implementation, not a long observation
+program. Capture enough representative dogfood samples to verify the signals and
+establish a before-cutover comparison; accumulating 30 days of retention happens
+in parallel and does not block Phase 2 or an offline migration.
+
 Not in Phase 1: object-store integration, database replacement, per-tenant
 container changes, pricing/plan quotas, customer-facing onboarding UI, or a
 general real-user browser beacon pipeline.
@@ -673,14 +721,16 @@ backup/mirroring is sufficient for launch.
 authority for new hosted envelopes.
 
 Deliver the proxied upload/finalize/receipt path, exact retry, orphan
-reconciliation, lane-aware admission, transitional dual durability, production
-shadow comparison, catalog/tombstone backup, and rollback proof. Direct upload
-remains a later measured optimization, not the launch path.
+reconciliation, lane-aware admission, the offline replacement playbook,
+catalog/tombstone backup, destination validation, and complete-generation
+rollback proof. Direct upload remains a later measured optimization, not the
+launch path. Do not build transitional dual durability or shadow serving while
+there are zero external users.
 
 Gate: acknowledged bytes survive crash and off-host restore inside the declared
 failure domains; catalog loss cannot resurrect tombstoned data; rollback retains
-every acknowledged envelope; live/detail SLOs hold during maximum-safe
-historical traffic.
+every acknowledged envelope; and live/detail SLOs hold after the product
+resumes. No SLO applies during the declared cutover window.
 
 ### Phase 5 — Projection and cold-read economics
 
@@ -700,11 +750,15 @@ derived store followed by rebuild restores equivalent product results.
 **Goal:** Migrate dogfood safely without coupling migration completion to fleet
 load proof.
 
-Deliver manifest-driven backfill, restore/cutover/rollback runbook, storage
-inventory parity, spending guardrails, and operator controls.
+Deliver the maintenance-state control, verified frozen snapshot, full-capacity
+manifest migration, restore/cutover/rollback runbook, storage inventory parity,
+spending guardrails, and operator controls. Keep production paused until the
+candidate passes product validation; do not trickle-migrate dogfood merely to
+preserve unused availability.
 
-Gate: existing raw data is independently restorable and storage growth has an
-actionable lead signal.
+Gate: the pre-cutover generation is independently restorable; the new generation
+passes manifest and end-to-end product proof; rollback is exercised; and storage
+growth has an actionable lead signal.
 
 ### Phase 6B — Fleet burst proof
 
@@ -737,6 +791,7 @@ proof. If the measured system is economical and reliable, keep it.
 - an event-level analytics warehouse before retained metrics become limiting;
 - a bespoke autoscaler based on an arbitrary tenant count;
 - a simultaneous object store, database, container, and onboarding rewrite;
+- zero-downtime migration machinery before external users require it;
 - a new parser-dependent raw format;
 - silent deletion of the customer's local source after upload;
 - pricing or customer quotas based on unmeasured estimates.
@@ -760,6 +815,8 @@ The epic is complete when:
 8. legacy duplicate storage is removed only after restore proof; and
 9. any fleet/database/container redesign is supported by evidence—or explicitly
    rejected because the simpler system is good enough.
+10. every prelaunch authority-changing migration uses a verified offline
+    snapshot/cutover/rollback path instead of prolonged live coexistence.
 
 ## Open Decisions
 
@@ -797,3 +854,8 @@ This revision incorporates their shared conclusions:
 - object count/request/deletion economics are decided before remote authority;
   and
 - remote backup plus restore proof is a valid launch stopping point.
+
+The subsequent owner refinement is also explicit: while there are zero external
+users, storage cutovers use planned downtime and full-capacity offline migration.
+The epic does not spend prelaunch engineering effort preserving live SLAs during
+the transformation itself.
