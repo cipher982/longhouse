@@ -251,7 +251,6 @@ def _initialize_schema(connection: sqlite3.Connection) -> None:
             content_rowid='id',
             tokenize='unicode61 remove_diacritics 2'
         );
-        CREATE VIRTUAL TABLE IF NOT EXISTS events_fts_vocab USING fts5vocab(events_fts, row);
         CREATE TRIGGER IF NOT EXISTS events_ai AFTER INSERT ON events BEGIN
             INSERT INTO events_fts(rowid, content_text, tool_output_text)
             VALUES (new.id, new.content_text, new.tool_output_text);
@@ -309,8 +308,6 @@ class SearchStore:
     def __init__(self, connection: sqlite3.Connection) -> None:
         self.connection = connection
         self._worklog_snapshots: dict[str, _WorklogSnapshot] = {}
-        self._term_document_counts: dict[str, int] = {}
-        self._term_document_total: int | None = None
         self._last_optimize_mono = 0.0
 
     def startup_maintenance(self) -> None:
@@ -318,10 +315,6 @@ class SearchStore:
 
         self.connection.execute("PRAGMA optimize=0x10002")
         self._last_optimize_mono = time.monotonic()
-
-    def reset_term_statistics(self) -> None:
-        self._term_document_counts.clear()
-        self._term_document_total = None
 
     def ping(self) -> dict[str, object]:
         row = self.connection.execute("SELECT COUNT(*) AS count FROM session_index").fetchone()
@@ -741,49 +734,11 @@ class SearchStore:
         }
 
     def _compile_fts_query(self, raw: str) -> tuple[str, int, int]:
-        """Keep identifiers exact while dropping only corpus-common natural terms."""
+        """Normalize only syntax; every user-supplied search term remains required."""
 
         fts_query = _fts_query(raw)
         tokens = [token.casefold() for token in re.findall(r"\w+", raw, flags=re.UNICODE)]
-        if not fts_query:
-            return "", 0, 0
-        stripped = raw.strip()
-        explicitly_quoted = len(stripped) >= 2 and stripped[0] == stripped[-1] and stripped[0] in {'"', "'"}
-        compact_identifier = not any(character.isspace() for character in stripped)
-        if explicitly_quoted or compact_identifier or len(tokens) < 3:
-            return fts_query, len(tokens), len(tokens)
-        frequencies = self._term_frequencies(tokens)
-        total = self._term_document_total or 0
-        if total <= 0:
-            return fts_query, len(tokens), len(tokens)
-        ceiling = max(1, int(total * 0.05))
-        # Unknown prose/typos are not evidence: requiring them turns an otherwise
-        # useful recall into an empty result. Keep only corpus-backed rare terms.
-        discriminative = {token for token in tokens if 0 < frequencies.get(token, 0) <= ceiling}
-        if len(discriminative) < 2:
-            return fts_query, len(tokens), len(tokens)
-        ranked = sorted(discriminative, key=lambda token: (frequencies.get(token, 0), token))[:6]
-        selected = set(ranked)
-        compiled_tokens = [token for token in tokens if token in selected]
-        if len(compiled_tokens) < 2:
-            return fts_query, len(tokens), len(tokens)
-        return _fts_query(" ".join(compiled_tokens)), len(tokens), len(compiled_tokens)
-
-    def _term_frequencies(self, tokens: list[str]) -> dict[str, int]:
-        uncached = sorted({token for token in tokens if token not in self._term_document_counts})
-        if uncached:
-            placeholders = ", ".join("?" for _ in uncached)
-            rows = self.connection.execute(
-                f"SELECT term, doc FROM events_fts_vocab WHERE term IN ({placeholders})",
-                uncached,
-            ).fetchall()
-            self._term_document_counts.update({str(row["term"]): int(row["doc"]) for row in rows})
-            for token in uncached:
-                self._term_document_counts.setdefault(token, 0)
-        if self._term_document_total is None:
-            row = self.connection.execute("SELECT COALESCE(SUM(event_count), 0) AS count FROM session_index").fetchone()
-            self._term_document_total = int(row["count"])
-        return {token: self._term_document_counts[token] for token in tokens}
+        return fts_query, len(tokens), len(tokens)
 
     def _maintain_after_publish(self) -> dict[str, int]:
         checkpoint = self.connection.execute("PRAGMA wal_checkpoint(PASSIVE)").fetchone()

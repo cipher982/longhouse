@@ -84,6 +84,21 @@ def test_fts_query_preserves_compact_identifiers_as_phrases(raw, expected):
     assert _fts_query(raw) == expected
 
 
+def test_search_preserves_every_natural_query_term(tmp_path):
+    connection = open_search_database(tmp_path / "search.db")
+    try:
+        assert connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE name = 'events_fts_vocab'"
+        ).fetchone() is None
+        query, token_count, compiled_token_count = SearchStore(connection)._compile_fts_query(
+            "please explain managed session recovery"
+        )
+        assert query == "please explain managed session recovery"
+        assert (token_count, compiled_token_count) == (5, 5)
+    finally:
+        connection.close()
+
+
 def test_searchd_rebuilds_an_incompatible_disposable_store(tmp_path):
     path = tmp_path / "search.db"
     connection = open_search_database(path)
