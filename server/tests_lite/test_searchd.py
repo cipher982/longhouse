@@ -16,8 +16,8 @@ from zerg.catalogd.client import CatalogUnavailable
 from zerg.searchd.server import SearchDaemon
 from zerg.searchd.store import _PUBLISH_AGGREGATES_SQL
 from zerg.searchd.store import _SEARCH_SQL
-from zerg.searchd.store import _fts_query
 from zerg.searchd.store import SearchStore
+from zerg.searchd.store import _fts_query
 from zerg.searchd.store import object_set_hash
 from zerg.searchd.store import open_search_database
 
@@ -180,13 +180,12 @@ async def test_timed_out_search_is_interrupted_before_later_reads(tmp_path):
     socket_path = socket_parent / "s"
     daemon = SearchDaemon(database_path=tmp_path / "search.db", socket_path=socket_path)
     await daemon.start()
-    assert daemon._read_store is not None
-    assert daemon._read_connection is not None
+    assert daemon._all_read_workers
     client = CatalogClient(socket_path)
 
-    def slow_search(**_params):
-        daemon._read_connection.execute("BEGIN")
-        return daemon._read_connection.execute(
+    def slow_search(connection, **_params):
+        connection.execute("BEGIN")
+        return connection.execute(
             """
             WITH RECURSIVE counter(value) AS (
                 SELECT 0 UNION ALL SELECT value + 1 FROM counter WHERE value < 100000000
@@ -195,19 +194,22 @@ async def test_timed_out_search_is_interrupted_before_later_reads(tmp_path):
             """
         ).fetchone()
 
-    original_search = daemon._read_store.search
-    daemon._read_store.search = slow_search
+    original_searches = [worker.store.search for worker in daemon._all_read_workers]
+    for worker in daemon._all_read_workers:
+        worker.store.search = lambda connection=worker.connection, **params: slow_search(connection, **params)
     try:
         with pytest.raises((CatalogRemoteError, CatalogUnavailable)) as timeout:
             await client.call("search.query.v2", _search_params("slow"), timeout_seconds=0.05)
         if isinstance(timeout.value, CatalogRemoteError):
             assert timeout.value.code == "deadline_exceeded"
-        daemon._read_store.search = original_search
+        for worker, original_search in zip(daemon._all_read_workers, original_searches, strict=True):
+            worker.store.search = original_search
         ping = await client.call("search.ping.v2", timeout_seconds=0.2)
         assert ping["ready"] is True
-        assert daemon._read_connection.in_transaction is False
+        assert all(worker.connection.in_transaction is False for worker in daemon._all_read_workers)
     finally:
-        daemon._read_store.search = original_search
+        for worker, original_search in zip(daemon._all_read_workers, original_searches, strict=True):
+            worker.store.search = original_search
         await client.close()
         await daemon.close()
         socket_parent.rmdir()
@@ -284,6 +286,19 @@ async def test_searchd_publishes_only_complete_generations_and_serves_search_wor
         assert search["results"][0]["record_ordinal"] == 0
         assert "speed" in search["results"][0]["content_snippet"]
         assert "content_text" not in search["results"][0]
+        context = await client.call(
+            "search.context.v2",
+            {
+                "owner_id": "42",
+                "session_id": session_id,
+                "generation_id": generation_id,
+                "search_event_id": search["results"][0]["search_event_id"],
+                "context_turns": 1,
+            },
+        )
+        assert context["evidence_status"] == "complete"
+        assert context["total_events"] == 2
+        assert [item["role"] for item in context["context"]] == ["user", "assistant"]
         filtered = await client.call("search.query.v2", {**_search_params("speed"), "provider": "claude"})
         assert filtered["results"] == []
 

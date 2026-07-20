@@ -1677,6 +1677,11 @@ class RecallMatch(BaseModel):
     total_events: int = 0
     context: List[Dict[str, Any]] = Field(default_factory=list)
     match_event_id: Optional[int] = None
+    generation_id: Optional[str] = None
+    source_object_id: Optional[str] = None
+    record_ordinal: Optional[int] = None
+    evidence_status: str = "complete"
+    evidence_reason: Optional[str] = None
 
 
 class RecallResponse(BaseModel):

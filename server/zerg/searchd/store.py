@@ -40,12 +40,12 @@ _PUBLISH_AGGREGATES_SQL = """
 """
 
 _SEARCH_SQL = """
-    SELECT e.session_id, e.generation_id, e.source_object_id,
+    SELECT e.id AS search_event_id, e.session_id, e.generation_id, e.source_object_id,
            e.record_ordinal, e.event_id, e.order_time_us,
            e.role, e.tool_name,
            snippet(events_fts, 0, '', '', ' … ', 24) AS content_snippet,
            snippet(events_fts, 1, '', '', ' … ', 24) AS tool_output_snippet,
-           s.project, s.provider, s.environment, s.indexed_through,
+           s.project, s.provider, s.environment, s.indexed_through, s.event_count,
            events_fts.rank AS rank
     FROM events_fts
     JOIN events e ON e.id = events_fts.rowid
@@ -62,6 +62,35 @@ _SEARCH_SQL = """
       AND (? IS NULL OR e.order_time_us >= ?)
       AND (? IS NULL OR e.order_time_us < ?)
     ORDER BY events_fts.rank ASC
+    LIMIT ?
+"""
+
+_CONTEXT_TARGET_SQL = """
+    SELECT e.order_time_us, e.event_key, s.event_count
+    FROM events e
+    JOIN session_index s ON s.session_id = e.session_id AND s.generation_id = e.generation_id
+    JOIN projection_membership m
+      ON m.session_id = e.session_id
+     AND m.generation_id = e.generation_id
+     AND m.desired_revision = s.indexed_through
+     AND m.object_id = e.source_object_id
+    WHERE e.id = ? AND e.session_id = ? AND e.generation_id = ? AND s.owner_id = ?
+"""
+
+_CONTEXT_ROWS_SQL = """
+    SELECT e.id AS search_event_id, e.event_id, e.source_object_id, e.record_ordinal,
+           e.order_time_us, e.role, e.content_text, e.tool_name
+    FROM events e
+    JOIN session_index s ON s.session_id = e.session_id AND s.generation_id = e.generation_id
+    JOIN projection_membership m
+      ON m.session_id = e.session_id
+     AND m.generation_id = e.generation_id
+     AND m.desired_revision = s.indexed_through
+     AND m.object_id = e.source_object_id
+    WHERE e.session_id = ? AND e.generation_id = ? AND s.owner_id = ?
+      AND e.role IN ('user', 'assistant') AND e.content_text IS NOT NULL
+      AND {position_predicate}
+    ORDER BY e.order_time_us {direction}, e.event_key {direction}
     LIMIT ?
 """
 
@@ -106,6 +135,18 @@ def open_search_database(path: Path) -> sqlite3.Connection:
         connection = _connect(path)
     assert connection is not None
     _initialize_schema(connection)
+    return connection
+
+
+def open_search_read_database(path: Path) -> sqlite3.Connection:
+    """Open one read-only WAL connection after the writer has initialized schema."""
+
+    if path.is_symlink():
+        raise RuntimeError("searchd database path must not be a symlink")
+    connection = sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True, timeout=5.0, isolation_level=None, check_same_thread=False)
+    connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA query_only=ON")
+    connection.execute("PRAGMA busy_timeout=5000")
     return connection
 
 
@@ -267,6 +308,20 @@ class SearchStore:
     def __init__(self, connection: sqlite3.Connection) -> None:
         self.connection = connection
         self._worklog_snapshots: dict[str, _WorklogSnapshot] = {}
+        self._term_document_counts: dict[str, int] = {}
+        self._term_document_total: int | None = None
+        self._term_vocabulary_ready = False
+        self._last_optimize_mono = 0.0
+
+    def startup_maintenance(self) -> None:
+        """Run SQLite's bounded planner refresh outside interactive requests."""
+
+        self.connection.execute("PRAGMA optimize=0x10002")
+        self._last_optimize_mono = time.monotonic()
+
+    def reset_term_statistics(self) -> None:
+        self._term_document_counts.clear()
+        self._term_document_total = None
 
     def ping(self) -> dict[str, object]:
         row = self.connection.execute("SELECT COUNT(*) AS count FROM session_index").fetchone()
@@ -594,7 +649,13 @@ class SearchStore:
         except BaseException:
             self.connection.execute("ROLLBACK")
             raise
-        return {"published": True, "projection_lag": False, "indexed_through": str(desired_revision)}
+        maintenance = self._maintain_after_publish()
+        return {
+            "published": True,
+            "projection_lag": False,
+            "indexed_through": str(desired_revision),
+            "maintenance": maintenance,
+        }
 
     def search(
         self,
@@ -608,9 +669,9 @@ class SearchStore:
         window_end_us: int | None,
         limit: int,
     ) -> dict[str, object]:
-        fts_query = _fts_query(query)
+        fts_query, query_token_count, compiled_token_count = self._compile_fts_query(query)
         if not fts_query:
-            return {"results": []}
+            return {"results": [], "query_token_count": query_token_count, "compiled_token_count": compiled_token_count}
         rows = self.connection.execute(
             _SEARCH_SQL,
             (
@@ -629,7 +690,114 @@ class SearchStore:
                 limit,
             ),
         ).fetchall()
-        return {"results": [dict(row) for row in rows]}
+        return {
+            "results": [dict(row) for row in rows],
+            "query_token_count": query_token_count,
+            "compiled_token_count": compiled_token_count,
+        }
+
+    def recall_context(
+        self,
+        *,
+        owner_id: str,
+        session_id: str,
+        generation_id: str,
+        search_event_id: int,
+        context_turns: int,
+    ) -> dict[str, object]:
+        """Return bounded clean neighbor evidence from the hit's published generation."""
+
+        target = self.connection.execute(
+            _CONTEXT_TARGET_SQL,
+            (search_event_id, session_id, generation_id, owner_id),
+        ).fetchone()
+        if target is None:
+            return {
+                "evidence_status": "unavailable",
+                "evidence_reason": "hit_not_published",
+                "context": [],
+                "total_events": 0,
+            }
+        total_events = int(target["event_count"])
+        if context_turns == 0:
+            return {"evidence_status": "complete", "evidence_reason": None, "context": [], "total_events": total_events}
+        before_sql = _CONTEXT_ROWS_SQL.format(
+            position_predicate="(e.order_time_us < ? OR (e.order_time_us = ? AND e.event_key <= ?))",
+            direction="DESC",
+        )
+        after_sql = _CONTEXT_ROWS_SQL.format(
+            position_predicate="(e.order_time_us > ? OR (e.order_time_us = ? AND e.event_key > ?))",
+            direction="ASC",
+        )
+        position = (int(target["order_time_us"]), int(target["order_time_us"]), str(target["event_key"]))
+        before = self.connection.execute(before_sql, (session_id, generation_id, owner_id, *position, context_turns + 1)).fetchall()
+        after = self.connection.execute(after_sql, (session_id, generation_id, owner_id, *position, context_turns)).fetchall()
+        context = [dict(row) for row in reversed(before)] + [dict(row) for row in after]
+        return {
+            "evidence_status": "complete",
+            "evidence_reason": None,
+            "context": context,
+            "total_events": total_events,
+        }
+
+    def _compile_fts_query(self, raw: str) -> tuple[str, int, int]:
+        """Keep identifiers exact while dropping only corpus-common natural terms."""
+
+        fts_query = _fts_query(raw)
+        tokens = [token.casefold() for token in re.findall(r"\w+", raw, flags=re.UNICODE)]
+        if not fts_query:
+            return "", 0, 0
+        stripped = raw.strip()
+        explicitly_quoted = len(stripped) >= 2 and stripped[0] == stripped[-1] and stripped[0] in {'"', "'"}
+        compact_identifier = not any(character.isspace() for character in stripped)
+        if explicitly_quoted or compact_identifier or len(tokens) < 3:
+            return fts_query, len(tokens), len(tokens)
+        frequencies = self._term_frequencies(tokens)
+        total = self._term_document_total or 0
+        if total <= 0:
+            return fts_query, len(tokens), len(tokens)
+        ceiling = max(1, int(total * 0.05))
+        # Unknown prose/typos are not evidence: requiring them turns an otherwise
+        # useful recall into an empty result. Keep only corpus-backed rare terms.
+        discriminative = {token for token in tokens if 0 < frequencies.get(token, 0) <= ceiling}
+        if len(discriminative) < 2:
+            return fts_query, len(tokens), len(tokens)
+        ranked = sorted(discriminative, key=lambda token: (frequencies.get(token, 0), token))[:6]
+        selected = set(ranked)
+        compiled_tokens = [token for token in tokens if token in selected]
+        if len(compiled_tokens) < 2:
+            return fts_query, len(tokens), len(tokens)
+        return _fts_query(" ".join(compiled_tokens)), len(tokens), len(compiled_tokens)
+
+    def _term_frequencies(self, tokens: list[str]) -> dict[str, int]:
+        if not self._term_vocabulary_ready:
+            self.connection.execute("CREATE VIRTUAL TABLE temp.events_fts_vocab USING fts5vocab(main, events_fts, row)")
+            self._term_vocabulary_ready = True
+        uncached = sorted({token for token in tokens if token not in self._term_document_counts})
+        if uncached:
+            placeholders = ", ".join("?" for _ in uncached)
+            rows = self.connection.execute(
+                f"SELECT term, doc FROM temp.events_fts_vocab WHERE term IN ({placeholders})",
+                uncached,
+            ).fetchall()
+            self._term_document_counts.update({str(row["term"]): int(row["doc"]) for row in rows})
+            for token in uncached:
+                self._term_document_counts.setdefault(token, 0)
+        if self._term_document_total is None:
+            row = self.connection.execute("SELECT COALESCE(SUM(event_count), 0) AS count FROM session_index").fetchone()
+            self._term_document_total = int(row["count"])
+        return {token: self._term_document_counts[token] for token in tokens}
+
+    def _maintain_after_publish(self) -> dict[str, int]:
+        checkpoint = self.connection.execute("PRAGMA wal_checkpoint(PASSIVE)").fetchone()
+        if time.monotonic() - self._last_optimize_mono >= 86_400:
+            self.connection.execute("PRAGMA optimize")
+            self._last_optimize_mono = time.monotonic()
+        return {
+            "checkpoint_busy": int(checkpoint[0]),
+            "checkpoint_log_pages": int(checkpoint[1]),
+            "checkpointed_pages": int(checkpoint[2]),
+        }
 
     def worklog_day(
         self,

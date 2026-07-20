@@ -10,6 +10,7 @@ import sqlite3
 import stat
 import time
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from pathlib import Path
 from uuid import UUID
 
@@ -23,6 +24,7 @@ from zerg.searchd.store import SearchStore
 from zerg.searchd.store import WorklogPageTooLarge
 from zerg.searchd.store import WorklogSnapshotError
 from zerg.searchd.store import open_search_database
+from zerg.searchd.store import open_search_read_database
 
 _HASH = re.compile(r"[0-9a-f]{64}\Z")
 _PROVIDER = re.compile(r"[a-z0-9][a-z0-9_-]{0,31}\Z")
@@ -33,6 +35,13 @@ class _ReadDeadlineExceeded(RuntimeError):
     pass
 
 
+@dataclass(slots=True)
+class _ReadWorker:
+    connection: sqlite3.Connection
+    store: SearchStore
+    executor: ThreadPoolExecutor
+
+
 class SearchDaemon:
     def __init__(self, *, database_path: Path, socket_path: Path) -> None:
         self.database_path = database_path.expanduser().resolve()
@@ -40,13 +49,26 @@ class SearchDaemon:
         self.lock_path = self.database_path.with_suffix(f"{self.database_path.suffix}.searchd.lock")
         self._lock_handle = None
         self._connection = None
-        self._read_connection = None
         self._store: SearchStore | None = None
-        self._read_store: SearchStore | None = None
         self._executor: ThreadPoolExecutor | None = None
-        self._read_executor: ThreadPoolExecutor | None = None
+        self._read_workers: asyncio.Queue[_ReadWorker] | None = None
+        self._all_read_workers: list[_ReadWorker] = []
+        self._worklog_worker: _ReadWorker | None = None
+        self._worklog_lock = asyncio.Lock()
         self._server: asyncio.AbstractServer | None = None
         self._published_inode: tuple[int, int] | None = None
+
+    @property
+    def _read_connection(self) -> sqlite3.Connection | None:
+        """Compatibility access for focused tests; production uses the worker queue."""
+
+        return self._all_read_workers[0].connection if self._all_read_workers else None
+
+    @property
+    def _read_store(self) -> SearchStore | None:
+        """Compatibility access for focused tests; production uses the worker queue."""
+
+        return self._all_read_workers[0].store if self._all_read_workers else None
 
     async def start(self) -> None:
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
@@ -59,10 +81,15 @@ class SearchDaemon:
         try:
             self._connection = open_search_database(self.database_path)
             self._store = SearchStore(self._connection)
+            self._store.startup_maintenance()
             self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="searchd-sqlite")
-            self._read_connection = open_search_database(self.database_path)
-            self._read_store = SearchStore(self._read_connection)
-            self._read_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="searchd-read")
+            worker_count = min(2, max(1, (os.cpu_count() or 1) // 2))
+            self._read_workers = asyncio.Queue(maxsize=worker_count)
+            for index in range(worker_count):
+                worker = self._new_read_worker(f"searchd-read-{index}")
+                self._all_read_workers.append(worker)
+                self._read_workers.put_nowait(worker)
+            self._worklog_worker = self._new_read_worker("searchd-worklog")
             self._prepare_socket()
             temporary = self.socket_path.with_name(f".{self.socket_path.name}.tmp.{os.getpid()}")
             if len(os.fsencode(temporary)) >= 104:
@@ -90,19 +117,21 @@ class SearchDaemon:
             self._server = None
         self._unlink_socket()
         self._store = None
-        self._read_store = None
         if self._executor is not None:
             self._executor.shutdown(wait=True, cancel_futures=True)
             self._executor = None
-        if self._read_executor is not None:
-            self._read_executor.shutdown(wait=True, cancel_futures=True)
-            self._read_executor = None
+        for worker in self._all_read_workers:
+            worker.executor.shutdown(wait=True, cancel_futures=True)
+            worker.connection.close()
+        self._all_read_workers.clear()
+        self._read_workers = None
+        if self._worklog_worker is not None:
+            self._worklog_worker.executor.shutdown(wait=True, cancel_futures=True)
+            self._worklog_worker.connection.close()
+            self._worklog_worker = None
         if self._connection is not None:
             self._connection.close()
             self._connection = None
-        if self._read_connection is not None:
-            self._read_connection.close()
-            self._read_connection = None
         if self._lock_handle is not None:
             fcntl.flock(self._lock_handle.fileno(), fcntl.LOCK_UN)
             self._lock_handle.close()
@@ -158,12 +187,12 @@ class SearchDaemon:
     async def _dispatch(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
         if time.monotonic_ns() > int(request.deadline_mono_ns):
             return self._error(request, "deadline_exceeded", "request deadline exceeded", retryable=True)
-        if self._store is None or self._executor is None or self._read_store is None or self._read_executor is None:
+        if self._store is None or self._executor is None or self._read_workers is None or self._worklog_worker is None:
             return self._error(request, "catalog_unavailable", "search index is not ready", retryable=True)
         try:
             if request.method == "search.ping.v2":
-                ping = await self._run_read(
-                    self._read_store.ping,
+                ping = await self._run_interactive_read(
+                    lambda store: store.ping(),
                     deadline_mono_ns=int(request.deadline_mono_ns),
                 )
                 return self._result(request, {**ping, "pid": os.getpid()})
@@ -172,36 +201,45 @@ class SearchDaemon:
                 return self._result(request, await self._run(self._store.index_object, **params))
             if request.method == "search.index.publish.v2":
                 params = _publish_params(request.params)
-                return self._result(request, await self._run(self._store.publish_generation, **params))
+                published = await self._run(self._store.publish_generation, **params)
+                return self._result(request, published)
             if request.method == "search.query.v2":
                 params = _search_params(request.params)
                 return self._result(
                     request,
-                    await self._run_read(
-                        self._read_store.search,
+                    await self._run_interactive_read(
+                        lambda store: store.search(**params),
                         deadline_mono_ns=int(request.deadline_mono_ns),
-                        **params,
+                    ),
+                )
+            if request.method == "search.context.v2":
+                params = _context_params(request.params)
+                return self._result(
+                    request,
+                    await self._run_interactive_read(
+                        lambda store: store.recall_context(**params),
+                        deadline_mono_ns=int(request.deadline_mono_ns),
                     ),
                 )
             if request.method == "worklog.day.v2":
                 params = _worklog_params(request.params)
                 return self._result(
                     request,
-                    await self._run_read(
-                        self._read_store.worklog_day,
+                    await self._run_worklog_read(
+                        lambda store: store.worklog_day(**params),
                         deadline_mono_ns=int(request.deadline_mono_ns),
-                        **params,
                     ),
                 )
             if request.method == "worklog.snapshot.release.v2":
                 _exact_keys(request.params, {"snapshot_id", "owner_id"})
                 return self._result(
                     request,
-                    await self._run_read(
-                        self._read_store.release_worklog_snapshot,
+                    await self._run_worklog_read(
+                        lambda store: store.release_worklog_snapshot(
+                            snapshot_id=_uuid(request.params["snapshot_id"], "snapshot_id"),
+                            owner_id=_text(request.params["owner_id"], "owner_id", 64),
+                        ),
                         deadline_mono_ns=int(request.deadline_mono_ns),
-                        snapshot_id=_uuid(request.params["snapshot_id"], "snapshot_id"),
-                        owner_id=_text(request.params["owner_id"], "owner_id", 64),
                     ),
                 )
             if request.method == "search.session.delete.v2":
@@ -226,31 +264,95 @@ class SearchDaemon:
         assert self._executor is not None
         return await asyncio.get_running_loop().run_in_executor(self._executor, lambda: function(**kwargs))
 
-    async def _run_read(self, function, *, deadline_mono_ns: int, **kwargs):
-        assert self._read_executor is not None
-        assert self._read_connection is not None
+    def _new_read_worker(self, name: str) -> _ReadWorker:
+        connection = open_search_read_database(self.database_path)
+        return _ReadWorker(
+            connection=connection,
+            store=SearchStore(connection),
+            executor=ThreadPoolExecutor(max_workers=1, thread_name_prefix=name),
+        )
 
-        def execute():
-            if time.monotonic_ns() >= deadline_mono_ns:
-                raise _ReadDeadlineExceeded
-            interrupted = False
-            self._read_connection.set_progress_handler(
-                lambda: int(time.monotonic_ns() >= deadline_mono_ns),
-                1_000,
+    async def _run_interactive_read(self, function, *, deadline_mono_ns: int) -> dict[str, object]:
+        assert self._read_workers is not None
+        deadline = deadline_mono_ns / 1_000_000_000
+        queued_at = time.monotonic()
+        try:
+            async with asyncio.timeout_at(deadline):
+                worker = await self._read_workers.get()
+        except TimeoutError as exc:
+            raise _ReadDeadlineExceeded from exc
+        admitted_at = time.monotonic()
+        execution = asyncio.get_running_loop().run_in_executor(
+            worker.executor,
+            lambda: self._execute_read(worker.connection, lambda: function(worker.store), deadline_mono_ns),
+        )
+        try:
+            async with asyncio.timeout_at(deadline):
+                result = await asyncio.shield(execution)
+            completed_at = time.monotonic()
+            payload = dict(result)
+            payload["timing"] = {
+                "admit_ms": round((admitted_at - queued_at) * 1000, 1),
+                "sql_ms": round((completed_at - admitted_at) * 1000, 1),
+                "active_readers": len(self._all_read_workers) - self._read_workers.qsize(),
+                "queued_readers": self._read_workers.qsize(),
+            }
+            return payload
+        except TimeoutError as exc:
+            execution.add_done_callback(lambda completed: self._return_finished_worker(worker, completed))
+            worker = None
+            raise _ReadDeadlineExceeded from exc
+        finally:
+            if worker is not None:
+                self._read_workers.put_nowait(worker)
+
+    def _return_finished_worker(self, worker: _ReadWorker, completed: asyncio.Future) -> None:
+        """Return a timed-out worker only after its SQLite call has unwound."""
+
+        try:
+            completed.result()
+        except (Exception, asyncio.CancelledError):
+            pass
+        if self._read_workers is not None:
+            self._read_workers.put_nowait(worker)
+
+    async def _run_worklog_read(self, function, *, deadline_mono_ns: int) -> dict[str, object]:
+        assert self._worklog_worker is not None
+        deadline = deadline_mono_ns / 1_000_000_000
+        try:
+            async with asyncio.timeout_at(deadline):
+                await self._worklog_lock.acquire()
+        except TimeoutError as exc:
+            raise _ReadDeadlineExceeded from exc
+        worker = self._worklog_worker
+        try:
+            return await asyncio.get_running_loop().run_in_executor(
+                worker.executor,
+                lambda: self._execute_read(worker.connection, lambda: function(worker.store), deadline_mono_ns),
             )
-            try:
-                return function(**kwargs)
-            except sqlite3.OperationalError as exc:
-                if str(exc) == "interrupted":
-                    interrupted = True
-                    raise _ReadDeadlineExceeded from exc
-                raise
-            finally:
-                self._read_connection.set_progress_handler(None, 0)
-                if interrupted and self._read_connection.in_transaction:
-                    self._read_connection.rollback()
+        finally:
+            self._worklog_lock.release()
 
-        return await asyncio.get_running_loop().run_in_executor(self._read_executor, execute)
+    @staticmethod
+    def _execute_read(connection: sqlite3.Connection, function, deadline_mono_ns: int):
+        if time.monotonic_ns() >= deadline_mono_ns:
+            raise _ReadDeadlineExceeded
+        interrupted = False
+        connection.set_progress_handler(
+            lambda: int(time.monotonic_ns() >= deadline_mono_ns),
+            10_000,
+        )
+        try:
+            return function()
+        except sqlite3.OperationalError as exc:
+            if str(exc) == "interrupted":
+                interrupted = True
+                raise _ReadDeadlineExceeded from exc
+            raise
+        finally:
+            connection.set_progress_handler(None, 0)
+            if interrupted and connection.in_transaction:
+                connection.rollback()
 
     @staticmethod
     def _result(request: CatalogRpcRequest, result: dict[str, object]) -> CatalogRpcResponse:
@@ -464,6 +566,21 @@ def _search_params(value: dict) -> dict:
         "window_start_us": value["window_start_us"],
         "window_end_us": value["window_end_us"],
         "limit": value["limit"],
+    }
+
+
+def _context_params(value: dict) -> dict:
+    _exact_keys(value, {"owner_id", "session_id", "generation_id", "search_event_id", "context_turns"})
+    if type(value["search_event_id"]) is not int or value["search_event_id"] <= 0:
+        raise ValueError("search_event_id is invalid")
+    if type(value["context_turns"]) is not int or not 0 <= value["context_turns"] <= 10:
+        raise ValueError("context_turns is invalid")
+    return {
+        "owner_id": _text(value["owner_id"], "owner_id", 64),
+        "session_id": _uuid(value["session_id"], "session_id"),
+        "generation_id": _uuid(value["generation_id"], "generation_id"),
+        "search_event_id": value["search_event_id"],
+        "context_turns": value["context_turns"],
     }
 
 

@@ -56,6 +56,8 @@ def test_recall_machine_search_uses_searchd_without_legacy_db(monkeypatch):
         return [
             {
                 "session_id": "11111111-1111-4111-8111-111111111111",
+                "generation_id": "22222222-2222-4222-8222-222222222222",
+                "search_event_id": 9,
                 "record_ordinal": 4,
                 "content_snippet": "the migration completed",
                 "environment": "production",
@@ -66,6 +68,17 @@ def test_recall_machine_search_uses_searchd_without_legacy_db(monkeypatch):
     monkeypatch.setattr(agents_search.database_module, "live_catalog_enabled", lambda: True)
     monkeypatch.setattr(agents_search.database_module, "get_session_factory", _fail_legacy_factory)
     monkeypatch.setattr(agents_search, "search_storage_v2_rows", search_v2)
+
+    async def context_v2(**kwargs):
+        assert kwargs["search_event_id"] == 9
+        return {
+            "evidence_status": "complete",
+            "evidence_reason": None,
+            "total_events": 12,
+            "context": [{"role": "user", "content_text": "please migrate"}],
+        }
+
+    monkeypatch.setattr(agents_search, "search_storage_v2_context", context_v2)
 
     response = asyncio.run(
         agents_search.recall_sessions(
@@ -89,6 +102,8 @@ def test_recall_machine_search_uses_searchd_without_legacy_db(monkeypatch):
 
     assert response.total == 1
     assert response.matches[0].evidence == "the migration completed"
+    assert response.matches[0].total_events == 12
+    assert response.matches[0].context[0]["content_text"] == "please migrate"
 
 
 def test_machine_session_list_query_uses_searchd_without_legacy_db(monkeypatch):
