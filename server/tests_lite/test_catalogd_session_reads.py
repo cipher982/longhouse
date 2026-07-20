@@ -9,6 +9,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
+from sqlalchemy import event
 
 from zerg.catalogd.client import CatalogClient
 from zerg.catalogd.client import CatalogRemoteError
@@ -505,15 +506,34 @@ async def test_session_timeline_and_read_return_assembled_snapshot_facts(daemon_
     first_id = "11111111-1111-4111-8111-111111111111"
     second_id = "22222222-2222-4222-8222-222222222222"
     pending_id = "33333333-3333-4333-8333-333333333333"
+    heartbeat_statements: list[str] = []
+
+    def capture_heartbeat_query(_connection, _cursor, statement, _parameters, _context, _executemany):
+        if "live_heartbeat_stamps" in statement:
+            heartbeat_statements.append(statement.lower())
+
     with engine.begin() as connection:
         _seed_session(connection, session_id=first_id, device_id="cinder", now=now)
         _seed_session(connection, session_id=second_id, device_id="clifford", now=now - timedelta(hours=1))
         connection.execute(
-            LiveHeartbeatStamp.__table__.insert().values(
-                device_id="cinder",
-                received_at=now,
-                is_offline=0,
-            )
+            LiveHeartbeatStamp.__table__.insert(),
+            [
+                {
+                    "device_id": "cinder",
+                    "received_at": now - timedelta(minutes=1),
+                    "is_offline": 1,
+                },
+                {
+                    "device_id": "cinder",
+                    "received_at": now,
+                    "is_offline": 0,
+                },
+                {
+                    "device_id": "clifford",
+                    "received_at": now - timedelta(hours=1),
+                    "is_offline": 0,
+                },
+            ],
         )
         connection.execute(
             LiveInteractionRequest.__table__.insert().values(
@@ -545,6 +565,8 @@ async def test_session_timeline_and_read_return_assembled_snapshot_facts(daemon_
 
     daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
     await daemon.start()
+    assert daemon._engine is not None
+    event.listen(daemon._engine, "before_cursor_execute", capture_heartbeat_query)
     client = CatalogClient(socket_path)
     try:
         result = await client.call(
@@ -580,6 +602,8 @@ async def test_session_timeline_and_read_return_assembled_snapshot_facts(daemon_
             "received_at": now.isoformat(),
             "is_offline": 0,
         }
+        assert heartbeat_statements
+        assert all("max(" in statement and "group by" in statement for statement in heartbeat_statements)
         assert facts["provider_alias"] is None
         assert facts["resume"] is None
         assert "display_phase" not in facts and "status" not in facts

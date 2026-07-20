@@ -132,6 +132,7 @@ _SAFE_RETRY_METHODS = {
 # the 1 s hard-failure budget. The default client deadline is the hard bound;
 # health probes and other callers that need a tighter bound pass one explicitly.
 DEFAULT_CATALOG_RPC_TIMEOUT_SECONDS = 1.0
+DEFAULT_CATALOG_RPC_MAX_CONCURRENCY = 8
 
 
 class CatalogUnavailable(RuntimeError):
@@ -153,16 +154,17 @@ class CatalogClient:
         socket_path: Path,
         *,
         default_timeout_seconds: float = DEFAULT_CATALOG_RPC_TIMEOUT_SECONDS,
+        max_concurrency: int = DEFAULT_CATALOG_RPC_MAX_CONCURRENCY,
     ) -> None:
+        if max_concurrency <= 0:
+            raise ValueError("max_concurrency must be positive")
         self.socket_path = socket_path
         self.default_timeout_seconds = default_timeout_seconds
-        self._reader: asyncio.StreamReader | None = None
-        self._writer: asyncio.StreamWriter | None = None
-        self._lock = asyncio.Lock()
+        self.max_concurrency = max_concurrency
+        self._admission = asyncio.Semaphore(max_concurrency)
 
     async def close(self) -> None:
-        async with self._lock:
-            await self._poison()
+        """Compatibility no-op; each call owns and closes its connection."""
 
     async def call(
         self,
@@ -176,23 +178,29 @@ class CatalogClient:
             raise ValueError("timeout_seconds must be positive")
         attempts = 2 if method in _SAFE_RETRY_METHODS else 1
         deadline = asyncio.get_running_loop().time() + timeout
-        async with self._lock:
-            for attempt in range(attempts):
-                remaining = deadline - asyncio.get_running_loop().time()
-                if remaining <= 0:
-                    raise CatalogUnavailable(f"catalogd deadline exceeded for {method}")
-                try:
-                    return await self._call_once(method, params or {}, remaining)
-                except CatalogRemoteError:
-                    raise
-                except (OSError, EOFError, ProtocolError, asyncio.TimeoutError, asyncio.IncompleteReadError) as exc:
-                    await self._poison()
-                    if attempt + 1 == attempts:
-                        raise CatalogUnavailable(f"catalogd unavailable for {method}") from exc
+        try:
+            # One persistent socket plus a process-wide mutex turned unrelated
+            # catalog RPCs into a head-of-line queue. Slow snapshots exhausted
+            # later callers' deadlines before they sent a frame, which then
+            # amplified SSE reconnect storms. The daemon already accepts
+            # concurrent Unix connections; use one per call while retaining an
+            # explicit bounded admission gate and one wall-clock deadline.
+            async with asyncio.timeout_at(deadline):
+                async with self._admission:
+                    for attempt in range(attempts):
+                        remaining = deadline - asyncio.get_running_loop().time()
+                        try:
+                            return await self._call_once(method, params or {}, remaining)
+                        except CatalogRemoteError:
+                            raise
+                        except (OSError, EOFError, ProtocolError, asyncio.IncompleteReadError) as exc:
+                            if attempt + 1 == attempts:
+                                raise CatalogUnavailable(f"catalogd unavailable for {method}") from exc
+        except asyncio.TimeoutError as exc:
+            raise CatalogUnavailable(f"catalogd deadline exceeded for {method}") from exc
         raise AssertionError("unreachable")
 
     async def _call_once(self, method: str, params: dict[str, Any], timeout_seconds: float) -> dict[str, Any]:
-        loop_deadline = asyncio.get_running_loop().time() + timeout_seconds
         monotonic_deadline = time.monotonic_ns() + int(timeout_seconds * 1_000_000_000)
         request = CatalogRpcRequest(
             id=secrets.token_hex(16),
@@ -200,11 +208,18 @@ class CatalogClient:
             deadline_mono_ns=str(monotonic_deadline),
             params=params,
         )
-        async with asyncio.timeout_at(loop_deadline):
-            if self._reader is None or self._writer is None:
-                self._reader, self._writer = await asyncio.open_unix_connection(self.socket_path)
-            await write_frame(self._writer, request)
-            response = await read_frame(self._reader)
+        writer: asyncio.StreamWriter | None = None
+        try:
+            reader, writer = await asyncio.open_unix_connection(self.socket_path)
+            await write_frame(writer, request)
+            response = await read_frame(reader)
+        finally:
+            if writer is not None:
+                writer.close()
+                try:
+                    await writer.wait_closed()
+                except OSError:
+                    pass
         if not isinstance(response, CatalogRpcResponse):
             raise ProtocolError("invalid_request", "catalogd returned a request frame")
         if response.id != request.id:
@@ -212,18 +227,6 @@ class CatalogClient:
         if response.error is not None:
             raise CatalogRemoteError(response.error)
         return response.result or {}
-
-    async def _poison(self) -> None:
-        writer = self._writer
-        self._reader = None
-        self._writer = None
-        if writer is None:
-            return
-        writer.close()
-        try:
-            await writer.wait_closed()
-        except OSError:
-            pass
 
 
 def call_catalogd_sync(

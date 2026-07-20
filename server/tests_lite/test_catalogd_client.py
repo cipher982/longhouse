@@ -34,7 +34,7 @@ def test_default_deadline_uses_hard_failure_budget(socket_path):
 
 
 @pytest.mark.asyncio
-async def test_client_reuses_connection_and_matches_response_ids(socket_path):
+async def test_client_uses_call_scoped_connections_and_matches_response_ids(socket_path):
     connections = 0
     requests = 0
 
@@ -57,9 +57,66 @@ async def test_client_reuses_connection_and_matches_response_ids(socket_path):
     try:
         assert await client.call("ping.v2") == {"method": "ping.v2"}
         assert await client.call("schema.v2") == {"method": "schema.v2"}
-        assert connections == 1
+        assert connections == 2
         assert requests == 2
     finally:
+        await client.close()
+        server.close()
+        await server.wait_closed()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_calls_do_not_wait_behind_one_socket(socket_path):
+    connections = 0
+
+    async def handle(reader, writer):
+        nonlocal connections
+        connections += 1
+        request = await read_frame(reader)
+        assert isinstance(request, CatalogRpcRequest)
+        await asyncio.sleep(0.15)
+        await write_frame(writer, CatalogRpcResponse(id=request.id, result={"ready": True}))
+        writer.close()
+
+    server = await asyncio.start_unix_server(handle, path=socket_path)
+    client = CatalogClient(socket_path)
+    started = time.monotonic()
+    try:
+        results = await asyncio.gather(*(client.call("ping.v2", timeout_seconds=0.5) for _ in range(5)))
+        assert results == [{"ready": True}] * 5
+        assert connections == 5
+        assert time.monotonic() - started < 0.35
+    finally:
+        await client.close()
+        server.close()
+        await server.wait_closed()
+
+
+@pytest.mark.asyncio
+async def test_admission_wait_is_part_of_call_deadline(socket_path):
+    first_started = asyncio.Event()
+
+    async def handle(reader, writer):
+        request = await read_frame(reader)
+        assert isinstance(request, CatalogRpcRequest)
+        first_started.set()
+        await asyncio.sleep(0.15)
+        await write_frame(writer, CatalogRpcResponse(id=request.id, result={"ready": True}))
+        writer.close()
+
+    server = await asyncio.start_unix_server(handle, path=socket_path)
+    client = CatalogClient(socket_path, max_concurrency=1)
+    first = asyncio.create_task(client.call("ping.v2", timeout_seconds=0.5))
+    try:
+        await first_started.wait()
+        started = time.monotonic()
+        with pytest.raises(CatalogUnavailable, match="deadline exceeded"):
+            await client.call("ping.v2", timeout_seconds=0.04)
+        assert time.monotonic() - started < 0.1
+        assert await first == {"ready": True}
+    finally:
+        if not first.done():
+            first.cancel()
         await client.close()
         server.close()
         await server.wait_closed()

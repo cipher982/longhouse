@@ -7759,12 +7759,44 @@ def _assemble_session_facts(
     device_ids = {str(row.get("device_id") or "").strip() for row in catalogs.values() if str(row.get("device_id") or "").strip()}
     heartbeat_by_device: dict[str, Any] = {}
     if device_ids:
-        for row in connection.execute(
-            select(heartbeat_table)
+        # A machine can accumulate tens of thousands of heartbeat receipts.
+        # Fetching all of them and retaining the first row made every timeline
+        # snapshot proportional to heartbeat history and triggered an SSE retry
+        # storm once the query crossed the catalog client's deadline. Resolve
+        # the latest timestamp and deterministic id tie-break inside SQLite so
+        # the response remains bounded to one row per requested device.
+        latest_heartbeat_times = (
+            select(
+                heartbeat_table.c.device_id.label("device_id"),
+                func.max(heartbeat_table.c.received_at).label("received_at"),
+            )
             .where(heartbeat_table.c.device_id.in_(device_ids))
-            .order_by(heartbeat_table.c.received_at.desc(), heartbeat_table.c.id.desc())
+            .group_by(heartbeat_table.c.device_id)
+            .subquery()
+        )
+        latest_heartbeat_ids = (
+            select(
+                heartbeat_table.c.device_id.label("device_id"),
+                func.max(heartbeat_table.c.id).label("id"),
+            )
+            .select_from(
+                heartbeat_table.join(
+                    latest_heartbeat_times,
+                    and_(
+                        heartbeat_table.c.device_id == latest_heartbeat_times.c.device_id,
+                        heartbeat_table.c.received_at == latest_heartbeat_times.c.received_at,
+                    ),
+                )
+            )
+            .group_by(heartbeat_table.c.device_id)
+            .subquery()
+        )
+        for row in connection.execute(
+            select(heartbeat_table).select_from(
+                heartbeat_table.join(latest_heartbeat_ids, heartbeat_table.c.id == latest_heartbeat_ids.c.id)
+            )
         ).mappings():
-            heartbeat_by_device.setdefault(str(row["device_id"]), row)
+            heartbeat_by_device[str(row["device_id"])] = row
 
     thread_rows = list(
         connection.execute(

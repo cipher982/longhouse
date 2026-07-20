@@ -75,8 +75,8 @@ class CatalogdSupervisor:
 
     async def stop(self) -> None:
         self._stopping = True
-        # catalogd drains active connection handlers before exiting; release
-        # the supervisor's persistent probe connection before SIGTERM.
+        # Catalog calls own short-lived connections. Keep the compatibility
+        # close boundary before SIGTERM so future client resources drain first.
         await self.client.close()
         await self.projector_client.close()
         await self._terminate_owned_process()
