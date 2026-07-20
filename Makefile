@@ -259,7 +259,7 @@ test-cursor-helm-product-e2e: ## Real Longhouse↔Cursor launch/control/archive 
 	@uv run --project server python scripts/qa/cursor-helm-product-e2e.py $(ARGS)
 
 test-cursor-helm-gate0-unit: ## Cursor Helm Gate 0 harness unit tests
-	@cd server && uv run --extra dev pytest tests_lite/test_cursor_helm_gate0.py tests_lite/test_cursor_helm_product_e2e.py tests_lite/test_cursor_hooks.py tests_lite/test_cursor_helm_launcher.py tests_lite/test_cursor_cli.py tests_lite/test_managed_provider_contracts.py tests_lite/test_managed_local_transport.py -q
+	@cd server && uv run --extra dev pytest tests_lite/test_cursor_helm_gate0.py tests_lite/test_cursor_helm_product_e2e.py tests_lite/test_cursor_hooks.py tests_lite/test_cursor_helm_launcher.py tests_lite/test_cursor_cli.py tests_lite/test_cursor_permission_policy.py tests_lite/test_permission_gate_routes.py tests_lite/test_catalogd_interactions.py tests_lite/test_managed_provider_contracts.py tests_lite/test_managed_local_transport.py -q
 
 test-runner: ## Runner unit tests (~5s)
 	@cd runner && bun test

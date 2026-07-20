@@ -1777,6 +1777,9 @@ class CatalogStore:
                 query = orm.query(LiveInteractionRequest).filter(LiveInteractionRequest.session_id == session_id)
                 if status is not None:
                     query = query.filter(LiveInteractionRequest.status == status)
+                    if status == "pending":
+                        now = datetime.now(UTC)
+                        query = query.filter((LiveInteractionRequest.expires_at.is_(None)) | (LiveInteractionRequest.expires_at > now))
                 rows = (
                     query.order_by(
                         LiveInteractionRequest.last_seen_at.desc(),
@@ -1890,6 +1893,19 @@ class CatalogStore:
                         "interaction": result,
                         "commit_seq": str(_current_commit_seq(connection)),
                     }
+                expired_before_response = (
+                    row.expires_at is not None and _as_aware_utc(row.expires_at) <= resolved_at and status != "expired"
+                )
+                event_status = "expired" if expired_before_response else status
+                event_response_payload = (
+                    {
+                        "permissionDecision": "deny",
+                        "permissionDecisionReason": "Approval deadline expired",
+                    }
+                    if expired_before_response
+                    else response_payload
+                )
+                event_response_text = "Approval deadline expired" if expired_before_response else response_text
                 event = RuntimeEventIngest(
                     runtime_key=row.runtime_key,
                     session_id=UUID(session_id),
@@ -1897,13 +1913,13 @@ class CatalogStore:
                     source="interaction_response",
                     kind="pause_resolution",
                     occurred_at=resolved_at,
-                    dedupe_key=f"interaction-resolution:{interaction_id}:{status}",
+                    dedupe_key=f"interaction-resolution:{interaction_id}:{event_status}",
                     payload={
                         "request_key": row.request_key,
                         "provider_request_id": row.provider_request_id,
-                        "status": status,
-                        "response_payload": response_payload,
-                        "response_text": response_text,
+                        "status": event_status,
+                        "response_payload": event_response_payload,
+                        "response_text": event_response_text,
                     },
                 )
                 ingest_live_runtime_events(orm, [event])
@@ -1917,8 +1933,8 @@ class CatalogStore:
             commit_seq = _advance_commit_seq(connection, resolved_at)
             return {
                 "found": True,
-                "resolved": True,
-                "reason": None,
+                "resolved": not expired_before_response,
+                "reason": "not_pending" if expired_before_response else None,
                 "interaction": _interaction_dto(resolved),
                 "commit_seq": str(commit_seq),
             }
@@ -1936,7 +1952,7 @@ class CatalogStore:
                 query = orm.query(LiveInteractionRequest).filter(
                     LiveInteractionRequest.session_id == session_id,
                     LiveInteractionRequest.kind == "permission_prompt",
-                    LiveInteractionRequest.source == "claude_permission_gate",
+                    LiveInteractionRequest.source.in_(("claude_permission_gate", "cursor_permission_gate")),
                 )
                 query = (
                     query.filter(LiveInteractionRequest.id == interaction_id)
@@ -1944,7 +1960,20 @@ class CatalogStore:
                     else query.filter(LiveInteractionRequest.request_key == request_key)
                 )
                 row = query.one_or_none()
-                if row is None or row.status == "pending":
+                expired = (
+                    row is not None
+                    and row.status == "pending"
+                    and row.expires_at is not None
+                    and _as_aware_utc(row.expires_at) <= datetime.now(UTC)
+                )
+                if expired:
+                    result = {
+                        "found": True,
+                        "resolved": True,
+                        "decision": "deny",
+                        "reason": "Approval deadline expired",
+                    }
+                elif row is None or row.status == "pending":
                     result = {"found": row is not None, "resolved": False, "decision": None, "reason": None}
                 else:
                     response = row.response_payload_json if isinstance(row.response_payload_json, dict) else {}

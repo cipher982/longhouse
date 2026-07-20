@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from datetime import datetime
+from datetime import timedelta
 from datetime import timezone
 from uuid import UUID
 from uuid import uuid4
@@ -134,6 +135,71 @@ def test_register_then_poll_returns_decision_after_resolve(tmp_path):
         )
         assert poll2.status_code == 200, poll2.text
         assert poll2.json() == {"decision": "allow", "reason": "approved in test", "resolved": True}
+    finally:
+        api_app.dependency_overrides.clear()
+
+
+def test_cursor_permission_request_has_provider_copy_and_deadline_then_expires(tmp_path):
+    session_local = _make_db(tmp_path)
+    session_id, _user_id = _seed_session(session_local)
+    client, api_app = _make_client(session_local)
+    try:
+        before = datetime.now(timezone.utc)
+        ack = client.post(
+            "/api/agents/permission-requests",
+            json={
+                "session_id": str(session_id),
+                "tool_use_id": "cursor-shell-1",
+                "tool_name": "Shell",
+                "provider": "cursor",
+                "wait_timeout_seconds": 7,
+            },
+        )
+        assert ack.status_code == 200, ack.text
+        with session_local() as db:
+            row = db.get(SessionPauseRequest, UUID(ack.json()["pause_request_id"]))
+            assert row.summary == "Cursor wants to use Shell."
+            assert row.provider_ref_json["source"] == "cursor_permission_gate"
+            expires_at = row.expires_at.replace(tzinfo=timezone.utc) if row.expires_at.tzinfo is None else row.expires_at
+            assert before + timedelta(seconds=6) <= expires_at <= before + timedelta(seconds=9)
+
+        expired = client.post(
+            f"/api/agents/permission-requests/{ack.json()['pause_request_id']}/expire",
+            json={"session_id": str(session_id), "reason": "human did not answer"},
+        )
+        assert expired.status_code == 200, expired.text
+        assert expired.json() == {"decision": "deny", "reason": "human did not answer", "resolved": True}
+        poll = client.get(
+            "/api/agents/permission-decision",
+            params={"session_id": str(session_id), "tool_use_id": "cursor-shell-1", "provider": "cursor"},
+        )
+        assert poll.json() == {"decision": "deny", "reason": "human did not answer", "resolved": True}
+    finally:
+        api_app.dependency_overrides.clear()
+
+
+def test_permission_deadline_cannot_be_late_approved(tmp_path):
+    session_local = _make_db(tmp_path)
+    session_id, _user_id = _seed_session(session_local)
+    client, api_app = _make_client(session_local)
+    try:
+        ack = client.post(
+            "/api/agents/permission-requests",
+            json={"session_id": str(session_id), "tool_use_id": "expired", "wait_timeout_seconds": 1},
+        ).json()
+        with session_local() as db:
+            row = db.get(SessionPauseRequest, UUID(ack["pause_request_id"]))
+            row.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+            db.commit()
+            resolved = resolve_pause_request(
+                db,
+                pause_request_id=row.id,
+                status="resolved",
+                response_payload={"permissionDecision": "allow"},
+            )
+            db.commit()
+            assert resolved.status == "expired"
+            assert resolved.response_payload_json["permissionDecision"] == "deny"
     finally:
         api_app.dependency_overrides.clear()
 

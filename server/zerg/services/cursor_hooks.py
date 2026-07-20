@@ -24,9 +24,10 @@ _EVENTS = (
     "stop",
 )
 _MARKER = "longhouse-cursor-hook.py"
+_PERMISSION_MARKER = "longhouse-cursor-permission-hook.py"
 
 _SCRIPT = r"""#!/usr/bin/env python3
-import hashlib, json, os, socket, sys, tempfile, time, urllib.error, urllib.parse, urllib.request
+import json, os, socket, sys, tempfile, time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -37,8 +38,7 @@ except Exception:
     payload = {}
 sid = os.environ.get("LONGHOUSE_SESSION_ID", "").strip()
 conversation_id = str(payload.get("conversation_id") or "").strip()
-permission_event = event in {"beforeShellExecution", "beforeMCPExecution"}
-if not conversation_id or (not sid and not permission_event):
+if not conversation_id or not sid:
     print("{}")
     raise SystemExit(0)
 home = Path(os.environ.get("LONGHOUSE_HOME") or (Path.home() / ".longhouse"))
@@ -81,10 +81,7 @@ claim_matches_reservation = (
     and existing_claim.get("status") in {"pending", "observed"}
 )
 if not claim_matches_reservation:
-    if event in {"beforeShellExecution", "beforeMCPExecution"} and os.environ.get("LONGHOUSE_PERMISSION_HOOK_ENABLED") == "1":
-        print(json.dumps({"permission": "deny", "user_message": "Longhouse launch identity mismatch; command blocked"}))
-    else:
-        print("{}")
+    print("{}")
     raise SystemExit(0)
 row = {"event": event, "observed_at": now, "session_id": sid, "conversation_id": conversation_id, "payload": payload}
 with (events / f"{sid}.ndjson").open("a", encoding="utf-8") as f:
@@ -111,7 +108,7 @@ claim = {
     "launch_id": launch_id,
     "hook_observed_at": now,
 }
-for key in ("thread_id", "turn_id", "run_id", "client_request_id"):
+for key in ("thread_id", "turn_id", "run_id", "client_request_id", "permission_policy"):
     if isinstance(existing_claim, dict) and existing_claim.get(key):
         claim[key] = existing_claim[key]
 registration_ready = os.environ.get("LONGHOUSE_CURSOR_REGISTRATION_READY") == "1"
@@ -152,52 +149,119 @@ if event in {"afterAgentResponse", "stop"}:
         except OSError:
             pass
 
-def permission(value, message=None):
-    result = {"permission": value}
-    if message:
-        result["user_message"] = message
-    print(json.dumps(result))
+print("{}")
+"""
 
-if event in {"beforeShellExecution", "beforeMCPExecution"} and os.environ.get("LONGHOUSE_PERMISSION_HOOK_ENABLED") == "1":
-    base = os.environ.get("LONGHOUSE_HOOK_URL", "").rstrip("/")
-    token = os.environ.get("LONGHOUSE_HOOK_TOKEN", "")
-    invocation_id = str(payload.get("tool_call_id") or payload.get("toolCallId") or payload.get("invocation_id") or payload.get("call_id") or f"{now}:{os.getpid()}")
-    material = "|".join([conversation_id, str(payload.get("generation_id") or ""), event, invocation_id, str(payload.get("command") or payload.get("tool_name") or "")])
-    request_id = hashlib.sha256(material.encode()).hexdigest()
-    tool_name = "Shell" if event == "beforeShellExecution" else str(payload.get("tool_name") or "MCP")
-    tool_input = {"command": payload.get("command")} if event == "beforeShellExecution" else (payload.get("tool_input") or payload.get("arguments") or {})
-    body = json.dumps({"session_id": sid, "tool_use_id": request_id, "tool_name": tool_name, "tool_input": tool_input, "provider": "cursor"}).encode()
-    headers = {
-        "Content-Type": "application/json",
-        "X-Agents-Token": token,
-        "User-Agent": "Longhouse-Cursor-Hook/1",
-    }
-    try:
-        req = urllib.request.Request(base + "/api/agents/permission-requests", data=body, headers=headers, method="POST")
-        with urllib.request.urlopen(req, timeout=5) as response:
-            ack = json.loads(response.read().decode() or "{}")
-        pause_id = str(ack.get("pause_request_id") or "")
-        deadline = time.monotonic() + min(20.0, max(0.0, float(os.environ.get("LONGHOUSE_PERMISSION_HOOK_TIMEOUT_S", "20"))))
-        query = urllib.parse.urlencode({"session_id": sid, "tool_use_id": request_id, "pause_request_id": pause_id})
-        while pause_id and time.monotonic() < deadline:
-            req = urllib.request.Request(base + "/api/agents/permission-decision?" + query, headers=headers)
-            with urllib.request.urlopen(req, timeout=5) as response:
-                result = json.loads(response.read().decode() or "{}")
-            if result.get("resolved"):
-                decision = str(result.get("decision") or "ask").lower()
-                permission(decision if decision in {"allow", "deny"} else "ask", result.get("reason"))
-                raise SystemExit(0)
-            time.sleep(0.5)
-    except (OSError, ValueError, urllib.error.URLError):
-        pass
-    permission("deny", "Longhouse approval unavailable; command blocked")
-else:
+_PERMISSION_SCRIPT = r"""#!/usr/bin/env python3
+import hashlib, json, os, sys, time, urllib.error, urllib.parse, urllib.request
+from pathlib import Path
+
+# This hook is installed fail-closed, so its ordinary non-policy path must be
+# completely inert and avoid stdin, filesystem, and network work.
+if os.environ.get("LONGHOUSE_PERMISSION_HOOK_ENABLED") != "1":
     print("{}")
+    raise SystemExit(0)
+
+def deny(message):
+    print(json.dumps({"permission": "deny", "user_message": message}))
+    raise SystemExit(0)
+
+event = sys.argv[1] if len(sys.argv) > 1 else "unknown"
+try:
+    payload = json.load(sys.stdin)
+except Exception:
+    deny("Longhouse received malformed Cursor hook input; command blocked")
+
+sid = os.environ.get("LONGHOUSE_SESSION_ID", "").strip()
+conversation_id = str(payload.get("conversation_id") or "").strip()
+launch_id = os.environ.get("LONGHOUSE_CURSOR_LAUNCH_ID", "").strip()
+if not sid or not conversation_id or not launch_id:
+    deny("Longhouse launch identity is incomplete; command blocked")
+
+home = Path(os.environ.get("LONGHOUSE_HOME") or (Path.home() / ".longhouse"))
+try:
+    claim = json.loads((home / "managed-local" / "cursor-helm" / "binding-probes" / f"{sid}.json").read_text())
+except (OSError, ValueError, TypeError):
+    deny("Longhouse launch identity could not be verified; command blocked")
+if not (
+    claim.get("session_id") == sid
+    and claim.get("conversation_uuid") == conversation_id
+    and claim.get("launch_id") == launch_id
+    and claim.get("status") in {"pending", "observed"}
+    and claim.get("permission_policy") in {"remote_human", "remote_approve"}
+):
+    deny("Longhouse launch identity or permission policy does not match; command blocked")
+
+base = os.environ.get("LONGHOUSE_HOOK_URL", "").rstrip("/")
+token = os.environ.get("LONGHOUSE_HOOK_TOKEN", "")
+if not base or not token:
+    deny("Longhouse approval service is not configured; command blocked")
+try:
+    timeout_s = min(120.0, max(1.0, float(os.environ.get("LONGHOUSE_PERMISSION_HOOK_TIMEOUT_S", "20"))))
+except ValueError:
+    deny("Longhouse approval timeout is invalid; command blocked")
+
+invocation_id = str(payload.get("tool_call_id") or payload.get("toolCallId") or payload.get("invocation_id") or payload.get("call_id") or f"{time.time_ns()}:{os.getpid()}")
+material = "|".join([conversation_id, str(payload.get("generation_id") or ""), event, invocation_id, str(payload.get("command") or payload.get("tool_name") or "")])
+request_id = hashlib.sha256(material.encode()).hexdigest()
+tool_name = "Shell" if event == "beforeShellExecution" else str(payload.get("tool_name") or "MCP")
+tool_input = {"command": payload.get("command")} if event == "beforeShellExecution" else (payload.get("tool_input") or payload.get("arguments") or {})
+body = json.dumps({"session_id": sid, "tool_use_id": request_id, "tool_name": tool_name, "tool_input": tool_input, "provider": "cursor", "wait_timeout_seconds": timeout_s}).encode()
+headers = {"Content-Type": "application/json", "X-Agents-Token": token, "User-Agent": "Longhouse-Cursor-Permission-Hook/1"}
+
+try:
+    request = urllib.request.Request(base + "/api/agents/permission-requests", data=body, headers=headers, method="POST")
+    with urllib.request.urlopen(request, timeout=5) as response:
+        ack = json.loads(response.read().decode() or "{}")
+except urllib.error.HTTPError as exc:
+    deny(f"Longhouse approval service rejected authentication or registration (HTTP {exc.code}); command blocked")
+except (OSError, urllib.error.URLError):
+    deny("Longhouse approval service could not be reached; command blocked")
+except (ValueError, TypeError):
+    deny("Longhouse approval service returned malformed registration data; command blocked")
+
+pause_id = str(ack.get("pause_request_id") or "")
+if not pause_id:
+    deny("Longhouse approval service returned an incomplete registration; command blocked")
+query = urllib.parse.urlencode({"session_id": sid, "tool_use_id": request_id, "pause_request_id": pause_id, "provider": "cursor"})
+deadline = time.monotonic() + timeout_s
+try:
+    while time.monotonic() < deadline:
+        request = urllib.request.Request(base + "/api/agents/permission-decision?" + query, headers=headers)
+        with urllib.request.urlopen(request, timeout=min(5.0, max(1.0, deadline - time.monotonic()))) as response:
+            result = json.loads(response.read().decode() or "{}")
+        if result.get("resolved"):
+            decision = str(result.get("decision") or "").lower()
+            if decision not in {"allow", "deny"}:
+                deny("Longhouse approval service returned a malformed decision; command blocked")
+            output = {"permission": decision}
+            if result.get("reason"):
+                output["user_message"] = result["reason"]
+            print(json.dumps(output))
+            raise SystemExit(0)
+        time.sleep(0.5)
+except SystemExit:
+    raise
+except urllib.error.HTTPError as exc:
+    deny(f"Longhouse approval polling was rejected (HTTP {exc.code}); command blocked")
+except (OSError, urllib.error.URLError):
+    deny("Longhouse approval service became unreachable while waiting; command blocked")
+except (ValueError, TypeError):
+    deny("Longhouse approval service returned malformed decision data; command blocked")
+
+try:
+    expire_body = json.dumps({"session_id": sid, "reason": "Approval deadline expired before a human decision"}).encode()
+    request = urllib.request.Request(base + f"/api/agents/permission-requests/{pause_id}/expire", data=expire_body, headers=headers, method="POST")
+    urllib.request.urlopen(request, timeout=2).close()
+except Exception:
+    pass
+deny("No human approval was received before the Longhouse deadline; command blocked")
 """
 
 
 def _is_ours(entry: object) -> bool:
-    return isinstance(entry, dict) and _MARKER in str(entry.get("command") or "")
+    command = str(entry.get("command") or "") if isinstance(entry, dict) else ""
+    return _MARKER in command or _PERMISSION_MARKER in command
 
 
 def install_cursor_hooks(cursor_dir: Path | None = None) -> list[str]:
@@ -207,10 +271,15 @@ def install_cursor_hooks(cursor_dir: Path | None = None) -> list[str]:
     hooks_dir = cursor_dir / "hooks"
     hooks_dir.mkdir(parents=True, exist_ok=True)
     script = hooks_dir / _MARKER
-    changed = not script.exists() or script.read_text(encoding="utf-8") != _SCRIPT
-    if changed:
+    permission_script = hooks_dir / _PERMISSION_MARKER
+    lifecycle_changed = not script.exists() or script.read_text(encoding="utf-8") != _SCRIPT
+    permission_changed = not permission_script.exists() or permission_script.read_text(encoding="utf-8") != _PERMISSION_SCRIPT
+    if lifecycle_changed:
         script.write_text(_SCRIPT, encoding="utf-8")
+    if permission_changed:
+        permission_script.write_text(_PERMISSION_SCRIPT, encoding="utf-8")
     script.chmod(stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)
+    permission_script.chmod(stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)
     config_path = cursor_dir / "hooks.json"
     try:
         config = json.loads(config_path.read_text(encoding="utf-8")) if config_path.exists() else {}
@@ -221,14 +290,16 @@ def install_cursor_hooks(cursor_dir: Path | None = None) -> list[str]:
     for event in _EVENTS:
         existing = hooks.get(event)
         entries = existing if isinstance(existing, list) else []
-        timeout = 25 if event in {"beforeShellExecution", "beforeMCPExecution"} else 5
         permission_event = event in {"beforeShellExecution", "beforeMCPExecution"}
-        ours = {"command": f"{script} {event}", "timeout": timeout, "failClosed": permission_event}
-        hooks[event] = [ours if _is_ours(item) else item for item in entries]
-        if not any(_is_ours(item) for item in hooks[event]):
-            hooks[event].append(ours)
+        lifecycle = {"command": f"{script} {event}", "timeout": 5, "failClosed": False}
+        permission = {"command": f"{permission_script} {event}", "timeout": 125, "failClosed": True}
+        hooks[event] = [item for item in entries if not _is_ours(item)]
+        hooks[event].append(lifecycle)
+        if permission_event:
+            hooks[event].append(permission)
     rendered = json.dumps(config, indent=2, sort_keys=True) + "\n"
     config_changed = not config_path.exists() or config_path.read_text(encoding="utf-8") != rendered
     if config_changed:
         config_path.write_text(rendered, encoding="utf-8")
+    changed = lifecycle_changed or permission_changed
     return [f"Installed Cursor hooks in {cursor_dir}"] if changed or config_changed else [f"{config_path} already up to date"]

@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from datetime import UTC
 from datetime import datetime
+from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import NAMESPACE_URL
@@ -132,6 +133,42 @@ async def test_catalogd_owns_permission_registration_resolution_and_poll(daemon_
         replay = await client.call("interaction.register.v2", registration)
         assert replay["interaction"]["status"] == "resolved"
         assert replay["interaction"]["can_respond"] is False
+
+        expired_registration = {"interaction": dict(registration["interaction"])}
+        expired_registration["interaction"].update(
+            {
+                "source": "cursor_permission_gate",
+                "provider": "cursor",
+                "provider_request_id": "cursor-expired",
+                "request_key": f"cursor:cursor:{session_id}:cursor-expired",
+                "occurred_at": (now - timedelta(seconds=30)).isoformat(),
+                "expires_at": (now - timedelta(seconds=10)).isoformat(),
+            }
+        )
+        expired = (await client.call("interaction.register.v2", expired_registration))["interaction"]
+        deadline_decision = await client.call(
+            "interaction.decision.read.v2",
+            {"session_id": session_id, "interaction_id": expired["id"], "request_key": None},
+        )
+        assert deadline_decision["decision"] == "deny"
+        pending_after_deadline = await client.call(
+            "interaction.list.v2",
+            {"session_id": session_id, "status": "pending", "limit": 20},
+        )
+        assert expired["id"] not in {item["id"] for item in pending_after_deadline["interactions"]}
+        late_allow = await client.call(
+            "interaction.resolve.v2",
+            {
+                "session_id": session_id,
+                "interaction_id": expired["id"],
+                "status": "resolved",
+                "response_payload": {"permissionDecision": "allow"},
+                "response_text": "too late",
+                "resolved_at": now.isoformat(),
+            },
+        )
+        assert late_allow["resolved"] is False
+        assert late_allow["interaction"]["status"] == "expired"
     finally:
         await client.close()
         await daemon.close()

@@ -318,7 +318,46 @@ def _create_cursor_chat(cursor_bin: str, cwd: Path) -> str:
         raise RuntimeError(f"cursor-agent create-chat returned invalid id {value!r}") from exc
 
 
+def _cursor_helm_argv(
+    cursor_bin: str,
+    provider_conversation_id: str,
+    permission_policy: str,
+    cursor_args: list[str] | None,
+) -> list[str]:
+    policy_args = ["--force"] if permission_policy == "auto_approve" else []
+    return [cursor_bin, "--resume", provider_conversation_id, *policy_args, *(cursor_args or [])]
+
+
+def _cursor_helm_child_env(
+    base_env: dict[str, str],
+    *,
+    session_id: str,
+    launch_id: str,
+    permission_policy: str,
+    hook_url: str,
+    hook_token: str | None,
+) -> dict[str, str]:
+    env = dict(base_env)
+    env["LONGHOUSE_SESSION_ID"] = session_id
+    env["LONGHOUSE_CURSOR_LAUNCH_ID"] = launch_id
+    for permission_var in (
+        "LONGHOUSE_PERMISSION_HOOK_ENABLED",
+        "LONGHOUSE_HOOK_URL",
+        "LONGHOUSE_HOOK_TOKEN",
+    ):
+        env.pop(permission_var, None)
+    if permission_policy == "remote_human" and hook_token:
+        env["LONGHOUSE_PERMISSION_HOOK_ENABLED"] = "1"
+        env["LONGHOUSE_HOOK_URL"] = hook_url
+        env["LONGHOUSE_HOOK_TOKEN"] = hook_token
+    return env
+
+
 def _resume_cursor_identity(longhouse_session_id: str) -> str:
+    return str(_resume_cursor_claim(longhouse_session_id)["conversation_uuid"])
+
+
+def _resume_cursor_claim(longhouse_session_id: str) -> dict:
     try:
         session_id = str(uuid.UUID(longhouse_session_id))
     except ValueError as exc:
@@ -330,12 +369,18 @@ def _resume_cursor_identity(longhouse_session_id: str) -> str:
         raise RuntimeError(f"no Cursor identity claim exists for Longhouse session {session_id}") from exc
     provider_id = str(claim.get("conversation_uuid") or "").strip()
     try:
-        return str(uuid.UUID(provider_id))
+        normalized_provider_id = str(uuid.UUID(provider_id))
     except ValueError as exc:
         raise RuntimeError(f"Cursor identity claim for {session_id} is invalid") from exc
+    return {**claim, "conversation_uuid": normalized_provider_id}
 
 
-def _write_pending_binding(session_id: str, provider_conversation_id: str, launch_id: str) -> None:
+def _write_pending_binding(
+    session_id: str,
+    provider_conversation_id: str,
+    launch_id: str,
+    permission_policy: str = "provider_local",
+) -> None:
     claims = _state_dir() / "binding-probes"
     claims.mkdir(parents=True, exist_ok=True)
     now = datetime.now(timezone.utc)
@@ -346,6 +391,7 @@ def _write_pending_binding(session_id: str, provider_conversation_id: str, launc
         "session_id": session_id,
         "conversation_uuid": provider_conversation_id,
         "launch_id": launch_id,
+        "permission_policy": permission_policy,
         "expires_at": (now + timedelta(minutes=10)).isoformat(),
     }
     target = claims / f"{session_id}.json"
@@ -882,7 +928,8 @@ def run_helm(
     url: str | None,
     token: str | None,
     config_dir: str | None,
-    permission_mode: str,
+    permission_policy: str,
+    permission_policy_explicit: bool = False,
     cursor_args: list[str] | None,
     verbose: bool = False,
     open_browser: bool = False,
@@ -923,8 +970,24 @@ def run_helm(
             fg=typer.colors.RED,
         )
         raise typer.Exit(code=EXIT_SETUP_FAILED)
+    from zerg.services.cursor_permission_policy import AUTO_APPROVE
+    from zerg.services.cursor_permission_policy import PROVIDER_LOCAL
+    from zerg.services.cursor_permission_policy import REMOTE_HUMAN
+    from zerg.services.cursor_permission_policy import cursor_permission_wire_mode
+    from zerg.services.cursor_permission_policy import normalize_cursor_permission_policy
+
     try:
-        provider_conversation_id = _resume_cursor_identity(resume_session_id) if resume_session_id else _create_cursor_chat(cursor_bin, cwd)
+        permission_policy = normalize_cursor_permission_policy(permission_policy, surface="helm")
+        if resume_session_id:
+            resume_claim = _resume_cursor_claim(resume_session_id)
+            provider_conversation_id = str(resume_claim["conversation_uuid"])
+            recorded_value = resume_claim.get("permission_policy") or "remote_approve"
+            recorded_policy = normalize_cursor_permission_policy(str(recorded_value), surface="helm")
+            if permission_policy_explicit and permission_policy != recorded_policy:
+                raise RuntimeError(f"resume policy conflict: session uses {recorded_policy}, requested {permission_policy}")
+            permission_policy = recorded_policy
+        else:
+            provider_conversation_id = _create_cursor_chat(cursor_bin, cwd)
     except (OSError, RuntimeError, subprocess.TimeoutExpired) as exc:
         typer.secho(f"Could not create native Cursor conversation: {exc}", fg=typer.colors.RED)
         raise typer.Exit(code=EXIT_SETUP_FAILED) from exc
@@ -940,7 +1003,8 @@ def run_helm(
     # Resuming reuses the Longhouse ID but starts a new provider process. A
     # previous generation must never authorize input into the new process.
     _phase_path(session_id).unlink(missing_ok=True)
-    _write_pending_binding(session_id, provider_conversation_id, launch_id)
+    _write_pending_binding(session_id, provider_conversation_id, launch_id, permission_policy)
+    permission_mode = cursor_permission_wire_mode(permission_policy)
     state_dir = _state_dir()
     state_dir.mkdir(parents=True, exist_ok=True)
     sock_path = _socket_path(session_id)
@@ -997,7 +1061,7 @@ def run_helm(
     # Brief race: if registration is fast, print steerable panel; never wait
     # for the full HTTP timeout before starting the TUI.
     registration_thread.join(timeout=0.3)
-    if permission_mode == "remote_approve" and not registration_box:
+    if permission_policy == REMOTE_HUMAN and not registration_box:
         # Remote approval is a safety contract, not a best-effort enhancement.
         # Do not start Cursor until the bounded registration worker has either
         # supplied per-session hook credentials or exhausted its retries.
@@ -1017,7 +1081,7 @@ def run_helm(
     else:
         attach_command = None
 
-    if permission_mode == "remote_approve" and (early is None or not early.registered or not early.hook_token):
+    if permission_policy == REMOTE_HUMAN and (early is None or not early.registered or not early.hook_token):
         stop_event.set()
         if early is not None and early.registered:
             _post_terminal_event(resolved_url, resolved_token, session_id, "permission_setup_failed", EXIT_SETUP_FAILED)
@@ -1054,6 +1118,16 @@ def run_helm(
         "Cursor Helm remote control is live when Longhouse registration and the machine lease succeed. " + archive_copy,
         fg=typer.colors.GREEN,
     )
+    if permission_policy == REMOTE_HUMAN:
+        typer.secho(
+            "Permission policy: remote_human. Shell and MCP calls pause for your approval in Longhouse "
+            f"({build_session_url(resolved_url, session_id)}).",
+            fg=typer.colors.YELLOW,
+        )
+    elif permission_policy == AUTO_APPROVE:
+        typer.secho("Permission policy: auto_approve.", fg=typer.colors.YELLOW)
+    else:
+        assert permission_policy == PROVIDER_LOCAL
 
     launch_ui.launch_panel(
         provider_label=launch_ui.PROVIDER_LABELS["cursor"],
@@ -1065,7 +1139,7 @@ def run_helm(
         attach_command=attach_command,
     )
 
-    argv = [cursor_bin, "--resume", provider_conversation_id, *(cursor_args or [])]
+    argv = _cursor_helm_argv(cursor_bin, provider_conversation_id, permission_policy, cursor_args)
 
     # Read the real terminal's mode + geometry before forking. We need the size
     # in two places: to preseed LINES/COLUMNS in the child env (mitigates the
@@ -1083,21 +1157,16 @@ def run_helm(
             os.chdir(str(cwd))
         except OSError:
             pass
-        env = dict(os.environ)
-        # A nested managed launch must own its new identity; inheriting an
-        # outer launcher ID cross-binds hook claims and remote control.
-        env["LONGHOUSE_SESSION_ID"] = session_id
-        env["LONGHOUSE_CURSOR_LAUNCH_ID"] = launch_id
-        for permission_var in (
-            "LONGHOUSE_PERMISSION_HOOK_ENABLED",
-            "LONGHOUSE_HOOK_URL",
-            "LONGHOUSE_HOOK_TOKEN",
-        ):
-            env.pop(permission_var, None)
-        if permission_mode == "remote_approve" and early is not None and early.hook_token:
-            env["LONGHOUSE_PERMISSION_HOOK_ENABLED"] = "1"
-            env["LONGHOUSE_HOOK_URL"] = resolved_url
-            env["LONGHOUSE_HOOK_TOKEN"] = early.hook_token
+        # A nested managed launch owns its identity and permission policy;
+        # inherited remote-human credentials must never engage another session.
+        env = _cursor_helm_child_env(
+            dict(os.environ),
+            session_id=session_id,
+            launch_id=launch_id,
+            permission_policy=permission_policy,
+            hook_url=resolved_url,
+            hook_token=(early.hook_token if early is not None else None),
+        )
         # Ink (cursor-agent's TUI) disables ANSI erase/cursor manipulation,
         # synchronized output, and SIGWINCH resize handling when it detects a
         # CI environment or when stdout is not a TTY. The child's stdout is the

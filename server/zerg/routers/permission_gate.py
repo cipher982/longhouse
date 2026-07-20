@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
+from datetime import timedelta
 from datetime import timezone
 from typing import Any
 from typing import Optional
@@ -25,6 +26,7 @@ from fastapi import APIRouter
 from fastapi import Depends
 from fastapi import HTTPException
 from fastapi import status
+from pydantic import Field
 from sqlalchemy.orm import Session
 
 from zerg import database as database_module
@@ -35,6 +37,8 @@ from zerg.models.agents import AgentSession
 from zerg.services.session_pause_requests import PENDING_STATUS
 from zerg.services.session_pause_requests import REPLY_TRANSPORT_CLAUDE_PULL
 from zerg.services.session_pause_requests import make_pause_request_key
+from zerg.services.session_pause_requests import normalize_utc
+from zerg.services.session_pause_requests import resolve_pause_request
 from zerg.services.session_pause_requests import upsert_pause_request
 from zerg.services.session_runtime import runtime_key_for_session
 from zerg.utils.time import UTCBaseModel
@@ -53,6 +57,8 @@ _permission_db_dependency = _no_permission_db if database_module.live_catalog_en
 # Distinct source so answerable permission-gate requests are NOT hidden by the
 # legacy claude_hook placeholder filter in session_pause_requests.
 PERMISSION_GATE_SOURCE = "claude_permission_gate"
+CURSOR_PERMISSION_GATE_SOURCE = "cursor_permission_gate"
+PERMISSION_GATE_SOURCES = {PERMISSION_GATE_SOURCE, CURSOR_PERMISSION_GATE_SOURCE}
 PERMISSION_PROMPT_KIND = "permission_prompt"
 
 
@@ -65,6 +71,12 @@ class PermissionRequestIn(UTCBaseModel):
     tool_input: Optional[dict[str, Any]] = None
     provider: Optional[str] = "claude"
     occurred_at: Optional[datetime] = None
+    wait_timeout_seconds: float = Field(default=20.0, ge=1.0, le=120.0)
+
+
+class PermissionExpireIn(UTCBaseModel):
+    session_id: str
+    reason: Optional[str] = None
 
 
 class PermissionRequestAck(UTCBaseModel):
@@ -137,6 +149,9 @@ async def register_permission_request(
 
     provider = (payload.provider or "claude").strip() or "claude"
     occurred_at = (payload.occurred_at or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    expires_at = occurred_at + timedelta(seconds=payload.wait_timeout_seconds)
+    source = CURSOR_PERMISSION_GATE_SOURCE if provider == "cursor" else PERMISSION_GATE_SOURCE
+    provider_label = "Cursor" if provider == "cursor" else "Claude" if provider == "claude" else provider.title()
     runtime_key = runtime_key_for_session(provider, payload.session_id)
     request_key = make_pause_request_key(
         provider=provider,
@@ -161,18 +176,22 @@ async def register_permission_request(
                         "runtime_key": runtime_key,
                         "provider": provider,
                         "device_id": None,
-                        "source": PERMISSION_GATE_SOURCE,
+                        "source": source,
                         "reply_transport": REPLY_TRANSPORT_CLAUDE_PULL,
                         "provider_request_id": tool_use_id,
                         "request_key": request_key,
                         "kind": PERMISSION_PROMPT_KIND,
                         "tool_name": tool_name,
                         "title": f"Permission: {tool_name}" if tool_name else "Tool permission",
-                        "summary": (f"Claude wants to use {tool_name}." if tool_name else "Claude is requesting tool permission."),
+                        "summary": (
+                            f"{provider_label} wants to use {tool_name}."
+                            if tool_name
+                            else f"{provider_label} is requesting tool permission."
+                        ),
                         "request_payload": {"tool_name": tool_name, "tool_input": payload.tool_input or {}},
                         "can_respond": True,
                         "occurred_at": occurred_at.isoformat(),
-                        "expires_at": None,
+                        "expires_at": expires_at.isoformat(),
                         "single_active": True,
                     }
                 },
@@ -199,13 +218,14 @@ async def register_permission_request(
         request_key=request_key,
         occurred_at=occurred_at,
         provider_request_id=tool_use_id,
-        provider_ref={"source": PERMISSION_GATE_SOURCE, "reply_transport": REPLY_TRANSPORT_CLAUDE_PULL},
+        provider_ref={"source": source, "reply_transport": REPLY_TRANSPORT_CLAUDE_PULL},
         kind=PERMISSION_PROMPT_KIND,
         tool_name=tool_name,
         title=f"Permission: {tool_name}" if tool_name else "Tool permission",
-        summary=f"Claude wants to use {tool_name}." if tool_name else "Claude is requesting tool permission.",
+        summary=f"{provider_label} wants to use {tool_name}." if tool_name else f"{provider_label} is requesting tool permission.",
         request_payload={"tool_name": tool_name, "tool_input": payload.tool_input or {}},
         can_respond=True,
+        expires_at=expires_at,
     )
     db.commit()
     return PermissionRequestAck(pause_request_id=str(row.id), request_key=request_key, status=row.status)
@@ -299,6 +319,12 @@ async def get_permission_decision(
     row = query.first()
     if row is None or not _is_permission_gate_row(row):
         return PermissionDecisionOut(decision=None, resolved=False)
+    if (
+        row.status == PENDING_STATUS
+        and normalize_utc(row.expires_at) is not None
+        and normalize_utc(row.expires_at) <= datetime.now(timezone.utc)
+    ):
+        return PermissionDecisionOut(decision="deny", reason="Approval deadline expired", resolved=True)
     if row.status == PENDING_STATUS:
         return PermissionDecisionOut(decision=None, resolved=False)
 
@@ -312,8 +338,65 @@ async def get_permission_decision(
     return PermissionDecisionOut(decision=decision, reason=reason, resolved=True)
 
 
+@router.post("/permission-requests/{pause_request_id}/expire", response_model=PermissionDecisionOut)
+async def expire_permission_request(
+    pause_request_id: str,
+    payload: PermissionExpireIn,
+    db: Session = Depends(_permission_db_dependency),
+    _token: object = Depends(verify_agents_token),
+) -> PermissionDecisionOut:
+    """Expire the exact held prompt when its provider-side wait deadline ends."""
+
+    _enforce_session_scope(_token, payload.session_id)
+    session_uuid = _coerce_session_uuid(payload.session_id)
+    try:
+        interaction_uuid = UUID(pause_request_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid pause_request_id") from exc
+    reason = (payload.reason or "Approval deadline expired").strip() or "Approval deadline expired"
+    response_payload = {"permissionDecision": "deny", "permissionDecisionReason": reason}
+    now = datetime.now(timezone.utc)
+    if database_module.live_catalog_enabled():
+        from zerg.services.catalogd_supervisor import get_catalogd_client
+
+        catalogd = get_catalogd_client()
+        if catalogd is None:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="live interaction catalog unavailable")
+        try:
+            result = await catalogd.call(
+                "interaction.resolve.v2",
+                {
+                    "session_id": str(session_uuid),
+                    "interaction_id": str(interaction_uuid),
+                    "status": "expired",
+                    "response_payload": response_payload,
+                    "response_text": reason,
+                    "resolved_at": now.isoformat(),
+                },
+                timeout_seconds=1.0,
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="live interaction expiry failed") from exc
+        if result.get("found") is not True:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="permission request not found")
+    else:
+        row = resolve_pause_request(
+            db,
+            pause_request_id=interaction_uuid,
+            status="expired",
+            occurred_at=now,
+            response_payload=response_payload,
+            response_text=reason,
+        )
+        if row is None or row.session_id != session_uuid or not _is_permission_gate_row(row):
+            db.rollback()
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="permission request not found")
+        db.commit()
+    return PermissionDecisionOut(decision="deny", reason=reason, resolved=True)
+
+
 def _is_permission_gate_row(row: object) -> bool:
     """True only for rows this gate created (source=claude_permission_gate)."""
     ref = getattr(row, "provider_ref_json", None)
     source = (ref or {}).get("source") if isinstance(ref, dict) else None
-    return str(source or "").strip() == PERMISSION_GATE_SOURCE
+    return str(source or "").strip() in PERMISSION_GATE_SOURCES

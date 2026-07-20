@@ -92,10 +92,16 @@ def launch(
         "--resume-session",
         help="Resume a stopped Cursor Helm conversation by its Longhouse session UUID.",
     ),
-    permission_mode: str = typer.Option(
-        "remote_approve",
+    permission_policy: str | None = typer.Option(
+        None,
+        "--permission-policy",
         "--permission-mode",
-        help="remote_approve routes Cursor tool approvals through Longhouse; bypass leaves Cursor local-only.",
+        help="provider_local (default), auto_approve, or remote_human. Legacy mode names remain accepted.",
+    ),
+    remote_approve: bool = typer.Option(
+        False,
+        "--remote-approve",
+        help="Require the human to approve Cursor Shell and MCP calls through Longhouse.",
     ),
     url: str | None = typer.Option(None, "--url", "-u", help="Longhouse API URL (uses stored URL if not specified)."),
     token: str | None = typer.Option(None, "--token", "-t", help="Device token (uses stored token if not specified)."),
@@ -111,6 +117,20 @@ def launch(
     if ctx.invoked_subcommand is not None:
         return
     from zerg.cli.cursor_helm import run_helm
+    from zerg.services.cursor_permission_policy import REMOTE_HUMAN
+    from zerg.services.cursor_permission_policy import normalize_cursor_permission_policy
+
+    try:
+        selected_policy = normalize_cursor_permission_policy(permission_policy, surface="helm")
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc), param_hint="--permission-policy") from exc
+    if remote_approve:
+        if permission_policy is not None and selected_policy != REMOTE_HUMAN:
+            raise typer.BadParameter(
+                "--remote-approve conflicts with the selected permission policy",
+                param_hint="--remote-approve",
+            )
+        selected_policy = REMOTE_HUMAN
 
     run_helm(
         cwd=cwd,
@@ -120,7 +140,8 @@ def launch(
         url=url,
         token=token,
         config_dir=config_dir,
-        permission_mode=permission_mode,
+        permission_policy=selected_policy,
+        permission_policy_explicit=permission_policy is not None or remote_approve,
         cursor_args=list(ctx.args),
         verbose=verbose,
         open_browser=open_browser,

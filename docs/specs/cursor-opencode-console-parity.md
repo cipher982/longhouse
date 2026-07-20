@@ -119,6 +119,10 @@ OpenCode Console launch initially supports explicit bypass only through stock
 `--auto`. Cursor's hook-backed `remote_approve` behavior is not inferred for
 OpenCode. If bypass is not selected, launch fails with a typed unsupported
 permission-mode result rather than waiting on an invisible interactive prompt.
+Cursor permission semantics are defined separately in
+`docs/specs/cursor-permission-policy.md`: Console defaults to `auto_approve`,
+and remote-human approval remains unavailable until Console has a valid
+session-scoped hook-token path.
 
 The adapter reuses the shared durable turn-claim registry and process-identity
 rules, but owns an OpenCode-specific parser and native-session binding. It must:

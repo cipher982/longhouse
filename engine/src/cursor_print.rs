@@ -33,8 +33,6 @@ pub struct CursorPrintRunConfig {
     pub resume_provider_thread_id: Option<String>,
     pub model: Option<String>,
     pub permission_mode: String,
-    pub api_url: String,
-    pub api_token: Option<String>,
     pub machine_name: String,
     pub local_db_path: Option<PathBuf>,
 }
@@ -77,6 +75,9 @@ pub async fn start_cursor_print_turn(
     validate_uuid(&config.run_id, "run_id")?;
     if let Some(turn_id) = normalized_optional(&config.turn_id) {
         validate_uuid(&turn_id, "turn_id")?;
+    }
+    if !matches!(config.permission_mode.as_str(), "bypass" | "auto_approve") {
+        anyhow::bail!("Cursor Console currently supports auto_approve permission policy only");
     }
     let provider_thread_id = match normalized_optional(&config.resume_provider_thread_id) {
         Some(value) => {
@@ -134,9 +135,7 @@ pub async fn start_cursor_print_turn(
     if let Some(model) = normalized_optional(&config.model) {
         args.extend(["--model".to_string(), model]);
     }
-    if config.permission_mode == "bypass" {
-        args.push("--force".to_string());
-    }
+    args.push("--force".to_string());
     args.push(provider_prompt);
     let argv = std::iter::once(config.cursor_bin.clone())
         .chain(args.iter().cloned())
@@ -155,19 +154,9 @@ pub async fn start_cursor_print_turn(
         .env_remove("LONGHOUSE_CURSOR_PRINT_MODE")
         .env_remove("LONGHOUSE_LAUNCH_ACTOR")
         .env_remove("LONGHOUSE_LAUNCH_SURFACE");
-    if config.permission_mode == "remote_approve" {
-        let token = normalized_optional(&config.api_token)
-            .context("Cursor Console remote approval requires a Machine Agent token")?;
-        command
-            .env("LONGHOUSE_PERMISSION_HOOK_ENABLED", "1")
-            .env("LONGHOUSE_HOOK_URL", config.api_url.trim_end_matches('/'))
-            .env("LONGHOUSE_HOOK_TOKEN", token)
-            .env("LONGHOUSE_PERMISSION_HOOK_TIMEOUT_S", "20");
-    } else {
-        command.env_remove("LONGHOUSE_PERMISSION_HOOK_ENABLED");
-        command.env_remove("LONGHOUSE_HOOK_URL");
-        command.env_remove("LONGHOUSE_HOOK_TOKEN");
-    }
+    command.env_remove("LONGHOUSE_PERMISSION_HOOK_ENABLED");
+    command.env_remove("LONGHOUSE_HOOK_URL");
+    command.env_remove("LONGHOUSE_HOOK_TOKEN");
     #[cfg(unix)]
     unsafe {
         command.pre_exec(|| {
@@ -1274,8 +1263,6 @@ mod tests {
                 resume_provider_thread_id: resume,
                 model: Some("gpt-5.3-codex-low".to_string()),
                 permission_mode: "bypass".to_string(),
-                api_url: "http://127.0.0.1:1".to_string(),
-                api_token: None,
                 machine_name: "cursor-console-canary".to_string(),
                 local_db_path: None,
             })
@@ -1378,8 +1365,6 @@ mod tests {
             resume_provider_thread_id: Some(first.provider_thread_id.clone()),
             model: Some("gpt-5.3-codex-low".to_string()),
             permission_mode: "bypass".to_string(),
-            api_url: "http://127.0.0.1:1".to_string(),
-            api_token: None,
             machine_name: "cursor-console-canary".to_string(),
             local_db_path: None,
         })

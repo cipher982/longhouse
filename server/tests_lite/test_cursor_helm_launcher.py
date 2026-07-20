@@ -96,7 +96,7 @@ def test_pending_binding_reserves_native_conversation_before_cursor_launch(monke
     session_id = "11111111-1111-4111-8111-111111111111"
     cursor_id = "22222222-2222-4222-8222-222222222222"
 
-    cursor_helm._write_pending_binding(session_id, cursor_id, "launch-1")
+    cursor_helm._write_pending_binding(session_id, cursor_id, "launch-1", "provider_local")
 
     claim = json.loads((cursor_helm._state_dir() / "binding-probes" / f"{session_id}.json").read_text())
     assert claim["schema_version"] == 2
@@ -105,6 +105,7 @@ def test_pending_binding_reserves_native_conversation_before_cursor_launch(monke
     assert claim["session_id"] == session_id
     assert claim["conversation_uuid"] == cursor_id
     assert claim["launch_id"] == "launch-1"
+    assert claim["permission_policy"] == "provider_local"
     assert claim["expires_at"] > cursor_helm._now_iso()
 
 
@@ -513,9 +514,57 @@ def test_resume_cursor_identity_uses_exact_hook_claim(tmp_path, monkeypatch):
     monkeypatch.setattr(cursor_helm, "_state_dir", lambda: tmp_path)
     claims = tmp_path / "binding-probes"
     claims.mkdir()
-    (claims / f"{session_id}.json").write_text(json.dumps({"session_id": session_id, "conversation_uuid": provider_id}))
+    (claims / f"{session_id}.json").write_text(
+        json.dumps(
+            {
+                "session_id": session_id,
+                "conversation_uuid": provider_id,
+                "permission_policy": "remote_human",
+            }
+        )
+    )
 
     assert cursor_helm._resume_cursor_identity(session_id) == provider_id
+    assert cursor_helm._resume_cursor_claim(session_id)["permission_policy"] == "remote_human"
+
+
+def test_cursor_helm_policy_owns_provider_args_and_permission_env() -> None:
+    assert cursor_helm._cursor_helm_argv("cursor-agent", "cursor-id", "provider_local", []) == [
+        "cursor-agent",
+        "--resume",
+        "cursor-id",
+    ]
+    assert cursor_helm._cursor_helm_argv("cursor-agent", "cursor-id", "auto_approve", [])[-1] == "--force"
+
+    inherited = {
+        "PATH": "/bin",
+        "LONGHOUSE_PERMISSION_HOOK_ENABLED": "1",
+        "LONGHOUSE_HOOK_URL": "https://outer.invalid",
+        "LONGHOUSE_HOOK_TOKEN": "outer-token",
+    }
+    local = cursor_helm._cursor_helm_child_env(
+        inherited,
+        session_id="session-1",
+        launch_id="launch-1",
+        permission_policy="provider_local",
+        hook_url="https://longhouse.example",
+        hook_token="inner-token",
+    )
+    assert "LONGHOUSE_PERMISSION_HOOK_ENABLED" not in local
+    assert "LONGHOUSE_HOOK_URL" not in local
+    assert "LONGHOUSE_HOOK_TOKEN" not in local
+
+    remote = cursor_helm._cursor_helm_child_env(
+        inherited,
+        session_id="session-2",
+        launch_id="launch-2",
+        permission_policy="remote_human",
+        hook_url="https://longhouse.example",
+        hook_token="inner-token",
+    )
+    assert remote["LONGHOUSE_PERMISSION_HOOK_ENABLED"] == "1"
+    assert remote["LONGHOUSE_HOOK_URL"] == "https://longhouse.example"
+    assert remote["LONGHOUSE_HOOK_TOKEN"] == "inner-token"
 
 
 def test_send_while_active_is_rejected_before_pty_write(monkeypatch):

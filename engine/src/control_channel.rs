@@ -1476,7 +1476,7 @@ async fn execute_turn_start(
     let resume_provider_thread_id = payload_optional_string(payload, "resume_provider_thread_id");
     let permission_mode =
         payload_optional_string(payload, "permission_mode").unwrap_or_else(|| {
-            if provider == "opencode" {
+            if matches!(provider.as_str(), "cursor" | "opencode") {
                 "bypass"
             } else {
                 "remote_approve"
@@ -1487,6 +1487,13 @@ async fn execute_turn_start(
         return Err(CommandError {
             code: "permission_mode_unsupported".to_string(),
             message: "OpenCode Console currently supports bypass permission mode only".to_string(),
+        });
+    }
+    if provider == "cursor" && !matches!(permission_mode.as_str(), "bypass" | "auto_approve") {
+        return Err(CommandError {
+            code: "permission_policy_unsupported".to_string(),
+            message: "Cursor Console currently supports auto_approve permission policy only"
+                .to_string(),
         });
     }
     let launch_actor = payload_optional_string(payload, "launch_actor");
@@ -1571,8 +1578,6 @@ async fn execute_turn_start(
             resume_provider_thread_id,
             model: payload_optional_string(payload, "model"),
             permission_mode: permission_mode.clone(),
-            api_url: config.api_url.clone(),
-            api_token: config.api_token.clone(),
             machine_name: config.machine_name.clone(),
             local_db_path,
         })
@@ -4401,6 +4406,40 @@ exit 1
 
         assert_eq!(response["ok"], false);
         assert_eq!(response["error"]["code"], "permission_mode_unsupported");
+    }
+
+    #[tokio::test]
+    async fn cursor_console_rejects_policies_without_a_valid_control_path() {
+        for permission_mode in ["provider_local", "remote_human", "remote_approve"] {
+            let run_id = Uuid::new_v4().to_string();
+            let mut cache = command_cache();
+            let response = handle_command_frame(
+                json!({
+                    "type": "command",
+                    "command_id": run_id,
+                    "session_id": Uuid::new_v4().to_string(),
+                    "command_type": COMMAND_TURN_START,
+                    "payload": {
+                        "provider": "cursor",
+                        "thread_id": Uuid::new_v4().to_string(),
+                        "turn_id": Uuid::new_v4().to_string(),
+                        "run_id": run_id,
+                        "cwd": std::env::temp_dir(),
+                        "message": "do work",
+                        "permission_mode": permission_mode,
+                    },
+                }),
+                &mut cache,
+                &test_config(),
+            )
+            .await;
+
+            assert_eq!(response["ok"], false, "{permission_mode}: {response}");
+            assert_eq!(
+                response["error"]["code"], "permission_policy_unsupported",
+                "{permission_mode}: {response}"
+            );
+        }
     }
 
     #[test]

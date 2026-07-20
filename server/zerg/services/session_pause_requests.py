@@ -257,8 +257,20 @@ def resolve_pause_request(
     row = query.first()
     if row is None or row.status != PENDING_STATUS:
         return row
+    resolved_at = normalize_utc(occurred_at) or datetime.now(timezone.utc)
+    if normalize_utc(row.expires_at) is not None and normalize_utc(row.expires_at) <= resolved_at and status != "expired":
+        row.status = "expired"
+        row.resolved_at = resolved_at
+        row.response_payload_json = {
+            "permissionDecision": "deny",
+            "permissionDecisionReason": "Approval deadline expired",
+        }
+        row.response_text = "Approval deadline expired"
+        db.add(row)
+        db.flush()
+        return row
     row.status = _terminal_status(status)
-    row.resolved_at = normalize_utc(occurred_at) or datetime.now(timezone.utc)
+    row.resolved_at = resolved_at
     row.response_payload_json = _json_obj(response_payload)
     row.response_text = _clean_str(response_text)
     db.add(row)
@@ -332,6 +344,9 @@ def load_active_pause_request_map(db: Session, session_ids: list[UUID]) -> dict[
     )
     by_session: dict[UUID, SessionPauseRequest] = {}
     for row in rows:
+        expires_at = normalize_utc(row.expires_at)
+        if expires_at is not None and expires_at <= datetime.now(timezone.utc):
+            continue
         if not is_user_facing_pause_request(row):
             continue
         by_session.setdefault(row.session_id, row)
@@ -358,7 +373,13 @@ def list_pause_requests_for_session(
         SessionPauseRequest.occurred_at.desc(),
         SessionPauseRequest.created_at.desc(),
     ).all()
-    return [row for row in rows if is_user_facing_pause_request(row)]
+    now = datetime.now(timezone.utc)
+    return [
+        row
+        for row in rows
+        if is_user_facing_pause_request(row)
+        and not (row.status == PENDING_STATUS and normalize_utc(row.expires_at) is not None and normalize_utc(row.expires_at) <= now)
+    ]
 
 
 def get_pause_request_for_session(
