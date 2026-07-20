@@ -107,12 +107,9 @@ state strings locally for its short label and color. Add a local
 
 ### Desktop Menu Bar And Snapshot Tooling
 
-The desktop menu bar uses `server/zerg/config/managed_phase_contract.json`, not
-the runtime-display projection, to decide whether a managed phase is known. Add
-`syncing_transcript` to that contract with `attention = "working"` so the menu
-bar does not raise an unknown-phase health warning during this normal handoff.
-Regenerate the Swift contract with
-`scripts/generate_managed_phase_contract_swift.py`.
+The raw managed-phase contract remains a local-health diagnostic seam. The
+desktop menu bar consumes canonical server presentation facts and must not
+independently translate raw phases into user-facing attention state.
 
 The widget snapshot helper has local fallback phase logic for screenshots. It
 is a standalone script at `scripts/widget-snapshot/Sources/main.swift`. It should
@@ -139,9 +136,9 @@ render the state as inactive.
    - Update the Live Activity raw-state helpers to render `syncing_transcript`
      with the same compact label/color treatment as active thinking.
 4. Desktop/menu-bar contract and snapshot tooling:
-   - Add `syncing_transcript` to `managed_phase_contract.json` as working.
-   - Regenerate `ManagedPhaseContract.generated.swift`.
-   - Update local-health/menu-bar contract tests.
+   - Add `syncing_transcript` to `managed_phase_contract.json` for raw local-health diagnostics.
+   - Update local-health diagnostics tests.
+   - Verify the menu bar consumes canonical presentation facts only.
    - Update `scripts/widget-snapshot/Sources/main.swift` fallback logic.
 5. Validation:
    - Backend: `make test`

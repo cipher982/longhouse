@@ -304,7 +304,6 @@ struct CodexExecRuntimeSink {
     turn_id: Option<String>,
     client_request_id: Option<String>,
     machine_name: String,
-    cwd: String,
     local_db_path: Option<PathBuf>,
     event_tx: mpsc::Sender<Vec<Value>>,
     critical_event_tx: mpsc::Sender<Vec<Value>>,
@@ -622,7 +621,6 @@ pub async fn start_codex_exec_once(config: CodexExecRunConfig) -> Result<CodexEx
         turn_id: config.turn_id.clone(),
         client_request_id: config.client_request_id.clone(),
         machine_name: config.machine_name.clone(),
-        cwd: config.cwd.to_string_lossy().to_string(),
         local_db_path: config.local_db_path.clone(),
         event_tx,
         critical_event_tx,
@@ -1504,23 +1502,6 @@ impl CodexExecRuntimeSink {
                 self.session_id
             );
         }
-        let managed_signal = crate::state::managed_session_state::ManagedSessionPhaseSignal {
-            session_id: self.session_id.clone(),
-            provider: "codex".to_string(),
-            workspace_path: Some(self.cwd.clone()),
-            phase_kind: phase.to_string(),
-            tool_name: signal.tool_name.clone(),
-            phase_source: CODEX_EXEC_RUNTIME_SOURCE.to_string(),
-            observed_at,
-        };
-        if let Err(err) = crate::state::managed_session_state::ManagedSessionStateStore::new(&conn)
-            .record_phase(&managed_signal)
-        {
-            eprintln!(
-                "[codex-exec] persist managed session state failed for {}: {err}",
-                self.session_id
-            );
-        }
     }
 
     async fn post_events(&self, events: Vec<Value>) {
@@ -1838,7 +1819,6 @@ for line in sys.stdin:
             turn_id: config.turn_id,
             client_request_id: config.client_request_id,
             machine_name: config.machine_name,
-            cwd: config.cwd.to_string_lossy().to_string(),
             local_db_path,
             event_tx: mpsc::channel(EVENT_PUMP_QUEUE_CAPACITY).0,
             critical_event_tx: mpsc::channel(EVENT_PUMP_CRITICAL_CAPACITY).0,

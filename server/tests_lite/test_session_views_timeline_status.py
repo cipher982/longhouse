@@ -125,7 +125,7 @@ def test_timeline_status_marks_live_managed_control_ready_without_provider_phase
         runtime_view=_runtime_view(last_live_at=datetime(2026, 3, 21, 11, 30, tzinfo=timezone.utc)),
     )
 
-    assert status.label == "No live signal"
+    assert status.label == "Activity unknown"
     assert status.tone == "inactive"
     assert status.seen_at == datetime(2026, 3, 21, 11, 30, tzinfo=timezone.utc)
     assert status.seen_at_prefix == "Last signal"
@@ -176,7 +176,7 @@ def test_timeline_status_no_live_signal_uses_last_live_at():
         runtime_view=_runtime_view(last_live_at=seen_at),
     )
 
-    assert status.label == "No live signal"
+    assert status.label == "Activity unknown"
     assert status.tone == "inactive"
     assert status.seen_at == seen_at
     assert status.seen_at_prefix == "Last signal"
@@ -185,7 +185,7 @@ def test_timeline_status_no_live_signal_uses_last_live_at():
 def test_timeline_status_no_runtime_view_falls_back_to_checked():
     status = _timeline_status_from_display(_display(), runtime_view=None)
 
-    assert status.label == "No live signal"
+    assert status.label == "Activity unknown"
     assert status.tone == "inactive"
     assert status.seen_at is None
     assert status.seen_at_prefix == "Checked"

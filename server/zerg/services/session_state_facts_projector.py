@@ -21,7 +21,6 @@ from pydantic import ConfigDict
 from pydantic import Field
 
 from zerg.machine_evidence import canonical_evidence_hash
-from zerg.services.agents.kernel_capabilities import KernelSessionCapabilities
 from zerg.services.session_state_contract import STATE_CONTRACT_VERSION
 from zerg.services.session_state_contract import SessionActionAvailability
 from zerg.services.session_state_contract import SessionActivityFacts
@@ -182,7 +181,6 @@ def project_served_session_state_facts(
     catalog_facts: Mapping[str, Any],
     heads: Collection[Mapping[str, Any]],
     supported_operations: Collection[str],
-    catalog_capabilities: KernelSessionCapabilities,
     pending_interaction: SessionPendingInteractionFacts | None,
     transcript: SessionTranscriptFacts,
     host: SessionHostFacts,
@@ -198,13 +196,15 @@ def project_served_session_state_facts(
         supported_operations=supported_operations,
         now=now,
     )
+    served_mode = shadow.mode
     control = _served_control(
         shadow.control,
-        mode=shadow.mode,
-        capabilities=catalog_capabilities,
+        mode=served_mode,
+        catalog_facts=catalog_facts,
+        supported_operations=set(supported_operations),
     )
     return assemble_session_state_facts(
-        mode=shadow.mode,
+        mode=served_mode,
         disposition=shadow.disposition,
         launch=shadow.launch,
         run=shadow.run,
@@ -277,46 +277,54 @@ def _served_control(
     observed: SessionControlFacts | None,
     *,
     mode: SessionMode,
-    capabilities: KernelSessionCapabilities,
+    catalog_facts: Mapping[str, Any],
+    supported_operations: set[str],
 ) -> SessionControlFacts:
     def availability(available: bool, reason: str) -> SessionActionAvailability:
         if available:
             return SessionActionAvailability(state="available")
         return SessionActionAvailability(state="unavailable", reason=reason)
 
+    console_control = _mapping(catalog_facts.get("console_control"))
     start_turn = availability(
-        mode == "console" and capabilities.can_start_turn,
-        capabilities.start_turn_blocked_by or ("not_console" if mode != "console" else "start_turn_unavailable"),
+        mode == "console" and bool(console_control.get("can_start_turn")),
+        _text(console_control.get("start_turn_blocked_by")) or ("not_console" if mode != "console" else "start_turn_unavailable"),
+    )
+    reattach_available, reattach_reason = _durable_action_availability(
+        catalog_facts,
+        mode=mode,
+        supported_operations=supported_operations,
+        operation="reattach",
+    )
+    resume_available, resume_reason = _durable_action_availability(
+        catalog_facts,
+        mode=mode,
+        supported_operations=supported_operations,
+        operation="resume",
     )
     if observed is not None:
         reattach = availability(
-            observed.connection != "connected" and capabilities.host_reattach_available,
-            "already_connected" if observed.connection == "connected" else "reattach_unavailable",
+            observed.connection != "connected" and reattach_available,
+            "already_connected" if observed.connection == "connected" else reattach_reason,
         )
         return observed.model_copy(
             update={
-                "control_plane": capabilities.control_plane,
+                "control_plane": _control_plane_for_observation(catalog_facts, observed),
                 "actions": observed.actions.model_copy(
                     update={"start_turn": start_turn, "reattach": reattach},
                 ),
             }
         )
 
-    owned = mode in {"helm", "console"} or capabilities.control_owned or capabilities.host_reattach_available
+    owned = mode in {"helm", "console"}
     connection = "not_applicable" if mode in {"shadow", "console"} else "unknown"
     unavailable_reason = "observe_only" if not owned else "control_unknown"
-    reattach = availability(
-        mode == "helm" and capabilities.host_reattach_available,
-        "reattach_unavailable",
-    )
-    resume = availability(
-        mode == "helm" and capabilities.host_reattach_available and capabilities.can_resume,
-        "resume_unavailable",
-    )
+    reattach = availability(mode == "helm" and reattach_available, reattach_reason)
+    resume = availability(mode == "helm" and resume_available, resume_reason)
     return SessionControlFacts(
         ownership="owned" if owned else "unowned",
         connection=connection,
-        control_plane=capabilities.control_plane,
+        control_plane=_durable_control_plane(catalog_facts),
         actions=SessionControlActions(
             start_turn=start_turn,
             send_input=availability(False, unavailable_reason),
@@ -326,6 +334,48 @@ def _served_control(
             resume=resume,
         ),
     )
+
+
+def _durable_action_availability(
+    catalog_facts: Mapping[str, Any],
+    *,
+    mode: SessionMode,
+    supported_operations: set[str],
+    operation: Literal["reattach", "resume"],
+) -> tuple[bool, str]:
+    if mode != "helm" or operation not in supported_operations:
+        return False, "unsupported" if operation not in supported_operations else "not_helm"
+    for value in catalog_facts.get("connections") or ():
+        connection = _mapping(value)
+        if connection.get("released_at") is not None:
+            continue
+        if _text(connection.get("state")) not in {"released", "ended"} and bool(connection.get("can_resume")):
+            return True, "reattach_available"
+    return False, f"{operation}_unavailable"
+
+
+def _control_plane_for_observation(
+    catalog_facts: Mapping[str, Any],
+    observed: SessionControlFacts,
+) -> str | None:
+    for value in catalog_facts.get("connections") or ():
+        connection = _mapping(value)
+        if (
+            _text(connection.get("adapter_connection_id")) == observed.connection_id
+            and _text(connection.get("lease_generation")) == observed.lease_generation
+        ):
+            return _text(connection.get("control_plane"))
+    return None
+
+
+def _durable_control_plane(catalog_facts: Mapping[str, Any]) -> str | None:
+    for value in reversed(tuple(catalog_facts.get("connections") or ())):
+        connection = _mapping(value)
+        if connection.get("released_at") is None:
+            control_plane = _text(connection.get("control_plane"))
+            if control_plane is not None:
+                return control_plane
+    return None
 
 
 def _mapping(value: Any) -> Mapping[str, Any]:
@@ -346,14 +396,13 @@ def _project_mode(catalog_facts: Mapping[str, Any]) -> SessionMode:
     execution_lifetime = _text(readiness.get("execution_lifetime"))
     launch_origin = _text(run.get("launch_origin"))
     connections = catalog_facts.get("connections")
+    owns_control = isinstance(connections, list) and any(
+        _text(_mapping(connection).get("acquisition_kind")) in {"spawned_control", "adopted_control"} for connection in connections
+    )
 
     if origin_kind == "console" or execution_lifetime == "one_shot" or launch_surface in {"web", "ios", "api"}:
         return "console"
-    if (
-        execution_lifetime == "live_control"
-        or (isinstance(connections, list) and bool(connections))
-        or launch_origin in {"longhouse_spawned", "longhouse_continued"}
-    ):
+    if execution_lifetime == "live_control" or owns_control or launch_origin in {"longhouse_spawned", "longhouse_continued"}:
         return "helm"
     return "shadow"
 

@@ -1,3 +1,4 @@
+import json
 from datetime import UTC
 from datetime import datetime
 from types import SimpleNamespace
@@ -53,6 +54,66 @@ def test_catalog_console_session_is_idle_identity_not_launch(tmp_path):
     replay = CatalogStore(engine).create_console_session(data=data)
     assert replay["created"] is False
     assert replay["exact_replay"] is True
+
+
+def test_console_create_outbox_is_exact_fail_closed_owner_evidence(tmp_path):
+    engine = create_catalog_engine(tmp_path / "catalog-console-owner.db")
+    initialize_catalog_schema(engine)
+    now = datetime.now(UTC)
+    matched_id = str(uuid4())
+    wrong_key_id = str(uuid4())
+    non_console_id = str(uuid4())
+    with Session(engine) as db:
+        db.add_all(
+            [
+                LiveUser(id=1, email="owner@example.com", is_active=True),
+                LiveUser(id=42, email="other@example.com", is_active=True),
+                LiveSessionCatalog(
+                    session_id=matched_id,
+                    provider="codex",
+                    environment="production",
+                    origin_kind="console",
+                    started_at=now,
+                ),
+                LiveSessionCatalog(
+                    session_id=wrong_key_id,
+                    provider="codex",
+                    environment="production",
+                    origin_kind="console",
+                    started_at=now,
+                ),
+                LiveSessionCatalog(
+                    session_id=non_console_id,
+                    provider="codex",
+                    environment="production",
+                    origin_kind="local",
+                    started_at=now,
+                ),
+                LiveArchiveOutbox(
+                    idempotency_key=f"console_session_create.v1:{matched_id}",
+                    kind="console_session_create.v1",
+                    payload_json=json.dumps({"session": {"owner_id": 1}}),
+                ),
+                LiveArchiveOutbox(
+                    idempotency_key=f"console_session_create.v1:{wrong_key_id}:wrong",
+                    kind="console_session_create.v1",
+                    payload_json=json.dumps({"session": {"owner_id": 1}}),
+                ),
+                LiveArchiveOutbox(
+                    idempotency_key=f"console_session_create.v1:{non_console_id}",
+                    kind="console_session_create.v1",
+                    payload_json=json.dumps({"session": {"owner_id": 1}}),
+                ),
+            ]
+        )
+        db.commit()
+
+    store = CatalogStore(engine)
+    with engine.connect() as connection:
+        assert store._session_explicitly_belongs_to_owner(connection, session_id=matched_id, owner_id=1) is True
+        assert store._session_explicitly_belongs_to_owner(connection, session_id=matched_id, owner_id=42) is False
+        assert store._session_explicitly_belongs_to_owner(connection, session_id=wrong_key_id, owner_id=1) is False
+        assert store._session_explicitly_belongs_to_owner(connection, session_id=non_console_id, owner_id=1) is False
 
 
 def test_catalog_console_turns_claim_and_wake_fifo(tmp_path):

@@ -148,12 +148,6 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
     }
 
     func applyingLocalProjection(_ projection: LocalStatusMonitor.Projection) -> HealthSnapshot {
-        let states = projection.sessions
-        let byId = Dictionary(uniqueKeysWithValues: states.map { ($0.sessionId, $0) })
-        let sessions = managedSessions?.map { session in
-            guard let state = session.sessionId.flatMap({ byId[$0] }) else { return session }
-            return session.applying(state)
-        }
         let updatedEngine = EngineStatusSnapshot(
             path: engineStatus?.path,
             exists: true,
@@ -166,7 +160,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
             ?? projection.engine?.lastUpdated
             ?? collectedAt
         return replacingManagedSessions(
-            sessions,
+            managedSessions,
             replacementEngineStatus: updatedEngine,
             replacementCollectedAt: pulse
         )
@@ -622,6 +616,21 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
 
     public var hasManagedRuntimeTruth: Bool {
         managedSummary != nil || !currentManagedSessions.isEmpty || !currentOrphanBridges.isEmpty
+    }
+
+    public var hasCanonicalControlTruth: Bool {
+        currentManagedSessions.contains { session in
+            session.authority == "runtime_host" && session.control != nil
+        }
+    }
+
+    public var hasLimitedCanonicalControl: Bool {
+        currentManagedSessions.contains { session in
+            guard session.authority == "runtime_host", let connection = session.control?.connection else {
+                return false
+            }
+            return connection == "disconnected" || connection == "degraded"
+        }
     }
 
     public var managedAttentionSeverity: HarnessSeverity? {
@@ -1508,7 +1517,20 @@ public struct SessionControlActionsSnapshot: Codable, Equatable, Sendable {
 public struct SessionControlSnapshot: Codable, Equatable, Sendable {
     public let ownership: String?
     public let connection: String?
+    public let controlPlane: String?
     public let actions: SessionControlActionsSnapshot
+
+    public init(
+        ownership: String?,
+        connection: String?,
+        controlPlane: String? = nil,
+        actions: SessionControlActionsSnapshot
+    ) {
+        self.ownership = ownership
+        self.connection = connection
+        self.controlPlane = controlPlane
+        self.actions = actions
+    }
 }
 
 public struct ManagedSessionSnapshot: Codable, Equatable, Identifiable, Sendable {
@@ -1683,25 +1705,6 @@ public struct ManagedSessionSnapshot: Codable, Equatable, Identifiable, Sendable
         )
     }
 
-    func applying(_ local: LocalStatusMonitor.SessionState) -> ManagedSessionSnapshot {
-        guard authority != "runtime_host" else { return self }
-        return ManagedSessionSnapshot(
-            sessionId: sessionId, provider: provider, workspaceLabel: workspaceLabel,
-            timelineTitle: timelineTitle, summaryTitle: summaryTitle, firstUserMessage: firstUserMessage,
-            titleState: titleState, titleSource: titleSource, titleProvenance: titleProvenance,
-            branch: branch, state: local.state ?? state, phase: local.phase ?? phase,
-            rawPhase: local.phase ?? rawPhase, phaseProvenance: "machine_agent",
-            phaseObservedAt: local.observedAt ?? phaseObservedAt,
-            lastActivityAt: local.observedAt ?? lastActivityAt,
-            bridgeStatus: local.bridgeStatus ?? bridgeStatus, bridgePid: bridgePid,
-            bridgeHeartbeatAt: bridgeHeartbeatAt, launchMode: launchMode, uiAttached: uiAttached,
-            uiPresence: uiPresence, reasonCodes: reasonCodes,
-            authority: authority, stateContractVersion: stateContractVersion,
-            presentationPolicyVersion: presentationPolicyVersion, commitSeq: commitSeq,
-            mode: mode, presentation: presentation, activity: activity, control: control
-        )
-    }
-
     func preservingTitle(from previous: ManagedSessionSnapshot) -> ManagedSessionSnapshot {
         ManagedSessionSnapshot(
             sessionId: sessionId, provider: provider, workspaceLabel: workspaceLabel,
@@ -1780,20 +1783,7 @@ public struct ManagedSessionSnapshot: Codable, Equatable, Identifiable, Sendable
             default: return .unknown(key)
             }
         }
-        switch normalizedState {
-        case "detached":
-            return .detached
-        case "degraded":
-            return .degraded
-        case "attached":
-            let normalizedPhase = phase?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            if normalizedPhase.isEmpty {
-                return .idle
-            }
-            return ManagedPhaseContract.attention(forDisplayPhase: phase) ?? .unknown("unknown phase")
-        default:
-            return .unknown(normalizedState)
-        }
+        return .unknown("canonical presentation unavailable")
     }
 }
 

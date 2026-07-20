@@ -153,8 +153,11 @@ extension HealthSnapshot {
             ? .repair
             : freshnessIsCurrent ? .normal : .unavailable
 
-        let controlLimited = degradedManagedCount > 0 || detachedManagedCount > 0
-        let controlValue = controlLimited ? "Limited" : hasManagedRuntimeTruth ? "Connected" : "Ready"
+        let controlLimited = hasLimitedCanonicalControl
+        let controlValue = controlLimited ? "Limited" : hasCanonicalControlTruth ? "Connected" : "Unavailable"
+        let controlPromotion: MenuBarPromotion = controlLimited
+            ? .inspect
+            : hasCanonicalControlTruth ? .normal : .unavailable
 
         let durableValue: String
         let durablePromotion: MenuBarPromotion
@@ -178,7 +181,7 @@ extension HealthSnapshot {
             MenuBarSystemFact(
                 id: "remote-control", label: "Remote control", value: controlValue,
                 detail: hostValueLabel == "-" ? nil : "Runtime Host · \(hostValueLabel)",
-                promotion: controlLimited ? .inspect : .normal
+                promotion: controlPromotion
             ),
             MenuBarSystemFact(
                 id: "durable-upload", label: "Durable upload", value: durableValue,

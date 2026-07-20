@@ -10,7 +10,6 @@ from typing import Any
 from zerg.services.longhouse_paths import get_agent_outbox_dir
 from zerg.services.longhouse_paths import get_agent_status_path
 
-from ._shared import _max_rfc3339
 from ._shared import _normalize_optional_int
 from ._shared import _normalize_optional_string
 from ._shared import _parse_rfc3339
@@ -18,7 +17,6 @@ from .constants import CONTROL_PATH_MANAGED
 from .constants import CONTROL_PATH_UNMANAGED
 from .constants import ENGINE_FRESH_SECONDS
 from .constants import LIVENESS_MODEL_ENGINE_STATUS
-from .phase import _phase_display_label
 from .process import _process_row_by_pid
 from .process import _process_row_is_zombie
 
@@ -211,68 +209,6 @@ def _engine_status_payload(engine_status: dict[str, Any]) -> Mapping[str, Any]:
     return raw_payload if isinstance(raw_payload, Mapping) else {}
 
 
-def _engine_status_managed_session_row(
-    *,
-    raw_row: Mapping[str, Any],
-    phase_overlay: dict[str, dict[str, str | None]] | None,
-) -> dict[str, Any]:
-    session_id = _normalize_optional_string(raw_row.get("session_id"))
-    provider = _normalize_optional_string(raw_row.get("provider")) or "unknown"
-    state = _normalize_optional_string(raw_row.get("state")) or "unknown"
-    observed_at = _normalize_optional_string(raw_row.get("observed_at"))
-    raw_phase = _normalize_optional_string(raw_row.get("phase"))
-    tool_name = _normalize_optional_string(raw_row.get("tool_name"))
-    phase_state = phase_overlay.get(session_id or "") if phase_overlay else None
-    overlay_phase = _normalize_optional_string(phase_state.get("phase")) if phase_state else None
-    overlay_tool = _normalize_optional_string(phase_state.get("tool_name")) if phase_state else None
-    phase_observed_at = _normalize_optional_string(phase_state.get("observed_at")) if phase_state else None
-    phase_last_activity_at = _normalize_optional_string(phase_state.get("last_activity_at")) if phase_state else None
-    workspace_label = _normalize_optional_string(phase_state.get("workspace_label")) if phase_state else None
-    workspace_path = _normalize_optional_string(phase_state.get("workspace_path")) if phase_state else None
-    display_phase = overlay_phase if overlay_phase is not None else raw_phase
-    display_tool = overlay_tool if overlay_phase is not None else tool_name
-
-    return {
-        "session_id": session_id,
-        "provider": provider,
-        "control_path": CONTROL_PATH_MANAGED,
-        "liveness_model": LIVENESS_MODEL_ENGINE_STATUS,
-        "provider_cli": None,
-        "workspace_label": workspace_label,
-        "cwd": workspace_path,
-        "branch": None,
-        "state": state,
-        "raw_phase": display_phase,
-        "phase": _phase_display_label(display_phase, display_tool),
-        "phase_observed_at": phase_observed_at or observed_at,
-        "last_activity_at": _max_rfc3339(observed_at, phase_last_activity_at, phase_observed_at),
-        "bridge_status": _normalize_optional_string(raw_row.get("bridge_status")),
-        "bridge_pid": None,
-        "bridge_heartbeat_at": observed_at,
-        "thread_subscription_status": _normalize_optional_string(raw_row.get("thread_subscription_status")),
-        "reason_codes": [],
-    }
-
-
-def _collect_managed_sessions_from_engine_status(
-    engine_status: dict[str, Any],
-    *,
-    phase_overlay: dict[str, dict[str, str | None]] | None = None,
-) -> list[dict[str, Any]]:
-    payload = _engine_status_payload(engine_status)
-    raw_rows = payload.get("managed_sessions")
-    if not isinstance(raw_rows, list):
-        return []
-
-    sessions: list[dict[str, Any]] = []
-    for raw_row in raw_rows:
-        if not isinstance(raw_row, Mapping):
-            continue
-        sessions.append(_engine_status_managed_session_row(raw_row=raw_row, phase_overlay=phase_overlay))
-
-    return sessions
-
-
 def _engine_status_resolved_sessions(engine_status: dict[str, Any]) -> list[Any] | None:
     payload = _engine_status_payload(engine_status)
     if "sessions" not in payload:
@@ -303,17 +239,10 @@ def _resolved_session_state(raw_row: Mapping[str, Any]) -> str:
     normalized_state = _normalize_optional_string(raw_row.get("state"))
     if normalized_state in {"attached", "detached", "degraded"}:
         return normalized_state
-
-    presentation_state = _normalize_optional_string(raw_row.get("presentation_state"))
-    if presentation_state == "managed_attached":
-        return "attached"
-    if presentation_state == "managed_detached":
-        return "detached"
-    if presentation_state == "managed_degraded":
-        return "degraded"
-    if presentation_state == "stale_evidence":
-        return "degraded"
-    return normalized_state or "unknown"
+    # A managed row with an unrecognized explicit state is contract drift.
+    # Fail visibly instead of allowing it to look healthy; presentation_state
+    # remains ignored because it is not a liveness fact.
+    return "degraded" if normalized_state is not None else "unknown"
 
 
 def _resolved_join_key_value(evidence: Mapping[str, Any], prefix: str) -> str | None:
@@ -339,9 +268,6 @@ def _resolved_engine_managed_session_row(
     bridge = _resolved_session_mapping(raw_row, "bridge")
     evidence = _resolved_session_mapping(raw_row, "evidence")
 
-    raw_phase = _normalize_optional_string(raw_row.get("phase"))
-    tool_name = _normalize_optional_string(raw_row.get("tool_name"))
-    row_phase_observed_at = _normalize_optional_string(raw_row.get("phase_observed_at"))
     last_activity_at = _normalize_optional_string(raw_row.get("last_activity_at"))
     bridge_heartbeat_at = _normalize_optional_string(bridge.get("heartbeat_at"))
     reason_codes = list(raw_row.get("reason_codes") or []) if isinstance(raw_row.get("reason_codes"), list) else []
@@ -357,10 +283,10 @@ def _resolved_engine_managed_session_row(
         "cwd": _normalize_optional_string(workspace.get("cwd")),
         "branch": _normalize_optional_string(workspace.get("branch")),
         "state": state,
-        "raw_phase": raw_phase,
-        "phase": _phase_display_label(raw_phase, tool_name),
-        "phase_observed_at": row_phase_observed_at,
-        "last_activity_at": _max_rfc3339(last_activity_at, row_phase_observed_at),
+        "raw_phase": None,
+        "phase": None,
+        "phase_observed_at": None,
+        "last_activity_at": last_activity_at,
         "timeline_title": _normalize_optional_string(raw_row.get("timeline_title")),
         "summary_title": _normalize_optional_string(raw_row.get("timeline_title")),
         "first_user_message": _normalize_optional_string(raw_row.get("first_user_message")),
@@ -425,10 +351,9 @@ def _collect_resolved_sessions_from_engine_status(
         if not isinstance(raw_row, Mapping):
             continue
         control_path = _normalize_optional_string(raw_row.get("control_path"))
-        presentation_state = _normalize_optional_string(raw_row.get("presentation_state"))
         if control_path == CONTROL_PATH_MANAGED:
             managed_sessions.append(_resolved_engine_managed_session_row(raw_row=raw_row))
-        elif control_path == CONTROL_PATH_UNMANAGED or presentation_state == CONTROL_PATH_UNMANAGED:
+        elif control_path == CONTROL_PATH_UNMANAGED:
             unmanaged_processes.append(_resolved_engine_unmanaged_process_row(raw_row))
 
     unmanaged_processes.sort(
@@ -514,8 +439,6 @@ __all__ = [
     "_collect_engine_status",
     "_collect_outbox",
     "_engine_status_payload",
-    "_engine_status_managed_session_row",
-    "_collect_managed_sessions_from_engine_status",
     "_engine_status_resolved_sessions",
     "_engine_status_resolved_sessions_issue",
     "_resolved_session_mapping",

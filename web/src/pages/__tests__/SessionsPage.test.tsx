@@ -103,7 +103,7 @@ function makeRuntimeDisplay(overrides: Partial<SessionRuntimeDisplay> = {}): Ses
 function makeTimelinePresentation(overrides: Partial<TimelineCardPresentation> = {}): TimelineCardPresentation {
   return {
     ownership: { label: "Unmanaged", tone: "neutral" },
-    status: { label: "No live signal", tone: "inactive", seen_at: null, seen_at_prefix: "Checked" },
+    status: { label: "Activity unknown", tone: "inactive", seen_at: null, seen_at_prefix: "Checked" },
     border_tone: "inactive",
     ...overrides,
   };

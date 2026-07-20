@@ -2666,7 +2666,7 @@ def test_client_request_id_is_owner_scoped(tmp_path):
     assert len(registry.sent) == 2
 
 
-def test_launched_codex_workspace_exposes_live_engine_control(tmp_path):
+def test_legacy_runtime_event_cannot_grant_served_live_engine_control(tmp_path):
     SessionLocal = _make_db(tmp_path)
     _seed_user_and_device(SessionLocal)
     launch_registry = _StubRegistry()
@@ -2724,9 +2724,9 @@ def test_launched_codex_workspace_exposes_live_engine_control(tmp_path):
         asyncio.run(global_registry.clear_for_tests())
 
     assert workspace.session.launch_state == "live"
-    assert workspace.session.capabilities.live_control_available is True
-    assert workspace.session.capabilities.can_queue_next_input is True
-    assert workspace.session.capabilities.can_steer_active_turn is True
+    assert workspace.session.capabilities.live_control_available is False
+    assert workspace.session.capabilities.can_queue_next_input is False
+    assert workspace.session.capabilities.can_steer_active_turn is False
 
 
 def test_continue_session_dispatches_resume_payload_and_attaches_new_run(tmp_path):

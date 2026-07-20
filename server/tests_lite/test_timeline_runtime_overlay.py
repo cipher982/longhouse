@@ -265,7 +265,7 @@ def test_terminal_signals_separate_run_end_from_session_closure(tmp_path, termin
         assert resp.status_code == 200, resp.text
         row = resp.json()["sessions"][0]
         assert row["id"] == session_id
-        expected_label = "Closed" if terminal_state == "user_closed" else "Ended"
+        expected_label = "Closed" if terminal_state == "user_closed" else "Activity unknown"
         assert row["session_state"]["disposition"]["state"] == ("closed" if terminal_state == "user_closed" else "open")
         assert row["runtime_display"]["lifecycle"] == ("closed" if terminal_state == "user_closed" else "open")
         assert row["timeline_card"]["status"]["label"] == expected_label
@@ -309,7 +309,7 @@ def test_reversible_or_turn_terminal_signals_do_not_close_session(tmp_path, term
         row = resp.json()["sessions"][0]
         assert row["id"] == session_id
         assert row["runtime_display"]["lifecycle"] == "open"
-        assert row["timeline_card"]["status"]["label"] == "No live signal"
+        assert row["timeline_card"]["status"]["label"] == "Activity unknown"
 
 
 def test_run_terminal_signal_closes_run_connection_not_session(tmp_path):
@@ -505,7 +505,7 @@ def test_progress_after_host_expired_reopens_runtime_projection(tmp_path):
         assert resp.status_code == 200, resp.text
         row = resp.json()["sessions"][0]
         assert row["id"] == session_id
-        assert row["timeline_card"]["status"]["label"] == "No live signal"
+        assert row["timeline_card"]["status"]["label"] == "Activity unknown"
 
 
 def test_late_phase_and_progress_do_not_reopen_ended_run_without_new_run_id(tmp_path):
@@ -656,13 +656,13 @@ def test_sessions_list_preserves_ingested_stalled_runtime_phase(tmp_path):
         resp = client.get("/agents/sessions?days_back=1&limit=10", headers={"X-Agents-Token": "dev"})
         assert resp.status_code == 200, resp.text
         row = next(item for item in resp.json()["sessions"] if item["id"] == session_id)
-        assert row["presence_state"] == "stalled"
-        assert row["runtime_display"]["state"] == "stalled"
-        assert row["runtime_display"]["tone"] == "stalled"
-        assert row["runtime_display"]["is_stalled"] is True
+        assert row["presence_state"] is None
+        assert row["session_state"]["activity"]["state"] == "unknown"
+        assert row["runtime_display"]["state"] is None
+        assert row["timeline_card"]["status"]["label"] == "Activity unknown"
 
 
-def test_sessions_list_uses_recent_activity_anchor_for_old_live_session(tmp_path):
+def test_archive_recency_ignores_old_runtime_only_activity(tmp_path):
     factory = _make_db(tmp_path, "recent_anchor.db")
     now = datetime.now(timezone.utc)
 
@@ -696,38 +696,17 @@ def test_sessions_list_uses_recent_activity_anchor_for_old_live_session(tmp_path
         payload = resp.json()
         assert payload["total"] >= 1
         top = payload["sessions"][0]
-        assert top["id"] == str(old_live.id)
-        assert top["project"] == "old-live"
-        assert top["status"] == "working"
-        assert top["presence_state"] == "running"
-        assert top["active_tool"] == "bash"
-        assert top["display_phase"] == "Running bash"
-        assert top["confidence"] == "live"
-        assert top["runtime_display"] == {
-            "truth_tier": "fresh",
-            "signal_tier": "phase_signal",
-            "state": "running",
-            "tone": "running",
-            "headline": "Using Shell",
-            "detail": None,
-            "phase_label": "Using Shell",
-            "compact_tool_label": "Shell",
-            "is_live": True,
-            "is_executing": True,
-            "needs_attention": False,
-            "is_idle": False,
-            "is_stalled": False,
-            "is_managed_local_truth": False,
-            "has_signal": True,
-            "control_path": "unmanaged",
-            "activity_recency": "live",
-            "lifecycle": "open",
-            "host_state": "unknown",
-            "terminal_reason": None,
-            "pause_request": None,
-        }
-        assert top["timeline_card"]["status"]["label"] == "Using Shell"
-        assert top["timeline_card"]["status"]["tone"] == "running"
+        assert top["id"] == str(recent_idle.id)
+        assert top["project"] == "recent-idle"
+        assert top["status"] is None
+        assert top["presence_state"] is None
+        assert top["active_tool"] is None
+        assert top["display_phase"] is None
+        assert top["confidence"] is None
+        assert top["session_state"]["activity"]["state"] == "unknown"
+        assert top["runtime_display"]["state"] is None
+        assert top["timeline_card"]["status"]["label"] == "Activity unknown"
+        assert top["timeline_card"]["status"]["tone"] == "inactive"
         assert top["timeline_anchor_at"] is not None
         assert top["timeline_anchor_at"] >= recent_idle.started_at.isoformat().replace("+00:00", "Z")
 
@@ -1367,8 +1346,8 @@ def test_sessions_list_marks_old_open_session_idle_without_live_signal(tmp_path)
         assert resp.status_code == 200, resp.text
         data = resp.json()["sessions"][0]
         assert data["id"] == str(session.id)
-        assert data["status"] == "idle"
-        assert data["display_phase"] == "Inactive"
+        assert data["status"] is None
+        assert data["display_phase"] is None
         assert data["presence_state"] is None
         assert data["confidence"] is None
 
@@ -1439,13 +1418,13 @@ def test_claude_channel_kernel_truth_marks_non_runner_session_online(tmp_path):
         assert resp.status_code == 200, resp.text
         data = resp.json()["sessions"][0]
         assert data["id"] == str(session.id)
-        assert data["runtime_display"]["control_path"] == "managed"
-        assert data["runtime_display"]["activity_recency"] == "live"
-        assert data["runtime_display"]["host_state"] == "online"
-        assert data["capabilities"]["live_control_available"] is True
-        assert data["capabilities"]["reply_to_live_session_available"] is True
-        assert data["capabilities"]["can_queue_next_input"] is True
-        assert data["capabilities"]["display_label"] == "Live control"
+        assert data["runtime_display"]["control_path"] == "unmanaged"
+        assert data["runtime_display"]["activity_recency"] == "none"
+        assert data["runtime_display"]["host_state"] == "unknown"
+        assert data["capabilities"]["live_control_available"] is False
+        assert data["capabilities"]["reply_to_live_session_available"] is False
+        assert data["capabilities"]["can_queue_next_input"] is False
+        assert data["session_state"]["activity"]["state"] == "unknown"
 
 
 def test_sessions_list_uses_fresh_managed_control_when_provider_phase_expires(tmp_path):
@@ -1476,12 +1455,12 @@ def test_sessions_list_uses_fresh_managed_control_when_provider_phase_expires(tm
         live_resp = client.get("/agents/sessions?days_back=1", headers={"X-Agents-Token": "dev"})
         assert live_resp.status_code == 200, live_resp.text
         live = live_resp.json()["sessions"][0]
-        assert live["capabilities"]["live_control_available"] is True
+        assert live["capabilities"]["live_control_available"] is False
         assert live["runtime_display"]["state"] is None
-        assert live["runtime_display"]["phase_label"] == "Activity unknown"
+        assert live["runtime_display"]["phase_label"] == "Inactive"
         assert live["timeline_card"]["status"] == {
             "label": "Activity unknown",
-            "tone": "quiet",
+            "tone": "inactive",
             "seen_at": None,
             "seen_at_prefix": "Updated",
         }
@@ -1499,7 +1478,7 @@ def test_sessions_list_uses_fresh_managed_control_when_provider_phase_expires(tm
         stale = stale_resp.json()["sessions"][0]
         assert stale["capabilities"]["live_control_available"] is False
         assert stale["timeline_card"]["status"]["label"] == "Activity unknown"
-        assert stale["session_state"]["presentation"]["access"]["label"] == "Control unknown"
+        assert stale["session_state"]["presentation"]["access"]["label"] == "Search only"
 
 
 def test_active_sessions_fresh_presence_beats_ended_at(tmp_path):
@@ -1530,14 +1509,14 @@ def test_active_sessions_fresh_presence_beats_ended_at(tmp_path):
         assert len(rows) == 1
         row = rows[0]
         assert row["id"] == str(session.id)
-        assert row["status"] == "working"
-        assert row["presence_state"] == "thinking"
-        assert row["display_phase"] == "Thinking"
-        assert row["confidence"] == "live"
+        assert row["status"] == "completed"
+        assert row["presence_state"] is None
+        assert row["display_phase"] is None
+        assert row["confidence"] is None
         assert row["timeline_anchor_at"] is not None
 
 
-def test_sessions_list_uses_runtime_anchor_for_old_runtime_only_session(tmp_path):
+def test_archive_sessions_ignore_runtime_only_recency_anchor(tmp_path):
     factory = _make_db(tmp_path, "runtime_anchor_sessions.db")
     now = datetime.now(timezone.utc)
 
@@ -1549,7 +1528,7 @@ def test_sessions_list_uses_runtime_anchor_for_old_runtime_only_session(tmp_path
             ended_at=None,
             project="old-runtime",
         )
-        _seed_session(
+        recent_history = _seed_session(
             db,
             started_at=now - timedelta(hours=2),
             ended_at=now - timedelta(hours=1),
@@ -1585,15 +1564,15 @@ def test_sessions_list_uses_runtime_anchor_for_old_runtime_only_session(tmp_path
         payload = resp.json()
         assert payload["total"] >= 1
         row = payload["sessions"][0]
-        assert row["id"] == str(old_runtime.id)
-        assert row["project"] == "old-runtime"
-        assert row["status"] == "working"
-        assert row["display_phase"] == "Running bash"
+        assert row["id"] == str(recent_history.id)
+        assert row["project"] == "recent-history"
+        assert row["status"] is None
+        assert row["display_phase"] is None
         assert row["timeline_anchor_at"] is not None
-        assert row["timeline_card"]["status"]["label"] == "Using Shell"
+        assert row["timeline_card"]["status"]["label"] == "Activity unknown"
 
 
-def test_active_sessions_uses_runtime_anchor_for_old_runtime_only_session(tmp_path):
+def test_archive_active_sessions_ignore_runtime_only_recency_anchor(tmp_path):
     factory = _make_db(tmp_path, "runtime_anchor_active.db")
     now = datetime.now(timezone.utc)
 
@@ -1633,12 +1612,7 @@ def test_active_sessions_uses_runtime_anchor_for_old_runtime_only_session(tmp_pa
         resp = client.get("/agents/sessions/active?days_back=14&limit=5", headers={"X-Agents-Token": "dev"})
         assert resp.status_code == 200, resp.text
         rows = resp.json()["sessions"]
-        assert len(rows) == 1
-        row = rows[0]
-        assert row["id"] == str(old_runtime.id)
-        assert row["status"] == "working"
-        assert row["presence_state"] == "thinking"
-        assert row["display_phase"] == "Thinking"
+        assert rows == []
 
 
 def test_sessions_list_prefers_materialized_runtime_state_when_present(tmp_path):
@@ -1682,14 +1656,14 @@ def test_sessions_list_prefers_materialized_runtime_state_when_present(tmp_path)
         assert resp.status_code == 200, resp.text
         row = resp.json()["sessions"][0]
         assert row["id"] == str(session.id)
-        assert row["status"] == "working"
-        assert row["presence_state"] == "running"
-        assert row["display_phase"] == "Running bash"
-        assert row["runtime_phase"] == "running"
-        assert row["runtime_source"] == "semantic"
-        assert row["runtime_version"] == 3
-        assert row["confidence"] == "live"
-        assert row["timeline_card"]["status"]["label"] == "Using Shell"
+        assert row["status"] is None
+        assert row["presence_state"] is None
+        assert row["display_phase"] is None
+        assert row["runtime_phase"] is None
+        assert row["runtime_source"] is None
+        assert row["runtime_version"] is None
+        assert row["confidence"] is None
+        assert row["timeline_card"]["status"]["label"] == "Activity unknown"
 
 
 def test_sessions_list_keeps_progress_runtime_overlay_for_recent_closed_session(tmp_path):
@@ -1733,14 +1707,14 @@ def test_sessions_list_keeps_progress_runtime_overlay_for_recent_closed_session(
         assert resp.status_code == 200, resp.text
         row = resp.json()["sessions"][0]
         assert row["id"] == str(session.id)
-        assert row["status"] == "idle"
-        assert row["display_phase"] == "Inactive"
+        assert row["status"] is None
+        assert row["display_phase"] is None
         assert row["runtime_phase"] is None
-        assert row["runtime_source"] == "progress"
+        assert row["runtime_source"] is None
         assert row["presence_state"] is None
         assert row["last_live_at"] is None
-        assert row["confidence"] == "stale"
-        assert row["timeline_card"]["status"]["label"] == "No live signal"
+        assert row["confidence"] is None
+        assert row["timeline_card"]["status"]["label"] == "Activity unknown"
         assert row["timeline_card"]["status"]["seen_at_prefix"] == "Updated"
 
 
@@ -1784,11 +1758,11 @@ def test_sessions_list_suppresses_stale_progress_running_phase(tmp_path):
         assert resp.status_code == 200, resp.text
         row = resp.json()["sessions"][0]
         assert row["id"] == str(session.id)
-        assert row["status"] == "idle"
+        assert row["status"] is None
         assert row["presence_state"] is None
-        assert row["display_phase"] == "Inactive"
+        assert row["display_phase"] is None
         assert row["runtime_phase"] is None
-        assert row["runtime_source"] == "progress"
+        assert row["runtime_source"] is None
         assert row["runtime_display"]["headline"] == "Inactive"
         assert row["runtime_display"]["phase_label"] == "Inactive"
         assert row["runtime_display"]["state"] is None
@@ -1846,10 +1820,10 @@ def test_sessions_list_uses_activity_unknown_when_phase_signal_is_stale(tmp_path
         assert resp.status_code == 200, resp.text
         row = resp.json()["sessions"][0]
         assert row["id"] == str(session.id)
-        assert row["confidence"] == "stale"
+        assert row["confidence"] is None
         assert row["runtime_phase"] is None
         assert row["timeline_card"]["status"]["label"] == "Activity unknown"
-        assert row["timeline_card"]["status"]["tone"] == "quiet"
+        assert row["timeline_card"]["status"]["tone"] == "inactive"
         assert row["timeline_card"]["status"]["seen_at"] is None
         assert row["timeline_card"]["status"]["seen_at_prefix"] == "Updated"
 
@@ -1899,17 +1873,17 @@ def test_sessions_list_marks_materialized_needs_user_as_idle(tmp_path):
         assert resp.status_code == 200, resp.text
         row = resp.json()["sessions"][0]
         assert row["id"] == str(session.id)
-        assert row["status"] == "idle"
-        assert row["presence_state"] == "needs_user"
-        assert row["display_phase"] == "Idle"
-        assert row["runtime_phase"] == "needs_user"
-        assert row["runtime_source"] == "managed_local_transport"
-        assert row["confidence"] == "live"
-        assert row["runtime_display"]["truth_tier"] == "managed-local"
-        assert row["runtime_display"]["signal_tier"] == "phase_signal"
-        assert row["runtime_display"]["headline"] == "Idle"
-        assert row["runtime_display"]["detail"] == "Waiting for next prompt"
-        assert row["runtime_display"]["tone"] == "idle"
+        assert row["status"] is None
+        assert row["presence_state"] is None
+        assert row["display_phase"] is None
+        assert row["runtime_phase"] is None
+        assert row["runtime_source"] is None
+        assert row["confidence"] is None
+        assert row["runtime_display"]["truth_tier"] == "none"
+        assert row["runtime_display"]["signal_tier"] == "none"
+        assert row["runtime_display"]["headline"] == "Inactive"
+        assert row["runtime_display"]["detail"] is None
+        assert row["runtime_display"]["tone"] == "inactive"
         assert row["runtime_display"]["needs_attention"] is False
 
 
@@ -1981,18 +1955,17 @@ def test_sessions_list_marks_pending_structured_question_as_needs_answer(tmp_pat
         assert resp.status_code == 200, resp.text
         row = resp.json()["sessions"][0]
         assert row["id"] == str(session.id)
-        assert row["presence_state"] == "needs_user"
-        assert row["runtime_display"]["state"] == "needs_user"
-        assert row["runtime_display"]["headline"] == "Needs answer"
-        assert row["runtime_display"]["detail"] == "The agent needs a storage decision."
-        assert row["runtime_display"]["tone"] == "blocked"
-        assert row["runtime_display"]["needs_attention"] is True
-        assert row["runtime_display"]["pause_request"]["id"] == str(pause.id)
-        assert row["runtime_display"]["pause_request"]["can_respond"] is True
-        assert row["runtime_display"]["pause_request"]["questions"][0]["id"] == "storage"
-        assert row["timeline_card"]["status"]["label"] == "Needs answer"
-        assert row["timeline_card"]["status"]["tone"] == "blocked"
-        assert row["timeline_card"]["border_tone"] == "blocked"
+        assert row["presence_state"] is None
+        assert row["session_state"]["pending_interaction"] is None
+        assert row["runtime_display"]["state"] is None
+        assert row["runtime_display"]["headline"] == "Inactive"
+        assert row["runtime_display"]["detail"] is None
+        assert row["runtime_display"]["tone"] == "inactive"
+        assert row["runtime_display"]["needs_attention"] is False
+        assert row["runtime_display"]["pause_request"] is None
+        assert row["timeline_card"]["status"]["label"] == "Activity unknown"
+        assert row["timeline_card"]["status"]["tone"] == "inactive"
+        assert row["timeline_card"]["border_tone"] == "inactive"
 
 
 def test_sessions_list_keeps_stale_structured_question_visible(tmp_path):
@@ -2053,12 +2026,12 @@ def test_sessions_list_keeps_stale_structured_question_visible(tmp_path):
         row = resp.json()["sessions"][0]
         assert row["runtime_phase"] is None
         assert row["presence_state"] is None
-        assert row["runtime_display"]["state"] == "needs_user"
-        assert row["runtime_display"]["headline"] == "Needs answer"
-        assert row["runtime_display"]["tone"] == "blocked"
-        assert row["runtime_display"]["needs_attention"] is True
-        assert row["runtime_display"]["pause_request"]["id"] == str(pause.id)
-        assert row["timeline_card"]["status"]["label"] == "Needs answer"
+        assert row["runtime_display"]["state"] is None
+        assert row["runtime_display"]["headline"] == "Inactive"
+        assert row["runtime_display"]["tone"] == "inactive"
+        assert row["runtime_display"]["needs_attention"] is False
+        assert row["runtime_display"]["pause_request"] is None
+        assert row["timeline_card"]["status"]["label"] == "Activity unknown"
 
 
 def test_sessions_list_keeps_activity_idle_while_transcript_is_lagging(tmp_path):
@@ -2109,16 +2082,16 @@ def test_sessions_list_keeps_activity_idle_while_transcript_is_lagging(tmp_path)
         assert resp.status_code == 200, resp.text
         row = resp.json()["sessions"][0]
         assert row["id"] == str(session.id)
-        assert row["presence_state"] == "idle"
-        assert row["runtime_display"]["state"] == "idle"
-        assert row["runtime_display"]["headline"] == "Idle"
-        assert row["runtime_display"]["phase_label"] == "Idle"
-        assert row["runtime_display"]["tone"] == "idle"
-        assert row["runtime_display"]["is_idle"] is True
+        assert row["presence_state"] is None
+        assert row["runtime_display"]["state"] is None
+        assert row["runtime_display"]["headline"] == "Inactive"
+        assert row["runtime_display"]["phase_label"] == "Inactive"
+        assert row["runtime_display"]["tone"] == "inactive"
+        assert row["runtime_display"]["is_idle"] is False
         assert row["session_state"]["transcript"]["convergence"] == "lagging"
-        assert row["timeline_card"]["status"]["label"] == "Idle"
-        assert row["timeline_card"]["status"]["tone"] == "idle"
-        assert row["timeline_card"]["status"]["seen_at"] is not None
+        assert row["timeline_card"]["status"]["label"] == "Activity unknown"
+        assert row["timeline_card"]["status"]["tone"] == "inactive"
+        assert row["timeline_card"]["status"]["seen_at"] is None
 
 
 def test_sessions_list_keeps_idle_after_pending_turn_materialization(tmp_path):
@@ -2221,10 +2194,10 @@ def test_sessions_list_keeps_idle_after_pending_turn_materialization(tmp_path):
         row = resp.json()["sessions"][0]
         assert row["assistant_messages"] == 113
         assert row["user_messages"] == 45
-        assert row["presence_state"] == "idle"
-        assert row["runtime_display"]["state"] == "idle"
-        assert row["runtime_display"]["phase_label"] == "Idle"
-        assert row["runtime_display"]["is_idle"] is True
+        assert row["presence_state"] is None
+        assert row["runtime_display"]["state"] is None
+        assert row["runtime_display"]["phase_label"] == "Inactive"
+        assert row["runtime_display"]["is_idle"] is False
         assert row["session_state"]["transcript"]["convergence"] == "lagging"
 
 
@@ -2295,10 +2268,10 @@ def test_sessions_list_does_not_infer_syncing_without_post_prompt_active_phase(t
         )
         assert resp.status_code == 200, resp.text
         row = resp.json()["sessions"][0]
-        assert row["presence_state"] == "idle"
-        assert row["runtime_display"]["state"] == "idle"
-        assert row["runtime_display"]["phase_label"] == "Idle"
-        assert row["runtime_display"]["is_idle"] is True
+        assert row["presence_state"] is None
+        assert row["runtime_display"]["state"] is None
+        assert row["runtime_display"]["phase_label"] == "Inactive"
+        assert row["runtime_display"]["is_idle"] is False
 
 
 @pytest.mark.skip(reason="UnmanagedSessionBinding table was removed; replacement uses kernel SessionConnection rows")
@@ -2430,9 +2403,9 @@ def test_active_sessions_recent_progress_fallback_is_non_executing(tmp_path):
         assert resp.status_code == 200, resp.text
         rows = resp.json()["sessions"]
         row = next(item for item in rows if item["id"] == str(session.id))
-        assert row["status"] == "idle"
+        assert row["status"] == "active"
         assert row["presence_state"] is None
-        assert row["display_phase"] == "Inactive"
+        assert row["display_phase"] is None
         assert row["runtime_phase"] is None
         assert row["confidence"] is None
         assert row["runtime_display"]["truth_tier"] == "none"
@@ -2487,13 +2460,13 @@ def test_sessions_surfaces_ignore_stale_presence_payload_after_newer_blocked_sig
         assert active_resp.status_code == 200, active_resp.text
         active_row = next(item for item in active_resp.json()["sessions"] if item["id"] == str(session.id))
         assert active_row["status"] == "active"
-        assert active_row["presence_state"] == "blocked"
-        assert active_row["display_phase"] == "Blocked on Bash"
-        assert active_row["runtime_phase"] == "blocked"
-        assert active_row["confidence"] == "live"
+        assert active_row["presence_state"] is None
+        assert active_row["display_phase"] is None
+        assert active_row["runtime_phase"] is None
+        assert active_row["confidence"] is None
 
         list_resp = client.get("/agents/sessions?days_back=14&limit=5", headers={"X-Agents-Token": "dev"})
         assert list_resp.status_code == 200, list_resp.text
         list_row = next(item for item in list_resp.json()["sessions"] if item["id"] == str(session.id))
-        assert list_row["presence_state"] == "blocked"
-        assert list_row["display_phase"] == "Blocked on Bash"
+        assert list_row["presence_state"] is None
+        assert list_row["display_phase"] is None

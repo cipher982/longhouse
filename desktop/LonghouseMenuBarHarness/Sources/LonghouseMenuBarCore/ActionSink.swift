@@ -70,15 +70,16 @@ public protocol HealthActionSink {
     ) -> HealthActionFeedback?
 }
 
-/// A managed session to stop, with the provider needed to pick the stop
-/// transport (engine `codex-bridge stop` vs CLI `opencode-channel stop`).
+/// A managed session to stop, with the canonical adapter identity when known.
 public struct ManagedStopTarget: Equatable, Sendable {
     public let sessionID: String
     public let provider: String?
+    public let controlPlane: String?
 
-    public init(sessionID: String, provider: String?) {
+    public init(sessionID: String, provider: String?, controlPlane: String? = nil) {
         self.sessionID = sessionID
         self.provider = provider
+        self.controlPlane = controlPlane
     }
 }
 
@@ -254,7 +255,15 @@ public struct SpyHealthActionSink: HealthActionSink {
             )
         }
 
-        switch startStopManagedBridge(sessionID: sessionID, provider: provider) {
+        let canonicalSession = snapshot.currentManagedSessions.first {
+            $0.sessionId?.trimmingCharacters(in: .whitespacesAndNewlines) == sessionID
+        }
+        switch startStopManagedBridge(
+            sessionID: sessionID,
+            provider: provider,
+            controlPlane: canonicalSession?.control?.controlPlane,
+            allowProviderFallback: canonicalSession == nil
+        ) {
         case .started:
             return feedback(
                 for: .stopManagedBridge,
@@ -274,7 +283,7 @@ public struct SpyHealthActionSink: HealthActionSink {
                 for: .stopManagedBridge,
                 style: .failure,
                 title: "Stop could not start",
-                detail: "Longhouse could not start `\(stopCommandDescription(sessionID: sessionID, provider: provider))` on this Mac."
+                detail: "Longhouse could not start `\(stopCommandDescription(sessionID: sessionID, provider: provider, controlPlane: canonicalSession?.control?.controlPlane))` on this Mac."
             )
         }
     }
@@ -317,7 +326,12 @@ public struct SpyHealthActionSink: HealthActionSink {
         var failed: [String] = []
         var started = 0
         for target in deduped {
-            switch startStopManagedBridge(sessionID: target.sessionID, provider: target.provider) {
+            switch startStopManagedBridge(
+                sessionID: target.sessionID,
+                provider: target.provider,
+                controlPlane: target.controlPlane,
+                allowProviderFallback: target.controlPlane == nil
+            ) {
             case .started:
                 started += 1
             case .unsupported, .failed:
@@ -462,7 +476,13 @@ public struct SpyHealthActionSink: HealthActionSink {
                 continue
             }
             seen.insert(sessionID)
-            result.append(ManagedStopTarget(sessionID: sessionID, provider: target.provider))
+            result.append(
+                ManagedStopTarget(
+                    sessionID: sessionID,
+                    provider: target.provider,
+                    controlPlane: target.controlPlane
+                )
+            )
         }
         return result
     }
@@ -497,76 +517,107 @@ public struct SpyHealthActionSink: HealthActionSink {
         case failed
     }
 
-    private func startStopManagedBridge(sessionID: String, provider: String?) -> ManagedStopOutcome {
+    private struct StopAdapterKey: Hashable {
+        let provider: String
+        let controlPlane: String
+    }
+
+    private enum StopAdapter {
+        case cli(arguments: [String])
+        case engine(arguments: [String])
+    }
+
+    private static let stopAdapters: [StopAdapterKey: StopAdapter] = {
+        var adapters: [StopAdapterKey: StopAdapter] = [:]
+        for plane in ["codex_bridge", "codex_app_server"] {
+            adapters[StopAdapterKey(provider: "codex", controlPlane: plane)] = .engine(arguments: ["codex-bridge", "stop"])
+        }
+        adapters[StopAdapterKey(provider: "opencode", controlPlane: "opencode_server_bridge")] =
+            .cli(arguments: ["opencode-channel", "stop"])
+        for plane in ["cursor_helm", "cursor_acp", "cursor_exec"] {
+            adapters[StopAdapterKey(provider: "cursor", controlPlane: plane)] = .engine(arguments: ["cursor-helm", "stop"])
+        }
+        return adapters
+    }()
+
+    private static let orphanStopAdapters: [String: StopAdapter] = [
+        "codex": .engine(arguments: ["codex-bridge", "stop"]),
+        "opencode": .cli(arguments: ["opencode-channel", "stop"]),
+        "cursor": .engine(arguments: ["cursor-helm", "stop"]),
+    ]
+
+    private func stopAdapter(
+        provider: String?,
+        controlPlane: String?,
+        allowProviderFallback: Bool
+    ) -> StopAdapter? {
         let normalizedProvider = (provider ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        switch normalizedProvider {
-        case "opencode":
-            // OpenCode stop is a `longhouse` CLI command, not an engine command.
-            guard let executable = LonghouseCLI.resolveExecutable() else {
-                return .failed
-            }
-            let url = startBackgroundProcess(
-                launchPath: executable.path,
-                arguments: ["opencode-channel", "stop", "--session-id", sessionID]
-            )
-            return url.map(ManagedStopOutcome.started) ?? .failed
-        case "cursor":
-            // Cursor Helm terminate goes through the engine control socket client.
-            guard let executable = LonghouseCLI.resolveEngineExecutable() else {
-                return .failed
-            }
-            let url = startBackgroundProcess(
-                launchPath: executable.path,
-                arguments: ["cursor-helm", "stop", "--session-id", sessionID]
-            )
-            return url.map(ManagedStopOutcome.started) ?? .failed
-        case "", "codex":
-            // Codex and legacy rows with no provider stop via the engine bridge.
-            guard let executable = LonghouseCLI.resolveEngineExecutable() else {
-                return .failed
-            }
-            let url = startBackgroundProcess(
-                launchPath: executable.path,
-                arguments: ["codex-bridge", "stop", "--session-id", sessionID]
-            )
-            return url.map(ManagedStopOutcome.started) ?? .failed
-        default:
-            // Claude, Antigravity, etc. have no menu-bar stop transport yet.
+        let normalizedControlPlane = (controlPlane ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if !normalizedProvider.isEmpty, !normalizedControlPlane.isEmpty {
+            return Self.stopAdapters[
+                StopAdapterKey(provider: normalizedProvider, controlPlane: normalizedControlPlane)
+            ]
+        }
+        return allowProviderFallback ? Self.orphanStopAdapters[normalizedProvider.isEmpty ? "codex" : normalizedProvider] : nil
+    }
+
+    private func startStopManagedBridge(
+        sessionID: String,
+        provider: String?,
+        controlPlane: String?,
+        allowProviderFallback: Bool
+    ) -> ManagedStopOutcome {
+        let normalizedProvider = (provider ?? "unknown").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard let adapter = stopAdapter(
+            provider: provider,
+            controlPlane: controlPlane,
+            allowProviderFallback: allowProviderFallback
+        ) else {
             return .unsupported(provider: normalizedProvider)
         }
+        let invocation: (URL, [String])?
+        switch adapter {
+        case .cli(let arguments):
+            invocation = LonghouseCLI.resolveExecutable().map { ($0, arguments) }
+        case .engine(let arguments):
+            invocation = LonghouseCLI.resolveEngineExecutable().map { ($0, arguments) }
+        }
+        guard let (executable, arguments) = invocation else {
+            return .failed
+        }
+        let url = startBackgroundProcess(
+            launchPath: executable.path,
+            arguments: arguments + ["--session-id", sessionID]
+        )
+        return url.map(ManagedStopOutcome.started) ?? .failed
     }
 
     /// Test-only accessor for the provider-routed stop command description.
-    func stopCommandDescriptionForTesting(sessionID: String, provider: String?) -> String {
-        stopCommandDescription(sessionID: sessionID, provider: provider)
+    func stopCommandDescriptionForTesting(sessionID: String, provider: String?, controlPlane: String? = nil) -> String {
+        stopCommandDescription(sessionID: sessionID, provider: provider, controlPlane: controlPlane)
     }
 
     /// Test-only classifier for which stop transport a provider routes to,
     /// without launching anything. "opencode" / "cursor" / "codex" / "unsupported".
-    func stopTransportForTesting(provider: String?) -> String {
-        switch (provider ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
-        case "opencode":
-            return "opencode"
-        case "cursor":
-            return "cursor"
-        case "", "codex":
-            return "codex"
-        default:
-            return "unsupported"
+    func stopTransportForTesting(provider: String?, controlPlane: String? = nil) -> String {
+        guard let adapter = stopAdapter(provider: provider, controlPlane: controlPlane, allowProviderFallback: controlPlane == nil)
+        else { return "unsupported" }
+        switch adapter {
+        case .cli: return "opencode"
+        case .engine(let arguments): return arguments.first == "cursor-helm" ? "cursor" : "codex"
         }
     }
 
     /// Human-readable description of the stop command for a provider, used in
     /// failure feedback so the message names the command we actually ran.
-    private func stopCommandDescription(sessionID: String, provider: String?) -> String {
-        let normalizedProvider = (provider ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        switch normalizedProvider {
-        case "opencode":
-            return "longhouse opencode-channel stop --session-id \(sessionID)"
-        case "cursor":
-            return "longhouse-engine cursor-helm stop --session-id \(sessionID)"
-        default:
-            return "longhouse-engine codex-bridge stop --session-id \(sessionID)"
+    private func stopCommandDescription(sessionID: String, provider: String?, controlPlane: String?) -> String {
+        guard let adapter = stopAdapter(provider: provider, controlPlane: controlPlane, allowProviderFallback: controlPlane == nil)
+        else { return "unsupported stop adapter" }
+        switch adapter {
+        case .cli(let arguments):
+            return "longhouse \(arguments.joined(separator: " ")) --session-id \(sessionID)"
+        case .engine(let arguments):
+            return "longhouse-engine \(arguments.joined(separator: " ")) --session-id \(sessionID)"
         }
     }
 

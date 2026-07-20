@@ -4,17 +4,6 @@ import Testing
 
 @testable import LonghouseMenuBarCore
 
-private struct ManagedPhaseContractFile: Decodable {
-    let phases: [ManagedPhaseContractCase]
-}
-
-private struct ManagedPhaseContractCase: Decodable {
-    let rawPhase: String
-    let displayLabel: String
-    let toolDisplayFormat: String?
-    let attention: String
-}
-
 private struct StaticHealthSnapshotSource: HealthSnapshotSource {
     let snapshot: HealthSnapshot
 
@@ -141,13 +130,13 @@ struct LonghouseMenuBarCoreTests {
     }
 
     @Test
-    func externalBlockIsVisibleWithoutClaimingUserAction() {
+    func legacyPhaseCannotClaimExternalBlock() {
         let snapshot = presentationSnapshot(sessions: [presentationSession(phase: "blocked on network")])
 
         let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0))
 
         #expect(presentation.promotion == .normal)
-        #expect(presentation.subheadline.contains("1 blocked"))
+        #expect(presentation.subheadline.contains("1 phase unavailable"))
         #expect(!presentation.headline.contains("needs you"))
     }
 
@@ -204,6 +193,17 @@ struct LonghouseMenuBarCoreTests {
 
         #expect(presentation.promotion == .unavailable)
         #expect(presentation.headline == "Current local status unavailable")
+    }
+
+    @Test
+    func missingRuntimeTruthDoesNotClaimRemoteControlReady() {
+        let snapshot = presentationSnapshot(sessions: [presentationSession(phase: "idle")])
+
+        let fact = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0))
+            .facts.first(where: { $0.id == "remote-control" })
+
+        #expect(fact?.value == "Unavailable")
+        #expect(fact?.promotion == .unavailable)
     }
 
     @Test
@@ -282,6 +282,35 @@ struct LonghouseMenuBarCoreTests {
         #expect(refreshed.managedSessions?.first?.timelineTitle == "Fix wake recovery")
         #expect(refreshed.managedSessions?.first?.titleProvenance == "remote_sse")
         #expect(refreshed.managedSessions?.first?.phase == "thinking")
+    }
+
+    @Test
+    func localEngineProjectionCannotRewriteSessionState() throws {
+        let session = ManagedSessionSnapshot(
+            sessionId: "session-1", provider: "codex", workspaceLabel: "zerg",
+            branch: "main", state: "attached", phase: "Thinking", lastActivityAt: nil,
+            bridgeStatus: "ready", bridgePid: 42, bridgeHeartbeatAt: nil,
+            reasonCodes: [], authority: "runtime_host"
+        )
+        let snapshot = HealthSnapshot(
+            schemaVersion: 1, collectedAt: "2026-07-14T17:00:00Z",
+            healthState: "healthy", severity: "green", headline: "Healthy",
+            reasons: [], suggestedActions: [], service: nil, engineStatus: nil,
+            outbox: nil, activitySummary: nil, managedSessions: [session],
+            launchReadiness: nil
+        )
+
+        let refreshed = snapshot.applyingLocalProjection(
+            LocalStatusMonitor.Projection(
+                sessions: [LocalStatusMonitor.SessionState(sessionId: "session-1")],
+                engine: nil
+            )
+        )
+
+        let current = try #require(refreshed.managedSessions?.first)
+        #expect(current.state == "attached")
+        #expect(current.phase == "Thinking")
+        #expect(current.authority == "runtime_host")
     }
 
     @Test
@@ -746,6 +775,15 @@ struct LonghouseMenuBarCoreTests {
         #expect(sink.stopTransportForTesting(provider: "opencode") == "opencode")
         #expect(sink.stopTransportForTesting(provider: "cursor") == "cursor")
         #expect(sink.stopTransportForTesting(provider: "codex") == "codex")
+        #expect(
+            sink.stopTransportForTesting(provider: "codex", controlPlane: "codex_app_server") == "codex"
+        )
+        #expect(
+            sink.stopTransportForTesting(provider: "cursor", controlPlane: "cursor_acp") == "cursor"
+        )
+        #expect(
+            sink.stopTransportForTesting(provider: "codex", controlPlane: "claude_channel_bridge") == "unsupported"
+        )
         // Legacy rows with no provider stay on the codex bridge path.
         #expect(sink.stopTransportForTesting(provider: nil) == "codex")
         #expect(sink.stopTransportForTesting(provider: "") == "codex")
@@ -1444,7 +1482,7 @@ struct LonghouseMenuBarCoreTests {
 
         #expect(snapshot.parsedSeverity == .green)
         #expect(snapshot.managedAttentionSeverity == .red)
-        #expect(snapshot.menuBarPresentation(relativeTo: Date()).promotion == .inspect)
+        #expect(snapshot.menuBarPresentation(relativeTo: Date()).promotion == .normal)
         #expect(snapshot.displaySeverity == .red)
     }
 
@@ -1960,7 +1998,7 @@ struct LonghouseMenuBarCoreTests {
         #expect(snapshot.healthState == "broken")
         #expect(snapshot.managedAttentionSeverity == nil)
         #expect(snapshot.menuBarPresentation(relativeTo: Date()).promotion == .normal)
-        #expect(session.menuBarAttentionKind == .unknown("unknown phase"))
+        #expect(session.menuBarAttentionKind == .unknown("canonical presentation unavailable"))
         #expect(session.rawPhase == "future_magic")
     }
 
@@ -2001,37 +2039,7 @@ struct LonghouseMenuBarCoreTests {
     }
 
     @Test
-    func managedSessionAttentionMatchesSharedPhaseContract() throws {
-        for item in try loadManagedPhaseContract() {
-            let displayPhase = contractDisplayPhase(for: item)
-            let data = Data("""
-            {
-              "health_state": "healthy",
-              "severity": "green",
-              "headline": "Longhouse shipping healthy",
-              "reasons": [],
-              "suggested_actions": [],
-              "managed_sessions": [
-                {
-                  "session_id": "sess-\(item.rawPhase)",
-                  "provider": "claude",
-                  "workspace_label": "acme",
-                  "state": "attached",
-                  "phase": "\(displayPhase)",
-                  "phase_observed_at": "2026-04-22T01:56:59Z",
-                  "last_activity_at": "2026-04-22T01:56:59Z"
-                }
-              ]
-            }
-            """.utf8)
-            let snapshot = try HealthSnapshotDecoder.decode(data: data)
-            let session = try #require(snapshot.managedSessions?.first)
-            #expect(session.menuBarAttentionKind == managedAttentionKind(for: item.attention))
-        }
-    }
-
-    @Test
-    func attachedManagedSessionWithoutPhaseDefaultsToIdleAttention() {
+    func attachedManagedSessionWithoutPhaseStaysUnknown() {
         let session = ManagedSessionSnapshot(
             sessionId: "sess-missing-phase",
             provider: "codex",
@@ -2047,7 +2055,7 @@ struct LonghouseMenuBarCoreTests {
             reasonCodes: []
         )
 
-        #expect(session.menuBarAttentionKind == .idle)
+        #expect(session.menuBarAttentionKind == .unknown("canonical presentation unavailable"))
         #expect(session.normalizedUIPresence == nil)
         #expect(session.isConsoleManagedSession == false)
         #expect(session.needsManagedSessionAttention == false)
@@ -2077,7 +2085,7 @@ struct LonghouseMenuBarCoreTests {
         #expect(session.isConsoleManagedSession == true)
         #expect(session.needsManagedSessionAttention == false)
         #expect(session.isBackgroundManagedSession == true)
-        #expect(session.menuBarAttentionKind == .idle)
+        #expect(session.menuBarAttentionKind == .unknown("canonical presentation unavailable"))
     }
 
     @Test
@@ -2102,7 +2110,7 @@ struct LonghouseMenuBarCoreTests {
 
         #expect(session.isConsoleManagedSession == true)
         #expect(session.needsManagedSessionAttention == false)
-        #expect(session.menuBarAttentionKind == .unknown("future_state"))
+        #expect(session.menuBarAttentionKind == .unknown("canonical presentation unavailable"))
     }
 
     @Test
@@ -2128,7 +2136,7 @@ struct LonghouseMenuBarCoreTests {
         #expect(session.isConsoleManagedSession == false)
         #expect(session.needsManagedSessionAttention == true)
         #expect(session.isBackgroundManagedSession == true)
-        #expect(session.menuBarAttentionKind == .detached)
+        #expect(session.menuBarAttentionKind == .unknown("canonical presentation unavailable"))
         #expect(session.canStopFromMenuBar == false)
     }
 
@@ -2150,7 +2158,7 @@ struct LonghouseMenuBarCoreTests {
             reasonCodes: []
         )
 
-        #expect(session.menuBarAttentionKind == .unknown("unknown phase"))
+        #expect(session.menuBarAttentionKind == .unknown("canonical presentation unavailable"))
     }
 
     @Test
@@ -2171,7 +2179,7 @@ struct LonghouseMenuBarCoreTests {
         )
 
         #expect(session.normalizedState == "unknown")
-        #expect(session.menuBarAttentionKind == .unknown("unknown"))
+        #expect(session.menuBarAttentionKind == .unknown("canonical presentation unavailable"))
     }
 
     @Test
@@ -2220,38 +2228,6 @@ struct LonghouseMenuBarCoreTests {
         #expect(snapshot.menuBarPresentation(relativeTo: Date()).promotion == .normal)
     }
 
-    @Test
-    @MainActor
-    func managedPhaseContractRendersStablePills() throws {
-        let outputDirectory = try makeFakeHomeDirectory()
-        defer { try? FileManager.default.removeItem(at: outputDirectory) }
-
-        let updateFixtures = ProcessInfo.processInfo.environment["LONGHOUSE_UPDATE_PHASE_SNAPSHOTS"] == "1"
-        let actionSink = SpyHealthActionSink(logURL: nil, uiURL: nil, effectMode: .logOnly)
-
-        for item in try loadManagedPhaseContract() {
-            let expectedURL = managedPhaseSnapshotFixtureURL(for: item.rawPhase)
-            let actualURL = outputDirectory.appendingPathComponent(expectedURL.lastPathComponent)
-            try SnapshotRenderer.renderPNG(
-                snapshot: managedPhaseSnapshot(for: item),
-                actionSink: actionSink,
-                outputURL: actualURL,
-                presentationDate: fixedManagedPhasePresentationDate
-            )
-
-            let actualData = try Data(contentsOf: actualURL)
-            if updateFixtures || !FileManager.default.fileExists(atPath: expectedURL.path) {
-                try FileManager.default.createDirectory(
-                    at: expectedURL.deletingLastPathComponent(),
-                    withIntermediateDirectories: true
-                )
-                try actualData.write(to: expectedURL)
-            }
-
-            try assertPNGsRenderIdentically(actualURL: actualURL, expectedURL: expectedURL)
-        }
-    }
-
     private func makeFakeHomeDirectory() throws -> URL {
         let tempDirectory = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -2272,179 +2248,6 @@ struct LonghouseMenuBarCoreTests {
         return executableURL
     }
 
-    private func loadManagedPhaseContract() throws -> [ManagedPhaseContractCase] {
-        let fixtureURL = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .appendingPathComponent("../../server/zerg/config/managed_phase_contract.json")
-            .standardizedFileURL
-        let data = try Data(contentsOf: fixtureURL)
-        let decoder = JSONDecoder()
-        decoder.keyDecodingStrategy = .convertFromSnakeCase
-        return try decoder.decode(ManagedPhaseContractFile.self, from: data).phases
-    }
-
-    private var fixedManagedPhasePresentationDate: Date {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime]
-        return formatter.date(from: "2026-04-22T02:09:59Z")!
-    }
-
-    private func managedPhaseSnapshotFixtureURL(for rawPhase: String) -> URL {
-        URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .appendingPathComponent("Fixtures/managed-phase-snapshots/managed-phase-\(rawPhase).png")
-    }
-
-    private func managedPhaseSnapshot(for item: ManagedPhaseContractCase) -> HealthSnapshot {
-        HealthSnapshot(
-            schemaVersion: 1,
-            collectedAt: "2026-04-22T02:09:59Z",
-            healthState: "healthy",
-            severity: "green",
-            headline: "Longhouse shipping healthy",
-            reasons: [],
-            suggestedActions: [],
-            service: nil,
-            engineStatus: nil,
-            outbox: nil,
-            activitySummary: nil,
-            managedSummary: ManagedSummarySnapshot(
-                attachedCount: 1,
-                detachedCount: 0,
-                degradedCount: 0,
-                orphanBridgeCount: 0,
-                latestActivityAt: "2026-04-22T01:56:59Z"
-            ),
-            managedSessions: [
-                ManagedSessionSnapshot(
-                    sessionId: "sess-\(item.rawPhase)",
-                    provider: "claude",
-                    workspaceLabel: "phase-\(item.rawPhase.replacingOccurrences(of: "_", with: "-"))",
-                    timelineTitle: "phase-\(item.rawPhase.replacingOccurrences(of: "_", with: "-"))",
-                    titleState: "ready",
-                    branch: nil,
-                    state: "attached",
-                    phase: contractDisplayPhase(for: item),
-                    phaseObservedAt: "2026-04-22T01:56:59Z",
-                    lastActivityAt: "2026-04-22T01:56:59Z",
-                    bridgeStatus: nil,
-                    bridgePid: nil,
-                    bridgeHeartbeatAt: nil,
-                    reasonCodes: nil
-                )
-            ],
-            orphanBridges: [],
-            launchReadiness: nil,
-            build: BuildIdentitySnapshot(
-                installed: BuildIdentityRecord(
-                    version: "0.1.15",
-                    commit: "d4d4a106fedcba98765432100123456789abcdef",
-                    commitShort: "d4d4a106",
-                    dirty: false,
-                    builtAt: "2026-04-22T01:40:00Z",
-                    channel: "dev",
-                    error: nil,
-                    detail: nil
-                ),
-                engine: BuildIdentityRecord(
-                    version: "0.1.15",
-                    commit: "d4d4a106fedcba98765432100123456789abcdef",
-                    commitShort: "d4d4a106",
-                    dirty: false,
-                    builtAt: "2026-04-22T01:40:00Z",
-                    channel: "dev",
-                    error: nil,
-                    detail: nil
-                ),
-                engineRestartPending: false
-            ),
-            updateInfo: nil
-        )
-    }
-
-    private func contractDisplayPhase(for item: ManagedPhaseContractCase) -> String {
-        if let format = item.toolDisplayFormat {
-            return format.replacingOccurrences(of: "{tool_name}", with: "Bash")
-        }
-        return item.displayLabel
-    }
-
-    private func managedAttentionKind(for raw: String) -> ManagedAttentionKind {
-        switch raw {
-        case "working":
-            return .working
-        case "needsYou":
-            return .needsYou
-        case "blocked":
-            return .blocked
-        case "idle":
-            return .idle
-        case "detached":
-            return .detached
-        case "degraded":
-            return .degraded
-        default:
-            Issue.record("Unknown attention kind in managed phase contract: \(raw)")
-            return .unknown(raw)
-        }
-    }
-
-    private func assertPNGsRenderIdentically(actualURL: URL, expectedURL: URL) throws {
-        let actualRep = try decodedPNGRep(from: actualURL)
-        let expectedRep = try decodedPNGRep(from: expectedURL)
-
-        #expect(actualRep.pixelsWide == expectedRep.pixelsWide)
-        #expect(actualRep.pixelsHigh == expectedRep.pixelsHigh)
-        #expect(actualRep.bytesPerRow == expectedRep.bytesPerRow)
-        #expect(actualRep.bitsPerPixel == expectedRep.bitsPerPixel)
-
-        let actualData = try bitmapData(from: actualRep, sourceURL: actualURL)
-        let expectedData = try bitmapData(from: expectedRep, sourceURL: expectedURL)
-        guard actualData != expectedData else {
-            return
-        }
-
-        let bytesPerPixel = max(actualRep.bitsPerPixel / 8, 1)
-        let mismatchOffset = zip(actualData, expectedData)
-            .enumerated()
-            .first(where: { (_, pair) in pair.0 != pair.1 })?
-            .offset ?? 0
-        let pixelIndex = mismatchOffset / bytesPerPixel
-        let x = pixelIndex % actualRep.pixelsWide
-        let y = pixelIndex / actualRep.pixelsWide
-        let actualColor = actualRep.colorAt(x: x, y: y)?.description ?? "unknown"
-        let expectedColor = expectedRep.colorAt(x: x, y: y)?.description ?? "unknown"
-        Issue.record(
-            """
-            Rendered snapshot pixels differ for \(expectedURL.lastPathComponent) at (\(x), \(y)).
-            expected: \(expectedColor)
-            actual:   \(actualColor)
-            """
-        )
-    }
-
-    private func decodedPNGRep(from url: URL) throws -> NSBitmapImageRep {
-        let data = try Data(contentsOf: url)
-        return try #require(
-            NSBitmapImageRep(data: data),
-            "Failed to decode PNG at \(url.path)"
-        )
-    }
-
-    private func bitmapData(from rep: NSBitmapImageRep, sourceURL: URL) throws -> Data {
-        guard let bitmapData = rep.bitmapData else {
-            throw SnapshotComparisonError.missingBitmapData(sourceURL.path)
-        }
-        return Data(bytes: bitmapData, count: rep.bytesPerRow * rep.pixelsHigh)
-    }
-
-    private enum SnapshotComparisonError: Error {
-        case missingBitmapData(String)
-    }
 }
 
 private func presentationSession(phase: String) -> ManagedSessionSnapshot {

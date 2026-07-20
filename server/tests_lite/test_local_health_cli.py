@@ -2253,13 +2253,13 @@ def test_collect_local_health_uses_managed_session_phase_state_for_codex_bridge_
 
     snapshot = local_health_service.collect_local_health(tmp_path)
 
-    assert snapshot["managed_sessions"][0]["workspace_label"] == "zerg-canonical"
-    assert snapshot["managed_sessions"][0]["phase"] == "blocked on shell"
-    assert snapshot["managed_sessions"][0]["phase_observed_at"] == "2026-04-17T17:31:30Z"
-    assert snapshot["managed_sessions"][0]["last_activity_at"] == "2026-04-17T17:31:30Z"
+    assert snapshot["managed_sessions"][0]["workspace_label"] == "bridge-cwd"
+    assert snapshot["managed_sessions"][0]["phase"] is None
+    assert snapshot["managed_sessions"][0]["phase_observed_at"] is None
+    assert snapshot["managed_sessions"][0]["last_activity_at"] == "2026-04-17T17:31:00Z"
 
 
-def test_collect_local_health_keeps_attached_codex_idle_from_single_phase_ledger(monkeypatch, tmp_path: Path):
+def test_collect_local_health_does_not_promote_local_phase_evidence_to_activity(monkeypatch, tmp_path: Path):
     _disable_real_runner_env(monkeypatch, tmp_path)
     monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
     _write_engine_status(tmp_path, age_seconds=5)
@@ -2325,8 +2325,8 @@ def test_collect_local_health_keeps_attached_codex_idle_from_single_phase_ledger
     snapshot = local_health_service.collect_local_health(tmp_path)
 
     assert snapshot["managed_sessions"][0]["state"] == "attached"
-    assert snapshot["managed_sessions"][0]["phase"] == "idle"
-    assert snapshot["managed_sessions"][0]["phase_observed_at"] == "2026-04-17T17:31:30Z"
+    assert snapshot["managed_sessions"][0]["phase"] is None
+    assert snapshot["managed_sessions"][0]["phase_observed_at"] is None
     assert snapshot["managed_sessions"][0]["last_activity_at"] == "2026-04-17T17:43:00Z"
 
 
@@ -2453,12 +2453,11 @@ def test_collect_local_health_flags_unknown_managed_phase_contract_drift(monkeyp
     assert snapshot["health_state"] == "healthy"
     assert snapshot["severity"] == "green"
     assert snapshot["headline"] == "Longhouse shipping healthy"
-    assert "managed_unknown_phase" in snapshot["reasons"]
-    assert any("Update the managed phase contract" in action for action in snapshot["suggested_actions"])
+    assert "managed_unknown_phase" not in snapshot["reasons"]
     assert snapshot["managed_sessions"][0]["state"] == "attached"
-    assert snapshot["managed_sessions"][0]["raw_phase"] == "future_magic"
-    assert snapshot["managed_sessions"][0]["phase"] == "unknown phase"
-    assert snapshot["managed_sessions"][0]["phase_observed_at"] == "2026-04-17T17:31:30Z"
+    assert snapshot["managed_sessions"][0]["raw_phase"] is None
+    assert snapshot["managed_sessions"][0]["phase"] is None
+    assert snapshot["managed_sessions"][0]["phase_observed_at"] is None
 
 
 def test_collect_local_health_recognizes_remote_tui_attach_without_resume_token(monkeypatch, tmp_path: Path):
@@ -3718,7 +3717,7 @@ def test_collect_local_health_fast_uses_resolved_sessions_without_process_scan(m
     assert snapshot["managed_sessions"][0]["session_id"] == managed_id
     assert snapshot["managed_sessions"][0]["provider"] == "codex"
     assert snapshot["managed_sessions"][0]["liveness_model"] == "engine_status"
-    assert snapshot["managed_sessions"][0]["phase"] == "thinking"
+    assert snapshot["managed_sessions"][0]["phase"] is None
     assert snapshot["managed_sessions"][0]["launch_mode"] is None
     assert snapshot["managed_sessions"][0]["ui_attached"] is None
     assert snapshot["managed_sessions"][0]["ui_presence"] is None
@@ -3991,7 +3990,7 @@ def test_collect_local_health_fast_prefers_resolved_engine_sessions(monkeypatch,
     assert managed["provider"] == "codex"
     assert managed["workspace_label"] == "zerg"
     assert managed["branch"] == "session-identity-kernel-cleanup"
-    assert managed["phase"] == "thinking"
+    assert managed["phase"] is None
     assert managed["bridge_pid"] == 4202
     assert managed["app_server_pid"] == 4203
     assert managed["launch_mode"] == "detached_ui"
@@ -4866,7 +4865,7 @@ def test_process_scan_detects_managed_antigravity_via_env(monkeypatch):
     assert row["state"] == "attached"
 
 
-def test_process_scan_uses_phase_overlay_when_available(monkeypatch, tmp_path: Path):
+def test_process_scan_uses_phase_overlay_without_replacing_process_workspace(monkeypatch, tmp_path: Path):
     now = datetime(2026, 4, 19, 0, 0, 0, tzinfo=timezone.utc)
     session_id = "bfb567fb-7e0f-4552-8411-24f682751484"
     proc = _FakeProc(
@@ -4900,11 +4899,11 @@ def test_process_scan_uses_phase_overlay_when_available(monkeypatch, tmp_path: P
     )
 
     assert len(rows) == 1
-    assert rows[0]["cwd"] == "/Users/test/git/zerg-canonical"
-    assert rows[0]["workspace_label"] == "zerg-canonical"
+    assert rows[0]["cwd"] == "/Users/test/git/process-cwd"
+    assert rows[0]["workspace_label"] == "process-cwd"
     assert rows[0]["phase"] == "running Bash"
     assert rows[0]["phase_observed_at"] == "2026-04-19T00:04:00Z"
-    assert rows[0]["last_activity_at"] == "2026-04-19T00:05:00Z"
+    assert rows[0]["last_activity_at"] == "2026-04-19T00:04:00Z"
 
 
 def test_process_scan_humanizes_needs_user_phase(monkeypatch, tmp_path: Path):
@@ -4996,20 +4995,7 @@ def test_local_health_phase_contract_matches_display_labels():
         assert local_health_service._phase_display_label(case.raw_phase, tool_name) == case.display_for_tool(tool_name)
 
 
-def test_managed_phase_contract_swift_generated_is_current():
-    root = Path(__file__).resolve().parents[2]
-    generated_path = (
-        root
-        / "desktop"
-        / "LonghouseMenuBarHarness"
-        / "Sources"
-        / "LonghouseMenuBarCore"
-        / "ManagedPhaseContract.generated.swift"
-    )
-    assert generated_path.read_text() == managed_phase_contract.render_swift_source()
-
-
-def test_local_health_command_surfaces_managed_phase_contract_from_raw_hook_events(monkeypatch, tmp_path: Path):
+def test_local_health_command_does_not_promote_raw_hook_phase_to_presentation(monkeypatch, tmp_path: Path):
     runner = CliRunner()
     monkeypatch.setattr(local_health_service, "_candidate_runner_env_paths", lambda: [tmp_path / "missing-runner.env"])
     monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
@@ -5053,7 +5039,8 @@ def test_local_health_command_surfaces_managed_phase_contract_from_raw_hook_even
         assert result.exit_code == 0, result.output
         payload = json.loads(result.output)
         managed_session = next(item for item in payload["managed_sessions"] if item["session_id"] == session_id)
-        assert managed_session["phase"] == case.display_for_tool(tool_name)
+        assert managed_session["phase"] is None
+        assert managed_session["raw_phase"] is None
 
 
 def test_managed_session_phase_state_expires_stale_rows(monkeypatch, tmp_path: Path):
@@ -5239,9 +5226,9 @@ def test_managed_session_phase_state_keeps_newer_stored_last_activity_when_outbo
 
     assert overlay["sess-1"]["phase"] == "thinking"
     assert overlay["sess-1"]["observed_at"] == outbox_observed_at
-    assert overlay["sess-1"]["last_activity_at"] == stored_last_activity_at
-    assert overlay["sess-1"]["workspace_path"] == "/Users/test/git/acme"
-    assert overlay["sess-1"]["workspace_label"] == "acme"
+    assert overlay["sess-1"]["last_activity_at"] == outbox_observed_at
+    assert overlay["sess-1"]["workspace_path"] is None
+    assert overlay["sess-1"]["workspace_label"] is None
 
 
 def test_process_scan_falls_back_to_argv_when_env_empty(monkeypatch, tmp_path: Path):

@@ -111,9 +111,11 @@ Minimum schema:
 }
 ```
 
-The contract is not a replacement for `managed_session_state`. The existing
-SQLite row owns current phase/workspace truth. The contract owns launch-time
-environment and control provenance.
+The contract is not a live session-state authority. Canonical catalog facts own
+served mode, activity, control, interaction, and host truth. The local
+`session_phase_state` ledger retains short-lived provider observations for
+diagnostics only; it cannot grant control or drive product presentation. The
+contract owns launch-time environment and control provenance.
 
 ## Contract Lifecycle
 

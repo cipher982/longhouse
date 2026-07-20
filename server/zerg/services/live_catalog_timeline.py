@@ -11,12 +11,12 @@ from typing import Any
 from uuid import UUID
 
 from zerg.models.live_store import LiveLaunchReadiness
-from zerg.models.live_store import LiveRuntimeState
 from zerg.models.live_store import LiveSessionCatalog
 from zerg.models.live_store import LiveSessionConnection
 from zerg.models.live_store import LiveSessionRun
 from zerg.models.live_store import LiveSessionThread
 from zerg.models.live_store import LiveTimelineCard
+from zerg.services.agent_heartbeat_health import DEFAULT_MACHINE_HEARTBEAT_STALE_AFTER_SECONDS
 from zerg.services.agents.kernel_capabilities import KernelSessionCapabilities
 from zerg.services.agents.kernel_capabilities import project_capabilities_from_rows
 from zerg.services.agents.kernel_capabilities import project_console_turn_capabilities
@@ -29,14 +29,10 @@ from zerg.services.live_launch_readiness import LiveLaunchReadinessView
 from zerg.services.live_launch_readiness import project_live_launch_readiness
 from zerg.services.machine_control_channel import get_machine_control_channel_registry
 from zerg.services.managed_provider_contracts import contract_for_provider
-from zerg.services.session_pause_requests import pending_interaction_from_live_runtime
 from zerg.services.session_pubsub import TOPIC_TIMELINE
 from zerg.services.session_pubsub import get_pubsub
-from zerg.services.session_runtime import build_fallback_runtime_view
-from zerg.services.session_runtime import build_runtime_view
 from zerg.services.session_runtime_display import TRANSCRIPT_SYNC_DISPLAY_WINDOW
 from zerg.services.session_state_contract import SessionHostFacts
-from zerg.services.session_state_contract import build_session_state_facts
 from zerg.services.session_state_contract import project_pending_interaction_facts
 from zerg.services.session_state_contract import project_transcript_facts
 from zerg.services.session_state_facts_projector import project_served_session_state_facts
@@ -49,7 +45,6 @@ from zerg.services.session_views import build_compat_runtime_display_response
 from zerg.services.session_views import build_live_launch_placeholder_response
 from zerg.services.session_views import build_session_capabilities_response
 from zerg.services.session_views import build_session_timeline_card_response
-from zerg.services.session_views import derive_session_liveness_facts
 from zerg.services.session_views import project_compat_capabilities_from_state
 from zerg.services.timeline_session_listing import TimelineSessionCardResponse
 from zerg.services.timeline_session_listing import TimelineSessionListParams
@@ -64,21 +59,104 @@ def _supported_operations(provider: str | None) -> set[str]:
     operations = {
         operation for operation in ("send_input", "interrupt", "terminate", "tail_output") if bool(getattr(contract, operation, False))
     }
+    if contract.reattach:
+        operations.add("reattach")
     if contract.can_resume:
         operations.add("resume")
     return operations
 
 
-def _host_facts(runtime_facts) -> SessionHostFacts:
-    if runtime_facts is None:
+def _pending_interaction(catalog_facts: dict[str, Any]) -> dict[str, Any] | None:
+    interaction = catalog_facts.get("pending_interaction")
+    if not isinstance(interaction, dict):
+        return None
+    projection = interaction.get("projection")
+    body = dict(projection) if isinstance(projection, dict) else {}
+    body.update(
+        {
+            "id": interaction.get("id"),
+            "session_id": interaction.get("session_id"),
+            "runtime_key": interaction.get("runtime_key"),
+            "kind": interaction.get("kind"),
+            "status": interaction.get("status"),
+            "provider": interaction.get("provider"),
+            "can_respond": bool(interaction.get("can_respond")),
+            "occurred_at": decode_catalog_datetime(interaction.get("occurred_at")),
+            "last_seen_at": decode_catalog_datetime(interaction.get("last_seen_at")),
+            "resolved_at": decode_catalog_datetime(interaction.get("resolved_at")),
+            "expires_at": decode_catalog_datetime(interaction.get("expires_at")),
+        }
+    )
+    return body
+
+
+def _host_facts(catalog_facts: dict[str, Any], *, now: datetime) -> SessionHostFacts:
+    heartbeat = catalog_facts.get("machine_heartbeat")
+    if not isinstance(heartbeat, dict):
         return SessionHostFacts(state="unknown")
-    state = str(runtime_facts.host.state or "").strip()
-    if state not in {"online", "stale", "offline"}:
-        state = "unknown"
+    observed_at = decode_catalog_datetime(heartbeat.get("received_at"))
+    if observed_at is None:
+        return SessionHostFacts(state="unknown")
+    if bool(heartbeat.get("is_offline")):
+        state = "offline"
+    elif (now - observed_at).total_seconds() > DEFAULT_MACHINE_HEARTBEAT_STALE_AFTER_SECONDS:
+        state = "stale"
+    else:
+        state = "online"
     return SessionHostFacts(
         state=state,
-        observed_at=normalize_utc(runtime_facts.host.last_seen_at),
+        observed_at=observed_at,
     )
+
+
+def _console_control_facts(
+    *,
+    session: LiveSessionCatalog,
+    thread: LiveSessionThread | None,
+    latest_console_turn: dict[str, Any] | None,
+    owner_id: int | None,
+) -> dict[str, Any]:
+    """Project Console action gates from catalog identity plus the channel registry."""
+
+    device_id = str(thread.device_id or "").strip() if thread is not None else ""
+    cwd = str(thread.cwd or "").strip() if thread is not None else ""
+    registry = get_machine_control_channel_registry()
+    machine_online = bool(owner_id is not None and device_id and registry.is_online(owner_id=owner_id, device_id=device_id))
+    adapter_available = bool(
+        machine_online
+        and registry.supports(
+            owner_id=owner_id,
+            device_id=device_id,
+            capability=f"{session.provider}.turn_start",
+        )
+    )
+    interrupt_adapter_available = bool(
+        machine_online
+        and registry.supports(
+            owner_id=owner_id,
+            device_id=device_id,
+            capability=f"{session.provider}.turn_interrupt",
+        )
+    )
+    turn_state = str((latest_console_turn or {}).get("state") or "idle").strip().lower()
+    if turn_state not in {"idle", "queued", "starting", "active", "draining"}:
+        turn_state = "idle"
+    execution_target_available = bool(device_id and cwd)
+    blocked_by = "session_closed" if session.closed_at is not None else None
+    if blocked_by is None and not execution_target_available:
+        blocked_by = "execution_target_missing"
+    if blocked_by is None and turn_state in {"queued", "starting", "active", "draining"}:
+        blocked_by = "turn_active"
+    if blocked_by is None and not machine_online:
+        blocked_by = "machine_offline"
+    if blocked_by is None and not adapter_available:
+        blocked_by = "adapter_unavailable"
+    return {
+        "turn_state": turn_state,
+        "can_start_turn": blocked_by is None,
+        "start_turn_blocked_by": blocked_by,
+        "can_interrupt_active_turn": turn_state in {"starting", "active", "draining"} and interrupt_adapter_available,
+    }
 
 
 def _canonical_runtime_aliases(*, session_state, runtime_display) -> dict[str, Any]:
@@ -135,7 +213,6 @@ def project_catalog_session_facts(
             transcript_revision=int(session.transcript_revision or 0),
             archive_state="pending",
         )
-    runtime = hydrate_catalog_row(LiveRuntimeState, facts.get("runtime"))
     readiness_row = hydrate_catalog_row(LiveLaunchReadiness, facts.get("readiness"))
     readiness = project_live_launch_readiness(readiness_row) if readiness_row is not None else None
     thread = hydrate_catalog_row(LiveSessionThread, facts.get("primary_thread"))
@@ -153,39 +230,26 @@ def project_catalog_session_facts(
     if str(session.origin_kind or "").strip() == "console":
         latest_console_turn = facts.get("latest_console_turn")
         owner_id = facts.get("owner_id")
-        device_id = str(thread.device_id or "").strip() if thread is not None else ""
-        registry = get_machine_control_channel_registry()
-        machine_online = bool(owner_id is not None and device_id and registry.is_online(owner_id=int(owner_id), device_id=device_id))
-        adapter_available = bool(
-            machine_online
-            and registry.supports(
-                owner_id=int(owner_id),
-                device_id=device_id,
-                capability=f"{session.provider}.turn_start",
-            )
+        console_control = _console_control_facts(
+            session=session,
+            thread=thread,
+            latest_console_turn=latest_console_turn if isinstance(latest_console_turn, dict) else None,
+            owner_id=int(owner_id) if owner_id is not None else None,
         )
-        interrupt_adapter_available = bool(
-            machine_online
-            and registry.supports(
-                owner_id=int(owner_id),
-                device_id=device_id,
-                capability=f"{session.provider}.turn_interrupt",
-            )
-        )
+        facts = {**facts, "console_control": console_control}
         capabilities = project_console_turn_capabilities(
             capabilities,
             closed=session.closed_at is not None,
             execution_target_available=bool(thread is not None and str(thread.device_id or "").strip() and str(thread.cwd or "").strip()),
-            turn_state=(latest_console_turn.get("state") if isinstance(latest_console_turn, dict) else None),
-            machine_online=machine_online,
-            adapter_available=adapter_available,
-            interrupt_adapter_available=interrupt_adapter_available,
+            turn_state=console_control["turn_state"],
+            machine_online=console_control["start_turn_blocked_by"] not in {"machine_offline"},
+            adapter_available=console_control["start_turn_blocked_by"] not in {"adapter_unavailable"},
+            interrupt_adapter_available=bool(console_control["can_interrupt_active_turn"]),
         )
     return _response_from_catalog(
         session,
         card,
         readiness=readiness,
-        runtime=runtime,
         capability_flags=capabilities,
         now=observed_at,
         catalog_facts=facts,
@@ -262,58 +326,35 @@ def _project_session_state(
     session: LiveSessionCatalog,
     card: LiveTimelineCard,
     readiness: LiveLaunchReadinessView | None,
-    runtime: LiveRuntimeState | None,
-    runtime_overlay,
     capability_flags: KernelSessionCapabilities,
-    runtime_facts,
     last_activity_at: datetime,
     now: datetime,
     catalog_facts: dict[str, Any],
     canonical_heads: list[dict[str, Any]] | None,
     commit_seq: int | None,
 ):
-    pause_request = pending_interaction_from_live_runtime(runtime)
-    if canonical_heads is not None:
-        if commit_seq is None:
-            raise ValueError("canonical detail projection requires commit_seq")
-        transcript = project_transcript_facts(
-            session=session,
-            last_activity_at=last_activity_at,
-            user_messages=int(card.user_messages or 0),
-            assistant_messages=int(card.assistant_messages or 0),
-            archive_state=card.archive_state,
-            live_observation=bool(capability_flags.observe_only),
-            source_revision=(catalog_facts.get("transcript_coordinates") or {}).get("source_revision"),
-            durable_revision=(catalog_facts.get("transcript_coordinates") or {}).get("durable_revision"),
-            render_revision=(catalog_facts.get("transcript_coordinates") or {}).get("render_revision"),
-            transcript_last_append_at=decode_catalog_datetime((catalog_facts.get("transcript_coordinates") or {}).get("last_append_at")),
-        )
-        return project_served_session_state_facts(
-            session_id=str(session.session_id),
-            commit_seq=commit_seq,
-            catalog_facts=catalog_facts,
-            heads=canonical_heads,
-            supported_operations=_supported_operations(session.provider),
-            catalog_capabilities=capability_flags,
-            pending_interaction=project_pending_interaction_facts(pause_request),
-            transcript=transcript,
-            host=_host_facts(runtime_facts),
-            now=now,
-        )
-    return build_session_state_facts(
+    pause_request = _pending_interaction(catalog_facts)
+    transcript = project_transcript_facts(
         session=session,
-        runtime_view=runtime_overlay,
-        capabilities=capability_flags,
-        liveness=runtime_facts,
-        pause_request=pause_request,
-        launch_state=readiness.launch_state if readiness is not None else None,
-        launch_error_code=readiness.launch_error_code if readiness is not None else None,
-        launch_error_message=readiness.launch_error_message if readiness is not None else None,
-        execution_lifetime=readiness.execution_lifetime if readiness is not None else None,
         last_activity_at=last_activity_at,
         user_messages=int(card.user_messages or 0),
         assistant_messages=int(card.assistant_messages or 0),
         archive_state=card.archive_state,
+        live_observation=bool(capability_flags.observe_only),
+        source_revision=(catalog_facts.get("transcript_coordinates") or {}).get("source_revision"),
+        durable_revision=(catalog_facts.get("transcript_coordinates") or {}).get("durable_revision"),
+        render_revision=(catalog_facts.get("transcript_coordinates") or {}).get("render_revision"),
+        transcript_last_append_at=decode_catalog_datetime((catalog_facts.get("transcript_coordinates") or {}).get("last_append_at")),
+    )
+    return project_served_session_state_facts(
+        session_id=str(session.session_id),
+        commit_seq=commit_seq or 0,
+        catalog_facts=catalog_facts,
+        heads=canonical_heads or (),
+        supported_operations=_supported_operations(session.provider),
+        pending_interaction=project_pending_interaction_facts(pause_request),
+        transcript=transcript,
+        host=_host_facts(catalog_facts, now=now),
         now=now,
     )
 
@@ -323,7 +364,6 @@ def _pending_response_from_catalog(
     card: LiveTimelineCard,
     *,
     readiness: LiveLaunchReadinessView,
-    runtime: LiveRuntimeState | None,
     capability_flags: KernelSessionCapabilities,
     now: datetime,
     catalog_facts: dict[str, Any],
@@ -335,20 +375,11 @@ def _pending_response_from_catalog(
     ended_at = normalize_utc(session.ended_at)
     last_activity_at = normalize_utc(card.last_activity_at) or normalize_utc(session.last_activity_at) or response.started_at
     capabilities = response.capabilities
-    runtime_overlay = build_runtime_view(state=runtime, session=session, now=now) if runtime is not None else None
-    runtime_facts = derive_session_liveness_facts(
-        runtime_overlay=runtime_overlay,
-        capability_flags=capability_flags,
-        last_activity_at=last_activity_at,
-    )
     session_state = _project_session_state(
         session=session,
         card=card,
         readiness=readiness,
-        runtime=runtime,
-        runtime_overlay=runtime_overlay,
         capability_flags=capability_flags,
-        runtime_facts=runtime_facts,
         last_activity_at=last_activity_at,
         now=now,
         catalog_facts=catalog_facts,
@@ -357,13 +388,11 @@ def _pending_response_from_catalog(
     )
     runtime_display = build_compat_runtime_display_response(
         session_state=session_state,
-        pause_request=pending_interaction_from_live_runtime(runtime),
+        pause_request=_pending_interaction(catalog_facts),
         now=now,
     )
     capabilities = project_compat_capabilities_from_state(capabilities, session_state)
-    canonical_aliases = (
-        _canonical_runtime_aliases(session_state=session_state, runtime_display=runtime_display) if canonical_heads is not None else {}
-    )
+    canonical_aliases = _canonical_runtime_aliases(session_state=session_state, runtime_display=runtime_display)
     launch_state = readiness.launch_state
     execution_lifetime = readiness.execution_lifetime
     return response.model_copy(
@@ -382,38 +411,21 @@ def _pending_response_from_catalog(
             "assistant_messages": int(card.assistant_messages or 0),
             "tool_calls": int(card.tool_calls or 0),
             "last_activity_at": last_activity_at,
-            "timeline_anchor_at": (normalize_utc(runtime.timeline_anchor_at) if runtime is not None else last_activity_at),
-            "runtime_phase": canonical_aliases.get("runtime_phase", str(runtime.phase) if runtime is not None else None),
-            "phase_started_at": canonical_aliases.get(
-                "phase_started_at", normalize_utc(runtime.phase_started_at) if runtime is not None else None
-            ),
-            "last_progress_at": canonical_aliases.get(
-                "last_progress_at", normalize_utc(runtime.last_progress_at) if runtime is not None else None
-            ),
-            "runtime_source": canonical_aliases.get("runtime_source", "live_catalog"),
-            "terminal_state": canonical_aliases.get(
-                "terminal_state",
-                str(runtime.terminal_state) if runtime is not None and runtime.terminal_state else None,
-            ),
-            "runtime_version": canonical_aliases.get("runtime_version", int(runtime.runtime_version or 0) if runtime is not None else None),
-            "status": (
-                canonical_aliases["status"]
-                if "status" in canonical_aliases
-                else "closed"
-                if session_state.disposition.state == "closed"
-                else str(runtime.phase)
-                if runtime is not None
-                else "active"
-            ),
-            "presence_state": canonical_aliases.get("presence_state", response.presence_state),
-            "presence_tool": canonical_aliases.get("presence_tool", response.presence_tool),
-            "presence_updated_at": canonical_aliases.get("presence_updated_at", response.presence_updated_at),
-            "last_live_at": canonical_aliases.get("last_live_at", response.last_live_at),
-            "display_phase": canonical_aliases.get("display_phase", runtime_display.phase_label),
-            "active_tool": canonical_aliases.get(
-                "active_tool", str(runtime.active_tool) if runtime is not None and runtime.active_tool else None
-            ),
-            "confidence": canonical_aliases.get("confidence", response.confidence),
+            "timeline_anchor_at": session_state.activity.observed_at or last_activity_at,
+            "runtime_phase": canonical_aliases["runtime_phase"],
+            "phase_started_at": canonical_aliases["phase_started_at"],
+            "last_progress_at": canonical_aliases["last_progress_at"],
+            "runtime_source": canonical_aliases["runtime_source"],
+            "terminal_state": canonical_aliases["terminal_state"],
+            "runtime_version": canonical_aliases["runtime_version"],
+            "status": canonical_aliases["status"],
+            "presence_state": canonical_aliases["presence_state"],
+            "presence_tool": canonical_aliases["presence_tool"],
+            "presence_updated_at": canonical_aliases["presence_updated_at"],
+            "last_live_at": canonical_aliases["last_live_at"],
+            "display_phase": canonical_aliases["display_phase"],
+            "active_tool": canonical_aliases["active_tool"],
+            "confidence": canonical_aliases["confidence"],
             "summary": session.summary,
             "summary_title": card.summary_title or session.summary_title,
             "anchor_title": session.anchor_title,
@@ -434,7 +446,7 @@ def _pending_response_from_catalog(
             "session_state": session_state,
             "runtime_display": runtime_display,
             "timeline_card": build_session_timeline_card_response(
-                runtime_view=runtime_overlay,
+                runtime_view=None,
                 runtime_display=runtime_display,
                 session_state=session_state,
             ),
@@ -462,7 +474,6 @@ def _response_from_catalog(
     card: LiveTimelineCard,
     *,
     readiness: LiveLaunchReadinessView | None,
-    runtime: LiveRuntimeState | None,
     capability_flags: KernelSessionCapabilities,
     now: datetime,
     catalog_facts: dict[str, Any],
@@ -475,7 +486,6 @@ def _response_from_catalog(
             session,
             card,
             readiness=readiness,
-            runtime=runtime,
             capability_flags=capability_flags,
             now=now,
             catalog_facts=catalog_facts,
@@ -486,25 +496,11 @@ def _response_from_catalog(
     started_at = normalize_utc(session.started_at) or now
     ended_at = normalize_utc(session.ended_at)
     last_activity_at = normalize_utc(card.last_activity_at) or normalize_utc(session.last_activity_at) or started_at
-    runtime_overlay = build_runtime_view(state=runtime, session=session, now=now) if runtime is not None else None
-    display_runtime_overlay = runtime_overlay or build_fallback_runtime_view(
-        session=session,
-        last_activity_at=last_activity_at,
-        now=now,
-    )
-    runtime_facts = derive_session_liveness_facts(
-        runtime_overlay=runtime_overlay,
-        capability_flags=capability_flags,
-        last_activity_at=last_activity_at,
-    )
     session_state = _project_session_state(
         session=session,
         card=card,
         readiness=readiness,
-        runtime=runtime,
-        runtime_overlay=runtime_overlay,
         capability_flags=capability_flags,
-        runtime_facts=runtime_facts,
         last_activity_at=last_activity_at,
         now=now,
         catalog_facts=catalog_facts,
@@ -513,7 +509,7 @@ def _response_from_catalog(
     )
     runtime_display = build_compat_runtime_display_response(
         session_state=session_state,
-        pause_request=pending_interaction_from_live_runtime(runtime),
+        pause_request=_pending_interaction(catalog_facts),
         now=now,
     )
     capabilities = build_session_capabilities_response(
@@ -521,11 +517,10 @@ def _response_from_catalog(
         capability_flags=capability_flags,
         runtime_display=runtime_display,
         kernel_capabilities=capability_flags,
+        session_mode=session_state.mode,
     )
     capabilities = project_compat_capabilities_from_state(capabilities, session_state)
-    canonical_aliases = (
-        _canonical_runtime_aliases(session_state=session_state, runtime_display=runtime_display) if canonical_heads is not None else {}
-    )
+    canonical_aliases = _canonical_runtime_aliases(session_state=session_state, runtime_display=runtime_display)
     title = _title(session, card)
     return SessionResponse(
         id=str(session.session_id),
@@ -543,27 +538,21 @@ def _response_from_catalog(
         assistant_messages=int(card.assistant_messages or 0),
         tool_calls=int(card.tool_calls or 0),
         last_activity_at=last_activity_at,
-        timeline_anchor_at=display_runtime_overlay.timeline_anchor_at,
-        runtime_phase=canonical_aliases.get("runtime_phase", runtime_overlay.runtime_phase if runtime_overlay is not None else None),
-        phase_started_at=canonical_aliases.get(
-            "phase_started_at", runtime_overlay.phase_started_at if runtime_overlay is not None else None
-        ),
-        last_progress_at=canonical_aliases.get(
-            "last_progress_at", runtime_overlay.last_progress_at if runtime_overlay is not None else None
-        ),
-        runtime_source=canonical_aliases.get("runtime_source", runtime_overlay.runtime_source if runtime_overlay is not None else None),
-        terminal_state=canonical_aliases.get("terminal_state", runtime_overlay.terminal_state if runtime_overlay is not None else None),
-        runtime_version=canonical_aliases.get("runtime_version", runtime_overlay.runtime_version if runtime_overlay is not None else None),
-        status=canonical_aliases.get("status", runtime_overlay.status if runtime_overlay is not None else None),
-        presence_state=canonical_aliases.get("presence_state", runtime_overlay.presence_state if runtime_overlay is not None else None),
-        presence_tool=canonical_aliases.get("presence_tool", runtime_overlay.presence_tool if runtime_overlay is not None else None),
-        presence_updated_at=canonical_aliases.get(
-            "presence_updated_at", runtime_overlay.presence_updated_at if runtime_overlay is not None else None
-        ),
-        last_live_at=canonical_aliases.get("last_live_at", runtime_overlay.last_live_at if runtime_overlay is not None else None),
-        display_phase=canonical_aliases.get("display_phase", runtime_overlay.display_phase if runtime_overlay is not None else None),
-        active_tool=canonical_aliases.get("active_tool", runtime_overlay.active_tool if runtime_overlay is not None else None),
-        confidence=canonical_aliases.get("confidence", runtime_overlay.confidence if runtime_overlay is not None else None),
+        timeline_anchor_at=session_state.activity.observed_at or last_activity_at,
+        runtime_phase=canonical_aliases["runtime_phase"],
+        phase_started_at=canonical_aliases["phase_started_at"],
+        last_progress_at=canonical_aliases["last_progress_at"],
+        runtime_source=canonical_aliases["runtime_source"],
+        terminal_state=canonical_aliases["terminal_state"],
+        runtime_version=canonical_aliases["runtime_version"],
+        status=canonical_aliases["status"],
+        presence_state=canonical_aliases["presence_state"],
+        presence_tool=canonical_aliases["presence_tool"],
+        presence_updated_at=canonical_aliases["presence_updated_at"],
+        last_live_at=canonical_aliases["last_live_at"],
+        display_phase=canonical_aliases["display_phase"],
+        active_tool=canonical_aliases["active_tool"],
+        confidence=canonical_aliases["confidence"],
         summary=session.summary,
         summary_title=card.summary_title or session.summary_title,
         anchor_title=session.anchor_title,
@@ -582,7 +571,7 @@ def _response_from_catalog(
         session_state=session_state,
         runtime_display=runtime_display,
         timeline_card=build_session_timeline_card_response(
-            runtime_view=display_runtime_overlay,
+            runtime_view=None,
             runtime_display=runtime_display,
             session_state=session_state,
         ),
@@ -787,6 +776,7 @@ def project_machine_session_delta(
                 "control": {
                     "ownership": state.control.ownership,
                     "connection": state.control.connection,
+                    "control_plane": state.control.control_plane,
                     "actions": {
                         "terminate": state.control.actions.terminate.model_dump(mode="json"),
                         "reattach": state.control.actions.reattach.model_dump(mode="json"),

@@ -211,6 +211,65 @@ async def ingest_runtime_observation_batch(
             prepared_per_session: list[dict] = []
             widget_push = None
 
+            if push_contexts and live_catalog_enabled() and owner_id is not None:
+                from zerg.services.catalog_read_gateway import CatalogReadError
+                from zerg.services.live_catalog_timeline import read_live_catalog_session
+
+                async def _read_canonical_session(context: dict):
+                    sid = context["session_id"]
+                    try:
+                        session, _provider_alias, _commit_seq = await asyncio.to_thread(
+                            read_live_catalog_session,
+                            sid,
+                            owner_id=owner_id,
+                        )
+                    except (CatalogReadError, TypeError, ValueError):
+                        logging.getLogger(__name__).warning(
+                            "Canonical Live Activity projection unavailable for session %s",
+                            sid,
+                            exc_info=True,
+                        )
+                        return None
+                    return (context, session) if session is not None else None
+
+                canonical_reads = await asyncio.gather(*(_read_canonical_session(context) for context in push_contexts))
+                canonical_sessions = [item for item in canonical_reads if item is not None]
+
+                def _do_canonical_live_activity_prep(wdb: Session):
+                    prepared: list[dict] = []
+                    for context, canonical_session in canonical_sessions:
+                        activity_state = canonical_session.session_state.activity.state
+                        canonical_state = {
+                            "executing": "running",
+                            "quiescent": "idle",
+                        }.get(activity_state, activity_state)
+                        prepared.append(
+                            {
+                                "session_id": canonical_session.id,
+                                "canonical_state": canonical_state,
+                                "attention_push": None,
+                                "attention_resolution_push": None,
+                                "live_activity_pushes": prepare_session_live_activity_pushes(
+                                    wdb,
+                                    owner_id=owner_id,
+                                    session_id=canonical_session.id,
+                                    current_state=None,
+                                    current_tool_name=None,
+                                    occurred_at=now_utc,
+                                    canonical_session=canonical_session,
+                                ),
+                            }
+                        )
+                    return prepared
+
+                if canonical_sessions:
+                    prepared_per_session = await execute_post_write(
+                        ws,
+                        _do_canonical_live_activity_prep,
+                        fallback_db,
+                        label="runtime-canonical-live-activity",
+                    )
+
             # Notification/session-message prep still depends on archive-only
             # projections. Never smuggle a cold factory open into catalog-mode
             # runtime ingest; the hot runtime write and control lock watcher are

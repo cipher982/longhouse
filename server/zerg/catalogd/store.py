@@ -3162,10 +3162,14 @@ class CatalogStore:
     ) -> dict[str, Any]:
         """Check drainability and claim exactly one queued input receipt."""
 
-        from zerg.services.live_control_catalog import _QUEUE_DRAINABLE_PHASES
+        from zerg.catalogd.fact_reducer import read_session_fact_heads
         from zerg.services.live_control_catalog import load_live_control_session
         from zerg.services.live_session_inputs import _snapshot
         from zerg.services.live_session_inputs import claim_next_live_queued_receipt
+        from zerg.services.managed_provider_contracts import contract_for_provider
+        from zerg.services.session_state_contract import SessionHostFacts
+        from zerg.services.session_state_contract import SessionTranscriptFacts
+        from zerg.services.session_state_facts_projector import project_served_session_state_facts
 
         observed_at = datetime.now(UTC)
         with _write_transaction(self.engine) as connection:
@@ -3179,17 +3183,46 @@ class CatalogStore:
                         "reason": "session_not_found",
                         "commit_seq": str(_current_commit_seq(connection)),
                     }
-                runtime = (
-                    orm.query(LiveRuntimeState)
-                    .filter(LiveRuntimeState.session_id == session.id)
-                    .order_by(LiveRuntimeState.updated_at.desc(), LiveRuntimeState.runtime_version.desc())
-                    .first()
+                session_facts = _assemble_session_facts(
+                    connection,
+                    session_ids=[session_id],
+                    observed_at=observed_at,
+                    compact=True,
                 )
-                if runtime is None or str(runtime.phase or "").strip() not in _QUEUE_DRAINABLE_PHASES:
+                fact_commit_seq, heads = read_session_fact_heads(connection, session_id=session_id)
+                contract = contract_for_provider(session.provider)
+                supported_operations = {
+                    operation
+                    for operation in ("send_input", "interrupt", "terminate", "tail_output", "resume")
+                    if contract is not None and bool(getattr(contract, "can_resume" if operation == "resume" else operation, False))
+                }
+                projection = (
+                    project_served_session_state_facts(
+                        session_id=session_id,
+                        commit_seq=fact_commit_seq,
+                        catalog_facts=session_facts[0],
+                        heads=heads,
+                        supported_operations=supported_operations,
+                        pending_interaction=None,
+                        transcript=SessionTranscriptFacts(convergence="unknown"),
+                        host=SessionHostFacts(state="unknown"),
+                        now=observed_at,
+                    )
+                    if session_facts
+                    else None
+                )
+                if projection is None or projection.activity.state not in {"quiescent", "blocked"}:
                     orm.rollback()
                     return {
                         "claimed": False,
-                        "reason": "runtime_not_drainable",
+                        "reason": "activity_not_drainable",
+                        "commit_seq": str(_current_commit_seq(connection)),
+                    }
+                if projection.control is None or projection.control.actions.send_input.state != "available":
+                    orm.rollback()
+                    return {
+                        "claimed": False,
+                        "reason": "control_unavailable",
                         "commit_seq": str(_current_commit_seq(connection)),
                     }
                 replay_row = (
@@ -3956,7 +3989,7 @@ class CatalogStore:
 
     @staticmethod
     def _session_explicitly_belongs_to_owner(connection: Any, *, session_id: str, owner_id: int) -> bool:
-        """Fail closed when legacy catalog rows do not carry owner evidence."""
+        """Fail closed unless a durable row explicitly binds the session owner."""
 
         owner_exists = connection.execute(
             select(LiveUser.id).where(LiveUser.id == owner_id, LiveUser.is_active.is_(True))
@@ -3970,7 +4003,20 @@ class CatalogStore:
         storage_owner = connection.execute(
             select(StorageSession.owner_id).where(StorageSession.session_id == session_id)
         ).scalar_one_or_none()
-        return storage_owner is not None and str(storage_owner) == owner_text
+        if storage_owner is not None:
+            return str(storage_owner) == owner_text
+
+        catalog_origin = connection.execute(
+            select(LiveSessionCatalog.origin_kind).where(LiveSessionCatalog.session_id == session_id)
+        ).scalar_one_or_none()
+        if catalog_origin != "console":
+            return False
+        outbox_owner = connection.execute(
+            select(func.json_extract(LiveArchiveOutbox.payload_json, "$.session.owner_id")).where(
+                LiveArchiveOutbox.idempotency_key == f"console_session_create.v1:{session_id}"
+            )
+        ).scalar_one_or_none()
+        return outbox_owner is not None and str(outbox_owner) == owner_text
 
     @staticmethod
     def _session_belongs_to_owner(connection: Any, *, session_id: str, owner_id: int) -> bool:
@@ -7594,6 +7640,8 @@ def _assemble_session_facts(
     catalog_table = LiveSessionCatalog.__table__
     card_table = LiveTimelineCard.__table__
     runtime_table = LiveRuntimeState.__table__
+    interaction_table = LiveInteractionRequest.__table__
+    heartbeat_table = LiveHeartbeatStamp.__table__
     readiness_table = LiveLaunchReadiness.__table__
     thread_table = LiveSessionThread.__table__
     run_table = LiveSessionRun.__table__
@@ -7692,6 +7740,31 @@ def _assemble_session_facts(
         for row in connection.execute(select(readiness_table).where(readiness_table.c.session_id.in_(session_ids))).mappings()
         if _as_aware_utc(row["expires_at"]) is None or _as_aware_utc(row["expires_at"]) > observed_at
     }
+    pending_interaction_by_session: dict[str, Any] = {}
+    for row in connection.execute(
+        select(interaction_table)
+        .where(
+            interaction_table.c.session_id.in_(session_ids),
+            interaction_table.c.status == "pending",
+            or_(interaction_table.c.expires_at.is_(None), interaction_table.c.expires_at > observed_at),
+        )
+        .order_by(
+            interaction_table.c.last_seen_at.desc(),
+            interaction_table.c.occurred_at.desc(),
+            interaction_table.c.id.desc(),
+        )
+    ).mappings():
+        pending_interaction_by_session.setdefault(str(row["session_id"]), row)
+
+    device_ids = {str(row.get("device_id") or "").strip() for row in catalogs.values() if str(row.get("device_id") or "").strip()}
+    heartbeat_by_device: dict[str, Any] = {}
+    if device_ids:
+        for row in connection.execute(
+            select(heartbeat_table)
+            .where(heartbeat_table.c.device_id.in_(device_ids))
+            .order_by(heartbeat_table.c.received_at.desc(), heartbeat_table.c.id.desc())
+        ).mappings():
+            heartbeat_by_device.setdefault(str(row["device_id"]), row)
 
     thread_rows = list(
         connection.execute(
@@ -7835,6 +7908,15 @@ def _assemble_session_facts(
                     else None
                 ),
                 "runtime": _runtime_dto(runtime_by_session.get(session_id), compact=compact),
+                "pending_interaction": (
+                    _interaction_dto(SimpleNamespace(**pending_interaction_by_session[session_id]))
+                    if session_id in pending_interaction_by_session
+                    else None
+                ),
+                "machine_heartbeat": _row_dto(
+                    heartbeat_by_device.get(str(catalog.get("device_id") or "")),
+                    fields=frozenset({"device_id", "received_at", "is_offline"}),
+                ),
                 "readiness": _row_dto(
                     readiness_by_session.get(session_id),
                     fields=_READINESS_FIELDS,

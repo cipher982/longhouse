@@ -1102,6 +1102,12 @@ struct SessionViewModelTests {
         let inputOriginField = inputOriginJSON.map { ",\n                  \"input_origin\": \($0)" } ?? ""
         let transcriptPreviewField = transcriptPreviewJSON.map { ",\n            \"transcript_preview\": \($0)" } ?? ""
         let pauseRequestField = pauseRequestJSON.map { ",\n            \"pause_request\": \($0)" } ?? ""
+        let stateFactsJSON = try jsonValueString(
+            makeSessionStateFacts(
+                activity: pauseRequestJSON == nil ? "quiescent" : "blocked",
+                pendingInteractionKind: pauseRequestJSON == nil ? nil : "structured_question"
+            )
+        )
         let json = """
         {
           "session": {
@@ -1115,6 +1121,7 @@ struct SessionViewModelTests {
               "host_reattach_available": true,
               "reply_to_live_session_available": true
             },
+            "state_facts": \(stateFactsJSON),
             "runtime_display": {
             "truth_tier": "fresh",
             "signal_tier": "none",
@@ -1176,6 +1183,13 @@ struct SessionViewModelTests {
 
     nonisolated private func jsonString(_ value: String) throws -> String {
         let data = try JSONEncoder().encode(value)
+        return String(data: data, encoding: .utf8)!
+    }
+
+    nonisolated private func jsonValueString<T: Encodable>(_ value: T) throws -> String {
+        let encoder = JSONEncoder()
+        encoder.keyEncodingStrategy = .convertToSnakeCase
+        let data = try encoder.encode(value)
         return String(data: data, encoding: .utf8)!
     }
 

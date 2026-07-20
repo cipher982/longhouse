@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from datetime import datetime
+from datetime import timedelta
 from datetime import timezone
 from types import SimpleNamespace
 from uuid import uuid4
@@ -14,6 +15,9 @@ os.environ.setdefault("TESTING", "1")
 os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
 import zerg.database as database_module
+from zerg.catalogd.fact_reducer import ReducerFact
+from zerg.catalogd.fact_reducer import canonical_evidence_hash
+from zerg.catalogd.fact_reducer import reduce_fact_batch
 from zerg.database import initialize_live_database
 from zerg.database import make_live_engine
 from zerg.database import make_sessionmaker
@@ -94,6 +98,72 @@ def _seed_live_control(db):
     )
     db.commit()
     return session_id
+
+
+def _seed_canonical_idle_facts(db, session_id):
+    now = datetime.now(timezone.utc)
+    run = db.query(LiveSessionRun).filter(LiveSessionRun.ended_at.is_(None)).one()
+    connection = db.query(LiveSessionConnection).filter(LiveSessionConnection.run_id == run.id).one()
+    connection.adapter_connection_id = f"connection-{session_id}"
+    connection.lease_generation = f"lease-{session_id}"
+    db.flush()
+    activity = {
+        "authority_class": "provider_runtime",
+        "provider": "codex",
+        "session_id": str(session_id),
+        "run_id": str(run.id),
+        "kind": "idle",
+        "raw_kind": "idle",
+        "source": "provider_runtime",
+        "observed_at": now.isoformat(),
+        "valid_until": (now + timedelta(minutes=2)).isoformat(),
+    }
+    control = {
+        "authority_class": "provider_control",
+        "provider": "codex",
+        "session_id": str(session_id),
+        "run_id": str(run.id),
+        "connection_id": connection.adapter_connection_id,
+        "lease_generation": connection.lease_generation,
+        "granted_operations": ["send_input"],
+        "state": "attached",
+        "lease_ttl_ms": 120_000,
+        "source": "provider_control",
+        "observed_at": now.isoformat(),
+    }
+    reduce_fact_batch(
+        db.connection(),
+        [
+            ReducerFact(
+                family="activity",
+                subject_key=f"run:{run.id}",
+                source="provider_runtime",
+                source_epoch=str(run.id),
+                source_seq=1,
+                dedupe_key="c" * 64,
+                evidence_hash=canonical_evidence_hash(activity),
+                value=activity,
+                observed_at=now,
+                session_id=str(session_id),
+                valid_until=now + timedelta(minutes=2),
+            ),
+            ReducerFact(
+                family="control",
+                subject_key=f"connection:{connection.adapter_connection_id}:{connection.lease_generation}",
+                source="provider_control",
+                source_epoch=connection.lease_generation,
+                source_seq=1,
+                dedupe_key="d" * 64,
+                evidence_hash=canonical_evidence_hash(control),
+                value=control,
+                observed_at=now,
+                session_id=str(session_id),
+                valid_until=now + timedelta(minutes=2),
+            ),
+        ],
+        received_at=now,
+    )
+    db.commit()
 
 
 def test_live_control_projection_never_needs_archive_models(tmp_path):
@@ -351,7 +421,7 @@ async def test_catalog_terminal_wake_dispatches_next_live_receipt(tmp_path, monk
                 session_id=session_id,
                 provider="codex",
                 device_id="cinder",
-                phase="idle",
+                phase="thinking",
                 phase_source="test",
                 timeline_anchor_at=now,
                 runtime_version=1,
@@ -369,6 +439,7 @@ async def test_catalog_terminal_wake_dispatches_next_live_receipt(tmp_path, monk
             client_request_id="queued-1",
         )
         db.commit()
+        _seed_canonical_idle_facts(db, session_id)
 
     catalog_store = CatalogStore(engine)
 

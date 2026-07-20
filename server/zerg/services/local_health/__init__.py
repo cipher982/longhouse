@@ -31,8 +31,6 @@ from datetime import timezone
 from pathlib import Path
 from typing import Any
 
-from zerg.managed_phase_contract import display_label_for_phase
-from zerg.managed_phase_contract import is_known_raw_phase
 from zerg.provider_cli_contract import PROVIDER_CLI_BINARY_BY_PROVIDER
 from zerg.provider_cli_contract import PROVIDER_CLI_ENV_BY_PROVIDER
 from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_BRIDGE_STATE
@@ -199,10 +197,8 @@ from .contracts import _managed_contract_headline
 from .cursor import _collect_cursor_discovery
 from .engine_status import _collect_build_identity
 from .engine_status import _collect_engine_status
-from .engine_status import _collect_managed_sessions_from_engine_status
 from .engine_status import _collect_outbox
 from .engine_status import _collect_resolved_sessions_from_engine_status
-from .engine_status import _engine_status_managed_session_row
 from .engine_status import _engine_status_payload
 from .engine_status import _engine_status_resolved_sessions
 from .engine_status import _engine_status_resolved_sessions_issue
@@ -512,7 +508,10 @@ def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = F
     now = _utc_now()
     resolved_base_dir = _coerce_path(claude_dir)
     _machine_state_path, machine_state, _machine_state_error = read_machine_state(resolved_base_dir)
-    phase_overlay = None if fast else _load_managed_session_phase_state(resolved_base_dir, now=now)
+    # Local phase rows are raw shipping evidence, not presentation authority.
+    # Runtime Host canonical facts may enrich these rows after collection; the
+    # machine preview stays explicitly unknown until then.
+    phase_overlay = None
     service = _collect_service(resolved_base_dir)
     engine_status = _collect_engine_status(resolved_base_dir, now=now)
     outbox = _collect_outbox(resolved_base_dir, now=now)

@@ -10,10 +10,6 @@ final class LocalStatusMonitor: @unchecked Sendable {
 
     struct SessionState: Sendable {
         let sessionId: String
-        let state: String?
-        let phase: String?
-        let observedAt: String?
-        let bridgeStatus: String?
     }
 
     private let statusURL: URL
@@ -102,13 +98,7 @@ final class LocalStatusMonitor: @unchecked Sendable {
         else { return [] }
         return rows.compactMap { row in
             guard let sessionId = row["session_id"] as? String else { return nil }
-            return SessionState(
-                sessionId: sessionId,
-                state: row["state"] as? String,
-                phase: row["phase"] as? String,
-                observedAt: row["observed_at"] as? String,
-                bridgeStatus: row["bridge_status"] as? String
-            )
+            return SessionState(sessionId: sessionId)
         }
     }
 

@@ -144,7 +144,7 @@ def test_comparison_reports_axis_drift_and_rejects_cross_commit_claims():
     assert action_drift.control is not None and action_drift.control.matches is False
     assert action_drift.gate_status == "blocked"
     assert [(delta.family, delta.relation, delta.resolution) for delta in action_drift.deltas] == [
-        ("control", "semantic_divergence", "block_deletion")
+        ("control", "identity_mismatch", "block_deletion")
     ]
 
 
@@ -521,7 +521,7 @@ def test_reducer_health_route_reports_failures_without_claiming_cutover(monkeypa
     assert payload["catalog_commit_seq"] == 21
     assert payload["projected_families"] == ["mode", "disposition", "launch", "run", "activity", "control"]
     assert "transcript" in payload["unsupported_families"]
-    assert payload["cutover_active"] is False
+    assert "cutover_active" not in payload
     assert payload["contract"]["state_contract_version"] == 1
     assert payload["contract"]["presentation_policy_version"] == 1
     assert payload["contract"]["presentation_keys"]["primary"][-1] == "activity_unknown"

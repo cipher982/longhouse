@@ -10,9 +10,14 @@ import pytest
 from sqlalchemy.orm import Session
 
 from zerg.catalogd.client import CatalogClient
+from zerg.catalogd.fact_reducer import ReducerFact
+from zerg.catalogd.fact_reducer import canonical_evidence_hash
+from zerg.catalogd.fact_reducer import reduce_fact_batch
+from zerg.catalogd.models import FactHead
 from zerg.catalogd.schema import create_catalog_engine
 from zerg.catalogd.schema import initialize_catalog_schema
 from zerg.catalogd.server import CatalogDaemon
+from zerg.catalogd.store import CatalogStore
 from zerg.models.live_store import LiveArchiveOutbox
 from zerg.models.live_store import LiveRuntimeState
 from zerg.models.live_store import LiveSessionCatalog
@@ -39,6 +44,8 @@ def _seed_queue(engine):
     session_id = uuid4()
     thread_id = uuid4()
     run_id = uuid4()
+    adapter_connection_id = f"connection-{session_id}"
+    lease_generation = f"lease-{session_id}"
     with Session(engine) as db:
         db.add(
             LiveSessionCatalog(
@@ -81,6 +88,8 @@ def _seed_queue(engine):
                 run_id=str(run_id),
                 control_plane="codex_bridge",
                 acquisition_kind="spawned_control",
+                adapter_connection_id=adapter_connection_id,
+                lease_generation=lease_generation,
                 state="attached",
                 device_id="cinder",
                 can_send_input=1,
@@ -94,7 +103,7 @@ def _seed_queue(engine):
                 session_id=session_id,
                 provider="codex",
                 device_id="cinder",
-                phase="idle",
+                phase="thinking",
                 phase_source="test",
                 timeline_anchor_at=now,
                 runtime_version=1,
@@ -113,7 +122,141 @@ def _seed_queue(engine):
             now=now,
         )
         db.commit()
+        activity = {
+            "authority_class": "provider_runtime",
+            "provider": "codex",
+            "session_id": str(session_id),
+            "run_id": str(run_id),
+            "kind": "idle",
+            "raw_kind": "idle",
+            "source": "provider_runtime",
+            "observed_at": now.isoformat(),
+            "valid_until": (now + timedelta(minutes=2)).isoformat(),
+        }
+        control = {
+            "authority_class": "provider_control",
+            "provider": "codex",
+            "session_id": str(session_id),
+            "run_id": str(run_id),
+            "connection_id": adapter_connection_id,
+            "lease_generation": lease_generation,
+            "granted_operations": ["send_input"],
+            "state": "attached",
+            "lease_ttl_ms": 120_000,
+            "source": "provider_control",
+            "observed_at": now.isoformat(),
+        }
+        reduce_fact_batch(
+            db.connection(),
+            [
+                ReducerFact(
+                    family="activity",
+                    subject_key=f"run:{run_id}",
+                    source="provider_runtime",
+                    source_epoch=str(run_id),
+                    source_seq=1,
+                    dedupe_key="a" * 64,
+                    evidence_hash=canonical_evidence_hash(activity),
+                    value=activity,
+                    observed_at=now,
+                    session_id=str(session_id),
+                    valid_until=now + timedelta(minutes=2),
+                ),
+                ReducerFact(
+                    family="control",
+                    subject_key=f"connection:{adapter_connection_id}:{lease_generation}",
+                    source="provider_control",
+                    source_epoch=lease_generation,
+                    source_seq=1,
+                    dedupe_key="b" * 64,
+                    evidence_hash=canonical_evidence_hash(control),
+                    value=control,
+                    observed_at=now,
+                    session_id=str(session_id),
+                    valid_until=now + timedelta(minutes=2),
+                ),
+            ],
+            received_at=now,
+        )
+        db.commit()
         return session_id, str(receipt.id)
+
+
+def _replace_activity_head(engine, session_id, *, kind: str):
+    observed_at = datetime.now(UTC).replace(microsecond=0) + timedelta(seconds=1)
+    with Session(engine) as db:
+        run = db.query(LiveSessionRun).one()
+        value = {
+            "authority_class": "provider_runtime",
+            "provider": "codex",
+            "session_id": str(session_id),
+            "run_id": str(run.id),
+            "kind": kind,
+            "raw_kind": kind,
+            "source": "provider_runtime",
+            "observed_at": observed_at.isoformat(),
+            "valid_until": (observed_at + timedelta(minutes=2)).isoformat(),
+        }
+        reduce_fact_batch(
+            db.connection(),
+            [
+                ReducerFact(
+                    family="activity",
+                    subject_key=f"run:{run.id}",
+                    source="provider_runtime",
+                    source_epoch=str(run.id),
+                    source_seq=2,
+                    dedupe_key=canonical_evidence_hash({"kind": kind, "seq": 2}),
+                    evidence_hash=canonical_evidence_hash(value),
+                    value=value,
+                    observed_at=observed_at,
+                    session_id=str(session_id),
+                    valid_until=observed_at + timedelta(minutes=2),
+                )
+            ],
+            received_at=observed_at,
+        )
+        db.commit()
+
+
+def _replace_control_grants(engine, session_id, *, granted_operations: list[str]):
+    observed_at = datetime.now(UTC).replace(microsecond=0) + timedelta(seconds=1)
+    with Session(engine) as db:
+        run = db.query(LiveSessionRun).one()
+        connection = db.query(LiveSessionConnection).one()
+        value = {
+            "authority_class": "provider_control",
+            "provider": "codex",
+            "session_id": str(session_id),
+            "run_id": str(run.id),
+            "connection_id": connection.adapter_connection_id,
+            "lease_generation": connection.lease_generation,
+            "granted_operations": granted_operations,
+            "state": "attached",
+            "lease_ttl_ms": 120_000,
+            "source": "provider_control",
+            "observed_at": observed_at.isoformat(),
+        }
+        reduce_fact_batch(
+            db.connection(),
+            [
+                ReducerFact(
+                    family="control",
+                    subject_key=f"connection:{connection.adapter_connection_id}:{connection.lease_generation}",
+                    source="provider_control",
+                    source_epoch=str(connection.lease_generation),
+                    source_seq=2,
+                    dedupe_key=canonical_evidence_hash({"grants": granted_operations, "seq": 2}),
+                    evidence_hash=canonical_evidence_hash(value),
+                    value=value,
+                    observed_at=observed_at,
+                    session_id=str(session_id),
+                    valid_until=observed_at + timedelta(minutes=2),
+                )
+            ],
+            received_at=observed_at,
+        )
+        db.commit()
 
 
 @pytest.mark.asyncio
@@ -132,7 +275,7 @@ async def test_catalogd_claims_and_finishes_queued_input_exactly_once(daemon_pat
         assert queued["session_ids"] == [str(session_id)]
         params = {"session_id": str(session_id), "delivery_request_id": "delivery-1"}
         claimed = await client.call("session.input.claim.v2", params)
-        assert claimed["claimed"] is True
+        assert claimed["claimed"] is True, claimed
         assert claimed["receipt"]["id"] == receipt_id
         assert claimed["session"]["device_id"] == "cinder"
         replay = await client.call("session.input.claim.v2", params)
@@ -206,6 +349,49 @@ async def test_catalogd_claims_and_finishes_queued_input_exactly_once(daemon_pat
         assert db.get(LiveSessionInputReceipt, receipt_id).status == "delivered"
         assert db.query(LiveArchiveOutbox).count() == 0
     engine.dispose()
+
+
+@pytest.fixture
+def mutates_queue_db(tmp_path):
+    engine = create_catalog_engine(tmp_path / "queue-denial.db")
+    initialize_catalog_schema(engine)
+    session_id, _receipt_id = _seed_queue(engine)
+    yield engine, session_id
+    engine.dispose()
+
+
+def _delete_control_heads(engine):
+    with Session(engine) as db:
+        db.query(FactHead).filter(FactHead.family == "control").delete(synchronize_session=False)
+        db.commit()
+
+
+@pytest.mark.parametrize(
+    ("mutate", "expected_reason"),
+    [
+        (
+            lambda engine, session_id: _replace_activity_head(engine, session_id, kind="running"),
+            "activity_not_drainable",
+        ),
+        (lambda engine, _session_id: _delete_control_heads(engine), "control_unavailable"),
+        (
+            lambda engine, session_id: _replace_control_grants(engine, session_id, granted_operations=[]),
+            "control_unavailable",
+        ),
+    ],
+)
+def test_catalogd_queue_claim_uses_canonical_activity_and_control(mutates_queue_db, mutate, expected_reason):
+    engine, session_id = mutates_queue_db
+    mutate(engine, session_id)
+
+    result = CatalogStore(engine).claim_queued_input(
+        session_id=str(session_id),
+        delivery_request_id=f"denied-{expected_reason}",
+    )
+
+    assert result["claimed"] is False
+    assert result["reason"] == expected_reason
+    assert result["commit_seq"].isdigit()
 
 
 @pytest.mark.asyncio

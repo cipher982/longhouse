@@ -24,7 +24,9 @@ from sqlalchemy import and_
 from sqlalchemy import bindparam
 from sqlalchemy import case
 from sqlalchemy import cast
+from sqlalchemy import false
 from sqlalchemy import func
+from sqlalchemy import literal
 from sqlalchemy import or_
 from sqlalchemy import select
 from sqlalchemy import text
@@ -2808,22 +2810,6 @@ class AgentsStore:
                 payload={},
             )
         ]
-        if events_inserted > 0 and transcript_changed and latest_inserted_timestamp is not None:
-            progress_anchor = latest_inserted_event_id or latest_inserted_timestamp.isoformat()
-            runtime_events.append(
-                RuntimeEventIngest(
-                    runtime_key=runtime_key,
-                    session_id=session_id,
-                    thread_id=thread_id,
-                    provider=data.provider,
-                    device_id=data.device_id,
-                    source="agents_ingest",
-                    kind="progress_signal",
-                    occurred_at=latest_inserted_timestamp,
-                    dedupe_key=f"progress:{runtime_key}:{progress_anchor}",
-                    payload={"progress_kind": "transcript_append"},
-                )
-            )
         runtime_events.extend(
             _claude_transcript_pause_events(
                 self.db,
@@ -3747,17 +3733,20 @@ class AgentsStore:
 
     @staticmethod
     def _runtime_signal_subquery():
+        """Compatibility-shaped empty relation for archive query signatures.
+
+        Live recency belongs to catalogd. Archive queries retain these columns
+        until their SSE signature contract is removed, but must never consult
+        ``session_runtime_state`` as a competing activity authority.
+        """
         return (
             select(
-                SessionRuntimeState.session_id.label("session_id"),
-                func.max(SessionRuntimeState.updated_at).label("runtime_updated_at"),
-                func.max(SessionRuntimeState.runtime_version).label("runtime_version"),
-                func.max(SessionRuntimeState.timeline_anchor_at).label("runtime_timeline_anchor_at"),
+                literal(None).label("session_id"),
+                literal(None).label("runtime_updated_at"),
+                literal(None).label("runtime_version"),
+                literal(None).label("runtime_timeline_anchor_at"),
             )
-            .outerjoin(SessionThread, SessionRuntimeState.thread_id == SessionThread.id)
-            .where(SessionRuntimeState.session_id.is_not(None))
-            .where(or_(SessionRuntimeState.thread_id.is_(None), SessionThread.is_primary == 1))
-            .group_by(SessionRuntimeState.session_id)
+            .where(false())
             .subquery()
         )
 

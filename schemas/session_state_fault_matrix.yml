@@ -103,7 +103,7 @@ scenarios:
       - server/tests_lite/test_storage_v2_workspace.py::test_storage_v2_workspace_composes_catalog_shell_and_tail
       - server/tests_lite/test_session_state_diagnostics.py::test_diagnostics_route_reports_only_canonical_serve_and_authorization
       - server/tests_lite/test_heartbeat_endpoint.py::test_heartbeat_legacy_managed_sessions_still_materialize_control
-      - server/tests_lite/test_local_health_cli.py::test_collect_local_health_keeps_attached_codex_idle_from_single_phase_ledger
+      - server/tests_lite/test_local_health_cli.py::test_collect_local_health_does_not_promote_local_phase_evidence_to_activity
     live: required
     expect: [canonical_ingest_always_on, legacy_identity_never_authorizes]
 

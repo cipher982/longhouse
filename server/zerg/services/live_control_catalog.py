@@ -16,7 +16,6 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from zerg.catalogd.models import FactHead
-from zerg.models.live_store import LiveRuntimeState
 from zerg.models.live_store import LiveSessionCatalog
 from zerg.models.live_store import LiveSessionConnection
 from zerg.models.live_store import LiveSessionRun
@@ -27,7 +26,6 @@ from zerg.services.session_state_facts_projector import authorize_exact_control_
 from zerg.utils.time import normalize_utc
 
 logger = logging.getLogger(__name__)
-_QUEUE_DRAINABLE_PHASES = frozenset({"idle", "needs_user", "blocked"})
 _CONTROL_ACQUISITION_KINDS = ("spawned_control", "adopted_control")
 _CANONICAL_AUTH_PROVIDERS = frozenset({"codex", "claude", "opencode", "cursor"})
 
@@ -432,20 +430,7 @@ def live_session_input_block_reason(db: Session, session: LiveControlSession) ->
         if isinstance(latest_run, dict) and latest_run.get("ended_at") is not None:
             return "run_ended"
         return None
-    row = (
-        db.query(LiveRuntimeState.terminal_state)
-        .filter(LiveRuntimeState.session_id == session.id)
-        .order_by(LiveRuntimeState.updated_at.desc(), LiveRuntimeState.runtime_version.desc())
-        .first()
-    )
-    if row is None:
-        return None
-    terminal_state = str(row[0] or "").strip()
-    if terminal_state == "user_closed":
-        return "session_closed"
-    if terminal_state in {"", "finished", "host_expired"}:
-        return None
-    return "run_ended"
+    return live_control_command_block_reason(db, session_id=session.id)
 
 
 def live_session_closed_for_input(db: Session, session: LiveControlSession) -> bool:

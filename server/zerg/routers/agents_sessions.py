@@ -58,7 +58,6 @@ from zerg.services.live_catalog_timeline import read_live_catalog_session
 from zerg.services.live_catalog_timeline import stream_live_catalog_machine_sessions
 from zerg.services.live_session_state import list_active_live_session_ids
 from zerg.services.machine_control_channel import get_machine_control_channel_registry
-from zerg.services.managed_control_state import load_managed_control_state_map
 from zerg.services.provisional_events import load_active_provisional_preview_map
 from zerg.services.raw_object_workers import RawObjectWorkerError
 from zerg.services.searchd_supervisor import get_searchd_client
@@ -83,11 +82,7 @@ from zerg.services.session_listing import SessionListParams
 from zerg.services.session_listing import list_agent_sessions
 from zerg.services.session_messages import create_session_message
 from zerg.services.session_messages import resolve_session_message_owner_id
-from zerg.services.session_pause_requests import load_active_pause_request_map
 from zerg.services.session_pause_requests import load_hot_session_projection_map
-from zerg.services.session_pause_requests import serialize_pause_request_projection
-from zerg.services.session_runtime import load_runtime_state_map
-from zerg.services.session_runtime import resolve_runtime_overlay
 from zerg.services.session_turns import execute_session_turn_write
 from zerg.services.session_turns import get_session_turn_by_id
 from zerg.services.session_turns import list_session_turns
@@ -1300,42 +1295,31 @@ def list_active_sessions(
 
         session_ids = [s.id for s in sessions]
         last_activity = store.get_last_activity_map(session_ids)
-        runtime_state_map = load_runtime_state_map(db, [session.id for session in sessions])
-        pause_request_map = load_active_pause_request_map(db, session_ids)
-        control_state_map = load_managed_control_state_map(db, [session.id for session in sessions])
         kernel_capabilities_map = project_capabilities_bulk(db, session_ids=session_ids)
+        launch_attempt_map = latest_launch_attempts(db, session_ids)
         items: List[ActiveSessionResponse] = []
         for s in sessions:
             last_activity_at = normalize_utc_datetime(last_activity.get(s.id) or s.ended_at or s.started_at) or now
-            runtime_overlay = resolve_runtime_overlay(
-                s,
-                last_activity_at=last_activity.get(s.id) or s.ended_at or s.started_at,
-                runtime_state_map=runtime_state_map,
-                now=now,
-            )
-
             attention_level = "auto"
 
-            if status_filter and runtime_overlay.status != status_filter:
-                continue
             if attention and attention_level != attention:
                 continue
 
-            items.append(
-                build_active_session_response(
-                    store,
-                    s,
-                    last_activity_at=last_activity_at,
-                    runtime_overlay=runtime_overlay,
-                    attention=attention_level,
-                    last_user_message=_bounded_preview(s.last_user_message_preview, max_len=300),
-                    last_assistant_message=_bounded_preview(s.last_assistant_message_preview, max_len=300),
-                    now=now,
-                    control_overlay=control_state_map.get(s.id),
-                    kernel_capabilities=kernel_capabilities_map.get(s.id),
-                    pause_request=serialize_pause_request_projection(pause_request_map.get(s.id)),
-                )
+            item = build_active_session_response(
+                store,
+                s,
+                last_activity_at=last_activity_at,
+                runtime_overlay=None,
+                attention=attention_level,
+                last_user_message=_bounded_preview(s.last_user_message_preview, max_len=300),
+                last_assistant_message=_bounded_preview(s.last_assistant_message_preview, max_len=300),
+                now=now,
+                kernel_capabilities=kernel_capabilities_map.get(s.id),
+                launch_attempt=launch_attempt_map.get(s.id),
             )
+            if status_filter and item.status != status_filter:
+                continue
+            items.append(item)
 
         return ActiveSessionsResponse(
             sessions=items,
@@ -1581,13 +1565,9 @@ def get_session(
         activity_map = store.get_last_activity_map([session.id])
     with timing.span("load_first_user"):
         first_user_map = store.get_first_message_map([session.id], role="user", max_len=80)
-    now = datetime.now(timezone.utc)
     with timing.span("load_runtime"):
-        runtime_state_map = load_runtime_state_map(db, [session.id])
-        pause_request_map = load_active_pause_request_map(db, [session.id])
         transcript_preview_map = load_active_provisional_preview_map(db, [session.id])
         pending_response_turn_map = load_pending_response_turn_map(db, [session.id])
-        control_state_map = load_managed_control_state_map(db, [session.id])
         launch_attempt_map = latest_launch_attempts(db, [session.id])
         hot_projection_map = load_hot_session_projection_map([session.id])
     with timing.span("build_response"):
@@ -1598,22 +1578,11 @@ def get_session(
             store,
             session,
             last_activity_at=activity_map.get(session.id) or session.ended_at or session.started_at,
-            runtime_overlay=resolve_runtime_overlay(
-                session,
-                last_activity_at=activity_map.get(session.id) or session.ended_at or session.started_at,
-                runtime_state_map=runtime_state_map,
-                now=now,
-            ),
+            runtime_overlay=None,
             first_user_message=first_user_map.get(session.id),
-            control_overlay=control_state_map.get(session.id),
             transcript_preview=transcript_preview_map.get(str(session.id)),
             owner_id=effective_owner_id,
             has_pending_response_turn=bool(pending_response_turn_map.get(session.id)),
-            pause_request=(
-                hot_projection_map[session.id][0]
-                if session.id in hot_projection_map
-                else serialize_pause_request_projection(pause_request_map.get(session.id))
-            ),
             archive_state=(hot_projection_map[session.id][1] if session.id in hot_projection_map else "current"),
             launch_attempt=launch_attempt_map.get(session.id),
         )
@@ -1676,13 +1645,9 @@ async def get_session_thread(
     with timing.span("load_first_user"):
         first_user_map = store.get_first_message_map(thread_session_ids, role="user", max_len=80)
     thread_cache = store.batch_thread_meta(thread_sessions)
-    now = datetime.now(timezone.utc)
     with timing.span("load_runtime"):
-        runtime_state_map = load_runtime_state_map(db, [item.id for item in thread_sessions])
-        pause_request_map = load_active_pause_request_map(db, thread_session_ids)
         transcript_preview_map = load_active_provisional_preview_map(db, [item.id for item in thread_sessions])
         pending_response_turn_map = load_pending_response_turn_map(db, thread_session_ids)
-        control_state_map = load_managed_control_state_map(db, [item.id for item in thread_sessions])
         launch_attempt_map = latest_launch_attempts(db, thread_session_ids)
 
     with timing.span("build_response"):
@@ -1698,18 +1663,11 @@ async def get_session_thread(
                     item,
                     thread_cache=thread_cache,
                     last_activity_at=activity_map.get(item.id) or item.ended_at or item.started_at,
-                    runtime_overlay=resolve_runtime_overlay(
-                        item,
-                        last_activity_at=activity_map.get(item.id) or item.ended_at or item.started_at,
-                        runtime_state_map=runtime_state_map,
-                        now=now,
-                    ),
+                    runtime_overlay=None,
                     first_user_message=first_user_map.get(item.id),
                     transcript_preview=transcript_preview_map.get(str(item.id)),
-                    control_overlay=control_state_map.get(item.id),
                     owner_id=effective_owner_id,
                     has_pending_response_turn=bool(pending_response_turn_map.get(item.id)),
-                    pause_request=serialize_pause_request_projection(pause_request_map.get(item.id)),
                     launch_attempt=launch_attempt_map.get(item.id),
                 )
                 for item in thread_sessions

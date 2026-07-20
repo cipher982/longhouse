@@ -140,7 +140,7 @@ class _DisconnectAfterFirstCycleRequest:
         return self._checks > 1
 
 
-def test_timeline_stream_emits_runtime_backed_session_upsert(tmp_path):
+def test_archive_timeline_stream_does_not_reorder_from_legacy_runtime_state(tmp_path):
     session_local = _make_db(tmp_path, "timeline_stream_upsert.db")
     now = datetime.now(timezone.utc)
 
@@ -196,12 +196,12 @@ def test_timeline_stream_emits_runtime_backed_session_upsert(tmp_path):
     assert events[0]["event"] == "connected"
     assert events[1]["event"] == "session_upsert"
     assert "Timeline session stream connected" in events[0]["data"]
-    assert upsert_payload["session"]["thread_id"] == str(old_runtime.id)
-    assert upsert_payload["session"]["head"]["project"] == "old-runtime-stream"
-    assert upsert_payload["session"]["head"]["display_phase"] == "Running bash"
+    assert upsert_payload["session"]["thread_id"] != str(old_runtime.id)
+    assert upsert_payload["session"]["head"]["project"] == "recent-history-stream"
+    assert upsert_payload["session"]["head"]["display_phase"] is None
 
 
-def test_session_window_signature_prefers_runtime_activity_anchor(tmp_path):
+def test_archive_session_window_signature_ignores_legacy_runtime_activity_anchor(tmp_path):
     session_local = _make_db(tmp_path, "timeline_stream_window_signature.db")
     now = datetime.now(timezone.utc)
 
@@ -256,10 +256,10 @@ def test_session_window_signature_prefers_runtime_activity_anchor(tmp_path):
             include_total=True,
         )
 
-    assert total == 2
-    assert rows[0][0] == str(old_runtime.id)
-    assert rows[0][4] == 7
-    assert rows[0][5] is not None
+    assert total == 1
+    assert rows[0][0] != str(old_runtime.id)
+    assert rows[0][4] == 0
+    assert rows[0][5] is None
 
 
 def test_session_window_signature_can_skip_total_count(tmp_path):

@@ -35,6 +35,7 @@ def _project(capability_flags: KernelSessionCapabilities, **overrides):
         "lifecycle": "open",
         "is_executing": False,
         "host_state": "online",
+        "session_mode": "helm",
     }
     values.update(overrides)
     return project_send_affordance(capability_flags, **values)
@@ -47,6 +48,23 @@ def test_live_idle_send_uses_auto_intent():
     assert affordance.default_input_intent == "auto"
     assert affordance.composer_enabled is True
     assert affordance.send_disabled_reason is None
+
+
+def test_console_affordance_uses_canonical_mode_not_legacy_control_label():
+    affordance = _project(
+        _caps(control_label="imported", live_control_available=False, can_send_input=False),
+        session_mode="console",
+        can_start_turn=True,
+    )
+
+    assert affordance.input_mode == "console"
+    assert affordance.composer_enabled is True
+
+
+def test_legacy_console_label_cannot_switch_helm_affordance_mode():
+    affordance = _project(_caps(control_label="console"), session_mode="helm")
+
+    assert affordance.input_mode == "live"
 
 
 def test_live_idle_claude_channel_bridge_uses_auto_intent():

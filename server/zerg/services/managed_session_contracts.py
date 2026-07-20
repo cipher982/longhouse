@@ -1,9 +1,9 @@
 """Managed provider session contract files.
 
 These contracts record launch-time local provenance for managed provider
-sessions. They are deliberately separate from ``managed_session_state``:
-SQLite owns current phase/workspace truth, while these JSON files own the local
-execution and control contract that local-health can verify later.
+sessions. They are deliberately separate from canonical catalog session facts:
+the Runtime Host owns served session truth, while these JSON files own the
+local execution and control contract that local-health can verify later.
 """
 
 from __future__ import annotations

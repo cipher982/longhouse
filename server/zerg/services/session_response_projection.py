@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime
-from datetime import timezone
 from typing import Any
 from typing import Mapping
 from uuid import UUID
@@ -15,12 +13,7 @@ from zerg.models.agents import AgentSession
 from zerg.services.agents import AgentsStore
 from zerg.services.agents.kernel_capabilities import project_capabilities_bulk
 from zerg.services.internal_sessions import internal_canary_session_clause
-from zerg.services.managed_control_state import load_managed_control_state_map
 from zerg.services.provisional_events import load_active_provisional_preview_map
-from zerg.services.session_pause_requests import load_active_pause_request_map
-from zerg.services.session_pause_requests import serialize_pause_request_projection
-from zerg.services.session_runtime import load_runtime_state_map
-from zerg.services.session_runtime import resolve_runtime_overlay
 from zerg.services.session_turns import load_pending_response_turn_map
 from zerg.services.session_views import SessionResponse
 from zerg.services.session_views import build_session_response
@@ -86,10 +79,6 @@ def build_session_response_list(
 
     session_ids = [session.id for session in sessions]
     activity_map = store.get_last_activity_map(session_ids)
-    now = datetime.now(timezone.utc)
-    runtime_state_map = load_runtime_state_map(db, session_ids)
-    pause_request_map = load_active_pause_request_map(db, session_ids)
-    control_state_map = load_managed_control_state_map(db, session_ids)
     transcript_preview_map = load_active_provisional_preview_map(db, session_ids)
     pending_response_turn_map = load_pending_response_turn_map(db, session_ids, include_event_fallback=False)
     first_user_map = {
@@ -127,24 +116,16 @@ def build_session_response_list(
                 session,
                 thread_cache=thread_cache,
                 last_activity_at=normalize_utc_datetime(last_activity_at),
-                runtime_overlay=resolve_runtime_overlay(
-                    session,
-                    last_activity_at=last_activity_at,
-                    runtime_state_map=runtime_state_map,
-                    now=now,
-                ),
                 first_user_message=first_user_map.get(session.id),
                 match_event_id=match.get("event_id"),
                 match_snippet=match.get("snippet") or semantic_snippet_map.get(str(session.id)),
                 match_role=match.get("role"),
                 match_score=sem_score_map.get(session.id),
-                control_overlay=control_state_map.get(session.id),
                 transcript_preview=transcript_preview_map.get(str(session.id)),
                 owner_id=owner_id,
                 summary_status=summary_status,
                 kernel_capabilities=kernel_capabilities_map.get(session.id),
                 has_pending_response_turn=bool(pending_response_turn_map.get(session.id)),
-                pause_request=serialize_pause_request_projection(pause_request_map.get(session.id)),
                 launch_attempt=launch_attempt_map.get(session.id),
             )
         )

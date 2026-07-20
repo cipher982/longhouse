@@ -153,6 +153,32 @@ struct SessionModelsTests {
             "reply_to_live_session_available": true
           },
           "loop_mode": "assist",
+          "session_state": {
+            "state_contract_version": 1,
+            "presentation_policy_version": 1,
+            "mode": "helm",
+            "disposition": {"state": "open"},
+            "run": {"lifecycle": "running"},
+            "activity": {"state": "quiescent"},
+            "control": {
+              "ownership": "owned",
+              "connection": "connected",
+              "actions": {
+                "start_turn": {"state": "unavailable", "reason": "not_console"},
+                "send_input": {"state": "available"},
+                "interrupt": {"state": "available"},
+                "terminate": {"state": "available"},
+                "reattach": {"state": "unavailable", "reason": "already_connected"},
+                "resume": {"state": "unavailable", "reason": "already_connected"}
+              }
+            },
+            "transcript": {"convergence": "current", "searchable": true, "live_observation": true},
+            "host": {"state": "online"},
+            "presentation": {
+              "primary": {"key": "idle", "label": "Idle", "tone": "idle"},
+              "access": {"key": "live_control", "label": "Live control", "tone": "live"}
+            }
+          },
           "runtime_display": {
             "truth_tier": "managed-local",
             "signal_tier": "phase_signal",
@@ -186,8 +212,7 @@ struct SessionModelsTests {
 
     @Test
     func canonicalActivityPreservesRawEvidenceAndUnknownAccessibility() throws {
-        let migrated = try sessionStateFixtureData(Data(apiSessionJSON().utf8))
-        var object = try #require(JSONSerialization.jsonObject(with: migrated) as? [String: Any])
+        var object = try #require(JSONSerialization.jsonObject(with: Data(apiSessionJSON().utf8)) as? [String: Any])
         var state = try #require(object["session_state"] as? [String: Any])
         var activity = try #require(state["activity"] as? [String: Any])
         activity["state"] = "unknown"
@@ -250,6 +275,14 @@ struct SessionModelsTests {
         }
         """
         let json = apiSessionJSON()
+            .replacingOccurrences(
+                of: #""activity": {"state": "quiescent"}"#,
+                with: #""activity": {"state": "blocked"}, "pending_interaction": {"id": "pause-storage", "kind": "structured_question", "can_respond": true}"#
+            )
+            .replacingOccurrences(
+                of: #""primary": {"key": "idle", "label": "Idle", "tone": "idle"}"#,
+                with: #""primary": {"key": "needs_answer", "label": "Needs answer", "tone": "blocked"}"#
+            )
             .replacingOccurrences(of: #""headline": "Idle","#, with: #""headline": "Needs answer","#)
             .replacingOccurrences(of: #""detail": "Waiting for next prompt","#, with: #""detail": "Codex needs a storage decision.","#)
             .replacingOccurrences(of: #""phase_label": "Idle","#, with: #""phase_label": "Needs answer","#)
@@ -272,6 +305,14 @@ struct SessionModelsTests {
     @Test
     func sessionDetailShowsAttentionFallbackWhenBlockedPauseRequestIsMissing() throws {
         let json = apiSessionJSON()
+            .replacingOccurrences(
+                of: #""activity": {"state": "quiescent"}"#,
+                with: #""activity": {"state": "blocked"}"#
+            )
+            .replacingOccurrences(
+                of: #""primary": {"key": "idle", "label": "Idle", "tone": "idle"}"#,
+                with: #""primary": {"key": "blocked", "label": "Blocked", "tone": "blocked"}"#
+            )
             .replacingOccurrences(of: #""state": "needs_user","#, with: #""state": "blocked","#)
             .replacingOccurrences(of: #""tone": "idle","#, with: #""tone": "blocked","#)
             .replacingOccurrences(of: #""headline": "Idle","#, with: #""headline": "Blocked","#)
@@ -840,7 +881,11 @@ struct SessionModelsTests {
         }
         """.data(using: .utf8)!
 
-        let detail = try JSONDecoder.snakeCase.decodeSessionFixture(SessionDetail.self, from: json)
+        let data = try addingSessionStateFacts(
+            makeSessionStateFacts(activity: "quiescent"),
+            to: json
+        )
+        let detail = try JSONDecoder.snakeCase.decodeSessionFixture(SessionDetail.self, from: data)
 
         #expect(detail.effectiveLoopMode == .assist)
         #expect(detail.canSendLive)
@@ -852,66 +897,7 @@ struct SessionModelsTests {
 
     @Test
     func apiTimelineSessionsListResponseDecodesTimelineCardContract() throws {
-        let sessionJSON = """
-        {
-          "id": "session-card-contract",
-          "summary_title": "Timeline contract",
-          "summary": "Backend emits card presentation.",
-          "status": "idle",
-          "presence_state": "needs_user",
-          "presence_tool": null,
-          "active_tool": null,
-          "display_phase": "Idle",
-          "user_state": "active",
-          "provider": "claude",
-          "project": "zerg",
-          "git_branch": "main",
-          "started_at": "2026-04-25T19:00:00Z",
-          "ended_at": null,
-          "home_label": "On this Mac",
-          "timeline_anchor_at": "2026-04-25T20:00:00Z",
-          "last_activity_at": "2026-04-25T20:00:00Z",
-          "user_messages": 3,
-          "assistant_messages": 2,
-          "tool_calls": 4,
-          "thread_root_session_id": "session-card-contract",
-          "thread_head_session_id": "session-card-contract",
-          "thread_continuation_count": 0,
-          "capabilities": {
-            "live_control_available": true,
-            "host_reattach_available": true,
-            "reply_to_live_session_available": true
-          },
-          "loop_mode": "assist",
-          "runtime_display": {
-            "truth_tier": "managed-local",
-            "signal_tier": "phase_signal",
-            "state": "needs_user",
-            "tone": "idle",
-            "headline": "Idle",
-            "detail": "Waiting for next prompt",
-            "phase_label": "Idle",
-            "compact_tool_label": null,
-            "is_live": false,
-            "is_executing": false,
-            "needs_attention": false,
-            "is_idle": true,
-            "is_stalled": false,
-            "is_managed_local_truth": true,
-            "has_signal": true,
-            "control_path": "managed",
-            "activity_recency": "live",
-            "lifecycle": "open",
-            "host_state": "online",
-            "terminal_reason": null
-          },
-          "timeline_card": {
-            "ownership": {"label": "Managed", "tone": "neutral"},
-            "status": {"label": "Idle", "tone": "idle", "seen_at": null, "seen_at_prefix": "Updated"},
-            "border_tone": "idle"
-          }
-        }
-        """
+        let sessionJSON = apiSessionJSON()
         let json = """
         {
           "sessions": [
@@ -1116,7 +1102,11 @@ struct SessionModelsTests {
         }
         """.data(using: .utf8)!
 
-        let detail = try JSONDecoder.snakeCase.decodeSessionFixture(SessionDetail.self, from: json)
+        let data = try addingSessionStateFacts(
+            makeSessionStateFacts(activity: "unknown", owned: false),
+            to: json
+        )
+        let detail = try JSONDecoder.snakeCase.decodeSessionFixture(SessionDetail.self, from: data)
 
         #expect(detail.isReadOnly)
         #expect(detail.runtimeCapabilityLabel == "Search only")
@@ -1183,7 +1173,11 @@ struct SessionModelsTests {
         }
         """.data(using: .utf8)!
 
-        let detail = try JSONDecoder.snakeCase.decodeSessionFixture(SessionDetail.self, from: json)
+        let shadowData = try addingSessionStateFacts(
+            makeSessionStateFacts(activity: "unknown", owned: false),
+            to: json
+        )
+        let detail = try JSONDecoder.snakeCase.decodeSessionFixture(SessionDetail.self, from: shadowData)
 
         #expect(!detail.canSendLive)
         #expect(!detail.isControlOffline)
@@ -1195,18 +1189,30 @@ struct SessionModelsTests {
 
         let legacyComposerPayload = String(decoding: json, as: UTF8.self)
             .replacingOccurrences(of: #""composer_enabled": false"#, with: #""composer_enabled": true"#)
+        let legacyComposerData = try addingSessionStateFacts(
+            makeSessionStateFacts(activity: "unknown", owned: false),
+            to: Data(legacyComposerPayload.utf8)
+        )
         let legacyComposer = try JSONDecoder.snakeCase.decodeSessionFixture(
             SessionDetail.self,
-            from: Data(legacyComposerPayload.utf8)
+            from: legacyComposerData
         )
         #expect(!legacyComposer.canSendLive)
 
         let consolePayload = String(decoding: json, as: UTF8.self)
             .replacingOccurrences(of: #""input_mode": "read_only""#, with: #""input_mode": "console", "can_start_turn": true"#)
             .replacingOccurrences(of: #""composer_enabled": false"#, with: #""composer_enabled": true"#)
+        let consoleData = try addingSessionStateFacts(
+            makeSessionStateFacts(
+                activity: "quiescent",
+                mode: "console",
+                startTurnAvailable: true
+            ),
+            to: Data(consolePayload.utf8)
+        )
         let console = try JSONDecoder.snakeCase.decodeSessionFixture(
             SessionDetail.self,
-            from: Data(consolePayload.utf8)
+            from: consoleData
         )
         #expect(console.canSendLive)
         #expect(!console.isReadOnly)
@@ -1275,7 +1281,11 @@ struct SessionModelsTests {
         }
         """.data(using: .utf8)!
 
-        let detail = try JSONDecoder.snakeCase.decodeSessionFixture(SessionDetail.self, from: json)
+        let data = try addingSessionStateFacts(
+            makeSessionStateFacts(activity: "executing"),
+            to: json
+        )
+        let detail = try JSONDecoder.snakeCase.decodeSessionFixture(SessionDetail.self, from: data)
 
         #expect(detail.canSendLive)
         #expect(detail.defaultInputIntent == "steer")
@@ -1344,7 +1354,11 @@ struct SessionModelsTests {
         }
         """.data(using: .utf8)!
 
-        let detail = try JSONDecoder.snakeCase.decodeSessionFixture(SessionDetail.self, from: json)
+        let data = try addingSessionStateFacts(
+            makeSessionStateFacts(activity: "quiescent", closed: true),
+            to: json
+        )
+        let detail = try JSONDecoder.snakeCase.decodeSessionFixture(SessionDetail.self, from: data)
 
         #expect(!detail.canSendLive)
         #expect(detail.attachImagesEnabled == false)
@@ -1415,7 +1429,16 @@ struct SessionModelsTests {
         }
         """.data(using: .utf8)!
 
-        let detail = try JSONDecoder.snakeCase.decodeSessionFixture(SessionDetail.self, from: json)
+        let data = try addingSessionStateFacts(
+            makeSessionStateFacts(
+                activity: "unknown",
+                launchState: "pending",
+                sendInputAvailable: false,
+                accessLabel: "Control unknown"
+            ),
+            to: json
+        )
+        let detail = try JSONDecoder.snakeCase.decodeSessionFixture(SessionDetail.self, from: data)
 
         #expect(!detail.canSendLive)
         #expect(detail.canDraftBeforeSendReady)

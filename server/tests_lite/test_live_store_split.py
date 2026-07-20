@@ -42,6 +42,7 @@ from zerg.models.agents import SessionTurn
 from zerg.models.live_store import LiveArchiveOutbox
 from zerg.models.live_store import LiveControlLease
 from zerg.models.live_store import LiveHeartbeatStamp
+from zerg.models.live_store import LiveInteractionRequest
 from zerg.models.live_store import LiveLaunchReadiness
 from zerg.models.live_store import LiveRuntimeState
 from zerg.models.live_store import LiveSession as LiveSessionRow
@@ -263,6 +264,7 @@ def test_hot_interaction_and_archive_state_match_list_and_workspace_before_archi
         "kind": "structured_question",
         "provider": "codex",
         "occurred_at": now.isoformat(),
+        "last_seen_at": now.isoformat(),
         "can_respond": True,
         "questions": [
             {
@@ -331,6 +333,24 @@ def test_hot_interaction_and_archive_state_match_list_and_workspace_before_archi
                 pending_interaction_projection_json=projection,
                 pending_interaction_can_respond=1,
                 runtime_version=3,
+                updated_at=now,
+            )
+        )
+        db.add(
+            LiveInteractionRequest(
+                id=str(pause_id),
+                session_id=str(session_id),
+                runtime_key=f"codex:{session_id}",
+                provider="codex",
+                request_key="codex:runtime:question",
+                kind="structured_question",
+                status="pending",
+                can_respond=1,
+                request_payload_json={},
+                projection_json=projection,
+                occurred_at=now,
+                last_seen_at=now,
+                created_at=now,
                 updated_at=now,
             )
         )

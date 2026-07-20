@@ -15,6 +15,7 @@ from zerg.database import Base
 from zerg.database import make_engine
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionPauseRequest
+from zerg.models.agents import SessionRuntimeState
 from zerg.services.agents import AgentsStore
 from zerg.services.agents import EventIngest
 from zerg.services.agents import SessionIngest
@@ -63,6 +64,8 @@ def test_agents_ingest_sqlite(tmp_path):
 
         assert result.events_inserted == 1
         assert result.events_skipped == 0
+        runtime_state = db.query(SessionRuntimeState).one()
+        assert runtime_state.last_progress_at is None
 
 
 def test_unmanaged_claude_ask_user_question_transcript_creates_read_only_pause_request(tmp_path):

@@ -14,6 +14,7 @@ from zerg.catalogd.schema import initialize_catalog_schema
 from zerg.catalogd.store import CatalogStore
 from zerg.database import make_live_engine
 from zerg.database import make_sessionmaker
+from zerg.models.live_store import LiveInteractionRequest
 from zerg.models.live_store import LiveLaunchReadiness
 from zerg.models.live_store import LiveRuntimeState
 from zerg.models.live_store import LiveSessionCatalog
@@ -103,7 +104,8 @@ def test_detail_read_has_no_legacy_serve_kill_switch(monkeypatch):
 def test_canonical_host_projection_preserves_same_snapshot_liveness():
     observed_at = datetime.now(timezone.utc)
     host = live_catalog_timeline._host_facts(
-        SimpleNamespace(host=SimpleNamespace(state="online", last_seen_at=observed_at))
+        {"machine_heartbeat": {"received_at": observed_at.isoformat(), "is_offline": False}},
+        now=observed_at,
     )
 
     assert host.state == "online"
@@ -122,6 +124,7 @@ def test_canonical_detail_projects_one_owner_scoped_snapshot(monkeypatch):
         "heads": heads,
         "heads_truncated": False,
     }
+
     def shadow(requested, *, owner_id):
         assert requested == session_id
         assert owner_id == 3
@@ -372,14 +375,15 @@ def test_live_catalog_timeline_lists_card_and_runtime_without_archive(tmp_path):
     assert card.thread_id == str(thread_id)
     assert card.head.id == str(session_id)
     assert card.head.timeline_title == "Storage isolation"
-    assert card.head.runtime_phase == "thinking"
-    assert card.head.runtime_display.state == "thinking"
-    assert card.head.timeline_card.status.label == "Thinking"
+    assert card.head.runtime_phase is None
+    assert card.head.runtime_display.state is None
+    assert card.head.timeline_card.status.label == "Activity unknown"
     assert card.head.user_messages == 1
-    assert card.head.capabilities.staleness_reason is None
-    assert card.head.capabilities.control_label == "live"
+    assert card.head.capabilities.staleness_reason == "control_unknown"
+    assert card.head.session_state.mode == "helm"
     assert card.head.capabilities.observe_only is False
-    assert card.head.capabilities.can_send_input is True
+    assert card.head.session_state.control.actions.send_input.state == "unavailable"
+    assert card.head.session_state.control.actions.resume.state == "available"
 
 
 def test_live_catalog_timeline_labels_zero_content_shell_as_empty(tmp_path):
@@ -437,6 +441,75 @@ def test_live_catalog_timeline_labels_zero_content_shell_as_empty(tmp_path):
     assert session.timeline_title == "longhouse · Empty session"
     assert session.title_state == "awaiting_input"
     assert session.title_source == "project"
+
+
+def test_live_catalog_question_preserves_opened_at_and_needs_answer(tmp_path):
+    engine = make_live_engine(f"sqlite:///{tmp_path / 'live-question.db'}")
+    initialize_catalog_schema(engine)
+    LiveSession = make_sessionmaker(engine)
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    opened_at = now - timedelta(seconds=20)
+    session_id = uuid4()
+    interaction_id = uuid4()
+    with LiveSession() as db:
+        db.add_all(
+            [
+                LiveSessionCatalog(
+                    session_id=str(session_id),
+                    provider="codex",
+                    environment="production",
+                    project="longhouse",
+                    device_id="cinder",
+                    started_at=now - timedelta(minutes=2),
+                    last_activity_at=now,
+                    created_at=now,
+                    updated_at=now,
+                ),
+                LiveTimelineCard(
+                    session_id=str(session_id),
+                    provider="codex",
+                    environment="production",
+                    project="longhouse",
+                    device_id="cinder",
+                    started_at=now - timedelta(minutes=2),
+                    last_activity_at=now,
+                    archive_state="pending",
+                    derived_state="current",
+                    parser_revision="test",
+                    updated_at=now,
+                ),
+                LiveInteractionRequest(
+                    id=str(interaction_id),
+                    session_id=str(session_id),
+                    runtime_key=f"codex:{session_id}",
+                    provider="codex",
+                    request_key=f"codex:{session_id}:question-1",
+                    kind="structured_question",
+                    status="pending",
+                    can_respond=1,
+                    projection_json={"summary": "Choose a migration path"},
+                    occurred_at=opened_at,
+                    last_seen_at=now,
+                    expires_at=now + timedelta(minutes=5),
+                ),
+            ]
+        )
+        db.commit()
+
+    snapshot = CatalogStore(engine).read_session(session_id=str(session_id))
+    response = project_catalog_session_facts(
+        snapshot["facts"],
+        observed_at=datetime.fromisoformat(snapshot["observed_at"]),
+    )
+
+    pending = response.session_state.pending_interaction
+    assert pending is not None
+    assert pending.id == str(interaction_id)
+    assert pending.kind == "question"
+    assert pending.opened_at == opened_at
+    assert response.session_state.presentation.primary is not None
+    assert response.session_state.presentation.primary.key == "needs_answer"
+    assert response.session_state.presentation.primary.observed_at == opened_at
 
 
 def test_storage_v2_untitled_session_uses_first_prompt_as_pending_fallback(tmp_path):
@@ -592,23 +665,23 @@ def test_live_catalog_timeline_keeps_runtime_and_control_axes_independent(tmp_pa
     by_title = {card.head.timeline_title: card.head for card in response.sessions}
 
     managed = by_title["Managed idle"]
-    assert managed.runtime_display.state == "idle"
-    assert managed.timeline_card.status.label == "Idle"
-    assert managed.capabilities.control_label == "reattach"
+    assert managed.runtime_display.state is None
+    assert managed.timeline_card.status.label == "Activity unknown"
+    assert managed.session_state.mode == "helm"
     assert managed.capabilities.observe_only is False
     assert managed.capabilities.can_resume is True
 
     imported = by_title["Imported history"]
     assert imported.runtime_display.state is None
-    assert imported.timeline_card.status.label == "No live signal"
-    assert imported.capabilities.control_label == "imported"
+    assert imported.timeline_card.status.label == "Activity unknown"
+    assert imported.session_state.mode == "shadow"
     assert imported.capabilities.observe_only is False
     assert imported.capabilities.search_only is True
 
     shadow = by_title["Shadow active"]
-    assert shadow.runtime_display.state == "thinking"
-    assert shadow.timeline_card.status.label == "Thinking"
-    assert shadow.capabilities.control_label == "search-only"
+    assert shadow.runtime_display.state is None
+    assert shadow.timeline_card.status.label == "Activity unknown"
+    assert shadow.session_state.mode == "shadow"
     assert shadow.capabilities.observe_only is True
     assert shadow.capabilities.can_tail_output is True
     assert shadow.capabilities.can_send_input is False
@@ -669,10 +742,10 @@ def test_live_catalog_timeline_does_not_keep_stale_adopted_shell_working(tmp_pat
 
     [card] = response.sessions
     assert card.head.runtime_display.state is None
-    assert card.head.timeline_card.status.label == "No live signal"
+    assert card.head.timeline_card.status.label == "Activity unknown"
     assert card.head.capabilities.control_label == "imported"
     assert card.head.capabilities.observe_only is False
-    assert card.head.capabilities.staleness_reason == "imported_only"
+    assert card.head.capabilities.staleness_reason == "control_unknown"
 
 
 def test_live_catalog_timeline_returns_typed_archive_requirement_for_search(tmp_path):

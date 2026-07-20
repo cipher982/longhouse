@@ -33,10 +33,18 @@ from zerg.services.apns_sender import SessionAttentionPush
 from zerg.services.apns_sender import _attention_collapse_id
 from zerg.services.apns_sender import build_session_attention_payload
 from zerg.services.apns_sender import build_session_attention_resolution_payload
-from zerg.services.apns_sender import build_session_live_activity_payload
 from zerg.services.apns_sender import build_widget_timeline_payload
 from zerg.services.apns_sender import prepare_session_attention_resolution_push
+from zerg.services.apns_sender import prepare_session_live_activity_pushes
 from zerg.services.apns_sender import prepare_widget_timeline_push
+from zerg.services.session_state_contract import SessionActionAvailability
+from zerg.services.session_state_contract import SessionActivityFacts
+from zerg.services.session_state_contract import SessionControlActions
+from zerg.services.session_state_contract import SessionControlFacts
+from zerg.services.session_state_contract import SessionDispositionFacts
+from zerg.services.session_state_contract import SessionHostFacts
+from zerg.services.session_state_contract import SessionTranscriptFacts
+from zerg.services.session_state_contract import assemble_session_state_facts
 
 
 def _make_db(tmp_path, name: str = "test_apns.db"):
@@ -64,6 +72,91 @@ def _seed_user(SessionLocal, *, user_id: int = 1, prefs: dict | None = None):
         user = User(id=user_id, email=f"user-{user_id}@example.com", role="ADMIN", prefs=prefs or {})
         db.add(user)
         db.commit()
+
+
+def test_live_activity_push_uses_canonical_session_contract(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path)
+    session_id = uuid4()
+    observed_at = datetime.now(timezone.utc).replace(microsecond=0)
+    unavailable = SessionActionAvailability(state="unavailable", reason="control_unknown")
+    session_state = assemble_session_state_facts(
+        mode="helm",
+        disposition=SessionDispositionFacts(state="open"),
+        launch=None,
+        run=None,
+        activity=SessionActivityFacts(
+            state="executing",
+            tool="Shell",
+            source="provider_runtime",
+            observed_at=observed_at,
+        ),
+        control=SessionControlFacts(
+            ownership="owned",
+            connection="unknown",
+            actions=SessionControlActions(
+                send_input=unavailable,
+                interrupt=unavailable,
+                terminate=unavailable,
+                reattach=unavailable,
+                resume=unavailable,
+            ),
+        ),
+        pending_interaction=None,
+        transcript=SessionTranscriptFacts(convergence="current"),
+        host=SessionHostFacts(state="online", observed_at=observed_at),
+        commit_seq=17,
+    )
+    canonical_session = SimpleNamespace(
+        id=str(session_id),
+        provider="codex",
+        project="longhouse",
+        timeline_title="Canonical state cutover",
+        summary_title=None,
+        session_state=session_state,
+    )
+    with SessionLocal() as db:
+        db.add(User(id=1, email="user@example.com", role="ADMIN"))
+        db.commit()
+        db.add(
+            APNSLiveActivityRegistration(
+                owner_id=1,
+                session_id=str(session_id),
+                activity_id="activity-1",
+                push_token="a" * 64,
+                push_environment="sandbox",
+                app_build_id="0.1.0-dev+aaaa1111",
+            )
+        )
+        db.commit()
+        pushes = prepare_session_live_activity_pushes(
+            db,
+            owner_id=1,
+            session_id=session_id,
+            current_state="blocked",
+            current_tool_name="legacy-tool",
+            occurred_at=observed_at,
+            canonical_session=canonical_session,
+        )
+        assert len(pushes) == 1
+        [push] = pushes
+        assert push.presence_state == "running"
+        assert push.display_phase == "Using Shell"
+        assert push.active_tool == "Shell"
+        assert push.title == "Canonical state cutover"
+        assert push.is_attention is False
+        assert (
+            prepare_session_live_activity_pushes(
+                db,
+                owner_id=1,
+                session_id=session_id,
+                current_state="thinking",
+                current_tool_name=None,
+                occurred_at=observed_at + timedelta(seconds=20),
+                canonical_session=canonical_session,
+            )
+            == ()
+        )
+    engine.dispose()
 
 
 def test_apns_registration_upserts_existing_device(tmp_path):
@@ -1177,8 +1270,7 @@ def test_pending_pause_request_wins_over_blocked_attention(tmp_path):
     engine.dispose()
 
 
-
-def test_presence_widget_push_uses_set_hash_and_debounce(tmp_path):
+def test_presence_widget_push_hash_ignores_ephemeral_runtime_state(tmp_path):
     engine, SessionLocal = _make_db(tmp_path)
     session_id = str(uuid4())
 
@@ -1242,17 +1334,15 @@ def test_presence_widget_push_uses_set_hash_and_debounce(tmp_path):
                 )
                 assert response.status_code == 204, response.text
 
-    assert widget_send_mock.await_count == 2
+    assert widget_send_mock.await_count == 1
     first_push = widget_send_mock.await_args_list[0].args[0]
-    second_push = widget_send_mock.await_args_list[1].args[0]
     assert first_push.collapse_id == "lh-widget-1"
-    assert first_push.state_hash != second_push.state_hash
     assert first_push.targets[0].device_token == "f" * 64
     assert build_widget_timeline_payload() == {"aps": {"content-changed": True}}
 
     with SessionLocal() as db:
         state = db.query(APNSWidgetPushState).filter(APNSWidgetPushState.owner_id == 1).one()
-        assert state.state_hash == second_push.state_hash
+        assert state.state_hash == first_push.state_hash
 
     _cleanup_overrides()
     engine.dispose()
@@ -1491,7 +1581,7 @@ def test_presence_widget_push_missing_state_table_degrades(tmp_path):
     engine.dispose()
 
 
-def test_presence_live_activity_pushes_session_state_and_debounces(tmp_path):
+def test_archive_presence_does_not_invent_live_activity_state(tmp_path):
     engine, SessionLocal = _make_db(tmp_path)
     session_id = str(uuid4())
 
@@ -1568,30 +1658,18 @@ def test_presence_live_activity_pushes_session_state_and_debounces(tmp_path):
                 )
                 assert response.status_code == 204, response.text
 
-    assert live_send_mock.await_count == 4
-    pushes = [call.args[0] for call in live_send_mock.await_args_list]
-    first_pushes = [push for push in pushes if push.presence_state == "thinking"]
-    second_pushes = [push for push in pushes if push.presence_state == "running"]
-    assert len(first_pushes) == 2
-    assert len(second_pushes) == 2
-    assert {push.activity_id for push in first_pushes} == {"activity-1", "activity-2"}
-    assert {push.push_token for push in first_pushes} == {"a" * 64, "b" * 64}
-    assert all(push.display_phase == "Using Shell" for push in second_pushes)
-    payload = build_session_live_activity_payload(second_pushes[0])
-    assert payload["aps"]["event"] == "update"
-    assert payload["aps"]["content-state"]["presenceState"] == "running"
-    assert payload["aps"]["content-state"]["displayPhase"] == "Using Shell"
-    assert payload["aps"]["content-state"]["activeTool"] == "Shell"
+    live_send_mock.assert_not_awaited()
 
     with SessionLocal() as db:
         rows = db.query(APNSLiveActivityRegistration).all()
-        assert {row.last_state_hash for row in rows} == {push.state_hash for push in second_pushes}
+        assert all(row.last_state_hash is None for row in rows)
+        assert all(row.last_push_at is None for row in rows)
 
     _cleanup_overrides()
     engine.dispose()
 
 
-def test_presence_live_activity_renders_needs_user_as_idle(tmp_path):
+def test_archive_needs_user_does_not_invent_live_activity_idle(tmp_path):
     engine, SessionLocal = _make_db(tmp_path)
     session_id = str(uuid4())
 
@@ -1648,21 +1726,13 @@ def test_presence_live_activity_renders_needs_user_as_idle(tmp_path):
             )
             assert response.status_code == 204, response.text
 
-    live_send_mock.assert_awaited_once()
-    push = live_send_mock.await_args.args[0]
-    assert push.presence_state == "idle"
-    assert push.display_phase == "Idle"
-    assert push.is_attention is False
-    payload = build_session_live_activity_payload(push)
-    assert payload["aps"]["content-state"]["presenceState"] == "idle"
-    assert payload["aps"]["content-state"]["displayPhase"] == "Idle"
-    assert payload["aps"]["content-state"]["isAttention"] is False
+    live_send_mock.assert_not_awaited()
 
     _cleanup_overrides()
     engine.dispose()
 
 
-def test_presence_live_activity_send_failure_clears_stamp(tmp_path):
+def test_archive_presence_leaves_live_activity_stamp_clear(tmp_path):
     engine, SessionLocal = _make_db(tmp_path)
     session_id = str(uuid4())
 
@@ -1719,7 +1789,7 @@ def test_presence_live_activity_send_failure_clears_stamp(tmp_path):
             )
             assert response.status_code == 204, response.text
 
-    assert live_send_mock.await_count == 1
+    live_send_mock.assert_not_awaited()
     with SessionLocal() as db:
         row = db.query(APNSLiveActivityRegistration).one()
         assert row.last_state_hash is None

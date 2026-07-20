@@ -321,7 +321,6 @@ class ResolvedLocalSessionIn(UTCBaseModel):
     provider: str = Field(..., max_length=64)
     provider_session_id: str | None = Field(None, max_length=255)
     control_path: str = Field(..., max_length=32)
-    presentation_state: str = Field(..., max_length=32)
     state: str = Field(..., max_length=32)
     phase: str | None = Field(None, max_length=32)
     tool_name: str | None = Field(None, max_length=128)
@@ -442,10 +441,6 @@ def _resolved_session_control_path(session: ResolvedLocalSessionIn) -> str:
     return str(session.control_path or "").strip().lower()
 
 
-def _resolved_session_presentation_state(session: ResolvedLocalSessionIn) -> str:
-    return str(session.presentation_state or "").strip().lower()
-
-
 def _managed_leases_from_resolved_sessions(
     sessions: list[ResolvedLocalSessionIn],
     *,
@@ -486,8 +481,7 @@ def _unmanaged_bindings_from_resolved_sessions(
     bindings: list[UnmanagedSessionBindingIn] = []
     for session in sessions:
         control_path = _resolved_session_control_path(session)
-        presentation_state = _resolved_session_presentation_state(session)
-        if control_path != "unmanaged" and presentation_state != "unmanaged":
+        if control_path != "unmanaged":
             continue
         provider_session_id = str(session.provider_session_id or "").strip()
         if not provider_session_id:

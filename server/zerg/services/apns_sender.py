@@ -8,6 +8,7 @@ from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
 from hashlib import sha256
+from typing import Any
 from typing import Literal
 from uuid import UUID
 
@@ -24,19 +25,12 @@ from zerg.models.apns_live_activity_registration import APNSLiveActivityRegistra
 from zerg.models.apns_widget_push_state import APNSWidgetPushState
 from zerg.models.notification_event import NotificationEvent
 from zerg.models.user import User
-from zerg.services.agents.kernel_capabilities import project_session_capabilities
 from zerg.services.notification_policy import AttentionDeliveryAction
 from zerg.services.notification_policy import evaluate_tier1_delivery
 from zerg.services.notification_policy import recent_visible_web_client_exists
 from zerg.services.notification_policy import user_time_sensitive_blocked
 from zerg.services.session_kernel_projection import project_session_control_fields
-from zerg.services.session_liveness_facts import build_session_liveness_facts
 from zerg.services.session_pause_requests import PAUSE_KIND_STRUCTURED_QUESTION
-from zerg.services.session_pause_requests import load_active_pause_request_for_session
-from zerg.services.session_pause_requests import serialize_pause_request_projection
-from zerg.services.session_runtime import load_runtime_state_map
-from zerg.services.session_runtime import resolve_runtime_overlay
-from zerg.services.session_state_contract import build_session_state_facts
 from zerg.services.write_serializer import execute_post_write
 
 logger = logging.getLogger(__name__)
@@ -914,8 +908,21 @@ def prepare_session_live_activity_pushes(
     current_tool_name: str | None,
     occurred_at: datetime,
     runtime_state_map: dict | None | object = _TARGETS_SENTINEL,
+    canonical_session: Any | None = None,
 ) -> tuple[LiveActivityPush, ...]:
+    """Prepare Live Activity pushes from the canonical served session contract.
+
+    Archive-only callers intentionally fail closed instead of rebuilding an
+    independent activity/control interpretation from compatibility tables.
+    """
+    del current_state, current_tool_name, runtime_state_map
     if owner_id is None or session_id is None:
+        return ()
+    if canonical_session is None:
+        logger.debug(
+            "Skipping archive-mode Live Activity projection for session %s; canonical catalog state is unavailable",
+            session_id,
+        )
         return ()
 
     try:
@@ -937,53 +944,29 @@ def prepare_session_live_activity_pushes(
             )
             return ()
         raise
-
     if not registrations:
         return ()
 
-    session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
-    if session is None:
-        return ()
-
-    provider = str(getattr(session, "provider", None) or "Session")
-    if runtime_state_map is _TARGETS_SENTINEL:
-        runtime_state_map = load_runtime_state_map(db, [session.id])
-    runtime_overlay = resolve_runtime_overlay(
-        session,
-        last_activity_at=session.last_activity_at,
-        runtime_state_map=runtime_state_map or {},
-        now=occurred_at,
-    )
-    capabilities = project_session_capabilities(db, session_id=session.id)
-    pause_request = serialize_pause_request_projection(load_active_pause_request_for_session(db, session.id))
-    state_facts = build_session_state_facts(
-        session=session,
-        runtime_view=runtime_overlay,
-        capabilities=capabilities,
-        liveness=build_session_liveness_facts(
-            runtime_view=runtime_overlay,
-            capabilities=capabilities,
-            last_activity_at=session.last_activity_at,
-            now=occurred_at,
-        ),
-        pause_request=pause_request,
-        last_activity_at=session.last_activity_at,
-        user_messages=int(session.user_messages or 0),
-        assistant_messages=int(session.assistant_messages or 0),
-        now=occurred_at,
+    state_facts = canonical_session.session_state
+    provider = str(canonical_session.provider or "Session")
+    project = str(canonical_session.project or "").strip() or None
+    title = (
+        str(canonical_session.timeline_title or "").strip()
+        or str(canonical_session.summary_title or "").strip()
+        or project
+        or provider
+        or "Longhouse session"
     )
     presence_state = {
         "executing": "running",
         "quiescent": "idle",
     }.get(state_facts.activity.state, state_facts.activity.state)
-    active_tool = state_facts.activity.tool or str(current_tool_name or "").strip() or None
+    active_tool = state_facts.activity.tool
     display_phase = (
         state_facts.presentation.primary.label
         if state_facts.presentation.primary is not None
         else _live_activity_display_phase(presence_state, active_tool)
     )
-    title = _session_title(session, db=db)
-    project = _session_project(session)
     is_attention = state_facts.pending_interaction is not None
     state_hash = _live_activity_state_hash(
         title=title,
@@ -1004,11 +987,9 @@ def prepare_session_live_activity_pushes(
             continue
         if previous_push_at_utc is not None and (occurred_at - previous_push_at_utc) < LIVE_ACTIVITY_PUSH_DEBOUNCE:
             continue
-
         push_environment: Literal["sandbox", "production"] = (
             "production" if str(registration.push_environment or "sandbox") == "production" else "sandbox"
         )
-
         registration.last_state_hash = state_hash
         registration.last_push_at = occurred_at
         notifications.append(
@@ -1437,16 +1418,9 @@ def _widget_active_set_hash(db: Session, *, now: datetime) -> str:
         .limit(8)
         .all()
     )
-    runtime_state_map = load_runtime_state_map(db, [session.id for session in sessions])
     parts: list[str] = []
     for session in sessions:
-        runtime_overlay = resolve_runtime_overlay(
-            session,
-            last_activity_at=session.last_activity_at,
-            runtime_state_map=runtime_state_map,
-            now=now,
-        )
-        parts.append(f"{session.id}:{runtime_overlay.presence_state or 'unknown'}")
+        parts.append(f"{session.id}:{_as_aware_utc(session.last_activity_at)}")
     return sha256("|".join(parts).encode("utf-8")).hexdigest()
 
 

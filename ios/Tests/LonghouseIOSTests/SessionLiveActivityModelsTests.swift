@@ -97,7 +97,11 @@ struct SessionLiveActivityModelsTests {
         }
         """.data(using: .utf8)!
 
-        let detail = try JSONDecoder.snakeCase.decodeSessionFixture(SessionDetail.self, from: json)
+        let data = try addingSessionStateFacts(
+            makeSessionStateFacts(activity: "executing", tool: "Shell"),
+            to: json
+        )
+        let detail = try JSONDecoder.snakeCase.decodeSessionFixture(SessionDetail.self, from: data)
         let state = detail.liveActivityContentState(updatedAt: Date(timeIntervalSince1970: 1_777_140_000))
 
         #expect(state.displayPhase == "Using Shell")
@@ -158,7 +162,11 @@ struct SessionLiveActivityModelsTests {
         }
         """.data(using: .utf8)!
 
-        let detail = try JSONDecoder.snakeCase.decodeSessionFixture(SessionDetail.self, from: json)
+        let data = try addingSessionStateFacts(
+            makeSessionStateFacts(activity: "unknown"),
+            to: json
+        )
+        let detail = try JSONDecoder.snakeCase.decodeSessionFixture(SessionDetail.self, from: data)
         let state = detail.liveActivityContentState(updatedAt: Date(timeIntervalSince1970: 1_777_140_000))
 
         #expect(state.presenceState == "unknown")

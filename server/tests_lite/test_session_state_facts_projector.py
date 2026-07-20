@@ -45,6 +45,8 @@ BOUND_CONTROL_CATALOG_FACTS = {
             "run_id": "run-1",
             "adapter_connection_id": "connection-1",
             "lease_generation": "lease-1",
+            "control_plane": "codex_app_server",
+            "acquisition_kind": "spawned_control",
             "state": "attached",
             "released_at": None,
         }
@@ -458,15 +460,6 @@ def test_served_projector_assembles_full_contract_at_snapshot_commit():
             _control(observed_at=NOW, grants=["interrupt", "send_input"]),
         ],
         supported_operations={"send_input", "interrupt", "terminate"},
-        catalog_capabilities=_capabilities(
-            run_id="run-1",
-            control_plane="codex_app_server",
-            control_label="live",
-            live_control_available=True,
-            can_send_input=True,
-            can_interrupt=True,
-            can_terminate=True,
-        ),
         pending_interaction=None,
         transcript=SessionTranscriptFacts(convergence="current", last_append_at=NOW),
         host=SessionHostFacts(state="online", observed_at=NOW),
@@ -495,15 +488,18 @@ def test_served_projector_without_control_head_fails_actions_closed():
         catalog_facts={
             **CATALOG_FACTS,
             "readiness": {"state": "adopted", "execution_lifetime": "live_control"},
+            "connections": [
+                {
+                    "run_id": "run-1",
+                    "control_plane": "codex_app_server",
+                    "state": "detached",
+                    "can_resume": True,
+                    "released_at": None,
+                }
+            ],
         },
         heads=[],
-        supported_operations={"send_input", "interrupt", "terminate"},
-        catalog_capabilities=_capabilities(
-            control_label="reattach",
-            host_reattach_available=True,
-            can_resume=True,
-            control_owned=True,
-        ),
+        supported_operations={"send_input", "interrupt", "terminate", "reattach", "resume"},
         pending_interaction=None,
         transcript=SessionTranscriptFacts(convergence="unknown"),
         host=SessionHostFacts(state="unknown"),

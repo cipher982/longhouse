@@ -228,6 +228,8 @@ def _mode(
     execution_home = _clean(getattr(raw_execution_home, "value", raw_execution_home))
     if origin_kind == "console" or execution_lifetime == "one_shot" or surface in {"web", "ios", "api"}:
         return "console"
+    if capabilities.observe_only:
+        return "shadow"
     if (
         execution_lifetime == "live_control"
         or execution_home == "managed_local"
@@ -552,6 +554,63 @@ def project_transcript_facts(
         durable_revision=durable_revision,
         render_revision=render_revision,
         last_append_at=transcript_last_append_at,
+    )
+
+
+def build_archive_session_state_facts(
+    *,
+    session: Any,
+    capabilities: KernelSessionCapabilities,
+    launch_state: str | None = None,
+    launch_error_code: str | None = None,
+    launch_error_message: str | None = None,
+    execution_lifetime: str | None = None,
+    last_activity_at: datetime | None = None,
+    has_visible_transcript_preview: bool = False,
+    has_pending_response_turn: bool = False,
+    user_messages: int = 0,
+    assistant_messages: int = 0,
+    archive_state: str | None = None,
+    pause_request: dict[str, Any] | None = None,
+) -> SessionStateFacts:
+    """Project cold/archive rows without inventing ephemeral runtime truth."""
+
+    unavailable = SessionActionAvailability(state="unavailable", reason="search_only")
+    control = SessionControlFacts(
+        ownership="unowned",
+        connection="not_applicable",
+        actions=SessionControlActions(
+            start_turn=SessionActionAvailability(state="unavailable", reason="not_console"),
+            send_input=unavailable,
+            interrupt=unavailable,
+            terminate=unavailable,
+            reattach=unavailable,
+            resume=unavailable,
+        ),
+    )
+    return assemble_session_state_facts(
+        mode=_mode(session=session, execution_lifetime=execution_lifetime, capabilities=capabilities),
+        disposition=_disposition(session=session, runtime_view=None),
+        launch=_launch(
+            launch_state=launch_state,
+            error_code=launch_error_code,
+            error_message=launch_error_message,
+        ),
+        run=None,
+        activity=SessionActivityFacts(state="unknown"),
+        control=control,
+        pending_interaction=project_pending_interaction_facts(pause_request),
+        transcript=_transcript(
+            session=session,
+            last_activity_at=last_activity_at,
+            has_visible_transcript_preview=has_visible_transcript_preview,
+            has_pending_response_turn=has_pending_response_turn,
+            user_messages=user_messages,
+            assistant_messages=assistant_messages,
+            archive_state=archive_state,
+            live_observation=False,
+        ),
+        host=SessionHostFacts(state="unknown"),
     )
 
 

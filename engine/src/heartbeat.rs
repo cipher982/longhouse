@@ -359,7 +359,6 @@ pub struct ResolvedLocalSession {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provider_session_id: Option<String>,
     pub control_path: String,
-    pub presentation_state: String,
     pub state: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub phase: Option<String>,
@@ -525,8 +524,8 @@ pub struct ManagedSessionLease {
     pub machine_id: String,
     pub sequence: u64,
     pub state: String,
-    /// Local-only compatibility overlay for `machine_preview`; activity ships
-    /// through typed evidence and must never ride the control lease wire.
+    /// Deprecated local fields retained only for the resolved-session wire
+    /// shape. Lease construction never populates activity.
     #[serde(skip)]
     pub phase: Option<String>,
     #[serde(skip)]
@@ -537,13 +536,6 @@ pub struct ManagedSessionLease {
     pub thread_subscription_status: Option<String>,
     pub observed_at: String,
     pub lease_ttl_ms: u64,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct ManagedPhaseOverlay {
-    phase: Option<String>,
-    tool_name: Option<String>,
-    observed_at: Option<String>,
 }
 
 /// Stats needed to build a heartbeat.
@@ -653,12 +645,11 @@ pub fn session_snapshot_digest(payload: &HeartbeatPayload) -> String {
             let mut reason_codes = session.reason_codes.clone();
             reason_codes.sort();
             format!(
-                "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
+                "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
                 session.provider,
                 session.session_id.as_deref().unwrap_or(""),
                 session.provider_session_id.as_deref().unwrap_or(""),
                 session.control_path,
-                session.presentation_state,
                 session.state,
                 session.phase.as_deref().unwrap_or(""),
                 session.tool_name.as_deref().unwrap_or(""),
@@ -715,7 +706,6 @@ pub fn session_snapshot_digest(payload: &HeartbeatPayload) -> String {
 /// Kept pure (no fs/ps side effects) so the reaper and tests can share
 /// the same scan pass.
 pub(crate) fn leases_from_observations(
-    phase_overlay: &HashMap<String, ManagedPhaseOverlay>,
     machine_id: &str,
     observations: &[CodexBridgeObservation],
     now: DateTime<Utc>,
@@ -728,7 +718,6 @@ pub(crate) fn leases_from_observations(
         if codex_bridge_observation_is_stopped(obs) {
             continue;
         }
-        let overlay = phase_overlay.get(&obs.session_id);
         let thread_failed = matches!(
             obs.thread_subscription_status.as_deref(),
             Some("failed") | Some("provider_thread_switched")
@@ -762,21 +751,11 @@ pub(crate) fn leases_from_observations(
             machine_id: machine_id.trim().to_string(),
             sequence,
             state: lease_state.to_string(),
-            phase: match lease_state {
-                "attached" => Some(
-                    overlay
-                        .and_then(|row| normalize_managed_phase(row.phase.as_deref()))
-                        .unwrap_or_else(|| "idle".to_string()),
-                ),
-                _ => None,
-            },
-            tool_name: overlay.and_then(|row| row.tool_name.clone()),
+            phase: None,
+            tool_name: None,
             bridge_status: Some(obs.status.clone()),
             thread_subscription_status: obs.thread_subscription_status.clone(),
-            observed_at: overlay
-                .and_then(|row| row.observed_at.clone())
-                .unwrap_or_else(|| obs.updated_at.clone())
-                .if_empty(observed_at.clone()),
+            observed_at: obs.updated_at.clone().if_empty(observed_at.clone()),
             lease_ttl_ms: 15 * 60 * 1000,
         });
     }
@@ -791,12 +770,10 @@ fn codex_bridge_observation_is_stopped(obs: &CodexBridgeObservation) -> bool {
 
 /// Build managed-session leases for Claude channel sessions.
 ///
-/// Only live Claude provider processes are emitted. The server treats
-/// `managed_sessions` as a complete snapshot, so a previously leased session
-/// disappearing from this list becomes an explicit `process_gone` terminal
-/// signal there.
+/// Only live Claude provider processes are emitted. Disappearance withdraws
+/// the current control observation; terminal lifecycle remains explicit
+/// provider/process evidence rather than a lease-side inference.
 pub(crate) fn leases_from_claude_channel_observations(
-    phase_overlay: &HashMap<String, ManagedPhaseOverlay>,
     machine_id: &str,
     observations: &[ClaudeChannelObservation],
     now: DateTime<Utc>,
@@ -809,7 +786,6 @@ pub(crate) fn leases_from_claude_channel_observations(
         if !obs.claude_alive {
             continue;
         }
-        let overlay = phase_overlay.get(&obs.session_id);
         let lease_state = if obs.ready && obs.bridge_alive {
             "attached"
         } else {
@@ -822,15 +798,8 @@ pub(crate) fn leases_from_claude_channel_observations(
             machine_id: machine_id.trim().to_string(),
             sequence,
             state: lease_state.to_string(),
-            phase: match lease_state {
-                "attached" => Some(
-                    overlay
-                        .and_then(|row| normalize_managed_phase(row.phase.as_deref()))
-                        .unwrap_or_else(|| "idle".to_string()),
-                ),
-                _ => None,
-            },
-            tool_name: overlay.and_then(|row| row.tool_name.clone()),
+            phase: None,
+            tool_name: None,
             bridge_status: Some(if obs.ready && obs.bridge_alive {
                 "ready".to_string()
             } else if obs.bridge_alive {
@@ -839,10 +808,7 @@ pub(crate) fn leases_from_claude_channel_observations(
                 "bridge_down".to_string()
             }),
             thread_subscription_status: None,
-            observed_at: overlay
-                .and_then(|row| row.observed_at.clone())
-                .unwrap_or_else(|| obs.updated_at.clone())
-                .if_empty(observed_at.clone()),
+            observed_at: obs.updated_at.clone().if_empty(observed_at.clone()),
             lease_ttl_ms: 15 * 60 * 1000,
         });
     }
@@ -858,7 +824,6 @@ pub(crate) fn leases_from_claude_channel_observations(
 /// readiness observation. Dead state files are omitted from the complete
 /// heartbeat snapshot so the Runtime Host can detach the prior connection.
 pub(crate) fn leases_from_opencode_server_observations(
-    phase_overlay: &HashMap<String, ManagedPhaseOverlay>,
     machine_id: &str,
     observations: &[OpenCodeServerObservation],
     now: DateTime<Utc>,
@@ -871,7 +836,6 @@ pub(crate) fn leases_from_opencode_server_observations(
         if !obs.server_alive {
             continue;
         }
-        let overlay = phase_overlay.get(&obs.session_id);
         let state = if obs.health_ready {
             "attached"
         } else {
@@ -883,12 +847,8 @@ pub(crate) fn leases_from_opencode_server_observations(
             machine_id: machine_id.trim().to_string(),
             sequence,
             state: state.to_string(),
-            phase: Some(
-                overlay
-                    .and_then(|row| normalize_managed_phase(row.phase.as_deref()))
-                    .unwrap_or_else(|| "idle".to_string()),
-            ),
-            tool_name: overlay.and_then(|row| row.tool_name.clone()),
+            phase: None,
+            tool_name: None,
             bridge_status: Some(
                 if obs.health_ready {
                     "ready"
@@ -898,10 +858,7 @@ pub(crate) fn leases_from_opencode_server_observations(
                 .to_string(),
             ),
             thread_subscription_status: None,
-            observed_at: overlay
-                .and_then(|row| row.observed_at.clone())
-                .unwrap_or_else(|| obs.updated_at.clone())
-                .if_empty(observed_at.clone()),
+            observed_at: obs.updated_at.clone().if_empty(observed_at.clone()),
             lease_ttl_ms: 15 * 60 * 1000,
         });
     }
@@ -915,7 +872,6 @@ pub(crate) fn leases_from_opencode_server_observations(
 /// the Runtime Host detaches the prior connection. There is no separate lease
 /// sidecar; the launcher's state file + socket IS the liveness signal.
 pub(crate) fn leases_from_cursor_helm_observations(
-    phase_overlay: &HashMap<String, ManagedPhaseOverlay>,
     machine_id: &str,
     observations: &[CursorHelmObservation],
     now: DateTime<Utc>,
@@ -928,25 +884,17 @@ pub(crate) fn leases_from_cursor_helm_observations(
         if !obs.live {
             continue;
         }
-        let overlay = phase_overlay.get(&obs.session_id);
         leases.push(ManagedSessionLease {
             session_id: obs.session_id.clone(),
             provider: "cursor".to_string(),
             machine_id: machine_id.trim().to_string(),
             sequence,
             state: "attached".to_string(),
-            phase: Some(
-                overlay
-                    .and_then(|row| normalize_managed_phase(row.phase.as_deref()))
-                    .unwrap_or_else(|| "idle".to_string()),
-            ),
-            tool_name: overlay.and_then(|row| row.tool_name.clone()),
+            phase: None,
+            tool_name: None,
             bridge_status: Some("ready".to_string()),
             thread_subscription_status: None,
-            observed_at: overlay
-                .and_then(|row| row.observed_at.clone())
-                .unwrap_or_else(|| obs.updated_at.clone())
-                .if_empty(observed_at.clone()),
+            observed_at: obs.updated_at.clone().if_empty(observed_at.clone()),
             lease_ttl_ms: 15 * 60 * 1000,
         });
     }
@@ -2019,12 +1967,11 @@ fn resolved_managed_opencode_session(
         provider: lease.provider.clone(),
         provider_session_id,
         control_path: "managed".to_string(),
-        presentation_state: managed_presentation_state(&lease.state),
         state: lease.state.clone(),
-        phase: lease.phase.clone(),
-        tool_name: lease.tool_name.clone(),
-        phase_observed_at: Some(lease.observed_at.clone()),
-        last_activity_at: Some(lease.observed_at.clone()),
+        phase: None,
+        tool_name: None,
+        phase_observed_at: None,
+        last_activity_at: None,
         timeline_title: None,
         first_user_message: None,
         title_state: None,
@@ -2119,12 +2066,11 @@ fn resolved_managed_codex_session(
         provider: lease.provider.clone(),
         provider_session_id,
         control_path: "managed".to_string(),
-        presentation_state: managed_presentation_state(&lease.state),
         state: lease.state.clone(),
-        phase: lease.phase.clone(),
-        tool_name: lease.tool_name.clone(),
-        phase_observed_at: Some(lease.observed_at.clone()),
-        last_activity_at: Some(lease.observed_at.clone()),
+        phase: None,
+        tool_name: None,
+        phase_observed_at: None,
+        last_activity_at: None,
         timeline_title: None,
         first_user_message: None,
         title_state: None,
@@ -2230,12 +2176,11 @@ fn resolved_managed_cursor_session(
         provider: lease.provider.clone(),
         provider_session_id: None,
         control_path: "managed".to_string(),
-        presentation_state: managed_presentation_state(&lease.state),
         state: lease.state.clone(),
-        phase: lease.phase.clone(),
-        tool_name: lease.tool_name.clone(),
-        phase_observed_at: Some(lease.observed_at.clone()),
-        last_activity_at: Some(lease.observed_at.clone()),
+        phase: None,
+        tool_name: None,
+        phase_observed_at: None,
+        last_activity_at: None,
         timeline_title: None,
         first_user_message: None,
         title_state: None,
@@ -2318,12 +2263,11 @@ fn resolved_managed_claude_session(
         provider: lease.provider.clone(),
         provider_session_id,
         control_path: "managed".to_string(),
-        presentation_state: managed_presentation_state(&lease.state),
         state: lease.state.clone(),
-        phase: lease.phase.clone(),
-        tool_name: lease.tool_name.clone(),
-        phase_observed_at: Some(lease.observed_at.clone()),
-        last_activity_at: Some(lease.observed_at.clone()),
+        phase: None,
+        tool_name: None,
+        phase_observed_at: None,
+        last_activity_at: None,
         timeline_title: None,
         first_user_message: None,
         title_state: None,
@@ -2368,12 +2312,11 @@ fn resolved_managed_generic_session(lease: &ManagedSessionLease) -> ResolvedLoca
         provider: lease.provider.clone(),
         provider_session_id: None,
         control_path: "managed".to_string(),
-        presentation_state: managed_presentation_state(&lease.state),
         state: lease.state.clone(),
-        phase: lease.phase.clone(),
-        tool_name: lease.tool_name.clone(),
-        phase_observed_at: Some(lease.observed_at.clone()),
-        last_activity_at: Some(lease.observed_at.clone()),
+        phase: None,
+        tool_name: None,
+        phase_observed_at: None,
+        last_activity_at: None,
         timeline_title: None,
         first_user_message: None,
         title_state: None,
@@ -2409,7 +2352,6 @@ fn resolved_unmanaged_session(binding: &UnmanagedSessionBinding) -> ResolvedLoca
         provider: binding.provider.clone(),
         provider_session_id: Some(binding.provider_session_id.clone()),
         control_path: "unmanaged".to_string(),
-        presentation_state: "unmanaged".to_string(),
         state: "unmanaged".to_string(),
         phase: None,
         tool_name: None,
@@ -2436,16 +2378,6 @@ fn resolved_unmanaged_session(binding: &UnmanagedSessionBinding) -> ResolvedLoca
         },
         reason_codes: Vec::new(),
     }
-}
-
-fn managed_presentation_state(state: &str) -> String {
-    match state {
-        "attached" => "managed_attached",
-        "detached" => "managed_detached",
-        "degraded" => "managed_degraded",
-        _ => "stale_evidence",
-    }
-    .to_string()
 }
 
 fn workspace_from_cwd(cwd: Option<String>) -> ResolvedWorkspace {
@@ -2605,42 +2537,6 @@ impl EmptyStringFallback for String {
             self
         }
     }
-}
-
-fn normalize_managed_phase(value: Option<&str>) -> Option<String> {
-    let phase = value?.trim();
-    match phase {
-        "idle" | "thinking" | "running" | "blocked" | "needs_user" => Some(phase.to_string()),
-        _ => None,
-    }
-}
-
-pub(crate) fn load_managed_phase_overlay(
-    conn: &rusqlite::Connection,
-) -> HashMap<String, ManagedPhaseOverlay> {
-    let mut rows = HashMap::new();
-    let Ok(mut stmt) = conn.prepare(
-        "SELECT session_id, phase, tool_name, observed_at
-         FROM session_phase_state",
-    ) else {
-        return rows;
-    };
-    let Ok(iter) = stmt.query_map([], |row| {
-        Ok((
-            row.get::<_, String>(0)?,
-            ManagedPhaseOverlay {
-                phase: row.get::<_, Option<String>>(1)?,
-                tool_name: row.get::<_, Option<String>>(2)?,
-                observed_at: row.get::<_, Option<String>>(3)?,
-            },
-        ))
-    }) else {
-        return rows;
-    };
-    for item in iter.flatten() {
-        rows.insert(item.0, item.1);
-    }
-    rows
 }
 
 /// Send heartbeat to server via the existing authenticated client.
@@ -3137,43 +3033,37 @@ mod tests {
     }
 
     #[test]
-    fn leases_from_observations_classifies_attached_with_phase_overlay() {
-        use crate::state::managed_session_state::{
-            ManagedSessionPhaseSignal, ManagedSessionStateStore,
-        };
+    fn leases_from_observations_do_not_overlay_activity_on_control() {
+        use crate::state::session_phase::{SessionPhaseSignal, SessionPhaseStore};
 
         let db = tempfile::NamedTempFile::new().unwrap();
         let conn = open_db(Some(db.path())).unwrap();
         let session_id = "7474a2a1-ab9f-4a10-9726-898e895fedf0";
         let now = Utc::now();
-        ManagedSessionStateStore::new(&conn)
-            .record_phase(&ManagedSessionPhaseSignal {
+        SessionPhaseStore::new(&conn)
+            .record(&SessionPhaseSignal {
                 session_id: session_id.to_string(),
                 provider: "codex".to_string(),
-                workspace_path: None,
-                phase_kind: "running".to_string(),
+                phase: "running".to_string(),
                 tool_name: Some("Shell".to_string()),
-                phase_source: "codex_bridge".to_string(),
+                source: "codex_bridge".to_string(),
                 observed_at: now,
             })
             .unwrap();
 
         let obs = test_observation(session_id, "ws://127.0.0.1:45678/session");
-        let leases =
-            leases_from_observations(&load_managed_phase_overlay(&conn), "cinder", &[obs], now);
+        let leases = leases_from_observations("cinder", &[obs], now);
 
         assert_eq!(leases.len(), 1);
         let lease = &leases[0];
         assert_eq!(lease.session_id, session_id);
         assert_eq!(lease.state, "attached");
-        assert_eq!(lease.phase.as_deref(), Some("running"));
-        assert_eq!(lease.tool_name.as_deref(), Some("Shell"));
+        assert_eq!(lease.phase, None);
+        assert_eq!(lease.tool_name, None);
     }
 
     #[test]
     fn leases_from_observations_classifies_detached_ui_ready_bridge_as_attached() {
-        let db = tempfile::NamedTempFile::new().unwrap();
-        let conn = open_db(Some(db.path())).unwrap();
         let now = Utc::now();
 
         let mut obs = test_observation(
@@ -3185,18 +3075,15 @@ mod tests {
         obs.app_server_alive = true;
         obs.thread_id = Some("thread-detached-ui".to_string());
 
-        let leases =
-            leases_from_observations(&load_managed_phase_overlay(&conn), "cinder", &[obs], now);
+        let leases = leases_from_observations("cinder", &[obs], now);
 
         assert_eq!(leases.len(), 1);
         assert_eq!(leases[0].state, "attached");
-        assert_eq!(leases[0].phase.as_deref(), Some("idle"));
+        assert_eq!(leases[0].phase, None);
     }
 
     #[test]
     fn resolved_sessions_project_codex_ui_presence_without_changing_lease_state() {
-        let db = tempfile::NamedTempFile::new().unwrap();
-        let conn = open_db(Some(db.path())).unwrap();
         let now = Utc::now();
 
         let mut foreground = test_observation("foreground-codex", "ws://127.0.0.1:45681/session");
@@ -3210,12 +3097,7 @@ mod tests {
         background.thread_id = Some("thread-background".to_string());
 
         let observations = vec![foreground, background];
-        let leases = leases_from_observations(
-            &load_managed_phase_overlay(&conn),
-            "cinder",
-            &observations,
-            now,
-        );
+        let leases = leases_from_observations("cinder", &observations, now);
         let sessions =
             resolved_sessions_from_observations(&leases, &[], &observations, &[], &[], &[]);
 
@@ -3371,17 +3253,11 @@ mod tests {
 
     #[test]
     fn opencode_health_failure_keeps_managed_degraded_lease() {
-        let db = tempfile::NamedTempFile::new().unwrap();
-        let conn = open_db(Some(db.path())).unwrap();
         let mut observation = test_opencode_observation("managed-opencode", "keep_server");
         observation.health_ready = false;
 
-        let leases = leases_from_opencode_server_observations(
-            &load_managed_phase_overlay(&conn),
-            "cinder",
-            &[observation],
-            chrono::Utc::now(),
-        );
+        let leases =
+            leases_from_opencode_server_observations("cinder", &[observation], chrono::Utc::now());
 
         assert_eq!(leases.len(), 1);
         assert_eq!(leases[0].state, "degraded");
@@ -3464,8 +3340,6 @@ mod tests {
 
     #[test]
     fn leases_from_observations_classifies_degraded_and_detached() {
-        let db = tempfile::NamedTempFile::new().unwrap();
-        let conn = open_db(Some(db.path())).unwrap();
         let now = Utc::now();
 
         let mut degraded = test_observation("degraded-session", "ws://127.0.0.1:45679/session");
@@ -3474,12 +3348,7 @@ mod tests {
         let mut detached = test_observation("detached-session", "ws://127.0.0.1:45680/session");
         detached.bridge_alive = false; // lock not held → detached
 
-        let leases = leases_from_observations(
-            &load_managed_phase_overlay(&conn),
-            "cinder",
-            &[degraded, detached],
-            now,
-        );
+        let leases = leases_from_observations("cinder", &[degraded, detached], now);
 
         assert_eq!(leases.len(), 2);
         let degraded_lease = leases
@@ -3496,15 +3365,12 @@ mod tests {
 
     #[test]
     fn leases_from_observations_marks_provider_thread_switch_as_degraded() {
-        let db = tempfile::NamedTempFile::new().unwrap();
-        let conn = open_db(Some(db.path())).unwrap();
         let now = Utc::now();
 
         let mut obs = test_observation("provider-switch-session", "ws://127.0.0.1:45679/session");
         obs.thread_subscription_status = Some("provider_thread_switched".to_string());
 
-        let leases =
-            leases_from_observations(&load_managed_phase_overlay(&conn), "cinder", &[obs], now);
+        let leases = leases_from_observations("cinder", &[obs], now);
 
         assert_eq!(leases.len(), 1);
         assert_eq!(leases[0].state, "degraded");
@@ -3517,8 +3383,6 @@ mod tests {
 
     #[test]
     fn leases_from_observations_skips_stopped_codex_bridges() {
-        let db = tempfile::NamedTempFile::new().unwrap();
-        let conn = open_db(Some(db.path())).unwrap();
         let now = Utc::now();
 
         let mut stopped = test_observation("stopped-session", "ws://127.0.0.1:45681/session");
@@ -3529,36 +3393,28 @@ mod tests {
 
         let live = test_observation("live-session", "ws://127.0.0.1:45682/session");
 
-        let leases = leases_from_observations(
-            &load_managed_phase_overlay(&conn),
-            "cinder",
-            &[stopped, live],
-            now,
-        );
+        let leases = leases_from_observations("cinder", &[stopped, live], now);
 
         assert_eq!(leases.len(), 1);
         assert_eq!(leases[0].session_id, "live-session");
     }
 
     #[test]
-    fn leases_from_claude_channel_observations_emit_live_channel_sessions() {
+    fn leases_from_claude_channel_observations_keep_activity_off_control() {
         use crate::managed_claude_scan::ClaudeChannelObservation;
-        use crate::state::managed_session_state::{
-            ManagedSessionPhaseSignal, ManagedSessionStateStore,
-        };
+        use crate::state::session_phase::{SessionPhaseSignal, SessionPhaseStore};
 
         let db = tempfile::NamedTempFile::new().unwrap();
         let conn = open_db(Some(db.path())).unwrap();
         let session_id = "09b68f98-1e31-458e-b78a-6dfd062ead75";
         let now = Utc::now();
-        ManagedSessionStateStore::new(&conn)
-            .record_phase(&ManagedSessionPhaseSignal {
+        SessionPhaseStore::new(&conn)
+            .record(&SessionPhaseSignal {
                 session_id: session_id.to_string(),
                 provider: "claude".to_string(),
-                workspace_path: None,
-                phase_kind: "needs_user".to_string(),
+                phase: "needs_user".to_string(),
                 tool_name: None,
-                phase_source: "claude_hook".to_string(),
+                source: "claude_hook".to_string(),
                 observed_at: now,
             })
             .unwrap();
@@ -3598,12 +3454,7 @@ mod tests {
             claude_foreground_tui: false,
         };
 
-        let leases = leases_from_claude_channel_observations(
-            &load_managed_phase_overlay(&conn),
-            "cinder",
-            &[live, dead],
-            now,
-        );
+        let leases = leases_from_claude_channel_observations("cinder", &[live, dead], now);
 
         assert_eq!(leases.len(), 1);
         let lease = leases
@@ -3613,7 +3464,7 @@ mod tests {
         assert_eq!(lease.session_id, session_id);
         assert_eq!(lease.provider, "claude");
         assert_eq!(lease.state, "attached");
-        assert_eq!(lease.phase.as_deref(), Some("needs_user"));
+        assert_eq!(lease.phase, None);
         assert_eq!(lease.bridge_status.as_deref(), Some("ready"));
         assert_eq!(lease.lease_ttl_ms, 900_000);
     }
@@ -3848,22 +3699,15 @@ mod tests {
             managed.provider_session_id.as_deref(),
             Some("thread-managed")
         );
-        assert_eq!(managed.presentation_state, "managed_attached");
         assert_eq!(managed.workspace.label.as_deref(), Some("zerg"));
         assert_eq!(
             managed.workspace.cwd.as_deref(),
             Some("/Users/test/git/zerg")
         );
-        assert_eq!(managed.phase.as_deref(), Some("thinking"));
-        assert_eq!(managed.tool_name.as_deref(), Some("Bash"));
-        assert_eq!(
-            managed.phase_observed_at.as_deref(),
-            Some("2026-05-05T12:00:00Z")
-        );
-        assert_eq!(
-            managed.last_activity_at.as_deref(),
-            Some("2026-05-05T12:00:00Z")
-        );
+        assert_eq!(managed.phase, None);
+        assert_eq!(managed.tool_name, None);
+        assert_eq!(managed.phase_observed_at, None);
+        assert_eq!(managed.last_activity_at, None);
         assert_eq!(managed.bridge.bridge_pid, Some(111));
         assert_eq!(managed.bridge.app_server_pid, Some(222));
         assert_eq!(managed.bridge.status.as_deref(), Some("ready"));
@@ -3882,7 +3726,6 @@ mod tests {
             .find(|session| session.control_path == "unmanaged")
             .unwrap();
         assert_eq!(unmanaged.provider, "claude");
-        assert_eq!(unmanaged.presentation_state, "unmanaged");
         assert_eq!(unmanaged.process.pid, Some(333));
         assert_eq!(
             unmanaged.provider_session_id.as_deref(),
@@ -4002,7 +3845,6 @@ mod tests {
         assert_eq!(session.provider, "cursor");
         assert_eq!(session.control_path, "managed");
         assert_eq!(session.state, "attached");
-        assert_eq!(session.presentation_state, "managed_attached");
         assert_eq!(session.workspace.label.as_deref(), Some("zerg"));
         assert_eq!(
             session.workspace.cwd.as_deref(),
@@ -4092,9 +3934,8 @@ mod tests {
         assert_eq!(session.session_id.as_deref(), Some("managed-codex"));
         assert_eq!(session.provider, "codex");
         assert_eq!(session.control_path, "managed");
-        assert_eq!(session.presentation_state, "managed_attached");
         assert_eq!(session.state, "attached");
-        assert_eq!(session.phase.as_deref(), Some("idle"));
+        assert_eq!(session.phase, None);
         assert_eq!(session.provider_session_id, None);
         assert_eq!(session.bridge.status, None);
         assert_eq!(session.evidence.process_observed, false);
@@ -4148,9 +3989,8 @@ mod tests {
         assert_eq!(session.session_id.as_deref(), Some("managed-opencode"));
         assert_eq!(session.provider, "opencode");
         assert_eq!(session.control_path, "managed");
-        assert_eq!(session.presentation_state, "managed_degraded");
         assert_eq!(session.state, "degraded");
-        assert_eq!(session.phase.as_deref(), Some("needs_user"));
+        assert_eq!(session.phase, None);
         assert_eq!(
             session.provider_session_id.as_deref(),
             Some("opencode-native-session")

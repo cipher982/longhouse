@@ -7550,8 +7550,6 @@ export interface components {
             provider_session_id?: string | null;
             /** Control Path */
             control_path: string;
-            /** Presentation State */
-            presentation_state: string;
             /** State */
             state: string;
             /** Phase */

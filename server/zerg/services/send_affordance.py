@@ -64,6 +64,7 @@ def project_send_affordance(
     *,
     read_only_reason: str,
     provider_label: str | None = None,
+    session_mode: str | None = None,
     lifecycle: str | None = None,
     is_executing: bool = False,
     host_state: str | None = None,
@@ -78,7 +79,7 @@ def project_send_affordance(
 
     provider_session = _provider_session_label(provider_label)
 
-    if capability_flags.control_label == "console":
+    if session_mode == "console":
         if can_start_turn:
             return SendAffordance(
                 input_mode="console",

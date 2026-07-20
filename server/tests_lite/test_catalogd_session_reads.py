@@ -27,6 +27,7 @@ from zerg.catalogd.store import CatalogStore
 from zerg.models.live_store import LiveControlLease
 from zerg.models.live_store import LiveDeviceToken
 from zerg.models.live_store import LiveHeartbeatStamp
+from zerg.models.live_store import LiveInteractionRequest
 from zerg.models.live_store import LiveLaunchReadiness
 from zerg.models.live_store import LiveRuntimeState
 from zerg.models.live_store import LiveSession
@@ -64,7 +65,7 @@ def _seed_session(
     owner_id: str | None = None,
 ) -> None:
     thread_id = str(uuid4())
-    run_id = str(uuid4())
+    run_id = session_id
     connection.execute(
         LiveSessionCatalog.__table__.insert().values(
             session_id=session_id,
@@ -133,7 +134,9 @@ def _seed_session(
         LiveSessionConnection.__table__.insert().values(
             run_id=run_id,
             control_plane="managed_local",
-            acquisition_kind="launch_local",
+            acquisition_kind="spawned_control",
+            adapter_connection_id=f"connection-{session_id}",
+            lease_generation=f"lease-{session_id}",
             state="attached",
             device_id=device_id,
             can_send_input=1,
@@ -226,12 +229,15 @@ def _seed_session(
 
 
 def _reducer_fact(*, family: str, session_id: str, now: datetime) -> ReducerFact:
+    run_id = session_id
+    connection_id = f"connection-{session_id}"
+    lease_generation = f"lease-{session_id}"
     if family == "activity":
         value = {
             "authority_class": "provider_runtime",
             "provider": "codex",
             "session_id": session_id,
-            "run_id": "run-shadow",
+            "run_id": run_id,
             "kind": "running",
             "raw_kind": "running",
             "tool_name": "Shell",
@@ -241,9 +247,9 @@ def _reducer_fact(*, family: str, session_id: str, now: datetime) -> ReducerFact
         }
         return ReducerFact(
             family=family,
-            subject_key="run:run-shadow",
+            subject_key=f"run:{run_id}",
             source="provider_runtime",
-            source_epoch="run-shadow",
+            source_epoch=run_id,
             source_seq=1,
             dedupe_key="a" * 64,
             evidence_hash=canonical_evidence_hash(value),
@@ -256,9 +262,9 @@ def _reducer_fact(*, family: str, session_id: str, now: datetime) -> ReducerFact
         "authority_class": "provider_control",
         "provider": "codex",
         "session_id": session_id,
-        "run_id": "run-shadow",
-        "connection_id": "connection-shadow",
-        "lease_generation": "lease-shadow",
+        "run_id": run_id,
+        "connection_id": connection_id,
+        "lease_generation": lease_generation,
         "granted_operations": ["interrupt", "send_input"],
         "state": "attached",
         "lease_ttl_ms": 120_000,
@@ -267,9 +273,9 @@ def _reducer_fact(*, family: str, session_id: str, now: datetime) -> ReducerFact
     }
     return ReducerFact(
         family=family,
-        subject_key="connection:connection-shadow:lease-shadow",
+        subject_key=f"connection:{connection_id}:{lease_generation}",
         source="provider_control",
-        source_epoch="lease-shadow",
+        source_epoch=lease_generation,
         source_seq=1,
         dedupe_key="b" * 64,
         evidence_hash=canonical_evidence_hash(value),
@@ -502,6 +508,29 @@ async def test_session_timeline_and_read_return_assembled_snapshot_facts(daemon_
         _seed_session(connection, session_id=first_id, device_id="cinder", now=now)
         _seed_session(connection, session_id=second_id, device_id="clifford", now=now - timedelta(hours=1))
         connection.execute(
+            LiveHeartbeatStamp.__table__.insert().values(
+                device_id="cinder",
+                received_at=now,
+                is_offline=0,
+            )
+        )
+        connection.execute(
+            LiveInteractionRequest.__table__.insert().values(
+                id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+                session_id=first_id,
+                runtime_key=f"codex:{first_id}",
+                provider="codex",
+                request_key=f"codex:{first_id}:question-1",
+                kind="structured_question",
+                status="pending",
+                can_respond=1,
+                projection_json={"summary": "Choose a migration path"},
+                occurred_at=now,
+                last_seen_at=now,
+                expires_at=now + timedelta(minutes=5),
+            )
+        )
+        connection.execute(
             LiveSessionCatalog.__table__.insert().values(
                 session_id=pending_id,
                 provider="codex",
@@ -544,6 +573,12 @@ async def test_session_timeline_and_read_return_assembled_snapshot_facts(daemon_
         assert facts["primary_thread"]["id"] == facts["catalog"]["primary_thread_id"]
         assert facts["latest_run"]["thread_id"] == facts["primary_thread"]["id"]
         assert facts["connections"][0]["can_send_input"] == 1
+        assert facts["pending_interaction"]["id"] == "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        assert facts["machine_heartbeat"] == {
+            "device_id": "cinder",
+            "received_at": now.isoformat(),
+            "is_offline": 0,
+        }
         assert facts["provider_alias"] is None
         assert facts["resume"] is None
         assert "display_phase" not in facts and "status" not in facts

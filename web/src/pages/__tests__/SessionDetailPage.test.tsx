@@ -1437,7 +1437,7 @@ describe("SessionDetailPage", () => {
 
     expect(document.querySelector(".session-workspace-route")).toHaveClass(
       "session-workspace-route--unmanaged",
-      "session-workspace-route--tone-inactive",
+      "session-workspace-route--tone-quiet",
     );
     expect(screen.getByTestId("session-control-strip")).toHaveTextContent(
       "Activity unknown",
@@ -1550,14 +1550,14 @@ describe("SessionDetailPage", () => {
       screen.queryByTestId("session-continuation-unavailable"),
     ).not.toBeInTheDocument();
     expect(screen.getByTestId("session-control-strip")).toHaveTextContent(
-      "Read only",
+      "Search only",
     );
     expect(screen.getByTestId("session-control-strip")).toHaveTextContent(
       "Activity unknown",
     );
     expect(document.querySelector(".session-workspace-route")).toHaveClass(
       "session-workspace-route--unmanaged",
-      "session-workspace-route--tone-inactive",
+      "session-workspace-route--tone-quiet",
     );
   });
 

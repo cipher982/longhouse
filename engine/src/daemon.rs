@@ -2129,13 +2129,10 @@ fn build_local_status_projection(
     payload.ship_scheduler = scheduler_snapshot;
     apply_archive_repair_control(&mut payload, &archive_control, archive_repair_mode);
     let now = chrono::Utc::now();
-    let phase_overlay = heartbeat::load_managed_phase_overlay(conn);
-    payload.managed_sessions =
-        heartbeat::leases_from_observations(&phase_overlay, machine_id, observations, now);
+    payload.managed_sessions = heartbeat::leases_from_observations(machine_id, observations, now);
     payload
         .managed_sessions
         .extend(heartbeat::leases_from_claude_channel_observations(
-            &phase_overlay,
             machine_id,
             claude_observations,
             now,
@@ -2143,7 +2140,6 @@ fn build_local_status_projection(
     payload
         .managed_sessions
         .extend(heartbeat::leases_from_opencode_server_observations(
-            &phase_overlay,
             machine_id,
             opencode_observations,
             now,
@@ -2151,7 +2147,6 @@ fn build_local_status_projection(
     payload
         .managed_sessions
         .extend(heartbeat::leases_from_cursor_helm_observations(
-            &phase_overlay,
             machine_id,
             cursor_observations,
             now,
@@ -4407,11 +4402,6 @@ mod tests {
             provider: provider.to_string(),
             provider_session_id: provider_session_id.map(str::to_string),
             control_path: control_path.to_string(),
-            presentation_state: if control_path == "managed" {
-                format!("managed_{state}")
-            } else {
-                control_path.to_string()
-            },
             state: state.to_string(),
             phase: Some("idle".to_string()),
             tool_name: None,
@@ -4677,7 +4667,6 @@ mod tests {
         ));
         let mut second = first.clone();
         second.sessions[0].state = "detached".to_string();
-        second.sessions[0].presentation_state = "managed_detached".to_string();
 
         assert_ne!(
             runtime_truth_signature(&first),
