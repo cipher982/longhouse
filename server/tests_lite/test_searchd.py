@@ -16,6 +16,7 @@ from zerg.catalogd.client import CatalogUnavailable
 from zerg.searchd.server import SearchDaemon
 from zerg.searchd.store import _PUBLISH_AGGREGATES_SQL
 from zerg.searchd.store import _SEARCH_SQL
+from zerg.searchd.store import _fts_query
 from zerg.searchd.store import SearchStore
 from zerg.searchd.store import object_set_hash
 from zerg.searchd.store import open_search_database
@@ -65,6 +66,22 @@ def _search_params(query: str) -> dict:
         "window_end_us": None,
         "limit": 10,
     }
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("search.db", '"search db"'),
+        ("--no-verify", '"no verify"'),
+        ("server/zerg/searchd/store.py", '"server zerg searchd store py"'),
+        ('"exact closing text"', '"exact closing text"'),
+        ("repair session recall", "repair session recall"),
+        ("50068012e", "50068012e"),
+        ("---", ""),
+    ],
+)
+def test_fts_query_preserves_compact_identifiers_as_phrases(raw, expected):
+    assert _fts_query(raw) == expected
 
 
 def test_searchd_rebuilds_an_incompatible_disposable_store(tmp_path):

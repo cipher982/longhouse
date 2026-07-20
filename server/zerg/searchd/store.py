@@ -893,8 +893,16 @@ def _object_projection_hash(**value: object) -> str:
 
 
 def _fts_query(raw: str) -> str:
-    normalized = re.sub(r"[^\w\s]+", " ", raw, flags=re.UNICODE)
-    return re.sub(r"\s+", " ", normalized).strip()
+    tokens = re.findall(r"\w+", raw, flags=re.UNICODE)
+    if not tokens:
+        return ""
+    stripped = raw.strip()
+    explicitly_quoted = len(stripped) >= 2 and stripped[0] == stripped[-1] and stripped[0] in {'"', "'"}
+    compact_identifier = not any(character.isspace() for character in stripped)
+    normalized = " ".join(tokens)
+    if len(tokens) > 1 and (explicitly_quoted or compact_identifier):
+        return f'"{normalized}"'
+    return normalized
 
 
 def _bounded_worklog_page(rows: list[sqlite3.Row], *, limit: int, cursor_builder) -> dict[str, object]:
