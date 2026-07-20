@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import sqlite3
 import threading
 from pathlib import Path
 from uuid import UUID
@@ -13,6 +14,7 @@ from zerg.catalogd.client import CatalogClient
 from zerg.catalogd.client import CatalogRemoteError
 from zerg.searchd.server import SearchDaemon
 from zerg.searchd.store import _PUBLISH_AGGREGATES_SQL
+from zerg.searchd.store import SearchStore
 from zerg.searchd.store import object_set_hash
 from zerg.searchd.store import open_search_database
 
@@ -211,6 +213,64 @@ async def test_searchd_publishes_only_complete_generations_and_serves_search_wor
         assert "content_text" not in search["results"][0]
         filtered = await client.call("search.query.v2", {**_search_params("speed"), "provider": "claude"})
         assert filtered["results"] == []
+
+        with sqlite3.connect(tmp_path / "search.db") as legacy:
+            legacy.execute(
+                "UPDATE indexed_objects SET projection_hash = ? WHERE object_id = ?",
+                (hashlib.sha256(b"legacy-hash-including-session-metadata").hexdigest(), object_id),
+            )
+        replay_at_new_revision = await client.call(
+            "search.index.object.v2",
+            {
+                **index_params,
+                "desired_revision": "8",
+                "project": "renamed-longhouse",
+                "environment": "hosted",
+                "cwd": "/workspace/renamed-longhouse",
+                "git_repo": "cipher982/renamed-longhouse",
+            },
+        )
+        assert replay_at_new_revision["exact_replay"] is True
+        assert replay_at_new_revision["identity_upgraded"] is True
+        exact_replay = await client.call(
+            "search.index.object.v2",
+            {
+                **index_params,
+                "desired_revision": "8",
+                "project": "renamed-longhouse",
+                "environment": "hosted",
+                "cwd": "/workspace/renamed-longhouse",
+                "git_repo": "cipher982/renamed-longhouse",
+            },
+        )
+        assert exact_replay["identity_upgraded"] is False
+        with pytest.raises(CatalogRemoteError, match="identity conflicts"):
+            await client.call(
+                "search.index.object.v2",
+                {
+                    **index_params,
+                    "desired_revision": "8",
+                    "records": _records("different payload after identity upgrade"),
+                },
+            )
+        republished = await client.call(
+            "search.index.publish.v2",
+            {
+                **base_publish,
+                "desired_revision": "8",
+                "object_count": 1,
+                "project": "renamed-longhouse",
+                "environment": "hosted",
+                "cwd": "/workspace/renamed-longhouse",
+                "git_repo": "cipher982/renamed-longhouse",
+            },
+        )
+        assert republished["published"] is True
+        renamed = await client.call(
+            "search.query.v2",
+            {**_search_params("speed"), "project": "renamed-longhouse", "environment": "hosted"},
+        )
+        assert renamed["results"][0]["session_id"] == session_id
         worklog_sessions = await client.call(
             "worklog.day.v2",
             {
@@ -249,16 +309,16 @@ async def test_searchd_publishes_only_complete_generations_and_serves_search_wor
         replacement_params = {
             **index_params,
             "object_id": replacement_id,
-            "desired_revision": "8",
+            "desired_revision": "9",
             "records": _records("replacement projection"),
         }
         await client.call("search.index.object.v2", replacement_params)
-        # Staging revision 8 must not disturb the fully published revision 7.
+        # Staging revision 9 must not disturb the fully published revision 8.
         assert len((await client.call("search.query.v2", _search_params("speed")))["results"]) == 1
         assert (await client.call("search.query.v2", _search_params("replacement")))["results"] == []
         replacement_publish = {
             **base_publish,
-            "desired_revision": "8",
+            "desired_revision": "9",
             "object_set_hash": object_set_hash([replacement_id]),
             "object_count": 1,
         }
@@ -290,3 +350,40 @@ async def test_searchd_publishes_only_complete_generations_and_serves_search_wor
         await client.close()
         await daemon.close()
         socket_parent.rmdir()
+
+
+def test_searchd_upgrades_legacy_empty_object_for_same_subject_only(tmp_path):
+    connection = open_search_database(tmp_path / "search.db")
+    store = SearchStore(connection)
+    session_id = str(uuid4())
+    generation_id = str(uuid4())
+    object_id = hashlib.sha256(b"empty-render-object").hexdigest()
+    source_epoch = str(uuid4())
+    params = {
+        "session_id": session_id,
+        "generation_id": generation_id,
+        "object_id": object_id,
+        "desired_revision": 1,
+        "provider": "claude",
+        "machine_id": "cinder",
+        "project": "longhouse",
+        "environment": "local",
+        "cwd": "/workspace/longhouse",
+        "git_repo": "cipher982/longhouse",
+        "opaque_source_id": "claude/session.jsonl",
+        "source_epoch": source_epoch,
+        "records": [],
+    }
+    try:
+        assert store.index_object(**params)["created"] is True
+        connection.execute(
+            "UPDATE indexed_objects SET projection_hash = ? WHERE object_id = ?",
+            (hashlib.sha256(b"legacy-empty-object-hash").hexdigest(), object_id),
+        )
+        upgraded = store.index_object(**{**params, "desired_revision": 2, "project": "renamed-longhouse"})
+        assert upgraded["identity_upgraded"] is True
+        assert store.index_object(**{**params, "desired_revision": 2})["identity_upgraded"] is False
+        with pytest.raises(ValueError, match="identity conflicts"):
+            store.index_object(**{**params, "session_id": str(uuid4()), "desired_revision": 3})
+    finally:
+        connection.close()

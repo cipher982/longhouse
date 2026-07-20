@@ -271,16 +271,12 @@ class SearchStore:
         records: list[dict[str, Any]],
     ) -> dict[str, object]:
         now = datetime.now(UTC).isoformat()
-        projection_hash = _projection_hash(
+        projection_hash = _object_projection_hash(
             session_id=session_id,
             generation_id=generation_id,
             object_id=object_id,
             provider=provider,
             machine_id=machine_id,
-            project=project,
-            environment=environment,
-            cwd=cwd,
-            git_repo=git_repo,
             opaque_source_id=opaque_source_id,
             source_epoch=source_epoch,
             records=records,
@@ -288,13 +284,28 @@ class SearchStore:
         self.connection.execute("BEGIN IMMEDIATE")
         try:
             existing = self.connection.execute(
-                "SELECT projection_hash, event_count FROM indexed_objects WHERE object_id = ?",
+                """
+                SELECT session_id, generation_id, projection_hash, event_count
+                FROM indexed_objects WHERE object_id = ?
+                """,
                 (object_id,),
             ).fetchone()
             if existing is not None:
                 exact = existing["projection_hash"] == projection_hash and int(existing["event_count"]) == len(records)
                 if not exact:
-                    raise ValueError("indexed object identity conflicts with existing derived rows")
+                    same_empty_object = (
+                        not records
+                        and int(existing["event_count"]) == 0
+                        and existing["session_id"] == session_id
+                        and existing["generation_id"] == generation_id
+                    )
+                    stored_hash = self._stored_object_projection_hash(existing=existing, object_id=object_id)
+                    if (not same_empty_object and stored_hash != projection_hash) or int(existing["event_count"]) != len(records):
+                        raise ValueError("indexed object identity conflicts with existing derived rows")
+                    self.connection.execute(
+                        "UPDATE indexed_objects SET projection_hash = ?, indexed_at = ? WHERE object_id = ?",
+                        (projection_hash, now, object_id),
+                    )
                 self.connection.execute(
                     """
                     INSERT OR IGNORE INTO projection_membership(
@@ -304,7 +315,12 @@ class SearchStore:
                     (session_id, generation_id, desired_revision, object_id),
                 )
                 self.connection.execute("COMMIT")
-                return {"created": False, "exact_replay": True, "event_count": len(records)}
+                return {
+                    "created": False,
+                    "exact_replay": True,
+                    "identity_upgraded": not exact,
+                    "event_count": len(records),
+                }
             for record in records:
                 preimage = "\0".join(
                     (
@@ -375,6 +391,58 @@ class SearchStore:
             self.connection.execute("ROLLBACK")
             raise
         return {"created": True, "exact_replay": False, "event_count": len(records)}
+
+    def _stored_object_projection_hash(self, *, existing: sqlite3.Row, object_id: str) -> str | None:
+        session_id = str(existing["session_id"])
+        generation_id = str(existing["generation_id"])
+        event_count = int(existing["event_count"])
+        rows = self.connection.execute(
+            """
+            SELECT event_id, record_ordinal, order_time_us, source_position,
+                   event_subordinal, role, content_text, tool_name,
+                   tool_output_text, tool_call_id, thread_id, branch_kind,
+                   provider, machine_id, opaque_source_id, source_epoch
+            FROM events
+            WHERE session_id = ? AND generation_id = ? AND source_object_id = ?
+            ORDER BY record_ordinal ASC
+            """,
+            (session_id, generation_id, object_id),
+        ).fetchall()
+        if len(rows) != event_count:
+            return None
+        if not rows:
+            return None
+        first = rows[0]
+        immutable_fields = ("provider", "machine_id", "opaque_source_id", "source_epoch")
+        if any(any(row[field] != first[field] for field in immutable_fields) for row in rows[1:]):
+            return None
+        records = [
+            {
+                "event_id": str(row["event_id"]),
+                "record_ordinal": int(row["record_ordinal"]),
+                "order_time_us": int(row["order_time_us"]),
+                "source_position": int(row["source_position"]),
+                "event_subordinal": int(row["event_subordinal"]),
+                "role": str(row["role"]),
+                "content_text": row["content_text"],
+                "tool_name": row["tool_name"],
+                "tool_output_text": row["tool_output_text"],
+                "tool_call_id": row["tool_call_id"],
+                "thread_id": row["thread_id"],
+                "branch_kind": row["branch_kind"],
+            }
+            for row in rows
+        ]
+        return _object_projection_hash(
+            session_id=session_id,
+            generation_id=generation_id,
+            object_id=object_id,
+            provider=str(first["provider"]),
+            machine_id=str(first["machine_id"]),
+            opaque_source_id=str(first["opaque_source_id"]),
+            source_epoch=str(first["source_epoch"]),
+            records=records,
+        )
 
     def publish_generation(
         self,
@@ -817,7 +885,8 @@ def _object_set_hash(object_ids: list[str]) -> str:
     return hashlib.sha256(_OBJECT_SET_DOMAIN + "".join(sorted(object_ids)).encode("ascii")).hexdigest()
 
 
-def _projection_hash(**value: object) -> str:
+def _object_projection_hash(**value: object) -> str:
+    """Hash immutable render payload only; session metadata is published separately."""
     return hashlib.sha256(canonical_json(value).encode("utf-8")).hexdigest()
 
 
