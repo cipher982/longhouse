@@ -222,6 +222,13 @@ async def test_timed_out_search_is_interrupted_before_later_reads(tmp_path):
         ping = await client.call("search.ping.v2", timeout_seconds=0.2)
         assert ping["ready"] is True
         assert all(worker.connection.in_transaction is False for worker in daemon._all_read_workers)
+        for _ in range(20):
+            assert daemon._read_workers is not None
+            queued_workers = list(daemon._read_workers._queue)
+            if len(queued_workers) == len(daemon._all_read_workers):
+                break
+            await asyncio.sleep(0.01)
+        assert sorted(id(worker) for worker in queued_workers) == sorted(id(worker) for worker in daemon._all_read_workers)
     finally:
         for worker, original_search in zip(daemon._all_read_workers, original_searches, strict=True):
             worker.store.search = original_search

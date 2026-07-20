@@ -299,7 +299,11 @@ class SearchDaemon:
             }
             return payload
         except TimeoutError as exc:
-            execution.add_done_callback(lambda completed: self._return_finished_worker(worker, completed))
+            # Capture this worker now. The local variable is cleared below so
+            # the finally block does not return it before its SQLite call has
+            # unwound; a closure over the variable itself would later see None
+            # and permanently reduce the read pool after a deadline.
+            execution.add_done_callback(lambda completed, finished_worker=worker: self._return_finished_worker(finished_worker, completed))
             worker = None
             raise _ReadDeadlineExceeded from exc
         finally:
