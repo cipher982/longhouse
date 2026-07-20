@@ -67,38 +67,10 @@ async function configureManagedLocalSession(
   ).toBe(true);
 }
 
-async function sendAttachedIdleLease(
+async function getSession(
   request: APIRequestContext,
   sessionId: string,
-): Promise<void> {
-  const response = await request.post("/api/agents/heartbeat", {
-    data: {
-      version: "e2e",
-      daemon_pid: 123,
-      managed_sessions: [
-        {
-          session_id: sessionId,
-          provider: "codex",
-          machine_id: "cinder",
-          sequence: Date.now(),
-          state: "attached",
-          phase: "idle",
-          bridge_status: "ready",
-          thread_subscription_status: "subscribed",
-          observed_at: new Date().toISOString(),
-          lease_ttl_ms: 15 * 60 * 1000,
-        },
-      ],
-    },
-  });
-
-  expect(
-    response.status(),
-    `heartbeat failed: ${response.status()} ${await response.text()}`,
-  ).toBe(204);
-}
-
-async function getSession(request: APIRequestContext, sessionId: string): Promise<any> {
+): Promise<any> {
   const response = await request.get(`/api/agents/sessions/${sessionId}`);
   expect(
     response.ok(),
@@ -108,14 +80,16 @@ async function getSession(request: APIRequestContext, sessionId: string): Promis
 }
 
 test.describe("Managed Codex liveness", () => {
-  test("timeline keeps attached lease controllable without provider phase", async ({
+  test("managed metadata does not fabricate live control without canonical evidence", async ({
     page,
     request,
   }) => {
     const suffix = randomUUID().slice(0, 8);
     const project = `managed-idle-lease-${suffix}`;
     const token = `managed-idle-ready-${suffix}`;
-    const oldTimestamp = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+    const oldTimestamp = new Date(
+      Date.now() - 2 * 60 * 60 * 1000,
+    ).toISOString();
 
     const sessionId = await ingestCodexSession(request, {
       project,
@@ -123,14 +97,14 @@ test.describe("Managed Codex liveness", () => {
       timestamp: oldTimestamp,
     });
     await configureManagedLocalSession(request, sessionId);
-    await sendAttachedIdleLease(request, sessionId);
 
     const session = await getSession(request, sessionId);
-    expect(session.runtime_display?.control_path).toBe("managed");
-    expect(session.runtime_display?.host_state).toBe("online");
+    expect(session.session_state?.mode).toBe("helm");
+    expect(session.session_state?.control?.ownership).toBe("unowned");
+    expect(session.runtime_display?.control_path).toBe("unmanaged");
     expect(session.runtime_display?.state).toBeNull();
-    expect(session.capabilities?.live_control_available).toBe(true);
-    expect(session.capabilities?.composer_enabled).toBe(true);
+    expect(session.capabilities?.live_control_available).toBe(false);
+    expect(session.capabilities?.composer_enabled).toBe(false);
 
     await page.goto(`/timeline?project=${project}`);
     await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });

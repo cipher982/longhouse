@@ -560,7 +560,7 @@ test.describe("Sessions Page", () => {
     await expect(page).toHaveURL("/timeline");
   });
 
-  test("Timeline renders observed runtime facts without inferred active states", async ({
+  test("Archive E2E does not promote legacy runtime signals to canonical activity", async ({
     page,
     request,
   }) => {
@@ -679,14 +679,14 @@ test.describe("Sessions Page", () => {
       .filter({ hasText: `running-state-${suffix}` })
       .first();
     await expect(runningRow).toBeVisible();
-    await expect(runningRow).toHaveAttribute("data-status", "running");
+    await expect(runningRow).toHaveAttribute("data-status", "inactive");
 
     const needsUserRow = page
       .getByTestId("session-row")
       .filter({ hasText: `needs-user-state-${suffix}` })
       .first();
     await expect(needsUserRow).toBeVisible();
-    await expect(needsUserRow).toHaveAttribute("data-status", "idle");
+    await expect(needsUserRow).toHaveAttribute("data-status", "inactive");
 
     const inferredRow = page
       .getByTestId("session-row")
@@ -696,7 +696,7 @@ test.describe("Sessions Page", () => {
     await expect(inferredRow).toHaveAttribute("data-status", "inactive");
   });
 
-  test("Timeline live stream updates a visible card in place without duplication", async ({
+  test("Timeline live stream reconciles a visible card without duplication", async ({
     page,
     request,
   }) => {
@@ -737,6 +737,24 @@ test.describe("Sessions Page", () => {
       ],
     });
 
+    await page.addInitScript(() => {
+      const NativeEventSource = window.EventSource;
+      const sessionIds: string[] = [];
+      (
+        window as typeof window & { __timelineSessionUpserts?: string[] }
+      ).__timelineSessionUpserts = sessionIds;
+      window.EventSource = class ObservedEventSource extends NativeEventSource {
+        constructor(url: string | URL, init?: EventSourceInit) {
+          super(url, init);
+          this.addEventListener("session_upsert", (event) => {
+            const payload = JSON.parse((event as MessageEvent).data);
+            const sessionId = payload?.session?.head?.id;
+            if (typeof sessionId === "string") sessionIds.push(sessionId);
+          });
+        }
+      };
+    });
+
     const streamConnected = page.waitForResponse((response) => {
       return (
         response.url().includes("/api/timeline/sessions/stream") &&
@@ -775,12 +793,18 @@ test.describe("Sessions Page", () => {
       },
     ]);
 
-    // The runtime fact updates the older row's status in place, but the
-    // inbox layout is anchored to start time — so order MUST NOT change.
-    // This is the no-jitter contract.
-    await expect(olderRow).toHaveAttribute("data-status", "running", {
-      timeout: 15000,
-    });
+    await page.waitForFunction(
+      (sessionId) =>
+        (
+          window as typeof window & { __timelineSessionUpserts?: string[] }
+        ).__timelineSessionUpserts?.includes(sessionId),
+      olderId,
+      { timeout: 15_000 },
+    );
+
+    // The stream reconciles the older row without promoting the retired
+    // legacy phase signal. Order stays anchored to start time: no jitter.
+    await expect(olderRow).toHaveAttribute("data-status", "inactive");
     await expect(olderRow).toHaveAttribute("data-closed", "false");
     await expect(olderRow).toHaveCount(1);
     await expect(recentRow).toHaveCount(1);
@@ -1336,7 +1360,8 @@ test.describe("SSE Fallback", () => {
     // Request routing only affects future requests and leaves an established
     // streaming response alive, which made the old test timing-dependent.
     await page.evaluate(() => {
-      const streams = (window as any).__TEST_WORKSPACE_STREAMS__ as EventSource[];
+      const streams = (window as any)
+        .__TEST_WORKSPACE_STREAMS__ as EventSource[];
       const stream = streams.at(-1);
       if (!stream) throw new Error("workspace EventSource was not captured");
       stream.close();

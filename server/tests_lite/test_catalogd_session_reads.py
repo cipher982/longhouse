@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import UTC
 from datetime import datetime
@@ -729,6 +730,8 @@ async def test_canonical_timeline_is_owner_scoped_and_commit_coherent(daemon_pat
     now = datetime.now(UTC).replace(microsecond=0)
     session_id = "66666666-6666-4666-8666-666666666666"
     ownerless_session_id = "77777777-7777-4777-8777-777777777777"
+    connection_id = str(uuid4())
+    lease_generation = str(uuid4())
     with engine.begin() as connection:
         connection.execute(
             LiveUser.__table__.insert().values(
@@ -741,20 +744,115 @@ async def test_canonical_timeline_is_owner_scoped_and_commit_coherent(daemon_pat
         )
         _seed_session(connection, session_id=session_id, device_id="cinder", now=now, owner_id="7")
         _seed_session(connection, session_id=ownerless_session_id, device_id="cinder", now=now)
-        reduced = reduce_fact_batch(
-            connection,
-            [
-                _reducer_fact(family="activity", session_id=session_id, now=now),
-                _reducer_fact(family="control", session_id=session_id, now=now),
-            ],
-            received_at=now,
+        connection.execute(
+            LiveSessionConnection.__table__.update()
+            .where(LiveSessionConnection.run_id == session_id)
+            .values(
+                control_plane="codex_bridge",
+                adapter_connection_id=None,
+                lease_generation=None,
+            )
         )
     engine.dispose()
+
+    activity = {
+        "authority_class": "provider_runtime",
+        "provider": "codex",
+        "session_id": session_id,
+        "run_id": session_id,
+        "kind": "running",
+        "raw_kind": "running",
+        "tool_name": "Shell",
+        "source": "provider_runtime",
+        "observed_at": now.isoformat(),
+        "valid_until": (now + timedelta(minutes=2)).isoformat(),
+    }
+    control = {
+        "authority_class": "provider_control",
+        "provider": "codex",
+        "session_id": session_id,
+        "run_id": session_id,
+        "connection_id": connection_id,
+        "lease_generation": lease_generation,
+        "granted_operations": ["interrupt", "send_input"],
+        "ownership": "managed",
+        "state": "attached",
+        "lease_ttl_ms": 120_000,
+        "source": "provider_control",
+        "observed_at": now.isoformat(),
+    }
+    evidence = {
+        "schema_version": 3,
+        "activity": [activity],
+        "control": [control],
+        "identities": [
+            {
+                "fact_family": "activity",
+                "fact_index": 0,
+                "subject_key": f"run:{session_id}",
+                "source": "provider_runtime",
+                "source_epoch": session_id,
+                "source_seq": 1,
+                "sequenced": True,
+                "dedupe_key": hashlib.sha256(f"{session_id}:activity:1".encode()).hexdigest(),
+                "evidence_hash": canonical_evidence_hash(activity),
+            },
+            {
+                "fact_family": "control",
+                "fact_index": 0,
+                "subject_key": f"connection:{connection_id}:{lease_generation}",
+                "source": "provider_control",
+                "source_epoch": lease_generation,
+                "source_seq": None,
+                "sequenced": False,
+                "dedupe_key": hashlib.sha256(f"{connection_id}:{lease_generation}".encode()).hexdigest(),
+                "evidence_hash": canonical_evidence_hash(control),
+            },
+        ],
+    }
+    heartbeat = {
+        "device_id": "cinder",
+        "received_at": now.isoformat(),
+        "version": "engine-test",
+        "last_ship_at": None,
+        "last_ship_attempt_at": None,
+        "last_ship_result": "ok",
+        "last_ship_latency_ms": 12,
+        "last_ship_http_status": 200,
+        "spool_pending": 0,
+        "spool_dead": 0,
+        "parse_errors_1h": 0,
+        "consecutive_failures": 0,
+        "ship_attempts_1h": 1,
+        "ship_successes_1h": 1,
+        "ship_rate_limited_1h": 0,
+        "ship_server_errors_1h": 0,
+        "ship_payload_rejections_1h": 0,
+        "ship_payload_too_large_1h": 0,
+        "ship_retryable_client_errors_1h": 0,
+        "ship_connect_errors_1h": 0,
+        "ship_latency_p50_ms_1h": 10,
+        "ship_latency_p95_ms_1h": 20,
+        "disk_free_bytes": 1_000_000,
+        "is_offline": 0,
+        "raw_json": json.dumps({"machine_evidence": evidence}),
+        "sessions_digest": "canonical-session-state",
+        "sessions_sequence": 1,
+    }
 
     daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
     await daemon.start()
     client = CatalogClient(socket_path)
     try:
+        heartbeat_result = await client.call(
+            "machine.heartbeat.apply.v2",
+            {
+                "heartbeat": heartbeat,
+                "managed_leases": [],
+                "managed_leases_present": False,
+                "owner_id": 7,
+            },
+        )
         result = await client.call(
             "session.timeline.list.v2",
             {
@@ -772,18 +870,40 @@ async def test_canonical_timeline_is_owner_scoped_and_commit_coherent(daemon_pat
                 "include_state_heads": True,
             },
         )
+        detail = await client.call(
+            "session.shadow_state.read.v2",
+            {"session_id": session_id, "owner_id": 7},
+        )
     finally:
         await client.close()
         await daemon.close()
 
-    assert result["commit_seq"] == str(reduced.commit_seq)
+    assert heartbeat_result["shadow_reducer"]["status"] == "applied"
+    assert heartbeat_result["shadow_reducer"]["identity_binding"]["bound"] == 1
+    assert result["commit_seq"] == heartbeat_result["commit_seq"]
     assert result["total"] == 1
     assert len(result["rows"]) == 1
     row = result["rows"][0]
     assert row["facts"]["catalog"]["session_id"] == session_id
     assert row["heads_truncated"] is False
     assert {head["family"] for head in row["heads"]} == {"activity", "control"}
-    assert {head["updated_commit_seq"] for head in row["heads"]} == {reduced.commit_seq}
+    assert {head["updated_commit_seq"] for head in row["heads"]} == {int(heartbeat_result["commit_seq"])}
+    projected = project_catalog_session_facts(
+        row["facts"],
+        observed_at=datetime.fromisoformat(result["observed_at"]),
+        canonical_heads=row["heads"],
+        commit_seq=int(result["commit_seq"]),
+    )
+    assert projected.session_state.activity.state == "executing"
+    assert projected.session_state.activity.tool == "Shell"
+    assert projected.session_state.control.ownership == "owned"
+    assert projected.session_state.control.connection == "connected"
+    assert projected.session_state.control.actions.send_input.state == "available"
+    assert detail["commit_seq"] == result["commit_seq"]
+    assert detail["legacy_facts"]["catalog"]["session_id"] == session_id
+    assert {head["evidence_hash"] for head in detail["heads"]} == {
+        head["evidence_hash"] for head in row["heads"]
+    }
 
 
 def test_shadow_state_read_bounds_combined_rpc_payload(daemon_paths):
@@ -1133,7 +1253,10 @@ async def test_enrollment_excludes_revoked_and_workspaces_are_owner_device_scope
         await daemon.close()
 
 
+@pytest.mark.timeout(30)
 def test_maximum_timeline_page_fits_one_protocol_frame(daemon_paths):
+    # This intentionally serializes a near-protocol-limit payload. Keep its
+    # CPU/frame-size boundary independent from the suite's 10s latency guard.
     database_path, _socket_path = daemon_paths
     engine = create_catalog_engine(database_path)
     initialize_catalog_schema(engine)
