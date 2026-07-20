@@ -21,6 +21,7 @@ from zerg.searchd.store import SCHEMA_GENERATION
 from zerg.searchd.store import SCHEMA_VERSION
 
 logger = logging.getLogger(__name__)
+SEARCHD_QUERY_RPC_TIMEOUT_SECONDS = 5.0
 SEARCHD_PROJECTOR_RPC_TIMEOUT_SECONDS = 240.0
 
 
@@ -46,10 +47,16 @@ class SearchdSupervisor:
         self.database_path = database_path
         self.socket_path = socket_path
         self.status_path = socket_path.with_name("searchd-status.json")
-        self.client = CatalogClient(socket_path)
-        # Background FTS writes can legitimately exceed the interactive RPC
-        # budget for large render objects. Reads retain the one-second bound on
-        # the separate client/read executor.
+        # Search and worklog are user-facing all-history reads with a five-second
+        # hard budget. Keep supervisor health probes on the generic one-second
+        # budget so a dead sidecar is still replaced promptly.
+        self.client = CatalogClient(
+            socket_path,
+            default_timeout_seconds=SEARCHD_QUERY_RPC_TIMEOUT_SECONDS,
+        )
+        self.health_client = CatalogClient(socket_path)
+        # Background FTS writes can legitimately exceed the interactive query
+        # budget for large render objects.
         self.projector_client = CatalogClient(
             socket_path,
             default_timeout_seconds=SEARCHD_PROJECTOR_RPC_TIMEOUT_SECONDS,
@@ -74,7 +81,7 @@ class SearchdSupervisor:
         while asyncio.get_running_loop().time() < deadline:
             remaining = deadline - asyncio.get_running_loop().time()
             try:
-                ping = await self.client.call(
+                ping = await self.health_client.call(
                     "search.ping.v2",
                     timeout_seconds=max(0.01, min(0.1, remaining)),
                 )
@@ -99,6 +106,7 @@ class SearchdSupervisor:
     async def stop(self) -> None:
         self._stopping = True
         await self.client.close()
+        await self.health_client.close()
         await self.projector_client.close()
         await self._terminate_owned_process()
         if self._task is not None:
@@ -115,7 +123,7 @@ class SearchdSupervisor:
         backoff = 0.1
         while not self._stopping:
             try:
-                ping = await self.client.call("search.ping.v2")
+                ping = await self.health_client.call("search.ping.v2")
             except CatalogUnavailable:
                 ping = None
             if ping is not None and self._is_compatible(ping):
@@ -124,7 +132,7 @@ class SearchdSupervisor:
                 continue
             if ping is not None:
                 self._write_status("waiting_for_compatible_owner", ping=ping, ownership="adopted")
-                await self.client.close()
+                await self.health_client.close()
                 await asyncio.sleep(0.1)
                 continue
 
@@ -157,6 +165,7 @@ class SearchdSupervisor:
                 if self._process is not None and self._process.returncode is not None:
                     self._process = None
                 await self.client.close()
+                await self.health_client.close()
                 await self.projector_client.close()
             await asyncio.sleep(backoff)
             backoff = min(5.0, backoff * 2)
@@ -175,7 +184,7 @@ class SearchdSupervisor:
     async def _monitor_owned_process(self, process: asyncio.subprocess.Process) -> int:
         while process.returncode is None and not self._stopping:
             try:
-                ping = await self.client.call("search.ping.v2")
+                ping = await self.health_client.call("search.ping.v2")
                 if self._is_compatible(ping):
                     self._write_status(
                         "running",

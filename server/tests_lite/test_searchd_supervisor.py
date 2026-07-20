@@ -8,6 +8,7 @@ from uuid import uuid4
 import pytest
 
 from zerg.catalogd.client import CatalogClient
+from zerg.catalogd.client import CatalogUnavailable
 from zerg.searchd.store import SCHEMA_GENERATION
 from zerg.searchd.store import SCHEMA_VERSION
 from zerg.services.searchd_supervisor import SearchdSupervisor
@@ -99,5 +100,23 @@ def test_search_projector_has_background_write_budget(supervisor_paths):
     database_path, socket_path = supervisor_paths
     supervisor = SearchdSupervisor(database_path=database_path, socket_path=socket_path)
 
-    assert supervisor.client.default_timeout_seconds == 1.0
+    assert supervisor.client.default_timeout_seconds == 5.0
+    assert supervisor.health_client.default_timeout_seconds == 1.0
     assert supervisor.projector_client.default_timeout_seconds == 240.0
+
+
+@pytest.mark.asyncio
+async def test_interactive_search_budget_survives_one_second_read_contention(supervisor_paths, monkeypatch):
+    database_path, socket_path = supervisor_paths
+    supervisor = SearchdSupervisor(database_path=database_path, socket_path=socket_path)
+
+    async def delayed_call(method, params, timeout_seconds):
+        await asyncio.sleep(1.05)
+        return {"method": method}
+
+    monkeypatch.setattr(supervisor.client, "_call_once", delayed_call)
+    monkeypatch.setattr(supervisor.health_client, "_call_once", delayed_call)
+
+    assert await supervisor.client.call("search.query.v2") == {"method": "search.query.v2"}
+    with pytest.raises(CatalogUnavailable, match="deadline exceeded"):
+        await supervisor.health_client.call("search.ping.v2")

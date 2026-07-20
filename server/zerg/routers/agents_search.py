@@ -130,9 +130,20 @@ async def search_storage_v2_rows(
             },
         )
     except (CatalogRemoteError, CatalogUnavailable) as exc:
+        reason = exc.code if isinstance(exc, CatalogRemoteError) else str(exc)
+        logger.warning(
+            "Storage-v2 search query unavailable owner_id=%s query_length=%d reason=%s",
+            owner_id,
+            len(query),
+            reason,
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={"code": "search_unavailable", "message": "The derived search index is unavailable."},
+            detail={
+                "code": "search_unavailable",
+                "message": "The derived search index is unavailable.",
+                "reason": reason,
+            },
         ) from exc
     return [row for row in (result.get("results") or []) if isinstance(row, dict)]
 
