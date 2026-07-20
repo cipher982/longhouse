@@ -17,6 +17,7 @@ from fastapi import Depends
 from fastapi import HTTPException
 from fastapi import Query
 from fastapi import Request
+from fastapi import Response
 from fastapi import status
 from sqlalchemy import or_
 from sqlalchemy.exc import OperationalError
@@ -65,9 +66,11 @@ from zerg.services.session_views import RecallResponse
 from zerg.services.session_views import SemanticSearchResponse
 from zerg.services.session_views import SessionResponse
 from zerg.services.session_views import build_session_response
+from zerg.utils.server_timing import ServerTimingRecorder
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 logger = logging.getLogger(__name__)
+RECALL_ROUTE_TIMEOUT_SECONDS = 5.0
 
 _catalog_db_dependency = catalog_db_dependency()
 
@@ -105,6 +108,7 @@ async def search_storage_v2_rows(
     environment: str | None,
     days_back: int,
     limit: int,
+    timeout_seconds: float | None = None,
 ) -> list[dict[str, object]]:
     """Search the disposable v2 index without opening the retired archive DB."""
 
@@ -116,19 +120,20 @@ async def search_storage_v2_rows(
         )
     now = datetime.now(timezone.utc)
     try:
-        result = await search.call(
-            "search.query.v2",
-            {
-                "owner_id": str(owner_id),
-                "query": query,
-                "project": project,
-                "provider": provider,
-                "environment": environment,
-                "window_start_us": int((now - timedelta(days=days_back)).timestamp() * 1_000_000),
-                "window_end_us": None,
-                "limit": min(200, max(1, limit)),
-            },
-        )
+        params = {
+            "owner_id": str(owner_id),
+            "query": query,
+            "project": project,
+            "provider": provider,
+            "environment": environment,
+            "window_start_us": int((now - timedelta(days=days_back)).timestamp() * 1_000_000),
+            "window_end_us": None,
+            "limit": min(200, max(1, limit)),
+        }
+        if timeout_seconds is None:
+            result = await search.call("search.query.v2", params)
+        else:
+            result = await search.call("search.query.v2", params, timeout_seconds=timeout_seconds)
     except (CatalogRemoteError, CatalogUnavailable) as exc:
         reason = exc.code if isinstance(exc, CatalogRemoteError) else str(exc)
         logger.warning(
@@ -146,6 +151,48 @@ async def search_storage_v2_rows(
             },
         ) from exc
     return [row for row in (result.get("results") or []) if isinstance(row, dict)]
+
+
+async def search_storage_v2_context(
+    *,
+    owner_id: int,
+    session_id: str,
+    generation_id: str,
+    search_event_id: int,
+    context_turns: int,
+    timeout_seconds: float,
+) -> dict[str, object]:
+    """Read bounded neighbor evidence from the same generation as a search hit."""
+
+    search = get_searchd_client()
+    if search is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": "search_unavailable", "message": "The derived search index is unavailable."},
+        )
+    try:
+        result = await search.call(
+            "search.context.v2",
+            {
+                "owner_id": str(owner_id),
+                "session_id": session_id,
+                "generation_id": generation_id,
+                "search_event_id": search_event_id,
+                "context_turns": context_turns,
+            },
+            timeout_seconds=timeout_seconds,
+        )
+    except (CatalogRemoteError, CatalogUnavailable) as exc:
+        reason = exc.code if isinstance(exc, CatalogRemoteError) else str(exc)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "search_evidence_unavailable",
+                "message": "Recall evidence is unavailable.",
+                "reason": reason,
+            },
+        ) from exc
+    return result
 
 
 async def search_storage_v2_sessions(
@@ -828,6 +875,7 @@ async def cancel_recall_index_job(
 @router.get("/recall", response_model=RecallResponse)
 async def recall_sessions(
     request: Request,
+    response: Response = None,
     query: str = Query(..., description="What to search for"),
     project: Optional[str] = Query(None, description="Filter by project"),
     provider: Optional[str] = Query(None, description="Filter by provider"),
@@ -852,6 +900,11 @@ async def recall_sessions(
     handler_started = time.perf_counter()
     request_started = getattr(request.state, "request_timeout_started_at", None)
     pre_handler_ms = (handler_started - request_started) * 1000 if isinstance(request_started, float) else None
+    timing = ServerTimingRecorder()
+
+    def remaining_budget() -> float:
+        started = request_started if isinstance(request_started, float) else handler_started
+        return max(0.05, RECALL_ROUTE_TIMEOUT_SECONDS - (time.perf_counter() - started) - 0.1)
 
     if context_mode not in {"forensic", "active_context"}:
         raise HTTPException(
@@ -873,15 +926,18 @@ async def recall_sessions(
                     "message": "Storage-v2 search does not yet project active-context boundaries.",
                 },
             )
-        rows = await search_storage_v2_rows(
-            owner_id=_catalog_owner_id(_auth),
-            query=query,
-            project=project,
-            provider=provider,
-            environment=None,
-            days_back=since_days,
-            limit=min(200, max_results * 8),
-        )
+        owner_id = _catalog_owner_id(_auth)
+        with timing.span("discovery"):
+            rows = await search_storage_v2_rows(
+                owner_id=owner_id,
+                query=query,
+                project=project,
+                provider=provider,
+                environment=None,
+                days_back=since_days,
+                limit=min(200, max_results * 8),
+                timeout_seconds=remaining_budget(),
+            )
         matches: list[RecallMatch] = []
         seen: set[str] = set()
         for row in rows:
@@ -902,12 +958,45 @@ async def recall_sessions(
                     score=1.0 / (1.0 + abs(float(row.get("rank") or 0.0))),
                     context_text=snippet or None,
                     evidence=snippet or None,
-                    total_events=0,
+                    total_events=int(row.get("event_count") or 0),
                     context=[],
+                    match_event_id=int(row["search_event_id"]) if row.get("search_event_id") is not None else None,
+                    generation_id=str(row.get("generation_id") or "") or None,
+                    source_object_id=str(row.get("source_object_id") or "") or None,
+                    record_ordinal=int(row.get("record_ordinal") or 0),
                 )
             )
             if len(matches) >= max_results:
                 break
+
+        async def hydrate(match: RecallMatch) -> None:
+            if match.match_event_id is None or match.generation_id is None:
+                match.evidence_status = "unavailable"
+                match.evidence_reason = "search_hit_missing_locator"
+                return
+            try:
+                evidence = await search_storage_v2_context(
+                    owner_id=owner_id,
+                    session_id=match.session_id,
+                    generation_id=match.generation_id,
+                    search_event_id=match.match_event_id,
+                    context_turns=context_turns,
+                    timeout_seconds=remaining_budget(),
+                )
+            except HTTPException as exc:
+                detail = exc.detail if isinstance(exc.detail, dict) else {}
+                match.evidence_status = "partial"
+                match.evidence_reason = str(detail.get("code") or "search_evidence_unavailable")
+                return
+            match.context = [item for item in (evidence.get("context") or []) if isinstance(item, dict)]
+            match.total_events = int(evidence.get("total_events") or match.total_events)
+            match.evidence_status = str(evidence.get("evidence_status") or "complete")
+            reason = evidence.get("evidence_reason")
+            match.evidence_reason = str(reason) if reason is not None else None
+
+        with timing.span("hydrate"):
+            await asyncio.gather(*(hydrate(match) for match in matches))
+        timing.apply(response)
         return RecallResponse(matches=matches, total=len(matches))
 
     assert database_url is not None

@@ -66,8 +66,12 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
     Returns:
         A ``FastMCP`` server instance with all tools registered.
     """
-    server = FastMCP("longhouse")
     client = LonghouseAPIClient(api_url, api_token)
+
+    # A streamable HTTP MCP server enters its FastMCP lifespan once per client
+    # session, not once per process. Keep this process-owned pool alive instead
+    # of closing it when the first HTTP client disconnects.
+    server = FastMCP("longhouse")
 
     # ------------------------------------------------------------------
     # Tool: search_sessions
@@ -317,9 +321,9 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
         context_turns: int = 2,
         context_mode: str = "forensic",
     ) -> str:
-        """Retrieve context from the canonical Longhouse agent-session database.
+        """Retrieve lexical evidence from the canonical Longhouse session archive.
 
-        Semantic/fuzzy search — returns actual conversation content around relevant turns.
+        Returns actual conversation evidence around relevant turns.
         Use when you don't know the exact phrase but know the concept: "what was decided about auth?"
         NOT for exact string match → use query_agents SQL with ILIKE for that.
         NOT for session discovery → use search_sessions for that.

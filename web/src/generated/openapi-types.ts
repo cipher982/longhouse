@@ -4045,6 +4045,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/agents/permission-requests/{pause_request_id}/expire": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Expire Permission Request
+         * @description Expire the exact held prompt when its provider-side wait deadline ends.
+         */
+        post: operations["expire_permission_request_agents_permission_requests__pause_request_id__expire_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/agents/runtime/events/batch": {
         parameters: {
             query?: never;
@@ -6655,6 +6675,13 @@ export interface components {
              */
             resolved: boolean;
         };
+        /** PermissionExpireIn */
+        PermissionExpireIn: {
+            /** Session Id */
+            session_id: string;
+            /** Reason */
+            reason?: string | null;
+        };
         /** PermissionRequestAck */
         PermissionRequestAck: {
             /** Pause Request Id */
@@ -6686,6 +6713,11 @@ export interface components {
             provider: string | null;
             /** Occurred At */
             occurred_at?: string | null;
+            /**
+             * Wait Timeout Seconds
+             * @default 20
+             */
+            wait_timeout_seconds: number;
         };
         /**
          * PresenceIn
@@ -7397,6 +7429,19 @@ export interface components {
             }[];
             /** Match Event Id */
             match_event_id?: number | null;
+            /** Generation Id */
+            generation_id?: string | null;
+            /** Source Object Id */
+            source_object_id?: string | null;
+            /** Record Ordinal */
+            record_ordinal?: number | null;
+            /**
+             * Evidence Status
+             * @default complete
+             */
+            evidence_status: string;
+            /** Evidence Reason */
+            evidence_reason?: string | null;
         };
         /**
          * RecallResponse
@@ -18846,6 +18891,41 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PermissionDecisionOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    expire_permission_request_agents_permission_requests__pause_request_id__expire_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                pause_request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PermissionExpireIn"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {

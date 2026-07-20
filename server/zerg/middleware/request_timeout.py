@@ -24,6 +24,7 @@ from starlette.types import Send
 logger = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT_SECONDS = 15
+RECALL_TIMEOUT_SECONDS = 5
 MANAGED_LOCAL_LAUNCH_TIMEOUT_SECONDS = 45
 INTERACTIVE_AUTH_TIMEOUT_SECONDS = 30
 INGEST_TIMEOUT_SECONDS = 30
@@ -38,6 +39,7 @@ _STREAMING_FRAGMENTS = ("/stream", "/chat", "/branch", "/ws")
 
 # Route-specific timeout overrides for legitimate long-running requests.
 _TIMEOUT_OVERRIDES = {
+    "/agents/recall": RECALL_TIMEOUT_SECONDS,
     "/devices/tokens": INTERACTIVE_AUTH_TIMEOUT_SECONDS,
     "/agents/ingest": INGEST_TIMEOUT_SECONDS,
     "/sessions/managed-local/this-device": MANAGED_LOCAL_LAUNCH_TIMEOUT_SECONDS,

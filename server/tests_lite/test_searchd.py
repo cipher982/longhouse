@@ -4,6 +4,9 @@ import asyncio
 import hashlib
 import sqlite3
 import threading
+from datetime import UTC
+from datetime import datetime
+from datetime import timedelta
 from pathlib import Path
 from uuid import UUID
 from uuid import uuid4
@@ -16,8 +19,10 @@ from zerg.catalogd.client import CatalogUnavailable
 from zerg.searchd.server import SearchDaemon
 from zerg.searchd.store import _PUBLISH_AGGREGATES_SQL
 from zerg.searchd.store import _SEARCH_SQL
-from zerg.searchd.store import _fts_query
+from zerg.searchd.store import _SEARCHABLE_SEARCH_SQL
+from zerg.searchd.store import SCHEMA_GENERATION
 from zerg.searchd.store import SearchStore
+from zerg.searchd.store import _fts_query
 from zerg.searchd.store import object_set_hash
 from zerg.searchd.store import open_search_database
 
@@ -84,6 +89,21 @@ def test_fts_query_preserves_compact_identifiers_as_phrases(raw, expected):
     assert _fts_query(raw) == expected
 
 
+def test_search_preserves_every_natural_query_term(tmp_path):
+    connection = open_search_database(tmp_path / "search.db")
+    try:
+        assert connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE name = 'events_fts_vocab'"
+        ).fetchone() is None
+        query, token_count, compiled_token_count = SearchStore(connection)._compile_fts_query(
+            "please explain managed session recovery"
+        )
+        assert query == "please explain managed session recovery"
+        assert (token_count, compiled_token_count) == (5, 5)
+    finally:
+        connection.close()
+
+
 def test_searchd_rebuilds_an_incompatible_disposable_store(tmp_path):
     path = tmp_path / "search.db"
     connection = open_search_database(path)
@@ -94,7 +114,7 @@ def test_searchd_rebuilds_an_incompatible_disposable_store(tmp_path):
     rebuilt = open_search_database(path)
     try:
         meta = rebuilt.execute("SELECT schema_version, schema_generation FROM search_meta").fetchone()
-        assert tuple(meta) == (1, "searchd-v1-frozen-worklog-snapshots")
+        assert tuple(meta) == (1, SCHEMA_GENERATION)
         assert rebuilt.execute("SELECT store_id FROM search_meta").fetchone()[0] != previous_store_id
         assert rebuilt.execute("SELECT COUNT(*) FROM session_index").fetchone()[0] == 0
     finally:
@@ -115,15 +135,16 @@ def test_publish_aggregate_uses_session_generation_index(tmp_path):
         connection.close()
 
 
-def test_search_uses_fts_rank_top_k_without_temp_sort(tmp_path):
+@pytest.mark.parametrize(("sql", "fts_name"), [(_SEARCH_SQL, "events_fts"), (_SEARCHABLE_SEARCH_SQL, "searchable_fts")])
+def test_search_uses_fts_rank_top_k_without_temp_sort(tmp_path, sql, fts_name):
     connection = open_search_database(tmp_path / "search.db")
     try:
         plan = connection.execute(
-            f"EXPLAIN QUERY PLAN {_SEARCH_SQL}",
+            f"EXPLAIN QUERY PLAN {sql}",
             ("search db", "42", None, None, None, None, None, None, None, None, None, None, 10),
         ).fetchall()
         details = [str(row[3]) for row in plan]
-        assert any("VIRTUAL TABLE INDEX 32:" in detail for detail in details)
+        assert any(fts_name in detail and "VIRTUAL TABLE INDEX 32:" in detail for detail in details)
         assert not any("TEMP B-TREE FOR ORDER BY" in detail for detail in details)
     finally:
         connection.close()
@@ -180,13 +201,12 @@ async def test_timed_out_search_is_interrupted_before_later_reads(tmp_path):
     socket_path = socket_parent / "s"
     daemon = SearchDaemon(database_path=tmp_path / "search.db", socket_path=socket_path)
     await daemon.start()
-    assert daemon._read_store is not None
-    assert daemon._read_connection is not None
+    assert daemon._all_read_workers
     client = CatalogClient(socket_path)
 
-    def slow_search(**_params):
-        daemon._read_connection.execute("BEGIN")
-        return daemon._read_connection.execute(
+    def slow_search(connection, **_params):
+        connection.execute("BEGIN")
+        return connection.execute(
             """
             WITH RECURSIVE counter(value) AS (
                 SELECT 0 UNION ALL SELECT value + 1 FROM counter WHERE value < 100000000
@@ -195,19 +215,29 @@ async def test_timed_out_search_is_interrupted_before_later_reads(tmp_path):
             """
         ).fetchone()
 
-    original_search = daemon._read_store.search
-    daemon._read_store.search = slow_search
+    original_searches = [worker.store.search for worker in daemon._all_read_workers]
+    for worker in daemon._all_read_workers:
+        worker.store.search = lambda connection=worker.connection, **params: slow_search(connection, **params)
     try:
         with pytest.raises((CatalogRemoteError, CatalogUnavailable)) as timeout:
             await client.call("search.query.v2", _search_params("slow"), timeout_seconds=0.05)
         if isinstance(timeout.value, CatalogRemoteError):
             assert timeout.value.code == "deadline_exceeded"
-        daemon._read_store.search = original_search
+        for worker, original_search in zip(daemon._all_read_workers, original_searches, strict=True):
+            worker.store.search = original_search
         ping = await client.call("search.ping.v2", timeout_seconds=0.2)
         assert ping["ready"] is True
-        assert daemon._read_connection.in_transaction is False
+        assert all(worker.connection.in_transaction is False for worker in daemon._all_read_workers)
+        for _ in range(20):
+            assert daemon._read_workers is not None
+            queued_workers = list(daemon._read_workers._queue)
+            if len(queued_workers) == len(daemon._all_read_workers):
+                break
+            await asyncio.sleep(0.01)
+        assert sorted(id(worker) for worker in queued_workers) == sorted(id(worker) for worker in daemon._all_read_workers)
     finally:
-        daemon._read_store.search = original_search
+        for worker, original_search in zip(daemon._all_read_workers, original_searches, strict=True):
+            worker.store.search = original_search
         await client.close()
         await daemon.close()
         socket_parent.rmdir()
@@ -284,6 +314,19 @@ async def test_searchd_publishes_only_complete_generations_and_serves_search_wor
         assert search["results"][0]["record_ordinal"] == 0
         assert "speed" in search["results"][0]["content_snippet"]
         assert "content_text" not in search["results"][0]
+        context = await client.call(
+            "search.context.v2",
+            {
+                "owner_id": "42",
+                "session_id": session_id,
+                "generation_id": generation_id,
+                "search_event_id": search["results"][0]["search_event_id"],
+                "context_turns": 1,
+            },
+        )
+        assert context["evidence_status"] == "complete"
+        assert context["total_events"] == 2
+        assert [item["role"] for item in context["context"]] == ["user", "assistant"]
         filtered = await client.call("search.query.v2", {**_search_params("speed"), "provider": "claude"})
         assert filtered["results"] == []
 
@@ -423,6 +466,143 @@ async def test_searchd_publishes_only_complete_generations_and_serves_search_wor
         await client.close()
         await daemon.close()
         socket_parent.rmdir()
+
+
+def test_searchd_searches_only_published_recent_events_and_falls_back_for_archive(tmp_path):
+    connection = open_search_database(tmp_path / "search.db")
+    store = SearchStore(connection)
+    now_us = int(datetime.now(UTC).timestamp() * 1_000_000)
+
+    def publish(*, session_id: str, generation_id: str, object_id: str, revision: int, text: str, order_time_us: int):
+        source_epoch = str(uuid4())
+        records = [
+            {
+                **record,
+                "content_text": text if index == 0 else record["content_text"],
+                "order_time_us": order_time_us + index,
+            }
+            for index, record in enumerate(_records(text))
+        ]
+        store.index_object(
+            session_id=session_id,
+            generation_id=generation_id,
+            object_id=object_id,
+            desired_revision=revision,
+            provider="codex",
+            machine_id="cinder",
+            project="longhouse",
+            environment="local",
+            cwd="/workspace/longhouse",
+            git_repo="cipher982/longhouse",
+            opaque_source_id="codex/session.jsonl",
+            source_epoch=source_epoch,
+            records=records,
+        )
+        return store.publish_generation(
+            session_id=session_id,
+            generation_id=generation_id,
+            owner_id="42",
+            desired_revision=revision,
+            object_count=1,
+            object_set_hash=object_set_hash([object_id]),
+            event_count=len(records),
+            project="longhouse",
+            provider="codex",
+            environment="local",
+            cwd="/workspace/longhouse",
+            git_repo="cipher982/longhouse",
+            started_at=datetime.now(UTC).isoformat(),
+        )
+
+    def search(query: str, *, window_start_us: int):
+        return store.search(
+            owner_id="42",
+            query=query,
+            project=None,
+            provider=None,
+            environment=None,
+            window_start_us=window_start_us,
+            window_end_us=None,
+            limit=10,
+        )
+
+    session_id = str(uuid4())
+    first_generation = str(uuid4())
+    first_object = hashlib.sha256(b"published-recent").hexdigest()
+    assert publish(
+        session_id=session_id,
+        generation_id=first_generation,
+        object_id=first_object,
+        revision=1,
+        text="published recent recall needle",
+        order_time_us=now_us,
+    )["published"] is True
+    recent = search("published recent recall needle", window_start_us=now_us - 60_000_000)
+    assert recent["search_scope"] == "published_recent"
+    assert [row["session_id"] for row in recent["results"]] == [session_id]
+    normal_window = search(
+        "published recent recall needle",
+        window_start_us=int((datetime.now(UTC) - timedelta(days=90)).timestamp() * 1_000_000),
+    )
+    assert normal_window["search_scope"] == "published_recent"
+    assert [row["session_id"] for row in normal_window["results"]] == [session_id]
+
+    staged_object = hashlib.sha256(b"staged-replacement").hexdigest()
+    staged_generation = str(uuid4())
+    store.index_object(
+        session_id=session_id,
+        generation_id=staged_generation,
+        object_id=staged_object,
+        desired_revision=2,
+        provider="codex",
+        machine_id="cinder",
+        project="longhouse",
+        environment="local",
+        cwd="/workspace/longhouse",
+        git_repo="cipher982/longhouse",
+        opaque_source_id="codex/session.jsonl",
+        source_epoch=str(uuid4()),
+        records=[{**record, "content_text": "staged replacement needle", "order_time_us": now_us + index} for index, record in enumerate(_records("staged"))],
+    )
+    assert search("staged replacement needle", window_start_us=now_us - 60_000_000)["results"] == []
+
+    assert store.publish_generation(
+        session_id=session_id,
+        generation_id=staged_generation,
+        owner_id="42",
+        desired_revision=2,
+        object_count=1,
+        object_set_hash=object_set_hash([staged_object]),
+        event_count=2,
+        project="longhouse",
+        provider="codex",
+        environment="local",
+        cwd="/workspace/longhouse",
+        git_repo="cipher982/longhouse",
+        started_at=datetime.now(UTC).isoformat(),
+    )["published"] is True
+    assert search("published recent recall needle", window_start_us=now_us - 60_000_000)["results"] == []
+    assert {row["session_id"] for row in search("staged replacement needle", window_start_us=now_us - 60_000_000)["results"]} == {session_id}
+
+    archived_session = str(uuid4())
+    archived_generation = str(uuid4())
+    archived_object = hashlib.sha256(b"archived-recall").hexdigest()
+    old_us = int((datetime.now(UTC) - timedelta(days=100)).timestamp() * 1_000_000)
+    assert publish(
+        session_id=archived_session,
+        generation_id=archived_generation,
+        object_id=archived_object,
+        revision=1,
+        text="archived recall needle",
+        order_time_us=old_us,
+    )["published"] is True
+    archive = search("archived recall needle", window_start_us=old_us - 60_000_000)
+    assert archive["search_scope"] == "published_archive"
+    assert [row["session_id"] for row in archive["results"]] == [archived_session]
+    assert connection.execute(
+        "SELECT COUNT(*) FROM searchable_events WHERE session_id = ?", (archived_session,)
+    ).fetchone()[0] == 0
+    assert search("archived recall needle", window_start_us=now_us - 60_000_000)["results"] == []
 
 
 def test_searchd_upgrades_legacy_empty_object_for_same_subject_only(tmp_path):
