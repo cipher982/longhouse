@@ -1,6 +1,6 @@
 # Speed-of-Light Recall
 
-**Status:** Reviewed implementation plan
+**Status:** Implementing published-only lexical corpus
 **Owner:** Longhouse session core
 **Created:** 2026-07-20
 **Depends on:** `agent-session-recall-continuity.md`,
@@ -28,6 +28,28 @@ agent / CLI
 
 Raw objects and catalog facts remain authoritative. `search.db`, ranks,
 snippets, neighbor evidence, and term statistics are derived and rebuildable.
+
+### July 20 correction: rank the eligible corpus
+
+Production profiling disproved the remaining query-rewrite and global
+candidate shortcuts. A broad query can match more than 140,000 historical FTS
+rows, while only a small fraction survive the current-generation and requested
+window filters. Ranking a fixed global top-K and filtering it afterward loses
+valid results; deleting user terms changes their request.
+
+The fast lexical lane therefore indexes only **published, current-generation
+events inside a 91-day retained corpus, covering the normal 90-day discovery
+horizon with a small clock margin,** into a separate `searchable_fts` corpus.
+Search ranks that eligible corpus directly. Raw
+`events` and its full FTS index remain the staging/archive source for explicit
+wider (up to 365-day) requests, which are an honest slower lane rather than a
+silent truncation. Successful publication atomically replaces one session's
+searchable slice; supersession and deletion remove it.
+
+Telemetry records search scope, token counts, result counts, admission delay,
+and SQL time without raw query text. A schema-generation bump rebuilds this
+disposable store cleanly; `VACUUM`, embeddings, and further worker scaling are
+not the primary latency fix.
 
 ## Product Outcome
 
@@ -175,35 +197,11 @@ The same phase corrects MCP copy that still calls the canonical lexical route
 Compact identifiers and explicit phrases retain their current deterministic
 normalization.
 
-Before adding query policy, benchmark a candidate-first SQL shape that obtains
-ranked FTS rowids before expensive snippets and joins. It may ship only if
-result identity is unchanged across:
-
-- owner binding;
-- project, provider, and environment filters;
-- time windows;
-- current projection membership;
-- exact, phrase, natural, and miss fixtures.
-
-A fixed over-fetch is not sufficient proof: filtered matches can occur beyond
-the candidate window. If the two-step shape cannot preserve complete top-K
-semantics, discard it rather than hide the difference.
-
-If common natural queries still miss the searchd target, add a small
-corpus-aware compiler:
-
-1. Create a connection-local `fts5vocab` view in the temporary schema; do not
-   bump `SCHEMA_GENERATION` or rebuild the 28 GB derived store.
-2. Look up document frequency only for the normalized query tokens.
-3. Never rewrite compact identifiers or explicit phrases.
-4. Drop a high-frequency token only when at least two rarer tokens remain.
-5. Retain at most six discriminative tokens.
-6. Cache bounded frequency results and invalidate them after publication.
-
-The frequency threshold is selected from relevance and latency fixtures. It is
-not a hardcoded English or Longhouse stopword list. Removing a common AND term
-creates a candidate superset, but rank order may change; expected session
-identities gate enablement.
+The discovery index is a published-only recent corpus, not a second-stage
+candidate list. Its FTS rows already satisfy current generation and the normal
+window before ranking begins. A wider explicit request uses the archive lane,
+whose slower behavior remains visible to the caller. Query compilation only
+normalizes FTS syntax; it never removes user terms.
 
 ### 3. Searchd workload lanes
 
@@ -343,16 +341,18 @@ measured TCP/TLS setup cost without leaks.
 
 ### Phase 2: Reduce per-query work
 
-- Capture the current `EXPLAIN QUERY PLAN` and CPU profile.
-- Prototype the candidate-first SQL shape.
-- Keep it only if every filter/relevance fixture preserves exact result
-  identity.
-- If natural search remains above 200 ms, add the minimal temporary
-  `fts5vocab` compiler and gate it with the same fixtures.
+- Publish only current-generation events inside the 91-day retained discovery
+  corpus into `searchable_events` / `searchable_fts`; the normal 90-day window
+  uses this fast lane with a small clock margin.
+- Rank that corpus directly; never globally rank then over-fetch/filter.
+- Keep the full staging/archive index only for explicit wider search windows.
+- Bump the disposable search schema generation and rebuild cleanly.
+- Gate the cutover on session identities, filters, and phrase/identifier
+  fixtures; never delete user terms as a latency policy.
 
-**Exit:** representative natural searchd p95 is at or below 200 ms, or the
-remaining measured cost and rejected shortcuts are documented before changing
-architecture.
+**Exit:** representative recent natural searchd p95 is at or below 200 ms, or
+the remaining measured cost is documented before changing the retrieval
+architecture again.
 
 ### Phase 3: Return honest bounded evidence
 

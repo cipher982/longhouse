@@ -10,13 +10,17 @@ import time
 from dataclasses import dataclass
 from datetime import UTC
 from datetime import datetime
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 from uuid import UUID
 from uuid import uuid4
 
 SCHEMA_VERSION = 1
-SCHEMA_GENERATION = "searchd-v1-frozen-worklog-snapshots"
+SCHEMA_GENERATION = "searchd-v2-published-searchable-corpus"
+SEARCHABLE_RETENTION_DAYS = 91
+SEARCHABLE_FAST_WINDOW_DAYS = 90
+SEARCHABLE_FAST_WINDOW_MARGIN_SECONDS = 300
 _OBJECT_SET_DOMAIN = b"longhouse-search-object-set-v1\0"
 _WORKLOG_PAGE_BYTES = 700_000
 _WORKLOG_SNAPSHOT_BYTES = 64 * 1024 * 1024
@@ -39,7 +43,7 @@ _PUBLISH_AGGREGATES_SQL = """
       AND e.session_id = ? AND e.generation_id = ?
 """
 
-_SEARCH_SQL = """
+_ARCHIVE_SEARCH_SQL = """
     SELECT e.id AS search_event_id, e.session_id, e.generation_id, e.source_object_id,
            e.record_ordinal, e.event_id, e.order_time_us,
            e.role, e.tool_name,
@@ -64,6 +68,30 @@ _SEARCH_SQL = """
     ORDER BY events_fts.rank ASC
     LIMIT ?
 """
+
+_SEARCHABLE_SEARCH_SQL = """
+    SELECT e.source_event_id AS search_event_id, e.session_id, e.generation_id, e.source_object_id,
+           e.record_ordinal, e.event_id, e.order_time_us,
+           e.role, e.tool_name,
+           snippet(searchable_fts, 0, '', '', ' … ', 24) AS content_snippet,
+           snippet(searchable_fts, 1, '', '', ' … ', 24) AS tool_output_snippet,
+           e.project, e.provider, e.environment, e.indexed_through, e.event_count,
+           searchable_fts.rank AS rank
+    FROM searchable_fts
+    JOIN searchable_events e ON e.source_event_id = searchable_fts.rowid
+    WHERE searchable_fts MATCH ? AND e.owner_id = ?
+      AND (? IS NULL OR e.project = ?)
+      AND (? IS NULL OR e.provider = ?)
+      AND (? IS NULL OR e.environment = ?)
+      AND (? IS NULL OR e.order_time_us >= ?)
+      AND (? IS NULL OR e.order_time_us < ?)
+    ORDER BY searchable_fts.rank ASC
+    LIMIT ?
+"""
+
+# Focused plan tests and diagnostic tooling use this name for the all-history
+# correctness lane. Interactive recent recall uses _SEARCHABLE_SEARCH_SQL.
+_SEARCH_SQL = _ARCHIVE_SEARCH_SQL
 
 _CONTEXT_TARGET_SQL = """
     SELECT e.order_time_us, e.event_key, s.event_count
@@ -265,6 +293,50 @@ def _initialize_schema(connection: sqlite3.Connection) -> None:
             INSERT INTO events_fts(rowid, content_text, tool_output_text)
             VALUES (new.id, new.content_text, new.tool_output_text);
         END;
+        CREATE TABLE IF NOT EXISTS searchable_events (
+            source_event_id INTEGER PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            generation_id TEXT NOT NULL,
+            source_object_id TEXT NOT NULL,
+            record_ordinal INTEGER NOT NULL,
+            event_id TEXT NOT NULL,
+            order_time_us INTEGER NOT NULL,
+            role TEXT NOT NULL,
+            tool_name TEXT,
+            content_text TEXT,
+            tool_output_text TEXT,
+            owner_id TEXT NOT NULL,
+            project TEXT,
+            provider TEXT NOT NULL,
+            environment TEXT NOT NULL,
+            indexed_through INTEGER NOT NULL,
+            event_count INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS ix_searchable_events_session
+            ON searchable_events(session_id, generation_id, source_object_id);
+        CREATE INDEX IF NOT EXISTS ix_searchable_events_window
+            ON searchable_events(order_time_us);
+        CREATE VIRTUAL TABLE IF NOT EXISTS searchable_fts USING fts5(
+            content_text,
+            tool_output_text,
+            content='searchable_events',
+            content_rowid='source_event_id',
+            tokenize='unicode61 remove_diacritics 2'
+        );
+        CREATE TRIGGER IF NOT EXISTS searchable_events_ai AFTER INSERT ON searchable_events BEGIN
+            INSERT INTO searchable_fts(rowid, content_text, tool_output_text)
+            VALUES (new.source_event_id, new.content_text, new.tool_output_text);
+        END;
+        CREATE TRIGGER IF NOT EXISTS searchable_events_ad AFTER DELETE ON searchable_events BEGIN
+            INSERT INTO searchable_fts(searchable_fts, rowid, content_text, tool_output_text)
+            VALUES ('delete', old.source_event_id, old.content_text, old.tool_output_text);
+        END;
+        CREATE TRIGGER IF NOT EXISTS searchable_events_au AFTER UPDATE ON searchable_events BEGIN
+            INSERT INTO searchable_fts(searchable_fts, rowid, content_text, tool_output_text)
+            VALUES ('delete', old.source_event_id, old.content_text, old.tool_output_text);
+            INSERT INTO searchable_fts(rowid, content_text, tool_output_text)
+            VALUES (new.source_event_id, new.content_text, new.tool_output_text);
+        END;
         CREATE TABLE IF NOT EXISTS session_index (
             session_id TEXT PRIMARY KEY,
             generation_id TEXT NOT NULL,
@@ -313,6 +385,7 @@ class SearchStore:
     def startup_maintenance(self) -> None:
         """Run SQLite's bounded planner refresh outside interactive requests."""
 
+        self.connection.execute("DELETE FROM searchable_events WHERE order_time_us < ?", (_searchable_cutoff_us(),))
         self.connection.execute("PRAGMA optimize=0x10002")
         self._last_optimize_mono = time.monotonic()
 
@@ -638,6 +711,16 @@ class SearchStore:
                 """,
                 (session_id, session_id),
             )
+            self._replace_searchable_session(
+                session_id=session_id,
+                generation_id=generation_id,
+                desired_revision=desired_revision,
+                owner_id=owner_id,
+                project=project,
+                provider=provider,
+                environment=environment,
+                event_count=event_count,
+            )
             self.connection.execute("COMMIT")
         except BaseException:
             self.connection.execute("ROLLBACK")
@@ -649,6 +732,55 @@ class SearchStore:
             "indexed_through": str(desired_revision),
             "maintenance": maintenance,
         }
+
+    def _replace_searchable_session(
+        self,
+        *,
+        session_id: str,
+        generation_id: str,
+        desired_revision: int,
+        owner_id: str,
+        project: str | None,
+        provider: str,
+        environment: str,
+        event_count: int,
+    ) -> None:
+        """Atomically replace one session's published, recent discovery corpus."""
+
+        self.connection.execute("DELETE FROM searchable_events WHERE session_id = ?", (session_id,))
+        self.connection.execute(
+            """
+            INSERT INTO searchable_events(
+                source_event_id, session_id, generation_id, source_object_id,
+                record_ordinal, event_id, order_time_us, role, tool_name,
+                content_text, tool_output_text, owner_id, project, provider,
+                environment, indexed_through, event_count
+            )
+            SELECT e.id, e.session_id, e.generation_id, e.source_object_id,
+                   e.record_ordinal, e.event_id, e.order_time_us, e.role, e.tool_name,
+                   e.content_text, e.tool_output_text, ?, ?, ?, ?, ?, ?
+            FROM events e
+            JOIN projection_membership m ON m.object_id = e.source_object_id
+            WHERE m.session_id = ? AND m.generation_id = ? AND m.desired_revision = ?
+              AND e.session_id = ? AND e.generation_id = ?
+              AND e.order_time_us >= ?
+            """,
+            (
+                owner_id,
+                project,
+                provider,
+                environment,
+                desired_revision,
+                event_count,
+                session_id,
+                generation_id,
+                desired_revision,
+                session_id,
+                generation_id,
+                _searchable_cutoff_us(),
+            ),
+        )
+        self.connection.execute("DELETE FROM searchable_events WHERE order_time_us < ?", (_searchable_cutoff_us(),))
 
     def search(
         self,
@@ -665,8 +797,9 @@ class SearchStore:
         fts_query, query_token_count, compiled_token_count = self._compile_fts_query(query)
         if not fts_query:
             return {"results": [], "query_token_count": query_token_count, "compiled_token_count": compiled_token_count}
+        use_searchable_corpus = window_start_us is not None and window_start_us >= _fast_scope_cutoff_us()
         rows = self.connection.execute(
-            _SEARCH_SQL,
+            _SEARCHABLE_SEARCH_SQL if use_searchable_corpus else _ARCHIVE_SEARCH_SQL,
             (
                 fts_query,
                 owner_id,
@@ -687,6 +820,7 @@ class SearchStore:
             "results": [dict(row) for row in rows],
             "query_token_count": query_token_count,
             "compiled_token_count": compiled_token_count,
+            "search_scope": "published_recent" if use_searchable_corpus else "published_archive",
         }
 
     def recall_context(
@@ -985,6 +1119,7 @@ class SearchStore:
         self.connection.execute("BEGIN IMMEDIATE")
         try:
             self.connection.execute("DELETE FROM session_index WHERE session_id = ?", (session_id,))
+            self.connection.execute("DELETE FROM searchable_events WHERE session_id = ?", (session_id,))
             self.connection.execute("DELETE FROM projection_membership WHERE session_id = ?", (session_id,))
             self.connection.execute("DELETE FROM events WHERE session_id = ?", (session_id,))
             self.connection.execute("DELETE FROM indexed_objects WHERE session_id = ?", (session_id,))
@@ -1010,6 +1145,17 @@ def _object_set_hash(object_ids: list[str]) -> str:
 def _object_projection_hash(**value: object) -> str:
     """Hash immutable render payload only; session metadata is published separately."""
     return hashlib.sha256(canonical_json(value).encode("utf-8")).hexdigest()
+
+
+def _searchable_cutoff_us() -> int:
+    return int((datetime.now(UTC) - timedelta(days=SEARCHABLE_RETENTION_DAYS)).timestamp() * 1_000_000)
+
+
+def _fast_scope_cutoff_us() -> int:
+    return int(
+        (datetime.now(UTC) - timedelta(days=SEARCHABLE_FAST_WINDOW_DAYS, seconds=SEARCHABLE_FAST_WINDOW_MARGIN_SECONDS)).timestamp()
+        * 1_000_000
+    )
 
 
 def _fts_query(raw: str) -> str:

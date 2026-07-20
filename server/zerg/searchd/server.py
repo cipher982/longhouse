@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import fcntl
+import logging
 import os
 import re
 import sqlite3
@@ -29,6 +30,7 @@ from zerg.searchd.store import open_search_read_database
 _HASH = re.compile(r"[0-9a-f]{64}\Z")
 _PROVIDER = re.compile(r"[a-z0-9][a-z0-9_-]{0,31}\Z")
 _ROLES = {"user", "assistant", "tool", "system"}
+logger = logging.getLogger(__name__)
 
 
 class _ReadDeadlineExceeded(RuntimeError):
@@ -205,13 +207,21 @@ class SearchDaemon:
                 return self._result(request, published)
             if request.method == "search.query.v2":
                 params = _search_params(request.params)
-                return self._result(
-                    request,
-                    await self._run_interactive_read(
-                        lambda store: store.search(**params),
-                        deadline_mono_ns=int(request.deadline_mono_ns),
-                    ),
+                result = await self._run_interactive_read(
+                    lambda store: store.search(**params),
+                    deadline_mono_ns=int(request.deadline_mono_ns),
                 )
+                timing = result.get("timing") if isinstance(result.get("timing"), dict) else {}
+                logger.info(
+                    "searchd query scope=%s query_tokens=%s compiled_tokens=%s results=%s admit_ms=%s sql_ms=%s",
+                    result.get("search_scope"),
+                    result.get("query_token_count"),
+                    result.get("compiled_token_count"),
+                    len(result.get("results") or []),
+                    timing.get("admit_ms"),
+                    timing.get("sql_ms"),
+                )
+                return self._result(request, result)
             if request.method == "search.context.v2":
                 params = _context_params(request.params)
                 return self._result(
