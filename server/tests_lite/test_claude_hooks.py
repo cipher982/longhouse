@@ -41,13 +41,13 @@ def test_claude_hook_leaves_elicitation_questions_to_transcript_ingest():
     assert "permission_prompt)              STATE=\"blocked\"" in HOOK_SCRIPT
 
 
-def test_claude_hook_does_not_inject_startup_context_by_default():
-    # Startup continuity injection lives in labs/startup-continuity, not the
-    # default install. The default hook must stay observation-only.
+def test_claude_hook_does_not_fetch_dynamic_startup_context():
+    # The coordination bootstrap is static and local. Startup continuity's
+    # hosted project-summary fetch remains lab-only.
     assert "/api/agents/sessions/startup-context" not in HOOK_SCRIPT
     assert "LONGHOUSE_HOOK_URL" not in HOOK_SCRIPT
     assert "LONGHOUSE_HOOK_TOKEN" not in HOOK_SCRIPT
-    assert "hookSpecificOutput" not in HOOK_SCRIPT
+    assert "LONGHOUSE_COORDINATION_BOOTSTRAP" in HOOK_SCRIPT
 
 
 def test_claude_hook_hot_path_stays_local_only():

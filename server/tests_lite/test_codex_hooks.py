@@ -41,13 +41,13 @@ def test_codex_hook_script_has_managed_session_id_support():
     assert '--arg provider "codex"' in CODEX_HOOK_SCRIPT, "must stamp Codex presence events with provider=codex"
 
 
-def test_codex_hook_does_not_inject_startup_context_by_default():
-    # Startup continuity injection lives in labs/startup-continuity, not the
-    # default install. The default hook must stay observation-only.
+def test_codex_hook_does_not_fetch_dynamic_startup_context():
+    # The coordination bootstrap is static and local. Startup continuity's
+    # hosted project-summary fetch remains lab-only.
     assert '/api/agents/sessions/startup-context' not in CODEX_HOOK_SCRIPT
     assert 'LONGHOUSE_HOOK_URL' not in CODEX_HOOK_SCRIPT
     assert 'LONGHOUSE_HOOK_TOKEN' not in CODEX_HOOK_SCRIPT
-    assert 'hookSpecificOutput' not in CODEX_HOOK_SCRIPT
+    assert 'LONGHOUSE_COORDINATION_BOOTSTRAP' in CODEX_HOOK_SCRIPT
 
 
 def test_codex_hook_hot_path_stays_local_only():

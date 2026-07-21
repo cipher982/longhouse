@@ -25,6 +25,7 @@ _REQUIRED_BOOL_FIELDS = (
     "tail_output",
     "runtime_phase",
     "transcript_binding",
+    "startup_coordination_context",
     "can_resume",
     "turn_start",
 )

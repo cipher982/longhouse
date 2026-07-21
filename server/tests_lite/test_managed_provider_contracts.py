@@ -48,6 +48,7 @@ def _manifest_item(provider: str = "test") -> dict:
         "tail_output": True,
         "runtime_phase": True,
         "transcript_binding": True,
+        "startup_coordination_context": True,
         "run_once": False,
         "turn_start": True,
         "operation_evidence": {
@@ -112,6 +113,19 @@ def test_provider_identity_contracts_are_manifest_backed():
             "cursor_helm",
         }
     )
+
+
+def test_startup_coordination_context_support_is_explicit():
+    assert {
+        contract.provider: contract.startup_coordination_context
+        for contract in all_managed_provider_contracts()
+    } == {
+        "codex": True,
+        "claude": True,
+        "opencode": False,
+        "antigravity": False,
+        "cursor": False,
+    }
 
 
 def test_control_plane_index_rejects_contract_collisions():

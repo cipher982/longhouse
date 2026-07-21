@@ -56,6 +56,7 @@ class ManagedProviderContract:
     tail_output: bool = True
     runtime_phase: bool = True
     transcript_binding: bool = True
+    startup_coordination_context: bool = False
     can_resume: bool = False
     console_adapter: str | None = None
     turn_start: bool = False
@@ -135,6 +136,7 @@ def _contract_from_manifest_item(item: dict[str, object]) -> ManagedProviderCont
         tail_output=bool(item.get("tail_output", True)),
         runtime_phase=bool(item.get("runtime_phase", True)),
         transcript_binding=bool(item.get("transcript_binding", True)),
+        startup_coordination_context=bool(item.get("startup_coordination_context", False)),
         can_resume=bool(item.get("can_resume", False)),
         console_adapter=(str(item["console_adapter"]) if item.get("console_adapter") else None),
         turn_start=bool(item.get("turn_start", False)),
