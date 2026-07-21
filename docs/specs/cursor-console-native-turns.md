@@ -95,6 +95,11 @@ provider tool identity when available and by run-scoped ordinal otherwise.
 Optimistic input is superseded by its exactly bound native user record, never
 by text comparison.
 
+Here, canonical means the lossless provider archive. It does not prove that
+every persisted retry artifact was presented by an interactive TUI. That
+separate visibility contract is defined in
+`docs/specs/cursor-output-visibility-contract.md`.
+
 ## Capability And Cutover
 
 The provider contract names `cursor_print` as Cursor's Console adapter and
