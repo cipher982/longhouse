@@ -170,6 +170,61 @@ def _render_manifest(
 
 
 @pytest.mark.asyncio
+async def test_storage_telemetry_summary_is_bounded_and_accounts_objects(daemon_paths):
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        epoch = uuid4()
+        session_id = uuid4()
+        raw = _raw_params(epoch=epoch, session_id=session_id, start=0, end=6, records=(b"hello\n",), sealed_at=now)
+        raw.update(
+            render_state="ready",
+            render_manifest=_render_manifest(uuid4(), source_epoch=epoch),
+            projectors=["search-v2"],
+        )
+        await client.call("storage.raw_object.commit.v2", raw)
+
+        summary = await client.call("storage.telemetry.summary.v2", {})
+
+        assert summary["objects"] == {
+            "raw": {"count": 1, "bytes": 3},
+            "render": {"count": 1, "bytes": 80},
+            "media": {"count": 0, "bytes": 0},
+        }
+        assert summary["projectors"] == [
+            {
+                "projector": "search-v2",
+                "lagging": 1,
+                "failed": 0,
+                "claimed": 0,
+                "oldest_lag_updated_at": summary["projectors"][0]["oldest_lag_updated_at"],
+            }
+        ]
+
+        await client.call(
+            "storage.session.delete.v2",
+            {
+                "session_id": str(session_id),
+                "deletion_id": str(uuid4()),
+                "reason": "telemetry_test",
+                "deleted_at": (now + timedelta(seconds=1)).isoformat(),
+            },
+        )
+        retired = await client.call("storage.telemetry.summary.v2", {})
+        assert retired["objects"]["raw"] == {"count": 0, "bytes": 0}
+        assert retired["objects"]["render"] == {"count": 0, "bytes": 0}
+        # Deletion intentionally leaves one lagging search-v2 cleanup job.
+        assert retired["projectors"][0]["projector"] == "search-v2"
+        assert retired["projectors"][0]["lagging"] == 1
+    finally:
+        await client.close()
+        await daemon.close()
+
+
+@pytest.mark.asyncio
 async def test_first_durable_content_reveals_hidden_console_shell(daemon_paths):
     database_path, socket_path = daemon_paths
     now = datetime.now(UTC).replace(microsecond=0)

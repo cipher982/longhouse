@@ -37,6 +37,10 @@ _LIVE_STORE_TABLE_BYTES_DEADLINE_MS_ENV = "LONGHOUSE_LIVE_STORE_TABLE_BYTES_DEAD
 _LIVE_STORE_TABLE_BYTES_DEFAULT_DEADLINE_MS = 50
 
 
+def _mark_godview_failure() -> None:
+    metrics.telemetry_health.labels(component="godview_refresh").set(0.0)
+
+
 def refresh_write_serializer_gauges() -> None:
     """Mirror WriteSerializer.get_metrics() + WAL bytes into gauges."""
     try:
@@ -47,6 +51,7 @@ def refresh_write_serializer_gauges() -> None:
             return
         m = ws.get_metrics()
     except Exception:
+        _mark_godview_failure()
         logger.exception("godview: failed to read write serializer metrics")
         return
 
@@ -72,6 +77,7 @@ def refresh_write_serializer_gauges() -> None:
         if wal_bytes is not None:
             metrics.sqlite_wal_bytes.set(float(wal_bytes))
     except Exception:
+        _mark_godview_failure()
         logger.exception("godview: failed to read WAL bytes")
 
 
@@ -85,6 +91,7 @@ def refresh_live_write_serializer_gauges() -> None:
             return
         m = ws.get_metrics()
     except Exception:
+        _mark_godview_failure()
         logger.exception("godview: failed to read live write serializer metrics")
         return
 
@@ -110,6 +117,7 @@ def refresh_live_write_serializer_gauges() -> None:
         if wal_bytes is not None:
             metrics.live_sqlite_wal_bytes.set(float(wal_bytes))
     except Exception:
+        _mark_godview_failure()
         logger.exception("godview: failed to read Live Store WAL bytes")
 
 
@@ -128,6 +136,7 @@ def refresh_live_store_gauges() -> None:
             _refresh_live_archive_outbox_gauges(db)
             _refresh_live_store_table_bytes_gauges(db)
     except Exception:
+        _mark_godview_failure()
         logger.exception("godview: failed to refresh Live Store gauges")
 
 
@@ -196,9 +205,11 @@ def _refresh_live_store_table_bytes_gauges(_db) -> None:
         with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=0.1) as conn:
             table_bytes = collect_sqlite_table_bytes_with_deadline(conn, deadline_monotonic=deadline_monotonic)
     except SQLiteTableBytesTimeout:
+        _mark_godview_failure()
         logger.warning("godview: Live Store table-byte collection timed out")
         return
     except Exception:
+        _mark_godview_failure()
         logger.exception("godview: failed to collect Live Store table bytes")
         return
 
@@ -254,6 +265,7 @@ def refresh_device_gauges() -> None:
         with session_factory() as db:
             summary_map = load_machine_transport_health_map(db)
     except Exception:
+        _mark_godview_failure()
         logger.exception("godview: failed to load machine transport health")
         return
 
@@ -323,7 +335,80 @@ def _refresh_live_device_gauges() -> None:
 
 def refresh_godview_gauges() -> None:
     """Refresh all god-view gauges. Safe to call at scrape time."""
+    metrics.telemetry_health.labels(component="godview_refresh").set(1.0)
     refresh_write_serializer_gauges()
     refresh_live_write_serializer_gauges()
     refresh_live_store_gauges()
     refresh_device_gauges()
+    refresh_host_disk_gauges()
+    refresh_storage_telemetry_gauges()
+
+
+def refresh_host_disk_gauges() -> None:
+    from zerg.services.historical_admission import sample_storage_disk
+    from zerg.services.raw_object_workers import storage_v2_root
+
+    sample_storage_disk(storage_v2_root())
+
+
+def refresh_storage_telemetry_gauges() -> None:
+    """Project only the cached async catalog snapshot into scrape-time gauges."""
+
+    from zerg.services.storage_telemetry_snapshot import get_storage_telemetry_snapshot
+
+    snapshot = get_storage_telemetry_snapshot()
+    snapshot_healthy = snapshot.fresh and snapshot.last_error is None
+    if snapshot.last_success_timestamp is not None:
+        for component in ("catalog_state", "object_state", "projector_state", "recall_state"):
+            metrics.telemetry_last_success_timestamp_seconds.labels(component=component).set(snapshot.last_success_timestamp)
+
+    metrics.telemetry_health.labels(component="catalog_state").set(1.0 if snapshot_healthy else 0.0)
+    objects = snapshot.payload.get("objects") if snapshot.payload is not None else None
+    object_state_healthy = snapshot_healthy and isinstance(objects, dict)
+    raw_count = None
+    if isinstance(objects, dict):
+        total_bytes = 0
+        complete = True
+        for kind in ("raw", "render", "media"):
+            row = objects.get(kind)
+            if not isinstance(row, dict):
+                complete = False
+                continue
+            count = row.get("count")
+            stored_bytes = row.get("bytes")
+            if type(count) is not int or type(stored_bytes) is not int:
+                complete = False
+                continue
+            if kind == "raw":
+                raw_count = count
+            metrics.storage_object_count.labels(kind=kind).set(float(count))
+            metrics.storage_object_stored_bytes.labels(kind=kind).set(float(stored_bytes))
+            total_bytes += stored_bytes
+        object_state_healthy = object_state_healthy and complete
+        if complete:
+            metrics.storage_total_stored_bytes.set(float(total_bytes))
+    metrics.telemetry_health.labels(component="object_state").set(1.0 if object_state_healthy else 0.0)
+
+    now = datetime.now(timezone.utc)
+    projectors = snapshot.payload.get("projectors") if snapshot.payload is not None else None
+    search_projector = None
+    if isinstance(projectors, list):
+        search_projector = next(
+            (row for row in projectors if isinstance(row, dict) and row.get("projector") == "search-v2"),
+            None,
+        )
+    projector_state_healthy = snapshot_healthy and isinstance(projectors, list) and (search_projector is not None or raw_count == 0)
+    metrics.telemetry_health.labels(component="projector_state").set(1.0 if projector_state_healthy else 0.0)
+    # Recall has no independent bounded health source yet. Never infer it from
+    # search-v2 and accidentally turn missing evidence green.
+    metrics.telemetry_health.labels(component="recall_state").set(0.0)
+    if search_projector is None:
+        return
+    projector = "search-v2"
+    metrics.projector_lag_sessions.labels(projector=projector).set(float(search_projector.get("lagging") or 0))
+    metrics.projector_failed_sessions.labels(projector=projector).set(float(search_projector.get("failed") or 0))
+    metrics.projector_claimed_sessions.labels(projector=projector).set(float(search_projector.get("claimed") or 0))
+    oldest = _normalize_db_datetime(search_projector.get("oldest_lag_updated_at"))
+    metrics.projector_oldest_lag_age_seconds.labels(projector=projector).set(
+        max(0.0, (now - oldest).total_seconds()) if oldest is not None else float("nan")
+    )

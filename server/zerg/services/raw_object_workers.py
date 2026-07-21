@@ -40,6 +40,15 @@ def storage_v2_root() -> Path:
     return get_settings().data_dir / "objects-v2"
 
 
+def _env_positive_int(name: str, default: int) -> int:
+    raw = os.getenv(name, "").strip()
+    try:
+        value = int(raw) if raw else default
+    except ValueError:
+        value = default
+    return max(1, value)
+
+
 def _seal_in_worker(root: str, spec: RawObjectSpec) -> SealedRawObject:
     return seal_raw_object(Path(root), spec)
 
@@ -397,7 +406,13 @@ _pool: RawObjectWorkerPool | None = None
 def get_raw_object_worker_pool() -> RawObjectWorkerPool:
     global _pool
     if _pool is None or _pool._closed:
-        _pool = RawObjectWorkerPool(storage_v2_root())
+        _pool = RawObjectWorkerPool(
+            storage_v2_root(),
+            live_workers=_env_positive_int("LONGHOUSE_STORAGE_RAW_LIVE_WORKERS", 2),
+            repair_workers=_env_positive_int("LONGHOUSE_STORAGE_RAW_REPAIR_WORKERS", 1),
+            user_read_workers=_env_positive_int("LONGHOUSE_STORAGE_RAW_READ_WORKERS", 1),
+            queue_multiplier=_env_positive_int("LONGHOUSE_STORAGE_RAW_QUEUE_MULTIPLIER", 2),
+        )
     return _pool
 
 

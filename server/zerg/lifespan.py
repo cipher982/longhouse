@@ -204,6 +204,13 @@ async def lifespan(app: FastAPI):
             except Exception:
                 app.state.search_v2_projector_started = False
                 logger.exception("Failed to start search-v2 projector (non-fatal)")
+            try:
+                from zerg.services.storage_telemetry_snapshot import run_storage_telemetry_refresh_loop
+
+                app.state.storage_telemetry_task = asyncio.create_task(run_storage_telemetry_refresh_loop())
+                logger.info("Storage telemetry refresh loop started")
+            except Exception:
+                logger.exception("Failed to start storage telemetry refresh loop (non-fatal)")
         elif live_store_configured():
             with _timed_startup_step("initialize_live_database"):
                 initialize_live_database()
@@ -510,6 +517,10 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Error during startup: {e}")
         if catalog_mode and not _settings.testing:
+            telemetry_task = getattr(app.state, "storage_telemetry_task", None)
+            if telemetry_task is not None:
+                telemetry_task.cancel()
+                await asyncio.gather(telemetry_task, return_exceptions=True)
             try:
                 from zerg.services.search_v2_projector import stop_search_v2_projector
 
@@ -593,6 +604,10 @@ async def lifespan(app: FastAPI):
         await topic_manager.shutdown()
 
         if catalog_mode and not _settings.testing:
+            telemetry_task = getattr(app.state, "storage_telemetry_task", None)
+            if telemetry_task is not None:
+                telemetry_task.cancel()
+                await asyncio.gather(telemetry_task, return_exceptions=True)
             try:
                 from zerg.services.search_v2_projector import stop_search_v2_projector
 

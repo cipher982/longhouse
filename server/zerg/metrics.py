@@ -264,6 +264,80 @@ try:
         labelnames=("version", "commit", "channel", "dirty"),
     )
 
+    storage_object_stored_bytes = Gauge(
+        "longhouse_storage_object_stored_bytes",
+        "Catalog-accounted stored bytes by immutable object kind",
+        labelnames=("kind",),
+    )
+
+    storage_object_count = Gauge(
+        "longhouse_storage_object_count",
+        "Catalog-accounted immutable object count by kind",
+        labelnames=("kind",),
+    )
+
+    storage_total_stored_bytes = Gauge(
+        "longhouse_storage_total_stored_bytes",
+        "Catalog-accounted stored bytes for this runtime tenant",
+    )
+
+    projector_lag_sessions = Gauge(
+        "longhouse_projector_lag_sessions",
+        "Sessions whose desired projector revision exceeds the completed revision",
+        labelnames=("projector",),
+    )
+
+    projector_failed_sessions = Gauge(
+        "longhouse_projector_failed_sessions",
+        "Projector session rows currently in failed state",
+        labelnames=("projector",),
+    )
+
+    projector_claimed_sessions = Gauge(
+        "longhouse_projector_claimed_sessions",
+        "Projector session rows with an active claim",
+        labelnames=("projector",),
+    )
+
+    projector_oldest_lag_age_seconds = Gauge(
+        "longhouse_projector_oldest_lag_age_seconds",
+        "Age of the oldest lagging projector session",
+        labelnames=("projector",),
+    )
+
+    telemetry_health = Gauge(
+        "longhouse_telemetry_health",
+        "Whether one bounded telemetry component is currently healthy (1/0)",
+        labelnames=("component",),
+    )
+
+    telemetry_last_success_timestamp_seconds = Gauge(
+        "longhouse_telemetry_last_success_timestamp_seconds",
+        "Unix timestamp of the last successful telemetry component refresh",
+        labelnames=("component",),
+    )
+
+    historical_admission_rejections_total = Counter(
+        "longhouse_historical_admission_rejections_total",
+        "Historical work rejected by bounded admission reason",
+        labelnames=("path", "reason"),
+    )
+
+    historical_disk_free_bytes = Gauge(
+        "longhouse_historical_disk_free_bytes",
+        "Free bytes on the Runtime Host storage volume used for historical admission",
+    )
+
+    historical_disk_free_ratio = Gauge(
+        "longhouse_historical_disk_free_ratio",
+        "Free fraction on the Runtime Host storage volume used for historical admission",
+    )
+
+    historical_budget_available_bytes = Gauge(
+        "longhouse_historical_budget_available_bytes",
+        "Current process-local historical byte-budget tokens; -1 when disabled",
+    )
+
     # ------------------------------------------------------------------
     # God-view gauges: current operational state, refreshed at scrape time
     # (see routers/metrics.py::_refresh_dynamic_gauges). These turn the
@@ -470,6 +544,7 @@ except ModuleNotFoundError:  # pragma: no cover – metrics disabled when lib ab
     session_input_attachments_total = _NoopCounter()  # type: ignore[assignment]
     session_input_attachment_blob_fetches_total = _NoopCounter()  # type: ignore[assignment]
     product_read_requests_total = _NoopCounter()  # type: ignore[assignment]
+    historical_admission_rejections_total = _NoopCounter()  # type: ignore[assignment]
 
     # Provide *noop* Gauge so code can call ``set`` without importing
     # the optional dependency in minimal CI images.
@@ -551,3 +626,15 @@ except ModuleNotFoundError:  # pragma: no cover – metrics disabled when lib ab
     product_read_stage_seconds = _NoopHistogram()  # type: ignore[assignment]
     product_read_bytes = _NoopHistogram()  # type: ignore[assignment]
     product_read_objects = _NoopHistogram()  # type: ignore[assignment]
+    storage_object_stored_bytes = _NoopGauge()  # type: ignore[assignment]
+    storage_object_count = _NoopGauge()  # type: ignore[assignment]
+    storage_total_stored_bytes = _NoopGauge()  # type: ignore[assignment]
+    projector_lag_sessions = _NoopGauge()  # type: ignore[assignment]
+    projector_failed_sessions = _NoopGauge()  # type: ignore[assignment]
+    projector_claimed_sessions = _NoopGauge()  # type: ignore[assignment]
+    projector_oldest_lag_age_seconds = _NoopGauge()  # type: ignore[assignment]
+    telemetry_health = _NoopGauge()  # type: ignore[assignment]
+    telemetry_last_success_timestamp_seconds = _NoopGauge()  # type: ignore[assignment]
+    historical_disk_free_bytes = _NoopGauge()  # type: ignore[assignment]
+    historical_disk_free_ratio = _NoopGauge()  # type: ignore[assignment]
+    historical_budget_available_bytes = _NoopGauge()  # type: ignore[assignment]

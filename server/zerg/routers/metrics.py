@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 
 from fastapi import APIRouter
 from fastapi import HTTPException
@@ -66,14 +67,24 @@ def _refresh_dynamic_gauges() -> None:
 
         refresh_godview_gauges()
     except Exception:
+        from zerg.metrics import telemetry_health
+
+        telemetry_health.labels(component="godview_refresh").set(0.0)
         logger.exception("Failed to refresh god-view gauges")
     try:
         from zerg.build_info import load
         from zerg.metrics import build_identity_info
+        from zerg.metrics import telemetry_health
+        from zerg.metrics import telemetry_last_success_timestamp_seconds
 
         build = load()
         build_identity_info.labels(build.version, build.commit, build.channel, str(build.dirty).lower()).set(1)
+        telemetry_health.labels(component="build_identity").set(1.0)
+        telemetry_last_success_timestamp_seconds.labels(component="build_identity").set(time.time())
     except Exception:
+        from zerg.metrics import telemetry_health
+
+        telemetry_health.labels(component="build_identity").set(0.0)
         logger.exception("Failed to refresh build identity gauge")
 
 
@@ -86,6 +97,11 @@ try:
         # Deny (404, hide existence) before doing any DB work on the refresh.
         if not _metrics_access_allowed(request):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+        from zerg.metrics import telemetry_health
+        from zerg.metrics import telemetry_last_success_timestamp_seconds
+
+        telemetry_health.labels(component="metrics_export").set(1.0)
+        telemetry_last_success_timestamp_seconds.labels(component="metrics_export").set(time.time())
         _refresh_dynamic_gauges()
         return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 

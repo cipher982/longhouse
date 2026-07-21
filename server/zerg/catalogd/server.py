@@ -367,6 +367,8 @@ class CatalogDaemon:
             return await self._list_storage_sessions(request)
         if request.method == "storage.health.v2":
             return await self._read_storage_health(request)
+        if request.method == "storage.telemetry.summary.v2":
+            return await self._read_storage_telemetry_summary(request)
         if request.method == "storage.session.raw_manifest.v2":
             return await self._read_storage_session_raw_manifest(request)
         if request.method == "storage.session.render_manifest.v2":
@@ -2159,6 +2161,13 @@ class CatalogDaemon:
             self._store.read_storage_health,
             owner_id=request.params["owner_id"],
         )
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _read_storage_telemetry_summary(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if request.params:
+            return self._error(request, "invalid_request", "storage.telemetry.summary.v2 takes no parameters")
+        assert self._store is not None
+        result = await self._run_read_store(self._store.read_storage_telemetry_summary)
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _read_storage_session_raw_manifest(self, request: CatalogRpcRequest) -> CatalogRpcResponse:

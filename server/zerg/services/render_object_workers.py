@@ -40,6 +40,15 @@ def _worker_ping() -> int:
     return os.getpid()
 
 
+def _env_positive_int(name: str, default: int) -> int:
+    raw = os.getenv(name, "").strip()
+    try:
+        value = int(raw) if raw else default
+    except ValueError:
+        value = default
+    return max(1, value)
+
+
 class RenderObjectWorkerPool:
     def __init__(
         self,
@@ -253,7 +262,13 @@ _pool: RenderObjectWorkerPool | None = None
 def get_render_object_worker_pool() -> RenderObjectWorkerPool:
     global _pool
     if _pool is None or _pool._closed:
-        _pool = RenderObjectWorkerPool(storage_v2_root())
+        _pool = RenderObjectWorkerPool(
+            storage_v2_root(),
+            live_workers=_env_positive_int("LONGHOUSE_STORAGE_RENDER_LIVE_WORKERS", 1),
+            repair_workers=_env_positive_int("LONGHOUSE_STORAGE_RENDER_REPAIR_WORKERS", 1),
+            user_read_workers=_env_positive_int("LONGHOUSE_STORAGE_RENDER_READ_WORKERS", 2),
+            queue_multiplier=_env_positive_int("LONGHOUSE_STORAGE_RENDER_QUEUE_MULTIPLIER", 2),
+        )
     return _pool
 
 

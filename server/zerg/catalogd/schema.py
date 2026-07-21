@@ -17,6 +17,7 @@ from datetime import UTC
 from datetime import datetime
 from pathlib import Path
 
+from sqlalchemy import BigInteger
 from sqlalchemy import CheckConstraint
 from sqlalchemy import Column
 from sqlalchemy import Connection
@@ -81,6 +82,24 @@ catalog_meta = Table(
     CheckConstraint("singleton = 1", name="ck_catalog_meta_singleton"),
     CheckConstraint("schema_version > 0", name="ck_catalog_meta_schema_version_positive"),
     CheckConstraint("commit_seq >= 0", name="ck_catalog_meta_commit_seq_nonnegative"),
+)
+
+storage_telemetry_counters = Table(
+    "storage_telemetry_counters",
+    _catalog_metadata,
+    Column("singleton", Integer, primary_key=True),
+    Column("raw_count", BigInteger, nullable=False, server_default=text("0")),
+    Column("raw_bytes", BigInteger, nullable=False, server_default=text("0")),
+    Column("render_count", BigInteger, nullable=False, server_default=text("0")),
+    Column("render_bytes", BigInteger, nullable=False, server_default=text("0")),
+    Column("media_count", BigInteger, nullable=False, server_default=text("0")),
+    Column("media_bytes", BigInteger, nullable=False, server_default=text("0")),
+    Column("search_projector_rows", BigInteger, nullable=False, server_default=text("0")),
+    Column("search_projector_lagging", BigInteger, nullable=False, server_default=text("0")),
+    Column("search_projector_failed", BigInteger, nullable=False, server_default=text("0")),
+    Column("search_projector_claimed", BigInteger, nullable=False, server_default=text("0")),
+    Column("updated_at", Text, nullable=False),
+    CheckConstraint("singleton = 1", name="ck_storage_telemetry_counters_singleton"),
 )
 
 
@@ -501,6 +520,181 @@ def _migrate_catalog_schema(engine: Engine, *, from_version: int) -> None:
             connection.exec_driver_sql(f"PRAGMA user_version={next_version}")
 
 
+def _initialize_storage_telemetry_accounting(engine: Engine) -> None:
+    """Reconcile once at startup, then maintain O(1) counters transactionally."""
+
+    now = datetime.now(UTC).isoformat()
+    with engine.begin() as connection:
+        connection.execute(storage_telemetry_counters.delete().where(storage_telemetry_counters.c.singleton == 1))
+        connection.exec_driver_sql(
+            """
+            INSERT INTO storage_telemetry_counters (
+                singleton, raw_count, raw_bytes, render_count, render_bytes,
+                media_count, media_bytes, search_projector_rows,
+                search_projector_lagging, search_projector_failed,
+                search_projector_claimed, updated_at
+            )
+            SELECT
+                1,
+                (SELECT COUNT(*) FROM raw_objects WHERE retired_at IS NULL),
+                (SELECT COALESCE(SUM(compressed_size), 0) FROM raw_objects WHERE retired_at IS NULL),
+                (SELECT COUNT(*) FROM render_objects WHERE retired_at IS NULL),
+                (SELECT COALESCE(SUM(compressed_size), 0) FROM render_objects WHERE retired_at IS NULL),
+                (SELECT COUNT(*) FROM media_objects WHERE state = 'present'),
+                (SELECT COALESCE(SUM(byte_size), 0) FROM media_objects WHERE state = 'present'),
+                (SELECT COUNT(*) FROM projector_state WHERE projector = 'search-v2'),
+                (SELECT COUNT(*) FROM projector_state
+                    WHERE projector = 'search-v2' AND desired_revision > completed_revision),
+                (SELECT COUNT(*) FROM projector_state
+                    WHERE projector = 'search-v2' AND status = 'failed'),
+                (SELECT COUNT(*) FROM projector_state
+                    WHERE projector = 'search-v2' AND claim_token IS NOT NULL),
+                ?
+            """,
+            (now,),
+        )
+
+        trigger_names = (
+            "storage_telemetry_raw_insert",
+            "storage_telemetry_raw_update",
+            "storage_telemetry_raw_delete",
+            "storage_telemetry_render_insert",
+            "storage_telemetry_render_update",
+            "storage_telemetry_render_delete",
+            "storage_telemetry_media_insert",
+            "storage_telemetry_media_update",
+            "storage_telemetry_media_delete",
+            "storage_telemetry_projector_insert",
+            "storage_telemetry_projector_update",
+            "storage_telemetry_projector_delete",
+        )
+        for trigger_name in trigger_names:
+            connection.exec_driver_sql(f"DROP TRIGGER IF EXISTS {trigger_name}")
+
+        trigger_statements = (
+            """CREATE TRIGGER IF NOT EXISTS storage_telemetry_raw_insert
+            AFTER INSERT ON raw_objects WHEN NEW.retired_at IS NULL BEGIN
+                UPDATE storage_telemetry_counters SET
+                    raw_count = raw_count + 1,
+                    raw_bytes = raw_bytes + NEW.compressed_size,
+                    updated_at = CURRENT_TIMESTAMP WHERE singleton = 1;
+            END""",
+            """CREATE TRIGGER IF NOT EXISTS storage_telemetry_raw_update
+            AFTER UPDATE OF retired_at, compressed_size ON raw_objects BEGIN
+                UPDATE storage_telemetry_counters SET
+                    raw_count = raw_count
+                        - CASE WHEN OLD.retired_at IS NULL THEN 1 ELSE 0 END
+                        + CASE WHEN NEW.retired_at IS NULL THEN 1 ELSE 0 END,
+                    raw_bytes = raw_bytes
+                        - CASE WHEN OLD.retired_at IS NULL THEN OLD.compressed_size ELSE 0 END
+                        + CASE WHEN NEW.retired_at IS NULL THEN NEW.compressed_size ELSE 0 END,
+                    updated_at = CURRENT_TIMESTAMP WHERE singleton = 1;
+            END""",
+            """CREATE TRIGGER IF NOT EXISTS storage_telemetry_raw_delete
+            AFTER DELETE ON raw_objects WHEN OLD.retired_at IS NULL BEGIN
+                UPDATE storage_telemetry_counters SET
+                    raw_count = raw_count - 1,
+                    raw_bytes = raw_bytes - OLD.compressed_size,
+                    updated_at = CURRENT_TIMESTAMP WHERE singleton = 1;
+            END""",
+            """CREATE TRIGGER IF NOT EXISTS storage_telemetry_render_insert
+            AFTER INSERT ON render_objects WHEN NEW.retired_at IS NULL BEGIN
+                UPDATE storage_telemetry_counters SET
+                    render_count = render_count + 1,
+                    render_bytes = render_bytes + NEW.compressed_size,
+                    updated_at = CURRENT_TIMESTAMP WHERE singleton = 1;
+            END""",
+            """CREATE TRIGGER IF NOT EXISTS storage_telemetry_render_update
+            AFTER UPDATE OF retired_at, compressed_size ON render_objects BEGIN
+                UPDATE storage_telemetry_counters SET
+                    render_count = render_count
+                        - CASE WHEN OLD.retired_at IS NULL THEN 1 ELSE 0 END
+                        + CASE WHEN NEW.retired_at IS NULL THEN 1 ELSE 0 END,
+                    render_bytes = render_bytes
+                        - CASE WHEN OLD.retired_at IS NULL THEN OLD.compressed_size ELSE 0 END
+                        + CASE WHEN NEW.retired_at IS NULL THEN NEW.compressed_size ELSE 0 END,
+                    updated_at = CURRENT_TIMESTAMP WHERE singleton = 1;
+            END""",
+            """CREATE TRIGGER IF NOT EXISTS storage_telemetry_render_delete
+            AFTER DELETE ON render_objects WHEN OLD.retired_at IS NULL BEGIN
+                UPDATE storage_telemetry_counters SET
+                    render_count = render_count - 1,
+                    render_bytes = render_bytes - OLD.compressed_size,
+                    updated_at = CURRENT_TIMESTAMP WHERE singleton = 1;
+            END""",
+            """CREATE TRIGGER IF NOT EXISTS storage_telemetry_media_insert
+            AFTER INSERT ON media_objects WHEN NEW.state = 'present' BEGIN
+                UPDATE storage_telemetry_counters SET
+                    media_count = media_count + 1,
+                    media_bytes = media_bytes + COALESCE(NEW.byte_size, 0),
+                    updated_at = CURRENT_TIMESTAMP WHERE singleton = 1;
+            END""",
+            """CREATE TRIGGER IF NOT EXISTS storage_telemetry_media_update
+            AFTER UPDATE OF state, byte_size ON media_objects BEGIN
+                UPDATE storage_telemetry_counters SET
+                    media_count = media_count
+                        - CASE WHEN OLD.state = 'present' THEN 1 ELSE 0 END
+                        + CASE WHEN NEW.state = 'present' THEN 1 ELSE 0 END,
+                    media_bytes = media_bytes
+                        - CASE WHEN OLD.state = 'present' THEN COALESCE(OLD.byte_size, 0) ELSE 0 END
+                        + CASE WHEN NEW.state = 'present' THEN COALESCE(NEW.byte_size, 0) ELSE 0 END,
+                    updated_at = CURRENT_TIMESTAMP WHERE singleton = 1;
+            END""",
+            """CREATE TRIGGER IF NOT EXISTS storage_telemetry_media_delete
+            AFTER DELETE ON media_objects WHEN OLD.state = 'present' BEGIN
+                UPDATE storage_telemetry_counters SET
+                    media_count = media_count - 1,
+                    media_bytes = media_bytes - COALESCE(OLD.byte_size, 0),
+                    updated_at = CURRENT_TIMESTAMP WHERE singleton = 1;
+            END""",
+            """CREATE TRIGGER IF NOT EXISTS storage_telemetry_projector_insert
+            AFTER INSERT ON projector_state WHEN NEW.projector = 'search-v2' BEGIN
+                UPDATE storage_telemetry_counters SET
+                    search_projector_rows = search_projector_rows + 1,
+                    search_projector_lagging = search_projector_lagging
+                        + CASE WHEN NEW.desired_revision > NEW.completed_revision THEN 1 ELSE 0 END,
+                    search_projector_failed = search_projector_failed
+                        + CASE WHEN NEW.status = 'failed' THEN 1 ELSE 0 END,
+                    search_projector_claimed = search_projector_claimed
+                        + CASE WHEN NEW.claim_token IS NOT NULL THEN 1 ELSE 0 END,
+                    updated_at = CURRENT_TIMESTAMP WHERE singleton = 1;
+            END""",
+            """CREATE TRIGGER IF NOT EXISTS storage_telemetry_projector_update
+            AFTER UPDATE OF projector, desired_revision, completed_revision, status, claim_token ON projector_state BEGIN
+                UPDATE storage_telemetry_counters SET
+                    search_projector_rows = search_projector_rows
+                        - CASE WHEN OLD.projector = 'search-v2' THEN 1 ELSE 0 END
+                        + CASE WHEN NEW.projector = 'search-v2' THEN 1 ELSE 0 END,
+                    search_projector_lagging = search_projector_lagging
+                        - CASE WHEN OLD.projector = 'search-v2'
+                            AND OLD.desired_revision > OLD.completed_revision THEN 1 ELSE 0 END
+                        + CASE WHEN NEW.projector = 'search-v2'
+                            AND NEW.desired_revision > NEW.completed_revision THEN 1 ELSE 0 END,
+                    search_projector_failed = search_projector_failed
+                        - CASE WHEN OLD.projector = 'search-v2' AND OLD.status = 'failed' THEN 1 ELSE 0 END
+                        + CASE WHEN NEW.projector = 'search-v2' AND NEW.status = 'failed' THEN 1 ELSE 0 END,
+                    search_projector_claimed = search_projector_claimed
+                        - CASE WHEN OLD.projector = 'search-v2' AND OLD.claim_token IS NOT NULL THEN 1 ELSE 0 END
+                        + CASE WHEN NEW.projector = 'search-v2' AND NEW.claim_token IS NOT NULL THEN 1 ELSE 0 END,
+                    updated_at = CURRENT_TIMESTAMP WHERE singleton = 1;
+            END""",
+            """CREATE TRIGGER IF NOT EXISTS storage_telemetry_projector_delete
+            AFTER DELETE ON projector_state WHEN OLD.projector = 'search-v2' BEGIN
+                UPDATE storage_telemetry_counters SET
+                    search_projector_rows = search_projector_rows - 1,
+                    search_projector_lagging = search_projector_lagging
+                        - CASE WHEN OLD.desired_revision > OLD.completed_revision THEN 1 ELSE 0 END,
+                    search_projector_failed = search_projector_failed
+                        - CASE WHEN OLD.status = 'failed' THEN 1 ELSE 0 END,
+                    search_projector_claimed = search_projector_claimed
+                        - CASE WHEN OLD.claim_token IS NOT NULL THEN 1 ELSE 0 END,
+                    updated_at = CURRENT_TIMESTAMP WHERE singleton = 1;
+            END""",
+        )
+        for statement in trigger_statements:
+            connection.exec_driver_sql(statement)
+
+
 def initialize_catalog_schema(engine: Engine) -> CatalogMeta:
     """Create or idempotently upgrade the v1 live catalog schema."""
 
@@ -566,6 +760,8 @@ def initialize_catalog_schema(engine: Engine) -> CatalogMeta:
             )
             connection.exec_driver_sql(f"PRAGMA user_version={CATALOG_SCHEMA_VERSION}")
 
+    _initialize_storage_telemetry_accounting(engine)
+
     return read_catalog_meta(engine)
 
 
@@ -578,6 +774,7 @@ __all__ = [
     "CatalogSchemaMigrationError",
     "CatalogSchemaMismatchError",
     "catalog_meta",
+    "storage_telemetry_counters",
     "create_catalog_engine",
     "initialize_catalog_schema",
     "read_catalog_meta",

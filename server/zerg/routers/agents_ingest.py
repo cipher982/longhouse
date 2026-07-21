@@ -493,6 +493,7 @@ async def _acquire_archive_ingest_slot(write_label: str, response: Response) -> 
     if write_label not in _ARCHIVE_INGEST_LABELS:
         return False
 
+    _check_historical_archive_admission(write_label, response, admitted_bytes=0)
     _check_archive_ingest_wal_pressure(write_label, response)
     await _check_archive_ingest_writer_pressure(write_label, response)
 
@@ -501,6 +502,28 @@ async def _acquire_archive_ingest_slot(write_label: str, response: Response) -> 
 
     await _ARCHIVE_INGEST_SLOTS.acquire()
     return True
+
+
+def _check_historical_archive_admission(write_label: str, response: Response, *, admitted_bytes: int) -> None:
+    if write_label not in _ARCHIVE_INGEST_LABELS:
+        return
+    from zerg.metrics import historical_admission_rejections_total
+    from zerg.services.historical_admission import evaluate_historical_admission
+
+    decision = evaluate_historical_admission(
+        root=get_settings().data_dir,
+        admitted_bytes=admitted_bytes,
+        stored_bytes=None,
+        enforce_stored_ceiling=False,
+    )
+    if decision.admitted:
+        return
+    historical_admission_rejections_total.labels(path="legacy_archive", reason=decision.reason).inc()
+    _raise_archive_ingest_backpressure(
+        response,
+        admission_state=decision.reason,
+        retry_after_seconds=decision.retry_after_seconds,
+    )
 
 
 def _release_archive_ingest_slot(acquired: bool) -> None:
@@ -947,6 +970,7 @@ async def ingest_session(
                     content_encoding=content_encoding_label,
                     kind="wire",
                 ).observe(wire_bytes)
+                _check_historical_archive_admission(write_label, response, admitted_bytes=len(body))
                 agents_ingest_payload_bytes.labels(
                     content_encoding=content_encoding_label,
                     kind="decoded",

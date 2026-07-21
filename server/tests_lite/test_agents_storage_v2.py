@@ -215,6 +215,16 @@ async def test_storage_v2_envelope_is_sealed_committed_and_replayed(monkeypatch)
             assert replay.status_code == 200
             assert replay.json() == receipt
 
+            monkeypatch.setenv("LONGHOUSE_TENANT_STORED_BYTES_CEILING", "1")
+            repair_replay = await client.post(
+                "/agents/storage/v2/envelopes",
+                json=payload,
+                headers={"X-Longhouse-Storage-Lane": "repair"},
+            )
+            assert repair_replay.status_code == 200
+            assert repair_replay.json() == receipt
+            monkeypatch.delenv("LONGHOUSE_TENANT_STORED_BYTES_CEILING")
+
             epoch_manifest = await client.get(
                 f"/agents/storage/v2/source-epochs/{payload['source_epoch']}/manifest"
             )
@@ -384,6 +394,25 @@ async def test_storage_v2_media_must_be_durable_before_complete_receipt(monkeypa
             assert upload.status_code == 200, upload.text
             assert upload.json()["sha256"] == media_hash
 
+            monkeypatch.setenv("LONGHOUSE_TENANT_STORED_BYTES_CEILING", "1")
+            repair_replay = await client.put(
+                f"/agents/storage/v2/media/{media_hash}",
+                content=media_bytes,
+                headers={"Content-Type": "image/png", "X-Longhouse-Storage-Lane": "repair"},
+            )
+            assert repair_replay.status_code == 200, repair_replay.text
+            assert repair_replay.json()["created"] is False
+
+            live_bytes = b"live-is-not-governed-by-historical-ceilings"
+            live_hash = hashlib.sha256(live_bytes).hexdigest()
+            live_upload = await client.put(
+                f"/agents/storage/v2/media/{live_hash}",
+                content=live_bytes,
+                headers={"Content-Type": "application/octet-stream", "X-Longhouse-Storage-Lane": "live"},
+            )
+            assert live_upload.status_code == 200, live_upload.text
+            monkeypatch.delenv("LONGHOUSE_TENANT_STORED_BYTES_CEILING")
+
             alias_claim = await client.post(
                 "/agents/storage/v2/media/claims",
                 json={
@@ -487,6 +516,50 @@ async def test_storage_v2_busy_lane_returns_typed_backpressure(monkeypatch):
     assert response.headers["x-longhouse-storage-backpressure"] == "storage_lane_busy"
     assert response.headers["x-longhouse-storage-lane"] == "repair"
     assert response.headers["retry-after"] == "5"
+
+
+@pytest.mark.asyncio
+async def test_storage_v2_repair_disk_watermark_returns_typed_backpressure(monkeypatch):
+    class Catalog:
+        async def call(self, method, _params, **_kwargs):
+            assert method == "storage.raw_object.exists.batch.v2"
+            return {"objects": [{"receipt": None}]}
+
+    from zerg.services import historical_admission
+
+    decision = historical_admission.HistoricalAdmissionDecision(
+        admitted=False,
+        reason="disk_watermark",
+        retry_after_seconds=60,
+        disk_free_bytes=100,
+        disk_free_ratio=0.01,
+    )
+    monkeypatch.setattr(storage_router, "get_catalogd_client", lambda: Catalog())
+    monkeypatch.setattr(storage_router, "get_raw_object_worker_pool", _AdmissionOnlyPool)
+    monkeypatch.setattr(storage_router, "get_render_object_worker_pool", _AdmissionOnlyPool)
+    monkeypatch.setattr(historical_admission, "evaluate_historical_admission", lambda **_kwargs: decision)
+    app = FastAPI()
+    app.include_router(storage_router.router)
+    app.dependency_overrides[verify_agents_token] = lambda: SimpleNamespace(device_id="cinder", owner_id=1)
+    app.dependency_overrides[require_single_tenant] = lambda: None
+    payload = _payload(
+        tenant_id=get_settings().archive_primary_tenant_id,
+        machine_id="cinder",
+        epoch=UUID("018f0c3a-7b2d-7f10-8a11-323456789abc"),
+    )
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/agents/storage/v2/envelopes",
+            json=payload,
+            headers={"X-Longhouse-Storage-Lane": "repair"},
+        )
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "historical_admission_paused"
+    assert response.json()["detail"]["details"]["reason"] == "disk_watermark"
+    assert response.headers["x-longhouse-storage-admission-state"] == "disk_watermark"
+    assert response.headers["x-longhouse-storage-lane"] == "repair"
 
 
 @pytest.mark.asyncio

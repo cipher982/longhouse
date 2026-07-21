@@ -56,6 +56,7 @@ from zerg.catalogd.models import SessionTombstone as LiveSessionTombstone
 from zerg.catalogd.models import SourceEpoch as LiveSourceEpoch
 from zerg.catalogd.models import StorageSession
 from zerg.catalogd.schema import catalog_meta
+from zerg.catalogd.schema import storage_telemetry_counters
 from zerg.models.live_store import LiveAPNSDeviceRegistration
 from zerg.models.live_store import LiveAPNSLiveActivityRegistration
 from zerg.models.live_store import LiveArchiveOutbox
@@ -5849,6 +5850,34 @@ class CatalogStore:
                 "last_heartbeat_at": _encode_datetime(last_heartbeat_at),
                 "media_repair_refs": int(media_repair_refs or 0),
                 "media_repair_bytes": 0,
+                "commit_seq": str(_current_commit_seq(connection)),
+                "observed_at": observed_at.isoformat(),
+            }
+
+    def read_storage_telemetry_summary(self) -> dict[str, Any]:
+        """Return O(1) transactional storage and projector counters."""
+
+        observed_at = datetime.now(UTC)
+        with _read_snapshot(self.engine) as connection:
+            row = connection.execute(select(storage_telemetry_counters).where(storage_telemetry_counters.c.singleton == 1)).mappings().one()
+            projectors = []
+            if int(row["search_projector_rows"]) > 0:
+                projectors.append(
+                    {
+                        "projector": "search-v2",
+                        "lagging": int(row["search_projector_lagging"]),
+                        "failed": int(row["search_projector_failed"]),
+                        "claimed": int(row["search_projector_claimed"]),
+                        "oldest_lag_updated_at": None,
+                    }
+                )
+            return {
+                "objects": {
+                    "raw": {"count": int(row["raw_count"]), "bytes": int(row["raw_bytes"])},
+                    "render": {"count": int(row["render_count"]), "bytes": int(row["render_bytes"])},
+                    "media": {"count": int(row["media_count"]), "bytes": int(row["media_bytes"])},
+                },
+                "projectors": projectors,
                 "commit_seq": str(_current_commit_seq(connection)),
                 "observed_at": observed_at.isoformat(),
             }

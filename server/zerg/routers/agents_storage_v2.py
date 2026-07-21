@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import hashlib
 import json
 import logging
 import unicodedata
@@ -33,6 +34,7 @@ from zerg.services.raw_object_workers import RawObjectWorkerBusy
 from zerg.services.raw_object_workers import RawObjectWorkerError
 from zerg.services.raw_object_workers import RawObjectWorkerPool
 from zerg.services.raw_object_workers import get_raw_object_worker_pool
+from zerg.services.raw_object_workers import storage_v2_root
 from zerg.services.render_object_workers import RenderObjectWorkerBusy
 from zerg.services.render_object_workers import RenderObjectWorkerError
 from zerg.services.render_object_workers import RenderObjectWorkerPool
@@ -140,6 +142,49 @@ def _http_error(
         detail={"code": code, "message": message, "details": details or {}},
         headers=headers,
     )
+
+
+def _raise_historical_storage_backpressure(decision, *, path: str) -> None:
+    from zerg.metrics import historical_admission_rejections_total
+
+    historical_admission_rejections_total.labels(path=path, reason=decision.reason).inc()
+    headers = {
+        "Retry-After": str(decision.retry_after_seconds),
+        "X-Longhouse-Storage-Lane": "repair",
+        "X-Longhouse-Storage-Backpressure": "historical_admission",
+        "X-Longhouse-Storage-Admission-State": decision.reason,
+    }
+    raise _http_error(
+        status.HTTP_503_SERVICE_UNAVAILABLE,
+        "historical_admission_paused",
+        "Historical storage work is paused; live traffic remains reserved.",
+        details={
+            "reason": decision.reason,
+            "disk_free_bytes": decision.disk_free_bytes,
+            "disk_free_ratio": decision.disk_free_ratio,
+            "stored_bytes": decision.stored_bytes,
+            "stored_ceiling_bytes": decision.stored_ceiling_bytes,
+        },
+        headers=headers,
+    )
+
+
+async def _admit_historical_storage(*, admitted_bytes: int, path: str) -> None:
+    from zerg.services.historical_admission import evaluate_historical_admission
+    from zerg.services.historical_admission import tenant_stored_bytes_ceiling
+    from zerg.services.storage_telemetry_snapshot import get_storage_telemetry_snapshot
+
+    snapshot = get_storage_telemetry_snapshot()
+    stored_ceiling_enabled = tenant_stored_bytes_ceiling() > 0
+    decision = evaluate_historical_admission(
+        root=storage_v2_root(),
+        admitted_bytes=admitted_bytes,
+        stored_bytes=(
+            snapshot.total_stored_bytes if not stored_ceiling_enabled or (snapshot.fresh and snapshot.last_error is None) else None
+        ),
+    )
+    if not decision.admitted:
+        _raise_historical_storage_backpressure(decision, path=path)
 
 
 def _canonical_text(value: object, field: str, maximum_bytes: int) -> str:
@@ -587,13 +632,33 @@ async def put_storage_v2_media(
     try:
         async with workers.admission(lane):
             data = await _read_bounded_bytes(request, maximum=MAX_MEDIA_BYTES)
+        body_hash = await asyncio.to_thread(lambda: hashlib.sha256(data).hexdigest())
+        if body_hash != canonical_hash:
+            raise MediaObjectValidationError("media bytes do not match media_hash")
+        catalogd = get_catalogd_client()
+        if catalogd is None:
+            raise CatalogUnavailable("catalogd is not supervised")
+        if lane == "repair":
+            existing = await catalogd.call("storage.media.exists.batch.v2", {"media_hashes": [canonical_hash]})
+            objects = existing.get("objects")
+            if not isinstance(objects, list) or len(objects) != 1 or not isinstance(objects[0], dict):
+                raise CatalogUnavailable("catalog returned an invalid media existence result")
+            media_replay = objects[0]
+            if media_replay.get("state") == "present" and media_replay.get("byte_size") == len(data):
+                return {
+                    "v": 2,
+                    "sha256": canonical_hash,
+                    "mime_type": media_replay.get("mime_type") or mime_type,
+                    "byte_size": len(data),
+                    "created": False,
+                    "commit_seq": media_replay.get("commit_seq"),
+                }
+            await _admit_historical_storage(admitted_bytes=len(data), path="storage_v2_media")
+        async with workers.admission(lane):
             sealed = await workers.seal_media(
                 MediaObjectSpec(media_hash=canonical_hash, mime_type=mime_type, data=data),
                 lane=lane,
             )
-        catalogd = get_catalogd_client()
-        if catalogd is None:
-            raise CatalogUnavailable("catalogd is not supervised")
         result = await catalogd.call(
             "storage.media.commit.v2",
             {
@@ -814,6 +879,12 @@ async def _commit_admitted_envelope(
             raise CatalogUnavailable("catalog returned an invalid raw-object existence result")
         if objects[0].get("receipt") is not None:
             return _validated_receipt(objects[0]["receipt"])
+
+        if lane == "repair":
+            await _admit_historical_storage(
+                admitted_bytes=sum(len(record.data) for record in spec.records),
+                path="storage_v2",
+            )
 
         async with raw_workers.admission(lane):
             raw_task = asyncio.create_task(raw_workers.seal(spec, lane=parsed["lane"]))

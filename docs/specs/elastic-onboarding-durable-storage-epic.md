@@ -1,6 +1,6 @@
 # Elastic Onboarding and Durable Storage Epic
 
-**Status:** Phase 1 in progress; Slice A implemented and independently reviewed
+**Status:** Phase 1 in progress; Slices A–C implemented and independently reviewed
 **Owner:** Longhouse core and hosted operations
 **Created:** 2026-07-20
 **Scope:** Hosted scale, customer import, storage telemetry, and object-store
@@ -641,15 +641,25 @@ This epic must not reintroduce it as an object-store migration fallback.
 **Goal:** Establish the minimum measurements and hard safety controls needed to
 change storage or accept a large import safely.
 
-**Implementation checkpoint (2026-07-20):** Slice A is implemented on the epic
-branch and is not yet deployed. It adds bounded route-class request outcomes and
-latency, independently timed read stages, immutable-object bytes/counts, and
-exact commit/dirty build identity. Cursor/Grok initially rejected misleading
-catch-all and per-batch measurements; the amended implementation uses a concrete
-UUID route allowlist, one object-I/O observation per request, and explicit
-surface opt-in. The backend gate passes. Projector/search/object state gauges,
-telemetry-health, safety ceilings, the scheduled cohort journey, deployment,
-and the baseline report remain in progress.
+**Implementation checkpoint (2026-07-20):** Slices A–C are implemented on the
+epic branch and are not yet deployed. Slice A adds bounded route-class request
+outcomes and latency, independently timed read stages, immutable-object
+bytes/counts, and exact commit/dirty build identity. Slices B–C add O(1)
+transactional raw/render/media and search-projector accounting, an async cached
+telemetry snapshot with explicit health/freshness, retained host-disk signals,
+isolated configurable storage worker lanes, and disk/byte/stored-cap admission
+for reconstructable historical work only. Exact envelope and media retries
+bypass ceilings; live storage and legacy live ingest never consume historical
+budgets. Unknown recall and oldest-lag evidence cannot appear green.
+
+Cursor/Grok rejected three earlier revisions for misleading read measurements,
+periodic full-table telemetry scans, incomplete media retry behavior, inferred
+recall health, missing live-lane proofs, and a misplaced lifecycle cancellation.
+The amended implementation maintains counters with reconciled SQLite triggers,
+never refreshes telemetry from a request, owns the refresh task through startup
+and shutdown, and has direct failure/isolation tests. The backend gate passes
+with 3,850 tests and 13 skips. The scheduled cohort journey, deployment, and
+baseline report remain in progress.
 
 Deliver:
 

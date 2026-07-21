@@ -36,6 +36,7 @@ from zerg.models.agents import SessionObservation
 from zerg.routers.agents_ingest import _ARCHIVE_INGEST_MAX_IN_FLIGHT
 from zerg.routers.agents_ingest import _acquire_archive_ingest_slot
 from zerg.routers.agents_ingest import _archive_retry_after_for_queue_depth
+from zerg.routers.agents_ingest import _check_historical_archive_admission
 from zerg.routers.agents_ingest import _check_live_ingest_writer_pressure
 from zerg.routers.agents_ingest import _incremental_session_counts_for_label
 from zerg.routers.agents_ingest import _ingest_lane_for_label
@@ -386,6 +387,17 @@ async def test_live_ingest_admission_rejects_stale_archive_writer(monkeypatch):
     assert response.headers["X-Ingest-Backpressure"] == "live_ingest_backpressure"
     assert response.headers["X-Ingest-Writer-Active-Label"] == "ingest-replay"
     assert response.headers["X-Ingest-Writer-Active-Age-Ms"] == "10000.0"
+
+
+def test_live_ingest_never_calls_historical_admission(monkeypatch):
+    from zerg.services import historical_admission
+
+    def forbidden(**_kwargs):
+        raise AssertionError("live ingest entered historical admission")
+
+    monkeypatch.setattr(historical_admission, "evaluate_historical_admission", forbidden)
+
+    _check_historical_archive_admission("ingest-live", Response(), admitted_bytes=1024)
 
 
 @pytest.mark.asyncio
