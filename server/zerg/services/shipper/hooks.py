@@ -185,7 +185,7 @@ fi
 
 # Always exit 0 — hook errors trigger Claude Code's "What should Claude do
 # instead?" prompt, which interrupts the session.
-COORDINATION_BOOTSTRAP_ENABLED="${LONGHOUSE_COORDINATION_BOOTSTRAP:-0}"
+COORDINATION_BOOTSTRAP_ENABLED="${LONGHOUSE_COORDINATION_BOOTSTRAP:-1}"
 case "$COORDINATION_BOOTSTRAP_ENABLED" in
   1|true|TRUE|yes|YES|on|ON)
     if [[ "$EVENT" == "SessionStart" ]] && [[ -n "$MANAGED_SESSION_ID" ]]; then
@@ -266,7 +266,7 @@ if [[ -n "$STATE" ]] && [[ -n "$SID" ]]; then
   fi
 fi
 
-COORDINATION_BOOTSTRAP_ENABLED="${LONGHOUSE_COORDINATION_BOOTSTRAP:-0}"
+COORDINATION_BOOTSTRAP_ENABLED="${LONGHOUSE_COORDINATION_BOOTSTRAP:-1}"
 case "$COORDINATION_BOOTSTRAP_ENABLED" in
   1|true|TRUE|yes|YES|on|ON)
     if [[ "$EVENT" == "SessionStart" ]] && [[ -n "$MANAGED_SESSION_ID" ]]; then

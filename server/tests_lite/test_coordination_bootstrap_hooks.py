@@ -14,18 +14,19 @@ from zerg.services.shipper.hooks import HOOK_SCRIPT
 
 @pytest.mark.parametrize("script", [HOOK_SCRIPT, CODEX_HOOK_SCRIPT])
 @pytest.mark.parametrize(
-    ("managed", "enabled", "expects_context"),
+    ("managed", "flag_value", "expects_context"),
     [
-        (True, True, True),
-        (True, False, False),
-        (False, True, False),
+        (True, None, True),
+        (True, "1", True),
+        (True, "0", False),
+        (False, None, False),
     ],
 )
-def test_static_coordination_bootstrap_is_flagged_and_managed_only(
+def test_static_coordination_bootstrap_is_default_on_but_managed_only(
     tmp_path,
     script,
     managed,
-    enabled,
+    flag_value,
     expects_context,
 ):
     if shutil.which("jq") is None:
@@ -43,8 +44,8 @@ def test_static_coordination_bootstrap_is_flagged_and_managed_only(
     env.pop("LONGHOUSE_COORDINATION_BOOTSTRAP", None)
     if managed:
         env["LONGHOUSE_MANAGED_SESSION_ID"] = "11111111-1111-1111-1111-111111111111"
-    if enabled:
-        env["LONGHOUSE_COORDINATION_BOOTSTRAP"] = "1"
+    if flag_value is not None:
+        env["LONGHOUSE_COORDINATION_BOOTSTRAP"] = flag_value
 
     completed = subprocess.run(
         ["/bin/bash", str(hook)],
