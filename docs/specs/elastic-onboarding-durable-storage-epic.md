@@ -1,7 +1,7 @@
 # Elastic Onboarding and Durable Storage Epic
 
-**Status:** Phases 1 and 2 accepted in production; Phase 3 is the active
-implementation phase
+**Status:** Phases 1–3 accepted for launch; Phases 4–7 are explicitly deferred
+post-launch
 **Owner:** Longhouse core and hosted operations
 **Created:** 2026-07-20
 **Scope:** Hosted scale, customer import, storage telemetry, and object-store
@@ -307,10 +307,13 @@ namespace but is never authorization. Finalization proves the authenticated
 tenant owns the expected envelope and object location. Media remains
 tenant-scoped for the same deletion and information-leak reasons as raw data.
 
-The provider is deliberately undecided in this epic. Selection is a measured
-Phase 3 decision using durability, request semantics, optional direct-upload support,
-latency from the Runtime Host and customer regions, egress, operational limits,
-cost, and exit/migration mechanics. Provider marketing is not evidence.
+Backblaze B2 is the selected Phase 3 backup/mirror backend. It is already the
+operational target for Zerg tenant-database Kopia backups, speaks the required
+S3 surface, uses the existing scoped-key provisioning path, and has inexpensive
+storage with free egress up to the published allowance. That direct operational
+fit outweighed a cold multi-vendor bake-off before production code required one.
+The B2 profile is backup-only: it cannot advance the authoritative catalog
+cursor. Remote authority remains an explicitly deferred post-launch decision.
 
 ### Catalog and databases
 
@@ -571,10 +574,11 @@ tenant durable cost
   + catalog/runtime baseline
 ```
 
-Phase 1 establishes the application and host baseline. Phase 3 benchmarks
-candidate object backends with representative small/recent and large/historical
-objects. Onboarding adds per-tenant inventory and import cost evidence before
-pricing or quotas are finalized.
+Phase 1 establishes the application and host baseline. Phase 3 uses the
+accepted Phase 2 dogfood inventory as its conservative remote-mirror model;
+existing B2/Kopia operations are stronger provider evidence than a speculative
+multi-vendor benchmark. Onboarding adds per-tenant inventory and import cost
+evidence before pricing or quotas are finalized.
 
 Capacity warnings are based on projected exhaustion from current bytes/rates and
 provider quota, not a fixed tenant scalar. Hard safety ceilings still exist for
@@ -685,12 +689,12 @@ silently expand the current phase.
 | 1 — telemetry/baseline | accepted | Retention continues without blocking later phases. |
 | 2A — source inventory | accepted | None. |
 | 2B — progressive import/restart safety | accepted | No acknowledged work replayed after the accepted restart proof. |
-| 3 — remote backup/provider decision | in progress | Contract, benchmark, authorization, deletion, catalog backup, and disposable restore proof behind the existing object seam. |
-| 4 — optional remote authority | gated by Phase 3 evidence | Proceed only if remote authority beats tested backup/mirroring for launch. |
-| 5 — projection/cold-read economics | not started | Destructive render/search/recall rebuild from raw truth plus current/cold read proof. |
-| 6A — dogfood migration | not started | Offline snapshot, cutover, complete product validation, and exercised rollback. |
-| 6B — signup burst | not started | Multi-tenant fairness, admission, spending, and pause/resume proof. |
-| 7 — fleet simplification decision | deferred | Keep or change containers/SQLite from measured evidence; a rewrite is not presumed. |
+| 3 — remote backup/provider decision | accepted | B2 scoped-namespace contract, mirror/scrub/restore/tombstone proof, lifecycle, and conservative cost model are accepted for launch. |
+| 4 — optional remote authority | deferred post-launch | Backup/mirroring is sufficient for launch; do not add a second acknowledgement authority without customer/operational evidence. |
+| 5 — projection/cold-read economics | deferred post-launch | Do not expand scope while existing filesystem authority and Phase 3 backup meet launch needs. |
+| 6A — dogfood migration | deferred post-launch | No authority cutover is justified before external-user or operational evidence. |
+| 6B — signup burst | deferred post-launch | Revisit only when actual signup concurrency warrants fleet-level proof. |
+| 7 — fleet simplification decision | deferred post-launch | Keep containers and per-tenant SQLite unless measured evidence justifies change. |
 
 ## Delivery Plan
 
@@ -877,24 +881,64 @@ repeats acknowledged work.
 **Goal:** Prove one hosted backend behind the existing object seam without
 changing acknowledgement authority.
 
-Deliver filesystem/S3-compatible contract tests, candidate benchmarks, cost
-model, tenant namespace/auth tests, mirror adapter, inventory, scrub, deletion,
-catalog/tombstone backup, and disposable restore proof. Benchmark envelope-sized
-objects against packing alternatives using storage cost, request cost, restore/
-scrub duration, and deletion time; record a packing decision even when the
-decision is to keep envelopes unpacked. Versioned backends must prove
-noncurrent-version expiration within the declared deletion policy.
+**Production acceptance checkpoint (2026-07-21):** Backblaze B2 is selected
+for remote backup/mirroring. This is a provider decision from existing
+operational evidence, not a cold multi-provider bake-off: Zerg already backs up
+tenant databases to B2 through Kopia and provisions scoped service credentials
+through `~/git/me/scripts/b2-provision.py`. B2 provides the needed S3 surface,
+bucket-scoped application keys, and published low storage/egress economics.
+R2, AWS S3, and Wasabi were intentionally not benchmarked: existing operational
+fit resolved the provider choice before code needed a vendor comparison.
 
-Gate: select a provider only after the same workload and failure matrix run
-against each serious candidate. Remote objects plus catalog backup restore a
-disposable tenant without resurrecting deleted sessions. Record the decision,
-rejected alternatives, deletion policy, object-count threshold, and whether
-backup/mirroring is sufficient for launch.
+Commit `b1b86ee871` added a real-provider `make test-storage-v2-b2` proof and
+passed it against the disposable `lh-longhouse-phase3-backups` bucket using an
+application key limited to list/read/write/delete in that bucket. Tenant names
+remain opaque SHA-256 namespaces. The proof performed immutable create/replay/
+full read/delete, then mirrored a catalog plus raw/render/media snapshot,
+scrubbed every remote artifact, restored it into a blank root, and restored a
+later tombstone snapshot without resurrecting the deleted session. The generic
+S3 conditional-create/checksum profile was rejected by B2's endpoint, so the
+dedicated B2 adapter accepts only content-addressed backup blobs/manifests,
+full-hash-verifies every read, and is incapable of becoming the authoritative
+raw acknowledgement path. Exact deploy [run 29851715298](https://github.com/cipher982/longhouse/actions/runs/29851715298)
+put that commit on demo and canary; fast smoke and control-plane health passed.
+
+Deletion policy for this disposable proof namespace is B2 lifecycle: hide the
+current version after seven days, permanently delete hidden versions one day
+later, and cancel unfinished large uploads after one day. Logical deletion was
+also proved immediately by the real B2 `delete_verified` path; the later
+tombstone restore proves catalog state prevents resurrection while the backup
+exists. Lifecycle runs daily, so the physical-purge boundary is at most the
+configured age plus B2's next daily sweep.
+
+**Cost and packing decision:** Phase 2 dogfood measured 9,947 sources and a
+24,149,562,450-byte footprint. At [B2's published pricing](https://www.backblaze.com/cloud-storage/transaction-pricing)
+of $0.005/GB-month, a
+conservative one-times mirror is about $0.121/month before the account-wide
+10-GB free allowance, or about $0.071/month if that allowance is allocated
+entirely to this mirror. Upload and normal object operations are free; egress is
+free through three times average monthly storage (about 72.45 GB for this
+model), then $0.01/GB. This intentionally does not subtract compression or
+deduplication, so it is an upper-bound storage input. Keep immutable envelopes
+unpacked. Reconsider packing only when a tenant exceeds 1,000,000 cataloged
+immutable objects (roughly 100× this observed source inventory) or a sustained
+seven-day read/list/scrub signal shows object-count amplification. There is no
+B2 request-cost trigger at the current published rates.
+
+The scoped B2 target passed 9 tests; the one broad Phase 3 `make test` gate
+passed 3,883 tests with 15 skips. Phase 3 is accepted. Remote backup/mirroring
+plus verified restore is sufficient for launch; it does not change
+acknowledgement authority. Phase 4 and all later phases are explicitly deferred
+post-launch.
 
 ### Phase 4 — Optional remote raw authority
 
 **Goal:** If Phase 3 evidence justifies it, make remote immutable raw objects the
 authority for new hosted envelopes.
+
+**State: deferred post-launch.** The accepted B2 mirror is intentionally not an
+acknowledgement authority. Do not begin this phase without evidence that its
+operational benefit beats the added migration and authority risk.
 
 Deliver the proxied upload/finalize/receipt path, exact retry, orphan
 reconciliation, lane-aware admission, the offline replacement playbook,
@@ -914,6 +958,9 @@ resumes. No SLO applies during the declared cutover window.
 predictable latency and cost, whether Phase 4 uses remote authority or Phase 3
 remains a backup/mirror.
 
+**State: deferred post-launch.** Existing raw authority and the Phase 3 backup
+proof are sufficient for launch; wait for real read/cost evidence.
+
 Deliver projector scheduling/telemetry, remote read/cache policy, cold cohort
 proof, search/recall rebuild drills, and measured object packing/caching only
 where read amplification justifies it.
@@ -925,6 +972,9 @@ derived store followed by rebuild restores equivalent product results.
 
 **Goal:** Migrate dogfood safely without coupling migration completion to fleet
 load proof.
+
+**State: deferred post-launch.** No remote-authority cutover is currently
+justified, so an offline migration would create risk without launch benefit.
 
 Deliver the maintenance-state control, verified frozen snapshot, full-capacity
 manifest migration, restore/cutover/rollback runbook, storage inventory parity,
@@ -941,6 +991,9 @@ growth has an actionable lead signal.
 **Goal:** Prove that simultaneous signups degrade through visible queueing and
 backpressure rather than outage.
 
+**State: deferred post-launch.** Revisit from actual signup-concurrency evidence,
+not a synthetic pre-launch expansion.
+
 Deliver concurrent tenant simulation, fairness proof, capacity projection,
 cost/spending alarms, and operator pause/resume exercises. This depends on Phase
 2 admission, not on completing existing-tenant migration.
@@ -952,6 +1005,10 @@ boundaries, and predictable per-tenant progress under configured ceilings.
 
 **Goal:** Decide whether per-tenant containers, tenant SQLite catalogs, search
 stores, or the current host layout should change.
+
+**State: deferred post-launch.** Keep the current containers and per-tenant
+SQLite unless measured customer load, isolation, recovery, or cost evidence
+supports a change.
 
 This is a decision phase, not a promised rewrite. Compare measured baseline and
 operational burden against shared-process/shared-database designs. Any accepted
@@ -996,10 +1053,8 @@ The epic is complete when:
 
 ## Open Decisions
 
-- Which hosted object backend wins the Phase 3 contract, latency, cost, and exit
-  evaluation?
-- After remote backup/mirroring passes restore proof, is remote acknowledgement
-  authority worth its added operational surface for launch?
+- When post-launch evidence exists, is remote acknowledgement authority worth
+  its added operational surface beyond the accepted B2 backup/mirror?
 - Does proxied ingress ever become a measured bottleneck large enough to justify
   a second direct-upload topology?
 - What recent-history policy produces the best time to first value across real
@@ -1009,8 +1064,9 @@ The epic is complete when:
 - Which customer controls and plan limits are needed once real import/storage
   distributions exist?
 
-These questions are gates, not omissions. Phases 1–3 produce the evidence needed
-to answer them without inventing a customer or a workload.
+These questions are deliberate post-launch gates, not omissions. Phases 1–3 are
+the accepted launch scope; none grants permission to pre-build the deferred
+authority, migration, burst, or fleet work.
 
 ## Independent Review Synthesis
 
