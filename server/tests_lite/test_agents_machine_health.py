@@ -105,6 +105,24 @@ def test_machine_health_service_reads_bounded_live_heartbeat_stamps(tmp_path, mo
     assert summaries[0].history_import.inventory is not None
     assert summaries[0].history_import.inventory.source_count == 9947
 
+    catalog_summaries, catalog_total = machine_health_service.machine_transport_health_from_catalog_rows(
+        [
+            {
+                "device_id": "cinder",
+                "received_at": (pinned_now - timedelta(minutes=1)).isoformat(),
+                "version": "0.1.28-dev+498e06c4",
+                "ship_attempts_1h": 4,
+                "ship_successes_1h": 4,
+                "disk_free_bytes": 100,
+                "raw_json": json.dumps({"history_import": history_import}),
+            }
+        ],
+        stale_after_seconds=3600,
+    )
+    assert catalog_total == 1
+    assert catalog_summaries[0].history_import.inventory is not None
+    assert catalog_summaries[0].history_import.inventory.footprint_bytes == 24149562450
+
 
 def _make_client(SessionLocal):
     from zerg.dependencies.agents_auth import require_single_tenant

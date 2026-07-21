@@ -6,6 +6,7 @@ import json
 from dataclasses import dataclass
 from datetime import datetime
 from datetime import timedelta
+from types import SimpleNamespace
 from typing import Any
 
 from sqlalchemy import func
@@ -96,9 +97,9 @@ def list_machine_transport_health(
             recent_within_seconds=recent_within_seconds,
             heartbeat_model=heartbeat_model,
         )
-        summaries = list(summary_map.values())
+        rows = list(summary_map.values())
     else:
-        summaries = list(
+        rows = list(
             load_machine_transport_health_map(
                 db,
                 stale_after_seconds=stale_after_seconds,
@@ -106,6 +107,34 @@ def list_machine_transport_health(
                 heartbeat_model=heartbeat_model,
             ).values()
         )
+    return _filter_machine_transport_health(rows, status=status, limit=limit)
+
+
+def machine_transport_health_from_catalog_rows(
+    rows: list[dict[str, Any]],
+    *,
+    status: str | None = None,
+    stale_after_seconds: int = DEFAULT_MACHINE_HEARTBEAT_STALE_AFTER_SECONDS,
+    limit: int = 20,
+) -> tuple[list[MachineTransportHealthSummary], int]:
+    now = utc_now()
+    summaries = [
+        build_machine_transport_health_summary(
+            SimpleNamespace(**_decode_catalog_heartbeat(row)),
+            stale_after_seconds=stale_after_seconds,
+            now=now,
+        )
+        for row in rows
+    ]
+    return _filter_machine_transport_health(summaries, status=status, limit=limit)
+
+
+def _filter_machine_transport_health(
+    summaries: list[MachineTransportHealthSummary],
+    *,
+    status: str | None,
+    limit: int,
+) -> tuple[list[MachineTransportHealthSummary], int]:
     if status:
         summaries = [item for item in summaries if item.status == status]
     summaries.sort(
@@ -117,6 +146,40 @@ def list_machine_transport_health(
     )
     total = len(summaries)
     return summaries[:limit], total
+
+
+def _decode_catalog_heartbeat(row: dict[str, Any]) -> dict[str, Any]:
+    decoded = {
+        "version": None,
+        "last_ship_at": None,
+        "last_ship_attempt_at": None,
+        "last_ship_result": None,
+        "last_ship_latency_ms": None,
+        "last_ship_http_status": None,
+        "spool_pending": 0,
+        "spool_dead": 0,
+        "parse_errors_1h": 0,
+        "consecutive_failures": 0,
+        "ship_attempts_1h": 0,
+        "ship_successes_1h": 0,
+        "ship_rate_limited_1h": 0,
+        "ship_server_errors_1h": 0,
+        "ship_payload_rejections_1h": 0,
+        "ship_payload_too_large_1h": 0,
+        "ship_retryable_client_errors_1h": 0,
+        "ship_connect_errors_1h": 0,
+        "ship_latency_p50_ms_1h": None,
+        "ship_latency_p95_ms_1h": None,
+        "disk_free_bytes": 0,
+        "is_offline": 0,
+        "raw_json": "{}",
+        **row,
+    }
+    for field in ("received_at", "last_ship_at", "last_ship_attempt_at"):
+        value = decoded.get(field)
+        if isinstance(value, str):
+            decoded[field] = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    return decoded
 
 
 def load_machine_transport_health_map(

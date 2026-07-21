@@ -24,7 +24,6 @@ from zerg.database import get_db
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.device_token import DeviceToken
-from zerg.models.live_store import LiveHeartbeatStamp
 from zerg.schemas.machines import ArchiveBacklogControlRequest
 from zerg.schemas.machines import ArchiveBacklogControlResponse
 from zerg.schemas.machines import ArchiveBacklogResponse
@@ -41,9 +40,11 @@ from zerg.schemas.observability import MachineHealthListResponse
 from zerg.schemas.observability import MachineHealthStatus
 from zerg.services.agent_heartbeat_health import DEFAULT_MACHINE_HEARTBEAT_STALE_AFTER_SECONDS
 from zerg.services.agent_heartbeat_health import list_machine_transport_health
+from zerg.services.agent_heartbeat_health import machine_transport_health_from_catalog_rows
 from zerg.services.catalog_read_gateway import CatalogReadError
 from zerg.services.catalog_read_gateway import active_owner_id
 from zerg.services.catalog_read_gateway import enrolled_machines
+from zerg.services.catalog_read_gateway import machine_heartbeats
 from zerg.services.catalog_read_gateway import machine_operation
 from zerg.services.catalog_read_gateway import machine_workspaces
 from zerg.services.catalog_read_gateway import rename_machine
@@ -81,18 +82,6 @@ def _legacy_machine_db():
 
 
 _machine_read_db_dependency = get_db if _catalog_db_dependency is get_db else _legacy_machine_db
-
-
-def _live_machine_health_db():
-    factory = database_module.get_live_session_factory()
-    if factory is None:
-        raise HTTPException(status_code=503, detail={"code": "live_store_unavailable", "message": "Live telemetry is unavailable."})
-    with factory() as db:
-        yield db
-
-
-_machine_health_db_dependency = _live_machine_health_db if database_module.live_catalog_enabled() else get_db
-_machine_health_model = LiveHeartbeatStamp if database_module.live_catalog_enabled() else None
 
 
 def _request_owner_id(db: Session | None, device_token: DeviceToken | None) -> int:
@@ -208,17 +197,35 @@ def list_machine_health(
         le=24 * 60 * 60,
         description="Treat heartbeats older than this as offline",
     ),
-    db: Session = Depends(_machine_health_db_dependency),
-    _auth: object = Depends(verify_agents_token),
+    db: Session | None = Depends(_machine_read_db_dependency),
+    device_token: DeviceToken | None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> MachineHealthListResponse:
+    if database_module.live_catalog_enabled():
+        try:
+            payload = machine_heartbeats(
+                owner_id=_request_owner_id(db, device_token),
+                device_id=device_id,
+                recent_after=None,
+                limit=100,
+            )
+        except CatalogReadError as exc:
+            raise HTTPException(status_code=503, detail={"code": exc.code, "message": exc.message}) from exc
+        summaries, total = machine_transport_health_from_catalog_rows(
+            payload.get("heartbeats", []),
+            status=status,
+            stale_after_seconds=stale_after_seconds,
+            limit=limit,
+        )
+        return build_machine_health_list_response(summaries, total=total)
+
+    assert db is not None
     summaries, total = list_machine_transport_health(
         db,
         device_id=device_id,
         status=status,
         stale_after_seconds=stale_after_seconds,
         limit=limit,
-        **({"heartbeat_model": _machine_health_model} if _machine_health_model is not None else {}),
     )
     return build_machine_health_list_response(summaries, total=total)
 

@@ -92,6 +92,7 @@ from zerg.storage_v2.contracts import envelope_id as compute_envelope_id
 DEVICE_TOKEN_LIMIT_PER_OWNER = 1_000
 SESSION_READ_LIMIT = 100
 MACHINE_ENROLLMENT_LIMIT = 1_000
+MACHINE_HEALTH_LIMIT = 100
 WORKSPACE_CANDIDATE_LIMIT = 5_000
 # The capability projector consumes only its highest-ranked connection.  The
 # ordering below is deliberately identical to that projector, so returning the
@@ -111,6 +112,53 @@ _RECENCY_BUCKETS: tuple[tuple[float, int], ...] = (
     (14.0, 50),
     (31.0, 30),
 )
+
+_MACHINE_HEALTH_HEARTBEAT_FIELDS = frozenset(
+    {
+        "device_id",
+        "received_at",
+        "version",
+        "last_ship_at",
+        "last_ship_attempt_at",
+        "last_ship_result",
+        "last_ship_latency_ms",
+        "last_ship_http_status",
+        "spool_pending",
+        "spool_dead",
+        "parse_errors_1h",
+        "consecutive_failures",
+        "ship_attempts_1h",
+        "ship_successes_1h",
+        "ship_rate_limited_1h",
+        "ship_server_errors_1h",
+        "ship_payload_rejections_1h",
+        "ship_payload_too_large_1h",
+        "ship_retryable_client_errors_1h",
+        "ship_connect_errors_1h",
+        "ship_latency_p50_ms_1h",
+        "ship_latency_p95_ms_1h",
+        "disk_free_bytes",
+        "is_offline",
+    }
+)
+_MACHINE_HEALTH_RAW_FIELDS = frozenset(
+    {
+        "archive_backlog",
+        "history_import",
+        "last_ship_error_kind",
+        "last_ship_error_message",
+        "ship_attempts_10m",
+        "ship_successes_10m",
+        "ship_rate_limited_10m",
+        "ship_server_errors_10m",
+        "ship_retryable_client_errors_10m",
+        "ship_connect_errors_10m",
+    }
+)
+# This JSON string is encoded again inside the RPC response. A 32 KiB inner
+# cap leaves deterministic headroom below the 8 MiB frame even when all 100
+# rows contain escape-heavy content that doubles during outer JSON encoding.
+_MACHINE_HEALTH_RAW_MAX_BYTES = 32 * 1024
 
 
 def _json_launch_result(result: dict[str, Any]) -> dict[str, Any]:
@@ -4468,6 +4516,41 @@ class CatalogStore:
                 "limit_exceeded": False,
             }
 
+    def list_machine_heartbeats(
+        self,
+        *,
+        owner_id: int,
+        device_id: str | None,
+        recent_after: datetime | None,
+        limit: int,
+    ) -> dict[str, Any]:
+        observed_at = datetime.now(UTC)
+        token = LiveDeviceToken.__table__
+        heartbeat = LiveHeartbeatStamp.__table__
+        enrolled_devices = select(token.c.device_id).where(
+            token.c.owner_id == owner_id,
+            token.c.revoked_at.is_(None),
+        )
+        if device_id is not None:
+            enrolled_devices = enrolled_devices.where(token.c.device_id == device_id)
+        latest_ids = select(func.max(heartbeat.c.id)).where(heartbeat.c.device_id.in_(enrolled_devices))
+        if recent_after is not None:
+            latest_ids = latest_ids.where(heartbeat.c.received_at >= recent_after)
+        latest_ids = latest_ids.group_by(heartbeat.c.device_id)
+        with _read_snapshot(self.engine) as connection:
+            rows = connection.execute(
+                select(heartbeat)
+                .where(heartbeat.c.id.in_(latest_ids))
+                .order_by(heartbeat.c.received_at.desc(), heartbeat.c.device_id.asc())
+                .limit(min(limit, MACHINE_HEALTH_LIMIT))
+            ).mappings()
+            heartbeats = [_machine_health_heartbeat_dto(row) for row in rows]
+            return {
+                "commit_seq": str(_current_commit_seq(connection)),
+                "observed_at": observed_at.isoformat(),
+                "heartbeats": heartbeats,
+            }
+
     def list_machine_workspaces(
         self,
         *,
@@ -8446,6 +8529,25 @@ def _row_dto(
             result[key] = _truncate_utf8(value, limits.get(key, 255))
         else:
             result[key] = value
+    return result
+
+
+def _machine_health_heartbeat_dto(row) -> dict[str, Any]:
+    result = _row_dto(row, fields=_MACHINE_HEALTH_HEARTBEAT_FIELDS)
+    assert result is not None
+    raw = _decode_json_object(row.get("raw_json"))
+    projected_raw = {key: raw[key] for key in _MACHINE_HEALTH_RAW_FIELDS if key in raw}
+    encoded_raw = json.dumps(projected_raw, separators=(",", ":"), sort_keys=True)
+    if len(encoded_raw.encode("utf-8")) > _MACHINE_HEALTH_RAW_MAX_BYTES:
+        projected_raw.pop("archive_backlog", None)
+        encoded_raw = json.dumps(projected_raw, separators=(",", ":"), sort_keys=True)
+    if len(encoded_raw.encode("utf-8")) > _MACHINE_HEALTH_RAW_MAX_BYTES:
+        projected_raw["history_import"] = {"state": "unavailable"}
+        encoded_raw = json.dumps(projected_raw, separators=(",", ":"), sort_keys=True)
+    if len(encoded_raw.encode("utf-8")) > _MACHINE_HEALTH_RAW_MAX_BYTES:
+        encoded_raw = "{}"
+    assert len(encoded_raw.encode("utf-8")) <= _MACHINE_HEALTH_RAW_MAX_BYTES
+    result["raw_json"] = encoded_raw
     return result
 
 

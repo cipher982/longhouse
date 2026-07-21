@@ -74,6 +74,24 @@ def enrolled_machines(owner_id: int) -> dict[str, Any]:
     return _call("machine.enrollment.list.v2", {"owner_id": owner_id})
 
 
+def machine_heartbeats(
+    *,
+    owner_id: int,
+    device_id: str | None,
+    recent_after: str | None,
+    limit: int,
+) -> dict[str, Any]:
+    return _call(
+        "machine.health.list.v2",
+        {
+            "owner_id": owner_id,
+            "device_id": device_id,
+            "recent_after": recent_after,
+            "limit": limit,
+        },
+    )
+
+
 def rename_machine(*, owner_id: int, device_id: str, machine_name: str) -> dict[str, Any]:
     return _call(
         "machine.enrollment.rename.v2",
@@ -151,6 +169,7 @@ __all__ = [
     "active_owner_id",
     "enrolled_machines",
     "machine_operation",
+    "machine_heartbeats",
     "machine_workspaces",
     "recent_visible_web_presence",
     "rename_machine",

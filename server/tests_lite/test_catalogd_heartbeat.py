@@ -26,6 +26,7 @@ from zerg.catalogd.server import CatalogDaemon
 from zerg.machine_evidence import canonical_evidence_hash
 from zerg.models.live_store import LiveArchiveOutbox
 from zerg.models.live_store import LiveControlLease
+from zerg.models.live_store import LiveDeviceToken
 from zerg.models.live_store import LiveHeartbeatStamp
 from zerg.models.live_store import LiveSession
 from zerg.models.live_store import LiveSessionCatalog
@@ -183,6 +184,92 @@ def test_schema_v2_evidence_is_retained_but_not_shadow_reduced():
 
     assert status == "unsupported_schema"
     assert facts == []
+
+
+@pytest.mark.asyncio
+async def test_machine_health_read_is_owner_scoped_latest_and_privacy_bounded(daemon_paths):
+    database_path, socket_path = daemon_paths
+    engine = create_catalog_engine(database_path)
+    initialize_catalog_schema(engine)
+    now = datetime.now(UTC).replace(microsecond=0)
+    with engine.begin() as connection:
+        connection.execute(
+            LiveDeviceToken.__table__.insert(),
+            [
+                {
+                    "id": "owner-token",
+                    "owner_id": 7,
+                    "device_id": "cinder",
+                    "token_hash": "a" * 64,
+                    "created_at": now,
+                },
+                {
+                    "id": "other-token",
+                    "owner_id": 8,
+                    "device_id": "other",
+                    "token_hash": "b" * 64,
+                    "created_at": now,
+                },
+            ],
+        )
+        connection.execute(
+            LiveHeartbeatStamp.__table__.insert(),
+            [
+                {
+                    "device_id": "cinder",
+                    "received_at": now - timedelta(minutes=2),
+                    "version": "old",
+                    "raw_json": "{}",
+                },
+                {
+                    "device_id": "cinder",
+                    "received_at": now - timedelta(minutes=1),
+                    "version": "current",
+                    "raw_json": json.dumps(
+                        {
+                            "archive_backlog": {"padding": "x" * (200 * 1024)},
+                            "history_import": {"state": "unavailable"},
+                            "ship_attempts_10m": 4,
+                            "private_source_path": "/private/source.jsonl",
+                        }
+                    ),
+                },
+                {
+                    "device_id": "other",
+                    "received_at": now,
+                    "version": "other-owner",
+                    "raw_json": "{}",
+                },
+            ],
+        )
+    engine.dispose()
+
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        result = await client.call(
+            "machine.health.list.v2",
+            {
+                "owner_id": 7,
+                "device_id": None,
+                "recent_after": (now - timedelta(hours=1)).isoformat(),
+                "limit": 100,
+            },
+        )
+        assert len(result["heartbeats"]) == 1
+        heartbeat = result["heartbeats"][0]
+        assert heartbeat["device_id"] == "cinder"
+        assert heartbeat["version"] == "current"
+        projected_raw = json.loads(heartbeat["raw_json"])
+        assert len(heartbeat["raw_json"].encode("utf-8")) <= 32 * 1024
+        assert projected_raw == {
+            "history_import": {"state": "unavailable"},
+            "ship_attempts_10m": 4,
+        }
+    finally:
+        await client.close()
+        await daemon.close()
 
 
 @pytest.mark.asyncio

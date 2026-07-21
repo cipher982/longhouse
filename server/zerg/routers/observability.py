@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
 from uuid import UUID
 
 from fastapi import APIRouter
@@ -14,7 +15,6 @@ import zerg.database as database_module
 from zerg.database import get_db
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.auth import get_current_user
-from zerg.models.live_store import LiveHeartbeatStamp
 from zerg.schemas.observability import MachineHealthListResponse
 from zerg.schemas.observability import MachineHealthStatus
 from zerg.schemas.observability import ManagedTurnsSummaryEnvelopeResponse
@@ -26,6 +26,10 @@ from zerg.schemas.observability import SlowTurnsListResponse
 from zerg.services.agent_heartbeat_health import DEFAULT_MACHINE_HEALTH_RECENT_WITHIN_SECONDS
 from zerg.services.agent_heartbeat_health import DEFAULT_MACHINE_HEARTBEAT_STALE_AFTER_SECONDS
 from zerg.services.agent_heartbeat_health import list_machine_transport_health
+from zerg.services.agent_heartbeat_health import machine_transport_health_from_catalog_rows
+from zerg.services.catalog_read_gateway import CatalogReadError
+from zerg.services.catalog_read_gateway import active_owner_id
+from zerg.services.catalog_read_gateway import machine_heartbeats
 from zerg.services.observability_views import build_machine_health_list_response
 from zerg.services.observability_views import build_managed_turns_summary_envelope_response
 from zerg.services.observability_views import build_observability_overview_response
@@ -36,6 +40,7 @@ from zerg.services.realtime_propagation import build_realtime_propagation_sessio
 from zerg.services.session_turns import list_managed_completed_turns
 from zerg.services.session_turns import list_slow_session_turns
 from zerg.services.session_turns import materialize_recent_managed_transcript_turns
+from zerg.utils.time import utc_now
 
 router = APIRouter(
     prefix="/observability",
@@ -44,16 +49,11 @@ router = APIRouter(
 )
 
 
-def _live_machine_health_db():
-    factory = database_module.get_live_session_factory()
-    if factory is None:
-        raise HTTPException(status_code=503, detail={"code": "live_store_unavailable", "message": "Live telemetry is unavailable."})
-    with factory() as db:
-        yield db
+def _live_catalog_no_db():
+    yield None
 
 
-_machine_health_db_dependency = _live_machine_health_db if database_module.live_catalog_enabled() else get_db
-_machine_health_model = LiveHeartbeatStamp if database_module.live_catalog_enabled() else None
+_machine_health_db_dependency = _live_catalog_no_db if database_module.live_catalog_enabled() else get_db
 
 
 def _resolve_recent_machine_window_seconds(*, recent_within_hours: int) -> int:
@@ -135,18 +135,40 @@ async def list_machine_health(
         le=24 * 30,
         description="Only include machines with a heartbeat in this recent window",
     ),
-    db: Session = Depends(_machine_health_db_dependency),
+    db: Session | None = Depends(_machine_health_db_dependency),
 ) -> MachineHealthListResponse:
+    recent_within_seconds = _resolve_recent_machine_window_seconds(
+        recent_within_hours=recent_within_hours,
+    )
+    if database_module.live_catalog_enabled():
+        try:
+            owner_id = active_owner_id()
+            if owner_id is None:
+                raise CatalogReadError("owner_unavailable", "No active Longhouse owner is configured.")
+            payload = machine_heartbeats(
+                owner_id=owner_id,
+                device_id=device_id,
+                recent_after=(utc_now() - timedelta(seconds=recent_within_seconds)).isoformat(),
+                limit=100,
+            )
+        except CatalogReadError as exc:
+            raise HTTPException(status_code=503, detail={"code": exc.code, "message": exc.message}) from exc
+        summaries, total = machine_transport_health_from_catalog_rows(
+            payload.get("heartbeats", []),
+            status=status,
+            stale_after_seconds=stale_after_seconds,
+            limit=limit,
+        )
+        return build_machine_health_list_response(summaries, total=total)
+
+    assert db is not None
     summaries, total = list_machine_transport_health(
         db,
         device_id=device_id,
         status=status,
         stale_after_seconds=stale_after_seconds,
-        recent_within_seconds=_resolve_recent_machine_window_seconds(
-            recent_within_hours=recent_within_hours,
-        ),
+        recent_within_seconds=recent_within_seconds,
         limit=limit,
-        **({"heartbeat_model": _machine_health_model} if _machine_health_model is not None else {}),
     )
     return build_machine_health_list_response(summaries, total=total)
 
