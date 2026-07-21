@@ -167,6 +167,7 @@ class S3CompatibleImmutableObjectStore:
         self.client = client
         self.bucket = bucket
         self.namespace = namespace.rstrip("/")
+        self._backup_mirror_only = False
 
     def put_if_absent(self, *, tenant_id: str, key: str, data: bytes, sha256: str) -> StoredObject:
         _validate_request(tenant_id=tenant_id, key=key, sha256=sha256)
@@ -174,17 +175,32 @@ class S3CompatibleImmutableObjectStore:
             raise ObjectStoreCorruptError("object payload hash does not match declared SHA-256")
         remote_key = self._remote_key(tenant_id, key)
         reused = False
+        if self._backup_mirror_only:
+            # Some S3-compatible services accept PutObject but not the AWS
+            # conditional/checksum extensions. This mode is only safe for the
+            # content-addressed remote-backup mirror: a conflicting current
+            # object fails full hash verification, and it never advances the
+            # authoritative catalog cursor.
+            _validate_backup_mirror_key(key=key, sha256=sha256)
+            try:
+                self._verify_remote_head(tenant_id=tenant_id, key=key, sha256=sha256, size=len(data))
+            except ObjectStoreCorruptError as exc:
+                if not _is_not_found(exc):
+                    raise
+            else:
+                reused = True
+                mirrored = self.read_verified(tenant_id=tenant_id, key=key, sha256=sha256, max_bytes=len(data))
+                if mirrored != data:
+                    raise ObjectStoreCorruptError("remote immutable object differs after replay")
+                return StoredObject(key=key, sha256=sha256, size=len(data), reused=True)
+            self._put_object(remote_key=remote_key, data=data, sha256=sha256, conditional=False)
+            mirrored = self.read_verified(tenant_id=tenant_id, key=key, sha256=sha256, max_bytes=len(data))
+            if mirrored != data:
+                raise ObjectStoreCorruptError("remote immutable object differs after write")
+            return StoredObject(key=key, sha256=sha256, size=len(data), reused=reused)
         for attempt in range(2):
             try:
-                self.client.put_object(
-                    Bucket=self.bucket,
-                    Key=remote_key,
-                    Body=data,
-                    ContentLength=len(data),
-                    ChecksumSHA256=b64encode(bytes.fromhex(sha256)).decode("ascii"),
-                    Metadata={"longhouse-sha256": sha256},
-                    IfNoneMatch="*",
-                )
+                self._put_object(remote_key=remote_key, data=data, sha256=sha256, conditional=True)
                 break
             except ClientError as exc:
                 code = _client_error_code(exc)
@@ -201,13 +217,32 @@ class S3CompatibleImmutableObjectStore:
             raise ObjectStoreCorruptError("remote immutable object differs after write")
         return StoredObject(key=key, sha256=sha256, size=len(data), reused=reused)
 
+    def _put_object(self, *, remote_key: str, data: bytes, sha256: str, conditional: bool) -> None:
+        request: dict[str, Any] = {
+            "Bucket": self.bucket,
+            "Key": remote_key,
+            "Body": data,
+            "ContentLength": len(data),
+            "Metadata": {"longhouse-sha256": sha256},
+        }
+        if not self._backup_mirror_only:
+            request["ChecksumSHA256"] = b64encode(bytes.fromhex(sha256)).decode("ascii")
+        if conditional:
+            request["IfNoneMatch"] = "*"
+        self.client.put_object(**request)
+
     def read_verified(self, *, tenant_id: str, key: str, sha256: str, max_bytes: int) -> bytes:
         _validate_request(tenant_id=tenant_id, key=key, sha256=sha256)
+        if self._backup_mirror_only:
+            _validate_backup_mirror_key(key=key, sha256=sha256)
         if max_bytes < 0:
             raise ObjectStoreValidationError("max_bytes must be non-negative")
         remote_key = self._remote_key(tenant_id, key)
         try:
-            response = self.client.get_object(Bucket=self.bucket, Key=remote_key, ChecksumMode="ENABLED")
+            request: dict[str, Any] = {"Bucket": self.bucket, "Key": remote_key}
+            if not self._backup_mirror_only:
+                request["ChecksumMode"] = "ENABLED"
+            response = self.client.get_object(**request)
             size = response.get("ContentLength")
             if not isinstance(size, int) or size < 0 or size > max_bytes:
                 raise ObjectStoreCorruptError("remote object exceeds its read bound")
@@ -228,6 +263,8 @@ class S3CompatibleImmutableObjectStore:
 
     def delete_verified(self, *, tenant_id: str, key: str, sha256: str) -> bool:
         _validate_request(tenant_id=tenant_id, key=key, sha256=sha256)
+        if self._backup_mirror_only:
+            _validate_backup_mirror_key(key=key, sha256=sha256)
         try:
             size = self._verify_remote_head(tenant_id=tenant_id, key=key, sha256=sha256, size=None)
             self.read_verified(tenant_id=tenant_id, key=key, sha256=sha256, max_bytes=size)
@@ -243,7 +280,10 @@ class S3CompatibleImmutableObjectStore:
 
     def _verify_remote_head(self, *, tenant_id: str, key: str, sha256: str, size: int | None) -> int:
         try:
-            response = self.client.head_object(Bucket=self.bucket, Key=self._remote_key(tenant_id, key), ChecksumMode="ENABLED")
+            request: dict[str, Any] = {"Bucket": self.bucket, "Key": self._remote_key(tenant_id, key)}
+            if not self._backup_mirror_only:
+                request["ChecksumMode"] = "ENABLED"
+            response = self.client.head_object(**request)
         except ClientError as exc:
             raise ObjectStoreCorruptError(f"remote object is unreadable: {_client_error_code(exc)}") from exc
         metadata = response.get("Metadata")
@@ -261,6 +301,21 @@ class S3CompatibleImmutableObjectStore:
         return f"{self.namespace}/tenants/{tenant_namespace}/{key}"
 
 
+class B2BackupMirrorObjectStore(S3CompatibleImmutableObjectStore):
+    """B2 S3 profile restricted to content-addressed remote backup artifacts.
+
+    B2's S3 endpoint accepted PutObject but not the conditional-create and
+    checksum extensions required by the general S3 contract in the 2026-07-21
+    live proof. The backup protocol carries only SHA-addressed blobs/manifests,
+    re-reads every object, and cannot advance the catalog acknowledgement
+    cursor; that makes this compatibility profile a fail-closed mirror only.
+    """
+
+    def __init__(self, client: S3CompatibleClient, *, bucket: str, namespace: str = "longhouse/v1") -> None:
+        super().__init__(client, bucket=bucket, namespace=namespace)
+        self._backup_mirror_only = True
+
+
 def _validate_request(*, tenant_id: str, key: str, sha256: str) -> None:
     if not isinstance(tenant_id, str) or not tenant_id:
         raise ObjectStoreValidationError("tenant_id must be a non-empty string")
@@ -275,6 +330,17 @@ def _client_error_code(error: ClientError) -> str:
     return str(response.get("Code", "unknown"))
 
 
+def _is_not_found(error: ObjectStoreCorruptError) -> bool:
+    return any(code in str(error) for code in ("404", "NoSuchKey", "NotFound"))
+
+
+def _validate_backup_mirror_key(*, key: str, sha256: str) -> None:
+    blob_key = f"backup/v1/blobs/{sha256[:2]}/{sha256}"
+    manifest_key = f"backup/v1/manifests/{sha256[:2]}/{sha256}.json"
+    if key not in {blob_key, manifest_key}:
+        raise ObjectStoreValidationError("B2 backup mirror keys must be content-addressed backup blobs or manifests")
+
+
 def _fsync_directory(path: Path) -> None:
     descriptor = os.open(path, os.O_RDONLY)
     try:
@@ -284,6 +350,7 @@ def _fsync_directory(path: Path) -> None:
 
 
 __all__ = [
+    "B2BackupMirrorObjectStore",
     "FilesystemImmutableObjectStore",
     "ImmutableObjectStore",
     "ObjectStoreCorruptError",

@@ -79,6 +79,9 @@ observability-down: ## Stop the god-view observability stack
 test: ## Backend unit tests (tests_lite/, ~10s)
 	@cd server && ./run_backend_tests_lite.sh
 
+test-storage-v2-b2: ## Disposable real-B2 Phase 3 object/restore proof (requires scoped env)
+	@cd server && LONGHOUSE_B2_REAL_PROOF=1 uv run --extra dev pytest -q tests_lite/test_storage_v2_object_store.py tests_lite/test_catalogd_backup_restore.py
+
 test-session-state: ## @internal Focused canonical session-state and Phase 7 fault proofs
 	@NODEIDS="$$(uv run --no-project --with pyyaml python scripts/qa/session-state-fault-matrix.py --nodeids --server-relative)"; \
 		cd server && uv run --extra dev pytest -q $$NODEIDS

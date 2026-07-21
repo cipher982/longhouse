@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 from datetime import UTC
 from datetime import datetime
@@ -9,6 +10,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
+from zerg.storage_v2.object_store import B2BackupMirrorObjectStore
 
 from zerg.catalogd.backup import BackupProofError
 from zerg.catalogd.backup import restore_rehearsal
@@ -30,6 +32,7 @@ from zerg.storage_v2.object_store import FilesystemImmutableObjectStore
 from zerg.storage_v2.remote_backup import mirror_restore_point
 from zerg.storage_v2.remote_backup import restore_remote_rehearsal
 from zerg.storage_v2.remote_backup import scrub_remote_restore_point
+from tests_lite.test_storage_v2_object_store import real_b2_store_or_skip
 
 
 @pytest.fixture
@@ -116,7 +119,11 @@ def _raw_commit_params(
 
 
 @pytest.mark.asyncio
-async def test_exact_backup_verify_and_blank_root_restore_without_monolith(backup_root: Path) -> None:
+@pytest.mark.timeout(60)
+@pytest.mark.parametrize("remote_backend", ("filesystem", "b2"))
+async def test_exact_backup_verify_and_blank_root_restore_without_monolith(backup_root: Path, remote_backend: str) -> None:
+    if remote_backend == "b2" and os.environ.get("LONGHOUSE_B2_REAL_PROOF") != "1":
+        pytest.skip("set LONGHOUSE_B2_REAL_PROOF=1 to run the disposable B2 proof")
     tmp_path = backup_root
     database_path = tmp_path / "live-catalog.db"
     socket_path = tmp_path / "catalogd.sock"
@@ -234,7 +241,11 @@ async def test_exact_backup_verify_and_blank_root_restore_without_monolith(backu
     assert not (restored / "longhouse.db").exists()
     assert not (restored / "search.db").exists()
 
-    remote_store = FilesystemImmutableObjectStore(tmp_path / "remote-mirror", tenant_id=raw_spec.tenant_id)
+    remote_store: FilesystemImmutableObjectStore | B2BackupMirrorObjectStore
+    if remote_backend == "filesystem":
+        remote_store = FilesystemImmutableObjectStore(tmp_path / "remote-mirror", tenant_id=raw_spec.tenant_id)
+    else:
+        remote_store = real_b2_store_or_skip()
     remote = mirror_restore_point(
         store=remote_store,
         tenant_id=raw_spec.tenant_id,

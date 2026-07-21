@@ -1,15 +1,42 @@
 from __future__ import annotations
 
 import hashlib
+import os
 from io import BytesIO
+from uuid import uuid4
 
+import boto3
 import pytest
 from botocore.exceptions import ClientError
 
+from zerg.storage_v2.object_store import B2BackupMirrorObjectStore
 from zerg.storage_v2.object_store import FilesystemImmutableObjectStore
 from zerg.storage_v2.object_store import ObjectStoreCorruptError
 from zerg.storage_v2.object_store import ObjectStoreValidationError
 from zerg.storage_v2.object_store import S3CompatibleImmutableObjectStore
+
+
+def real_b2_store_or_skip() -> B2BackupMirrorObjectStore:
+    """Return the disposable B2 proof store only when the operator opts in."""
+
+    if os.environ.get("LONGHOUSE_B2_REAL_PROOF") != "1":
+        pytest.skip("set LONGHOUSE_B2_REAL_PROOF=1 to run the disposable B2 proof")
+    required = ("B2_LONGHOUSE_PHASE3_KEY_ID", "B2_LONGHOUSE_PHASE3_APP_KEY", "B2_LONGHOUSE_PHASE3_BUCKET", "B2_LONGHOUSE_PHASE3_S3_ENDPOINT")
+    missing = [name for name in required if not os.environ.get(name)]
+    if missing:
+        pytest.fail(f"B2 proof credentials are incomplete: {', '.join(missing)}")
+    endpoint = os.environ["B2_LONGHOUSE_PHASE3_S3_ENDPOINT"]
+    client = boto3.client(
+        "s3",
+        endpoint_url=f"https://{endpoint}",
+        aws_access_key_id=os.environ["B2_LONGHOUSE_PHASE3_KEY_ID"],
+        aws_secret_access_key=os.environ["B2_LONGHOUSE_PHASE3_APP_KEY"],
+        region_name=endpoint.split(".")[1],
+    )
+    return B2BackupMirrorObjectStore(
+        client,
+        bucket=os.environ["B2_LONGHOUSE_PHASE3_BUCKET"],
+    )
 
 
 def test_filesystem_store_is_tenant_scoped_idempotent_and_hash_verified(tmp_path):
@@ -141,3 +168,22 @@ def test_s3_store_retries_one_conditional_create_race():
 
     assert stored.reused is False
     assert len([call for call in client.calls if call[0] == "put"]) == 2
+
+
+@pytest.mark.timeout(60)
+def test_real_b2_store_contract() -> None:
+    """Exercise immutable create/replay/read/delete against the scoped B2 key."""
+
+    store = real_b2_store_or_skip()
+    tenant_id = f"phase3-contract-{uuid4()}"
+    data = b"Longhouse Phase 3 B2 contract proof\n"
+    sha256 = hashlib.sha256(data).hexdigest()
+    key = f"backup/v1/blobs/{sha256[:2]}/{sha256}"
+
+    first = store.put_if_absent(tenant_id=tenant_id, key=key, data=data, sha256=sha256)
+    replay = store.put_if_absent(tenant_id=tenant_id, key=key, data=data, sha256=sha256)
+
+    assert first.reused is False and replay.reused is True
+    assert store.read_verified(tenant_id=tenant_id, key=key, sha256=sha256, max_bytes=len(data)) == data
+    assert store.delete_verified(tenant_id=tenant_id, key=key, sha256=sha256) is True
+    assert store.delete_verified(tenant_id=tenant_id, key=key, sha256=sha256) is False
