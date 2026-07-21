@@ -1,6 +1,7 @@
 # Elastic Onboarding and Durable Storage Epic
 
-**Status:** Phase 1 accepted in production; Phase 2 discovery inventory starting
+**Status:** Phase 1 and Phase 2A inventory accepted in production; Phase 2B
+progressive scheduling next
 **Owner:** Longhouse core and hosted operations
 **Created:** 2026-07-20
 **Scope:** Hosted scale, customer import, storage telemetry, and object-store
@@ -749,6 +750,39 @@ general real-user browser beacon pipeline.
 
 **Goal:** Turn first install with months of multi-provider history into a
 controlled, useful flow on the current filesystem storage-v2 backend.
+
+**Phase 2A production acceptance checkpoint (2026-07-21):** Durable source
+inventory shipped through commits `efcff5a36`, `498e06c42`, `7739c6bde`,
+`4e6e10a37`, and `c269021d3`. The Machine Agent now inventories provider-native
+sources independently of whether historical import is paused or live work is
+busy, stores a generation and logical content digest across restart, and sends
+only provider-level counts, source bytes, SQLite WAL bytes, footprint bytes,
+time bounds, scan duration, and error count. Paths and filenames never enter
+the heartbeat or API projection. SQLite inventories count the database plus WAL
+and exclude SHM; WAL churn does not create a new logical generation.
+
+Production dogfood discovered 9,947 sources across Antigravity, Claude, Codex,
+Cursor, and OpenCode in 724 ms: 24,082,968,586 source bytes plus 66,593,864 WAL
+bytes, for a 24,149,562,450-byte footprint. The scan completed with zero errors
+while live control remained connected and a 245-range, roughly 7 GB archive
+backlog remained bounded behind the historical lane.
+
+Live acceptance also exposed two cross-boundary defects that tests alone had
+not represented. The catalog heartbeat validator still expected fields removed
+from the typed lease wire contract, so the new heartbeat was rejected; the
+contract is now derived from the current schema and heartbeat ingestion is 204.
+The API process correctly does not own a live SQLite read connection, so machine
+health now reads an owner-scoped, latest-row, privacy-allowlisted projection
+through catalogd rather than opening the catalog directly. Its raw projection
+is fail-closed and capped at 32 KiB per machine, leaving deterministic headroom
+under the 8 MiB RPC frame for 100 machines even with outer JSON escaping.
+
+The full backend gate passed with 3,876 tests and 13 skips. Exact build
+`c269021d3` deployed successfully, and an owner-bound production request returned
+HTTP 200 with the complete inventory above, healthy transport state, five
+provider aggregates, and no source-path values. Phase 2A is accepted. Phase 2B
+owns provider-fair recent-first scheduling, durable progress receipts, pause and
+resume, and restart recovery.
 
 Deliver discovery inventory, the onboarding state machine, recent-first
 scheduler, provider fairness, byte-based progress/health surfaces, thin
