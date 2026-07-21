@@ -41,15 +41,47 @@ the laptop sleeps. For durability you run the Runtime Host on an always-on box
   is happening right now" and must feel terminal-fast; a durable lane answers
   "what provably happened" and must be correct, ordered, and replayable.
 
+## Session modes
+
+Every session has exactly one mode. This vocabulary is canonical here and in
+the workspace `AGENTS.md`; nowhere else in this repo should redefine it —
+only link to this section.
+
+- **Shadow** — unmanaged, observe-only. The Machine Agent discovered a
+  session it did not launch (e.g. a bare `claude` run). Searchable and
+  sometimes partially live, but not steerable — Longhouse never owned its
+  control path.
+- **Helm** — managed, interactive, remote-steerable. `longhouse claude` /
+  `longhouse codex` run the provider's normal TUI while Longhouse owns the
+  control path, whether launched at a physical terminal or dispatched
+  remotely to run detached. The provider process is meant to persist for the
+  life of the interactive session — that's correct behavior, not a leak.
+- **Console** — managed, headless, UI-dispatched. Web/iOS sends one-shot work
+  through the Machine Agent; the provider process runs one turn and exits,
+  state persists to disk, and nothing stays resident between turns.
+
+`Managed session` / `Unmanaged session` (below) remain valid at the
+control-ownership level: Unmanaged == Shadow; Managed == Helm or Console.
+Both vocabularies are correct — they answer different questions (can
+Longhouse steer this at all, vs. exactly how).
+
+### Mapping to code
+
+Read `schemas/managed_providers.yml` for the current, authoritative
+per-provider support matrix — it changes independently of this document and
+this document does not restate it. The product terms above and the
+manifest/engine field names below refer to the same three modes:
+
+| Product term | Manifest/code fields |
+| --- | --- |
+| Shadow | discovered/unmanaged import; no `launch_*` capability involved |
+| Helm | `launch_local`, `launch_remote`, `steer_active_turn`, `send_input` |
+| Console | `turn_start` (current); `run_once` (legacy, being retired — see `docs/specs/turn-scoped-console-execution.md`) |
+
 ## Glossary
 
 The project uses some shorthand nouns. The important ones:
 
-- **Managed session** — Longhouse owns the control path (usually launched via
-  `longhouse claude` / `longhouse codex`). It can be steered later. Reflected by
-  `session.capabilities.live_control_available`.
-- **Unmanaged session** — imported or discovered (e.g. a bare `claude` run).
-  Searchable, sometimes partially live, but not steerable from the browser.
 - **Provider CLI** — an upstream binary you install yourself (`claude`, `codex`,
   Antigravity, `opencode`). Longhouse launches it through a control
   path but does not vendor, pin, or update it.
