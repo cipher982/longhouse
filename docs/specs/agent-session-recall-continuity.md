@@ -473,7 +473,7 @@ routes and cursors.
 - Verify exact phrase, SHA, dotted filename, and natural-language queries
   against a synthetic fixture that reproduces the measured session shape.
 
-Exit: david010 recall works while the index is healthy, and an intentionally
+Exit: hosted dogfood recall works while the index is healthy, and an intentionally
 broken query path is visibly degraded even when the process still pings.
 
 ### Slice 1: Converge The Repository On One Storage And Search Architecture

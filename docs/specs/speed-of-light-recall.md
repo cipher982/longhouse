@@ -62,7 +62,7 @@ Five seconds is a cancellation fuse. It is not an acceptable response time.
 ## Measured Baseline
 
 After the storage-v2 continuity cutover at commit `77bcbdedb`, the hosted
-`david010` corpus measured:
+dogfood corpus measured:
 
 | Observation | Result |
 | --- | ---: |
@@ -386,7 +386,7 @@ catalogd, ingest, projection, or worklog regression.
 - Run focused component tests per phase, then full backend and core E2E once at
   the final cutover SHA.
 - Ship the exact SHA, verify build identity, and run serial/concurrent/mixed
-  benchmarks on `david010`.
+  benchmarks on the hosted dogfood tenant.
 - Compare controlled results with organic p95/p99 and error telemetry through a
   full work cycle.
 
