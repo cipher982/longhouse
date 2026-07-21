@@ -42,7 +42,7 @@ use crate::storage_v2_contract::{self, EnvelopeIdentity, RangeKind};
 pub(crate) const PARSER_REVISION: &str = "engine-parser-v2";
 pub(crate) const ORDERING_REVISION: &str = "semantic-order-v2";
 const OPENCODE_SESSION_PAGE_SIZE: usize = 64;
-const CURSOR_PARSER_REVISION: &str = "cursor-store-render-v4-receipts";
+const CURSOR_PARSER_REVISION: &str = "cursor-store-render-v5-receipt-lifecycle";
 const LIVE_TARGET_BATCH_BYTES: usize = 64 * 1024;
 
 pub(crate) struct PreparedStorageV2Envelope {
@@ -1118,7 +1118,22 @@ fn cursor_text_projection(
                 .map(|(blob_id, subordinal)| (blob_id.clone(), *subordinal)),
         );
     }
+    if evidence.ambiguous {
+        tracing::warn!(
+            reason = "conflicting_hook_evidence",
+            store_turn_count = store_turns.len(),
+            hook_turn_count = evidence.turns.len(),
+            "Suppressing managed Cursor assistant text"
+        );
+        return projection;
+    }
     let Some(alignment) = unique_cursor_turn_alignment(&store_turns, &evidence.turns) else {
+        tracing::warn!(
+            reason = "ambiguous_turn_alignment",
+            store_turn_count = store_turns.len(),
+            hook_turn_count = evidence.turns.len(),
+            "Suppressing managed Cursor assistant text"
+        );
         return projection;
     };
     for (store_index, evidence_index) in alignment {
@@ -1134,6 +1149,13 @@ fn cursor_text_projection(
                         .suppressed
                         .remove(&(blob_id.clone(), *subordinal));
                 }
+            } else {
+                tracing::warn!(
+                    reason = "ambiguous_receipt_binding",
+                    generation_id = hook_turn.generation_id,
+                    text_block_count = store_turn.text_blocks.len(),
+                    "Suppressing managed Cursor assistant text"
+                );
             }
         }
     }
@@ -1508,16 +1530,32 @@ fn prepare_next_cursor_envelope_outcome_with_limit(
                 &binding.session_id,
                 &snapshot.conversation_uuid,
             )
-            .map(|evidence| evidence.unwrap_or_default())
+            .map(|evidence| {
+                if evidence.is_none() {
+                    tracing::warn!(
+                        session_id = binding.session_id,
+                        conversation_id = snapshot.conversation_uuid,
+                        reason = "missing_hook_evidence",
+                        "Suppressing managed Cursor assistant text"
+                    );
+                }
+                evidence.unwrap_or_default()
+            })
         })
         .transpose()?;
     // Do not consume raw records while the provider's turn receipt is still
     // racing the stop hook.  Both terminal hooks wake the shipper, so the
     // settled turn will be captured without permanently losing its render.
-    if visibility_evidence
+    if let Some(wait) = visibility_evidence
         .as_ref()
-        .is_some_and(|evidence| evidence.has_unsettled_turn())
+        .and_then(|evidence| evidence.unsettled_reason())
     {
+        tracing::warn!(
+            session_id = claimed_session_id.as_deref().unwrap_or_default(),
+            conversation_id = snapshot.conversation_uuid,
+            reason = wait.as_str(),
+            "Waiting for managed Cursor visibility evidence"
+        );
         return Ok(CursorPreparationOutcome::Current);
     }
     if visibility_evidence.is_some() {
@@ -2930,7 +2968,9 @@ mod tests {
                 prompt: "hello test 1".to_string(),
                 response_text: None,
                 stop_status: Some("error".to_string()),
+                stop_observed_at: None,
             }],
+            ..Default::default()
         };
 
         let rendered = cursor_render_records(&snapshot, &selected, 0, Some(&evidence)).unwrap();
@@ -2974,7 +3014,9 @@ mod tests {
                 prompt: "do work".to_string(),
                 response_text: Some("progressdone".to_string()),
                 stop_status: Some("completed".to_string()),
+                stop_observed_at: None,
             }],
+            ..Default::default()
         };
 
         let rendered = cursor_render_records(&snapshot, &selected, 0, Some(&evidence)).unwrap();
@@ -3011,12 +3053,81 @@ mod tests {
                 prompt: "repeat".to_string(),
                 response_text: Some("same answer".to_string()),
                 stop_status: Some("completed".to_string()),
+                stop_observed_at: None,
             }],
+            ..Default::default()
         };
 
         let rendered = cursor_render_records(&snapshot, &selected, 0, Some(&evidence)).unwrap();
         assert_eq!(rendered.len(), 1);
         assert_eq!(rendered[0].role, "user");
+    }
+
+    #[test]
+    fn cursor_conflicting_hook_receipts_fail_closed() {
+        let user = "1111111111111111111111111111111111111111111111111111111111111111";
+        let reply = "2222222222222222222222222222222222222222222222222222222222222222";
+        let (snapshot, selected) = cursor_visibility_fixture(vec![
+            (
+                user,
+                serde_json::json!({"role":"user","content":[{"type":"text","text":"<user_query>hello</user_query>"}]}),
+            ),
+            (
+                reply,
+                serde_json::json!({"role":"assistant","content":[{"type":"text","text":"world"}]}),
+            ),
+        ]);
+        let evidence = crate::cursor_visibility::CursorVisibilityEvidence {
+            turns: vec![crate::cursor_visibility::CursorHookTurn {
+                generation_id: "generation-conflict".to_string(),
+                prompt: "hello".to_string(),
+                response_text: Some("world".to_string()),
+                stop_status: Some("completed".to_string()),
+                stop_observed_at: None,
+            }],
+            ambiguous: true,
+            ..Default::default()
+        };
+
+        let rendered = cursor_render_records(&snapshot, &selected, 0, Some(&evidence)).unwrap();
+        assert_eq!(rendered.len(), 1);
+        assert_eq!(rendered[0].role, "user");
+    }
+
+    #[test]
+    fn cursor_failed_turn_keeps_executed_tool_evidence_but_suppresses_prose() {
+        let user = "1111111111111111111111111111111111111111111111111111111111111111";
+        let tool = "2222222222222222222222222222222222222222222222222222222222222222";
+        let prose = "3333333333333333333333333333333333333333333333333333333333333333";
+        let (snapshot, selected) = cursor_visibility_fixture(vec![
+            (
+                user,
+                serde_json::json!({"role":"user","content":[{"type":"text","text":"<user_query>run it</user_query>"}]}),
+            ),
+            (
+                tool,
+                serde_json::json!({"role":"assistant","content":[{"type":"tool-call","toolName":"Shell","toolCallId":"call-1","args":{"command":"pwd"}}]}),
+            ),
+            (
+                prose,
+                serde_json::json!({"role":"assistant","content":[{"type":"text","text":"uncommitted prose"}]}),
+            ),
+        ]);
+        let evidence = crate::cursor_visibility::CursorVisibilityEvidence {
+            turns: vec![crate::cursor_visibility::CursorHookTurn {
+                generation_id: "generation-failed-tool".to_string(),
+                prompt: "run it".to_string(),
+                response_text: None,
+                stop_status: Some("error".to_string()),
+                stop_observed_at: None,
+            }],
+            ..Default::default()
+        };
+
+        let rendered = cursor_render_records(&snapshot, &selected, 0, Some(&evidence)).unwrap();
+        assert_eq!(rendered.len(), 2);
+        assert_eq!(rendered[0].role, "user");
+        assert_eq!(rendered[1].tool_call_id.as_deref(), Some("call-1"));
     }
 
     #[test]
@@ -3033,7 +3144,7 @@ mod tests {
                 serde_json::json!({"role":"assistant","content":[{"type":"text","text":"unverified artifact"}]}),
             ),
         ]);
-        let evidence = crate::cursor_visibility::CursorVisibilityEvidence { turns: Vec::new() };
+        let evidence = crate::cursor_visibility::CursorVisibilityEvidence::default();
 
         let rendered = cursor_render_records(&snapshot, &selected, 0, Some(&evidence)).unwrap();
         assert_eq!(rendered.len(), 1);
@@ -3071,7 +3182,9 @@ mod tests {
                 prompt: "same prompt".to_string(),
                 response_text: Some("same reply".to_string()),
                 stop_status: Some("completed".to_string()),
+                stop_observed_at: None,
             }],
+            ..Default::default()
         };
 
         let rendered = cursor_render_records(&snapshot, &selected, 0, Some(&evidence)).unwrap();

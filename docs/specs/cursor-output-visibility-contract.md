@@ -263,7 +263,15 @@ Cursor storage-v2 renderer. Regression coverage proves:
 - successful hook receipts decompose exactly across multiple progress and
   final text blocks while tool events retain their position;
 - duplicate hook rows and reversed successful terminal-hook order are safe;
+- `afterAgentResponse` is independently sufficient to settle a committed turn,
+  while a lone `stop(completed)` receives a bounded reorder grace and then
+  degrades to raw-only rather than wedging archival;
+- `sessionEnd` settles incomplete turns raw-only and conflicting duplicate hook
+  payloads are explicit ambiguity rather than first-wins evidence;
 - missing and ambiguous receipt matches fail closed;
+- fail-closed holds and suppression decisions emit scoped diagnostics;
+- store reasoning blocks are retained raw but never projected as ordinary
+  assistant messages; only receipt-committed text is projected;
 - stale parser revisions replay through a replacement source epoch;
 - stale unattempted pending renders are rebuilt before shipping.
 

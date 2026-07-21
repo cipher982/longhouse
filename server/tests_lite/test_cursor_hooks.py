@@ -11,6 +11,8 @@ from http.server import BaseHTTPRequestHandler
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 
+import pytest
+
 from zerg.services.cursor_hooks import install_cursor_hooks
 
 
@@ -414,7 +416,13 @@ def test_cursor_permission_hook_is_inert_for_ambiguous_legacy_claim(tmp_path: Pa
     assert json.loads(result.stdout) == {}
 
 
-def test_cursor_stop_wakes_engine_with_exact_managed_store(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("event", "generation_id"),
+    [("stop", "generation-1"), ("sessionEnd", None)],
+)
+def test_cursor_terminal_hook_wakes_engine_with_exact_managed_store(
+    tmp_path: Path, event: str, generation_id: str | None
+) -> None:
     cursor = tmp_path / ".cursor"
     cursor.mkdir()
     conversation_id = "cursor-id"
@@ -451,9 +459,12 @@ def test_cursor_stop_wakes_engine_with_exact_managed_store(tmp_path: Path) -> No
             "LONGHOUSE_CURSOR_LAUNCH_ID": launch_id,
         }
     )
+    payload = {"conversation_id": conversation_id}
+    if generation_id is not None:
+        payload["generation_id"] = generation_id
     result = subprocess.run(
-        [str(script), "stop"],
-        input=json.dumps({"conversation_id": conversation_id, "generation_id": "generation-1"}),
+        [str(script), event],
+        input=json.dumps(payload),
         text=True,
         capture_output=True,
         env=env,
@@ -470,7 +481,7 @@ def test_cursor_stop_wakes_engine_with_exact_managed_store(tmp_path: Path) -> No
             "path": str(store),
             "phase": "idle",
             "session_id": "managed-session",
-            "turn_id": "generation-1",
+            "turn_id": generation_id,
             "wake_reason": "turn_completed",
             "observed_at_ms": received[0]["observed_at_ms"],
             "file_len_hint": len(b"cursor-store"),
