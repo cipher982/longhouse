@@ -154,8 +154,10 @@ receipt:
   sequence and store turns;
 - wait while the newest hook turn is unsettled, including the valid
   `stop(completed)`-before-`afterAgentResponse` race;
-- project assistant prose only when the `afterAgentResponse.text` receipt has
+- project assistant text only when the `afterAgentResponse.text` receipt has
   exactly one ordered decomposition across the turn's store text blocks;
+- keep uncommitted reasoning blocks raw-only so host redaction cannot turn
+  retry attempts into empty assistant rows;
 - retain tool calls/results in their original store order;
 - do not choose the first or last artifact when the receipt match is missing or
   ambiguous;
@@ -167,12 +169,12 @@ receipt:
   separate presentation surface rather than pretending it is a committed
   assistant message.
 
-The renderer revision is `cursor-store-render-v3-receipts`. Upgrading an
+The renderer revision is `cursor-store-render-v4-receipts`. Upgrading an
 already-captured Cursor source rotates to a replacement epoch and replays raw
-records from ordinal zero, so previously published v2 render objects are
-retired rather than left beside corrected output. An obsolete, unattempted
-pending v2 envelope is rebuilt before shipping; an attempted envelope remains
-an exact-retry authority until the host receipts it.
+records from ordinal zero, so previously published render objects are retired
+rather than left beside corrected output. An obsolete, unattempted pending
+envelope is rebuilt before shipping; an attempted envelope remains an
+exact-retry authority until the host receipts it.
 
 This is deliberately conservative. It prevents four uncommitted retries from
 appearing as four agent replies without deleting them, and it does not claim

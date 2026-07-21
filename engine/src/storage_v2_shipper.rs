@@ -42,7 +42,7 @@ use crate::storage_v2_contract::{self, EnvelopeIdentity, RangeKind};
 pub(crate) const PARSER_REVISION: &str = "engine-parser-v2";
 pub(crate) const ORDERING_REVISION: &str = "semantic-order-v2";
 const OPENCODE_SESSION_PAGE_SIZE: usize = 64;
-const CURSOR_PARSER_REVISION: &str = "cursor-store-render-v3-receipts";
+const CURSOR_PARSER_REVISION: &str = "cursor-store-render-v4-receipts";
 const LIVE_TARGET_BATCH_BYTES: usize = 64 * 1024;
 
 pub(crate) struct PreparedStorageV2Envelope {
@@ -1021,6 +1021,7 @@ struct CursorTextProjection {
 #[derive(Debug)]
 struct CursorStoreTurn {
     prompt: String,
+    suppressible_blocks: Vec<(String, usize)>,
     text_blocks: Vec<(String, usize, String)>,
 }
 
@@ -1075,6 +1076,7 @@ fn cursor_text_projection(
                 .unwrap_or_default();
             current_turn = Some(CursorStoreTurn {
                 prompt,
+                suppressible_blocks: Vec::new(),
                 text_blocks: Vec::new(),
             });
             continue;
@@ -1083,7 +1085,12 @@ fn cursor_text_projection(
             continue;
         };
         for (subordinal, block) in blocks.iter().enumerate() {
-            if block.get("type").and_then(Value::as_str) == Some("text")
+            let kind = block.get("type").and_then(Value::as_str);
+            if matches!(kind, Some("text" | "reasoning")) {
+                turn.suppressible_blocks
+                    .push((blob_id.clone(), subordinal));
+            }
+            if kind == Some("text")
                 && block.get("text").and_then(Value::as_str).is_some()
             {
                 turn.text_blocks.push((
@@ -1106,9 +1113,9 @@ fn cursor_text_projection(
     for store_turn in &store_turns {
         projection.suppressed.extend(
             store_turn
-                .text_blocks
+                .suppressible_blocks
                 .iter()
-                .map(|(blob_id, subordinal, _)| (blob_id.clone(), *subordinal)),
+                .map(|(blob_id, subordinal)| (blob_id.clone(), *subordinal)),
         );
     }
     let Some(alignment) = unique_cursor_turn_alignment(&store_turns, &evidence.turns) else {
@@ -1278,7 +1285,7 @@ fn cursor_render_records(
                         .and_then(Value::as_str)
                         .unwrap_or_default()
                         .to_string();
-                    if kind == "text" {
+                    if matches!(kind, "text" | "reasoning") {
                         let key = (blob_id.clone(), subordinal);
                         if projection.suppressed.contains(&key) {
                             continue;
@@ -2902,19 +2909,19 @@ mod tests {
             ),
             (
                 attempt_one,
-                serde_json::json!({"role":"assistant","content":[{"type":"text","text":"reply one"}]}),
+                serde_json::json!({"role":"assistant","content":[{"type":"reasoning","text":"retry thought one"},{"type":"text","text":"reply one"}]}),
             ),
             (
                 attempt_two,
-                serde_json::json!({"role":"assistant","content":[{"type":"text","text":"reply two"}]}),
+                serde_json::json!({"role":"assistant","content":[{"type":"reasoning","text":"retry thought two"},{"type":"text","text":"reply two"}]}),
             ),
             (
                 attempt_three,
-                serde_json::json!({"role":"assistant","content":[{"type":"text","text":"reply three"}]}),
+                serde_json::json!({"role":"assistant","content":[{"type":"reasoning","text":"retry thought three"},{"type":"text","text":"reply three"}]}),
             ),
             (
                 attempt_four,
-                serde_json::json!({"role":"assistant","content":[{"type":"text","text":"reply four"}]}),
+                serde_json::json!({"role":"assistant","content":[{"type":"reasoning","text":"retry thought four"},{"type":"text","text":"reply four"}]}),
             ),
         ]);
         let evidence = crate::cursor_visibility::CursorVisibilityEvidence {
@@ -2950,7 +2957,7 @@ mod tests {
             ),
             (
                 progress,
-                serde_json::json!({"role":"assistant","content":[{"type":"text","text":"progress"}]}),
+                serde_json::json!({"role":"assistant","content":[{"type":"reasoning","text":"internal progress"},{"type":"text","text":"progress"}]}),
             ),
             (
                 tool,
@@ -3135,7 +3142,8 @@ mod tests {
             .unwrap()
             .unwrap();
         let mut obsolete = first.envelope.clone();
-        obsolete.render.as_mut().unwrap().parser_revision = "cursor-store-render-v2".to_string();
+        obsolete.render.as_mut().unwrap().parser_revision =
+            "cursor-store-render-v3-receipts".to_string();
         let obsolete_body = serde_json::to_vec(&obsolete).unwrap();
         let obsolete_body_zstd = encode_zstd(&obsolete_body, "obsolete Cursor request").unwrap();
         pending_source_envelope::replace_request_body_after_render_conflict(
