@@ -9,6 +9,14 @@ Phase B not started, not scheduled.
 `docs/specs/cursor-opencode-console-parity.md`, `docs/specs/cursor-console-native-turns.md`,
 `schemas/managed_providers.yml`
 
+> **Post-review correction (2026-07-21):** Phase A incorrectly promoted
+> persistent, no-terminal `session.launch` processes as remotely launched
+> Helm. Canonical Helm creation is terminal-originated; remote clients may
+> steer an existing Helm session but cannot originate one. `session.launch`,
+> `launch_remote`, and the detached persistent Claude/Codex/OpenCode launch
+> paths are deletion targets, not a fourth product mode. This correction
+> supersedes the affected Phase A wording below.
+
 ## Why this exists
 
 A 2026-07-21 investigation into provider-launch capability gaps (Claude/Cursor
@@ -89,14 +97,12 @@ real behavioral work it can't honestly be separated from.
    genuine stale server-level claim, just not the *machine_control_supports*
    false-advertisement the existing engine test already guards against.
 
-5. **Two of three "Claude launch" code paths are genuinely under-named; the
-   third already isn't.** (Revised — sol's correction.) `console_turns.py`
-   is already explicitly Console-named and provider-neutral; it isn't part of
-   the naming confusion. The real problem is narrower and sharper than
-   originally stated: `_run_native_claude_tui` (physical terminal) and
-   `_launch_detached_native_claude_channel` (remote-dispatched, invoked only
-   via `claude_channel.py`) sit in the same file with no naming convention
-   distinguishing which real-world scenario each implements.
+5. **The Claude file contains one supported Helm launcher and one obsolete
+   persistent remote launcher.** `console_turns.py` is already explicitly
+   Console-named and provider-neutral. `_run_native_claude_tui` is the real
+   terminal-originated Helm path. `_launch_detached_native_claude_channel` is
+   `session.launch` compatibility machinery awaiting deletion, not another
+   valid Helm launch surface.
 
 6. **Two generations of the same concept coexist with no lifecycle marker,
    and this is partly deliberate mid-migration state, not pure neglect.**
@@ -251,11 +257,10 @@ work on those files is ordinary git, resolved at merge time.
    a behavioral one.
 4. Add module-level docstring banners to `_run_native_claude_tui` and
    `_launch_detached_native_claude_channel` stating plainly which product
-   mode each implements, and a short mapping comment/table linking
-   field-names (`run_once`, `turn_start`, `launch_local`, `launch_remote`) to
-   product vocabulary. **No public symbol, JSON field, or Typer command
-   renames in this phase** — private helper renames are fine if trivially
-   reviewable in the same commit as the banner. **Shipped:** `79528983b`.
+   mode each implements. **Shipped:** `79528983b`, then corrected after review:
+   `_run_native_claude_tui` is Helm; the detached helper is obsolete
+   `session.launch` compatibility machinery and implements no valid product
+   mode.
 5. Add a **hard-failing CI check**, not an advisory lint, that fails the build
    if a second location in the repo redefines Shadow/Helm/Console or
    Managed/Unmanaged in its own prose instead of linking to the canonical
@@ -294,10 +299,14 @@ isn't attempted piecemeal:
   `managed_providers.yml`).
 - Deleting the legacy `execution_lifetime`/`run_once`/launch-boolean fields
   per `turn-scoped-console-execution.md`'s already-agreed trigger.
+- Deleting provider-facing `session.launch`, `launch_remote`, and the
+  persistent no-terminal Claude/Codex/OpenCode launch implementations.
 - Public renames of the Claude launch functions/CLI surface.
 - Building the actual Claude Console (`turn_start`) adapter.
-- Deciding whether Cursor gets `launch_remote`.
-- Deciding an idle-timeout/reaper policy for Claude Helm-remote sessions.
+- Cursor does not get remote Helm; its existing `cursor_print` Console adapter
+  owns no-terminal UI dispatch.
+- No idle-timeout policy is added to preserve remote detached launch. The
+  invalid launch path is removed.
 
 Reviewer rationale for deferring rather than doing now (sol): doing the
 schema restructure and the renames before the behavioral work means touching

@@ -51,11 +51,13 @@ only link to this section.
   session it did not launch (e.g. a bare `claude` run). Searchable and
   sometimes partially live, but not steerable — Longhouse never owned its
   control path.
-- **Helm** — managed, interactive, remote-steerable. `longhouse claude` /
-  `longhouse codex` run the provider's normal TUI while Longhouse owns the
-  control path, whether launched at a physical terminal or dispatched
-  remotely to run detached. The provider process is meant to persist for the
-  life of the interactive session — that's correct behavior, not a leak.
+- **Helm** — managed, interactive, remote-steerable. A human starts Helm from
+  a physical terminal with `longhouse claude`, `longhouse codex`, or another
+  supported provider wrapper. Longhouse preserves the provider's normal TUI
+  and owns its control path. Once that terminal-originated session exists,
+  web/iOS may steer it remotely; web/iOS never originates a headless Helm
+  session. The provider process may persist while the interactive TUI remains
+  open.
 - **Console** — managed, headless, UI-dispatched. Web/iOS sends one-shot work
   through the Machine Agent; the provider process runs one turn and exits,
   state persists to disk, and nothing stays resident between turns.
@@ -75,8 +77,13 @@ manifest/engine field names below refer to the same three modes:
 | Product term | Manifest/code fields |
 | --- | --- |
 | Shadow | discovered/unmanaged import; no `launch_*` capability involved |
-| Helm | `launch_local`, `launch_remote`, `steer_active_turn`, `send_input` |
+| Helm | `launch_local`, plus adapter-proven live controls such as `steer_active_turn` and `send_input` |
 | Console | `turn_start` (current); `run_once` (legacy, being retired — see `docs/specs/turn-scoped-console-execution.md`) |
+
+`launch_remote` / provider-facing `session.launch` is obsolete compatibility
+machinery for persistent no-terminal processes. It is not a fourth mode or a
+valid Helm launch surface and is scheduled for deletion by
+`docs/specs/turn-scoped-console-execution.md`.
 
 ## Glossary
 

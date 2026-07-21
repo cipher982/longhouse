@@ -26,13 +26,12 @@ sessions.
   control operations. Steer uses `claude-channel send --meta intent=steer` and
   Runtime Host must gate explicit `intent=steer` on a fresh active runtime
   phase; idle channel injection is not steer.
-- Machine Agent remote launch uses the `claude.launch` support bit and must
-  run stock Claude under a PTY wrapper with
-  `--dangerously-load-development-channels server:longhouse-channel` and wait
-  for Claude channel state before Runtime Host records the launch as live.
-  Longhouse's channel is a private MCP server, not an Anthropic allowlisted
-  channel plugin; do not silently fall back to unmanaged/import-only launch if
-  Claude rejects this control path.
+- Helm creation is terminal-originated through `longhouse claude`. The
+  Machine Agent's remaining `claude.launch` / detached PTY path is obsolete
+  `session.launch` compatibility machinery scheduled for deletion; do not add
+  callers, tests that promote it as a product capability, or fallback paths.
+- Longhouse's channel is a private MCP server, not an Anthropic allowlisted
+  channel plugin.
 - Claude hook tokens must be passed through process env, never embedded in
   shell commands or PTY launch logs.
 - No detached bridge daemon, bridge state file, or flock sidecar should be required for Claude liveness.
@@ -50,16 +49,23 @@ sessions.
 - Bridge state, logs, lock sidecars, and IPC sockets live under `~/.longhouse/managed-local/codex-bridge/` unless overridden.
 - Hook scripts such as `longhouse-codex-hook.sh` are Longhouse hook scripts, not provider binaries.
 
-Codex launch modes:
+Codex execution paths:
 
-- **TUI-attached managed**: long-running Codex app-server plus visible `codex` TUI attached through `--remote`.
-- **Detached-UI managed**: long-running Codex app-server and Longhouse bridge, but no visible terminal TUI. Browser/iOS remote launch uses this mode so the session remains steerable from Longhouse without opening a terminal window.
-- **One-shot/batch**: prompt is passed to a provider process and the process exits after one turn. Do not call this "headless" in managed-session code or docs; it is a different execution model and is not equivalent to detached-ui managed control.
+- For Helm, a terminal-originated long-running Codex app-server has a visible
+  `codex` TUI attached through `--remote`.
+- For Console, `codex_exec` runs one turn, exits, and resumes durable provider
+  state in a later invocation.
+- For obsolete compatibility, `launch_mode=detached_ui` creates a persistent
+  process without a terminal through `session.launch`. It is scheduled for
+  deletion and must not be treated as supported Helm or extended.
 - A nonzero `codex --remote` auto-attach exit is a foreground TUI/client-link failure, not proof the managed session ended. Preserve the bridge and print a reattach command; only explicit stop paths should terminate the bridge/app-server.
 
 Bridge state:
 
-- Bridge writers persist detached-UI managed sessions as `launch_mode=detached_ui` and TUI sessions as `launch_mode=tui`.
+- Supported Helm writers persist TUI sessions as `launch_mode=tui`.
+- Existing `launch_mode=detached_ui` state belongs to the obsolete remote
+  launch path. Preserve it only long enough for safe compatibility/removal;
+  do not create new product behavior around it.
 - Do not automatically reap managed provider bridges or their app-server/server
   children. A missing TUI, wrapper signal, nonzero attach exit, or dead control
   bridge is degradation evidence, not permission to terminate user execution.
@@ -78,9 +84,11 @@ Hard Codex contract:
 - `longhouse opencode` starts stock upstream `opencode serve` on localhost
   through Longhouse's `opencode_server_bridge`, then attaches the TUI with
   stock `opencode attach`.
-- OpenCode server-bridge send, interrupt, launch, and terminate are first-class
-  Machine Agent control operations. Active-turn steer is not advertised until
-  OpenCode exposes and proves a true mid-turn injection semantic.
+- OpenCode server-bridge send, interrupt, and terminate are first-class Helm
+  control operations after terminal launch. Active-turn steer is not
+  advertised until OpenCode exposes and proves a true mid-turn injection
+  semantic. The remaining `opencode.launch` remote path is obsolete
+  `session.launch` compatibility machinery, not supported Helm.
 - Bridge state lives under `~/.claude/managed-local/opencode-server/` and
   stores the local server password in a 0600 state file so `longhouse
   opencode-channel attach` can reconnect without printing secrets. Runtime
@@ -150,9 +158,10 @@ After changes:
 
 - Use `managed` for Longhouse-owned control paths.
 - Use `unmanaged` for imported/discovered sessions without live control ownership.
-- Use `detached-ui managed` for a long-running managed provider session with no visible terminal TUI attached.
 - Use `one-shot` or `batch` for prompt-and-exit execution.
-- Avoid `headless` for Codex managed-session lifecycle unless you explicitly mean a non-GUI environment, headless browser, or other conventional non-session usage.
+- Use `Console` for product-owned, turn-scoped, no-terminal execution.
+- Treat `detached-ui` as an implementation name in obsolete compatibility
+  code, not a product mode or supported launch surface.
 - Use `live`, `reattachable`, `phase-known`, and `running` separately; do not collapse them into one status.
 - In local-health JSON, keep `control_path`, `liveness_model`, and `state` separate; do not infer managed/unmanaged ownership from process liveness or attached/detached state.
 - Avoid naming constants or paths as if Longhouse owns a provider binary when the behavior is only wrapper config or update-check suppression.

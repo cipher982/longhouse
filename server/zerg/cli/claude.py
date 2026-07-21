@@ -44,8 +44,9 @@ from zerg.services.shipper.hooks import install_hooks
 from zerg.session_execution_home import ManagedSessionTransport
 from zerg.session_loop_mode import SessionLoopMode
 
-# See ARCHITECTURE.md's "Session modes" section: `launch_local` and
-# `launch_remote` are Helm; `turn_start` and legacy `run_once` are Console.
+# See ARCHITECTURE.md's "Session modes" section: terminal-originated
+# `launch_local` is Helm; `turn_start` is Console. `launch_remote` is obsolete
+# persistent no-terminal compatibility machinery scheduled for deletion.
 
 
 class _NativeClaudeError(Exception):
@@ -306,9 +307,12 @@ def _launch_detached_native_claude_channel(
     hook_token: str | None = None,
     permission_mode: str = "bypass",
 ) -> dict:
-    """ARCHITECTURE.md's "Session modes": Helm launched remotely/detached.
-    Invoked via `longhouse claude-channel`, it runs headless in a fake PTY for later
-    reattachment; its intentional persistence is not a leak.
+    """Deprecated ``session.launch`` compatibility path.
+
+    This starts a persistent no-terminal Claude PTY. It is neither Helm nor
+    Console under the canonical session-mode model and is scheduled for
+    deletion; new callers must use terminal-originated Helm or turn-scoped
+    Console instead.
     """
     _ensure_native_claude_prereqs(
         base_url=base_url,

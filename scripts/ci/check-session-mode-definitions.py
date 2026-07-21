@@ -11,6 +11,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CANONICAL_DOC = REPO_ROOT / "ARCHITECTURE.md"
 HISTORICAL_SPECS = Path("docs") / "specs"
+NESTED_WORKTREES = Path(".claude") / "worktrees"
 TARGET_TERMS = "Shadow|Helm|Console|Managed session|Unmanaged session"
 DEFINITION_RE = re.compile(
     rf"^\s*[-*+]\s+\*\*(?:{TARGET_TERMS})\*\*\s*[-:\u2013\u2014]\s+\S"
@@ -23,6 +24,7 @@ def markdown_files() -> list[Path]:
         path
         for path in REPO_ROOT.rglob("*.md")
         if HISTORICAL_SPECS not in path.relative_to(REPO_ROOT).parents
+        and NESTED_WORKTREES not in path.relative_to(REPO_ROOT).parents
     )
 
 
