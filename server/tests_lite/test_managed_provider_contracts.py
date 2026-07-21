@@ -201,24 +201,23 @@ def test_provider_contract_maps_transport_and_control_plane(provider, transport,
     assert managed_transport_for_control_plane(control_plane) == transport
 
 
-def test_codex_contract_is_current_remote_launch_engine_channel_provider():
+def test_codex_contract_keeps_helm_and_console_without_remote_launch():
     codex = contract_for_provider("codex")
 
     assert codex is not None
     assert codex.launch_local is True
-    assert codex.launch_remote is True
+    assert codex.launch_remote is False
     assert codex.run_once is True
     assert codex.send_input is True
     assert codex.interrupt is True
     assert codex.steer_active_turn is True
     assert codex.answer_pause is True
+    assert codex.turn_start is True
     assert codex.machine_control_supports == (
         "codex.send",
         "codex.interrupt",
         "codex.steer",
         "codex.answer_pause",
-        "codex.launch",
-        "codex.continue",
         "codex.run_once",
         "codex.resume_run_once",
         "codex.turn_start",
@@ -228,13 +227,11 @@ def test_codex_contract_is_current_remote_launch_engine_channel_provider():
         "interrupt",
         "steer",
         "answer_pause",
-        "launch",
-        "continue",
         "run_once",
         "resume_run_once",
         "turn_start",
     )
-    assert remote_launch_supported_providers() == frozenset({"codex", "claude", "opencode"})
+    assert remote_launch_supported_providers() == frozenset()
     assert run_once_supported_providers() == frozenset({"codex"})
 
 
@@ -258,7 +255,7 @@ def test_claude_contract_is_first_class_channel_control_provider():
 
     assert claude is not None
     assert claude.launch_local is True
-    assert claude.launch_remote is True
+    assert claude.launch_remote is False
     assert claude.send_input is True
     assert claude.interrupt is True
     assert claude.steer_active_turn is True
@@ -271,8 +268,6 @@ def test_claude_contract_is_first_class_channel_control_provider():
         "claude.interrupt",
         "claude.steer",
         "claude.answer_pause",
-        "claude.launch",
-        "claude.continue",
     )
 
 
@@ -281,7 +276,7 @@ def test_opencode_contract_is_server_bridge_control_provider_without_active_turn
 
     assert opencode is not None
     assert opencode.launch_local is True
-    assert opencode.launch_remote is True
+    assert opencode.launch_remote is False
     assert opencode.send_input is True
     assert opencode.interrupt is True
     assert opencode.steer_active_turn is False
@@ -289,12 +284,11 @@ def test_opencode_contract_is_server_bridge_control_provider_without_active_turn
     assert opencode.reattach is True
     assert opencode.can_resume is False
     assert opencode.turn_start is True
-    assert opencode.operation_evidence_for("launch_remote")["level"] == "hermetic"
+    assert opencode.operation_evidence_for("launch_remote")["level"] == "none"
     assert opencode.operation_evidence_for("terminate")["level"] == "hermetic"
     assert opencode.machine_control_supports == (
         "opencode.send",
         "opencode.interrupt",
-        "opencode.launch",
         "opencode.terminate",
         "opencode.turn_start",
         "opencode.turn_interrupt",
@@ -435,15 +429,14 @@ def test_machine_control_command_projection_is_manifest_backed_for_every_provide
         for contract in all_managed_provider_contracts()
         if contract.can_resume
     )
-    # Every can_resume provider must advertise some continuation capability:
-    # Helm providers advertise `.continue` (live), Console-only providers
-    # advertise `.resume_run_once` (one-shot --resume).
+    # can_resume remains a local Helm/reattach fact. Provider-facing
+    # session.launch / *.continue machine supports are intentionally gone;
+    # Console resume still uses *.resume_run_once when run_once is supported.
     for contract in all_managed_provider_contracts():
-        if contract.can_resume:
-            assert (
-                f"{contract.provider}.continue" in contract.machine_control_supports
-                or f"{contract.provider}.resume_run_once" in contract.machine_control_supports
-            ), f"{contract.provider} has can_resume but no continue/resume_run_once capability"
+        assert f"{contract.provider}.launch" not in contract.machine_control_supports
+        assert f"{contract.provider}.continue" not in contract.machine_control_supports
+        if contract.can_resume and contract.run_once:
+            assert f"{contract.provider}.resume_run_once" in contract.machine_control_supports
     assert run_once_supported_providers() == frozenset(
         contract.provider
         for contract in all_managed_provider_contracts()
@@ -452,11 +445,7 @@ def test_machine_control_command_projection_is_manifest_backed_for_every_provide
 
 
 def test_machine_control_launch_capability_map_comes_from_provider_contracts():
-    assert machine_control_launch_capability_by_provider() == {
-        "codex": "codex.launch",
-        "claude": "claude.launch",
-        "opencode": "opencode.launch",
-    }
+    assert machine_control_launch_capability_by_provider() == {}
 
 
 def test_machine_control_operations_by_provider_projects_live_supports():
@@ -474,8 +463,8 @@ def test_machine_control_operations_by_provider_projects_live_supports():
         ],
         connected=True,
     ) == {
-        "codex": ("send", "answer_pause", "launch", "run_once"),
-        "claude": ("steer", "answer_pause", "launch"),
+        "codex": ("send", "answer_pause", "run_once"),
+        "claude": ("steer", "answer_pause"),
         "opencode": ("terminate",),
     }
 

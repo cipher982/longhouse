@@ -18,22 +18,16 @@ use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::Message;
-use uuid::Uuid;
 
 use crate::build_identity;
 use crate::claude_channel_control::{
     interrupt as claude_channel_interrupt, send_text as claude_channel_send_text,
     ClaudeChannelControlError, ClaudeChannelInterruptConfig, ClaudeChannelSendConfig,
 };
-use crate::claude_channel_launch::{
-    launch_detached as launch_detached_claude_channel, ClaudeChannelLaunchConfig,
-    ClaudePermissionMode,
-};
 use crate::codex_bridge::{
     cmd_codex_bridge_interrupt, cmd_codex_bridge_pause_response, cmd_codex_bridge_send,
-    cmd_codex_bridge_start, cmd_codex_bridge_steer, validate_codex_bridge_attached,
-    BridgeInterruptConfig, BridgeLaunchMode, BridgePauseResponseConfig, BridgeSendConfig,
-    BridgeStartConfig, BridgeSteerConfig, BridgeSteerError,
+    cmd_codex_bridge_steer, validate_codex_bridge_attached, BridgeInterruptConfig,
+    BridgePauseResponseConfig, BridgeSendConfig, BridgeSteerConfig, BridgeSteerError,
 };
 use crate::codex_exec::{start_codex_exec_once, CodexExecRunConfig};
 use crate::config::ShipperConfig;
@@ -51,7 +45,6 @@ const COMMAND_SEND_TEXT: &str = "session.send_text";
 const COMMAND_INTERRUPT: &str = "session.interrupt";
 const COMMAND_STEER_TEXT: &str = "session.steer_text";
 const COMMAND_ANSWER_PAUSE: &str = "session.answer_pause";
-const COMMAND_LAUNCH: &str = "session.launch";
 const COMMAND_TERMINATE: &str = "session.terminate";
 const COMMAND_RUN_ONCE: &str = "session.run_once";
 const COMMAND_TURN_START: &str = "session.turn.start";
@@ -63,10 +56,6 @@ const DEFAULT_CODEX_BIN: &str = "codex";
 const DEFAULT_CURSOR_BIN: &str = "cursor-agent";
 const DEFAULT_OPENCODE_BIN: &str = "opencode";
 const DEFAULT_LONGHOUSE_BIN: &str = "longhouse";
-// Remote detached-UI Codex launches run without the user's shell wrapper, so
-// the engine owns the managed zero-prompt contract explicitly.
-const REMOTE_CODEX_APPROVAL_POLICY: &str = "never";
-const REMOTE_CODEX_SANDBOX: &str = "danger-full-access";
 const REMOTE_CODEX_EXEC_APPROVAL_POLICY: &str = "never";
 const REMOTE_CODEX_EXEC_SANDBOX: &str = "workspace-write";
 // Engine is built from the monorepo. Keep this path beside the Python reader so
@@ -87,13 +76,6 @@ const CONTROL_RECONNECT_SHORT_MAX_BACKOFF_SECS: u64 = 5;
 const CONTROL_RECONNECT_SUSTAINED_MAX_BACKOFF_SECS: u64 = 30;
 const CONTROL_RECONNECT_SHORT_WINDOW_SECS: u64 = 60;
 static MANAGED_PROVIDER_CONTRACTS: OnceLock<Value> = OnceLock::new();
-
-fn remote_codex_bridge_defaults() -> (Option<String>, Option<String>) {
-    (
-        Some(REMOTE_CODEX_APPROVAL_POLICY.to_string()),
-        Some(REMOTE_CODEX_SANDBOX.to_string()),
-    )
-}
 
 #[derive(Clone, Debug)]
 pub struct ControlChannelStatus {
@@ -978,132 +960,6 @@ async fn execute_command(
                 "transport": "codex_app_server",
                 "pid": summary.pid,
                 "argv": summary.argv,
-            }))
-        }
-        COMMAND_LAUNCH => {
-            let provider = payload_required_string(&payload, "provider")?;
-            if provider != "codex" && provider != "claude" && provider != "opencode" {
-                return Err(CommandError {
-                    code: "provider_unsupported".to_string(),
-                    message: format!("provider={provider} is not supported by this engine build"),
-                });
-            }
-            let cwd_raw = payload_required_string(&payload, "cwd")?;
-            let cwd = PathBuf::from(&cwd_raw);
-            if !cwd.is_absolute() {
-                return Err(CommandError {
-                    code: "cwd_not_allowed".to_string(),
-                    message: "cwd must be absolute".to_string(),
-                });
-            }
-            if !cwd.is_dir() {
-                return Err(CommandError {
-                    code: "cwd_not_found".to_string(),
-                    message: format!("cwd does not exist: {}", cwd.display()),
-                });
-            }
-            let api_url = config.api_url.clone();
-            let api_token = config.api_token.clone().ok_or_else(|| CommandError {
-                code: "provider_launch_failed".to_string(),
-                message: "Machine Agent has no device token configured".to_string(),
-            })?;
-            let resume_target = payload_resume_target(&payload)?;
-
-            if provider == "claude" {
-                // Claude resumes by provider id. No transcript path is needed
-                // (unlike codex) because `claude --resume <id>` reads the local store.
-                // Preflight (claude-scoped on purpose): if the server passed a
-                // transcript path (the adopt-unmanaged continue case), fail
-                // honestly with transcript_not_found when it's gone, instead of a
-                // generic provider_launch_failed. Codex resume has its own bridge
-                // path and is intentionally not changed here.
-                if let Some(target) = resume_target.as_ref() {
-                    if let Some(path) = target.thread_path.as_ref() {
-                        if !path.trim().is_empty() && !std::path::Path::new(path).exists() {
-                            return Err(CommandError {
-                                code: "transcript_not_found".to_string(),
-                                message: format!("resume transcript no longer exists: {path}"),
-                            });
-                        }
-                    }
-                }
-                let resume_provider_session_id = resume_target
-                    .as_ref()
-                    .map(|target| target.thread_id.clone());
-                let permission_mode = match payload_optional_string(&payload, "permission_mode")
-                    .as_deref()
-                    .map(str::trim)
-                {
-                    Some("remote_approve") => ClaudePermissionMode::RemoteApprove,
-                    _ => ClaudePermissionMode::Bypass,
-                };
-                return launch_claude_channel_session(
-                    session_id.clone(),
-                    cwd,
-                    api_url,
-                    api_token,
-                    resume_provider_session_id,
-                    payload_optional_string(&payload, "hook_token"),
-                    permission_mode,
-                )
-                .await;
-            }
-            if provider == "opencode" {
-                return launch_opencode_server_session(
-                    session_id.clone(),
-                    cwd,
-                    api_url,
-                    api_token,
-                    config.machine_name.clone(),
-                    payload_optional_string(&payload, "display_name"),
-                )
-                .await;
-            }
-
-            let (approval_policy, sandbox) = remote_codex_bridge_defaults();
-            let summary = cmd_codex_bridge_start(BridgeStartConfig {
-                session_id: session_id.clone(),
-                run_id: payload_optional_string(&payload, "run_id"),
-                cwd,
-                api_url,
-                api_token,
-                codex_bin: DEFAULT_CODEX_BIN.to_string(),
-                approval_policy,
-                sandbox,
-                model: None,
-                model_reasoning_effort: None,
-                machine_name: Some(config.machine_name.clone()),
-                auto_approve: false,
-                hold_user_input_requests: false,
-                hold_permission_requests: false,
-                state_root: None,
-                longhouse_home: None,
-                log_file: None,
-                start_timeout_secs: LAUNCH_START_TIMEOUT_SECS,
-                // Detached-UI remote launch: there is no visible TUI to create
-                // a thread, so we ask the bridge to call thread/start itself.
-                create_initial_thread: resume_target.is_none(),
-                resume_thread_id: resume_target
-                    .as_ref()
-                    .map(|target| target.thread_id.clone()),
-                resume_thread_path: resume_target
-                    .as_ref()
-                    .and_then(|target| target.thread_path.clone()),
-                launch_mode: BridgeLaunchMode::DetachedUi,
-            })
-            .await
-            .map_err(|err| CommandError {
-                code: "provider_launch_failed".to_string(),
-                message: err.to_string(),
-            })?;
-
-            Ok(json!({
-                "session_id": summary.session_id,
-                "provider": "codex",
-                "transport": "codex_app_server",
-                "ws_url": summary.ws_url,
-                "thread_id": summary.thread_id,
-                "thread_path": summary.thread_path,
             }))
         }
         COMMAND_SEND_TEXT => {
@@ -2163,92 +2019,6 @@ fn normalize_provider_version(raw: &str) -> Option<String> {
     Some(value.trim_start_matches('v').to_ascii_lowercase())
 }
 
-async fn launch_claude_channel_session(
-    session_id: String,
-    cwd: PathBuf,
-    api_url: String,
-    api_token: String,
-    resume_provider_session_id: Option<String>,
-    hook_token: Option<String>,
-    permission_mode: ClaudePermissionMode,
-) -> std::result::Result<Value, CommandError> {
-    let resume = resume_provider_session_id.is_some();
-    let provider_session_id =
-        resume_provider_session_id.unwrap_or_else(|| Uuid::new_v4().to_string());
-    let summary = launch_detached_claude_channel(ClaudeChannelLaunchConfig {
-        session_id: session_id.clone(),
-        provider_session_id: provider_session_id.clone(),
-        cwd,
-        api_url,
-        api_token,
-        hook_token,
-        resume,
-        wait_ready: Duration::from_secs(LAUNCH_START_TIMEOUT_SECS),
-        claude_bin: "claude".to_string(),
-        permission_mode,
-        state_root: None,
-        claude_dir: None,
-        log_dir: None,
-        script_bin: "script".to_string(),
-    })
-    .await
-    .map_err(|err| CommandError {
-        code: "provider_launch_failed".to_string(),
-        message: err.to_string(),
-    })?;
-    Ok(json!({
-        "session_id": summary.session_id,
-        "provider": "claude",
-        "transport": "claude_channel_bridge",
-        "provider_session_id": summary.provider_session_id,
-        // Echo thread_id so server-side late reconciliation can attach the new
-        // run even when the synchronous response is lost. For claude the thread
-        // id is the provider session id.
-        "thread_id": summary.provider_session_id,
-        "pid": summary.pid,
-        "log_path": summary.log_path.display().to_string(),
-    }))
-}
-
-async fn launch_opencode_server_session(
-    session_id: String,
-    cwd: PathBuf,
-    api_url: String,
-    api_token: String,
-    machine_name: String,
-    display_name: Option<String>,
-) -> std::result::Result<Value, CommandError> {
-    let summary = crate::opencode_control::launch_server_bridge(
-        crate::opencode_control::OpenCodeLaunchConfig {
-            session_id: session_id.clone(),
-            cwd,
-            api_url,
-            api_token,
-            device_id: machine_name,
-            display_name,
-            wait_ready: Duration::from_secs(LAUNCH_START_TIMEOUT_SECS),
-            config_dir: None,
-            opencode_bin: None,
-            opencode_config_content: std::env::var("OPENCODE_CONFIG_CONTENT").ok(),
-        },
-    )
-    .await
-    .map_err(|err| CommandError {
-        code: "provider_launch_failed".to_string(),
-        message: err.to_string(),
-    })?;
-    Ok(json!({
-        "session_id": summary.session_id,
-        "provider": "opencode",
-        "transport": "opencode_server_bridge",
-        "provider_session_id": summary.provider_session_id,
-        "thread_id": summary.provider_session_id,
-        "server_url": summary.server_url,
-        "pid": summary.pid,
-        "log_path": summary.log_path,
-    }))
-}
-
 fn cli_output_result(output: CliCommandOutput, provider: &str, transport: &str) -> Value {
     json!({
         "exit_code": output.exit_code,
@@ -2515,9 +2285,11 @@ impl CommandError {
 mod tests {
     use super::*;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use uuid::Uuid;
+
+    const COMMAND_LAUNCH: &str = "session.launch";
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
-    const OPENCODE_TEST_SESSION_ID: &str = "11111111-1111-4111-8111-111111111111";
 
     fn command_cache() -> CompletedCommandCache {
         CompletedCommandCache::new(16, Duration::from_secs(60))
@@ -2566,8 +2338,6 @@ mod tests {
         ("codex", "interrupt", COMMAND_INTERRUPT),
         ("codex", "steer", COMMAND_STEER_TEXT),
         ("codex", "answer_pause", COMMAND_ANSWER_PAUSE),
-        ("codex", "launch", COMMAND_LAUNCH),
-        ("codex", "continue", COMMAND_LAUNCH),
         ("codex", "run_once", COMMAND_RUN_ONCE),
         ("codex", "resume_run_once", COMMAND_RUN_ONCE),
         ("codex", "turn_start", COMMAND_TURN_START),
@@ -2582,11 +2352,8 @@ mod tests {
         ("claude", "interrupt", COMMAND_INTERRUPT),
         ("claude", "steer", COMMAND_STEER_TEXT),
         ("claude", "answer_pause", COMMAND_ANSWER_PAUSE),
-        ("claude", "launch", COMMAND_LAUNCH),
-        ("claude", "continue", COMMAND_LAUNCH),
         ("opencode", "send", COMMAND_SEND_TEXT),
         ("opencode", "interrupt", COMMAND_INTERRUPT),
-        ("opencode", "launch", COMMAND_LAUNCH),
         ("opencode", "terminate", COMMAND_TERMINATE),
         ("antigravity", "send", COMMAND_SEND_TEXT),
     ];
@@ -2720,99 +2487,6 @@ mod tests {
         .unwrap();
     }
 
-    async fn spawn_opencode_launch_http_server(provider_session_id: &'static str) -> String {
-        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
-            .await
-            .unwrap();
-        let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move {
-            loop {
-                let Ok((mut stream, _)) = listener.accept().await else {
-                    break;
-                };
-                let mut bytes = Vec::new();
-                let mut header_end = None;
-                let mut content_length = 0usize;
-                loop {
-                    let mut chunk = [0u8; 1024];
-                    let read = stream.read(&mut chunk).await.unwrap();
-                    if read == 0 {
-                        break;
-                    }
-                    bytes.extend_from_slice(&chunk[..read]);
-                    if header_end.is_none() {
-                        header_end = http_header_end(&bytes);
-                        if let Some(end) = header_end {
-                            let head = String::from_utf8_lossy(&bytes[..end]);
-                            content_length = http_content_length(&head);
-                        }
-                    }
-                    if let Some(end) = header_end {
-                        if bytes.len() >= end + 4 + content_length {
-                            break;
-                        }
-                    }
-                }
-                let request = parse_http_request(&bytes);
-                let body = if request.target.starts_with("/global/health") {
-                    r#"{"healthy":true}"#.to_string()
-                } else if request.target.starts_with("/session") {
-                    format!(r#"{{"id":"{provider_session_id}"}}"#)
-                } else {
-                    r#"{"error":"missing"}"#.to_string()
-                };
-                let response = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                    body.len()
-                );
-                stream.write_all(response.as_bytes()).await.unwrap();
-            }
-        });
-        format!("http://{addr}")
-    }
-
-    fn write_fake_opencode_launch_binary(
-        dir: &Path,
-        server_url: &str,
-        count_path: &Path,
-    ) -> PathBuf {
-        let path = dir.join("opencode");
-        write_test_executable(
-            &path,
-            &format!(
-                "#!/bin/sh\n\
-                 echo spawn >> {count}\n\
-                 echo {listen}\n\
-                 while :; do sleep 60; done\n",
-                count = shell_quote_path(count_path),
-                listen = shell_quote(&format!("opencode server listening on {server_url}")),
-            ),
-        );
-        path
-    }
-
-    fn shell_quote(value: &str) -> String {
-        format!("'{}'", value.replace('\'', "'\\''"))
-    }
-
-    fn shell_quote_path(path: &Path) -> String {
-        shell_quote(&path.display().to_string())
-    }
-
-    fn terminate_test_pid(pid: u32) {
-        if pid == 0 || pid > i32::MAX as u32 {
-            return;
-        }
-        let pid = pid as i32;
-        #[cfg(unix)]
-        unsafe {
-            libc::killpg(pid, libc::SIGTERM);
-        }
-        unsafe {
-            libc::kill(pid, libc::SIGTERM);
-        }
-    }
-
     fn http_header_end(bytes: &[u8]) -> Option<usize> {
         bytes.windows(4).position(|window| window == b"\r\n\r\n")
     }
@@ -2943,7 +2617,7 @@ mod tests {
     }
 
     #[test]
-    fn control_channel_advertises_codex_continue() {
+    fn control_channel_keeps_codex_console_and_helm_controls_without_remote_launch() {
         let codex_contract = managed_provider_contract_items()
             .iter()
             .find(|item| item.get("provider").and_then(Value::as_str) == Some("codex"))
@@ -2954,17 +2628,34 @@ mod tests {
             .expect("codex contract has machine_control_supports");
         assert!(supports
             .iter()
-            .any(|item| item.as_str() == Some("codex.continue")));
+            .any(|item| item.as_str() == Some("codex.send")));
         assert!(supports
             .iter()
             .any(|item| item.as_str() == Some("codex.run_once")));
         assert!(supports
             .iter()
             .any(|item| item.as_str() == Some("codex.resume_run_once")));
+        assert!(supports
+            .iter()
+            .any(|item| item.as_str() == Some("codex.turn_start")));
+        assert!(!supports
+            .iter()
+            .any(|item| item.as_str() == Some("codex.launch")));
+        assert!(!supports
+            .iter()
+            .any(|item| item.as_str() == Some("codex.continue")));
+        assert_eq!(
+            codex_contract.get("launch_remote").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            codex_contract.get("launch_local").and_then(Value::as_bool),
+            Some(true)
+        );
     }
 
     #[test]
-    fn control_channel_advertises_claude_continue() {
+    fn control_channel_keeps_claude_helm_controls_without_remote_launch() {
         let claude_contract = managed_provider_contract_items()
             .iter()
             .find(|item| item.get("provider").and_then(Value::as_str) == Some("claude"))
@@ -2975,22 +2666,24 @@ mod tests {
             .expect("claude contract has machine_control_supports");
         assert!(supports
             .iter()
-            .any(|item| item.as_str() == Some("claude.continue")));
+            .any(|item| item.as_str() == Some("claude.send")));
         assert!(supports
             .iter()
             .any(|item| item.as_str() == Some("claude.answer_pause")));
+        assert!(!supports
+            .iter()
+            .any(|item| item.as_str() == Some("claude.launch")));
+        assert!(!supports
+            .iter()
+            .any(|item| item.as_str() == Some("claude.continue")));
+        assert_eq!(
+            claude_contract.get("launch_remote").and_then(Value::as_bool),
+            Some(false)
+        );
         assert_eq!(
             claude_contract.get("can_resume").and_then(Value::as_bool),
             Some(true)
         );
-    }
-
-    #[test]
-    fn remote_codex_launch_uses_zero_prompt_managed_defaults() {
-        let (approval_policy, sandbox) = remote_codex_bridge_defaults();
-
-        assert_eq!(approval_policy.as_deref(), Some("never"));
-        assert_eq!(sandbox.as_deref(), Some("danger-full-access"));
     }
 
     #[test]
@@ -3166,13 +2859,18 @@ mod tests {
             ("opencode", "answer_pause"),
             ("opencode", "run_once"),
             ("opencode", "resume_run_once"),
+            ("opencode", "launch"),
             ("antigravity", "interrupt"),
             ("antigravity", "steer"),
             ("antigravity", "answer_pause"),
             ("antigravity", "launch"),
             ("claude", "run_once"),
             ("claude", "resume_run_once"),
+            ("claude", "launch"),
+            ("claude", "continue"),
             ("codex", "terminate"),
+            ("codex", "launch"),
+            ("codex", "continue"),
         ] {
             let support = format!("{provider}.{operation}");
             assert!(
@@ -3220,7 +2918,6 @@ mod tests {
                 "archive.backlog_control.v2".to_string(),
                 "opencode.send".to_string(),
                 "opencode.interrupt".to_string(),
-                "opencode.launch".to_string(),
                 "opencode.terminate".to_string(),
                 "opencode.turn_start".to_string(),
                 "opencode.turn_interrupt".to_string(),
@@ -3236,7 +2933,6 @@ mod tests {
                 "archive.backlog_control.v2".to_string(),
                 "opencode.send".to_string(),
                 "opencode.interrupt".to_string(),
-                "opencode.launch".to_string(),
                 "opencode.terminate".to_string(),
                 "opencode.turn_start".to_string(),
                 "opencode.turn_interrupt".to_string(),
@@ -3252,10 +2948,11 @@ mod tests {
                 None
             }
         });
-        assert!(supports.contains(&"codex.launch".to_string()));
-        assert!(supports.contains(&"codex.continue".to_string()));
+        assert!(!supports.contains(&"codex.launch".to_string()));
+        assert!(!supports.contains(&"codex.continue".to_string()));
         assert!(supports.contains(&"codex.run_once".to_string()));
         assert!(supports.contains(&"codex.resume_run_once".to_string()));
+        assert!(supports.contains(&"codex.turn_start".to_string()));
         assert!(!supports.contains(&"codex.live_proof".to_string()));
 
         write_executable(&dir, "codex");
@@ -3283,17 +2980,17 @@ mod tests {
             }
         }
         assert_eq!(supports, expected);
-        assert!(supports.contains(&"codex.launch".to_string()));
-        assert!(supports.contains(&"codex.continue".to_string()));
+        assert!(!supports.contains(&"codex.launch".to_string()));
+        assert!(!supports.contains(&"codex.continue".to_string()));
         assert!(supports.contains(&"codex.run_once".to_string()));
         assert!(supports.contains(&"codex.resume_run_once".to_string()));
-        assert!(supports.contains(&"claude.launch".to_string()));
-        // claude.continue must survive the installed-binary gating path, not
-        // just exist in the raw manifest — this is the surface the server's
-        // `claude.continue in info.supports` check actually reads.
-        assert!(supports.contains(&"claude.continue".to_string()));
-        assert!(supports.contains(&"opencode.launch".to_string()));
+        assert!(supports.contains(&"codex.turn_start".to_string()));
+        assert!(!supports.contains(&"claude.launch".to_string()));
+        assert!(!supports.contains(&"claude.continue".to_string()));
+        assert!(supports.contains(&"claude.send".to_string()));
+        assert!(!supports.contains(&"opencode.launch".to_string()));
         assert!(supports.contains(&"opencode.terminate".to_string()));
+        assert!(supports.contains(&"opencode.turn_start".to_string()));
         assert!(supports.contains(&"antigravity.send".to_string()));
         assert!(supports.contains(&"claude.live_proof".to_string()));
         assert!(supports.contains(&"opencode.live_proof".to_string()));
@@ -4104,93 +3801,16 @@ exit 1
     }
 
     #[tokio::test]
-    async fn launch_rejects_nonexistent_cwd() {
+    async fn session_launch_is_unsupported_command() {
         let mut cache = command_cache();
         let result = handle_command_frame(
             json!({
                 "type": "command",
-                "command_id": "cmd-launch-missing-cwd",
+                "command_id": "cmd-launch-removed",
                 "session_id": "00000000-0000-0000-0000-000000000001",
                 "command_type": COMMAND_LAUNCH,
                 "payload": {
                     "provider": "codex",
-                    "cwd": "/does/not/exist/anywhere-pls",
-                },
-            }),
-            &mut cache,
-            &test_config(),
-        )
-        .await;
-
-        assert_eq!(result["ok"], false);
-        assert_eq!(result["error"]["code"], "cwd_not_found");
-    }
-
-    #[tokio::test]
-    async fn launch_rejects_relative_cwd() {
-        let mut cache = command_cache();
-        let result = handle_command_frame(
-            json!({
-                "type": "command",
-                "command_id": "cmd-launch-relative",
-                "session_id": "00000000-0000-0000-0000-000000000002",
-                "command_type": COMMAND_LAUNCH,
-                "payload": {
-                    "provider": "codex",
-                    "cwd": "relative/path",
-                },
-            }),
-            &mut cache,
-            &test_config(),
-        )
-        .await;
-
-        assert_eq!(result["ok"], false);
-        assert_eq!(result["error"]["code"], "cwd_not_allowed");
-    }
-
-    #[tokio::test]
-    async fn claude_continue_rejects_missing_resume_transcript() {
-        // Adopt-unmanaged continue carries a transcript path; if it's gone we
-        // must fail with transcript_not_found, not a generic launch failure.
-        let tmp = std::env::temp_dir();
-        let mut cache = command_cache();
-        let result = handle_command_frame(
-            json!({
-                "type": "command",
-                "command_id": "cmd-claude-missing-transcript",
-                "session_id": "00000000-0000-0000-0000-000000000003",
-                "command_type": COMMAND_LAUNCH,
-                "payload": {
-                    "provider": "claude",
-                    "cwd": tmp.to_string_lossy(),
-                    "mode": "continue",
-                    "resume": {
-                        "thread_id": "raw-provider-id",
-                        "thread_path": "/does/not/exist/raw-transcript.jsonl",
-                    },
-                },
-            }),
-            &mut cache,
-            &test_config(),
-        )
-        .await;
-
-        assert_eq!(result["ok"], false);
-        assert_eq!(result["error"]["code"], "transcript_not_found");
-    }
-
-    #[tokio::test]
-    async fn launch_rejects_unsupported_provider() {
-        let mut cache = command_cache();
-        let result = handle_command_frame(
-            json!({
-                "type": "command",
-                "command_id": "cmd-launch-provider",
-                "session_id": "00000000-0000-0000-0000-000000000003",
-                "command_type": COMMAND_LAUNCH,
-                "payload": {
-                    "provider": "antigravity",
                     "cwd": "/tmp",
                 },
             }),
@@ -4200,87 +3820,11 @@ exit 1
         .await;
 
         assert_eq!(result["ok"], false);
-        assert_eq!(result["error"]["code"], "provider_unsupported");
-    }
-
-    #[tokio::test]
-    async fn claude_launch_requires_device_token_before_spawning() {
-        let mut config = test_config();
-        config.api_token = None;
-        let mut cache = command_cache();
-        let result = handle_command_frame(
-            json!({
-                "type": "command",
-                "command_id": "cmd-launch-claude-no-token",
-                "session_id": "00000000-0000-0000-0000-000000000004",
-                "command_type": COMMAND_LAUNCH,
-                "payload": {
-                    "provider": "claude",
-                    "cwd": "/tmp",
-                },
-            }),
-            &mut cache,
-            &config,
-        )
-        .await;
-
-        assert_eq!(result["ok"], false);
-        assert_eq!(result["error"]["code"], "provider_launch_failed");
-    }
-
-    #[test]
-    fn opencode_launch_routes_through_native_adapter() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        let runtime = tokio::runtime::Runtime::new().unwrap();
-        let temp = tempfile::TempDir::new().unwrap();
-        let cwd = temp.path().join("project");
-        std::fs::create_dir(&cwd).unwrap();
-        let server_url = runtime.block_on(spawn_opencode_launch_http_server("ses_control"));
-        let count_path = temp.path().join("spawn-count.txt");
-        let bin_dir = temp.path().join("bin");
-        std::fs::create_dir(&bin_dir).unwrap();
-        let fake_bin = write_fake_opencode_launch_binary(&bin_dir, &server_url, &count_path);
-
-        let vars = vec![
-            (
-                "LONGHOUSE_OPENCODE_BIN".to_string(),
-                Some(fake_bin.display().to_string()),
-            ),
-            (
-                "CLAUDE_CONFIG_DIR".to_string(),
-                Some(temp.path().display().to_string()),
-            ),
-            ("OPENCODE_CONFIG_CONTENT".to_string(), None),
-        ];
-        let payload = temp_env::with_vars(vars, || {
-            runtime.block_on(launch_opencode_server_session(
-                OPENCODE_TEST_SESSION_ID.to_string(),
-                cwd.clone(),
-                "https://longhouse.test".to_string(),
-                "zdt_test_token".to_string(),
-                "test-machine".to_string(),
-                Some("Control Launch".to_string()),
-            ))
-        })
-        .unwrap();
-
-        assert_eq!(
-            payload["session_id"].as_str(),
-            Some(OPENCODE_TEST_SESSION_ID)
-        );
-        assert_eq!(payload["provider"].as_str(), Some("opencode"));
-        assert_eq!(
-            payload["transport"].as_str(),
-            Some("opencode_server_bridge")
-        );
-        assert_eq!(payload["provider_session_id"].as_str(), Some("ses_control"));
-        assert_eq!(payload["thread_id"].as_str(), Some("ses_control"));
-        assert_eq!(payload["server_url"].as_str(), Some(server_url.as_str()));
-        assert_eq!(std::fs::read_to_string(&count_path).unwrap(), "spawn\n");
-
-        if let Some(pid) = payload["pid"].as_u64() {
-            terminate_test_pid(pid as u32);
-        }
+        assert_eq!(result["error"]["code"], "unsupported_command");
+        assert!(result["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains(COMMAND_LAUNCH));
     }
 
     #[test]

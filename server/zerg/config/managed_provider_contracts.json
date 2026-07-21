@@ -13,7 +13,7 @@
         "codex_app_server"
       ],
       "launch_local": true,
-      "launch_remote": true,
+      "launch_remote": false,
       "run_once": true,
       "reattach": true,
       "send_input": true,
@@ -34,9 +34,8 @@
           "next": "promote to live_token when scheduled prompt canary is budgeted"
         },
         "launch_remote": {
-          "level": "live_no_token",
-          "source": "scripts/qa/codex-provider-release-canary.py detached_ui",
-          "next": "prove through Runtime Host remote launch smoke"
+          "level": "none",
+          "source": "provider-facing session.launch / detached_ui remote launch removed; Helm is terminal-originated launch_local"
         },
         "run_once": {
           "level": "hermetic",
@@ -96,8 +95,6 @@
         "codex.interrupt",
         "codex.steer",
         "codex.answer_pause",
-        "codex.launch",
-        "codex.continue",
         "codex.run_once",
         "codex.resume_run_once",
         "codex.turn_start"
@@ -113,7 +110,7 @@
       "control_plane": "claude_channel_bridge",
       "control_plane_aliases": [],
       "launch_local": true,
-      "launch_remote": true,
+      "launch_remote": false,
       "run_once": false,
       "reattach": true,
       "send_input": true,
@@ -131,12 +128,11 @@
         "launch_local": {
           "level": "live_no_token",
           "source": "longhouse provider-live canary --provider claude binary/auth/channel/PTY checks",
-          "next": "promote with detached channel launch transcript canary"
+          "next": "promote with live token channel/PTY transcript canary"
         },
         "launch_remote": {
-          "level": "source_review",
-          "source": "provider-control-e2e Claude fake process plus Machine Agent claude.launch support tests",
-          "next": "promote with Runtime Host remote launch against real Claude or a hermetic engine launch happy-path"
+          "level": "none",
+          "source": "provider-facing session.launch / claude.launch remote path removed; Helm is terminal-originated launch_local"
         },
         "run_once": {
           "level": "none",
@@ -193,9 +189,7 @@
         "claude.send",
         "claude.interrupt",
         "claude.steer",
-        "claude.answer_pause",
-        "claude.launch",
-        "claude.continue"
+        "claude.answer_pause"
       ]
     },
     {
@@ -208,7 +202,7 @@
       "control_plane": "opencode_server_bridge",
       "control_plane_aliases": [],
       "launch_local": true,
-      "launch_remote": true,
+      "launch_remote": false,
       "run_once": false,
       "reattach": true,
       "send_input": true,
@@ -229,9 +223,8 @@
           "next": "promote with release-canary prompt transcript proof"
         },
         "launch_remote": {
-          "level": "hermetic",
-          "source": "provider-control-e2e OpenCode fake server bridge launch",
-          "next": "promote with Runtime Host remote launch against real OpenCode"
+          "level": "none",
+          "source": "provider-facing session.launch / opencode.launch remote path removed; Helm is terminal-originated launch_local"
         },
         "run_once": {
           "level": "none",
@@ -287,7 +280,6 @@
       "machine_control_supports": [
         "opencode.send",
         "opencode.interrupt",
-        "opencode.launch",
         "opencode.terminate",
         "opencode.turn_start",
         "opencode.turn_interrupt"
