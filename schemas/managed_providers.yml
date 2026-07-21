@@ -182,7 +182,7 @@ providers:
   control_plane_aliases: []
   launch_local: true
   launch_remote: true
-  run_once: true
+  run_once: false
   reattach: true
   send_input: true
   interrupt: true
@@ -206,8 +206,8 @@ providers:
       source: provider-control-e2e OpenCode fake server bridge launch
       next: promote with Runtime Host remote launch against real OpenCode
     run_once:
-      level: hermetic
-      source: opencode_run adapter uses JSON output with native --session resume
+      level: none
+      source: OpenCode Console uses turn_start; session.run_once is not supported by the engine
     reattach:
       level: live_no_token
       source: longhouse provider-live canary OpenCode process-restart session recovery
