@@ -1,6 +1,6 @@
 # Elastic Onboarding and Durable Storage Epic
 
-**Status:** Phase 1 implementation complete; deployment and baseline verification in progress
+**Status:** Phase 1 accepted in production; Phase 2 discovery inventory starting
 **Owner:** Longhouse core and hosted operations
 **Created:** 2026-07-20
 **Scope:** Hosted scale, customer import, storage telemetry, and object-store
@@ -683,8 +683,27 @@ than `performance.getEntriesByType()`. The amended implementation maintains
 counters with reconciled SQLite triggers, never refreshes telemetry from a
 request, owns the refresh task through startup and shutdown, measures actual
 element paint, and has direct failure/isolation/privacy/browser tests.
-Deployment, the first retained live journey, and the baseline report remain in
-progress.
+Deployment, the first retained live journey, and the baseline report were
+completed at the production acceptance checkpoint below.
+
+**Production acceptance checkpoint (2026-07-21):** Phase 1 shipped through
+commits `f0a8ff026` and `70916f3ec` and passed the full backend gate (3,872
+passed, 13 skipped), exact-SHA deployment verification, and the automatically
+dispatched [Hosted Live QA run](https://github.com/cipher982/longhouse/actions/runs/29803744493).
+The always-on canary now creates and replays its durable session through
+storage-v2, fails closed on a noncanonical receipt, and is discovered through
+the live catalog without a legacy-database fallback.
+
+That production run negotiated storage-v2 with cutover enabled, received all
+four repair receipts, measured repair p50/p95 of 309.7/369.8 ms and live p50/p95
+of 265.0/284.8 ms, and passed the live SLA. The real browser opened the canary
+session, captured three independent SSE-to-paint samples, and measured paint
+p50/p95 of 4.3/9.5 ms. The privacy-safe retained journey passed timeline,
+active/recent, recent closed, cold, random, older projection, lexical search,
+and recall cohorts against exact build `70916f3ec`. Host inventory, remaining
+signal gaps, and private operational paths are recorded outside this public
+repository. Phase 1 is accepted; longer retention accrues in parallel and does
+not block Phase 2.
 
 Deliver:
 
