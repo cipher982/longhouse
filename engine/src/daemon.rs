@@ -250,7 +250,15 @@ struct PathTaskResult {
     rerun_priority: Option<WorkPriority>,
     local_retry_after: Option<Duration>,
     local_retry_priority: Option<WorkPriority>,
+    reconciled_to_head: bool,
     processing_elapsed: Duration,
+}
+
+enum PathStorageV2ShipResult {
+    Shipped(crate::storage_v2_shipper::StorageV2ShipOutcome),
+    Current,
+    WaitingOnClaim,
+    Continue,
 }
 
 fn is_opencode_database_job(job: &PathJob) -> bool {
@@ -327,6 +335,11 @@ struct DiscoveryTaskResult {
     enqueue_files: bool,
     priority: WorkPriority,
     reason: &'static str,
+}
+
+struct OpenHistoryReconciliation {
+    attempt_id: u64,
+    remaining_paths: HashSet<PathBuf>,
 }
 
 #[derive(Clone)]
@@ -636,7 +649,8 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     // 1. Open state DB
     let projection_db_path =
         crate::state::db::resolve_db_path(config.shipper_config.db_path.as_deref())?;
-    let conn = open_db(Some(&projection_db_path))?;
+    let mut conn = open_db(Some(&projection_db_path))?;
+    crate::state::source_inventory::abandon_open_reconciliation(&conn)?;
 
     // 2. Startup recovery
     let recovered = shipper::run_startup_recovery(&conn)?;
@@ -781,6 +795,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut in_flight = JoinSet::new();
     let mut discovery_tasks: JoinSet<DiscoveryTaskResult> = JoinSet::new();
     start_inventory_task(&mut discovery_tasks, &providers);
+    let mut open_history_reconciliation: Option<OpenHistoryReconciliation> = None;
     let mut managed_observation_scan_tasks: JoinSet<ManagedObservationScanResult> = JoinSet::new();
     let mut last_managed_observations = ManagedObservationSnapshot::default();
     let mut opencode_title_refresh_tasks: JoinSet<Result<()>> = JoinSet::new();
@@ -977,10 +992,13 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     Some(Ok(result)) => {
                         let retry_path = result.job.path.clone();
                         let retry_provider = result.job.provider;
+                        let reconciled_to_head = result.reconciled_to_head
+                            && result.rerun_priority.is_none()
+                            && result.local_retry_after.is_none();
                         scheduler.complete(&retry_path, result.rerun_priority);
                         if let Some(delay) = result.local_retry_after {
                             let priority = result.local_retry_priority.unwrap_or(result.job.priority);
-                            deferred_retries.insert(retry_path, DeferredRetry {
+                            deferred_retries.insert(retry_path.clone(), DeferredRetry {
                                 due_at: Instant::now() + delay,
                                 provider: retry_provider,
                                 priority,
@@ -1020,6 +1038,21 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 );
                             }
                         }
+                        if reconciled_to_head
+                            && !scheduler.has_path(&retry_path)
+                            && !deferred_retries.contains_key(&retry_path)
+                        {
+                            if let Some(open) = open_history_reconciliation.as_mut() {
+                                open.remaining_paths.remove(&retry_path);
+                            }
+                        }
+                        maybe_seal_history_reconciliation(
+                            &mut conn,
+                            &mut open_history_reconciliation,
+                            &scheduler,
+                            &deferred_retries,
+                            discovery_tasks.is_empty(),
+                        );
                     }
                     Some(Err(e)) => {
                         return Err(anyhow::anyhow!("path task failed: {}", e));
@@ -1031,6 +1064,9 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             discovery_result = discovery_tasks.join_next(), if !discovery_tasks.is_empty() => {
                 match discovery_result {
                     Some(Ok(result)) => {
+                        let reconciliation_paths = result
+                            .enqueue_files
+                            .then(|| result.files.iter().map(|(path, _)| path.clone()).collect());
                         let previous_inventory_generation =
                             crate::state::source_inventory::load_inventory(&conn)
                                 .ok()
@@ -1057,31 +1093,59 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                     scan_error_count = snapshot.scan_error_count,
                                     "Updated durable transcript source inventory"
                                 );
-                                if previous_inventory_generation == Some(snapshot.generation) {
-                                    continue;
+                                if let Some(remaining_paths) = reconciliation_paths {
+                                    match crate::state::source_inventory::begin_reconciliation(
+                                        &mut conn,
+                                        &snapshot,
+                                    ) {
+                                        Ok(Some(attempt)) => {
+                                            open_history_reconciliation =
+                                                Some(OpenHistoryReconciliation {
+                                                    attempt_id: attempt.attempt_id,
+                                                    remaining_paths,
+                                                });
+                                        }
+                                        Ok(None) => open_history_reconciliation = None,
+                                        Err(error) => {
+                                            open_history_reconciliation = None;
+                                            tracing::warn!(
+                                                error = %error,
+                                                "Failed to begin transcript reconciliation seal"
+                                            );
+                                        }
+                                    }
+                                    maybe_seal_history_reconciliation(
+                                        &mut conn,
+                                        &mut open_history_reconciliation,
+                                        &scheduler,
+                                        &deferred_retries,
+                                        discovery_tasks.is_empty(),
+                                    );
                                 }
-                                projection_generation = projection_generation.saturating_add(1);
-                                let input = ProjectionBuildInput {
-                                    generation: projection_generation,
-                                    managed_scan_partial: last_projected_managed_scan_partial,
-                                    process_snapshot_complete: last_projected_process_snapshot_complete,
-                                    db_path: projection_db_path.clone(),
-                                    tracker: tracker.clone(),
-                                    parse_tracker: parse_tracker.clone(),
-                                    ship_stats: ship_stats.clone(),
-                                    is_offline: offline.is_offline,
-                                    last_ship_at: last_ship_at.clone(),
-                                    machine_id: config.shipper_config.machine_name.clone(),
-                                    managed: last_projected_managed_observations.clone(),
-                                    unmanaged: last_unmanaged_session_bindings.clone().unwrap_or_default(),
-                                    limiter: adaptive_limiter.snapshot(),
-                                    scheduler: scheduler.snapshot(),
-                                    archive_repair_mode: config.archive_repair_mode,
-                                    last_full_reconciled_at: last_full_reconciled_at.clone(),
-                                    session_snapshot_state: session_snapshot_state.clone(),
-                                };
-                                if !maybe_start_projection_build(&mut projection_build_tasks, input) {
-                                    projection_build_pending = true;
+                                if previous_inventory_generation != Some(snapshot.generation) {
+                                    projection_generation = projection_generation.saturating_add(1);
+                                    let input = ProjectionBuildInput {
+                                        generation: projection_generation,
+                                        managed_scan_partial: last_projected_managed_scan_partial,
+                                        process_snapshot_complete: last_projected_process_snapshot_complete,
+                                        db_path: projection_db_path.clone(),
+                                        tracker: tracker.clone(),
+                                        parse_tracker: parse_tracker.clone(),
+                                        ship_stats: ship_stats.clone(),
+                                        is_offline: offline.is_offline,
+                                        last_ship_at: last_ship_at.clone(),
+                                        machine_id: config.shipper_config.machine_name.clone(),
+                                        managed: last_projected_managed_observations.clone(),
+                                        unmanaged: last_unmanaged_session_bindings.clone().unwrap_or_default(),
+                                        limiter: adaptive_limiter.snapshot(),
+                                        scheduler: scheduler.snapshot(),
+                                        archive_repair_mode: config.archive_repair_mode,
+                                        last_full_reconciled_at: last_full_reconciled_at.clone(),
+                                        session_snapshot_state: session_snapshot_state.clone(),
+                                    };
+                                    if !maybe_start_projection_build(&mut projection_build_tasks, input) {
+                                        projection_build_pending = true;
+                                    }
                                 }
                             }
                             Err(error) => tracing::warn!(
@@ -2187,16 +2251,18 @@ fn build_local_status_projection(
     payload.adaptive_backlog_limiter = limiter_snapshot;
     payload.ship_scheduler = scheduler_snapshot;
     apply_archive_repair_control(&mut payload, &archive_control, archive_repair_mode);
-    let background_active = payload.archive_backlog.pending_ranges > 0
-        || payload.ship_scheduler.as_ref().is_some_and(|scheduler| {
-            scheduler.ready_backlog > 0 || scheduler.in_flight_backlog > 0
-        });
+    let sealed_current = payload.history_import.state == "current";
+    let background_active = history_runtime_work_active(
+        sealed_current,
+        payload.archive_backlog.pending_ranges,
+        payload.ship_scheduler.as_ref(),
+    );
     payload.history_import.apply_runtime_state(
         is_offline,
         payload.archive_backlog.mode == "paused",
-        payload.archive_backlog.state == "blocked",
+        !sealed_current && payload.archive_backlog.state == "blocked",
         background_active,
-        payload.archive_backlog.dead_ranges > 0,
+        !sealed_current && payload.archive_backlog.dead_ranges > 0,
     );
     let now = chrono::Utc::now();
     payload.managed_sessions = heartbeat::leases_from_observations(machine_id, observations, now);
@@ -2277,6 +2343,22 @@ fn build_local_status_projection(
     heartbeat::apply_local_titles(conn, &mut payload.sessions);
     session_snapshot_state.annotate(&mut payload);
     heartbeat::build_status_file_projection(payload, &stats, phase_ledger, ledger_status)
+}
+
+fn history_runtime_work_active(
+    sealed_current: bool,
+    archive_pending_ranges: usize,
+    scheduler: Option<&crate::scheduler::SchedulerSnapshot>,
+) -> bool {
+    (!sealed_current && archive_pending_ranges > 0)
+        || scheduler.is_some_and(|scheduler| {
+            let live_or_retry = scheduler.ready_live > 0
+                || scheduler.in_flight_live > 0
+                || scheduler.ready_retry > 0
+                || scheduler.in_flight_retry > 0;
+            live_or_retry
+                || (!sealed_current && (scheduler.ready_scan > 0 || scheduler.in_flight_scan > 0))
+        })
 }
 
 fn observe_active_opencode_titles(
@@ -2438,6 +2520,45 @@ fn enqueue_discovered_files(
         scheduler.enqueue_observed(path, provider, priority, source, now_ms());
     }
     count
+}
+
+fn maybe_seal_history_reconciliation(
+    conn: &mut rusqlite::Connection,
+    open: &mut Option<OpenHistoryReconciliation>,
+    scheduler: &PathScheduler,
+    deferred_retries: &HashMap<PathBuf, DeferredRetry>,
+    discovery_idle: bool,
+) {
+    let Some(attempt) = open.as_ref() else {
+        return;
+    };
+    let history_retry_pending = deferred_retries
+        .values()
+        .any(|retry| retry.priority != WorkPriority::Live);
+    if !attempt.remaining_paths.is_empty()
+        || !discovery_idle
+        || scheduler.has_pending_priority(WorkPriority::Scan)
+        || scheduler.has_pending_priority(WorkPriority::Retry)
+        || history_retry_pending
+    {
+        return;
+    }
+    let attempt_id = attempt.attempt_id;
+    match crate::state::source_inventory::try_seal_reconciliation(conn, attempt_id) {
+        Ok(true) => {
+            tracing::info!(
+                attempt_id,
+                "Sealed durable transcript reconciliation coverage"
+            );
+            *open = None;
+        }
+        Ok(false) => {}
+        Err(error) => tracing::warn!(
+            attempt_id,
+            error = %error,
+            "Failed to seal durable transcript reconciliation coverage"
+        ),
+    }
 }
 
 fn discovery_observation_source(priority: WorkPriority) -> &'static str {
@@ -3601,6 +3722,7 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
         rerun_priority: None,
         local_retry_after: None,
         local_retry_priority: None,
+        reconciled_to_head: false,
         processing_elapsed: Duration::ZERO,
     };
 
@@ -3755,6 +3877,12 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
                 timeout,
             )
             .await
+            .map(|outcome| {
+                outcome.map_or(
+                    PathStorageV2ShipResult::Current,
+                    PathStorageV2ShipResult::Shipped,
+                )
+            })
         } else if is_cursor_database_job(&result.job) {
             crate::storage_v2_shipper::ship_next_cursor_envelope(
                 &mut conn,
@@ -3765,6 +3893,20 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
                 timeout,
             )
             .await
+            .map(|outcome| match outcome {
+                crate::storage_v2_shipper::CursorStorageV2ShipResult::Shipped(outcome) => {
+                    PathStorageV2ShipResult::Shipped(outcome)
+                }
+                crate::storage_v2_shipper::CursorStorageV2ShipResult::Current => {
+                    PathStorageV2ShipResult::Current
+                }
+                crate::storage_v2_shipper::CursorStorageV2ShipResult::WaitingOnClaim => {
+                    PathStorageV2ShipResult::WaitingOnClaim
+                }
+                crate::storage_v2_shipper::CursorStorageV2ShipResult::Continue => {
+                    PathStorageV2ShipResult::Continue
+                }
+            })
         } else if is_cursor_acp_source_job(&result.job) {
             crate::storage_v2_shipper::ship_next_cursor_acp_envelope(
                 &mut conn,
@@ -3775,6 +3917,12 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
                 timeout,
             )
             .await
+            .map(|outcome| {
+                outcome.map_or(
+                    PathStorageV2ShipResult::Current,
+                    PathStorageV2ShipResult::Shipped,
+                )
+            })
         } else {
             crate::storage_v2_shipper::ship_next_envelope(
                 &mut conn,
@@ -3787,9 +3935,15 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
                 timeout,
             )
             .await
+            .map(|outcome| {
+                outcome.map_or(
+                    PathStorageV2ShipResult::Current,
+                    PathStorageV2ShipResult::Shipped,
+                )
+            })
         };
         match ship_result {
-            Ok(Some(outcome)) => {
+            Ok(PathStorageV2ShipResult::Shipped(outcome)) => {
                 let latency_ms = ship_started.elapsed().as_millis() as u64;
                 task_context.ship_stats.record_with_lane_detail_and_stages(
                     stats_lane,
@@ -3818,15 +3972,18 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
                 result.events_shipped = outcome.events_shipped;
                 if outcome.has_more {
                     result.rerun_priority = Some(result.job.priority);
-                } else if let Err(error) =
-                    retire_legacy_spool_after_storage_v2(&conn, &result.job.path)
-                {
-                    tracing::warn!(
-                        path = %result.job.path.display(),
-                        error = %error,
-                        "Storage-v2 reached source head but legacy spool retirement failed"
-                    );
-                    result.local_retry_after = Some(local_retry_delay(result.job.priority));
+                } else {
+                    match retire_legacy_spool_after_storage_v2(&conn, &result.job.path) {
+                        Ok(_) => result.reconciled_to_head = true,
+                        Err(error) => {
+                            tracing::warn!(
+                                path = %result.job.path.display(),
+                                error = %error,
+                                "Storage-v2 reached source head but legacy spool retirement failed"
+                            );
+                            result.local_retry_after = Some(local_retry_delay(result.job.priority));
+                        }
+                    }
                 }
                 tracing::info!(
                     path = %result.job.path.display(),
@@ -3837,15 +3994,24 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
                     "Shipped storage-v2 source envelope"
                 );
             }
-            Ok(None) => {
-                if let Err(error) = retire_legacy_spool_after_storage_v2(&conn, &result.job.path) {
-                    tracing::warn!(
-                        path = %result.job.path.display(),
-                        error = %error,
-                        "Storage-v2 source is current but legacy spool retirement failed"
-                    );
-                    result.local_retry_after = Some(local_retry_delay(result.job.priority));
+            Ok(PathStorageV2ShipResult::Current) => {
+                match retire_legacy_spool_after_storage_v2(&conn, &result.job.path) {
+                    Ok(_) => result.reconciled_to_head = true,
+                    Err(error) => {
+                        tracing::warn!(
+                            path = %result.job.path.display(),
+                            error = %error,
+                            "Storage-v2 source is current but legacy spool retirement failed"
+                        );
+                        result.local_retry_after = Some(local_retry_delay(result.job.priority));
+                    }
                 }
+            }
+            Ok(PathStorageV2ShipResult::WaitingOnClaim) => {
+                return finish_path_task(result, task_started);
+            }
+            Ok(PathStorageV2ShipResult::Continue) => {
+                result.rerun_priority = Some(result.job.priority);
             }
             Err(error) => {
                 if let Some(blocked) =
@@ -4004,6 +4170,8 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
                 result.events_shipped = events_shipped;
                 if outcome.reconciliation_pending {
                     result.rerun_priority = Some(WorkPriority::Scan);
+                } else {
+                    result.reconciled_to_head = true;
                 }
             }
             Err(e) => {
@@ -4100,6 +4268,8 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
                     if !outcome.fully_processed && result.job.priority == WorkPriority::Live {
                         result.local_retry_after = Some(LIVE_LOCAL_RETRY_DELAY);
                         result.local_retry_priority = Some(WorkPriority::Retry);
+                    } else if outcome.fully_processed && !outcome.had_connect_error {
+                        result.reconciled_to_head = true;
                     }
                 }
                 Err(e) => {
@@ -4110,7 +4280,7 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
                 }
             }
         }
-        Ok(None) => {}
+        Ok(None) => result.reconciled_to_head = true,
         Err(e) => {
             if task_context.tracker.record_error() {
                 tracing::warn!(
@@ -5825,6 +5995,42 @@ mod tests {
         let resumed = scheduler.pop_launchable().unwrap();
         assert_eq!(resumed.path, history);
         assert_eq!(resumed.priority, WorkPriority::Scan);
+    }
+
+    #[test]
+    fn test_sealed_current_ignores_verification_scan_but_not_live_or_retry_work() {
+        let mut scheduler = PathScheduler::new(4);
+        scheduler.enqueue(
+            PathBuf::from("/tmp/verify.jsonl"),
+            "codex",
+            WorkPriority::Scan,
+        );
+        let snapshot = scheduler.snapshot();
+        assert!(history_runtime_work_active(false, 1, Some(&snapshot)));
+        assert!(!history_runtime_work_active(true, 1, Some(&snapshot)));
+
+        scheduler.enqueue(
+            PathBuf::from("/tmp/live.jsonl"),
+            "codex",
+            WorkPriority::Live,
+        );
+        assert!(history_runtime_work_active(
+            true,
+            0,
+            Some(&scheduler.snapshot())
+        ));
+
+        let mut retry_scheduler = PathScheduler::new(4);
+        retry_scheduler.enqueue(
+            PathBuf::from("/tmp/retry.jsonl"),
+            "codex",
+            WorkPriority::Retry,
+        );
+        assert!(history_runtime_work_active(
+            true,
+            0,
+            Some(&retry_scheduler.snapshot())
+        ));
     }
 
     #[test]

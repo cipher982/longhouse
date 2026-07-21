@@ -988,6 +988,10 @@ impl PathScheduler {
         !self.in_flight.is_empty()
     }
 
+    pub fn has_path(&self, path: &Path) -> bool {
+        self.ready_jobs.contains_key(path) || self.in_flight.contains_key(path)
+    }
+
     pub fn has_pending_work(&self) -> bool {
         !self.ready_jobs.is_empty() || !self.in_flight.is_empty()
     }

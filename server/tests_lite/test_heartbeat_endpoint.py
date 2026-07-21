@@ -958,11 +958,48 @@ def test_heartbeat_mixed_unit_history_progress_is_typed_and_path_free():
     encoded = parsed.history_import.model_dump(mode="json", exclude_none=True)
     assert "percent_complete" not in encoded["progress"]
     assert "path" not in encoded["progress"]["providers"][0]
-    invalid_current = HeartbeatIn.model_validate(
-        {"history_import": {**history_import, "state": "current"}}
-    )
+    invalid_current = HeartbeatIn.model_validate({"history_import": {**history_import, "state": "current"}})
     assert invalid_current.history_import is not None
     assert invalid_current.history_import.state == "unavailable"
+
+    current_progress = {
+        **history_import["progress"],
+        "acknowledged_source_bytes": 1_000,
+        "remaining_source_bytes": 0,
+        "acknowledged_records": 30,
+        "remaining_records": 0,
+        "pending_outbox_count": 0,
+        "pending_outbox_bytes": 0,
+        "providers": [
+            {
+                **history_import["progress"]["providers"][0],
+                "observed_units": 1_000,
+                "acknowledged_units": 1_000,
+                "remaining_units": 0,
+                "complete_source_count": 1,
+                "exact_total": True,
+                "inventory_coverage_complete": True,
+            },
+            {
+                **history_import["progress"]["providers"][1],
+                "acknowledged_units": 30,
+                "remaining_units": 0,
+                "complete_source_count": 2,
+                "inventory_coverage_complete": True,
+            },
+        ],
+    }
+    accepted_current = HeartbeatIn.model_validate(
+        {
+            "history_import": {
+                **history_import,
+                "state": "current",
+                "progress": current_progress,
+            }
+        }
+    )
+    assert accepted_current.history_import is not None
+    assert accepted_current.history_import.state == "current"
 
 
 def test_heartbeat_resolved_sessions_materialize_managed_control(tmp_path):

@@ -119,7 +119,18 @@ async fn ship_path_storage_v2(
         let prepared = if provider == "opencode" && opencode_db::is_opencode_database_path(path) {
             crate::storage_v2_shipper::prepare_next_opencode_envelope(conn, capabilities, path)?
         } else if provider == "cursor" && crate::cursor_store::is_cursor_store_database_path(path) {
-            crate::storage_v2_shipper::prepare_next_cursor_envelope(conn, capabilities, path)?
+            match crate::storage_v2_shipper::prepare_next_cursor_envelope_outcome(
+                conn,
+                capabilities,
+                path,
+            )? {
+                crate::storage_v2_shipper::CursorPreparationOutcome::Envelope(prepared) => {
+                    Some(prepared)
+                }
+                crate::storage_v2_shipper::CursorPreparationOutcome::Continue => continue,
+                crate::storage_v2_shipper::CursorPreparationOutcome::Current
+                | crate::storage_v2_shipper::CursorPreparationOutcome::WaitingOnClaim => None,
+            }
         } else if provider == "cursor_acp" {
             crate::storage_v2_shipper::prepare_next_cursor_acp_envelope(conn, capabilities, path)?
         } else {

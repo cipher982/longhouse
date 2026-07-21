@@ -91,8 +91,6 @@ class ProviderHistoryProgress(UTCBaseModel):
             raise ValueError("exact byte progress must use inventory_source_bytes")
         if self.unit == "bytes" and self.observed_units < self.inventory_source_bytes:
             raise ValueError("byte progress cannot observe fewer bytes than inventory")
-        if self.unit == "bytes" and self.inventory_coverage_complete != self.exact_total:
-            raise ValueError("byte inventory coverage requires an exact denominator")
         if self.unit == "unknown" and self.inventory_coverage_complete:
             raise ValueError("unknown progress units cannot claim complete inventory coverage")
         return self
@@ -155,6 +153,8 @@ class HistoryImportSnapshot(UTCBaseModel):
         if self.state == "current":
             if self.progress is None:
                 raise ValueError("current requires durable progress")
+            if self.inventory is None or self.inventory.scan_error_count > 0:
+                raise ValueError("current requires an error-free source inventory")
             if (
                 self.progress.remaining_source_bytes > 0
                 or self.progress.remaining_records > 0

@@ -6,7 +6,7 @@
 use std::collections::BTreeMap;
 
 use anyhow::Result;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -101,6 +101,14 @@ pub struct HistoryImportSnapshot {
     pub progress: Option<HistoryImportProgress>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HistoryReconciliationAttempt {
+    pub attempt_id: u64,
+    pub inventory_generation: u64,
+    pub content_sha256: String,
+    pub discovered_source_count: u64,
+}
+
 impl Default for HistoryImportSnapshot {
     fn default() -> Self {
         Self {
@@ -114,21 +122,27 @@ impl Default for HistoryImportSnapshot {
 impl HistoryImportSnapshot {
     pub fn load(conn: &Connection, outbox: &StorageV2OutboxSnapshot) -> Self {
         match load_inventory(conn) {
-            Ok(Some(inventory)) => match load_progress(conn, &inventory, outbox) {
-                Ok(progress) => Self {
-                    state: if progress.blocked_source_count > 0 {
-                        "blocked_source"
-                    } else if progress_has_work(&progress) {
-                        "importing"
-                    } else {
-                        "inventory_ready"
-                    }
-                    .to_string(),
-                    inventory: Some(inventory),
-                    progress: Some(progress),
-                },
-                Err(_) => Self::unavailable(),
-            },
+            Ok(Some(inventory)) => {
+                match reconciliation_sealed(conn, &inventory).and_then(|sealed| {
+                    load_progress(conn, &inventory, outbox, sealed).map(|p| (p, sealed))
+                }) {
+                    Ok((progress, sealed)) => Self {
+                        state: if progress.blocked_source_count > 0 {
+                            "blocked_source"
+                        } else if progress_has_work(&progress) {
+                            "importing"
+                        } else if sealed {
+                            "current"
+                        } else {
+                            "inventory_ready"
+                        }
+                        .to_string(),
+                        inventory: Some(inventory),
+                        progress: Some(progress),
+                    },
+                    Err(_) => Self::unavailable(),
+                }
+            }
             Ok(None) => Self::default(),
             Err(_) => Self::unavailable(),
         }
@@ -166,6 +180,8 @@ impl HistoryImportSnapshot {
             "backpressured"
         } else if has_work {
             "importing"
+        } else if self.state == "current" {
+            "current"
         } else {
             "inventory_ready"
         }
@@ -196,6 +212,7 @@ fn load_progress(
     conn: &Connection,
     inventory: &SourceInventorySnapshot,
     outbox: &StorageV2OutboxSnapshot,
+    reconciliation_sealed: bool,
 ) -> Result<HistoryImportProgress> {
     let mut stmt = conn.prepare(
         "SELECT epoch.provider,
@@ -261,7 +278,13 @@ fn load_progress(
                     inventory.scan_error_count == 0 && source.source_bytes >= epoch.observed_units;
                 acknowledged_source_bytes = acknowledged_source_bytes.saturating_add(acknowledged);
                 remaining_source_bytes = remaining_source_bytes.saturating_add(remaining);
-                (observed, acknowledged, remaining, exact, exact)
+                (
+                    observed,
+                    acknowledged,
+                    remaining,
+                    exact,
+                    reconciliation_sealed,
+                )
             }
             "records" => {
                 acknowledged_records =
@@ -272,7 +295,7 @@ fn load_progress(
                     epoch.acknowledged_units,
                     epoch.remaining_units,
                     false,
-                    false,
+                    reconciliation_sealed,
                 )
             }
             _ => (
@@ -297,6 +320,40 @@ fn load_progress(
             inventory_coverage_complete,
         });
     }
+    // A watcher can observe and fully receipt a brand-new provider/source
+    // after the last inventory scan. Keep that durable evidence visible rather
+    // than dropping epoch providers until the next reconciliation inventory.
+    for (provider, epoch) in epochs {
+        let unit = provider_progress_unit(&provider);
+        match unit {
+            "bytes" => {
+                acknowledged_source_bytes =
+                    acknowledged_source_bytes.saturating_add(epoch.acknowledged_units);
+                remaining_source_bytes =
+                    remaining_source_bytes.saturating_add(epoch.remaining_units);
+            }
+            "records" => {
+                acknowledged_records =
+                    acknowledged_records.saturating_add(epoch.acknowledged_units);
+                remaining_records = remaining_records.saturating_add(epoch.remaining_units);
+            }
+            _ => {}
+        }
+        providers.push(ProviderHistoryProgress {
+            provider,
+            unit: unit.to_string(),
+            inventory_source_count: 0,
+            inventory_source_bytes: 0,
+            tracked_source_count: epoch.tracked_source_count,
+            complete_source_count: epoch.complete_source_count,
+            observed_units: epoch.observed_units,
+            acknowledged_units: epoch.acknowledged_units,
+            remaining_units: epoch.remaining_units,
+            exact_total: false,
+            inventory_coverage_complete: reconciliation_sealed && unit != "unknown",
+        });
+    }
+    providers.sort_by(|left, right| left.provider.cmp(&right.provider));
 
     Ok(HistoryImportProgress {
         acknowledged_source_bytes,
@@ -310,6 +367,176 @@ fn load_progress(
         latest_block_kind: outbox.latest_block_kind.clone(),
         providers,
     })
+}
+
+pub fn abandon_open_reconciliation(conn: &Connection) -> Result<()> {
+    conn.execute(
+        "UPDATE history_reconciliation
+         SET open_attempt_id = NULL,
+             open_inventory_generation = NULL,
+             open_content_sha256 = NULL,
+             open_discovered_source_count = NULL,
+             open_scan_error_count = NULL,
+             open_started_at = NULL
+         WHERE singleton_id = 1",
+        [],
+    )?;
+    Ok(())
+}
+
+pub fn begin_reconciliation(
+    conn: &mut Connection,
+    inventory: &SourceInventorySnapshot,
+) -> Result<Option<HistoryReconciliationAttempt>> {
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    tx.execute(
+        "INSERT INTO history_reconciliation (singleton_id) VALUES (1)
+         ON CONFLICT(singleton_id) DO NOTHING",
+        [],
+    )?;
+    let prior_ids: (Option<i64>, Option<i64>) = tx.query_row(
+        "SELECT open_attempt_id, sealed_attempt_id
+         FROM history_reconciliation WHERE singleton_id = 1",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    let next_id = prior_ids
+        .0
+        .unwrap_or(0)
+        .max(prior_ids.1.unwrap_or(0))
+        .saturating_add(1);
+    let sealed_matches: bool = tx.query_row(
+        "SELECT COALESCE(sealed_inventory_generation = ?1
+                         AND sealed_content_sha256 = ?2, 0)
+         FROM history_reconciliation WHERE singleton_id = 1",
+        params![inventory.generation, inventory.content_sha256],
+        |row| row.get(0),
+    )?;
+    if inventory.scan_error_count > 0 {
+        tx.execute(
+            "UPDATE history_reconciliation
+             SET open_attempt_id = NULL,
+                 open_inventory_generation = NULL,
+                 open_content_sha256 = NULL,
+                 open_discovered_source_count = NULL,
+                 open_scan_error_count = NULL,
+                 open_started_at = NULL,
+                 sealed_attempt_id = NULL,
+                 sealed_inventory_generation = NULL,
+                 sealed_content_sha256 = NULL,
+                 sealed_at = NULL
+             WHERE singleton_id = 1",
+            [],
+        )?;
+        tx.commit()?;
+        return Ok(None);
+    }
+    tx.execute(
+        "UPDATE history_reconciliation
+         SET open_attempt_id = ?1,
+             open_inventory_generation = ?2,
+             open_content_sha256 = ?3,
+             open_discovered_source_count = ?4,
+             open_scan_error_count = 0,
+             open_started_at = ?5,
+             sealed_attempt_id = CASE WHEN ?6 THEN sealed_attempt_id ELSE NULL END,
+             sealed_inventory_generation = CASE WHEN ?6 THEN sealed_inventory_generation ELSE NULL END,
+             sealed_content_sha256 = CASE WHEN ?6 THEN sealed_content_sha256 ELSE NULL END,
+             sealed_at = CASE WHEN ?6 THEN sealed_at ELSE NULL END
+         WHERE singleton_id = 1",
+        params![
+            next_id,
+            inventory.generation,
+            inventory.content_sha256,
+            inventory.source_count,
+            chrono::Utc::now().to_rfc3339(),
+            sealed_matches,
+        ],
+    )?;
+    tx.commit()?;
+    Ok(Some(HistoryReconciliationAttempt {
+        attempt_id: next_id.max(0) as u64,
+        inventory_generation: inventory.generation,
+        content_sha256: inventory.content_sha256.clone(),
+        discovered_source_count: inventory.source_count,
+    }))
+}
+
+pub fn try_seal_reconciliation(conn: &mut Connection, attempt_id: u64) -> Result<bool> {
+    let attempt_id = i64::try_from(attempt_id)?;
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let open: Option<(i64, String, i64)> = tx
+        .query_row(
+            "SELECT open_inventory_generation, open_content_sha256, open_scan_error_count
+             FROM history_reconciliation
+             WHERE singleton_id = 1 AND open_attempt_id = ?1",
+            [attempt_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()?;
+    let Some((generation, content_sha256, scan_error_count)) = open else {
+        return Ok(false);
+    };
+    let inventory_matches: bool = tx.query_row(
+        "SELECT EXISTS(
+             SELECT 1 FROM source_inventory
+             WHERE singleton_id = 1 AND generation = ?1
+               AND content_sha256 = ?2 AND scan_error_count = 0
+         )",
+        params![generation, content_sha256],
+        |row| row.get(0),
+    )?;
+    if scan_error_count != 0 || !inventory_matches {
+        return Ok(false);
+    }
+    let pending_envelopes: i64 =
+        tx.query_row("SELECT COUNT(*) FROM pending_source_envelope", [], |row| {
+            row.get(0)
+        })?;
+    let lagging_epochs: i64 = tx.query_row(
+        "SELECT COUNT(*)
+         FROM source_epoch_registry AS epoch
+         LEFT JOIN source_epoch_lane_state AS lane
+           ON lane.source_epoch = epoch.source_epoch AND lane.lane = 'durable'
+         WHERE epoch.ended_at IS NULL
+           AND COALESCE(lane.last_position, 0) < epoch.max_observed_len",
+        [],
+        |row| row.get(0),
+    )?;
+    if pending_envelopes > 0 || lagging_epochs > 0 {
+        return Ok(false);
+    }
+    tx.execute(
+        "UPDATE history_reconciliation
+         SET sealed_attempt_id = open_attempt_id,
+             sealed_inventory_generation = open_inventory_generation,
+             sealed_content_sha256 = open_content_sha256,
+             sealed_at = ?2,
+             open_attempt_id = NULL,
+             open_inventory_generation = NULL,
+             open_content_sha256 = NULL,
+             open_discovered_source_count = NULL,
+             open_scan_error_count = NULL,
+             open_started_at = NULL
+         WHERE singleton_id = 1 AND open_attempt_id = ?1",
+        params![attempt_id, chrono::Utc::now().to_rfc3339()],
+    )?;
+    tx.commit()?;
+    Ok(true)
+}
+
+fn reconciliation_sealed(conn: &Connection, inventory: &SourceInventorySnapshot) -> Result<bool> {
+    let sealed = conn
+        .query_row(
+            "SELECT sealed_inventory_generation = ?1 AND sealed_content_sha256 = ?2
+             FROM history_reconciliation
+             WHERE singleton_id = 1 AND sealed_attempt_id IS NOT NULL",
+            params![inventory.generation, inventory.content_sha256],
+            |row| row.get::<_, bool>(0),
+        )
+        .optional()?
+        .unwrap_or(false);
+    Ok(sealed && inventory.scan_error_count == 0)
 }
 
 fn provider_progress_unit(provider: &str) -> &'static str {
@@ -620,7 +847,7 @@ mod tests {
         assert_eq!(progress.remaining_records, 3);
         assert_eq!(progress.providers[0].unit, "bytes");
         assert!(progress.providers[0].exact_total);
-        assert!(progress.providers[0].inventory_coverage_complete);
+        assert!(!progress.providers[0].inventory_coverage_complete);
         assert_eq!(progress.providers[0].observed_units, 1_000);
         assert_eq!(progress.providers[1].unit, "records");
         assert!(!progress.providers[1].exact_total);
@@ -703,6 +930,151 @@ mod tests {
         assert_eq!(provider.remaining_units, 50);
         assert!(!provider.exact_total);
         assert!(!provider.inventory_coverage_complete);
+    }
+
+    #[test]
+    fn durable_seal_promotes_record_coverage_and_current_across_restart() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let mut conn = db::open_db(Some(tmp.path())).unwrap();
+        let inventory = persist_inventory(
+            &conn,
+            SourceInventoryObservation {
+                observed_at: "2026-07-20T10:00:00Z".to_string(),
+                scan_duration_ms: 1,
+                scan_error_count: 0,
+                source_count: 1,
+                source_bytes: 5_000,
+                wal_bytes: 0,
+                footprint_bytes: 5_000,
+                providers: vec![ProviderSourceInventory {
+                    provider: "opencode".to_string(),
+                    source_count: 1,
+                    source_bytes: 5_000,
+                    wal_bytes: 0,
+                    footprint_bytes: 5_000,
+                    oldest_modified_at_ms: None,
+                    newest_modified_at_ms: None,
+                }],
+            },
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO source_epoch_registry (
+                source_epoch, provider, opaque_source_id, file_incarnation,
+                predecessor_epoch, start_reason, max_observed_len, source_revision,
+                bound_session_id, created_at, updated_at, ended_at, end_reason
+             ) VALUES ('epoch-records', 'opencode', 'opaque-records', 'incarnation', NULL,
+                       'initial', 10, NULL, NULL, '2026-07-20T10:00:00Z',
+                       '2026-07-20T10:00:00Z', NULL, NULL)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO source_epoch_lane_state (source_epoch, lane, last_position, updated_at)
+             VALUES ('epoch-records', 'durable', 10, '2026-07-20T10:00:00Z')",
+            [],
+        )
+        .unwrap();
+
+        let before = HistoryImportSnapshot::load(&conn, &StorageV2OutboxSnapshot::default());
+        assert_eq!(before.state, "importing");
+        assert!(!before.progress.unwrap().providers[0].inventory_coverage_complete);
+
+        let attempt = begin_reconciliation(&mut conn, &inventory)
+            .unwrap()
+            .unwrap();
+        assert!(try_seal_reconciliation(&mut conn, attempt.attempt_id).unwrap());
+        let sealed = HistoryImportSnapshot::load(&conn, &StorageV2OutboxSnapshot::default());
+        assert_eq!(sealed.state, "current");
+        let sealed_provider = &sealed.progress.unwrap().providers[0];
+        assert!(!sealed_provider.exact_total);
+        assert!(sealed_provider.inventory_coverage_complete);
+
+        conn.execute(
+            "INSERT INTO source_epoch_registry (
+                source_epoch, provider, opaque_source_id, file_incarnation,
+                predecessor_epoch, start_reason, max_observed_len, source_revision,
+                bound_session_id, created_at, updated_at, ended_at, end_reason
+             ) VALUES ('epoch-live-delta', 'cursor', 'opaque-live-delta', 'incarnation', NULL,
+                       'initial', 2, NULL, NULL, '2026-07-20T10:01:00Z',
+                       '2026-07-20T10:01:00Z', NULL, NULL)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO source_epoch_lane_state (source_epoch, lane, last_position, updated_at)
+             VALUES ('epoch-live-delta', 'durable', 2, '2026-07-20T10:01:00Z')",
+            [],
+        )
+        .unwrap();
+        let with_live_delta =
+            HistoryImportSnapshot::load(&conn, &StorageV2OutboxSnapshot::default());
+        assert_eq!(with_live_delta.state, "current");
+        let progress = with_live_delta.progress.unwrap();
+        assert_eq!(progress.providers.len(), 2);
+        assert_eq!(progress.providers[0].provider, "cursor");
+        assert_eq!(progress.providers[0].inventory_source_count, 0);
+        assert!(progress.providers[0].inventory_coverage_complete);
+        drop(conn);
+
+        let reopened = db::open_connection(tmp.path()).unwrap();
+        let restarted = HistoryImportSnapshot::load(&reopened, &StorageV2OutboxSnapshot::default());
+        assert_eq!(restarted.state, "current");
+    }
+
+    #[test]
+    fn lagging_epoch_blocks_seal_and_startup_abandons_only_open_attempt() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let mut conn = db::open_db(Some(tmp.path())).unwrap();
+        let inventory = persist_inventory(&conn, observation(1, "2026-07-20T10:00:00Z")).unwrap();
+        conn.execute(
+            "INSERT INTO source_epoch_registry (
+                source_epoch, provider, opaque_source_id, file_incarnation,
+                predecessor_epoch, start_reason, max_observed_len, source_revision,
+                bound_session_id, created_at, updated_at, ended_at, end_reason
+             ) VALUES ('epoch-lag', 'claude', 'opaque-lag', 'incarnation', NULL,
+                       'initial', 100, NULL, NULL, '2026-07-20T10:00:00Z',
+                       '2026-07-20T10:00:00Z', NULL, NULL)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO source_epoch_lane_state (source_epoch, lane, last_position, updated_at)
+             VALUES ('epoch-lag', 'durable', 90, '2026-07-20T10:00:00Z')",
+            [],
+        )
+        .unwrap();
+        let first = begin_reconciliation(&mut conn, &inventory)
+            .unwrap()
+            .unwrap();
+        assert!(!try_seal_reconciliation(&mut conn, first.attempt_id).unwrap());
+        abandon_open_reconciliation(&conn).unwrap();
+        assert!(!reconciliation_sealed(&conn, &inventory).unwrap());
+
+        conn.execute(
+            "UPDATE source_epoch_lane_state SET last_position = 100
+             WHERE source_epoch = 'epoch-lag' AND lane = 'durable'",
+            [],
+        )
+        .unwrap();
+        let second = begin_reconciliation(&mut conn, &inventory)
+            .unwrap()
+            .unwrap();
+        assert!(try_seal_reconciliation(&mut conn, second.attempt_id).unwrap());
+        let verify = begin_reconciliation(&mut conn, &inventory)
+            .unwrap()
+            .unwrap();
+        abandon_open_reconciliation(&conn).unwrap();
+        assert!(reconciliation_sealed(&conn, &inventory).unwrap());
+        assert_ne!(verify.attempt_id, second.attempt_id);
+
+        let mut errored = observation(1, "2026-07-20T10:05:00Z");
+        errored.scan_error_count = 1;
+        let errored_inventory = persist_inventory(&conn, errored).unwrap();
+        assert!(begin_reconciliation(&mut conn, &errored_inventory)
+            .unwrap()
+            .is_none());
+        assert!(!reconciliation_sealed(&conn, &errored_inventory).unwrap());
     }
 
     #[test]

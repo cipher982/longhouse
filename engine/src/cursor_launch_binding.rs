@@ -55,6 +55,13 @@ pub struct ManagedCursorBinding {
     pub client_request_id: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CursorLaunchBindingState {
+    Managed(ManagedCursorBinding),
+    Pending,
+    Unclaimed,
+}
+
 #[derive(Debug, Deserialize)]
 struct ProbeObservation {
     phase: String,
@@ -63,8 +70,54 @@ struct ProbeObservation {
     cursor_pid: Option<u64>,
 }
 
-pub fn managed_binding_for_conversation(conversation_uuid: &str) -> Result<Option<ManagedCursorBinding>> {
-    managed_binding_for_conversation_in(&claim_dir(), conversation_uuid)
+pub fn launch_binding_state_for_conversation(
+    conversation_uuid: &str,
+) -> Result<CursorLaunchBindingState> {
+    launch_binding_state_for_conversation_in(&claim_dir(), conversation_uuid)
+}
+
+fn launch_binding_state_for_conversation_in(
+    dir: &Path,
+    conversation_uuid: &str,
+) -> Result<CursorLaunchBindingState> {
+    let mut managed = Vec::new();
+    let mut pending = false;
+    for path in claim_paths(dir)? {
+        let Ok(bytes) = fs::read(&path) else {
+            continue;
+        };
+        let Ok(claim) = serde_json::from_slice::<LaunchBindingClaim>(&bytes) else {
+            continue;
+        };
+        if valid_claim(&claim, conversation_uuid) {
+            managed.push(ManagedCursorBinding {
+                session_id: claim.session_id,
+                thread_id: claim.thread_id,
+                turn_id: claim.turn_id,
+                run_id: claim.run_id,
+                client_request_id: claim.client_request_id,
+            });
+        } else if claim.schema_version == 2
+            && claim.provider == "cursor"
+            && claim.status == "pending"
+            && claim.conversation_uuid == conversation_uuid
+            && claim.expires_at.is_some_and(|value| value > Utc::now())
+        {
+            pending = true;
+        }
+    }
+    managed.sort_by(|left, right| left.session_id.cmp(&right.session_id));
+    managed.dedup_by(|left, right| left.session_id == right.session_id);
+    Ok(if managed.len() == 1 {
+        CursorLaunchBindingState::Managed(managed.remove(0))
+    } else if pending || !managed.is_empty() {
+        // More than one observed binding is not enough evidence to select a
+        // destination. Hold the source just like a pending claim rather than
+        // materializing a duplicate unmanaged session.
+        CursorLaunchBindingState::Pending
+    } else {
+        CursorLaunchBindingState::Unclaimed
+    })
 }
 
 #[cfg(test)]
@@ -72,9 +125,11 @@ fn managed_session_id_for_conversation_in(
     dir: &Path,
     conversation_uuid: &str,
 ) -> Result<Option<String>> {
-    Ok(managed_binding_for_conversation_in(dir, conversation_uuid)?.map(|binding| binding.session_id))
+    Ok(managed_binding_for_conversation_in(dir, conversation_uuid)?
+        .map(|binding| binding.session_id))
 }
 
+#[cfg(test)]
 fn managed_binding_for_conversation_in(
     dir: &Path,
     conversation_uuid: &str,
@@ -104,10 +159,7 @@ fn managed_binding_for_conversation_in(
 
 /// A prelaunch reservation prevents the empty Cursor store from racing ahead
 /// of the first provider hook and materializing as a duplicate Shadow session.
-pub fn pending_claim_for_conversation(conversation_uuid: &str) -> Result<bool> {
-    pending_claim_for_conversation_in(&claim_dir(), conversation_uuid)
-}
-
+#[cfg(test)]
 fn pending_claim_for_conversation_in(dir: &Path, conversation_uuid: &str) -> Result<bool> {
     for path in claim_paths(dir)? {
         let Ok(bytes) = fs::read(&path) else {
@@ -214,24 +266,76 @@ mod tests {
         assert!(valid_claim(&raw, "cursor-id"));
         assert!(!valid_claim(&raw, "different-cursor-id"));
         let dir = tempdir().unwrap();
-        fs::write(dir.path().join("claim.json"), serde_json::to_vec(&serde_json::json!({
-            "schema_version": 2,
-            "provider": "cursor",
-            "status": "observed",
-            "session_id": "longhouse-id",
-            "thread_id": "thread-id",
-            "turn_id": "turn-id",
-            "run_id": "run-id",
-            "client_request_id": "request-id",
-            "conversation_uuid": "cursor-id",
-            "hook_observed_at": "2026-07-17T00:00:00Z"
-        })).unwrap()).unwrap();
-        let binding = managed_binding_for_conversation_in(dir.path(), "cursor-id").unwrap().unwrap();
+        fs::write(
+            dir.path().join("claim.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "schema_version": 2,
+                "provider": "cursor",
+                "status": "observed",
+                "session_id": "longhouse-id",
+                "thread_id": "thread-id",
+                "turn_id": "turn-id",
+                "run_id": "run-id",
+                "client_request_id": "request-id",
+                "conversation_uuid": "cursor-id",
+                "hook_observed_at": "2026-07-17T00:00:00Z"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let binding = managed_binding_for_conversation_in(dir.path(), "cursor-id")
+            .unwrap()
+            .unwrap();
         assert_eq!(binding.session_id, "longhouse-id");
         assert_eq!(binding.thread_id.as_deref(), Some("thread-id"));
         assert_eq!(binding.turn_id.as_deref(), Some("turn-id"));
         assert_eq!(binding.run_id.as_deref(), Some("run-id"));
         assert_eq!(binding.client_request_id.as_deref(), Some("request-id"));
+    }
+
+    #[test]
+    fn launch_binding_state_distinguishes_pending_observed_and_unclaimed() {
+        let dir = tempdir().unwrap();
+        assert_eq!(
+            launch_binding_state_for_conversation_in(dir.path(), "cursor-id").unwrap(),
+            CursorLaunchBindingState::Unclaimed
+        );
+        fs::write(
+            dir.path().join("claim.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "schema_version": 2,
+                "provider": "cursor",
+                "status": "pending",
+                "session_id": "longhouse-id",
+                "conversation_uuid": "cursor-id",
+                "expires_at": "2099-01-01T00:00:00Z"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            launch_binding_state_for_conversation_in(dir.path(), "cursor-id").unwrap(),
+            CursorLaunchBindingState::Pending
+        );
+
+        fs::write(
+            dir.path().join("claim.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "schema_version": 2,
+                "provider": "cursor",
+                "status": "observed",
+                "session_id": "longhouse-id",
+                "conversation_uuid": "cursor-id",
+                "hook_observed_at": "2026-07-17T00:00:00Z"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(matches!(
+            launch_binding_state_for_conversation_in(dir.path(), "cursor-id").unwrap(),
+            CursorLaunchBindingState::Managed(ManagedCursorBinding { session_id, .. })
+                if session_id == "longhouse-id"
+        ));
     }
 
     #[test]

@@ -62,6 +62,21 @@ pub(crate) struct StorageV2ShipOutcome {
     pub has_more: bool,
 }
 
+pub(crate) enum CursorPreparationOutcome {
+    Envelope(PreparedStorageV2Envelope),
+    Current,
+    WaitingOnClaim,
+    Continue,
+}
+
+#[derive(Debug)]
+pub(crate) enum CursorStorageV2ShipResult {
+    Shipped(StorageV2ShipOutcome),
+    Current,
+    WaitingOnClaim,
+    Continue,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 struct PersistedMediaObject {
     source_offset: u64,
@@ -419,9 +434,9 @@ pub(crate) async fn ship_prepared_envelope(
             if let Some(conflict) =
                 error.downcast_ref::<crate::shipping::client::StorageV2Conflict>()
             {
-                if let Some(outcome) =
-                    reconcile_cursor_render_generation_conflict(conn, &pending, &prepared, conflict)?
-                {
+                if let Some(outcome) = reconcile_cursor_render_generation_conflict(
+                    conn, &pending, &prepared, conflict,
+                )? {
                     return Ok(outcome);
                 }
                 if let Some(outcome) = reconcile_storage_v2_conflict(
@@ -466,7 +481,10 @@ fn reconcile_cursor_render_generation_conflict(
     conflict: &crate::shipping::client::StorageV2Conflict,
 ) -> Result<Option<StorageV2ShipOutcome>> {
     if prepared.envelope.provider != "cursor"
-        || conflict.details.get("reason").and_then(|value| value.as_str())
+        || conflict
+            .details
+            .get("reason")
+            .and_then(|value| value.as_str())
             != Some("render_generation_revision_conflict")
     {
         return Ok(None);
@@ -1163,12 +1181,28 @@ fn classify_cursor_text(role: &str, text: &str) -> (String, String) {
     ("user".to_string(), text.to_string())
 }
 
+#[cfg(test)]
 pub(crate) fn prepare_next_cursor_envelope(
     conn: &mut Connection,
     capabilities: &StorageV2Capabilities,
     db_path: &Path,
 ) -> Result<Option<PreparedStorageV2Envelope>> {
-    prepare_next_cursor_envelope_with_limit(
+    Ok(
+        match prepare_next_cursor_envelope_outcome(conn, capabilities, db_path)? {
+            CursorPreparationOutcome::Envelope(prepared) => Some(prepared),
+            CursorPreparationOutcome::Current
+            | CursorPreparationOutcome::WaitingOnClaim
+            | CursorPreparationOutcome::Continue => None,
+        },
+    )
+}
+
+pub(crate) fn prepare_next_cursor_envelope_outcome(
+    conn: &mut Connection,
+    capabilities: &StorageV2Capabilities,
+    db_path: &Path,
+) -> Result<CursorPreparationOutcome> {
+    prepare_next_cursor_envelope_outcome_with_limit(
         conn,
         capabilities,
         db_path,
@@ -1176,12 +1210,34 @@ pub(crate) fn prepare_next_cursor_envelope(
     )
 }
 
+#[cfg(test)]
 fn prepare_next_cursor_envelope_with_limit(
     conn: &mut Connection,
     capabilities: &StorageV2Capabilities,
     db_path: &Path,
     maximum_batch_bytes: u64,
 ) -> Result<Option<PreparedStorageV2Envelope>> {
+    Ok(
+        match prepare_next_cursor_envelope_outcome_with_limit(
+            conn,
+            capabilities,
+            db_path,
+            maximum_batch_bytes,
+        )? {
+            CursorPreparationOutcome::Envelope(prepared) => Some(prepared),
+            CursorPreparationOutcome::Current
+            | CursorPreparationOutcome::WaitingOnClaim
+            | CursorPreparationOutcome::Continue => None,
+        },
+    )
+}
+
+fn prepare_next_cursor_envelope_outcome_with_limit(
+    conn: &mut Connection,
+    capabilities: &StorageV2Capabilities,
+    db_path: &Path,
+    maximum_batch_bytes: u64,
+) -> Result<CursorPreparationOutcome> {
     let canonical_path = stable_source_path(db_path);
     let path_text = canonical_path.to_string_lossy();
     if let Some(pending) = pending_source_envelope::load_for_path(conn, &path_text)? {
@@ -1196,7 +1252,7 @@ fn prepare_next_cursor_envelope_with_limit(
                 &pending.envelope_id,
             )?
         {
-            return pending_to_prepared(pending).map(Some);
+            return pending_to_prepared(pending).map(CursorPreparationOutcome::Envelope);
         }
     }
     let metadata_before = db_path
@@ -1215,17 +1271,18 @@ fn prepare_next_cursor_envelope_with_limit(
     }
     let snapshot =
         cursor_store::cursor_store_raw_snapshot_from(&store_snapshot, store_incarnation.clone())?;
-    let claimed_binding = crate::cursor_launch_binding::managed_binding_for_conversation(
+    let claimed_binding = match crate::cursor_launch_binding::launch_binding_state_for_conversation(
         &snapshot.conversation_uuid,
-    )?;
-    let claimed_session_id = claimed_binding.as_ref().map(|binding| binding.session_id.clone());
-    if claimed_session_id.is_none()
-        && crate::cursor_launch_binding::pending_claim_for_conversation(
-            &snapshot.conversation_uuid,
-        )?
-    {
-        return Ok(None);
-    }
+    )? {
+        crate::cursor_launch_binding::CursorLaunchBindingState::Managed(binding) => Some(binding),
+        crate::cursor_launch_binding::CursorLaunchBindingState::Pending => {
+            return Ok(CursorPreparationOutcome::WaitingOnClaim);
+        }
+        crate::cursor_launch_binding::CursorLaunchBindingState::Unclaimed => None,
+    };
+    let claimed_session_id = claimed_binding
+        .as_ref()
+        .map(|binding| binding.session_id.clone());
     let opaque_source_id = cursor_store::cursor_opaque_source_id(&snapshot.conversation_uuid);
     let previous_root_ids =
         cursor_store_root::previous_message_blob_ids(conn, &snapshot.conversation_uuid)?;
@@ -1376,7 +1433,11 @@ fn prepare_next_cursor_envelope_with_limit(
     let range_start =
         source_epoch::lane_position(conn, resolution.source_epoch, SourceLane::Durable)?;
     if range_start >= logical_len {
-        return Ok(None);
+        return Ok(if source_capture_has_more {
+            CursorPreparationOutcome::Continue
+        } else {
+            CursorPreparationOutcome::Current
+        });
     }
     let selected = cursor_store_records::cursor_records_from(
         conn,
@@ -1402,7 +1463,7 @@ fn prepare_next_cursor_envelope_with_limit(
         })
         .collect::<Vec<_>>();
     let Some(last) = selected.last() else {
-        return Ok(None);
+        return Ok(CursorPreparationOutcome::Continue);
     };
     let range_end = last
         .source_position
@@ -1452,7 +1513,10 @@ fn prepare_next_cursor_envelope_with_limit(
         .with_timezone(&Utc);
     let mut render_records =
         cursor_render_records(&store_snapshot, &selected, started_at.timestamp_micros())?;
-    if let Some(thread_id) = claimed_binding.as_ref().and_then(|binding| binding.thread_id.as_ref()) {
+    if let Some(thread_id) = claimed_binding
+        .as_ref()
+        .and_then(|binding| binding.thread_id.as_ref())
+    {
         for record in &mut render_records {
             record.thread_id = Some(thread_id.clone());
         }
@@ -1517,7 +1581,7 @@ fn prepare_next_cursor_envelope_with_limit(
         has_more: range_end < logical_len || source_capture_has_more,
         media_objects: Vec::new(),
     };
-    persist_prepared(conn, &path_text, prepared).map(Some)
+    persist_prepared(conn, &path_text, prepared).map(CursorPreparationOutcome::Envelope)
 }
 
 pub(crate) fn prepare_next_cursor_acp_envelope(
@@ -1854,24 +1918,28 @@ pub(crate) async fn ship_next_cursor_envelope(
     db_path: &Path,
     lane: &str,
     request_timeout: Duration,
-) -> Result<Option<StorageV2ShipOutcome>> {
+) -> Result<CursorStorageV2ShipResult> {
     let maximum_batch_bytes = if lane == "live" {
         LIVE_TARGET_BATCH_BYTES as u64
     } else {
         capabilities.max_raw_record_bytes
     };
-    let Some(prepared) = preparation_result(prepare_next_cursor_envelope_with_limit(
+    let prepared = preparation_result(prepare_next_cursor_envelope_outcome_with_limit(
         conn,
         capabilities,
         db_path,
         maximum_batch_bytes,
-    ))?
-    else {
-        return Ok(None);
-    };
-    ship_prepared_envelope(conn, client, capabilities, prepared, lane, request_timeout)
-        .await
-        .map(Some)
+    ))?;
+    match prepared {
+        CursorPreparationOutcome::Envelope(prepared) => {
+            ship_prepared_envelope(conn, client, capabilities, prepared, lane, request_timeout)
+                .await
+                .map(CursorStorageV2ShipResult::Shipped)
+        }
+        CursorPreparationOutcome::Current => Ok(CursorStorageV2ShipResult::Current),
+        CursorPreparationOutcome::WaitingOnClaim => Ok(CursorStorageV2ShipResult::WaitingOnClaim),
+        CursorPreparationOutcome::Continue => Ok(CursorStorageV2ShipResult::Continue),
+    }
 }
 
 pub(crate) async fn ship_next_cursor_acp_envelope(
@@ -2552,11 +2620,7 @@ mod tests {
             .clone();
         let obsolete_generation_id = Uuid::new_v4().to_string();
         let mut obsolete_envelope = prepared.envelope.clone();
-        obsolete_envelope
-            .render
-            .as_mut()
-            .unwrap()
-            .generation_id = obsolete_generation_id.clone();
+        obsolete_envelope.render.as_mut().unwrap().generation_id = obsolete_generation_id.clone();
         let pending = pending_source_envelope::load_for_epoch(&conn, prepared.source_epoch)
             .unwrap()
             .unwrap();
@@ -2673,9 +2737,11 @@ mod tests {
         .await
         .unwrap();
         assert!(shipped.bytes_shipped > 0);
-        assert!(pending_source_envelope::load_for_epoch(&conn, prepared.source_epoch)
-            .unwrap()
-            .is_none());
+        assert!(
+            pending_source_envelope::load_for_epoch(&conn, prepared.source_epoch)
+                .unwrap()
+                .is_none()
+        );
         server.await.unwrap();
     }
 
@@ -2978,6 +3044,40 @@ mod tests {
         );
         assert!(live.raw_bytes <= LIVE_TARGET_BATCH_BYTES as u64);
         assert!(live.has_more);
+    }
+
+    #[test]
+    fn cursor_preparation_reports_current_only_after_acknowledged_head() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("store.db");
+        let _store = make_cursor_store(&path);
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        let mut shipped = 0;
+
+        for _ in 0..16 {
+            match prepare_next_cursor_envelope_outcome_with_limit(
+                &mut conn,
+                &capabilities(),
+                &path,
+                LIVE_TARGET_BATCH_BYTES as u64,
+            )
+            .unwrap()
+            {
+                CursorPreparationOutcome::Envelope(prepared) => {
+                    acknowledge_prepared(&mut conn, &prepared);
+                    shipped += 1;
+                }
+                CursorPreparationOutcome::Continue => continue,
+                CursorPreparationOutcome::Current => {
+                    assert!(shipped > 0);
+                    return;
+                }
+                CursorPreparationOutcome::WaitingOnClaim => {
+                    panic!("fixture must not be held by a managed Cursor claim")
+                }
+            }
+        }
+        panic!("Cursor source did not reach a distinct current outcome");
     }
 
     #[test]

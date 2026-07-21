@@ -218,6 +218,20 @@ pub fn open_db(db_path: Option<&Path>) -> Result<Connection> {
             wal_bytes INTEGER NOT NULL,
             footprint_bytes INTEGER NOT NULL,
             providers_json TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS history_reconciliation (
+            singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
+            open_attempt_id INTEGER,
+            open_inventory_generation INTEGER,
+            open_content_sha256 TEXT,
+            open_discovered_source_count INTEGER,
+            open_scan_error_count INTEGER,
+            open_started_at TEXT,
+            sealed_attempt_id INTEGER,
+            sealed_inventory_generation INTEGER,
+            sealed_content_sha256 TEXT,
+            sealed_at TEXT
         );",
     )?;
 
