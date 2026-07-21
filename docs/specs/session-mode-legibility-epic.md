@@ -1,7 +1,7 @@
 # Session-Mode and Provider-Contract Legibility
 
-**Status:** Spec draft — reviewed by hatch cursor grok and hatch codex sol
-(2026-07-21), revised. Ready for founder go/no-go, not yet started.
+**Status:** Phase A shipped 2026-07-21 (item 3 partially — see item 3 note).
+Phase B not started, not scheduled.
 **Owner:** Longhouse core
 **Created:** 2026-07-21
 **Related:** `ARCHITECTURE.md`, `docs/specs/managed-session-state-normalization-epic.md`,
@@ -230,25 +230,44 @@ work on those files is ordinary git, resolved at merge time.
    explicitly justify it as an intentional compatibility shim, in writing, if
    it turns out something still depends on it), and reconcile
    `ENGINE_DISPATCH_SUPPORTS` so it no longer lists `cursor.run_once`.
+   **Shipped:** `0f83cb7f6` (retired `opencode.run_once`, regenerated JSON),
+   `6c929d42a` (removed stale `cursor.run_once` entry). Independently
+   verified: `managed_engine_dispatch_paths_are_manifest_backed` was actually
+   failing on `main` before this fix, confirming the drift was live, not
+   theoretical; it passes after.
 3. Make the existing `rust-edge-provider-parity` test compare against the
    real production dispatch registry instead of the second hand-maintained
    `ENGINE_DISPATCH_SUPPORTS` table — one authoritative registry, not a
-   parallel one that can drift again.
+   parallel one that can drift again. **Partially shipped, honestly short of
+   the full goal:** the stale entry is fixed (see item 2) and
+   `ENGINE_DISPATCH_SUPPORTS` now carries an explicit comment (`6c929d42a`)
+   stating it is a manually-maintained mirror of `execute_command`'s real
+   match arms, not authoritative, and must be kept in sync by hand. Making
+   the test invoke the real dispatch handlers hermetically (removing the
+   shadow table entirely) was investigated and found to need a larger
+   refactor to avoid triggering live provider side effects — deferred, not
+   attempted as a rushed fix. This remains open follow-up work, tracked here
+   rather than in Phase B since it's still a legibility/truthfulness fix, not
+   a behavioral one.
 4. Add module-level docstring banners to `_run_native_claude_tui` and
    `_launch_detached_native_claude_channel` stating plainly which product
    mode each implements, and a short mapping comment/table linking
    field-names (`run_once`, `turn_start`, `launch_local`, `launch_remote`) to
    product vocabulary. **No public symbol, JSON field, or Typer command
    renames in this phase** — private helper renames are fine if trivially
-   reviewable in the same commit as the banner.
+   reviewable in the same commit as the banner. **Shipped:** `79528983b`.
 5. Add a **hard-failing CI check**, not an advisory lint, that fails the build
    if a second location in the repo redefines Shadow/Helm/Console or
    Managed/Unmanaged in its own prose instead of linking to the canonical
    section — an explicit allowlist of where the definitions may originate,
    everything else must link and CI verifies it, not just style-guide it.
-6. Coordinate with the `worktree-companion-claude-print` work before editing
-   `control_channel.rs` or `schemas/managed_providers.yml`, to avoid a silent
-   collision.
+   **Shipped:** `2c6f15f5c` — `scripts/ci/check-session-mode-definitions.py`,
+   wired into a new `session-mode-legibility` GitHub Actions workflow
+   (PR-triggered) and local pre-commit. Verified with a real fail-then-pass
+   proof against a synthetic violation, not just written and assumed correct.
+
+Phase A is complete as of this pass, with item 3's deeper fix explicitly
+carried forward rather than silently claimed done.
 
 Acceptance for Phase A requires both a manual and an automated check — a
 read-through alone is not sufficient given there's no human reviewer to
