@@ -1,0 +1,17 @@
+name: Session Mode Legibility
+
+on:
+  pull_request:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  session-mode-definitions:
+    runs-on: ubuntu-latest
+    name: "Session mode definition check"
+    steps:
+      - uses: actions/checkout@v6
+      - name: Reject duplicate session-mode definitions
+        run: python3 scripts/ci/check-session-mode-definitions.py

@@ -58,6 +58,16 @@ repos:
   - repo: local
     hooks:
       # -----------------------------------------------------------------------
+      # Session-mode vocabulary must have one canonical definition
+      # -----------------------------------------------------------------------
+      - id: session-mode-definitions
+        name: Session mode definition check
+        entry: python3 scripts/ci/check-session-mode-definitions.py
+        language: system
+        files: \.md$
+        pass_filenames: false
+
+      # -----------------------------------------------------------------------
       # TypeScript type checking (catches most AI errors)
       # -----------------------------------------------------------------------
       - id: typescript-typecheck
