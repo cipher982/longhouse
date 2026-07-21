@@ -3246,8 +3246,6 @@ _MANAGED_LEASE_FIELDS = {
     "machine_id",
     "sequence",
     "state",
-    "phase",
-    "tool_name",
     "bridge_status",
     "thread_subscription_status",
     "observed_at",
@@ -3656,8 +3654,6 @@ def _validate_managed_lease(value: object) -> dict:
         ("provider", 64, False),
         ("machine_id", 255, True),
         ("state", 32, False),
-        ("phase", 32, True),
-        ("tool_name", 128, True),
         ("bridge_status", 64, True),
         ("thread_subscription_status", 64, True),
     ):

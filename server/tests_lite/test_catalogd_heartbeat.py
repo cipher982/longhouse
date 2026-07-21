@@ -15,6 +15,7 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.exc import SQLAlchemyError
 
 import zerg.catalogd.store as catalog_store
+from zerg.catalogd import server as catalog_server
 from zerg.catalogd.client import CatalogClient
 from zerg.catalogd.client import CatalogRemoteError
 from zerg.catalogd.models import FactHead
@@ -31,6 +32,7 @@ from zerg.models.live_store import LiveSessionCatalog
 from zerg.models.live_store import LiveSessionConnection
 from zerg.models.live_store import LiveSessionRun
 from zerg.models.live_store import LiveSessionThread
+from zerg.routers.heartbeat import ManagedSessionLeaseIn
 
 
 @pytest.fixture
@@ -88,13 +90,15 @@ def _lease(
         "machine_id": "cinder",
         "sequence": 4,
         "state": state,
-        "phase": "idle",
-        "tool_name": None,
         "bridge_status": "ready",
         "thread_subscription_status": "subscribed",
         "observed_at": observed_at.isoformat(),
         "lease_ttl_ms": 900_000,
     }
+
+
+def test_catalogd_managed_lease_contract_matches_heartbeat_schema():
+    assert catalog_server._MANAGED_LEASE_FIELDS == set(ManagedSessionLeaseIn.model_fields)
 
 
 def _schema_v3_evidence(*, session_id: str, run_id: str, observed_at: datetime) -> dict:
