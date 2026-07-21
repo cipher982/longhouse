@@ -71,6 +71,13 @@ export API_URL="$API_URL"
 export RUN_LIVE_E2E="1"
 export SMOKE_RUNTIME_TOKEN="${SMOKE_RUNTIME_TOKEN:-}"
 
+# The retained cohort journey must exercise ordinary owner-bound tenant auth,
+# not the broader smoke credential. At this point an existing device token is
+# available or the block above has minted an ephemeral one for this run.
+if [[ "${LONGHOUSE_JOURNEY_PRIVACY_MODE:-}" == "1" && -n "${LONGHOUSE_DEVICE_TOKEN:-}" ]]; then
+  export SMOKE_RUNTIME_TOKEN=""
+fi
+
 cd "$ROOT_DIR/e2e"
 
 bunx playwright test --config playwright.prod.config.js "$@"

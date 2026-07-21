@@ -30,6 +30,13 @@ export INTERNAL_API_SECRET="${INTERNAL_API_SECRET:-test-internal-secret-1234}"
 export GOOGLE_CLIENT_ID="${GOOGLE_CLIENT_ID:-test-google-client-id}"
 export GOOGLE_CLIENT_SECRET="${GOOGLE_CLIENT_SECRET:-test-google-client-secret}"
 
+# Production historical admission intentionally samples the real storage
+# filesystem. The lite suite must not turn the developer/CI host's ambient disk
+# pressure into unrelated archive-test failures; dedicated admission tests set
+# explicit thresholds and mock disk usage themselves.
+export LONGHOUSE_HISTORICAL_MIN_FREE_BYTES=0
+export LONGHOUSE_HISTORICAL_MIN_FREE_RATIO=0
+
 # Required by zerg/utils/crypto.py at import time (module-level Fernet init).
 # Generate a throwaway Fernet-compatible key with the stdlib so CI does not
 # depend on cryptography before uv creates the test venv.

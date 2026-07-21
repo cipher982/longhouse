@@ -1360,16 +1360,38 @@ class CatalogStore:
                     "commit_seq": str(_current_commit_seq(connection)),
                 }
 
-            token_count = connection.execute(
-                select(func.count()).select_from(token_table).where(token_table.c.owner_id == owner_id)
+            active_token_count = connection.execute(
+                select(func.count()).select_from(token_table).where(token_table.c.owner_id == owner_id, token_table.c.revoked_at.is_(None))
             ).scalar_one()
-            if token_count >= DEVICE_TOKEN_LIMIT_PER_OWNER:
+            if active_token_count >= DEVICE_TOKEN_LIMIT_PER_OWNER:
                 return {
                     "created": False,
                     "exact_replay": False,
                     "limit_exceeded": True,
                     "commit_seq": str(_current_commit_seq(connection)),
                 }
+
+            total_token_count = connection.execute(
+                select(func.count()).select_from(token_table).where(token_table.c.owner_id == owner_id)
+            ).scalar_one()
+            rows_to_prune = max(0, int(total_token_count) - DEVICE_TOKEN_LIMIT_PER_OWNER + 1)
+            if rows_to_prune:
+                revoked_ids = list(
+                    connection.execute(
+                        select(token_table.c.id)
+                        .where(token_table.c.owner_id == owner_id, token_table.c.revoked_at.is_not(None))
+                        .order_by(token_table.c.created_at, token_table.c.id)
+                        .limit(rows_to_prune)
+                    ).scalars()
+                )
+                if len(revoked_ids) != rows_to_prune:
+                    return {
+                        "created": False,
+                        "exact_replay": False,
+                        "limit_exceeded": True,
+                        "commit_seq": str(_current_commit_seq(connection)),
+                    }
+                connection.execute(delete(token_table).where(token_table.c.id.in_(revoked_ids)))
 
             connection.execute(
                 token_table.insert().values(

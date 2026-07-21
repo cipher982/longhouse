@@ -40,7 +40,11 @@ function RecallCard({ match }: { match: RecallMatch }) {
   const scorePercent = Math.round(match.score * 100);
 
   return (
-    <div className="recall-card" data-testid="recall-card">
+    <div
+      className="recall-card"
+      data-testid="recall-card"
+      {...{ elementtiming: "longhouse-recall-card" }}
+    >
       <div className="recall-card-header">
         <Link
           to={match.match_event_id ? `/timeline/${match.session_id}?event_id=${match.match_event_id}` : `/timeline/${match.session_id}`}

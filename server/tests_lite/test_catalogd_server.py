@@ -234,6 +234,76 @@ def test_device_list_holds_real_sqlite_snapshot_across_commit_seq_and_rows(daemo
     }
 
 
+def test_device_create_limit_counts_only_active_credentials(daemon_paths, monkeypatch):
+    from zerg.catalogd import store as store_module
+
+    database_path, _socket_path = daemon_paths
+    engine = create_catalog_engine(database_path)
+    initialize_catalog_schema(engine)
+    now = datetime.now(UTC)
+    with engine.begin() as connection:
+        connection.execute(
+            LiveDeviceToken.__table__.insert(),
+            [
+                {
+                    "id": "active-token",
+                    "owner_id": 7,
+                    "device_id": "active",
+                    "token_hash": "a" * 64,
+                    "created_at": now,
+                    "revoked_at": None,
+                },
+                {
+                    "id": "revoked-token-1",
+                    "owner_id": 7,
+                    "device_id": "retired-1",
+                    "token_hash": "b" * 64,
+                    "created_at": now - timedelta(days=2),
+                    "revoked_at": now - timedelta(days=1),
+                },
+                {
+                    "id": "revoked-token-2",
+                    "owner_id": 7,
+                    "device_id": "retired-2",
+                    "token_hash": "c" * 64,
+                    "created_at": now - timedelta(days=4),
+                    "revoked_at": now - timedelta(days=3),
+                },
+            ],
+        )
+
+    monkeypatch.setattr(store_module, "DEVICE_TOKEN_LIMIT_PER_OWNER", 2)
+    try:
+        created = CatalogStore(engine).create_device(
+            owner_id=7,
+            token_id="new-active-token",
+            device_id="github-cohort-journey",
+            token_hash="d" * 64,
+        )
+        rejected = CatalogStore(engine).create_device(
+            owner_id=7,
+            token_id="one-too-many",
+            device_id="overflow",
+            token_hash="e" * 64,
+        )
+    finally:
+        engine.dispose()
+
+    assert created["created"] is True
+    assert created["limit_exceeded"] is False
+    assert rejected["created"] is False
+    assert rejected["limit_exceeded"] is True
+
+    engine = create_catalog_engine(database_path)
+    try:
+        retained = CatalogStore(engine).list_devices(owner_id=7, include_revoked=True)
+    finally:
+        engine.dispose()
+    assert retained["limit_exceeded"] is False
+    assert retained["total"] == 2
+    assert [token["id"] for token in retained["tokens"]] == ["new-active-token", "active-token"]
+
+
 @pytest.mark.asyncio
 async def test_device_create_is_atomic_idempotent_and_visible_to_auth(daemon_paths):
     database_path, socket_path = daemon_paths

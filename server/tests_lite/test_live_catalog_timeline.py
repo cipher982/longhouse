@@ -8,6 +8,7 @@ from uuid import uuid4
 
 import pytest
 
+import zerg.routers.timeline as timeline_router
 import zerg.services.live_catalog_timeline as live_catalog_timeline
 from zerg.catalogd.models import StorageSession
 from zerg.catalogd.schema import initialize_catalog_schema
@@ -183,6 +184,33 @@ def test_canonical_detail_requires_owner_scope_before_catalog_read(monkeypatch):
         read_live_catalog_session(uuid4())
 
     assert raised.value.code == "canonical_owner_required"
+
+
+@pytest.mark.asyncio
+async def test_storage_v2_browser_search_hydrates_hits_with_owner_scope(monkeypatch):
+    session_id = uuid4()
+    observed: dict[str, object] = {}
+
+    class SearchClient:
+        async def call(self, method, params):
+            assert method == "search.query.v2"
+            assert params["owner_id"] == "7"
+            return {"results": [{"session_id": str(session_id)}]}
+
+    def read_session(requested, *, owner_id):
+        observed.update(requested=requested, owner_id=owner_id)
+        return None, None, "9"
+
+    monkeypatch.setattr(timeline_router, "get_searchd_client", lambda: SearchClient())
+    monkeypatch.setattr(timeline_router, "read_live_catalog_session", read_session)
+
+    result = await timeline_router._search_storage_v2_timeline(
+        owner_id=7,
+        params=_params(query="needle"),
+    )
+
+    assert result.total == 0
+    assert observed == {"requested": session_id, "owner_id": 7}
 
 
 def test_canonical_timeline_projects_all_rows_at_snapshot_commit(monkeypatch):

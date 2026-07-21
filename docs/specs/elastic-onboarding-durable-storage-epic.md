@@ -1,6 +1,6 @@
 # Elastic Onboarding and Durable Storage Epic
 
-**Status:** Phase 1 in progress; Slices A–C implemented and independently reviewed
+**Status:** Phase 1 implementation complete; deployment and baseline verification in progress
 **Owner:** Longhouse core and hosted operations
 **Created:** 2026-07-20
 **Scope:** Hosted scale, customer import, storage telemetry, and object-store
@@ -641,7 +641,7 @@ This epic must not reintroduce it as an object-store migration fallback.
 **Goal:** Establish the minimum measurements and hard safety controls needed to
 change storage or accept a large import safely.
 
-**Implementation checkpoint (2026-07-20):** Slices A–C are implemented on the
+**Implementation checkpoint (2026-07-20):** Slices A–D are implemented on the
 epic branch and are not yet deployed. Slice A adds bounded route-class request
 outcomes and latency, independently timed read stages, immutable-object
 bytes/counts, and exact commit/dirty build identity. Slices B–C add O(1)
@@ -652,14 +652,39 @@ for reconstructable historical work only. Exact envelope and media retries
 bypass ceilings; live storage and legacy live ingest never consume historical
 budgets. Unknown recall and oldest-lag evidence cannot appear green.
 
-Cursor/Grok rejected three earlier revisions for misleading read measurements,
+Slice D adds one fail-closed scheduled journey through the real non-demo
+dogfood tenant using an owner-bound device credential. It exercises timeline,
+active/recent, recent closed, cold, older-projection append, bounded random,
+stable lexical, and stable recall reads. It records exact build identity,
+route-class aggregates, typed outcomes, ready time, and Chromium Element Timing
+first paint. A real-browser contract test covers both buffered navigation paint
+and paint after an append boundary. The retained 30-day artifact rejects UUIDs,
+queries, paths, object keys, and fixture values; traces, screenshots, video,
+Playwright errors, and raw output are excluded from retained artifacts and CI
+logs.
+
+Live pre-deploy probing also found and fixed two blockers that the journey would
+otherwise expose: storage-v2 lexical hits were hydrated without the required
+owner scope, and a tenant with 1,000 historical revoked device credentials
+could no longer create a new credential. Creation now counts active credentials
+for admission and transactionally prunes only the oldest revoked history to a
+bounded total before inserting. The lite-test harness now disables ambient host
+disk watermarks by default so a nearly full developer or CI filesystem cannot
+silently turn unrelated archive contract tests red; dedicated admission tests
+still set thresholds and mock disk usage explicitly.
+
+Cursor/Grok rejected earlier revisions for misleading read measurements,
 periodic full-table telemetry scans, incomplete media retry behavior, inferred
 recall health, missing live-lane proofs, and a misplaced lifecycle cancellation.
-The amended implementation maintains counters with reconciled SQLite triggers,
-never refreshes telemetry from a request, owns the refresh task through startup
-and shutdown, and has direct failure/isolation tests. The backend gate passes
-with 3,850 tests and 13 skips. The scheduled cohort journey, deployment, and
-baseline report remain in progress.
+The first Slice D review additionally rejected a request-animation-frame proxy
+for first paint and unsafe default Playwright failure logging; the second found
+that Chromium Element Timing requires a buffered `PerformanceObserver` rather
+than `performance.getEntriesByType()`. The amended implementation maintains
+counters with reconciled SQLite triggers, never refreshes telemetry from a
+request, owns the refresh task through startup and shutdown, measures actual
+element paint, and has direct failure/isolation/privacy/browser tests.
+Deployment, the first retained live journey, and the baseline report remain in
+progress.
 
 Deliver:
 
@@ -858,9 +883,9 @@ to answer them without inventing a customer or a workload.
 
 ## Independent Review Synthesis
 
-Hatch Cursor/Grok and Claude/Fable independently reviewed the first draft
-against current storage-v2 code, `VISION.md`, and the adjacent durability specs.
-Both approved the architectural spine and rejected the original phase order.
+Two independent architecture reviews evaluated the first draft against current
+storage-v2 code, `VISION.md`, and the adjacent durability specs. Both approved
+the architectural spine and rejected the original phase order.
 This revision incorporates their shared conclusions:
 
 - progressive onboarding and admission now precede remote object authority;

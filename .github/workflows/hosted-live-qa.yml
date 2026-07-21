@@ -27,6 +27,8 @@ jobs:
       CONTROL_PLANE_ADMIN_TOKEN: ${{ secrets.CONTROL_PLANE_ADMIN_TOKEN }}
       LONGHOUSE_DEVICE_TOKEN: ${{ secrets.LONGHOUSE_DEVICE_TOKEN }}
       SMOKE_RUNTIME_TOKEN: ${{ secrets.SMOKE_RUNTIME_TOKEN }}
+      LONGHOUSE_JOURNEY_LEXICAL_QUERY: ${{ secrets.LONGHOUSE_JOURNEY_LEXICAL_QUERY }}
+      LONGHOUSE_JOURNEY_RECALL_QUERY: ${{ secrets.LONGHOUSE_JOURNEY_RECALL_QUERY }}
       QA_INSTANCE_SUBDOMAIN: ${{ vars.HOSTED_CANARY_SUBDOMAIN || 'demo' }}
       QA_HOME: /tmp/hosted-live-qa-${{ github.run_id }}-${{ github.run_attempt }}
       PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.cache/ms-playwright
@@ -131,6 +133,18 @@ jobs:
           fi
           make render-canary
 
+      - name: Validate cohort journey contracts
+        if: always() && steps.qa_live.outcome == 'success'
+        run: make validate-cohort-journey
+
+      - name: Run privacy-safe dogfood cohort journey
+        id: cohort_journey
+        if: always() && steps.qa_live.outcome == 'success'
+        env:
+          HOME: ${{ env.QA_HOME }}
+          LONGHOUSE_JOURNEY_OUTPUT: ${{ github.workspace }}/artifacts/cohort-journey/cohort-journey-${{ github.run_id }}-${{ github.run_attempt }}.json
+        run: make cohort-journey
+
       - name: Write summary
         if: always()
         run: |
@@ -144,7 +158,17 @@ jobs:
             echo "- qa-live: \`${{ steps.qa_live.outcome || 'skipped' }}\`"
             echo "- hosted shipper mixed bench: \`${{ steps.hosted_shipper_bench.outcome || 'skipped' }}\`"
             echo "- render-canary: \`${{ steps.render_canary.outcome || 'skipped' }}\`"
+            echo "- cohort journey: \`${{ steps.cohort_journey.outcome || 'skipped' }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload privacy-safe cohort journey artifact
+        if: always() && steps.cohort_journey.outcome != 'skipped'
+        uses: actions/upload-artifact@v7
+        with:
+          name: cohort-journey-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/cohort-journey/*.json
+          if-no-files-found: error
+          retention-days: 30
 
       - name: Upload live QA artifacts
         if: failure()

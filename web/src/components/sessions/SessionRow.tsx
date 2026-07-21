@@ -127,6 +127,7 @@ export function SessionRow({
       type="button"
       className="inbox-row"
       data-testid="session-row"
+      {...{ elementtiming: "longhouse-session-row" }}
       data-session-id={session.id}
       data-thread-id={thread.thread_id}
       data-status={statusTone}

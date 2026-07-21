@@ -193,7 +193,9 @@ async def _search_storage_v2_timeline(
         if session_id and session_id not in seen:
             seen.add(session_id)
             session_ids.append(UUID(session_id))
-    projected = await asyncio.gather(*(asyncio.to_thread(read_live_catalog_session, session_id) for session_id in session_ids))
+    projected = await asyncio.gather(
+        *(asyncio.to_thread(read_live_catalog_session, session_id, owner_id=owner_id) for session_id in session_ids)
+    )
     cards: list[TimelineSessionCardResponse] = []
     for session, _provider_alias, _commit_seq in projected:
         if session is None:

@@ -184,14 +184,14 @@ export const test = base.extend<LiveFixtures>({
 
   browserStorageState: [
     async ({ apiBaseUrl, playwright }, use) => {
-      const runtimeToken = normalizeToken(process.env.SMOKE_RUNTIME_TOKEN);
+      const runtimeToken = normalizeToken(process.env.SMOKE_RUNTIME_TOKEN) || readDeviceToken();
       if (runtimeToken) {
         await waitForHealthy(playwright.request, apiBaseUrl);
         await use(buildRuntimeTokenStorageState(apiBaseUrl, runtimeToken));
         return;
       }
 
-      test.skip(true, "SMOKE_RUNTIME_TOKEN not set; skipping live prod E2E");
+      test.skip(true, "SMOKE_RUNTIME_TOKEN or LONGHOUSE_DEVICE_TOKEN not set; skipping live prod E2E");
     },
     { scope: "worker" },
   ],
@@ -209,14 +209,14 @@ export const test = base.extend<LiveFixtures>({
         );
       }
 
-      const runtimeToken = normalizeToken(process.env.SMOKE_RUNTIME_TOKEN);
+      const runtimeToken = normalizeToken(process.env.SMOKE_RUNTIME_TOKEN) || readDeviceToken();
       if (runtimeToken) {
         await waitForHealthy(playwright.request, apiBaseUrl);
         await use(runtimeToken);
         return;
       }
 
-      test.skip(true, "SMOKE_RUNTIME_TOKEN not set; skipping live prod E2E");
+      test.skip(true, "SMOKE_RUNTIME_TOKEN or LONGHOUSE_DEVICE_TOKEN not set; skipping live prod E2E");
     },
     { scope: "worker" },
   ],
@@ -245,11 +245,9 @@ export const test = base.extend<LiveFixtures>({
   },
 
   agentsRequest: async ({ playwright, apiBaseUrl, deviceToken }, use) => {
-    // Hosted auth is intentionally split today:
-    // - `/api/agents/*` works with the device token header.
-    // - Browser navigation is validated separately via the longhouse_session cookie.
-    // Keep API-side session discovery on the device token path until hosted browser auth
-    // can list agents sessions without a 403.
+    // `/api/agents/*` uses the explicit device-token header. The browser fixture
+    // may use that same owner-bound token as its session cookie because hosted
+    // auth resolves `zdt_` principals through the canonical device-token store.
     const extraHTTPHeaders: Record<string, string> = {};
     if (deviceToken) {
       extraHTTPHeaders["X-Agents-Token"] = deviceToken;

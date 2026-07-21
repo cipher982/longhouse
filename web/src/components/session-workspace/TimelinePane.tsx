@@ -291,6 +291,7 @@ function MessageRow({
     <div
       id={`event-${event.id}`}
       data-testid="session-timeline-row"
+      {...{ elementtiming: "longhouse-session-timeline-row" }}
       data-row-kind="message"
       data-message-role={event.role}
       className={`tl-msg tl-msg--${event.role}`}
@@ -543,6 +544,7 @@ function ActionCard({
     <div
       id={rowId}
       data-testid="session-timeline-row"
+      {...{ elementtiming: "longhouse-session-timeline-row" }}
       data-row-kind="tool"
       data-tool-tier="action"
       data-status={statusTone}
@@ -615,6 +617,7 @@ function ContextLine({
     <div
       id={rowId}
       data-testid="session-timeline-row"
+      {...{ elementtiming: "longhouse-session-timeline-row" }}
       data-row-kind="tool"
       data-tool-tier="context"
       data-status={statusTone}
@@ -689,6 +692,7 @@ function NoiseChip({
     <div
       id={rowId}
       data-testid="session-timeline-row"
+      {...{ elementtiming: "longhouse-session-timeline-row" }}
       data-row-kind="noise-group"
       className={`tl-noise${isSelected ? " is-selected" : ""}${expanded ? " is-expanded" : ""}`}
     >
@@ -1036,7 +1040,7 @@ export function TimelinePane({
         <div className="timeline-pane__header-main">
           {headerLeft}
           <div className="timeline-pane__title-group">
-            <div className="timeline-pane__summary">
+            <div className="timeline-pane__summary" data-testid="session-timeline-summary">
               {loadedEntries >= totalEntries
                 ? `${totalEntries} entries`
                 : `${loadedEntries}/${totalEntries} entries loaded`}
@@ -1132,7 +1136,11 @@ export function TimelinePane({
         data-testid="session-timeline-list"
       >
         {hasPreviousPage || isFetchingPreviousPage ? (
-          <div ref={topSentinelRef} className="timeline-pane__load-older">
+          <div
+            ref={topSentinelRef}
+            className="timeline-pane__load-older"
+            data-testid="session-timeline-load-older"
+          >
             {isFetchingPreviousPage ? <Spinner size="sm" /> : null}
           </div>
         ) : null}

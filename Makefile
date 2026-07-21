@@ -23,7 +23,7 @@ PERF_PROOF_OUTPUT ?= artifacts/perf-proof/perf-proof.json
 .PHONY: test-cursor-console-product-e2e
 .PHONY: profile-ios-live-console
 .PHONY: validate-native-device-entrypoints
-.PHONY: perf-proof validate-perf-proof
+.PHONY: perf-proof validate-perf-proof cohort-journey validate-cohort-journey
 .PHONY: validate-legacy-nouns
 .PHONY: provider-release-proof-universal-live-smoke
 
@@ -271,16 +271,21 @@ test-e2e: ## Launch-surface E2E (core + a11y)
 test-e2e-core: ## @internal Core E2E — no retries
 	@$(MAKE) ensure-playwright-browser
 	cd e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) \
+		LONGHOUSE_HISTORICAL_MIN_FREE_BYTES=0 LONGHOUSE_HISTORICAL_MIN_FREE_RATIO=0 \
 		bunx playwright test --project=core --retries=0 --workers=2
 
 test-e2e-a11y: ## @internal Accessibility checks
 	@$(MAKE) ensure-playwright-browser
-	cd e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test --project=chromium tests/accessibility.spec.ts
+	cd e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) \
+		LONGHOUSE_HISTORICAL_MIN_FREE_BYTES=0 LONGHOUSE_HISTORICAL_MIN_FREE_RATIO=0 \
+		bunx playwright test --project=chromium tests/accessibility.spec.ts
 
 test-e2e-single: ## @internal Run one E2E spec (TEST=tests/foo.spec.ts)
 	@$(MAKE) ensure-playwright-browser
 	@test -n "$(TEST)" || (echo "Usage: make test-e2e-single TEST=<spec>" && exit 1)
-	cd e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test $(TEST)
+	cd e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) \
+		LONGHOUSE_HISTORICAL_MIN_FREE_BYTES=0 LONGHOUSE_HISTORICAL_MIN_FREE_RATIO=0 \
+		bunx playwright test $(TEST)
 
 test-e2e-onboarding: ## @internal Onboarding browser ring
 	@ONBOARDING_PLAYWRIGHT_PROJECT="$(PROJECT)" ./scripts/qa/qa-oss.sh --workdir $(CURDIR) --no-unit --no-e2e
@@ -288,7 +293,8 @@ test-e2e-onboarding: ## @internal Onboarding browser ring
 test-shipper-e2e: ## Shipper pipeline E2E (engine → API → DB)
 	@python3 scripts/build/generate_build_identity.py
 	cd engine && cargo build --profile $(or $(CARGO_PROFILE),release)
-	cd server && uv run --extra dev pytest tests/integration/test_shipper_e2e.py -m integration -v
+	cd server && LONGHOUSE_HISTORICAL_MIN_FREE_BYTES=0 LONGHOUSE_HISTORICAL_MIN_FREE_RATIO=0 \
+		uv run --extra dev pytest tests/integration/test_shipper_e2e.py -m integration -v
 
 test-shipper-synthetic-bench: ## Synthetic shipper bench fixture gate
 	@python3 scripts/build/generate_build_identity.py
@@ -428,6 +434,7 @@ validate: ## Run all contract checks
 	@$(MAKE) validate-provider-cli-canaries
 	@$(MAKE) validate-ship-monitor
 	@$(MAKE) validate-dogfood-runtime
+	@$(MAKE) validate-cohort-journey
 	@$(MAKE) lint-test-patterns
 
 validate-playwright-install: ## @internal Playwright installer wrapper regression tests
@@ -717,6 +724,17 @@ hosted-shipper-mixed-bench: ## Hosted mixed live/archive ingest bench
 render-canary: ## Playwright render-latency check against hosted (~2min)
 	@$(MAKE) ensure-js-deps
 	@./scripts/qa/render-canary.sh
+
+cohort-journey: ## Privacy-safe scheduled product journey against the non-demo dogfood tenant
+	@$(MAKE) ensure-js-deps
+	@./scripts/qa/cohort-journey.sh
+
+validate-cohort-journey: ## @internal Validate cohort selection and artifact privacy contracts
+	@$(MAKE) ensure-js-deps
+	@cd e2e && bun test tests/live/cohort-journey-helpers.test.ts reporters/privacy-reporter.test.ts
+	@bash scripts/tests/cohort-journey.test.sh
+	@cd e2e && LONGHOUSE_JOURNEY_PRIVACY_MODE=1 bunx playwright test --config playwright.prod.config.js tests/live/element-timing.spec.ts
+	@cd e2e && LONGHOUSE_JOURNEY_PRIVACY_MODE=1 bunx playwright test --config playwright.prod.config.js tests/live/cohort-journey.spec.ts --list
 
 session-propagation-sla: ## Managed Codex warm realtime SLA probe with contaminated-run retries
 	@./scripts/ci/session-propagation-sla.sh
