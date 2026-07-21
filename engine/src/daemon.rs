@@ -145,6 +145,7 @@ const OFFLINE_CONNECT_FAILURE_THRESHOLD: u32 = 3;
 // for historical engine-status/log readers, but keep code names explicit.
 const FAILED_SHIPMENT_RETRY_CONTEXT: &str = "spool_replay";
 const FAILED_SHIPMENT_RETRY_OBSERVATION_SOURCE: &str = "spool_pending";
+const STORAGE_V2_PENDING_RETRY_OBSERVATION_SOURCE: &str = "storage_v2_pending";
 
 struct WakeGapDetector {
     last_wall: SystemTime,
@@ -803,6 +804,23 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut deferred_retries = HashMap::new();
     let startup_archive_mode =
         read_archive_repair_control().normalized_mode(config.archive_repair_mode);
+    if task_context.storage_v2.is_some() {
+        match queue_storage_v2_pending_retry_paths(
+            &mut scheduler,
+            &conn,
+            config.archive_repair_mode,
+        ) {
+            Ok(queued) if queued > 0 => tracing::info!(
+                queued,
+                "Queued immutable storage-v2 exact retries at startup"
+            ),
+            Ok(_) => {}
+            Err(error) => tracing::warn!(
+                error = %error,
+                "Unable to queue immutable storage-v2 exact retries at startup"
+            ),
+        }
+    }
     let startup_archive_replay_delay =
         archive_startup_replay_warmup_delay(startup_archive_mode, rand::random::<f64>());
     maybe_start_managed_observation_scan(
@@ -933,6 +951,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 PERIODIC_SPOOL_PATH_LIMIT,
                 Some(adaptive_limiter.as_ref()),
                 config.archive_repair_mode,
+                task_context.storage_v2.is_some(),
             ) {
                 Ok(queued) if queued > 0 => {
                     tracing::info!(
@@ -1947,6 +1966,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             // Retry/archive lane: replay failed or incomplete shipments from
             // the spool. This timer is never the primary live transcript lane.
             _ = failed_ship_retry_timer.tick(), if !offline.is_offline && !startup_archive_replay_pending => {
+                let mut queued_retries = 0usize;
                 match queue_failed_shipment_retry_paths(
                     &mut scheduler,
                     &conn,
@@ -1955,11 +1975,31 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     config.archive_repair_mode,
                 ) {
                     Ok(queued) => {
+                        queued_retries = queued_retries.saturating_add(queued);
                         if queued > 0 {
                             tracing::debug!("Queued {} failed-shipment retry paths from spool", queued);
                         }
                     }
                     Err(e) => tracing::warn!("Failed-shipment retry error: {}", e),
+                }
+                if task_context.storage_v2.is_some() {
+                    match queue_storage_v2_pending_retry_paths(
+                        &mut scheduler,
+                        &conn,
+                        config.archive_repair_mode,
+                    ) {
+                        Ok(queued) => queued_retries = queued_retries.saturating_add(queued),
+                        Err(error) => tracing::warn!(
+                            error = %error,
+                            "Immutable storage-v2 retry error"
+                        ),
+                    }
+                }
+                if queued_retries > 0 {
+                    tracing::debug!(
+                        queued_retries,
+                        "Queued durable retry paths on periodic refill"
+                    );
                 }
             }
 
@@ -3238,6 +3278,38 @@ fn queue_failed_shipment_retry_paths(
     Ok(queued)
 }
 
+fn queue_storage_v2_pending_retry_paths(
+    scheduler: &mut PathScheduler,
+    conn: &rusqlite::Connection,
+    archive_repair_mode: ArchiveRepairMode,
+) -> Result<usize> {
+    if read_archive_repair_control().is_paused(archive_repair_mode) {
+        tracing::debug!("Immutable storage-v2 retry paused by local control file");
+        return Ok(0);
+    }
+    let mut queued = 0usize;
+    for pending in crate::state::pending_source_envelope::retry_paths(conn)? {
+        let Some(provider) = discovery::canonical_provider_name(&pending.provider) else {
+            tracing::warn!(
+                provider = %pending.provider,
+                path = %pending.source_path,
+                "Skipping storage-v2 pending retry with unknown provider"
+            );
+            continue;
+        };
+        scheduler.enqueue_observed_with_estimated_bytes(
+            PathBuf::from(pending.source_path),
+            provider,
+            WorkPriority::Retry,
+            STORAGE_V2_PENDING_RETRY_OBSERVATION_SOURCE,
+            now_ms(),
+            Some(pending.raw_bytes),
+        );
+        queued += 1;
+    }
+    Ok(queued)
+}
+
 fn queue_failed_shipment_retries_if_idle(
     scheduler: &mut PathScheduler,
     conn: &rusqlite::Connection,
@@ -3245,11 +3317,21 @@ fn queue_failed_shipment_retries_if_idle(
     limit: usize,
     limiter: Option<&AdaptiveLimiter>,
     archive_repair_mode: ArchiveRepairMode,
+    storage_v2_enabled: bool,
 ) -> Result<usize> {
     if offline || scheduler.has_pending_work() {
         return Ok(0);
     }
-    queue_failed_shipment_retry_paths(scheduler, conn, limit, limiter, archive_repair_mode)
+    let mut queued =
+        queue_failed_shipment_retry_paths(scheduler, conn, limit, limiter, archive_repair_mode)?;
+    if storage_v2_enabled {
+        queued = queued.saturating_add(queue_storage_v2_pending_retry_paths(
+            scheduler,
+            conn,
+            archive_repair_mode,
+        )?);
+    }
+    Ok(queued)
 }
 
 fn work_context(priority: WorkPriority) -> &'static str {
@@ -5603,6 +5685,7 @@ mod tests {
             10,
             None,
             ArchiveRepairMode::Drain,
+            false,
         )
         .unwrap();
 
@@ -5615,6 +5698,144 @@ mod tests {
         assert_eq!(
             job.observation.source,
             FAILED_SHIPMENT_RETRY_OBSERVATION_SOURCE
+        );
+    }
+
+    #[test]
+    fn test_storage_v2_pending_retry_is_queued_immediately() {
+        let db = tempfile::NamedTempFile::new().unwrap();
+        let transcript = tempfile::NamedTempFile::new().unwrap();
+        let mut conn = open_db(Some(db.path())).unwrap();
+        let epoch = uuid::Uuid::new_v4();
+        conn.execute(
+            "INSERT INTO source_epoch_registry (
+                 source_epoch, provider, opaque_source_id, file_incarnation,
+                 start_reason, max_observed_len, created_at, updated_at
+             ) VALUES (?1, 'codex', 'source-a', 'fixture', 'initial', 10, ?2, ?2)",
+            rusqlite::params![epoch.to_string(), "2026-07-15T00:00:00Z"],
+        )
+        .unwrap();
+        let pending = crate::state::pending_source_envelope::PendingSourceEnvelope::new(
+            epoch,
+            transcript.path().to_string_lossy().to_string(),
+            0,
+            10,
+            "a".repeat(64),
+            vec![1],
+            vec![2],
+            10,
+            1,
+            true,
+            false,
+        );
+        crate::state::pending_source_envelope::persist_or_load(&mut conn, &pending).unwrap();
+
+        let mut scheduler = PathScheduler::new(4);
+        assert_eq!(
+            queue_storage_v2_pending_retry_paths(&mut scheduler, &conn, ArchiveRepairMode::Drain,)
+                .unwrap(),
+            1
+        );
+        assert_eq!(scheduler.snapshot().ready_retry_bytes, 10);
+        let job = scheduler.pop_launchable().expect("storage-v2 retry queued");
+        assert_eq!(job.path, transcript.path());
+        assert_eq!(job.provider, "codex");
+        assert_eq!(job.priority, WorkPriority::Retry);
+        assert_eq!(
+            job.observation.source,
+            STORAGE_V2_PENDING_RETRY_OBSERVATION_SOURCE
+        );
+    }
+
+    #[test]
+    fn test_storage_v2_pending_retry_resumes_without_process_restart() {
+        let temp = tempfile::tempdir().unwrap();
+        temp_env::with_vars(
+            [
+                (
+                    "LONGHOUSE_HOME",
+                    Some(temp.path().join("lh").display().to_string()),
+                ),
+                ("HOME", Some(temp.path().join("home").display().to_string())),
+            ],
+            || {
+                let db = tempfile::NamedTempFile::new().unwrap();
+                let transcript = tempfile::NamedTempFile::new().unwrap();
+                let mut conn = open_db(Some(db.path())).unwrap();
+                let epoch = uuid::Uuid::new_v4();
+                conn.execute(
+                    "INSERT INTO source_epoch_registry (
+                         source_epoch, provider, opaque_source_id, file_incarnation,
+                         start_reason, max_observed_len, created_at, updated_at
+                     ) VALUES (?1, 'codex', 'source-a', 'fixture', 'initial', 10, ?2, ?2)",
+                    rusqlite::params![epoch.to_string(), "2026-07-15T00:00:00Z"],
+                )
+                .unwrap();
+                let pending = crate::state::pending_source_envelope::PendingSourceEnvelope::new(
+                    epoch,
+                    transcript.path().to_string_lossy().to_string(),
+                    0,
+                    10,
+                    "a".repeat(64),
+                    vec![1],
+                    vec![2],
+                    10,
+                    1,
+                    true,
+                    false,
+                );
+                crate::state::pending_source_envelope::persist_or_load(&mut conn, &pending)
+                    .unwrap();
+
+                let control_path = config::get_agent_archive_repair_control_path().unwrap();
+                std::fs::create_dir_all(control_path.parent().unwrap()).unwrap();
+                std::fs::write(
+                    &control_path,
+                    serde_json::to_vec(&json!({"mode": "paused"})).unwrap(),
+                )
+                .unwrap();
+
+                let mut scheduler = PathScheduler::new(4);
+                assert_eq!(
+                    queue_storage_v2_pending_retry_paths(
+                        &mut scheduler,
+                        &conn,
+                        ArchiveRepairMode::Drain,
+                    )
+                    .unwrap(),
+                    0
+                );
+                assert!(scheduler.pop_launchable().is_none());
+
+                let expires_at = (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
+                std::fs::write(
+                    &control_path,
+                    serde_json::to_vec(&json!({
+                        "mode": "trickle",
+                        "expires_at": expires_at
+                    }))
+                    .unwrap(),
+                )
+                .unwrap();
+
+                assert_eq!(
+                    queue_storage_v2_pending_retry_paths(
+                        &mut scheduler,
+                        &conn,
+                        ArchiveRepairMode::Drain,
+                    )
+                    .unwrap(),
+                    1
+                );
+                let job = scheduler
+                    .pop_launchable()
+                    .expect("storage-v2 retry queued after resume");
+                assert_eq!(job.path, transcript.path());
+                assert_eq!(
+                    job.observation.source,
+                    STORAGE_V2_PENDING_RETRY_OBSERVATION_SOURCE
+                );
+            },
         );
     }
 
@@ -5801,6 +6022,7 @@ mod tests {
             10,
             Some(limiter.as_ref()),
             ArchiveRepairMode::Drain,
+            false,
         )
         .unwrap();
 

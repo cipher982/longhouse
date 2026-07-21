@@ -50,6 +50,13 @@ pub struct PendingSourceEnvelope {
     pub block_detail: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingSourceRetryPath {
+    pub provider: String,
+    pub source_path: String,
+    pub raw_bytes: u64,
+}
+
 impl PendingSourceEnvelope {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -150,6 +157,40 @@ pub fn load_for_epoch(
     )
     .optional()
     .context("loading pending storage-v2 envelope by source epoch")
+}
+
+/// List exact-retry work that must be rescheduled after a process restart.
+///
+/// The request body itself remains authoritative in `pending_source_envelope`;
+/// this projection contains only enough information to wake the bounded path
+/// scheduler. Multiple epochs for one path collapse into one scheduler job.
+pub fn retry_paths(conn: &Connection) -> Result<Vec<PendingSourceRetryPath>> {
+    let mut statement = conn.prepare(
+        "SELECT epoch.provider, pending.source_path,
+                SUM(pending.raw_bytes), MIN(pending.created_at)
+         FROM pending_source_envelope AS pending
+         JOIN source_epoch_registry AS epoch
+           ON epoch.source_epoch = pending.source_epoch
+         WHERE pending.blocked_at IS NULL
+         GROUP BY epoch.provider, pending.source_path
+         ORDER BY MIN(pending.created_at), epoch.provider, pending.source_path",
+    )?;
+    let rows = statement.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, i64>(2)?,
+        ))
+    })?;
+    rows.map(|row| {
+        let (provider, source_path, raw_bytes) = row?;
+        Ok(PendingSourceRetryPath {
+            provider,
+            source_path,
+            raw_bytes: u64::try_from(raw_bytes).context("pending retry bytes are negative")?,
+        })
+    })
+    .collect()
 }
 
 /// Persist the first prepared intent for an epoch and return the durable winner.
@@ -605,10 +646,11 @@ fn from_sql_u64(index: usize, value: i64) -> rusqlite::Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::{
-        pending_outbox_has_capacity, persist_or_load, quarantine, snapshot,
+        pending_outbox_has_capacity, persist_or_load, quarantine, retry_paths, snapshot,
         PendingSourceEnvelope, MAX_PENDING_OUTBOX_BYTES,
     };
     use crate::state::db::open_db;
+    use rusqlite::params;
     use uuid::Uuid;
 
     #[test]
@@ -634,6 +676,53 @@ mod tests {
         assert_eq!(state.pending_count, 1);
         assert_eq!(state.pending_bytes, 2);
         assert_eq!(state.blocked_bytes, 2);
+    }
+
+    #[test]
+    fn retry_paths_are_provider_scoped_deduplicated_and_skip_quarantine() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        let active = Uuid::new_v4();
+        let second = Uuid::new_v4();
+        let blocked = Uuid::new_v4();
+        for (epoch, provider, source_id) in [
+            (active, "codex", "source-a"),
+            (second, "codex", "source-b"),
+            (blocked, "claude", "source-c"),
+        ] {
+            conn.execute(
+                "INSERT INTO source_epoch_registry (
+                     source_epoch, provider, opaque_source_id, file_incarnation,
+                     start_reason, max_observed_len, created_at, updated_at
+                 ) VALUES (?1, ?2, ?3, 'fixture', 'initial', 1, ?4, ?4)",
+                params![
+                    epoch.to_string(),
+                    provider,
+                    source_id,
+                    "2026-07-15T00:00:00Z"
+                ],
+            )
+            .unwrap();
+        }
+        let mut first = candidate(active, "/tmp/shared.jsonl");
+        first.raw_bytes = 3;
+        persist_or_load(&mut conn, &first).unwrap();
+        let mut same_path = candidate(second, "/tmp/shared.jsonl");
+        same_path.raw_bytes = 5;
+        same_path.envelope_id = "b".repeat(64);
+        persist_or_load(&mut conn, &same_path).unwrap();
+        let blocked_envelope = candidate(blocked, "/tmp/blocked.jsonl");
+        persist_or_load(&mut conn, &blocked_envelope).unwrap();
+        quarantine(&mut conn, blocked, "fixture", "blocked").unwrap();
+
+        assert_eq!(
+            retry_paths(&conn).unwrap(),
+            vec![super::PendingSourceRetryPath {
+                provider: "codex".to_string(),
+                source_path: "/tmp/shared.jsonl".to_string(),
+                raw_bytes: 8,
+            }]
+        );
     }
 
     fn candidate(source_epoch: Uuid, source_path: &str) -> PendingSourceEnvelope {
