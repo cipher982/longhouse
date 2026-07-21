@@ -59,6 +59,7 @@ class _Catalog:
                         "envelope_id": "a" * 64,
                         "object_path": "raw/v2/object.zst",
                         "object_hash": "b" * 64,
+                        "tenant_id": "tenant-archive",
                     }
                 ],
                 "objects_truncated": False,
@@ -70,8 +71,9 @@ class _Workers:
     def __init__(self, session_id):
         self.session_id = session_id
 
-    async def read(self, object_path, object_hash):
+    async def read(self, object_path, object_hash, tenant_id):
         assert object_path == "raw/v2/object.zst"
+        assert tenant_id == "tenant-archive"
         assert object_hash == "b" * 64
         records = (SimpleNamespace(data=b'{"one":1}'), SimpleNamespace(data=b'{"two":2}\n'))
         return SimpleNamespace(

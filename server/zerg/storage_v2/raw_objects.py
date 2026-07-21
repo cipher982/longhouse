@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import struct
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from uuid import UUID
@@ -16,6 +14,10 @@ import zstandard
 from zerg.storage_v2.contracts import EnvelopeIdentity
 from zerg.storage_v2.contracts import envelope_id
 from zerg.storage_v2.contracts import hash_records
+from zerg.storage_v2.object_store import FilesystemImmutableObjectStore
+from zerg.storage_v2.object_store import ImmutableObjectStore
+from zerg.storage_v2.object_store import ObjectStoreCorruptError
+from zerg.storage_v2.object_store import ObjectStoreValidationError
 
 MAGIC = b"LHRAW2\x00\x00"
 FORMAT_VERSION = 2
@@ -81,6 +83,10 @@ class DecodedRawObject:
 
 
 def seal_raw_object(root: Path, spec: RawObjectSpec) -> SealedRawObject:
+    return seal_raw_object_to_store(FilesystemImmutableObjectStore(root, tenant_id=spec.tenant_id), spec)
+
+
+def seal_raw_object_to_store(store: ImmutableObjectStore, spec: RawObjectSpec) -> SealedRawObject:
     payload, identity, record_hash_values = encode_raw_object(spec)
     payload_hash = hashlib.sha256(payload).hexdigest()
     compressed = zstandard.ZstdCompressor(level=3, write_checksum=True, write_content_size=True).compress(payload)
@@ -88,35 +94,17 @@ def seal_raw_object(root: Path, spec: RawObjectSpec) -> SealedRawObject:
         raise RawObjectValidationError("compressed raw object exceeds 40 MiB")
     compressed_hash = hashlib.sha256(compressed).hexdigest()
     relative_path = Path("raw") / "v2" / compressed_hash[:2] / f"{compressed_hash}.zst"
-    final_path = _safe_path(root, relative_path)
-    final_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-
-    if final_path.exists():
-        existing = final_path.read_bytes()
-        if hashlib.sha256(existing).hexdigest() != compressed_hash or existing != compressed:
-            raise RawObjectCorruptError(f"existing content-addressed raw object is corrupt: {relative_path}")
-        reused = True
-    else:
-        temporary_name: str | None = None
-        try:
-            with tempfile.NamedTemporaryFile(
-                mode="wb",
-                prefix=f".{compressed_hash}.tmp-",
-                dir=final_path.parent,
-                delete=False,
-            ) as handle:
-                temporary_name = handle.name
-                os.chmod(temporary_name, 0o600)
-                handle.write(compressed)
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(temporary_name, final_path)
-            temporary_name = None
-            _fsync_directory(final_path.parent)
-        finally:
-            if temporary_name is not None:
-                Path(temporary_name).unlink(missing_ok=True)
-        reused = False
+    try:
+        stored = store.put_if_absent(
+            tenant_id=spec.tenant_id,
+            key=relative_path.as_posix(),
+            data=compressed,
+            sha256=compressed_hash,
+        )
+    except ObjectStoreValidationError as exc:
+        raise RawObjectValidationError(str(exc)) from exc
+    except ObjectStoreCorruptError as exc:
+        raise RawObjectCorruptError(f"existing content-addressed raw object is corrupt: {relative_path}") from exc
 
     return SealedRawObject(
         envelope_id=envelope_id(identity),
@@ -127,26 +115,50 @@ def seal_raw_object(root: Path, spec: RawObjectSpec) -> SealedRawObject:
         uncompressed_size=len(payload),
         compressed_size=len(compressed),
         record_hashes=tuple(value.hex() for value in record_hash_values),
-        reused=reused,
+        reused=stored.reused,
     )
 
 
 def read_raw_object(root: Path, object_path: str, *, expected_object_hash: str) -> DecodedRawObject:
+    """Filesystem-only compatibility reader for offline tools and focused tests.
+
+    Runtime user reads must use ``read_raw_object_from_store`` with the catalog
+    tenant.  A remote backend may not accept this unscoped compatibility path.
+    """
+    return read_raw_object_from_store(
+        FilesystemImmutableObjectStore(root),
+        object_path,
+        expected_object_hash=expected_object_hash,
+        expected_tenant_id="local-filesystem-read",
+    )
+
+
+def read_raw_object_from_store(
+    store: ImmutableObjectStore,
+    object_path: str,
+    *,
+    expected_object_hash: str,
+    expected_tenant_id: str,
+) -> DecodedRawObject:
     if not _is_hash(expected_object_hash):
         raise RawObjectValidationError("expected_object_hash must be lowercase SHA-256 hex")
     relative_path = Path(object_path)
-    path = _safe_path(root, relative_path)
+    if relative_path.is_absolute() or not relative_path.parts or ".." in relative_path.parts:
+        raise RawObjectValidationError("raw object path must be safe and relative")
     if expected_object_hash not in relative_path.name:
         raise RawObjectValidationError("object path is not addressed by expected hash")
     try:
-        compressed = path.read_bytes()
-    except OSError as exc:
-        raise RawObjectCorruptError(f"raw object is unreadable: {relative_path}") from exc
-    if len(compressed) > MAX_COMPRESSED_BYTES:
-        raise RawObjectCorruptError("compressed raw object exceeds its bound")
-    object_hash = hashlib.sha256(compressed).hexdigest()
-    if object_hash != expected_object_hash:
-        raise RawObjectCorruptError("compressed raw object hash mismatch")
+        compressed = store.read_verified(
+            tenant_id=expected_tenant_id,
+            key=object_path,
+            sha256=expected_object_hash,
+            max_bytes=MAX_COMPRESSED_BYTES,
+        )
+    except ObjectStoreValidationError as exc:
+        raise RawObjectValidationError(str(exc)) from exc
+    except ObjectStoreCorruptError as exc:
+        raise RawObjectCorruptError(str(exc)) from exc
+    object_hash = expected_object_hash
     try:
         payload = zstandard.ZstdDecompressor().decompress(compressed, max_output_size=MAX_ENCODED_BYTES)
     except zstandard.ZstdError as exc:
@@ -154,6 +166,8 @@ def read_raw_object(root: Path, object_path: str, *, expected_object_hash: str) 
     if len(payload) > MAX_ENCODED_BYTES:
         raise RawObjectCorruptError("raw object payload exceeds its bound")
     spec, stored_envelope = decode_raw_object(payload)
+    if expected_tenant_id != "local-filesystem-read" and spec.tenant_id != expected_tenant_id:
+        raise RawObjectCorruptError("raw object tenant does not match the authorized tenant")
     identity = _identity(spec)
     computed_envelope = envelope_id(identity)
     if stored_envelope != computed_envelope:
@@ -343,24 +357,6 @@ def _validate_spec(spec: RawObjectSpec) -> None:
     envelope_id(_identity(spec))
 
 
-def _safe_path(root: Path, relative: Path) -> Path:
-    if relative.is_absolute() or not relative.parts or ".." in relative.parts:
-        raise RawObjectValidationError("raw object path must be safe and relative")
-    resolved_root = root.expanduser().resolve()
-    resolved = (resolved_root / relative).resolve()
-    if resolved != resolved_root and resolved_root not in resolved.parents:
-        raise RawObjectValidationError("raw object path escapes storage root")
-    return resolved
-
-
-def _fsync_directory(path: Path) -> None:
-    descriptor = os.open(path, os.O_RDONLY)
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
-
-
 def _is_hash(value: object) -> bool:
     return isinstance(value, str) and len(value) == 64 and all(character in "0123456789abcdef" for character in value)
 
@@ -376,6 +372,8 @@ __all__ = [
     "decode_raw_object",
     "encode_raw_object",
     "read_raw_object",
+    "read_raw_object_from_store",
     "seal_raw_object",
+    "seal_raw_object_to_store",
     "validate_raw_object_spec",
 ]

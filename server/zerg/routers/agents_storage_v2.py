@@ -1284,7 +1284,7 @@ async def read_storage_v2_session_raw(
     workers = get_raw_object_worker_pool()
     try:
         with timing.span("raw_object_read"):
-            decoded = await workers.read(str(item["object_path"]), str(item["object_hash"]))
+            decoded = await workers.read(str(item["object_path"]), str(item["object_hash"]), str(item["tenant_id"]))
         spec = decoded.spec
         if (
             spec.session_id != session_id

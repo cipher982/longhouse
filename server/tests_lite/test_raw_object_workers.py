@@ -40,7 +40,7 @@ async def test_process_pool_seals_live_and_repair_objects_without_sharing_capaci
         assert live.object_hash == repair.object_hash
         replay = await pool.seal(spec, lane="live")
         assert replay.reused is True
-        decoded = await pool.read(live.object_path, live.object_hash)
+        decoded = await pool.read(live.object_path, live.object_hash, spec.tenant_id)
         assert decoded.spec == spec
     finally:
         await pool.close()

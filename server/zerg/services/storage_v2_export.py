@@ -87,7 +87,7 @@ async def build_storage_v2_raw_export(
                 if not isinstance(item, dict):
                     raise RuntimeError("catalog returned an invalid raw-object row")
                 try:
-                    decoded = await workers.read(str(item["object_path"]), str(item["object_hash"]))
+                    decoded = await workers.read(str(item["object_path"]), str(item["object_hash"]), str(item["tenant_id"]))
                 except (KeyError, RawObjectCorruptError, RawObjectWorkerError) as exc:
                     raise RuntimeError("immutable raw object could not be verified") from exc
                 if decoded.envelope_id != item.get("envelope_id") or decoded.spec.session_id != session_id:

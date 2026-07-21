@@ -18,10 +18,11 @@ from zerg.storage_v2.media_objects import MediaObjectSpec
 from zerg.storage_v2.media_objects import SealedMediaObject
 from zerg.storage_v2.media_objects import read_media_object
 from zerg.storage_v2.media_objects import seal_media_object
+from zerg.storage_v2.object_store import FilesystemImmutableObjectStore
 from zerg.storage_v2.raw_objects import DecodedRawObject
 from zerg.storage_v2.raw_objects import RawObjectSpec
 from zerg.storage_v2.raw_objects import SealedRawObject
-from zerg.storage_v2.raw_objects import read_raw_object
+from zerg.storage_v2.raw_objects import read_raw_object_from_store
 from zerg.storage_v2.raw_objects import seal_raw_object
 
 
@@ -53,8 +54,13 @@ def _seal_in_worker(root: str, spec: RawObjectSpec) -> SealedRawObject:
     return seal_raw_object(Path(root), spec)
 
 
-def _read_in_worker(root: str, object_path: str, expected_object_hash: str) -> DecodedRawObject:
-    return read_raw_object(Path(root), object_path, expected_object_hash=expected_object_hash)
+def _read_in_worker(root: str, object_path: str, expected_object_hash: str, tenant_id: str) -> DecodedRawObject:
+    return read_raw_object_from_store(
+        FilesystemImmutableObjectStore(Path(root), tenant_id=tenant_id),
+        object_path,
+        expected_object_hash=expected_object_hash,
+        expected_tenant_id=tenant_id,
+    )
 
 
 def _seal_media_in_worker(root: str, spec: MediaObjectSpec) -> SealedMediaObject:
@@ -265,6 +271,7 @@ class RawObjectWorkerPool:
         self,
         object_path: str,
         expected_object_hash: str,
+        tenant_id: str,
         *,
         queue_timeout_seconds: float = 0.25,
         operation_timeout_seconds: float = 3.0,
@@ -287,6 +294,7 @@ class RawObjectWorkerPool:
                         str(self.root),
                         object_path,
                         expected_object_hash,
+                        tenant_id,
                     )
                     async with asyncio.timeout(operation_timeout_seconds):
                         return await asyncio.shield(future)

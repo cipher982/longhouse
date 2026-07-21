@@ -24,6 +24,7 @@ async def test_raw_export_streams_verified_objects_in_source_order(monkeypatch):
         "envelope_id": "envelope",
         "object_path": "raw/v2/aa/object.zst",
         "object_hash": "a" * 64,
+        "tenant_id": "tenant-seven",
     }
 
     class Catalog:
@@ -41,9 +42,10 @@ async def test_raw_export_streams_verified_objects_in_source_order(monkeypatch):
             return {"objects": [manifest_item], "objects_truncated": False}
 
     class Workers:
-        async def read(self, object_path, object_hash):
+        async def read(self, object_path, object_hash, tenant_id):
             assert object_path == manifest_item["object_path"]
             assert object_hash == manifest_item["object_hash"]
+            assert tenant_id == manifest_item["tenant_id"]
             return SimpleNamespace(
                 envelope_id="envelope",
                 spec=SimpleNamespace(
