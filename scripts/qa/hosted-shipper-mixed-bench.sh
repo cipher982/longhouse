@@ -36,6 +36,42 @@ cleanup_ephemeral_device_token() {
   fi
 }
 
+resolve_ship_machine_id() {
+  local api_url="$1"
+  local device_token="$2"
+  local response_file=""
+  local http_code=""
+  local machine_id=""
+
+  response_file="$(mktemp)"
+  if ! http_code="$(curl -sS -o "$response_file" -w "%{http_code}" \
+    --connect-timeout 10 --max-time 30 \
+    -H "X-Agents-Token: ${device_token}" \
+    "${api_url%/}/api/agents/storage/v2/capabilities")"; then
+    http_code="000"
+  fi
+
+  if [[ "$http_code" != "200" ]]; then
+    echo "Failed to negotiate storage-v2 capabilities at ${api_url} (HTTP ${http_code})" >&2
+    rm -f "$response_file"
+    return 1
+  fi
+
+  machine_id="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["machine_id"])' <"$response_file")" || {
+    echo "storage-v2 capabilities response missing machine_id" >&2
+    rm -f "$response_file"
+    return 1
+  }
+  rm -f "$response_file"
+
+  if [[ -z "$machine_id" ]]; then
+    echo "storage-v2 capabilities returned an empty machine_id" >&2
+    return 1
+  fi
+
+  printf '%s\n' "$machine_id"
+}
+
 if [[ -z "${LONGHOUSE_DEVICE_TOKEN:-}" ]]; then
   if [[ -z "${SMOKE_RUNTIME_TOKEN:-}" ]]; then
     echo "Set LONGHOUSE_DEVICE_TOKEN or SMOKE_RUNTIME_TOKEN before hosted shipper bench." >&2
@@ -50,6 +86,9 @@ if [[ -z "${LONGHOUSE_DEVICE_TOKEN:-}" ]]; then
   trap cleanup_ephemeral_device_token EXIT
 fi
 
+echo "Resolving authenticated storage-v2 machine identity..." >&2
+SHIP_MACHINE_ID="$(resolve_ship_machine_id "$API_URL" "$LONGHOUSE_DEVICE_TOKEN")"
+
 echo "Running hosted mixed live/archive shipper bench against $API_URL" >&2
 python3 "$ROOT_DIR/scripts/build/generate_build_identity.py"
 cd "$ROOT_DIR/engine"
@@ -60,6 +99,7 @@ cargo run --profile "${CARGO_PROFILE:-release}" -- bench \
   --level L3 \
   --ship-url "$API_URL" \
   --ship-token "$LONGHOUSE_DEVICE_TOKEN" \
+  --ship-machine-id "$SHIP_MACHINE_ID" \
   --ship-concurrency "${HOSTED_SHIPPER_BENCH_CONCURRENCY:-3}" \
   --mixed-live-count "${HOSTED_SHIPPER_BENCH_LIVE_COUNT:-6}" \
   --mixed-live-max-p95-ms "${HOSTED_SHIPPER_BENCH_LIVE_MAX_P95_MS:-10000}"

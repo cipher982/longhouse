@@ -265,6 +265,11 @@ enum Commands {
         #[arg(long)]
         ship_token: Option<String>,
 
+        /// Authenticated machine id for storage-v2 capability negotiation
+        /// (required when ship-url is set). Must match the device token identity.
+        #[arg(long)]
+        ship_machine_id: Option<String>,
+
         /// Number of concurrent in-flight POSTs in Mode B.
         #[arg(long, default_value = "1")]
         ship_concurrency: usize,
@@ -1240,6 +1245,7 @@ fn main() -> anyhow::Result<()> {
             compression,
             ship_url,
             ship_token,
+            ship_machine_id,
             ship_concurrency,
             mixed_live_count,
             mixed_live_max_p95_ms,
@@ -1256,6 +1262,7 @@ fn main() -> anyhow::Result<()> {
                 algo,
                 ship_url.as_deref(),
                 ship_token.as_deref(),
+                ship_machine_id.as_deref(),
                 ship_concurrency.max(1),
                 mixed_live_count,
                 mixed_live_max_p95_ms,

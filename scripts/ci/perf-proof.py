@@ -148,6 +148,8 @@ def parse_engine_bench_output(output: str) -> dict[str, Any]:
             metrics["decoded_mb"] = parse_number(stripped.split(":", 1)[1].strip().split()[0])
         elif stripped.startswith("Compressed:"):
             metrics["compressed_mb"] = parse_number(stripped.split(":", 1)[1].strip().split()[0])
+        elif stripped.startswith("Wire bytes:"):
+            metrics["wire_mb"] = parse_number(stripped.split(":", 1)[1].strip().split()[0])
         elif stripped.startswith("Events:"):
             metrics["events"] = int(parse_number(stripped.split(":", 1)[1].strip()))
         elif stripped.startswith("Events shipped:"):
@@ -169,23 +171,29 @@ def parse_engine_bench_output(output: str) -> dict[str, Any]:
         elif stripped.startswith("Peak RSS:"):
             metrics["peak_rss_mb"] = parse_number(stripped.split(":", 1)[1].strip().split()[0])
         elif stripped.startswith("Ship latency:"):
-            metrics["ship_latency"] = _parse_p50_p95(stripped)
+            if parsed := _parse_p50_p95(stripped):
+                metrics["ship_latency"] = parsed
         elif stripped.startswith("Server queue:"):
-            metrics["server_queue_latency"] = _parse_p50_p95(stripped)
+            if parsed := _parse_p50_p95(stripped):
+                metrics["server_queue_latency"] = parsed
         elif stripped.startswith("Server exec:"):
-            metrics["server_exec_latency"] = _parse_p50_p95(stripped)
+            if parsed := _parse_p50_p95(stripped):
+                metrics["server_exec_latency"] = parsed
         elif stripped.startswith("Live latency:") and "no successful" not in stripped:
-            metrics["live_latency"] = _parse_p50_p95(stripped)
+            if parsed := _parse_p50_p95(stripped):
+                metrics["live_latency"] = parsed
         elif stripped.startswith("Live SLA:"):
             metrics["live_sla"] = stripped.split(":", 1)[1].strip()
     return metrics
 
 
-def _parse_p50_p95(line: str) -> dict[str, float]:
+def _parse_p50_p95(line: str) -> dict[str, float] | None:
     # Example: Ship latency:   p50 7.8ms / p95 7.8ms
     tokens = line.replace("/", " ").replace("ms", "").split()
-    p50 = tokens[tokens.index("p50") + 1] if "p50" in tokens else "0"
-    p95 = tokens[tokens.index("p95") + 1] if "p95" in tokens else "0"
+    if "p50" not in tokens or "p95" not in tokens:
+        return None
+    p50 = tokens[tokens.index("p50") + 1]
+    p95 = tokens[tokens.index("p95") + 1]
     return {"p50_ms": parse_number(p50), "p95_ms": parse_number(p95)}
 
 
@@ -248,6 +256,8 @@ def run_engine_bench(engine_bin: Path, *, mixed: bool) -> dict[str, Any]:
                 f"http://127.0.0.1:{port}",
                 "--ship-token",
                 "synthetic",
+                "--ship-machine-id",
+                "synthetic-machine",
                 "--ship-concurrency",
                 "4",
                 "--mixed-live-count",

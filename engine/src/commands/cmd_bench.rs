@@ -13,6 +13,7 @@ pub fn cmd_bench(
     algo: CompressionAlgo,
     ship_url: Option<&str>,
     ship_token: Option<&str>,
+    ship_machine_id: Option<&str>,
     ship_concurrency: usize,
     mixed_live_count: usize,
     mixed_live_max_p95_ms: f64,
@@ -78,10 +79,13 @@ pub fn cmd_bench(
 
     let mode_label = match (parallel, ship_url) {
         (_, Some(url)) if mixed_live_count > 0 => format!(
-            "ship -> {} (archive concurrency {}, live probes {})",
+            "ship storage-v2 -> {} (archive concurrency {}, live probes {})",
             url, ship_concurrency, mixed_live_count
         ),
-        (_, Some(url)) => format!("ship -> {} (concurrency {})", url, ship_concurrency),
+        (_, Some(url)) => format!(
+            "ship storage-v2 -> {} (concurrency {})",
+            url, ship_concurrency
+        ),
         (true, None) => format!("parallel ({} workers)", num_workers),
         (false, None) => "sequential".to_string(),
     };
@@ -101,15 +105,24 @@ pub fn cmd_bench(
     if let Some(url) = ship_url {
         let token = ship_token
             .ok_or_else(|| anyhow::anyhow!("--ship-token is required when --ship-url is set"))?;
+        let machine_id = ship_machine_id.ok_or_else(|| {
+            anyhow::anyhow!("--ship-machine-id is required when --ship-url is set")
+        })?;
         let result = crate::bench::run_benchmark_ship(
             &files,
             url,
             token,
+            machine_id,
             ship_concurrency,
             mixed_live_count,
             algo,
         )?;
-        result.print_summary();
+        result.print_summary(mixed_live_max_p95_ms);
+        if !result.archive_succeeded() {
+            anyhow::bail!(
+                "storage-v2 ship bench failed: repair envelopes did not all receive valid receipts"
+            );
+        }
         if mixed_live_count > 0 && !result.live_sla_passes(mixed_live_max_p95_ms) {
             anyhow::bail!(
                 "mixed live/archive bench failed: live p95 or failures exceeded threshold"

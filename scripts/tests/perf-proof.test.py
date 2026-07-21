@@ -54,7 +54,7 @@ def test_parse_mixed_live_archive_output() -> None:
 Files:          6
 Concurrency:    4
 Decoded bytes:  0.35 MB
-Compressed:     0.01 MB
+Wire bytes:     0.86 MB
 Events shipped: 300
 Total:          0.713s
 Throughput:     0.5 MB/s decoded, 0.0 MB/s on wire
@@ -70,13 +70,21 @@ Live SLA:       PASS
 """
     metrics = perf.parse_engine_bench_output(output)
     assert metrics["decoded_mb"] == 0.35
-    assert metrics["compressed_mb"] == 0.01
+    assert metrics["wire_mb"] == 0.86
     assert metrics["events"] == 300
     assert metrics["ship_latency"] == {"p50_ms": 7.8, "p95_ms": 7.8}
     assert metrics["server_queue_latency"] == {"p50_ms": 2.0, "p95_ms": 2.0}
     assert metrics["server_exec_latency"] == {"p50_ms": 5.0, "p95_ms": 5.0}
     assert metrics["live_latency"] == {"p50_ms": 3.0, "p95_ms": 3.2}
     assert metrics["live_sla"] == "PASS"
+
+
+def test_parse_mixed_output_omits_unavailable_server_timing() -> None:
+    perf = _module()
+    metrics = perf.parse_engine_bench_output(
+        "Server queue:   (no X-Ingest-* headers seen)\n"
+    )
+    assert "server_queue_latency" not in metrics
 
 
 def test_startup_summary_reports_speedup() -> None:
@@ -214,6 +222,7 @@ def main() -> int:
     tests = [
         test_parse_engine_parse_bench_output,
         test_parse_mixed_live_archive_output,
+        test_parse_mixed_output_omits_unavailable_server_timing,
         test_startup_summary_reports_speedup,
         test_percentile_handles_empty_single_and_interpolated_samples,
         test_startup_summary_is_partial_when_probe_skipped,

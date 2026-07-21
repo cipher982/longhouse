@@ -309,7 +309,7 @@ test-shipper-synthetic-live-bench: ## Synthetic mixed live/archive shipper bench
 	for _ in 1 2 3 4 5 6 7 8 9 10; do test -s "$$port_file" && break; sleep 0.2; done; \
 	test -s "$$port_file"; \
 	port="$$(cat "$$port_file")"; \
-	cd engine && cargo run --profile $(or $(CARGO_PROFILE),release) -- bench --synthetic-files 6 --synthetic-events-per-file 50 --synthetic-bytes-per-event 1024 --level L3 --ship-url "http://127.0.0.1:$$port" --ship-token synthetic --ship-concurrency 4 --mixed-live-count 8 --mixed-live-max-p95-ms 10000
+	cd engine && cargo run --profile $(or $(CARGO_PROFILE),release) -- bench --synthetic-files 6 --synthetic-events-per-file 50 --synthetic-bytes-per-event 1024 --level L3 --ship-url "http://127.0.0.1:$$port" --ship-token synthetic --ship-machine-id synthetic-machine --ship-concurrency 4 --mixed-live-count 8 --mixed-live-max-p95-ms 10000
 
 perf-proof: ## Collect trendable startup/shipper/live perf proof JSON
 	@python3 scripts/build/generate_build_identity.py

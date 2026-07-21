@@ -291,6 +291,42 @@ fn prepare_next_envelope_with_limit(
     persist_prepared(conn, &path_text, prepared).map(Some)
 }
 
+/// Prepare one durable storage-v2 envelope for a lane and return the exact
+/// request body that must be POSTed (and optionally retried) without
+/// reserialization.
+pub(crate) fn prepare_next_envelope_body_for_lane(
+    conn: &mut Connection,
+    capabilities: &StorageV2Capabilities,
+    path: &Path,
+    provider: &str,
+    lane: &str,
+) -> Result<Option<(Vec<u8>, PreparedStorageV2Envelope)>> {
+    if lane != "live" && lane != "repair" {
+        anyhow::bail!("storage-v2 lane must be live or repair");
+    }
+    let maximum_batch_bytes = if lane == "live" {
+        LIVE_TARGET_BATCH_BYTES
+    } else {
+        MAX_RAW_BATCH_BYTES
+    };
+    let Some(prepared) = preparation_result(prepare_next_envelope_with_limit(
+        conn,
+        capabilities,
+        path,
+        provider,
+        None,
+        maximum_batch_bytes,
+    ))?
+    else {
+        return Ok(None);
+    };
+    let pending = pending_source_envelope::load_for_epoch(conn, prepared.source_epoch)?
+        .context("prepared storage-v2 envelope is not durable")?;
+    validate_pending_matches_prepared(&pending, &prepared)?;
+    let body = decode_zstd(&pending.request_body_zstd, "storage-v2 request body")?;
+    Ok(Some((body, prepared)))
+}
+
 pub(crate) async fn ship_next_envelope(
     conn: &mut Connection,
     client: &ShipperClient,
