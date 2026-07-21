@@ -606,6 +606,70 @@ def test_launch_detached_native_claude_channel_waits_for_channel_state(monkeypat
     assert "zdt_test_token" not in command_text
 
 
+def test_run_native_claude_tui_checks_channel_readiness_without_delaying_tui(monkeypatch, tmp_path):
+    thread_calls: list[dict] = []
+    wait_calls: list[dict] = []
+
+    class _FakeThread:
+        def __init__(self, *, target, kwargs, daemon):
+            thread_calls.append({"target": target, "kwargs": kwargs, "daemon": daemon})
+
+        def start(self):
+            thread_calls[0]["started"] = True
+
+    monkeypatch.setattr(claude_cli.threading, "Thread", _FakeThread)
+    monkeypatch.setattr(
+        claude_cli.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(returncode=0),
+    )
+    monkeypatch.setattr(
+        claude_cli,
+        "_post_claude_terminal_signal",
+        lambda **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        claude_cli,
+        "wait_for_claude_channel_state",
+        lambda **kwargs: wait_calls.append(kwargs) or {"ready": True},
+    )
+
+    assert (
+        claude_cli._run_native_claude_tui(
+            session_id="11111111-1111-1111-1111-111111111111",
+            run_id="22222222-2222-4222-8222-222222222222",
+            provider_session_id="provider-123",
+            cwd=tmp_path,
+            base_url="https://longhouse.test",
+            token="zdt_test_token",
+        )
+        == 0
+    )
+    assert thread_calls[0]["kwargs"] == {"session_id": "11111111-1111-1111-1111-111111111111"}
+    assert thread_calls[0]["daemon"] is True
+    assert thread_calls[0]["started"] is True
+
+    thread_calls[0]["target"](**thread_calls[0]["kwargs"])
+    assert wait_calls == [
+        {
+            "session_id": "11111111-1111-1111-1111-111111111111",
+            "timeout_secs": claude_cli._CLAUDE_CHANNEL_READY_TIMEOUT_SECS,
+        }
+    ]
+
+
+def test_claude_channel_readiness_warning_is_loud(monkeypatch, capsys):
+    monkeypatch.setattr(
+        claude_cli,
+        "wait_for_claude_channel_state",
+        lambda **_kwargs: (_ for _ in ()).throw(TimeoutError("not ready")),
+    )
+
+    claude_cli._warn_if_claude_channel_not_ready(session_id="11111111-1111-1111-1111-111111111111")
+
+    assert "may be observe-only" in capsys.readouterr().err
+
+
 def test_claude_channel_state_file_rejects_non_uuid_session_id(tmp_path):
     with pytest.raises(ValueError, match="valid UUID"):
         build_claude_channel_state_file(session_id="../../escape", state_root=tmp_path)

@@ -8,6 +8,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import threading
 from datetime import datetime
 from datetime import timezone
 from hashlib import sha256
@@ -61,6 +62,7 @@ _CLAUDE_TERMINAL_SOURCE = "claude_channel_wrapper"
 _CLAUDE_REMOTE_LAUNCH_LOG_DIR = "claude-channel-launch"
 _CLAUDE_SUBPROCESS_ENV_BLOCKLIST = ("CLAUDE_CONFIG_DIR",)
 _CLAUDE_BIN_ENV = "LONGHOUSE_CLAUDE_BIN"
+_CLAUDE_CHANNEL_READY_TIMEOUT_SECS = 20.0
 
 
 def _claude_subprocess_env(**extra: str) -> dict[str, str]:
@@ -222,6 +224,11 @@ def _run_native_claude_tui(
     # using the server-minted session-scoped hook token (the gate rejects the
     # durable device token). Other hooks keep using the device token.
     env = _claude_subprocess_env(LONGHOUSE_HOOK_TOKEN=hook_token or token)
+    threading.Thread(
+        target=_warn_if_claude_channel_not_ready,
+        kwargs={"session_id": session_id},
+        daemon=True,
+    ).start()
     completed = subprocess.run(shlex.split(command), check=False, cwd=str(cwd), env=env)
     exit_code = int(completed.returncode)
     _post_claude_terminal_signal(
@@ -232,6 +239,21 @@ def _run_native_claude_tui(
         exit_code=exit_code,
     )
     return exit_code
+
+
+def _warn_if_claude_channel_not_ready(*, session_id: str) -> None:
+    try:
+        wait_for_claude_channel_state(
+            session_id=session_id,
+            timeout_secs=_CLAUDE_CHANNEL_READY_TIMEOUT_SECS,
+        )
+    except Exception as exc:
+        typer.secho(
+            "Longhouse control channel did not become ready; this Claude session may be observe-only. "
+            f"Keep Claude open and check its Longhouse connection ({exc}).",
+            err=True,
+            fg=typer.colors.YELLOW,
+        )
 
 
 def _remote_launch_log_path(*, session_id: str, config_dir: Path | None) -> Path:
