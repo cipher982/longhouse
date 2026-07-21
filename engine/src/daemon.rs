@@ -324,6 +324,7 @@ struct TranscriptWakeSignal {
 struct DiscoveryTaskResult {
     files: Vec<(PathBuf, &'static str)>,
     inventory: crate::state::source_inventory::SourceInventoryObservation,
+    enqueue_files: bool,
     priority: WorkPriority,
     reason: &'static str,
 }
@@ -779,6 +780,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
         PathScheduler::with_limiter(max_in_flight, std::sync::Arc::clone(&adaptive_limiter));
     let mut in_flight = JoinSet::new();
     let mut discovery_tasks: JoinSet<DiscoveryTaskResult> = JoinSet::new();
+    start_inventory_task(&mut discovery_tasks, &providers);
     let mut managed_observation_scan_tasks: JoinSet<ManagedObservationScanResult> = JoinSet::new();
     let mut last_managed_observations = ManagedObservationSnapshot::default();
     let mut opencode_title_refresh_tasks: JoinSet<Result<()>> = JoinSet::new();
@@ -1036,12 +1038,14 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             &conn,
                             result.inventory,
                         );
-                        let queued = enqueue_discovered_files(
-                            &mut scheduler,
-                            result.files,
-                            result.priority,
-                        );
-                        tracing::debug!("Queued {} paths for {}", queued, result.reason);
+                        if result.enqueue_files {
+                            let queued = enqueue_discovered_files(
+                                &mut scheduler,
+                                result.files,
+                                result.priority,
+                            );
+                            tracing::debug!("Queued {} paths for {}", queued, result.reason);
+                        }
                         match inventory {
                             Ok(snapshot) => {
                                 tracing::info!(
@@ -2440,8 +2444,26 @@ fn start_discovery_task(
         DiscoveryTaskResult {
             files: scan.files,
             inventory: scan.inventory,
+            enqueue_files: true,
             priority,
             reason,
+        }
+    });
+}
+
+fn start_inventory_task(
+    discovery_tasks: &mut JoinSet<DiscoveryTaskResult>,
+    providers: &[ProviderConfig],
+) {
+    let providers = providers.to_vec();
+    discovery_tasks.spawn_blocking(move || {
+        let scan = discovery::discover_all_files_with_inventory(&providers);
+        DiscoveryTaskResult {
+            files: Vec::new(),
+            inventory: scan.inventory,
+            enqueue_files: false,
+            priority: WorkPriority::Scan,
+            reason: "startup inventory",
         }
     });
 }
@@ -4135,6 +4157,26 @@ async fn shutdown_signal() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn startup_inventory_discovers_sources_without_enqueuing_import_work() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("session.jsonl"), b"history").unwrap();
+        let providers = vec![ProviderConfig {
+            name: "claude",
+            root: temp.path().to_path_buf(),
+            extension: "jsonl",
+        }];
+        let mut tasks = JoinSet::new();
+
+        start_inventory_task(&mut tasks, &providers);
+        let result = tasks.join_next().await.unwrap().unwrap();
+
+        assert!(!result.enqueue_files);
+        assert!(result.files.is_empty());
+        assert_eq!(result.inventory.source_count, 1);
+        assert_eq!(result.reason, "startup inventory");
+    }
 
     #[derive(Clone)]
     struct RetainedFixtureRow {
