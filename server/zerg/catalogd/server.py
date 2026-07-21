@@ -355,6 +355,8 @@ class CatalogDaemon:
             return await self._raw_objects_exist_batch(request)
         if request.method == "storage.session.read.v2":
             return await self._read_storage_session(request)
+        if request.method == "storage.session.canary.lookup.v2":
+            return await self._lookup_storage_canary_session(request)
         if request.method == "storage.session.title.candidates.v2":
             return await self._list_storage_title_candidates(request)
         if request.method == "storage.session.title.complete.v2":
@@ -2050,6 +2052,32 @@ class CatalogDaemon:
             return self._error(request, "invalid_request", str(exc))
         assert self._store is not None
         result = await self._run_store(self._store.read_storage_session, session_id=session_id)
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _lookup_storage_canary_session(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"observed_at", "max_age_seconds"}:
+            return self._error(
+                request,
+                "invalid_request",
+                "storage.session.canary.lookup.v2 requires observed_at and max_age_seconds",
+            )
+        max_age_seconds = request.params["max_age_seconds"]
+        if type(max_age_seconds) is not int or not 1 <= max_age_seconds <= 3_600:
+            return self._error(
+                request,
+                "invalid_request",
+                "max_age_seconds must be an integer from 1 through 3600",
+            )
+        try:
+            observed_at = _parse_datetime(request.params["observed_at"], "observed_at")
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        assert self._store is not None
+        result = await self._run_store(
+            self._store.lookup_storage_canary_session,
+            observed_at=observed_at,
+            max_age_seconds=max_age_seconds,
+        )
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _list_storage_title_candidates(self, request: CatalogRpcRequest) -> CatalogRpcResponse:

@@ -89,6 +89,7 @@ _SAFE_RETRY_METHODS = {
     "storage.source_epoch.manifest.v2",
     "storage.raw_object.exists.batch.v2",
     "storage.session.read.v2",
+    "storage.session.canary.lookup.v2",
     "storage.session.title.candidates.v2",
     "storage.session.title.complete.v2",
     "storage.session.title.fail.v2",

@@ -6,6 +6,10 @@ Every INTERVAL seconds, POST a fabricated RuntimeEventIngest to
 emitted_at=now(). Measure server receive latency (round-trip minus a
 best-effort network half) and POST a CanaryObservation back.
 
+Bootstrap creates the durable StorageSession via storage-v2 (not legacy
+/api/agents/ingest). Runtime binding/progress ticks stay on the runtime
+batch path because they wake workspace SSE.
+
 Runs forever. Re-uses the same canary session_id across restarts so all
 probes aggregate into one session on the server.
 
@@ -15,7 +19,7 @@ Usage:
     LONGHOUSE_CANARY_TOKEN=<shared-secret-set-on-server> \
     python3 scripts/canary/producer.py
 
-The AGENTS token authenticates /api/agents/runtime/events/batch (ingest).
+The AGENTS token authenticates storage-v2 + runtime batch.
 The CANARY token authenticates /api/telemetry/canary-observation (metrics
 observation). They're separate secrets because they guard separate
 concerns — ingest is per-machine, canary is pipeline-internal.
@@ -24,8 +28,10 @@ concerns — ingest is per-machine, canary is pipeline-internal.
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import os
+import re
 import signal
 import socket
 import sys
@@ -40,6 +46,22 @@ import httpx
 INTERVAL_S = float(os.environ.get("LONGHOUSE_CANARY_INTERVAL_S", "30"))
 SESSION_ID_FILE = Path(os.environ.get("LONGHOUSE_CANARY_SESSION_FILE", str(Path.home() / ".longhouse" / "canary-session-id")))
 SEQ_FILE = SESSION_ID_FILE.with_name("canary-seq")
+_WIRE_PATH = Path(__file__).resolve().parents[1] / "lib" / "storage_v2_wire.py"
+_STORAGE_V2_INGEST_PATH = "/api/agents/storage/v2/envelopes"
+_STORAGE_V2_LANE_HEADER = "X-Longhouse-Storage-Lane"
+_SHA256_HEX = re.compile(r"[0-9a-f]{64}\Z")
+
+
+def _load_storage_v2_wire():
+    spec = importlib.util.spec_from_file_location("storage_v2_wire", _WIRE_PATH)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"unable to load storage-v2 wire helper from {_WIRE_PATH}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+_storage_v2_wire = _load_storage_v2_wire()
 
 
 def _require_env(key: str) -> str:
@@ -133,6 +155,133 @@ def _post_observation(
         print(f"observation post error: {exc}", file=sys.stderr)
 
 
+def _agents_headers(agents_token: str) -> dict[str, str]:
+    return {"X-Agents-Token": agents_token, "Content-Type": "application/json"}
+
+
+def _bootstrap_storage_v2(
+    client: httpx.Client,
+    *,
+    base_url: str,
+    agents_token: str,
+    session_id: str,
+) -> str:
+    """Create/replay the durable canary StorageSession via storage-v2.
+
+    Fail closed: never call legacy /api/agents/ingest and never warn-and-continue.
+    Returns the durable envelope_id on success.
+    """
+
+    try:
+        caps_resp = client.get(
+            f"{base_url}/api/agents/storage/v2/capabilities",
+            headers=_agents_headers(agents_token),
+            timeout=15.0,
+        )
+    except Exception as exc:
+        print(f"FATAL: storage-v2 capabilities network error: {exc}", file=sys.stderr)
+        sys.exit(3)
+    if caps_resp.status_code >= 300:
+        print(
+            f"FATAL: storage-v2 capabilities failed {caps_resp.status_code}: {caps_resp.text[:500]}",
+            file=sys.stderr,
+        )
+        sys.exit(3)
+    try:
+        capabilities = caps_resp.json()
+    except json.JSONDecodeError:
+        print("FATAL: storage-v2 capabilities returned non-JSON", file=sys.stderr)
+        sys.exit(3)
+    if not isinstance(capabilities, dict):
+        print("FATAL: storage-v2 capabilities payload is invalid", file=sys.stderr)
+        sys.exit(3)
+    if capabilities.get("cutover") is not True:
+        print("FATAL: storage-v2 cutover is not enabled on target", file=sys.stderr)
+        sys.exit(3)
+    if capabilities.get("protocol_version") != 2:
+        print("FATAL: storage-v2 protocol_version is not 2", file=sys.stderr)
+        sys.exit(3)
+
+    tenant_id = capabilities.get("tenant_id")
+    machine_id = capabilities.get("machine_id")
+    ingest_path = capabilities.get("ingest_path")
+    lane_header = capabilities.get("lane_header")
+    if not isinstance(tenant_id, str) or not tenant_id:
+        print("FATAL: storage-v2 capabilities missing tenant_id", file=sys.stderr)
+        sys.exit(3)
+    if not isinstance(machine_id, str) or not machine_id:
+        print("FATAL: storage-v2 capabilities missing machine_id", file=sys.stderr)
+        sys.exit(3)
+    if ingest_path != _STORAGE_V2_INGEST_PATH:
+        print("FATAL: storage-v2 capabilities returned unexpected ingest_path", file=sys.stderr)
+        sys.exit(3)
+    if lane_header != _STORAGE_V2_LANE_HEADER:
+        print("FATAL: storage-v2 capabilities returned unexpected lane_header", file=sys.stderr)
+        sys.exit(3)
+
+    envelope = _storage_v2_wire.build_canary_bootstrap_envelope(
+        tenant_id=tenant_id,
+        machine_id=machine_id,
+        session_id=session_id,
+    )
+    expected_id = envelope["expected_envelope_id"]
+    try:
+        resp = client.post(
+            f"{base_url}{ingest_path}",
+            headers={**_agents_headers(agents_token), _STORAGE_V2_LANE_HEADER: "live"},
+            json=envelope,
+            timeout=30.0,
+        )
+    except Exception as exc:
+        print(f"FATAL: storage-v2 envelope network error: {exc}", file=sys.stderr)
+        sys.exit(3)
+    if resp.status_code >= 300:
+        print(
+            f"FATAL: storage-v2 envelope commit failed {resp.status_code}: {resp.text[:500]}",
+            file=sys.stderr,
+        )
+        sys.exit(3)
+    try:
+        receipt = resp.json()
+    except json.JSONDecodeError:
+        print("FATAL: storage-v2 envelope returned non-JSON receipt", file=sys.stderr)
+        sys.exit(3)
+    if not isinstance(receipt, dict):
+        print("FATAL: storage-v2 envelope receipt is invalid", file=sys.stderr)
+        sys.exit(3)
+    if (
+        receipt.get("v") != 2
+        or receipt.get("raw_state") != "durable"
+        or receipt.get("render_state") != "ready"
+        or receipt.get("media_state") != "complete"
+        or receipt.get("missing_media_hashes") != []
+    ):
+        print("FATAL: storage-v2 envelope receipt is not browse-ready", file=sys.stderr)
+        sys.exit(3)
+    if receipt.get("envelope_id") != expected_id:
+        print("FATAL: storage-v2 envelope receipt identity mismatch", file=sys.stderr)
+        sys.exit(3)
+    object_hash = receipt.get("object_hash")
+    commit_seq = receipt.get("commit_seq")
+    if not isinstance(object_hash, str) or _SHA256_HEX.fullmatch(object_hash) is None:
+        print("FATAL: storage-v2 envelope receipt object_hash is invalid", file=sys.stderr)
+        sys.exit(3)
+    if (
+        not isinstance(commit_seq, str)
+        or not commit_seq.isascii()
+        or not commit_seq.isdecimal()
+        or str(int(commit_seq)) != commit_seq
+        or not 0 <= int(commit_seq) < 1 << 64
+    ):
+        print("FATAL: storage-v2 envelope receipt commit_seq is invalid", file=sys.stderr)
+        sys.exit(3)
+    print(
+        f"storage-v2 bootstrap ok: session_id={session_id} envelope_id={expected_id[:12]}… "
+        f"commit_seq={commit_seq}"
+    )
+    return expected_id
+
+
 def main() -> int:
     base_url = _require_env("LONGHOUSE_CANARY_URL").rstrip("/")
     agents_token = _require_env("LONGHOUSE_AGENTS_TOKEN")
@@ -152,38 +301,21 @@ def main() -> int:
     signal.signal(signal.SIGTERM, _stop)
 
     with httpx.Client(http2=True) as client:
-        # Bootstrap: create an AgentSession row (runtime observations alone don't
-        # create one, so the SSE workspace stream would 404 with
-        # session_not_found). Then a binding_signal so runtime state exists.
-        now = datetime.now(timezone.utc)
-        ingest_payload = {
-            "id": session_id,
-            "provider": "canary",
-            "environment": "production",
-            "project": "canary",
-            "device_id": machine_name,
-            "device_name": machine_name,
-            "started_at": now.isoformat().replace("+00:00", "Z"),
-            "events": [],
-        }
-        try:
-            resp = client.post(
-                f"{base_url}/api/agents/ingest",
-                headers={"X-Agents-Token": agents_token, "Content-Type": "application/json"},
-                json=ingest_payload,
-                timeout=15.0,
-            )
-            if resp.status_code >= 300:
-                print(f"session bootstrap failed {resp.status_code}: {resp.text[:500]}", file=sys.stderr)
-                # Non-fatal: session may already exist from prior run.
-        except Exception as exc:
-            print(f"session bootstrap network error: {exc}", file=sys.stderr)
+        # Bootstrap: durable StorageSession via storage-v2, then a binding_signal
+        # so LiveSession runtime liveness exists for canary-session discovery.
+        _bootstrap_storage_v2(
+            client,
+            base_url=base_url,
+            agents_token=agents_token,
+            session_id=session_id,
+        )
 
+        now = datetime.now(timezone.utc)
         bootstrap = {"events": [_binding_event(session_id, machine_name, now)]}
         try:
             resp = client.post(
                 f"{base_url}/api/agents/runtime/events/batch",
-                headers={"X-Agents-Token": agents_token, "Content-Type": "application/json"},
+                headers=_agents_headers(agents_token),
                 json=bootstrap,
                 timeout=15.0,
             )
@@ -202,7 +334,7 @@ def main() -> int:
             try:
                 resp = client.post(
                     f"{base_url}/api/agents/runtime/events/batch",
-                    headers={"X-Agents-Token": agents_token, "Content-Type": "application/json"},
+                    headers=_agents_headers(agents_token),
                     json=payload,
                     timeout=15.0,
                 )

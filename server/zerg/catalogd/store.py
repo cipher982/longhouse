@@ -5682,6 +5682,88 @@ class CatalogStore:
                 "observed_at": observed_at.isoformat(),
             }
 
+    def lookup_storage_canary_session(self, *, observed_at: datetime, max_age_seconds: int) -> dict[str, Any]:
+        """Return the freshest live canary StorageSession joined to LiveSession liveness.
+
+        Durable authority comes from StorageSession (provider canary/cnary). Runtime
+        freshness uses the server-observed LiveSession.updated_at timestamp; the
+        provider-stamped last_seen_at remains diagnostic metadata. Missing/ended
+        runtime rows are excluded so abandoned stress sessions do not win.
+        """
+
+        storage = StorageSession.__table__
+        live = LiveSession.__table__
+        tombstone = LiveSessionTombstone.__table__
+        cutoff = observed_at - timedelta(seconds=max_age_seconds)
+        with _read_snapshot(self.engine) as connection:
+            row = (
+                connection.execute(
+                    select(
+                        storage.c.session_id,
+                        storage.c.provider,
+                        storage.c.project,
+                        storage.c.machine_id,
+                        storage.c.environment,
+                        storage.c.last_activity_at,
+                        storage.c.origin_kind,
+                        storage.c.hidden_from_default_timeline,
+                        live.c.last_seen_at,
+                        live.c.updated_at.label("runtime_updated_at"),
+                        live.c.state,
+                    )
+                    .select_from(
+                        storage.join(live, live.c.session_id == storage.c.session_id).outerjoin(
+                            tombstone, tombstone.c.session_id == storage.c.session_id
+                        )
+                    )
+                    .where(
+                        tombstone.c.session_id.is_(None),
+                        storage.c.provider.in_(("canary", "cnary")),
+                        live.c.provider.in_(("canary", "cnary")),
+                        live.c.state.notin_(("missing", "ended")),
+                        live.c.updated_at >= cutoff,
+                    )
+                    .order_by(live.c.updated_at.desc(), live.c.last_seen_at.desc(), live.c.session_id.desc())
+                    .limit(1)
+                )
+                .mappings()
+                .first()
+            )
+            commit_seq = str(_current_commit_seq(connection))
+            if row is None:
+                return {
+                    "session_id": None,
+                    "provider": None,
+                    "project": None,
+                    "machine_id": None,
+                    "environment": None,
+                    "origin_kind": None,
+                    "hidden_from_default_timeline": None,
+                    "last_seen_at": None,
+                    "runtime_updated_at": None,
+                    "last_activity_at": None,
+                    "runtime_state": None,
+                    "commit_seq": commit_seq,
+                    "observed_at": _encode_datetime(observed_at),
+                    "max_age_seconds": max_age_seconds,
+                }
+            return {
+                "session_id": str(row["session_id"]),
+                "provider": str(row["provider"]),
+                "project": row["project"],
+                "machine_id": str(row["machine_id"]),
+                "environment": str(row["environment"]),
+                "origin_kind": row["origin_kind"],
+                "hidden_from_default_timeline": bool(row["hidden_from_default_timeline"]),
+                "last_seen_at": _encode_datetime(row["last_seen_at"]),
+                "runtime_updated_at": _encode_datetime(row["runtime_updated_at"]),
+                "last_activity_at": _encode_datetime(row["last_activity_at"]),
+                "runtime_state": str(row["state"]),
+                "commit_seq": commit_seq,
+                "observed_at": _encode_datetime(observed_at),
+                "max_age_seconds": max_age_seconds,
+            }
+
     def list_storage_title_candidates(self, *, limit: int) -> dict[str, Any]:
         table = StorageSession.__table__
         observed_at = datetime.now(UTC)

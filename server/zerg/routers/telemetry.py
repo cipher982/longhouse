@@ -407,7 +407,7 @@ _canary_last_obs_monotonic: dict[str, float] = {}
 async def canary_session_lookup() -> dict:
     """Return the session_id of the currently-live canary producer.
 
-    "Live" means the session has seen activity within the last 5 minutes.
+    "Live" means the session has seen runtime activity within the last 5 minutes.
     This excludes abandoned stress-run sessions that happened to have a
     newer last_activity_at than the always-on producer. Used by the
     Playwright render-canary test in CI to discover the target session
@@ -417,7 +417,61 @@ async def canary_session_lookup() -> dict:
     from datetime import timedelta
     from datetime import timezone
 
-    from zerg.models.agents import AgentSession
+    if live_catalog_enabled():
+        from zerg.catalogd.client import CatalogRemoteError
+        from zerg.catalogd.client import CatalogUnavailable
+        from zerg.services.catalogd_supervisor import get_catalogd_client
+
+        catalogd = get_catalogd_client()
+        if catalogd is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "code": "catalog_unavailable",
+                    "message": "Canary session lookup requires a live catalog.",
+                },
+            )
+        observed_at = datetime.now(timezone.utc)
+        try:
+            result = await catalogd.call(
+                "storage.session.canary.lookup.v2",
+                {
+                    "observed_at": observed_at.isoformat(),
+                    "max_age_seconds": 300,
+                },
+            )
+        except (CatalogUnavailable, CatalogRemoteError) as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "code": "catalog_unavailable",
+                    "message": "Canary session lookup catalog is unavailable.",
+                },
+            ) from exc
+        if not isinstance(result, dict):
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "code": "catalog_unavailable",
+                    "message": "Canary session lookup returned an invalid catalog payload.",
+                },
+            )
+        session_id = result.get("session_id")
+        if session_id is None:
+            return {"session_id": None}
+        try:
+            canonical_session_id = str(UUID(session_id)) if isinstance(session_id, str) else None
+        except ValueError:
+            canonical_session_id = None
+        if canonical_session_id != session_id:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "code": "catalog_unavailable",
+                    "message": "Canary session lookup returned an invalid session_id.",
+                },
+            )
+        return {"session_id": canonical_session_id}
 
     cutoff = datetime.now(timezone.utc) - timedelta(minutes=5)
 
