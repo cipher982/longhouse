@@ -8,6 +8,7 @@ from datetime import timezone
 from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
@@ -228,7 +229,8 @@ def test_create_message_delivers_immediately_for_safe_managed_local(monkeypatch,
         api_app_ref.dependency_overrides = {}
 
 
-def test_create_message_queues_when_target_is_running(monkeypatch, tmp_path):
+@pytest.mark.parametrize("active_phase", ["running", "thinking"])
+def test_create_message_queues_when_target_is_active(monkeypatch, tmp_path, active_phase):
     session_local = _make_db(tmp_path)
 
     with session_local() as db:
@@ -242,10 +244,10 @@ def test_create_message_queues_when_target_is_running(monkeypatch, tmp_path):
             device_id="cinder",
             device_name="cinder",
         )
-        _upsert_runtime_state(db, to_session, "running")
+        _upsert_runtime_state(db, to_session, active_phase)
 
     async def fail_if_called(**_kwargs):
-        raise AssertionError("send_text_to_managed_local_session should not be called while running")
+        raise AssertionError("send_text_to_managed_local_session should not be called during an active turn")
 
     monkeypatch.setattr("zerg.services.live_session_dispatch.send_text_to_live_session", fail_if_called)
 

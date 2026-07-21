@@ -13,6 +13,7 @@ from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionMessage
 from zerg.models.user import User
 from zerg.services.session_current_control import current_session_capabilities
+from zerg.services.session_message_envelope import render_session_message_envelope
 from zerg.services.session_runtime import current_presence_state_for_session
 
 logger = logging.getLogger(__name__)
@@ -23,7 +24,7 @@ MESSAGE_STATUS_DELIVERED = "delivered"
 MESSAGE_STATUS_STORED_ONLY = "stored_only"
 MESSAGE_STATUS_FAILED = "failed"
 
-MESSAGE_DELIVERABLE_STATES = {"idle", "thinking", "needs_user"}
+MESSAGE_DELIVERABLE_STATES = {"idle", "needs_user"}
 MAX_MESSAGES_PER_SAFE_BOUNDARY = 10
 
 
@@ -50,18 +51,10 @@ def is_session_message_deliverable_state(state: str | None) -> bool:
 
 
 def _build_injected_message(from_session: AgentSession, message: SessionMessage) -> str:
-    device_name = (
-        str(getattr(from_session, "device_name", "") or "").strip()
-        or str(getattr(from_session, "source_runner_name", "") or "").strip()
-        or str(getattr(from_session, "device_id", "") or "").strip()
-        or "unknown-device"
-    )
-    return "\n".join(
-        [
-            f"[Message #{message.id} from session {from_session.id} on {device_name}]",
-            message.body,
-            f"[End message — use session_tail({from_session.id}) for full context]",
-        ]
+    return render_session_message_envelope(
+        sender_session=from_session,
+        message_id=int(message.id),
+        text=message.body,
     )
 
 

@@ -80,6 +80,7 @@ from zerg.services.session_kernel_projection import project_session_lineage_fiel
 from zerg.services.session_listing import SessionListingError
 from zerg.services.session_listing import SessionListParams
 from zerg.services.session_listing import list_agent_sessions
+from zerg.services.session_message_envelope import render_session_message_envelope
 from zerg.services.session_messages import create_session_message
 from zerg.services.session_messages import resolve_session_message_owner_id
 from zerg.services.session_pause_requests import load_hot_session_projection_map
@@ -2232,17 +2233,10 @@ async def _attempt_catalog_message_delivery(
     if not live_control_session_capability_available(target_session, capability="send"):
         return message
 
-    device_name = (
-        str(getattr(sender_session, "device_name", "") or "").strip()
-        or str(getattr(sender_session, "device_id", "") or "").strip()
-        or "unknown-device"
-    )
-    injected_text = "\n".join(
-        [
-            f"[Message #{message['id']} from session {sender_session.id} on {device_name}]",
-            str(message["text"]),
-            f"[End message — use session_tail({sender_session.id}) for full context]",
-        ]
+    injected_text = render_session_message_envelope(
+        sender_session=sender_session,
+        message_id=int(message["id"]),
+        text=str(message["text"]),
     )
     delivery_status = "stored_only"
     delivered_via = None
@@ -2250,15 +2244,21 @@ async def _attempt_catalog_message_delivery(
     last_error = None
     try:
         from zerg.routers.session_chat import INPUT_INTENT_AUTO
+        from zerg.routers.session_chat import INPUT_INTENT_QUEUE
         from zerg.routers.session_chat import SessionInputRequest
         from zerg.routers.session_chat import _create_catalog_session_input_response
+
+        facts = getattr(target_session, "catalog_facts", None)
+        runtime = facts.get("runtime") if isinstance(facts, dict) else None
+        target_phase = str(runtime.get("phase") or "").strip() if isinstance(runtime, dict) else ""
+        intent = INPUT_INTENT_QUEUE if target_phase in {"running", "thinking"} else INPUT_INTENT_AUTO
 
         response = await _create_catalog_session_input_response(
             source_session=target_session,
             owner_id=owner_id,
             body=SessionInputRequest(
                 text=injected_text,
-                intent=INPUT_INTENT_AUTO,
+                intent=intent,
                 client_request_id=f"session-message-{message['id']}",
             ),
             db=None,
@@ -2268,11 +2268,14 @@ async def _attempt_catalog_message_delivery(
             delivered_via = "live_input"
             delivered_at = datetime.now(timezone.utc).isoformat()
         else:
+            delivery_status = "queued"
             delivered_via = "live_input_queue"
     except HTTPException as exc:
+        delivery_status = "failed"
         last_error = str(exc.detail)[:500]
     except Exception as exc:
         logger.warning("Session message %s live delivery failed", message.get("id"), exc_info=True)
+        delivery_status = "failed"
         last_error = str(exc)[:500] or type(exc).__name__
 
     result = await _catalog_message_call(

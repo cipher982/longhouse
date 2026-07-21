@@ -249,7 +249,8 @@ def test_catalog_message_delivery_preserves_owner_and_expected_status(monkeypatc
     target_id = UUID("00000000-0000-0000-0000-000000000022")
     observed = {}
 
-    async def create_input_response(**_kwargs):
+    async def create_input_response(**kwargs):
+        observed["input"] = kwargs["body"]
         return SimpleNamespace(outcome="sent")
 
     async def catalog_call(method, params):
@@ -289,3 +290,56 @@ def test_catalog_message_delivery_preserves_owner_and_expected_status(monkeypatc
     assert observed["method"] == "session.message.delivery.v2"
     assert observed["params"]["owner_id"] == 7
     assert observed["params"]["expected_status"] == "stored_only"
+    assert observed["input"].intent == "auto"
+    assert '"type":"longhouse_collaboration_message"' in observed["input"].text
+
+
+def test_catalog_message_delivery_queues_during_active_turn(monkeypatch):
+    sender_id = UUID("00000000-0000-0000-0000-000000000031")
+    target_id = UUID("00000000-0000-0000-0000-000000000032")
+    observed = {}
+
+    async def create_input_response(**kwargs):
+        observed["input"] = kwargs["body"]
+        return SimpleNamespace(outcome="queued")
+
+    async def catalog_call(method, params):
+        observed["method"] = method
+        observed["params"] = params
+        return {"message": {"id": 14, "delivery_status": params["delivery_status"]}}
+
+    monkeypatch.setattr("zerg.routers.session_chat._create_catalog_session_input_response", create_input_response)
+    monkeypatch.setattr("zerg.routers.agents_sessions._catalog_message_call", catalog_call)
+    response = asyncio.run(
+        _attempt_catalog_message_delivery(
+            owner_id=7,
+            sender_session=SimpleNamespace(id=sender_id, provider="claude", device_name="cinder"),
+            target_session=SimpleNamespace(
+                id=target_id,
+                catalog_facts={
+                    "runtime": {"phase": "thinking"},
+                    "latest_run": {"id": "run-1", "ended_at": None},
+                    "connections": [
+                        {
+                            "state": "attached",
+                            "released_at": None,
+                            "can_send_input": 1,
+                        }
+                    ],
+                },
+            ),
+            message={
+                "id": 14,
+                "text": "queue me",
+                "delivery_status": "stored_only",
+                "delivery_attempts": 0,
+            },
+        )
+    )
+
+    assert response["delivery_status"] == "queued"
+    assert observed["input"].intent == "queue"
+    assert observed["method"] == "session.message.delivery.v2"
+    assert observed["params"]["expected_status"] == "stored_only"
+    assert observed["params"]["delivery_status"] == "queued"
+    assert observed["params"]["delivered_via"] == "live_input_queue"

@@ -289,6 +289,20 @@ test.describe("Session messages", () => {
         });
         return payload.messages[0]?.delivery_status;
       })
+      .toBe("queued");
+    await expect(
+      page.getByTestId("session-timeline-row").filter({ hasText: messageText }),
+    ).toHaveCount(0);
+
+    await sendPresence(request, targetSessionId, "idle");
+
+    await expect
+      .poll(async () => {
+        const payload = await listInboundMessages(request, {
+          sessionId: targetSessionId,
+        });
+        return payload.messages[0]?.delivery_status;
+      })
       .toBe("delivered");
 
     const row = page
