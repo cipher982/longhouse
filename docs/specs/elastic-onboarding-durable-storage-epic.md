@@ -1,7 +1,7 @@
 # Elastic Onboarding and Durable Storage Epic
 
-**Status:** Phase 1 and Phase 2A inventory accepted in production; Phase 2B
-progressive scheduling next
+**Status:** Phase 1 and Phase 2A accepted in production; Phase 2B closeout in
+progress; Phase 3 is the next implementation phase
 **Owner:** Longhouse core and hosted operations
 **Created:** 2026-07-20
 **Scope:** Hosted scale, customer import, storage telemetry, and object-store
@@ -635,6 +635,63 @@ operational or economic benefit exceeds the additional migration risk.
 Legacy cold-monolith retirement remains owned by `speed-of-light-database.md`.
 This epic must not reintroduce it as an object-store migration fallback.
 
+## Execution Contract
+
+This epic is executed as a sequence of independently accepted product phases,
+not as a stream of individually deployed fixes. The objective is to minimize
+wall-clock critical path without weakening data-authority gates.
+
+### Scheduling rules
+
+- Keep one implementation owner and one coherent write stream. Use Hatch for
+  independent read-only design, threat-model, and final-diff review; do not
+  create competing authors in the same worktree.
+- Group code by one phase acceptance invariant. Small fixes within that slice
+  ship together unless the currently deployed build can lose data, cross a
+  tenant boundary, corrupt authority, or break live control.
+- Run formatting, affected unit tests, and the smallest relevant integration
+  proof while iterating. Run one broad repository gate after the phase diff is
+  stable, not after every correction.
+- Run the final targeted tests, independent review, acceptance-query
+  preparation, and rollback/runbook preparation in parallel when they do not
+  contend for the same local compiler or files.
+- Treat the required exact-SHA hosted CI/deploy gate as the broad gate when it
+  duplicates local CI. Authority-changing cutovers additionally require one
+  complete local gate and offline restore/rollback proof.
+- While remote CI or deployment runs, prepare the next phase in a separate
+  worktree or perform read-only research. Do not dirty the exact candidate SHA.
+- Update this ledger and detailed acceptance evidence once per accepted phase.
+  Do not spend a deployment cycle only to update status prose.
+
+### Blocking rule
+
+Work discovered during a phase blocks advancement only when it threatens an
+explicit phase gate or one of these boundaries:
+
+- acknowledged bytes, exact retry, or cursor monotonicity;
+- tenant authorization, deletion, or object namespace isolation;
+- live transcript/control capacity reserved from historical work;
+- deterministic restore, migration, or rollback;
+- truthful user/operator state required to recover the system.
+
+Cosmetic telemetry, log wording, speculative scale tuning, general cleanup,
+and fleet redesign are recorded for their owning later phase. They do not
+silently expand the current phase.
+
+### Current phase ledger
+
+| Phase | State | Next exact gate |
+| --- | --- | --- |
+| 1 — telemetry/baseline | accepted | Retention continues without blocking later phases. |
+| 2A — source inventory | accepted | None. |
+| 2B — progressive import/restart safety | closeout | Deploy the legacy cursor seal, then prove two consecutive restarts create no acknowledged-work replay and no durable cursor/epoch regression. |
+| 3 — remote backup/provider decision | not started | Contract, benchmark, authorization, deletion, catalog backup, and disposable restore proof behind the existing object seam. |
+| 4 — optional remote authority | gated by Phase 3 evidence | Proceed only if remote authority beats tested backup/mirroring for launch. |
+| 5 — projection/cold-read economics | not started | Destructive render/search/recall rebuild from raw truth plus current/cold read proof. |
+| 6A — dogfood migration | not started | Offline snapshot, cutover, complete product validation, and exercised rollback. |
+| 6B — signup burst | not started | Multi-tenant fairness, admission, spending, and pause/resume proof. |
+| 7 — fleet simplification decision | deferred | Keep or change containers/SQLite from measured evidence; a rewrite is not presumed. |
+
 ## Delivery Plan
 
 ### Phase 1 — Telemetry foundation and baseline
@@ -783,6 +840,26 @@ HTTP 200 with the complete inventory above, healthy transport state, five
 provider aggregates, and no source-path values. Phase 2A is accepted. Phase 2B
 owns provider-fair recent-first scheduling, durable progress receipts, pause and
 resume, and restart recovery.
+
+**Phase 2B closeout checkpoint (2026-07-21):** Commits `4e1af6171`,
+`a7e96abd6`, `fa17aac90`, `57891b40a`, `9e47484d5`, `5b53f7743`, and
+`5802cef49` are deployed. They add provider-fair backlog scheduling with live
+reservation, truthful byte progress, durable reconciliation completion, Cursor
+capture high-water retention, SQLite watcher-loop suppression, macOS file
+identity that survives reboot, and immediate pause-aware rescheduling of the
+immutable storage-v2 outbox after restart. Exact dogfood build `5802cef49` is
+clean; the storage-v2 outbox, blocked-source count, active spool, and archive
+backlog are all zero.
+
+Live restart testing exposed one remaining Phase 2 gate failure: 245 obsolete
+v1 `file_state` gaps representing 7,469,578,965 bytes are recreated on each
+process start even though storage-v2 proves those sources current and retires
+the transient spool rows. The reviewed local closeout changes only the legacy
+acked watermark after storage-v2 head proof; it does not advance the
+authoritative source-epoch durable cursor. Phase 2B is accepted only after that
+change is deployed and two consecutive restarts prove zero regenerated gaps,
+zero blocked envelopes, no durable-position regression, and no false source
+replacement. No other cleanup may delay Phase 3.
 
 Deliver discovery inventory, the onboarding state machine, recent-first
 scheduler, provider fairness, byte-based progress/health surfaces, thin

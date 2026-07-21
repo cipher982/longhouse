@@ -1,6 +1,6 @@
 # Durable Shipping Resilience
 
-**Status:** Decision draft
+**Status:** Core resilience implemented; legacy restart-gap closeout pending
 **Owner:** Longhouse core
 **Created:** 2026-07-17
 **Related:** `speed-of-light-shipper.md`, `transcript-convergence.md`,
@@ -243,6 +243,30 @@ Rules:
 
 The primary controller signal is acknowledged bytes/events per second. Attempt
 rate and busy worker count are diagnostics, not success metrics.
+
+### Implementation checkpoint (2026-07-21)
+
+The active Machine Agent now has provider-fair historical scheduling, a live
+capacity reservation, adaptive backlog admission, truthful byte progress,
+immutable exact-retry intents, pause-aware startup/periodic retry scheduling,
+stable macOS source identity across reboot, and durable reconciliation sealing.
+Production restart recovery drained every immutable pending envelope without a
+blocked source or acknowledged-position regression.
+
+One compatibility loop remains before this document's restart invariant is
+accepted: storage-v2 head proof deletes matching v1 spool pointers but the old
+`file_state.acked_offset` remains behind `queued_offset`. The next restart
+therefore reconstructs the same 245 pointers (7,469,578,965 bytes) and retires
+them locally again. The reviewed closeout seals only that obsolete v1 watermark
+after storage-v2 reports `Current` or receipts a final envelope, then deletes
+the matching spool pointers. Acceptance requires the first restart to seal the
+real rows and a second restart to create none while the authoritative v2 lane
+cursor and source epochs remain unchanged.
+
+The broader exact-source operator commands, preparation-quarantine model, and
+managed-process reap described below are adjacent resilience work. They do not
+expand the current elastic-onboarding phase unless a named phase gate exercises
+and fails one of those paths.
 
 ## Durable Local State
 
