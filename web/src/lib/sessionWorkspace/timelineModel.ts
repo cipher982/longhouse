@@ -281,6 +281,19 @@ export function isToolInteractionRunning(interaction: ToolInteraction): boolean 
   return interaction.callEvent?.tool_call_state === "running";
 }
 
+export function getToolInputRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+export function formatToolInput(value: unknown): string | null {
+  if (value == null) return null;
+  if (typeof value === "string") return value;
+  const serialized = JSON.stringify(value, null, 2);
+  return serialized ?? String(value);
+}
+
 export function getToolDuration(callEvent: AgentEvent | null, resultEvent: AgentEvent | null): string | null {
   if (!callEvent || !resultEvent) return null;
 
@@ -298,7 +311,8 @@ export function getToolSummary(interaction: ToolInteraction): string {
   const { callEvent, resultEvent } = interaction;
 
   if (callEvent?.tool_input_json) {
-    const input = callEvent.tool_input_json;
+    const input = getToolInputRecord(callEvent.tool_input_json);
+    if (!input) return (formatToolInput(callEvent.tool_input_json) ?? "").slice(0, 120).replace(/\n/g, " ");
     if ("description" in input && "prompt" in input) return String(input.description).slice(0, 120);
     if ("file_path" in input) return truncatePath(String(input.file_path));
     if ("command" in input) return String(input.command).slice(0, 120);

@@ -394,6 +394,38 @@ describe("TimelinePane", () => {
     expect(row).toHaveClass("tl-action--dropped");
   });
 
+  it("renders provider-native free-form tool input without crashing the timeline", () => {
+    const item = makePendingToolItem("running");
+    if (item.kind !== "tool") throw new Error("expected tool fixture");
+    item.interaction.callEvent!.tool_input_json = "*** Begin Patch\n*** Update File: example.ts";
+
+    render(
+      <TimelinePane
+        items={[item]}
+        totalEntries={1}
+        loadedEntries={1}
+        abandonedEvents={0}
+        showAbandonedBranches={false}
+        onShowAbandonedBranchesChange={vi.fn()}
+        hasPreviousPage={false}
+        isFetchingPreviousPage={false}
+        onFetchPreviousPage={vi.fn()}
+        loading={false}
+        error={null}
+        selectedKey={null}
+        onSelectKey={vi.fn()}
+      />,
+    );
+
+    const row = screen.getByTestId("session-timeline-row");
+    expect(row).toHaveTextContent(
+      "*** Begin Patch *** Update File: example.ts",
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Bash/ }));
+    expect(row).toHaveTextContent("*** Begin Patch");
+    expect(row).toHaveTextContent("*** Update File: example.ts");
+  });
+
   it("renders AskUserQuestion as a readable terminal-only question instead of a dropped tool", () => {
     render(
       <TimelinePane

@@ -13,11 +13,13 @@ import type {
 import {
   formatContinuationStamp,
   formatExplorationSummary,
+  formatToolInput,
   formatTime,
   getTimelineMessagePreview,
   getToolDisplayInfo,
   getToolDuration,
   getToolExitCode,
+  getToolInputRecord,
   getToolSummary,
   getToolTier,
   isAgentToolInteraction,
@@ -452,9 +454,13 @@ function ToolDetail({
   interaction: ToolInteraction;
   renderMedia: boolean;
 }) {
-  const rawInput = interaction.callEvent?.tool_input_json as Record<string, unknown> | null | undefined;
-  const editPatch = editPatchFromInput(rawInput);
-  const hasInput = rawInput != null && Object.keys(rawInput).length > 0;
+  const rawInput = interaction.callEvent?.tool_input_json;
+  const inputRecord = getToolInputRecord(rawInput);
+  const inputText = formatToolInput(rawInput);
+  const editPatch = editPatchFromInput(inputRecord);
+  const hasInput = inputRecord
+    ? Object.keys(inputRecord).length > 0
+    : Boolean(inputText?.trim());
   const parsedOutput = interaction.resultEvent?.tool_output_text
     ? parseLonghouseOutput(interaction.resultEvent.tool_output_text)
     : null;
@@ -472,7 +478,11 @@ function ToolDetail({
       ) : hasInput ? (
         <section className="tl-detail__block">
           <div className="tl-detail__label">input</div>
-          <CodeBlock text={JSON.stringify(rawInput, null, 2)} language="json" variant="input" />
+          <CodeBlock
+            text={inputText!}
+            language={inputRecord ? "json" : detectLanguage(inputText!, { toolName: interaction.toolName })}
+            variant="input"
+          />
         </section>
       ) : null}
       <section className="tl-detail__block">
@@ -481,7 +491,7 @@ function ToolDetail({
           <CodeBlock
             text={outputText}
             language={detectLanguage(outputText, {
-              filePath: typeof rawInput?.file_path === "string" ? rawInput.file_path : null,
+              filePath: typeof inputRecord?.file_path === "string" ? inputRecord.file_path : null,
               toolName: interaction.toolName,
             })}
             variant="output"
@@ -525,8 +535,9 @@ function ActionCard({
   const dropped = isToolInteractionDropped(interaction);
   const pending = isToolInteractionRunning(interaction);
   const isAgent = isAgentToolInteraction(interaction);
+  const inputRecord = getToolInputRecord(interaction.callEvent?.tool_input_json);
   const agentType = isAgent
-    ? ((interaction.callEvent?.tool_input_json as Record<string, unknown> | null)?.subagent_type as string | undefined)
+    ? (inputRecord?.subagent_type as string | undefined)
     : undefined;
   const outside =
     isOutsideActiveContext(interaction.callEvent) || isOutsideActiveContext(interaction.resultEvent);
@@ -766,7 +777,7 @@ function NoiseChip({
 }
 
 function AskUserQuestionRow({ interaction, rowId }: { interaction: ToolInteraction; rowId: string }) {
-  const rawInput = interaction.callEvent?.tool_input_json as Record<string, unknown> | null | undefined;
+  const rawInput = getToolInputRecord(interaction.callEvent?.tool_input_json);
   const questions = normalizeTranscriptQuestions(rawInput);
   const title = questions[0]?.header || "Question";
   const resultText = nonEmptyText(interaction.resultEvent?.tool_output_text);
@@ -1013,10 +1024,8 @@ export function TimelinePane({
         item.kind === "noise_group" ? item.group.interactions : [item.interaction];
       return interactions.some((interaction) => {
         if (interaction.toolName.toLowerCase().includes(query)) return true;
-        if (
-          interaction.callEvent?.tool_input_json &&
-          JSON.stringify(interaction.callEvent.tool_input_json).toLowerCase().includes(query)
-        ) {
+        const toolInput = formatToolInput(interaction.callEvent?.tool_input_json);
+        if (toolInput?.toLowerCase().includes(query)) {
           return true;
         }
         if (interaction.resultEvent?.tool_output_text?.toLowerCase().includes(query)) return true;

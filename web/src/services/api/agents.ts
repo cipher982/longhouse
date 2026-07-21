@@ -133,7 +133,8 @@ export interface SessionTranscriptPreview {
   text: string;
   role?: string;
   tool_name?: string | null;
-  tool_input_json?: Record<string, unknown> | null;
+  /** Provider-native tool input; free-form tools may emit a JSON string. */
+  tool_input_json?: unknown;
   tool_output_text?: string | null;
   tool_call_id?: string | null;
   tool_call_state?: "running" | "completed" | "dropped" | null;
@@ -459,7 +460,8 @@ export interface AgentEvent {
   raw_content_text?: string | null;
   input_origin?: AgentEventInputOrigin | null;
   tool_name: string | null;
-  tool_input_json: Record<string, unknown> | null;
+  /** Provider-native tool input; free-form tools may emit a JSON string. */
+  tool_input_json: unknown;
   tool_output_text: string | null;
   tool_call_id: string | null;
   tool_call_state?: "running" | "completed" | "dropped" | null;
