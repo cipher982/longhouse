@@ -619,6 +619,24 @@ function buildGroupedQueryTimelineCards(sessions: AgentSession[]): TimelineSessi
     .filter((card): card is TimelineSessionCard => card != null);
 }
 
+function isTimelineSessionCard(value: AgentSession | TimelineSessionCard): value is TimelineSessionCard {
+  return (
+    typeof value === "object"
+    && value !== null
+    && "thread_id" in value
+    && typeof value.thread_id === "string"
+    && "head" in value
+    && typeof value.head === "object"
+    && value.head !== null
+    && "detail" in value
+    && typeof value.detail === "object"
+    && value.detail !== null
+    && "root" in value
+    && typeof value.root === "object"
+    && value.root !== null
+  );
+}
+
 /**
  * List agent sessions with optional filters.
  */
@@ -645,16 +663,25 @@ export async function fetchAgentSessions(
 
   const groupedQueryMode = !!filters.query || (filters.mode != null && filters.mode !== "lexical");
   if (groupedQueryMode) {
-    // Query-driven search still comes back as raw session hits today; collapse
-    // those client-side until thread-aware query paging/ranking is designed cleanly.
-    const rawResponse = await request<AgentSessionsListResponse>(path, { method: "GET" });
+    // Storage-v2 returns canonical thread cards while the legacy/self-hosted
+    // compatibility path still returns raw session hits. Normalize either wire
+    // contract exactly once; re-grouping an already-threaded card nests the card
+    // inside `head` and strips the AgentSession runtime contract from the UI.
+    const rawResponse = await request<AgentSessionsListResponse | TimelineSessionsListResponse>(
+      path,
+      { method: "GET" },
+    );
+    const sourceSessions = rawResponse.sessions;
+    const sessions = sourceSessions.every(isTimelineSessionCard)
+      ? sourceSessions
+      : buildGroupedQueryTimelineCards(sourceSessions as AgentSession[]);
     return {
-      sessions: buildGroupedQueryTimelineCards(rawResponse.sessions),
+      sessions,
       total: rawResponse.total,
       has_real_sessions: rawResponse.has_real_sessions,
       query_grouping_mode: "grouped_results",
-      query_grouping_has_more: (filters.offset || 0) + rawResponse.sessions.length < rawResponse.total,
-      query_grouping_source_count: rawResponse.sessions.length,
+      query_grouping_has_more: (filters.offset || 0) + sourceSessions.length < rawResponse.total,
+      query_grouping_source_count: sourceSessions.length,
     };
   }
 
