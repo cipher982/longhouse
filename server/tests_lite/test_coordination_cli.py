@@ -395,9 +395,12 @@ def test_peers_command_json_output(monkeypatch):
                         "has_live_presence": True,
                         "device_name": "demo-machine",
                         "provider": "codex",
+                        "cwd": "/Users/dev/git/longhouse",
+                        "git_repo": "git@github.com:cipher982/longhouse.git",
                         "presence_state": "thinking",
                         "summary_title": "Peer",
                         "git_branch": "main",
+                        "pending_inbound_messages": 2,
                     }
                 ],
                 "total": 1,
@@ -420,6 +423,8 @@ def test_peers_command_json_output(monkeypatch):
     assert '"repo": "git@github.com:cipher982/longhouse.git"' in result.output
     assert '"total": 1' in result.output
     assert '"session_id": "22222222-2222-2222-2222-222222222222"' in result.output
+    assert '"cwd": "/Users/dev/git/longhouse"' in result.output
+    assert '"pending_inbound_messages": 2' in result.output
 
 
 def test_message_command_uses_from_session_header(monkeypatch):

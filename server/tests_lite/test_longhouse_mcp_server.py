@@ -222,9 +222,12 @@ async def test_peers_infers_repo_from_current_session(monkeypatch):
                             "has_live_presence": True,
                             "device_name": "demo-machine",
                             "provider": "codex",
+                            "cwd": "/Users/dev/git/longhouse",
+                            "git_repo": "git@github.com:cipher982/longhouse.git",
                             "presence_state": "thinking",
                             "summary_title": "Peer",
                             "git_branch": "main",
+                            "pending_inbound_messages": 2,
                         },
                     ],
                     "total": 2,
@@ -242,7 +245,25 @@ async def test_peers_infers_repo_from_current_session(monkeypatch):
 
     payload = json.loads(result)
     assert payload["total"] == 1
-    assert payload["peers"][0]["session_id"] == "22222222-2222-2222-2222-222222222222"
+    assert payload["repo"] == "git@github.com:cipher982/longhouse.git"
+    assert payload["active_only"] is True
+    assert payload["peers"][0] == {
+        "session_id": "22222222-2222-2222-2222-222222222222",
+        "device_name": "demo-machine",
+        "provider": "codex",
+        "cwd": "/Users/dev/git/longhouse",
+        "git_repo": "git@github.com:cipher982/longhouse.git",
+        "git_branch": "main",
+        "summary_title": "Peer",
+        "presence_state": "thinking",
+        "pending_inbound_messages": 2,
+        "kernel_control_label": None,
+        "kernel_live_control_available": None,
+        "kernel_host_reattach_available": None,
+        "kernel_observe_only": None,
+        "kernel_search_only": None,
+        "kernel_staleness_reason": None,
+    }
     assert mock_get.await_args_list[0].args == ("/api/agents/sessions/11111111-1111-1111-1111-111111111111",)
     assert mock_get.await_args_list[1].args == ("/api/agents/sessions/wall",)
     assert mock_get.await_args_list[1].kwargs["params"] == {
@@ -311,6 +332,45 @@ async def test_semantic_search_sessions_fails_loud_instead_of_falling_back():
     assert payload["retry"] == "Call search_sessions with semantic=false for lexical search."
     assert mock_get.await_count == 1
     assert mock_get.await_args.args == ("/api/agents/sessions/semantic",)
+
+
+@pytest.mark.asyncio
+async def test_search_sessions_preserves_structured_owner_scope_error():
+    server = create_server("http://example.com", "test-token")
+    tool = server._tool_manager._tools["search_sessions"]
+    response = type(
+        "Resp",
+        (),
+        {
+            "status_code": 503,
+            "text": json.dumps(
+                {
+                    "detail": {
+                        "code": "canonical_owner_required",
+                        "message": "Canonical owner scope is unavailable.",
+                    }
+                }
+            ),
+        },
+    )()
+
+    with patch(
+        "zerg.mcp_server.server.LonghouseAPIClient.get",
+        new=AsyncMock(return_value=response),
+    ):
+        result = await tool.run({"query": "coordination"})
+
+    payload = json.loads(result)
+    assert payload == {
+        "error": "API returned 503",
+        "status_code": 503,
+        "detail": {
+            "code": "canonical_owner_required",
+            "message": "Canonical owner scope is unavailable.",
+        },
+        "code": "canonical_owner_required",
+        "message": "Canonical owner scope is unavailable.",
+    }
 
 
 @pytest.mark.asyncio

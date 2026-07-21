@@ -341,6 +341,12 @@ def peers(
                 "session_id": item.get("session_id"),
                 "device_name": item.get("device_name"),
                 "provider": item.get("provider"),
+                "cwd": item.get("cwd"),
+                "git_repo": item.get("git_repo"),
+                "git_branch": item.get("git_branch"),
+                "summary_title": item.get("summary_title"),
+                "presence_state": item.get("presence_state"),
+                "pending_inbound_messages": item.get("pending_inbound_messages", 0),
                 "kernel_control_label": _wall_value(item, "kernel_control_label", "control_label"),
                 "kernel_live_control_available": _wall_value(
                     item,
@@ -355,9 +361,6 @@ def peers(
                 "kernel_observe_only": _wall_value(item, "kernel_observe_only", "observe_only"),
                 "kernel_search_only": _wall_value(item, "kernel_search_only", "search_only"),
                 "kernel_staleness_reason": _wall_value(item, "kernel_staleness_reason", "staleness_reason"),
-                "presence_state": item.get("presence_state"),
-                "summary_title": item.get("summary_title"),
-                "git_branch": item.get("git_branch"),
             }
         )
 

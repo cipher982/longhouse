@@ -37,6 +37,40 @@ def _format_error(exc: Exception, api_url: str) -> str:
     return json.dumps({"error": msg or repr(exc)})
 
 
+def _format_api_error(
+    response: httpx.Response,
+    *,
+    error: str | None = None,
+    retry: str | None = None,
+) -> str:
+    """Preserve structured API failure codes for agent-facing diagnosis."""
+    payload: dict = {
+        "error": error or f"API returned {response.status_code}",
+        "status_code": response.status_code,
+    }
+    raw_detail = response.text[:500]
+    try:
+        parsed = json.loads(response.text)
+    except (TypeError, json.JSONDecodeError):
+        parsed = None
+
+    detail = parsed.get("detail") if isinstance(parsed, dict) and "detail" in parsed else parsed
+    payload["detail"] = detail if detail is not None else raw_detail
+    if isinstance(parsed, dict):
+        code = parsed.get("code")
+        message = parsed.get("message")
+        if isinstance(detail, dict):
+            code = code or detail.get("code")
+            message = message or detail.get("message")
+        if code:
+            payload["code"] = code
+        if message:
+            payload["message"] = message
+    if retry:
+        payload["retry"] = retry
+    return json.dumps(payload)
+
+
 def _truncate_event(event: dict, max_chars: int, include_tool_output: bool) -> dict:
     """Truncate large content fields in an event dict.
 
@@ -121,14 +155,12 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
             resp = await client.get(path, params=params)
             if resp.status_code != 200:
                 if semantic:
-                    return json.dumps(
-                        {
-                            "error": f"Semantic search unavailable: API returned {resp.status_code}",
-                            "detail": resp.text[:500],
-                            "retry": "Call search_sessions with semantic=false for lexical search.",
-                        }
+                    return _format_api_error(
+                        resp,
+                        error=f"Semantic search unavailable: API returned {resp.status_code}",
+                        retry="Call search_sessions with semantic=false for lexical search.",
                     )
-                return json.dumps({"error": f"API returned {resp.status_code}", "detail": resp.text[:500]})
+                return _format_api_error(resp)
             return resp.text
         except Exception as exc:
             return _format_error(exc, api_url)
@@ -261,12 +293,7 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
                 params=params,
             )
             if events_resp.status_code != 200:
-                return json.dumps(
-                    {
-                        "error": f"API returned {events_resp.status_code}",
-                        "detail": events_resp.text[:500],
-                    }
-                )
+                return _format_api_error(events_resp)
 
             data = events_resp.json()
             events = [_truncate_event(e, max_content_chars, True) for e in data.get("events", [])]
@@ -355,17 +382,14 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
         try:
             resp = await client.get("/api/agents/recall", params=params)
             if resp.status_code != 200:
-                payload: dict = {
-                    "error": f"API returned {resp.status_code}",
-                    "detail": resp.text[:500],
-                }
+                retry = None
                 if resp.status_code == 503:
-                    payload["retry"] = (
+                    retry = (
                         "Call search_sessions (lexical / semantic=false) for the "
                         "same query, then get_session_detail. recall needs the "
                         "derived search index; search_sessions uses the primary store."
                     )
-                return json.dumps(payload)
+                return _format_api_error(resp, retry=retry)
             return resp.text
         except Exception as exc:
             return _format_error(exc, api_url)
@@ -402,7 +426,7 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
         try:
             resp = await client.get("/api/agents/sessions/wall", params=params)
             if resp.status_code != 200:
-                return json.dumps({"error": f"API returned {resp.status_code}", "detail": resp.text[:500]})
+                return _format_api_error(resp)
             return resp.text
         except Exception as exc:
             return _format_error(exc, api_url)
@@ -436,7 +460,7 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
                 params={"limit": min(limit, 100)},
             )
             if resp.status_code != 200:
-                return json.dumps({"error": f"API returned {resp.status_code}", "detail": resp.text[:500]})
+                return _format_api_error(resp)
             return resp.text
         except Exception as exc:
             return _format_error(exc, api_url)
@@ -449,10 +473,11 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
         repo: str | None = None,
         active_only: bool = True,
     ) -> str:
-        """List nearby same-repo peer sessions.
+        """List current same-repo collaborators from the live Longhouse wall.
 
         When repo is omitted, the tool tries to infer it from the current
-        managed session context when available.
+        managed session context when available. Use this for live coordination;
+        use search_sessions for historical work discovery.
         """
         current_session_id = get_managed_session_id()
         resolved_repo = repo
@@ -484,7 +509,7 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
                 params={"repo": resolved_repo, "days": 7},
             )
             if resp.status_code != 200:
-                return json.dumps({"error": f"API returned {resp.status_code}", "detail": resp.text[:500]})
+                return _format_api_error(resp)
             payload = json.loads(resp.text)
             sessions = []
             for item in payload.get("sessions", []):
@@ -497,18 +522,21 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
                         "session_id": item.get("session_id"),
                         "device_name": item.get("device_name"),
                         "provider": item.get("provider"),
+                        "cwd": item.get("cwd"),
+                        "git_repo": item.get("git_repo"),
+                        "git_branch": item.get("git_branch"),
+                        "summary_title": item.get("summary_title"),
+                        "presence_state": item.get("presence_state"),
+                        "pending_inbound_messages": item.get("pending_inbound_messages", 0),
                         "kernel_control_label": item.get("kernel_control_label"),
                         "kernel_live_control_available": item.get("kernel_live_control_available"),
                         "kernel_host_reattach_available": item.get("kernel_host_reattach_available"),
                         "kernel_observe_only": item.get("kernel_observe_only"),
                         "kernel_search_only": item.get("kernel_search_only"),
                         "kernel_staleness_reason": item.get("kernel_staleness_reason"),
-                        "presence_state": item.get("presence_state"),
-                        "summary_title": item.get("summary_title"),
-                        "git_branch": item.get("git_branch"),
                     }
                 )
-            return json.dumps({"peers": sessions, "total": len(sessions)})
+            return json.dumps({"repo": resolved_repo, "active_only": active_only, "peers": sessions, "total": len(sessions)})
         except Exception as exc:
             return _format_error(exc, api_url)
 
@@ -546,7 +574,7 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
                 headers={_CURRENT_SESSION_HEADER: from_session_id},
             )
             if resp.status_code not in (200, 201):
-                return json.dumps({"error": f"API returned {resp.status_code}", "detail": resp.text[:500]})
+                return _format_api_error(resp)
             return resp.text
         except Exception as exc:
             return _format_error(exc, api_url)
@@ -591,7 +619,7 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
                 headers={_CURRENT_SESSION_HEADER: current_session_id},
             )
             if resp.status_code != 200:
-                return json.dumps({"error": f"API returned {resp.status_code}", "detail": resp.text[:500]})
+                return _format_api_error(resp)
             return resp.text
         except Exception as exc:
             return _format_error(exc, api_url)
@@ -623,7 +651,7 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
                 headers={_CURRENT_SESSION_HEADER: current_session_id},
             )
             if resp.status_code != 200:
-                return json.dumps({"error": f"API returned {resp.status_code}", "detail": resp.text[:500]})
+                return _format_api_error(resp)
             return resp.text
         except Exception as exc:
             return _format_error(exc, api_url)
