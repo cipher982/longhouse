@@ -379,7 +379,7 @@ pub async fn cmd_ship(
             // New content available
             files_to_ship.push((path.clone(), *provider, current_offset));
         } else {
-            file_state.record_file_identity_if_missing(&path_str, current_identity.as_deref())?;
+            file_state.record_continuous_file_identity(&path_str, current_identity.as_deref())?;
         }
         // file_size == current_offset: no new content, skip
     }

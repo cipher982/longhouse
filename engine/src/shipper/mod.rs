@@ -31,7 +31,7 @@ use crate::shipping_stats::{
     RecentShipStatsTracker, ShipAttemptOutcome, ShipLane, ShipStageTimings,
 };
 use crate::source_line_claims;
-use crate::state::file_identity::identity_from_metadata;
+use crate::state::file_identity::{file_identities_match, identity_from_metadata};
 use crate::state::file_state::FileState;
 use crate::state::live_file_state::LiveFileState;
 use crate::state::spool::Spool;
@@ -759,7 +759,7 @@ pub fn prepare_file(
         file_state.reset_offsets(&path_str)?;
         Some(truncation_rewind_hint(&path_str))
     } else {
-        file_state.record_file_identity_if_missing(&path_str, current_identity.as_deref())?;
+        file_state.record_continuous_file_identity(&path_str, current_identity.as_deref())?;
         None
     };
 
@@ -1140,10 +1140,9 @@ pub(crate) fn file_identity_changed_for_cursor(
     if current_offset == 0 && queued_offset == 0 {
         return false;
     }
-    matches!(
-        (stored_identity, current_identity),
-        (Some(stored), Some(current)) if stored != current
-    )
+    stored_identity.is_some()
+        && current_identity.is_some()
+        && !file_identities_match(stored_identity, current_identity)
 }
 
 fn dead_letter_from_compressed_range(
@@ -1881,11 +1880,11 @@ pub(crate) fn prepare_file_batches_with_source_line_mode_parse_tracker_and_trace
         match cursor_mode {
             CursorMode::Archive => {
                 file_state
-                    .record_file_identity_if_missing(&path_str, current_identity.as_deref())?;
+                    .record_continuous_file_identity(&path_str, current_identity.as_deref())?;
             }
             CursorMode::Live => {
                 live_file_state
-                    .record_file_identity_if_missing(&path_str, current_identity.as_deref())?;
+                    .record_continuous_file_identity(&path_str, current_identity.as_deref())?;
             }
         }
         None

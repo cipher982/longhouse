@@ -10,7 +10,9 @@ use anyhow::Result;
 use chrono::Utc;
 use rusqlite::Connection;
 
-use super::file_identity::{current_file_identity, cursor_fingerprint};
+use super::file_identity::{
+    current_file_identity, cursor_fingerprint, strongest_matching_file_identity,
+};
 
 /// A tracked session file.
 #[derive(Debug, Clone)]
@@ -87,8 +89,8 @@ impl<'a> FileState<'a> {
         }
     }
 
-    /// Backfill identity for old rows without changing offsets.
-    pub fn record_file_identity_if_missing(
+    /// Persist the strongest identity for a source already proven continuous.
+    pub fn record_continuous_file_identity(
         &self,
         file_path: &str,
         file_identity: Option<&str>,
@@ -96,12 +98,20 @@ impl<'a> FileState<'a> {
         let Some(file_identity) = file_identity else {
             return Ok(());
         };
+        let stored = self.get_file_identity(file_path)?;
+        let preferred = match stored.as_deref() {
+            Some(stored) => strongest_matching_file_identity(stored, file_identity),
+            None => Some(file_identity),
+        };
+        let Some(preferred) = preferred else {
+            return Ok(());
+        };
         let now = Utc::now().to_rfc3339();
         self.conn.execute(
             "UPDATE file_state
              SET file_identity = ?1, last_updated = ?2
-             WHERE path = ?3 AND file_identity IS NULL",
-            rusqlite::params![file_identity, now, file_path],
+             WHERE path = ?3 AND file_identity IS NOT ?1",
+            rusqlite::params![preferred, now, file_path],
         )?;
         Ok(())
     }
@@ -116,7 +126,7 @@ impl<'a> FileState<'a> {
         provider: &str,
     ) -> Result<()> {
         let now = Utc::now().to_rfc3339();
-        let file_identity = current_file_identity(file_path);
+        let file_identity = self.preferred_current_identity(file_path)?;
         let acked_cursor_fingerprint = cursor_fingerprint(std::path::Path::new(file_path), offset);
         self.conn.execute(
             "INSERT INTO file_state (path, provider, queued_offset, acked_offset, file_identity, acked_cursor_fingerprint, session_id, provider_session_id, last_updated)
@@ -156,7 +166,7 @@ impl<'a> FileState<'a> {
         provider_session_id: &str,
     ) -> Result<()> {
         let now = Utc::now().to_rfc3339();
-        let file_identity = current_file_identity(file_path);
+        let file_identity = self.preferred_current_identity(file_path)?;
         self.conn.execute(
             "INSERT INTO file_state (path, provider, queued_offset, acked_offset, file_identity, session_id, provider_session_id, last_updated)
              VALUES (?1, ?2, MAX(?3, 0), 0, ?4, ?5, ?6, ?7)
@@ -200,7 +210,7 @@ impl<'a> FileState<'a> {
     /// Reset both offsets to 0 (e.g., after file truncation).
     pub fn reset_offsets(&self, file_path: &str) -> Result<()> {
         let now = Utc::now().to_rfc3339();
-        let file_identity = current_file_identity(file_path);
+        let file_identity = self.preferred_current_identity(file_path)?;
         self.conn.execute(
             "UPDATE file_state
              SET queued_offset = 0,
@@ -212,6 +222,20 @@ impl<'a> FileState<'a> {
             rusqlite::params![file_identity, now, file_path],
         )?;
         Ok(())
+    }
+
+    fn preferred_current_identity(&self, file_path: &str) -> Result<Option<String>> {
+        let current = current_file_identity(file_path);
+        let Some(current) = current else {
+            return Ok(None);
+        };
+        let stored = self.get_file_identity(file_path)?;
+        Ok(Some(match stored.as_deref() {
+            Some(stored) => strongest_matching_file_identity(stored, &current)
+                .unwrap_or(&current)
+                .to_string(),
+            None => current,
+        }))
     }
 
     /// Get files where queued_offset > acked_offset (need recovery on startup).

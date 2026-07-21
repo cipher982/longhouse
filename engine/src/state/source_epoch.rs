@@ -14,7 +14,9 @@ use chrono::Utc;
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use uuid::Uuid;
 
-use super::file_identity::identity_from_metadata;
+use super::file_identity::{
+    file_identities_match, identity_from_metadata, strongest_matching_file_identity,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceLane {
@@ -157,7 +159,10 @@ pub fn observe_source(
         );
     }
     let rotate_reason = if let Some(active) = &active {
-        if active.file_incarnation != file_incarnation {
+        if !file_identities_match(
+            Some(active.file_incarnation.as_str()),
+            Some(file_incarnation),
+        ) {
             Some(EpochStartReason::Replacement)
         } else if source_len < active.max_observed_len as i64 || position > source_len {
             Some(EpochStartReason::Truncation)
@@ -184,14 +189,19 @@ pub fn observe_source(
 
     let resolved = match (active, rotate_reason) {
         (Some(active), None) => {
+            let persisted_incarnation =
+                strongest_matching_file_identity(&active.file_incarnation, file_incarnation)
+                    .expect("non-rotated source identities must match");
             tx.execute(
                 "UPDATE source_epoch_registry
-                 SET max_observed_len = MAX(max_observed_len, ?1),
-                     source_revision = COALESCE(?2, source_revision),
-                     bound_session_id = COALESCE(?3, bound_session_id),
-                     updated_at = ?4
-                 WHERE source_epoch = ?5",
+                 SET file_incarnation = ?1,
+                     max_observed_len = MAX(max_observed_len, ?2),
+                     source_revision = COALESCE(?3, source_revision),
+                     bound_session_id = COALESCE(?4, bound_session_id),
+                     updated_at = ?5
+                 WHERE source_epoch = ?6",
                 params![
+                    persisted_incarnation,
                     source_len,
                     source_revision,
                     bound_session_id,
@@ -729,6 +739,87 @@ mod tests {
             })
             .unwrap();
         assert_eq!(retained, 6);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_device_remap_preserves_epoch_lane_and_upgrades_identity() {
+        let mut conn = crate::state::db::open_db(None).unwrap();
+        let initial = observe_source(
+            &mut conn,
+            "codex",
+            "path-sha256:stable",
+            "unix:16777230:4242",
+            100,
+            SourceLane::Durable,
+            0,
+            None,
+            None,
+            SourceChangeHint::None,
+        )
+        .unwrap();
+        acknowledge_position(&mut conn, initial.source_epoch, SourceLane::Durable, 0, 80).unwrap();
+
+        let after_reboot = observe_source(
+            &mut conn,
+            "codex",
+            "path-sha256:stable",
+            "macos-file-v1:4242:999",
+            100,
+            SourceLane::Durable,
+            0,
+            None,
+            None,
+            SourceChangeHint::None,
+        )
+        .unwrap();
+
+        assert_eq!(after_reboot.source_epoch, initial.source_epoch);
+        assert!(!after_reboot.created);
+        assert_eq!(
+            lane_position(&conn, initial.source_epoch, SourceLane::Durable).unwrap(),
+            80
+        );
+        assert_eq!(
+            active_source_incarnation(&conn, "codex", "path-sha256:stable").unwrap(),
+            Some("macos-file-v1:4242:999".to_string())
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_inode_reuse_with_new_birth_time_still_rotates() {
+        let mut conn = crate::state::db::open_db(None).unwrap();
+        let initial = observe_source(
+            &mut conn,
+            "codex",
+            "path-sha256:reused",
+            "macos-file-v1:4242:999",
+            100,
+            SourceLane::Durable,
+            0,
+            None,
+            None,
+            SourceChangeHint::None,
+        )
+        .unwrap();
+        let replacement = observe_source(
+            &mut conn,
+            "codex",
+            "path-sha256:reused",
+            "macos-file-v1:4242:1000",
+            100,
+            SourceLane::Durable,
+            0,
+            None,
+            None,
+            SourceChangeHint::None,
+        )
+        .unwrap();
+
+        assert!(replacement.created);
+        assert_eq!(replacement.start_reason, EpochStartReason::Replacement);
+        assert_eq!(replacement.predecessor_epoch, Some(initial.source_epoch));
     }
 
     #[test]

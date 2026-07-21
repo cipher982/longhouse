@@ -31,7 +31,9 @@ use crate::shipping::storage_v2::{
 use crate::shipping::storage_v2::{StorageV2Render, StorageV2RenderRecord, StorageV2SessionFacts};
 use crate::state::cursor_store_records;
 use crate::state::cursor_store_root;
-use crate::state::file_identity::{cursor_fingerprint, identity_from_metadata};
+use crate::state::file_identity::{
+    cursor_fingerprint, file_identities_match, identity_from_metadata,
+};
 use crate::state::file_state::FileState;
 use crate::state::pending_source_envelope::{self, PendingSourceEnvelope};
 use crate::state::source_epoch::{self, SourceChangeHint, SourceEpochResolution, SourceLane};
@@ -1266,7 +1268,10 @@ fn prepare_next_cursor_envelope_outcome_with_limit(
             .metadata()
             .with_context(|| format!("rechecking Cursor store metadata {}", db_path.display()))?,
     );
-    if identity_after_render.as_deref() != Some(store_incarnation.as_str()) {
+    if !file_identities_match(
+        Some(store_incarnation.as_str()),
+        identity_after_render.as_deref(),
+    ) {
         anyhow::bail!("Cursor store file changed identity during root capture");
     }
     let snapshot =
@@ -1301,7 +1306,7 @@ fn prepare_next_cursor_envelope_outcome_with_limit(
         source_epoch::active_source_incarnation(conn, "cursor", &opaque_source_id)?;
     let source_len_before_capture = if root_relation
         == cursor_store_root::CursorRootOrderRelation::Rewrite
-        || active_incarnation.as_deref() != Some(incarnation.as_str())
+        || !file_identities_match(active_incarnation.as_deref(), Some(incarnation.as_str()))
     {
         0
     } else {
@@ -1396,7 +1401,10 @@ fn prepare_next_cursor_envelope_outcome_with_limit(
             .metadata()
             .with_context(|| format!("rechecking Cursor store metadata {}", db_path.display()))?,
     );
-    if identity_after_blobs.as_deref() != Some(store_incarnation.as_str()) {
+    if !file_identities_match(
+        Some(store_incarnation.as_str()),
+        identity_after_blobs.as_deref(),
+    ) {
         anyhow::bail!("Cursor store file changed identity during blob capture");
     }
     cursor_store_records::append_unseen_cursor_records(
@@ -1875,11 +1883,11 @@ fn validated_legacy_offset(conn: &Connection, path_text: &str, path: &Path) -> R
     let current_identity = identity_from_metadata(&metadata);
     let stored_fingerprint = file_state.get_acked_cursor_fingerprint(path_text)?;
     let current_fingerprint = cursor_fingerprint(path, offset);
-    if stored_identity == current_identity
-        && stored_identity.is_some()
+    if file_identities_match(stored_identity.as_deref(), current_identity.as_deref())
         && stored_fingerprint == current_fingerprint
         && stored_fingerprint.is_some()
     {
+        file_state.record_continuous_file_identity(path_text, current_identity.as_deref())?;
         return Ok(offset);
     }
     tracing::warn!(
@@ -3656,6 +3664,47 @@ mod tests {
                 "claude",
             )
             .unwrap();
+
+        let prepared = prepare_next_envelope(&mut conn, &capabilities(), &path, "claude", None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(prepared.range_start, first.len() as u64);
+        assert_eq!(
+            FileState::new(&conn).get_file_identity(&path_text).unwrap(),
+            identity_from_metadata(&path.metadata().unwrap())
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn initial_v2_epoch_adopts_proven_cursor_across_macos_device_remap() {
+        use std::os::unix::fs::MetadataExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir
+            .path()
+            .join("018f0c3a-7b2d-7f10-8a11-123456789abc.jsonl");
+        let first = b"{\"type\":\"user\",\"uuid\":\"u1\",\"timestamp\":\"2026-07-12T12:00:00Z\",\"message\":{\"content\":\"hello\"}}\n";
+        let second = b"{\"type\":\"user\",\"uuid\":\"u2\",\"timestamp\":\"2026-07-12T12:01:00Z\",\"message\":{\"content\":\"world\"}}\n";
+        fs::write(&path, [first.as_slice(), second.as_slice()].concat()).unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        let canonical = fs::canonicalize(&path).unwrap();
+        let path_text = canonical.to_string_lossy();
+        FileState::new(&conn)
+            .set_offset(
+                &path_text,
+                first.len() as u64,
+                "018f0c3a-7b2d-7f10-8a11-123456789abc",
+                "provider-session",
+                "claude",
+            )
+            .unwrap();
+        let inode = path.metadata().unwrap().ino();
+        conn.execute(
+            "UPDATE file_state SET file_identity = ?1 WHERE path = ?2",
+            params![format!("unix:16777230:{inode}"), path_text.as_ref()],
+        )
+        .unwrap();
 
         let prepared = prepare_next_envelope(&mut conn, &capabilities(), &path, "claude", None)
             .unwrap()
