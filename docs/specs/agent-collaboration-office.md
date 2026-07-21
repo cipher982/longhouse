@@ -1,6 +1,6 @@
 # Managed Agent Coordination Loop
 
-Status: Implemented; pending production cutover
+Status: Shipped
 Owner: session kernel / managed providers
 Updated: 2026-07-21
 
@@ -51,6 +51,15 @@ stopped after search failed and never called `message_session`.
 The direct defect must be fixed. The UX should also make `peers` the obvious
 way to locate a live collaborator and the obvious recovery path when archive
 search is irrelevant or unavailable.
+
+Final Codex dogfood exposed two additional provider-boundary defects that unit
+and mocked MCP tests had not exercised. Bridge-created app-server processes did
+not trust the new Longhouse coordination tools, and Codex did not propagate the
+ambient managed-session environment into MCP subprocesses. Managed Codex launch
+now supplies explicit approval entries for only `peers`, `session_tail`,
+`check_messages`, `ack_message`, and `message_session`, plus the current
+`LONGHOUSE_MANAGED_SESSION_ID` in the Longhouse MCP server configuration. It
+does not auto-approve arbitrary MCP or provider tools.
 
 ## Goals
 
@@ -356,6 +365,12 @@ Acceptance:
 - current-session identity is inferred and cannot be forged; and
 - `stored_only` never claims model visibility.
 
+For Codex Helm sessions, this also requires the managed app-server launch to
+carry the current session identity into the Longhouse MCP subprocess and to
+trust the bounded coordination tool set. Passing the identity only to the TUI
+process is insufficient because the bridge-created app-server owns MCP tool
+execution.
+
 ### Phase 1B: Make receiving semantics honest
 
 1. Create one shared envelope renderer for legacy and storage-v2 delivery.
@@ -393,6 +408,14 @@ Acceptance:
 Phase 2 is enabled for Claude and Codex. Unsupported providers explicitly
 declare no startup-coordination capability and launch unchanged.
 
+The final no-flag Codex dogfood used a fresh disposable Helm session. Message
+`#12` entered the target through `live_input`; the target called public MCP
+`check_messages`, acknowledged `#12`, and called `message_session`; reply `#13`
+was durably created with the expected canary text. The target inbox showed the
+acknowledgement timestamp. The disposable session was then stopped. This proof
+used launch-scoped configuration and did not modify the user's persistent Codex
+tool approvals.
+
 ## Test Strategy
 
 ### Unit and integration
@@ -401,6 +424,8 @@ declare no startup-coordination capability and launch unchanged.
 - wall/peers projection preserves canonical capability fields and excludes
   self;
 - public MCP infers current identity for send, check, and acknowledge;
+- managed Codex app-server arguments scope trust to the five coordination tools
+  and bind the Longhouse MCP subprocess to the current session;
 - durable message outcomes cover delivered, queued, stored-only, and failed;
 - legacy and catalog paths share envelope rendering;
 - active-turn collaboration queues rather than silently steering; and
