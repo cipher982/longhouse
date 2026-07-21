@@ -39,6 +39,21 @@ pub fn get_providers() -> Vec<ProviderConfig> {
         .collect()
 }
 
+/// Resolve persisted/wire provider names to the canonical static names used by
+/// discovery and the scheduler. Keep aliases here so retry replay cannot drift
+/// from the providers accepted by fresh discovery.
+pub fn canonical_provider_name(provider: &str) -> Option<&'static str> {
+    match provider {
+        "claude" => Some("claude"),
+        "codex" => Some("codex"),
+        "antigravity" | "gemini" => Some("antigravity"),
+        "opencode" => Some("opencode"),
+        "cursor" => Some("cursor"),
+        "cursor_acp" => Some("cursor_acp"),
+        _ => None,
+    }
+}
+
 fn provider_candidates(home: &Path, claude_root: &Path) -> Vec<ProviderConfig> {
     vec![
         ProviderConfig {
@@ -505,7 +520,18 @@ mod tests {
             home.join(".local").join("share").join("opencode")
         );
         assert_eq!(providers[5].root, home.join(".cursor").join("chats"));
-        assert_eq!(providers[6].root, home.join(".gemini").join("tmp"));
+        assert_eq!(
+            providers[6].root,
+            home.join(".longhouse")
+                .join("agent")
+                .join("cursor-acp-source")
+        );
+        assert_eq!(providers[7].root, home.join(".gemini").join("tmp"));
+        assert!(providers
+            .iter()
+            .all(|provider| canonical_provider_name(provider.name) == Some(provider.name)));
+        assert_eq!(canonical_provider_name("gemini"), Some("antigravity"));
+        assert_eq!(canonical_provider_name("unknown"), None);
     }
 
     #[test]

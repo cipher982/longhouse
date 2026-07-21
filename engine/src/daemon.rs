@@ -3079,7 +3079,7 @@ fn queue_failed_shipment_retry_paths(
         control.tick_bytes(archive_repair_mode),
         include_huge,
     )? {
-        let Some(provider) = provider_name_to_static(&pending.provider) else {
+        let Some(provider) = discovery::canonical_provider_name(&pending.provider) else {
             tracing::warn!(
                 "Skipping pending spool path with unknown provider {}: {}",
                 pending.provider,
@@ -3112,17 +3112,6 @@ fn queue_failed_shipment_retries_if_idle(
         return Ok(0);
     }
     queue_failed_shipment_retry_paths(scheduler, conn, limit, limiter, archive_repair_mode)
-}
-
-fn provider_name_to_static(provider: &str) -> Option<&'static str> {
-    match provider {
-        "claude" => Some("claude"),
-        "codex" => Some("codex"),
-        "cursor" => Some("cursor"),
-        "antigravity" => Some("antigravity"),
-        "gemini" => Some("antigravity"),
-        _ => None,
-    }
 }
 
 fn work_context(priority: WorkPriority) -> &'static str {
@@ -3247,7 +3236,7 @@ fn record_transcript_wake_hint(
     latest_transcript_wake_observed: &mut HashMap<PathBuf, i64>,
     signal: TranscriptWakeSignal,
 ) -> Option<(PathBuf, &'static str, ObservationTrace)> {
-    let Some(provider) = provider_name_to_static(&signal.provider) else {
+    let Some(provider) = discovery::canonical_provider_name(&signal.provider) else {
         tracing::debug!(
             provider = %signal.provider,
             "Skipping transcript wake for unknown provider"
@@ -5434,6 +5423,43 @@ mod tests {
             job.observation.source,
             FAILED_SHIPMENT_RETRY_OBSERVATION_SOURCE
         );
+    }
+
+    #[test]
+    fn test_failed_shipment_retry_accepts_sqlite_and_acp_discovery_providers() {
+        let db = tempfile::NamedTempFile::new().unwrap();
+        let opencode = tempfile::NamedTempFile::new().unwrap();
+        let cursor_acp = tempfile::NamedTempFile::new().unwrap();
+        let conn = open_db(Some(db.path())).unwrap();
+        for (provider, transcript) in [("opencode", &opencode), ("cursor_acp", &cursor_acp)] {
+            Spool::new(&conn)
+                .enqueue(
+                    provider,
+                    &transcript.path().to_string_lossy(),
+                    0,
+                    100,
+                    Some("session-id"),
+                )
+                .unwrap();
+        }
+
+        let mut scheduler = PathScheduler::new(4);
+        let queued = queue_failed_shipment_retry_paths(
+            &mut scheduler,
+            &conn,
+            10,
+            None,
+            ArchiveRepairMode::Drain,
+        )
+        .unwrap();
+        assert_eq!(queued, 2);
+
+        let mut launched = HashSet::new();
+        while let Some(job) = scheduler.pop_launchable() {
+            launched.insert(job.provider);
+            scheduler.complete(&job.path, None);
+        }
+        assert_eq!(launched, HashSet::from(["opencode", "cursor_acp"]));
     }
 
     #[test]

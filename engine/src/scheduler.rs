@@ -660,13 +660,81 @@ struct InFlightJob {
     rerun_estimated_bytes: Option<u64>,
 }
 
+/// FIFO within each provider, round-robin across whichever providers currently
+/// have work. Discovery already supplies each provider's paths newest-first;
+/// this queue preserves that order without letting a large provider hide a
+/// smaller one behind thousands of files.
+#[derive(Default)]
+struct ProviderFairQueue {
+    queues: BTreeMap<&'static str, VecDeque<PathBuf>>,
+    rotation: VecDeque<&'static str>,
+}
+
+impl ProviderFairQueue {
+    fn push_back(&mut self, provider: &'static str, path: PathBuf) {
+        let queue = self.queues.entry(provider).or_default();
+        if queue.is_empty() {
+            self.rotation.push_back(provider);
+        }
+        queue.push_back(path);
+    }
+
+    fn pop_front(&mut self) -> Option<PathBuf> {
+        while let Some(provider) = self.rotation.pop_front() {
+            let (path, still_active) = match self.queues.get_mut(provider) {
+                Some(queue) => {
+                    let path = queue.pop_front();
+                    (path, !queue.is_empty())
+                }
+                None => (None, false),
+            };
+
+            if still_active {
+                self.rotation.push_back(provider);
+            } else {
+                self.queues.remove(provider);
+            }
+
+            if path.is_some() {
+                return path;
+            }
+        }
+        None
+    }
+
+    /// Put a continuation ahead of later work from the same provider while
+    /// leaving that provider's global rotation position unchanged.
+    fn prioritize_within_provider(&mut self, provider: &'static str, path: &Path) {
+        let queue = self.queues.entry(provider).or_default();
+        queue.retain(|candidate| candidate != path);
+        queue.push_front(path.to_path_buf());
+        if !self.rotation.contains(&provider) {
+            self.rotation.push_back(provider);
+        }
+    }
+
+    fn remove(&mut self, provider: &'static str, path: &Path) {
+        let emptied = match self.queues.get_mut(provider) {
+            Some(queue) => {
+                queue.retain(|candidate| candidate != path);
+                queue.is_empty()
+            }
+            None => false,
+        };
+        if emptied {
+            self.queues.remove(provider);
+            self.rotation.retain(|candidate| candidate != &provider);
+        }
+    }
+}
+
 /// Bounded scheduler that dedupes work by file path.
 pub struct PathScheduler {
     max_in_flight: usize,
     fairness_cursor: usize,
     ready_live: VecDeque<PathBuf>,
-    ready_retry: VecDeque<PathBuf>,
-    ready_scan: VecDeque<PathBuf>,
+    ready_retry: ProviderFairQueue,
+    ready_scan: ProviderFairQueue,
     ready_jobs: HashMap<PathBuf, ReadyJob>,
     in_flight: HashMap<PathBuf, InFlightJob>,
     limiter: Arc<AdaptiveLimiter>,
@@ -683,8 +751,8 @@ impl PathScheduler {
             max_in_flight: max_in_flight.max(1),
             fairness_cursor: 0,
             ready_live: VecDeque::new(),
-            ready_retry: VecDeque::new(),
-            ready_scan: VecDeque::new(),
+            ready_retry: ProviderFairQueue::default(),
+            ready_scan: ProviderFairQueue::default(),
             ready_jobs: HashMap::new(),
             in_flight: HashMap::new(),
             limiter,
@@ -794,12 +862,13 @@ impl PathScheduler {
         let urgent_managed_wake =
             priority == WorkPriority::Live && observation.source == "wake_socket";
         if let Some(ready) = self.ready_jobs.get_mut(&path) {
-            let mut reposition = false;
+            let mut reposition_from = None;
+            let mut reposition_same_lane = false;
             if priority < ready.priority {
+                reposition_from = Some((ready.provider, ready.priority));
                 ready.priority = priority;
                 ready.observation = observation;
                 ready.estimated_bytes = estimated_bytes;
-                reposition = true;
             } else if priority == ready.priority
                 && should_replace_observation(&ready.observation, &observation)
             {
@@ -807,11 +876,14 @@ impl PathScheduler {
                 if estimated_bytes.is_some() {
                     ready.estimated_bytes = estimated_bytes;
                 }
-                reposition = urgent_managed_wake;
+                reposition_same_lane = urgent_managed_wake;
             } else if estimated_bytes.is_some() {
                 ready.estimated_bytes = estimated_bytes;
             }
-            if reposition {
+            if let Some((provider, previous_priority)) = reposition_from {
+                self.remove_ready_path(provider, &path, previous_priority);
+                self.push_ready_path(path, priority, urgent_managed_wake);
+            } else if reposition_same_lane {
                 self.push_ready_path(path, priority, urgent_managed_wake);
             }
             return;
@@ -906,8 +978,8 @@ impl PathScheduler {
                 estimated_bytes,
             );
             if prioritize_opencode_scan_continuation {
-                self.ready_scan.retain(|candidate| candidate != path);
-                self.ready_scan.push_front(path.to_path_buf());
+                self.ready_scan
+                    .prioritize_within_provider(in_flight.provider, path);
             }
         }
     }
@@ -943,11 +1015,7 @@ impl PathScheduler {
             max_in_flight: self.max_in_flight,
             live_reserved: LIVE_RESERVED,
             live_in_flight_cap: LIVE_IN_FLIGHT_CAP,
-            backlog_cap: self
-                .max_in_flight
-                .saturating_sub(LIVE_RESERVED)
-                .max(1)
-                .min(self.limiter.current_cap()),
+            backlog_cap: self.backlog_cap(),
             ready_live,
             ready_retry,
             ready_scan,
@@ -976,13 +1044,12 @@ impl PathScheduler {
     }
 
     fn pop_ready_queue(&mut self, expected_priority: WorkPriority) -> Option<PathJob> {
-        let queue = match expected_priority {
-            WorkPriority::Live => &mut self.ready_live,
-            WorkPriority::Retry => &mut self.ready_retry,
-            WorkPriority::Scan => &mut self.ready_scan,
-        };
-
-        while let Some(path) = queue.pop_front() {
+        loop {
+            let path = match expected_priority {
+                WorkPriority::Live => self.ready_live.pop_front(),
+                WorkPriority::Retry => self.ready_retry.pop_front(),
+                WorkPriority::Scan => self.ready_scan.pop_front(),
+            }?;
             let Some(ready) = self.ready_jobs.get(&path).cloned() else {
                 continue;
             };
@@ -1012,8 +1079,6 @@ impl PathScheduler {
                 observation: ready.observation,
             });
         }
-
-        None
     }
 
     fn push_ready_path(
@@ -1028,26 +1093,49 @@ impl PathScheduler {
                 self.ready_live.push_front(path);
             }
             WorkPriority::Live => self.ready_live.push_back(path),
-            WorkPriority::Retry => self.ready_retry.push_back(path),
-            WorkPriority::Scan => self.ready_scan.push_back(path),
+            WorkPriority::Retry => {
+                let provider = self.ready_jobs[&path].provider;
+                self.ready_retry.push_back(provider, path);
+            }
+            WorkPriority::Scan => {
+                let provider = self.ready_jobs[&path].provider;
+                self.ready_scan.push_back(provider, path);
+            }
+        }
+    }
+
+    fn remove_ready_path(&mut self, provider: &'static str, path: &Path, priority: WorkPriority) {
+        match priority {
+            WorkPriority::Live => self.ready_live.retain(|candidate| candidate != path),
+            WorkPriority::Retry => self.ready_retry.remove(provider, path),
+            WorkPriority::Scan => self.ready_scan.remove(provider, path),
         }
     }
 
     fn can_launch_priority(&self, priority: WorkPriority) -> bool {
+        let backlog_has_room = self.in_flight_backlog_count() < self.backlog_cap();
         match priority {
             WorkPriority::Live => self.in_flight_count(WorkPriority::Live) < LIVE_IN_FLIGHT_CAP,
-            WorkPriority::Retry => {
-                // `LIVE_RESERVED` is kept as a hard floor for live latency
-                // safety. The adaptive limiter controls replay concurrency.
-                let backlog_room = self.max_in_flight.saturating_sub(LIVE_RESERVED).max(1);
-                let backlog_cap = backlog_room.min(self.limiter.current_cap());
-                self.in_flight_count(WorkPriority::Retry) < backlog_cap
+            WorkPriority::Retry => backlog_has_room,
+            // Scan shares the adaptive backlog budget with Retry and keeps a
+            // one-job subcap so reconciliation cannot crowd out spool replay.
+            WorkPriority::Scan => {
+                backlog_has_room && self.in_flight_count(WorkPriority::Scan) < SCAN_IN_FLIGHT_CAP
             }
-            // Reconciliation has its own single slot so a huge spool replay
-            // cannot indefinitely hide missed local source bytes. Live work
-            // still launches first and keeps its reserved capacity.
-            WorkPriority::Scan => self.in_flight_count(WorkPriority::Scan) < SCAN_IN_FLIGHT_CAP,
         }
+    }
+
+    fn backlog_cap(&self) -> usize {
+        // `LIVE_RESERVED` is a hard floor for live-latency safety. The
+        // adaptive limiter controls Retry+Scan as one background workload.
+        self.max_in_flight
+            .saturating_sub(LIVE_RESERVED)
+            .max(1)
+            .min(self.limiter.current_cap())
+    }
+
+    fn in_flight_backlog_count(&self) -> usize {
+        self.in_flight_count(WorkPriority::Retry) + self.in_flight_count(WorkPriority::Scan)
     }
 
     fn in_flight_count(&self, priority: WorkPriority) -> usize {
@@ -1123,7 +1211,7 @@ mod tests {
     }
 
     #[test]
-    fn test_retry_and_reconciliation_each_get_one_bounded_slot() {
+    fn test_retry_and_reconciliation_share_the_adaptive_backlog_cap() {
         let mut scheduler = PathScheduler::new(32);
 
         scheduler.enqueue(
@@ -1144,12 +1232,15 @@ mod tests {
 
         let first = scheduler.pop_launchable().unwrap();
         assert_eq!(first.priority, WorkPriority::Retry);
-        let second = scheduler.pop_launchable().unwrap();
-        assert_eq!(second.priority, WorkPriority::Scan);
         assert!(
             scheduler.pop_launchable().is_none(),
-            "retry and reconciliation lanes should each remain bounded"
+            "the floor cap of one must bound Retry+Scan together"
         );
+
+        scheduler.complete(&first.path, None);
+        let second = scheduler.pop_launchable().unwrap();
+        assert_eq!(second.priority, WorkPriority::Scan);
+        assert_eq!(scheduler.snapshot().in_flight_backlog, 1);
     }
 
     #[test]
@@ -1577,20 +1668,135 @@ mod tests {
     }
 
     #[test]
-    fn test_opencode_scan_continuation_stays_ahead_of_bulk_discovery() {
+    fn test_opencode_scan_continuation_yields_across_providers_but_stays_local_first() {
         let mut scheduler = PathScheduler::new(4);
         let opencode = PathBuf::from("/tmp/opencode.db");
-        let other = PathBuf::from("/tmp/other.jsonl");
+        let later_opencode = PathBuf::from("/tmp/opencode-later.db");
+        let codex = PathBuf::from("/tmp/codex.jsonl");
         scheduler.enqueue(opencode.clone(), "opencode", WorkPriority::Scan);
         let first = scheduler.pop_launchable().unwrap();
         assert_eq!(first.path, opencode);
 
-        scheduler.enqueue(other, "codex", WorkPriority::Scan);
+        scheduler.enqueue(codex.clone(), "codex", WorkPriority::Scan);
+        scheduler.enqueue(later_opencode.clone(), "opencode", WorkPriority::Scan);
         scheduler.complete(&opencode, Some(WorkPriority::Scan));
+
+        let other_provider = scheduler.pop_launchable().unwrap();
+        assert_eq!(other_provider.path, codex);
+        scheduler.complete(&other_provider.path, None);
 
         let continuation = scheduler.pop_launchable().unwrap();
         assert_eq!(continuation.path, opencode);
         assert_eq!(continuation.priority, WorkPriority::Scan);
+        scheduler.complete(&continuation.path, None);
+        assert_eq!(scheduler.pop_launchable().unwrap().path, later_opencode);
+    }
+
+    #[test]
+    fn test_scan_round_robins_providers_and_preserves_provider_order() {
+        let mut scheduler = PathScheduler::new(4);
+        let codex_new = PathBuf::from("/tmp/codex-new.jsonl");
+        let codex_old = PathBuf::from("/tmp/codex-old.jsonl");
+        let claude_new = PathBuf::from("/tmp/claude-new.jsonl");
+        let claude_old = PathBuf::from("/tmp/claude-old.jsonl");
+
+        for (path, provider) in [
+            (codex_new.clone(), "codex"),
+            (codex_old.clone(), "codex"),
+            (claude_new.clone(), "claude"),
+            (claude_old.clone(), "claude"),
+        ] {
+            scheduler.enqueue(path, provider, WorkPriority::Scan);
+        }
+
+        for expected in [codex_new, claude_new, codex_old, claude_old] {
+            let job = scheduler.pop_launchable().unwrap();
+            assert_eq!(job.path, expected);
+            scheduler.complete(&job.path, None);
+        }
+    }
+
+    #[test]
+    fn test_retry_round_robins_dynamically_discovered_providers() {
+        let mut scheduler = PathScheduler::new(4);
+        let codex_a = PathBuf::from("/tmp/codex-a.jsonl");
+        let codex_b = PathBuf::from("/tmp/codex-b.jsonl");
+        let future_provider = PathBuf::from("/tmp/future-provider.jsonl");
+
+        scheduler.enqueue(codex_a.clone(), "codex", WorkPriority::Retry);
+        scheduler.enqueue(codex_b.clone(), "codex", WorkPriority::Retry);
+        scheduler.enqueue(
+            future_provider.clone(),
+            "provider-added-later",
+            WorkPriority::Retry,
+        );
+
+        for expected in [codex_a, future_provider, codex_b] {
+            let job = scheduler.pop_launchable().unwrap();
+            assert_eq!(job.path, expected);
+            scheduler.complete(&job.path, None);
+        }
+    }
+
+    #[test]
+    fn test_priority_promotion_cannot_resurrect_a_stale_queue_position() {
+        let mut scheduler = PathScheduler::new(4);
+        let newest = PathBuf::from("/tmp/newest.jsonl");
+        let middle = PathBuf::from("/tmp/middle.jsonl");
+        let oldest = PathBuf::from("/tmp/oldest.jsonl");
+
+        for path in [&newest, &middle, &oldest] {
+            scheduler.enqueue(path.clone(), "codex", WorkPriority::Scan);
+        }
+        scheduler.enqueue(newest.clone(), "codex", WorkPriority::Retry);
+
+        let promoted = scheduler.pop_launchable().unwrap();
+        assert_eq!(promoted.path, newest);
+        assert_eq!(promoted.priority, WorkPriority::Retry);
+        scheduler.complete(&promoted.path, Some(WorkPriority::Scan));
+
+        for expected in [middle, oldest, newest] {
+            let job = scheduler.pop_launchable().unwrap();
+            assert_eq!(job.path, expected);
+            scheduler.complete(&job.path, None);
+        }
+    }
+
+    #[test]
+    fn test_snapshot_backlog_cap_is_the_actual_combined_launch_limit() {
+        let limiter = AdaptiveLimiter::new();
+        limiter.current_cap.store(16, Ordering::Relaxed);
+        let mut scheduler = PathScheduler::with_limiter(10, limiter);
+
+        scheduler.enqueue(
+            PathBuf::from("/tmp/retry-a.jsonl"),
+            "codex",
+            WorkPriority::Retry,
+        );
+        scheduler.enqueue(
+            PathBuf::from("/tmp/retry-b.jsonl"),
+            "claude",
+            WorkPriority::Retry,
+        );
+        scheduler.enqueue(
+            PathBuf::from("/tmp/scan.jsonl"),
+            "cursor",
+            WorkPriority::Scan,
+        );
+
+        assert_eq!(
+            scheduler.pop_launchable().unwrap().priority,
+            WorkPriority::Retry
+        );
+        assert_eq!(
+            scheduler.pop_launchable().unwrap().priority,
+            WorkPriority::Scan
+        );
+        assert!(scheduler.pop_launchable().is_none());
+
+        let snapshot = scheduler.snapshot();
+        assert_eq!(snapshot.backlog_cap, 2);
+        assert_eq!(snapshot.in_flight_backlog, snapshot.backlog_cap);
     }
 
     #[test]
@@ -1740,9 +1946,11 @@ mod tests {
         assert_eq!(live.priority, WorkPriority::Live);
         assert_eq!(live.path, PathBuf::from("/tmp/live.jsonl"));
 
-        // Replay and reconciliation each have one bounded background slot.
+        // Replay and reconciliation share the one-slot cold-start backlog cap.
         let retry_job = scheduler.pop_launchable().unwrap();
         assert_eq!(retry_job.priority, WorkPriority::Retry);
+        assert!(scheduler.pop_launchable().is_none());
+        scheduler.complete(&retry_job.path, None);
         let scan_job = scheduler.pop_launchable().unwrap();
         assert_eq!(scan_job.priority, WorkPriority::Scan);
         assert!(scheduler.pop_launchable().is_none());
@@ -1780,6 +1988,8 @@ mod tests {
             scheduler.pop_launchable().unwrap().priority,
             WorkPriority::Retry
         );
+        assert!(scheduler.pop_launchable().is_none());
+        scheduler.complete(Path::new("/tmp/retry.jsonl"), None);
         assert_eq!(
             scheduler.pop_launchable().unwrap().priority,
             WorkPriority::Scan
