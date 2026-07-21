@@ -2488,6 +2488,11 @@ fn codex_app_server_args(config: &BridgeRunConfig) -> Vec<OsString> {
             "mcp_servers.longhouse.tools.{tool}.approval_mode=\"approve\""
         )));
     }
+    args.push(OsString::from("-c"));
+    args.push(OsString::from(format!(
+        "mcp_servers.longhouse.env.LONGHOUSE_MANAGED_SESSION_ID={}",
+        serde_json::to_string(&config.session_id).expect("session id is serializable")
+    )));
     if let Some(effort) = config.model_reasoning_effort.as_deref() {
         args.push(OsString::from("-c"));
         args.push(OsString::from(format!("model_reasoning_effort={effort}")));
@@ -5781,6 +5786,10 @@ mod tests {
                 format!("mcp_servers.longhouse.tools.{tool}.approval_mode=\"approve\""),
             ]);
         }
+        expected.extend([
+            "-c".to_string(),
+            "mcp_servers.longhouse.env.LONGHOUSE_MANAGED_SESSION_ID=\"session-123\"".to_string(),
+        ]);
         expected.extend([
             "--ask-for-approval".to_string(),
             "never".to_string(),
