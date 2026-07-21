@@ -22,6 +22,10 @@ from zerg.storage_v2.media_objects import seal_media_object
 from zerg.storage_v2.raw_objects import RawObjectSpec
 from zerg.storage_v2.raw_objects import RawRecord
 from zerg.storage_v2.raw_objects import seal_raw_object
+from zerg.storage_v2.render_objects import RenderObjectSpec
+from zerg.storage_v2.render_objects import RenderRecord
+from zerg.storage_v2.render_objects import read_render_object
+from zerg.storage_v2.render_objects import seal_render_object
 
 
 @pytest.fixture
@@ -32,7 +36,36 @@ def backup_root() -> Path:
     shutil.rmtree(root, ignore_errors=True)
 
 
-def _raw_commit_params(*, sealed, spec: RawObjectSpec, now: datetime) -> dict[str, object]:
+def _render_manifest(*, sealed, generation_id) -> dict[str, object]:
+    return {
+        "generation_id": str(generation_id),
+        "parser_revision": "backup-restore-v1",
+        "ordering_revision": "semantic-order-v2",
+        "object_id": sealed.object_id,
+        "object_hash": sealed.object_hash,
+        "payload_hash": sealed.payload_hash,
+        "object_path": sealed.object_path,
+        "uncompressed_size": sealed.uncompressed_size,
+        "compressed_size": sealed.compressed_size,
+        "event_count": sealed.event_count,
+        "first_order_key": sealed.first_order_key,
+        "last_order_key": sealed.last_order_key,
+        "user_messages": sealed.user_messages,
+        "assistant_messages": sealed.assistant_messages,
+        "tool_calls": sealed.tool_calls,
+        "first_user_message_preview": sealed.first_user_message_preview,
+        "last_visible_text_preview": sealed.last_visible_text_preview,
+    }
+
+
+def _raw_commit_params(
+    *,
+    sealed,
+    spec: RawObjectSpec,
+    now: datetime,
+    render_state: str = "pending",
+    render_manifest: dict[str, object] | None = None,
+) -> dict[str, object]:
     return {
         "protocol_version": 2,
         "tenant_id": spec.tenant_id,
@@ -56,10 +89,10 @@ def _raw_commit_params(*, sealed, spec: RawObjectSpec, now: datetime) -> dict[st
         "uncompressed_size": sealed.uncompressed_size,
         "compressed_size": sealed.compressed_size,
         "provenance_kind": "native",
-        "render_state": "pending",
+        "render_state": render_state,
         "media_refs": [],
         "projectors": ["render-v2", "search-v2"],
-        "render_manifest": None,
+        "render_manifest": render_manifest,
         "session_facts": {
             "environment": "local",
             "project": "longhouse",
@@ -100,6 +133,29 @@ async def test_exact_backup_verify_and_blank_root_restore_without_monolith(backu
         records=(RawRecord(source_position=0, data=b"hello\n"),),
     )
     sealed_raw = seal_raw_object(data_root, raw_spec)
+    render_generation = uuid4()
+    render_spec = RenderObjectSpec(
+        session_id=session_id,
+        render_generation=render_generation,
+        parser_revision="backup-restore-v1",
+        ordering_revision="semantic-order-v2",
+        machine_id=raw_spec.machine_id,
+        provider=raw_spec.provider,
+        opaque_source_id=raw_spec.opaque_source_id,
+        source_epoch=raw_spec.source_epoch,
+        source_envelope_id=sealed_raw.envelope_id,
+        records=(
+            RenderRecord(
+                event_id="backup-restore-event",
+                order_time_us=int(now.timestamp() * 1_000_000),
+                source_position=0,
+                event_subordinal=0,
+                role="user",
+                content_text="hello",
+            ),
+        ),
+    )
+    sealed_render = seal_render_object(data_root, render_spec)
     media_bytes = b"lossless-media"
     media_hash = hashlib.sha256(media_bytes).hexdigest()
     sealed_media = seal_media_object(
@@ -116,7 +172,13 @@ async def test_exact_backup_verify_and_blank_root_restore_without_monolith(backu
     try:
         await client.call(
             "storage.raw_object.commit.v2",
-            _raw_commit_params(sealed=sealed_raw, spec=raw_spec, now=now),
+            _raw_commit_params(
+                sealed=sealed_raw,
+                spec=raw_spec,
+                now=now,
+                render_state="ready",
+                render_manifest=_render_manifest(sealed=sealed_render, generation_id=render_generation),
+            ),
         )
         await client.call(
             "storage.media.commit.v2",
@@ -138,7 +200,7 @@ async def test_exact_backup_verify_and_blank_root_restore_without_monolith(backu
             timeout_seconds=10,
         )
         assert int(backup["commit_seq"]) >= 2
-        assert backup["object_count"] == 2
+        assert backup["object_count"] == 3
     finally:
         await client.close()
         await daemon.close()
@@ -148,10 +210,10 @@ async def test_exact_backup_verify_and_blank_root_restore_without_monolith(backu
     assert manifest["objects"] == sorted(
         manifest["objects"], key=lambda item: (item["path"], item["kind"], item["sha256"])
     )
-    assert {item["kind"] for item in manifest["objects"]} == {"raw", "media"}
+    assert {item["kind"] for item in manifest["objects"]} == {"raw", "render", "media"}
     assert "created_at" not in manifest
     proof = verify_restore_point(manifest_path=manifest_path, data_root=data_root)
-    assert proof["ok"] is True and proof["object_count"] == 2
+    assert proof["ok"] is True and proof["object_count"] == 3
 
     restored = tmp_path / "blank-root"
     deployed_catalog = sqlite_file_path(resolve_live_database_url(f"sqlite:///{restored / 'longhouse.db'}"))
@@ -193,6 +255,11 @@ async def test_exact_backup_verify_and_blank_root_restore_without_monolith(backu
             {"session_id": str(session_id), "owner_id": "42", "after_source_key": None, "limit": 10},
         )
         assert raw_manifest["objects"][0]["object_hash"] == sealed_raw.object_hash
+        assert read_render_object(
+            restored,
+            sealed_render.object_path,
+            expected_object_hash=sealed_render.object_hash,
+        ).spec == render_spec
     finally:
         await restored_client.close()
         await restored_daemon.close()

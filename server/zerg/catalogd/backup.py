@@ -94,6 +94,15 @@ def _snapshot_manifest(snapshot: Path) -> tuple[dict[str, object], list[dict[str
             objects.append({"kind": "raw", "path": row["path"], "sha256": row["sha256"], "size": row["size"]})
         for row in connection.execute(
             """
+            SELECT object_path AS path, object_hash AS sha256, compressed_size AS size
+            FROM render_objects
+            WHERE retired_at IS NULL
+            ORDER BY object_path, object_hash
+            """
+        ):
+            objects.append({"kind": "render", "path": row["path"], "sha256": row["sha256"], "size": row["size"]})
+        for row in connection.execute(
+            """
             SELECT DISTINCT media.object_path AS path, media.media_hash AS sha256, media.byte_size AS size
             FROM media_objects AS media
             JOIN session_media_refs AS ref ON ref.media_hash = media.media_hash
