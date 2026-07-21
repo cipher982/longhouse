@@ -67,6 +67,14 @@ def _refresh_dynamic_gauges() -> None:
         refresh_godview_gauges()
     except Exception:
         logger.exception("Failed to refresh god-view gauges")
+    try:
+        from zerg.build_info import load
+        from zerg.metrics import build_identity_info
+
+        build = load()
+        build_identity_info.labels(build.version, build.commit, build.channel, str(build.dirty).lower()).set(1)
+    except Exception:
+        logger.exception("Failed to refresh build identity gauge")
 
 
 try:

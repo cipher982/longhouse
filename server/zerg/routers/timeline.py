@@ -297,6 +297,7 @@ def list_browser_machine_workspaces(
 
 @router.get("/sessions/semantic", response_model=SemanticSearchResponse)
 async def semantic_search_timeline_sessions(
+    response: Response = None,
     query: str = Query(..., description="Search query"),
     project: Optional[str] = Query(None, description="Filter by project"),
     provider: Optional[str] = Query(None, description="Filter by provider"),
@@ -308,30 +309,35 @@ async def semantic_search_timeline_sessions(
     db: Session | None = Depends(_sessions_router.session_detail_db_dependency),
     current_user=Depends(get_current_browser_user),
 ):
+    timing = ServerTimingRecorder(surface="search")
     if database_module.live_catalog_enabled():
-        searched = await _search_storage_v2_timeline(
-            owner_id=int(current_user.id),
-            params=TimelineSessionListParams(
-                project=project,
-                provider=provider,
-                environment=environment,
-                include_test=include_test,
-                hide_autonomous=True,
-                include_automation=False,
-                device_id=None,
-                days_back=days_back,
-                query=query,
-                limit=limit,
-                offset=0,
-                sort="relevance",
-                mode="lexical",
-                context_mode=context_mode,
-            ),
-        )
+        with timing.span("search_query"):
+            searched = await _search_storage_v2_timeline(
+                owner_id=int(current_user.id),
+                params=TimelineSessionListParams(
+                    project=project,
+                    provider=provider,
+                    environment=environment,
+                    include_test=include_test,
+                    hide_autonomous=True,
+                    include_automation=False,
+                    device_id=None,
+                    days_back=days_back,
+                    query=query,
+                    limit=limit,
+                    offset=0,
+                    sort="relevance",
+                    mode="lexical",
+                    context_mode=context_mode,
+                ),
+            )
         sessions = [card.head for card in searched.sessions]
-        return SemanticSearchResponse(sessions=sessions, total=searched.total, has_real_sessions=bool(sessions))
+        result = SemanticSearchResponse(sessions=sessions, total=searched.total, has_real_sessions=bool(sessions))
+        timing.apply(response)
+        return result
     assert db is not None
     return await _search_router.semantic_search_sessions(
+        response=response,
         query=query,
         project=project,
         provider=provider,
@@ -452,7 +458,7 @@ async def list_timeline_sessions(
 ):
     effective_limit = min(limit, 100)
     response.headers["X-Limit-Cap"] = "100"
-    timing = ServerTimingRecorder()
+    timing = ServerTimingRecorder(surface="timeline")
     params = TimelineSessionListParams(
         project=project,
         provider=provider,
@@ -471,16 +477,20 @@ async def list_timeline_sessions(
     )
     if database_module.live_catalog_enabled():
         try:
-            if query:
-                return await _search_storage_v2_timeline(
-                    owner_id=int(current_user.id),
-                    params=params,
-                )
-            return await asyncio.to_thread(
-                list_live_catalog_timeline,
-                params=params,
-                owner_id=int(current_user.id),
-            )
+            with timing.span("catalog_search" if query else "catalog_list"):
+                if query:
+                    result = await _search_storage_v2_timeline(
+                        owner_id=int(current_user.id),
+                        params=params,
+                    )
+                else:
+                    result = await asyncio.to_thread(
+                        list_live_catalog_timeline,
+                        params=params,
+                        owner_id=int(current_user.id),
+                    )
+            timing.apply(response)
+            return result
         except CatalogReadError as exc:
             raise HTTPException(
                 status_code=503,
@@ -1001,6 +1011,7 @@ def get_timeline_session_turn(
 @router.get("/sessions/{session_id}/events")
 async def get_timeline_session_events(
     session_id: UUID,
+    response: Response,
     thread_id: Optional[UUID] = Query(
         None,
         description="Thread lane to inspect; defaults to the primary session thread",
@@ -1017,12 +1028,14 @@ async def get_timeline_session_events(
     legacy_session_factory=Depends(get_legacy_workspace_session_factory),
     current_user=Depends(get_current_browser_user),
 ):
+    timing = ServerTimingRecorder(surface="session_detail")
     storage_workspace = await build_storage_v2_workspace(
         session_id=session_id,
         owner_id=int(current_user.id),
         branch_mode=branch_mode,
         limit=limit,
         cursor=cursor,
+        timing=timing,
     )
     if storage_workspace is None and not get_settings().testing:
         raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
@@ -1049,7 +1062,9 @@ async def get_timeline_session_events(
                     )
                 )
 
-        return await asyncio.to_thread(build_legacy_events)
+        result = await asyncio.to_thread(build_legacy_events)
+        timing.apply(response)
+        return result
     projection = storage_workspace["projection"]
     role_filter = {value.strip() for value in roles.split(",") if value.strip()} if roles else None
     events = [item["event"] for item in projection["items"] if item.get("kind") == "event" and item.get("event")]
@@ -1060,7 +1075,7 @@ async def get_timeline_session_events(
     if query is not None:
         needle = query.casefold()
         events = [event for event in events if needle in str(event.get("content_text") or "").casefold()]
-    return {
+    result = {
         "events": events,
         "total": projection["total"],
         "branch_mode": branch_mode,
@@ -1069,6 +1084,8 @@ async def get_timeline_session_events(
         "next_cursor": projection.get("next_cursor"),
         "has_more": projection.get("has_more", False),
     }
+    timing.apply(response)
+    return result
 
 
 @router.get("/sessions/{session_id}/projection")
@@ -1143,7 +1160,7 @@ async def get_timeline_session_workspace(
     legacy_session_factory=Depends(get_legacy_workspace_session_factory),
     current_user=Depends(get_current_browser_user),
 ):
-    timing = ServerTimingRecorder()
+    timing = ServerTimingRecorder(surface="session_detail")
     response.headers["Cache-Control"] = "no-store"
     storage_workspace = await build_storage_v2_workspace(
         session_id=session_id,
@@ -1151,6 +1168,7 @@ async def get_timeline_session_workspace(
         branch_mode=branch_mode,
         limit=limit,
         cursor=cursor,
+        timing=timing,
     )
     if storage_workspace is None and not get_settings().testing:
         raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
@@ -1208,7 +1226,7 @@ async def get_timeline_session_mobile_tail(
     legacy_session_factory=Depends(get_legacy_workspace_session_factory),
     current_user=Depends(get_current_browser_user),
 ):
-    timing = ServerTimingRecorder()
+    timing = ServerTimingRecorder(surface="session_detail")
     response.headers["Cache-Control"] = "no-store"
     storage_workspace = await build_storage_v2_workspace(
         session_id=session_id,
@@ -1216,6 +1234,7 @@ async def get_timeline_session_mobile_tail(
         branch_mode=branch_mode,
         limit=limit,
         cursor=cursor,
+        timing=timing,
     )
     if storage_workspace is None and not get_settings().testing:
         raise HTTPException(status_code=404, detail=f"Session {session_id} not found")

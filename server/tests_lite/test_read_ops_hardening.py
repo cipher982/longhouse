@@ -180,6 +180,26 @@ def test_metrics_refresh_skips_historical_liveness_audit(monkeypatch):
     assert refreshed == [True]
 
 
+def test_metrics_refresh_exports_exact_build_identity(monkeypatch):
+    from types import SimpleNamespace
+
+    from zerg import metrics
+    from zerg import build_info
+    from zerg.routers import metrics as metrics_mod
+
+    identity = SimpleNamespace(version="0.2.0", commit="abcdef123456", channel="dev", dirty=True)
+    monkeypatch.setattr(build_info, "load", lambda: identity)
+    metrics_mod._refresh_dynamic_gauges()
+
+    labels = [sample.labels for family in metrics.build_identity_info.collect() for sample in family.samples]
+    assert {
+        "version": identity.version,
+        "commit": identity.commit,
+        "channel": identity.channel,
+        "dirty": "true",
+    } in labels
+
+
 def test_historical_managed_codex_liveness_gauge_is_removed() -> None:
     """Never export an invariant gauge that has no bounded refresh owner."""
     from zerg import metrics

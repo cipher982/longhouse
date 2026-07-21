@@ -10,6 +10,7 @@ import logging
 import unicodedata
 from datetime import UTC
 from datetime import datetime
+from time import monotonic
 from typing import Any
 from uuid import UUID
 
@@ -63,6 +64,7 @@ from zerg.storage_v2.render_objects import RenderObjectSpec
 from zerg.storage_v2.render_objects import RenderObjectValidationError
 from zerg.storage_v2.render_objects import RenderRecord
 from zerg.storage_v2.render_objects import validate_render_object_spec
+from zerg.utils.server_timing import ServerTimingRecorder
 
 router = APIRouter(prefix="/agents/storage/v2", tags=["agents"])
 logger = logging.getLogger(__name__)
@@ -1118,10 +1120,12 @@ async def list_storage_v2_sessions(
 @router.get("/sessions/{session_id}/raw")
 async def read_storage_v2_session_raw(
     session_id: UUID,
+    response: Response,
     cursor: str | None = Query(None, description="Exclusive source-ordered raw-object cursor"),
     _auth: DeviceToken | object | None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> dict[str, object]:
+    timing = ServerTimingRecorder(surface="raw_export")
     owner_value = getattr(_auth, "owner_id", None)
     if owner_value is None:
         raise _http_error(status.HTTP_403_FORBIDDEN, "owner_required", "Storage-v2 reads require owner identity.")
@@ -1158,15 +1162,16 @@ async def read_storage_v2_session_raw(
             separators=(",", ":"),
         )
     try:
-        manifest = await catalogd.call(
-            "storage.session.raw_manifest.v2",
-            {
-                "session_id": str(session_id),
-                "owner_id": str(owner_value),
-                "after_source_key": after_source_key,
-                "limit": 1,
-            },
-        )
+        with timing.span("raw_manifest"):
+            manifest = await catalogd.call(
+                "storage.session.raw_manifest.v2",
+                {
+                    "session_id": str(session_id),
+                    "owner_id": str(owner_value),
+                    "after_source_key": after_source_key,
+                    "limit": 1,
+                },
+            )
     except (CatalogUnavailable, CatalogRemoteError) as exc:
         raise _http_error(
             status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -1183,7 +1188,12 @@ async def read_storage_v2_session_raw(
             "The catalog returned an invalid raw manifest.",
         )
     if not objects:
-        return {
+        from zerg.metrics import product_read_bytes
+        from zerg.metrics import product_read_objects
+
+        product_read_objects.labels("raw_export", "raw").observe(0)
+        product_read_bytes.labels("raw_export", "raw").observe(0)
+        result = {
             "v": 2,
             "session_id": str(session_id),
             "object": None,
@@ -1191,6 +1201,8 @@ async def read_storage_v2_session_raw(
             "next_cursor": None,
             "has_more": False,
         }
+        timing.apply(response)
+        return result
     item = objects[0]
     if not isinstance(item, dict):
         raise _http_error(
@@ -1200,7 +1212,8 @@ async def read_storage_v2_session_raw(
         )
     workers = get_raw_object_worker_pool()
     try:
-        decoded = await workers.read(str(item["object_path"]), str(item["object_hash"]))
+        with timing.span("raw_object_read"):
+            decoded = await workers.read(str(item["object_path"]), str(item["object_hash"]))
         spec = decoded.spec
         if (
             spec.session_id != session_id
@@ -1224,7 +1237,12 @@ async def read_storage_v2_session_raw(
             "The immutable raw object could not be verified.",
         ) from exc
     has_more = manifest.get("objects_truncated") is True
-    return {
+    from zerg.metrics import product_read_bytes
+    from zerg.metrics import product_read_objects
+
+    product_read_objects.labels("raw_export", "raw").observe(1)
+    product_read_bytes.labels("raw_export", "raw").observe(int(item.get("compressed_size") or 0))
+    result = {
         "v": 2,
         "session_id": str(session_id),
         "object": {
@@ -1245,6 +1263,8 @@ async def read_storage_v2_session_raw(
         "next_cursor": raw_export_cursor_token(object_cursor) if has_more else None,
         "has_more": has_more,
     }
+    timing.apply(response)
+    return result
 
 
 async def read_storage_v2_session_events_page(
@@ -1254,6 +1274,7 @@ async def read_storage_v2_session_events_page(
     cursor: str | None,
     anchor: str,
     limit: int,
+    timing: ServerTimingRecorder | None = None,
 ) -> dict[str, object]:
     """Read one verified render page for a known owner.
 
@@ -1284,18 +1305,21 @@ async def read_storage_v2_session_events_page(
             "The session catalog is temporarily unavailable.",
         )
     cursor_order_key = json.dumps(_cursor_order_key(decoded_cursor), separators=(",", ":")) if decoded_cursor is not None else None
+    retain_product_metrics = timing is not None and timing.product_surface is not None
+    timing = timing or ServerTimingRecorder()
     try:
-        manifest = await catalogd.call(
-            "storage.session.render_manifest.v2",
-            {
-                "session_id": str(session_id),
-                "owner_id": owner_id,
-                "generation_id": str(decoded_cursor.render_generation) if decoded_cursor is not None else None,
-                "after_order_key": cursor_order_key if anchor == "start" else None,
-                "before_order_key": cursor_order_key if anchor == "tail" else None,
-                "limit": _RENDER_MANIFEST_LIMIT,
-            },
-        )
+        with timing.span("render_manifest"):
+            manifest = await catalogd.call(
+                "storage.session.render_manifest.v2",
+                {
+                    "session_id": str(session_id),
+                    "owner_id": owner_id,
+                    "generation_id": str(decoded_cursor.render_generation) if decoded_cursor is not None else None,
+                    "after_order_key": cursor_order_key if anchor == "start" else None,
+                    "before_order_key": cursor_order_key if anchor == "tail" else None,
+                    "limit": _RENDER_MANIFEST_LIMIT,
+                },
+            )
     except (CatalogUnavailable, CatalogRemoteError) as exc:
         raise _http_error(
             status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -1339,14 +1363,19 @@ async def read_storage_v2_session_events_page(
     ordered_events: list[tuple[tuple[int, str, str, str, str, int, int], dict[str, object]]] = []
     next_object_index = 0
     cursor_key = _cursor_order_key(decoded_cursor) if decoded_cursor is not None else None
+    object_read_duration_ms = 0.0
     try:
         while next_object_index < len(objects):
             batch_manifests = objects[next_object_index : next_object_index + _RENDER_READ_BATCH]
             if any(not isinstance(item, dict) for item in batch_manifests):
                 raise ValueError("render object manifest is invalid")
-            decoded_batch = await asyncio.gather(
-                *(workers.read(str(item["object_path"]), str(item["object_hash"]), lane="user") for item in batch_manifests)
-            )
+            object_read_started = monotonic()
+            try:
+                decoded_batch = await asyncio.gather(
+                    *(workers.read(str(item["object_path"]), str(item["object_hash"]), lane="user") for item in batch_manifests)
+                )
+            finally:
+                object_read_duration_ms += (monotonic() - object_read_started) * 1000.0
             for item, decoded in zip(batch_manifests, decoded_batch, strict=True):
                 spec = decoded.spec
                 if (
@@ -1378,9 +1407,19 @@ async def read_storage_v2_session_events_page(
             "render_read_failed",
             "The immutable render generation could not be verified.",
         ) from exc
+    finally:
+        timing.record("render_object_read", object_read_duration_ms)
 
     page = ordered_events[:limit] if anchor == "start" else ordered_events[-limit:]
     has_more = len(ordered_events) > limit or next_object_index < len(objects) or manifest.get("objects_truncated") is True
+    if retain_product_metrics:
+        from zerg.metrics import product_read_bytes
+        from zerg.metrics import product_read_objects
+
+        read_objects = objects[:next_object_index]
+        compressed_bytes = sum(int(item.get("compressed_size") or 0) for item in read_objects if isinstance(item, dict))
+        product_read_objects.labels("session_detail", "render").observe(next_object_index)
+        product_read_bytes.labels("session_detail", "render").observe(compressed_bytes)
     return {
         "v": 2,
         "session_id": str(session_id),
@@ -1395,6 +1434,7 @@ async def read_storage_v2_session_events_page(
 @router.get("/sessions/{session_id}/events")
 async def read_storage_v2_session_events(
     session_id: UUID,
+    response: Response,
     cursor: str | None = Query(None, description="Exclusive generation-qualified render cursor"),
     anchor: str = Query("start", description="Page from the beginning or latest tail: start|tail"),
     limit: int = Query(100, ge=1, le=500),
@@ -1404,13 +1444,17 @@ async def read_storage_v2_session_events(
     owner_value = getattr(_auth, "owner_id", None)
     if owner_value is None:
         raise _http_error(status.HTTP_403_FORBIDDEN, "owner_required", "Storage-v2 reads require owner identity.")
-    return await read_storage_v2_session_events_page(
+    timing = ServerTimingRecorder(surface="session_detail")
+    result = await read_storage_v2_session_events_page(
         session_id=session_id,
         owner_id=str(owner_value),
         cursor=cursor,
         anchor=anchor,
         limit=limit,
+        timing=timing,
     )
+    timing.apply(response)
+    return result
 
 
 @router.post("/envelopes")

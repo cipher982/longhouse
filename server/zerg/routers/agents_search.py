@@ -569,6 +569,7 @@ def _structured_hits(value: str | None) -> list[str]:
 
 @router.get("/sessions/semantic", response_model=SemanticSearchResponse)
 async def semantic_search_sessions(
+    response: Response = None,
     query: str = Query(..., description="Search query"),
     project: Optional[str] = Query(None, description="Filter by project"),
     provider: Optional[str] = Query(None, description="Filter by provider"),
@@ -587,6 +588,7 @@ async def semantic_search_sessions(
     from zerg.services.embedding_cache import EmbeddingCache
     from zerg.services.session_processing.embeddings import generate_embedding
 
+    timing = ServerTimingRecorder(surface="search")
     if context_mode not in {"forensic", "active_context"}:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -602,18 +604,21 @@ async def semantic_search_sessions(
                     "message": "Storage-v2 search does not yet project active-context boundaries.",
                 },
             )
-        sessions = await search_storage_v2_sessions(
-            owner_id=_catalog_owner_id(_auth),
-            query=query,
-            project=project,
-            provider=provider,
-            environment=environment,
-            days_back=days_back,
-            limit=limit,
-            include_test=include_test,
-            hide_autonomous=True,
-        )
-        return SemanticSearchResponse(sessions=sessions, total=len(sessions), has_real_sessions=bool(sessions))
+        with timing.span("search_query"):
+            sessions = await search_storage_v2_sessions(
+                owner_id=_catalog_owner_id(_auth),
+                query=query,
+                project=project,
+                provider=provider,
+                environment=environment,
+                days_back=days_back,
+                limit=limit,
+                include_test=include_test,
+                hide_autonomous=True,
+            )
+        result = SemanticSearchResponse(sessions=sessions, total=len(sessions), has_real_sessions=bool(sessions))
+        timing.apply(response)
+        return result
 
     assert db is not None
 
@@ -621,7 +626,8 @@ async def semantic_search_sessions(
     if not config:
         raise _embedding_unavailable_response(embedding_unavailable_detail())
 
-    query_vec = await generate_embedding(query, config)
+    with timing.span("query_embedding"):
+        query_vec = await generate_embedding(query, config)
 
     cache = EmbeddingCache()
 
@@ -652,7 +658,8 @@ async def semantic_search_sessions(
         if valid_ids and cache.session_embedding_count == 0:
             raise _embedding_corpus_unavailable_response("session")
 
-        results = cache.search_sessions(query_vec, limit=limit, session_filter=valid_ids)
+        with timing.span("search_query"):
+            results = cache.search_sessions(query_vec, limit=limit, session_filter=valid_ids)
         ordered_session_ids = [sid for sid, _score in results]
         session_map = {str(session.id): session for session in store.get_sessions_ordered(ordered_session_ids)}
         for sid, score in results:
@@ -666,11 +673,12 @@ async def semantic_search_sessions(
         if valid_ids and cache.turn_embedding_count == 0:
             raise _embedding_corpus_unavailable_response("turn")
 
-        turn_hits = cache.search_turns(
-            query_vec,
-            limit=min(limit * 8, 200),
-            session_filter=valid_ids,
-        )
+        with timing.span("search_query"):
+            turn_hits = cache.search_turns(
+                query_vec,
+                limit=min(limit * 8, 200),
+                session_filter=valid_ids,
+            )
         unique_session_ids: list[str] = []
         seen_sessions: set[str] = set()
         for sid, _chunk_index, score, event_start, _event_end in turn_hits:
@@ -743,7 +751,9 @@ async def semantic_search_sessions(
         for session, snippet, score in matched_rows
     ]
 
-    return SemanticSearchResponse(sessions=sessions, total=len(sessions))
+    result = SemanticSearchResponse(sessions=sessions, total=len(sessions))
+    timing.apply(response)
+    return result
 
 
 @router.get("/recall/status")
@@ -900,7 +910,7 @@ async def recall_sessions(
     handler_started = time.perf_counter()
     request_started = getattr(request.state, "request_timeout_started_at", None)
     pre_handler_ms = (handler_started - request_started) * 1000 if isinstance(request_started, float) else None
-    timing = ServerTimingRecorder()
+    timing = ServerTimingRecorder(surface="recall")
 
     def remaining_budget() -> float:
         started = request_started if isinstance(request_started, float) else handler_started

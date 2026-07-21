@@ -334,6 +334,7 @@ async def _slim_machine_stream(browser_stream):
 
 @router.get("/worklog/day", response_model=WorklogDayExportResponse)
 async def export_worklog_day(
+    response: Response = None,
     date: date_type = Query(..., description="Digest day in the supplied timezone, YYYY-MM-DD"),
     timezone_name: str = Query("America/New_York", alias="timezone", description="IANA timezone for day boundaries"),
     include_test: bool = Query(False, description="Include test/e2e sessions"),
@@ -342,6 +343,7 @@ async def export_worklog_day(
     _single: None = Depends(require_single_tenant),
 ) -> WorklogDayExportResponse:
     """Return one day of session messages for machine worklog consumers."""
+    timing = ServerTimingRecorder(surface="worklog")
     try:
         if database_module.live_catalog_enabled():
             owner_id = getattr(_auth, "owner_id", None)
@@ -363,22 +365,28 @@ async def export_worklog_day(
                         "message": "The derived worklog projection is temporarily unavailable.",
                     },
                 )
-            return await build_worklog_day_export_v2(
-                catalog=catalog,
-                search=search,
-                owner_id=str(owner_id),
+            with timing.span("worklog_projection"):
+                result = await build_worklog_day_export_v2(
+                    catalog=catalog,
+                    search=search,
+                    owner_id=str(owner_id),
+                    day=date,
+                    timezone_name=timezone_name,
+                    include_test=include_test,
+                )
+            timing.apply(response)
+            return result
+        if db is None:
+            raise RuntimeError("legacy worklog database dependency is unavailable")
+        with timing.span("worklog_projection"):
+            result = build_worklog_day_export(
+                db,
                 day=date,
                 timezone_name=timezone_name,
                 include_test=include_test,
             )
-        if db is None:
-            raise RuntimeError("legacy worklog database dependency is unavailable")
-        return build_worklog_day_export(
-            db,
-            day=date,
-            timezone_name=timezone_name,
-            include_test=include_test,
-        )
+        timing.apply(response)
+        return result
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except WorklogV2Error as exc:
@@ -1539,7 +1547,7 @@ def get_session(
 
     assert db is not None
     store = AgentsStore(db)
-    timing = ServerTimingRecorder()
+    timing = ServerTimingRecorder(surface="session_detail")
 
     with timing.span("load_session"):
         session = store.get_session(session_id)
@@ -2017,7 +2025,7 @@ async def get_session_workspace(
     _single: None = Depends(require_single_tenant),
 ) -> SessionWorkspaceResponse | dict[str, object]:
     """Get the focused session, its thread, and the first projection page in one round trip."""
-    timing = ServerTimingRecorder()
+    timing = ServerTimingRecorder(surface="session_detail")
     response.headers["Cache-Control"] = "no-store"
     owner_value = getattr(_auth, "owner_id", None)
     if owner_value is None and not get_settings().testing:
@@ -2033,6 +2041,7 @@ async def get_session_workspace(
             branch_mode=branch_mode,
             limit=limit,
             cursor=cursor,
+            timing=timing,
         )
     if storage_workspace is None and not get_settings().testing:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Session {session_id} not found")

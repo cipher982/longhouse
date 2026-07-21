@@ -15,6 +15,7 @@ import asyncio
 import logging
 import os
 import time
+from uuid import UUID
 
 from starlette.types import ASGIApp
 from starlette.types import Receive
@@ -55,6 +56,69 @@ _ARCHIVE_READ_EXACT_PATHS = {
     "/timeline/sessions/semantic",
     "/timeline/sessions/summary",
 }
+
+
+def _product_read_route_class(api_path: str, method: str) -> str | None:
+    """Map product reads to a bounded metric label.
+
+    This deliberately classifies route shapes rather than resolved paths so a
+    session id, query, owner, or object key can never become a Prometheus label.
+    """
+
+    if method not in {"GET", "HEAD"}:
+        return None
+    if api_path in {"/agents/recall", "/timeline/recall"}:
+        return "recall"
+    if api_path in {"/agents/sessions/semantic", "/timeline/sessions/semantic"}:
+        return "search"
+    if api_path.startswith("/agents/worklog/"):
+        return "worklog"
+    if api_path in {"/agents/sessions", "/timeline/sessions", "/agents/storage/v2/sessions"}:
+        return "timeline"
+    if api_path.startswith("/agents/storage/v2/sessions/"):
+        return _session_read_route_class(api_path.removeprefix("/agents/storage/v2/sessions/"), storage_v2=True)
+    for prefix in ("/agents/sessions/", "/timeline/sessions/"):
+        if api_path.startswith(prefix):
+            return _session_read_route_class(api_path.removeprefix(prefix), storage_v2=False)
+    return None
+
+
+def _session_read_route_class(remainder: str, *, storage_v2: bool) -> str | None:
+    parts = remainder.strip("/").split("/")
+    try:
+        UUID(parts[0])
+    except (ValueError, IndexError):
+        return None
+    if len(parts) == 1:
+        return "session_detail"
+    if len(parts) != 2:
+        return None
+    suffix = parts[1]
+    if suffix == "raw" and storage_v2:
+        return "raw_export"
+    if suffix in {"export", "archive-bundle"} and not storage_v2:
+        return "raw_export"
+    if suffix in ({"events"} if storage_v2 else {"workspace", "events", "projection", "mobile-tail"}):
+        return "session_detail"
+    return None
+
+
+def _observe_product_read(route_class: str, status_code: int, elapsed_seconds: float, outcome: str | None = None) -> None:
+    from zerg.metrics import product_read_request_seconds
+    from zerg.metrics import product_read_requests_total
+
+    status_family = f"{max(0, status_code) // 100}xx" if 100 <= status_code <= 599 else "unknown"
+    if outcome is None:
+        if status_family == "unknown":
+            outcome = "protocol_error"
+        elif status_code < 400:
+            outcome = "ok"
+        elif status_code < 500:
+            outcome = "client_error"
+        else:
+            outcome = "server_error"
+    product_read_requests_total.labels(route_class, status_family, outcome).inc()
+    product_read_request_seconds.labels(route_class, status_family, outcome).observe(max(0.0, elapsed_seconds))
 
 
 def _uses_archive_read_timeout(api_path: str, method: str) -> bool:
@@ -116,6 +180,7 @@ class RequestTimeoutMiddleware:
 
         timeout = self.timeout
         method = str(scope.get("method") or "GET").upper()
+        route_class = _product_read_route_class(api_path, method)
         if _uses_archive_read_timeout(api_path, method):
             timeout = ARCHIVE_READ_TIMEOUT_SECONDS
         for prefix, override in _TIMEOUT_OVERRIDES.items():
@@ -130,11 +195,13 @@ class RequestTimeoutMiddleware:
 
         # Enforce timeout.
         response_started = False
+        response_status: int | None = None
 
         async def send_wrapper(message: dict) -> None:
-            nonlocal response_started
+            nonlocal response_started, response_status
             if message["type"] == "http.response.start":
                 response_started = True
+                response_status = int(message.get("status") or 0)
             await send(message)
 
         try:
@@ -149,7 +216,10 @@ class RequestTimeoutMiddleware:
                     elapsed * 1000,
                     path,
                 )
+            if route_class is not None:
+                _observe_product_read(route_class, response_status or 0, elapsed)
         except asyncio.TimeoutError:
+            elapsed = time.perf_counter() - started_at
             method = scope.get("method", "?")
             logger.warning(
                 "Request timed out after %.1fs: %s %s",
@@ -161,6 +231,8 @@ class RequestTimeoutMiddleware:
             if response_started:
                 # Headers already sent — we cannot emit a new response.
                 # The connection will be closed by the server.
+                if route_class is not None:
+                    _observe_product_read(route_class, 503, elapsed, "timeout")
                 return
 
             body = b'{"detail":"Request timed out"}'
@@ -180,3 +252,9 @@ class RequestTimeoutMiddleware:
                     "body": body,
                 }
             )
+            if route_class is not None:
+                _observe_product_read(route_class, 503, elapsed, "timeout")
+        except BaseException:
+            if route_class is not None:
+                _observe_product_read(route_class, 500, time.perf_counter() - started_at, "exception")
+            raise

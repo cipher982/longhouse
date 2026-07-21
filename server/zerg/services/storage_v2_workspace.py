@@ -17,6 +17,7 @@ from zerg.routers.agents_storage_v2 import read_storage_v2_session_events_page
 from zerg.services.catalog_read_gateway import CatalogReadError
 from zerg.services.catalogd_supervisor import get_catalogd_client
 from zerg.services.live_catalog_timeline import read_live_catalog_session
+from zerg.utils.server_timing import ServerTimingRecorder
 
 
 def _event_projection(
@@ -156,6 +157,7 @@ async def build_storage_v2_workspace(
     limit: int,
     cursor: str | None = None,
     anchor: str = "tail",
+    timing: ServerTimingRecorder | None = None,
 ) -> dict[str, object] | None:
     """Return a storage-v2 workspace, including live control-only sessions.
 
@@ -173,18 +175,21 @@ async def build_storage_v2_workspace(
         if get_settings().testing:
             return None
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="The session catalog is unavailable.")
+    timing = timing or ServerTimingRecorder()
     try:
-        session, _provider_alias, session_commit_seq = await asyncio.to_thread(
-            read_live_catalog_session,
-            session_id,
-            owner_id=owner_id,
-        )
+        with timing.span("catalog_session"):
+            session, _provider_alias, session_commit_seq = await asyncio.to_thread(
+                read_live_catalog_session,
+                session_id,
+                owner_id=owner_id,
+            )
     except CatalogReadError as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="The session catalog is unavailable.") from exc
     if session is None:
         return None
     try:
-        storage_result = await catalogd.call("storage.session.read.v2", {"session_id": str(session_id)})
+        with timing.span("storage_manifest"):
+            storage_result = await catalogd.call("storage.session.read.v2", {"session_id": str(session_id)})
     except (CatalogRemoteError, CatalogUnavailable) as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="The session catalog is unavailable.") from exc
     storage = storage_result if storage_result.get("found") is True else None
@@ -202,6 +207,7 @@ async def build_storage_v2_workspace(
             cursor=cursor,
             anchor=anchor,
             limit=limit,
+            timing=timing,
         )
     return _workspace_envelope(
         session_id=session_id,

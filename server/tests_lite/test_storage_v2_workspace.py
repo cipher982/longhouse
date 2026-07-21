@@ -47,6 +47,11 @@ async def test_storage_v2_workspace_composes_catalog_shell_and_tail(monkeypatch)
     )
 
     async def read_page(**kwargs):
+        timing = kwargs.pop("timing")
+        assert isinstance(timing, workspace_module.ServerTimingRecorder)
+        assert timing.product_surface is None
+        assert "catalog_session" in (timing.header_value() or "")
+        assert "storage_manifest" in (timing.header_value() or "")
         assert kwargs == {
             "session_id": session_id,
             "owner_id": "42",

@@ -1,6 +1,6 @@
 # Elastic Onboarding and Durable Storage Epic
 
-**Status:** Reviewed, ready for Phase 1
+**Status:** Phase 1 in progress; Slice A implemented and independently reviewed
 **Owner:** Longhouse core and hosted operations
 **Created:** 2026-07-20
 **Scope:** Hosted scale, customer import, storage telemetry, and object-store
@@ -640,6 +640,16 @@ This epic must not reintroduce it as an object-store migration fallback.
 
 **Goal:** Establish the minimum measurements and hard safety controls needed to
 change storage or accept a large import safely.
+
+**Implementation checkpoint (2026-07-20):** Slice A is implemented on the epic
+branch and is not yet deployed. It adds bounded route-class request outcomes and
+latency, independently timed read stages, immutable-object bytes/counts, and
+exact commit/dirty build identity. Cursor/Grok initially rejected misleading
+catch-all and per-batch measurements; the amended implementation uses a concrete
+UUID route allowlist, one object-I/O observation per request, and explicit
+surface opt-in. The backend gate passes. Projector/search/object state gauges,
+telemetry-health, safety ceilings, the scheduled cohort journey, deployment,
+and the baseline report remain in progress.
 
 Deliver:
 

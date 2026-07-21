@@ -222,6 +222,48 @@ try:
         labelnames=("outcome",),
     )
 
+    # Product read-path telemetry. Labels are deliberately coarse and bounded:
+    # never add request paths, session ids, owners, queries, or object keys.
+    product_read_requests_total = Counter(
+        "longhouse_product_read_requests_total",
+        "Product read requests by stable route class, status family, and outcome",
+        labelnames=("route_class", "status_family", "outcome"),
+    )
+
+    product_read_request_seconds = Histogram(
+        "longhouse_product_read_request_seconds",
+        "End-to-end product read request latency by stable route class and outcome",
+        labelnames=("route_class", "status_family", "outcome"),
+        buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 15, 60),
+    )
+
+    product_read_stage_seconds = Histogram(
+        "longhouse_product_read_stage_seconds",
+        "Independently timed product read stage latency; stages may be nested and are not additive",
+        labelnames=("surface", "stage"),
+        buckets=(0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5),
+    )
+
+    product_read_bytes = Histogram(
+        "longhouse_product_read_bytes",
+        "Compressed immutable object bytes read per product request",
+        labelnames=("surface", "object_kind"),
+        buckets=(0, 1_024, 4_096, 16_384, 65_536, 262_144, 1_048_576, 4_194_304, 16_777_216),
+    )
+
+    product_read_objects = Histogram(
+        "longhouse_product_read_objects",
+        "Immutable objects read per product request",
+        labelnames=("surface", "object_kind"),
+        buckets=(0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1_000),
+    )
+
+    build_identity_info = Gauge(
+        "longhouse_build_info",
+        "Runtime build identity for correlating retained telemetry with deployments",
+        labelnames=("version", "commit", "channel", "dirty"),
+    )
+
     # ------------------------------------------------------------------
     # God-view gauges: current operational state, refreshed at scrape time
     # (see routers/metrics.py::_refresh_dynamic_gauges). These turn the
@@ -427,6 +469,7 @@ except ModuleNotFoundError:  # pragma: no cover – metrics disabled when lib ab
     managed_codex_bridge_freshness_total = _NoopCounter()  # type: ignore[assignment]
     session_input_attachments_total = _NoopCounter()  # type: ignore[assignment]
     session_input_attachment_blob_fetches_total = _NoopCounter()  # type: ignore[assignment]
+    product_read_requests_total = _NoopCounter()  # type: ignore[assignment]
 
     # Provide *noop* Gauge so code can call ``set`` without importing
     # the optional dependency in minimal CI images.
@@ -503,3 +546,8 @@ except ModuleNotFoundError:  # pragma: no cover – metrics disabled when lib ab
     device_reported_offline = _NoopGauge()  # type: ignore[assignment]
     device_archive_backlog_pending_bytes = _NoopGauge()  # type: ignore[assignment]
     device_archive_backlog_pending_ranges = _NoopGauge()  # type: ignore[assignment]
+    build_identity_info = _NoopGauge()  # type: ignore[assignment]
+    product_read_request_seconds = _NoopHistogram()  # type: ignore[assignment]
+    product_read_stage_seconds = _NoopHistogram()  # type: ignore[assignment]
+    product_read_bytes = _NoopHistogram()  # type: ignore[assignment]
+    product_read_objects = _NoopHistogram()  # type: ignore[assignment]
