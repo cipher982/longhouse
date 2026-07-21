@@ -178,7 +178,12 @@ export function assertPrivacySafeArtifact(payload: unknown, forbiddenStrings: st
   visit(payload, forbiddenStrings);
 }
 
-export async function waitForElementPaint(page: Page, marker: string, afterEpochMs: number): Promise<number> {
+export async function waitForElementPaint(
+  page: Page,
+  marker: string,
+  afterEpochMs: number,
+  timeoutMs = 15_000,
+): Promise<number> {
   const epochMs = await page.evaluate(
     ({ expectedMarker, minimumEpochMs, timeoutMs }) => new Promise<number | false>((resolve) => {
       let observer: PerformanceObserver | null = null;
@@ -204,7 +209,7 @@ export async function waitForElementPaint(page: Page, marker: string, afterEpoch
         finish(false);
       }
     }),
-    { expectedMarker: marker, minimumEpochMs: afterEpochMs, timeoutMs: 15_000 },
+    { expectedMarker: marker, minimumEpochMs: afterEpochMs, timeoutMs },
   );
   if (typeof epochMs !== "number" || !Number.isFinite(epochMs)) throw new Error("paint_evidence_unavailable");
   return epochMs;

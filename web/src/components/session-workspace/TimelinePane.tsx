@@ -291,13 +291,15 @@ function MessageRow({
     <div
       id={`event-${event.id}`}
       data-testid="session-timeline-row"
-      {...{ elementtiming: "longhouse-session-timeline-row" }}
       data-row-kind="message"
       data-message-role={event.role}
       className={`tl-msg tl-msg--${event.role}`}
     >
       <div className="tl-msg__head">
-        <span className="tl-msg__who">
+        <span
+          className="tl-msg__who"
+          {...{ elementtiming: "longhouse-session-timeline-row" }}
+        >
           {isUser ? "You" : isAssistant ? "AI" : event.role}
         </span>
         <span className="tl-msg__time">{formatTime(event.timestamp)}</span>
@@ -544,7 +546,6 @@ function ActionCard({
     <div
       id={rowId}
       data-testid="session-timeline-row"
-      {...{ elementtiming: "longhouse-session-timeline-row" }}
       data-row-kind="tool"
       data-tool-tier="action"
       data-status={statusTone}
@@ -562,7 +563,12 @@ function ActionCard({
       >
         <span className="tl-action__accent" style={{ background: info.color }} data-tone={statusTone} />
         <span className="tl-action__icon" style={{ color: info.color }}>{info.icon}</span>
-        <span className="tl-action__name">{agentType || info.displayName}</span>
+        <span
+          className="tl-action__name"
+          {...{ elementtiming: "longhouse-session-timeline-row" }}
+        >
+          {agentType || info.displayName}
+        </span>
         {info.mcpNamespace ? <span className="tl-action__ns">{info.mcpNamespace}</span> : null}
         <span className="tl-action__summary">{summary || (dropped ? "dropped" : pending ? "running…" : "")}</span>
         <span className="tl-action__meta">
@@ -617,7 +623,6 @@ function ContextLine({
     <div
       id={rowId}
       data-testid="session-timeline-row"
-      {...{ elementtiming: "longhouse-session-timeline-row" }}
       data-row-kind="tool"
       data-tool-tier="context"
       data-status={statusTone}
@@ -634,7 +639,13 @@ function ContextLine({
         aria-controls={detailId}
       >
         <span className="tl-context__arrow">↳</span>
-        <span className="tl-context__label" style={{ color: info.color }}>{info.displayName}</span>
+        <span
+          className="tl-context__label"
+          style={{ color: info.color }}
+          {...{ elementtiming: "longhouse-session-timeline-row" }}
+        >
+          {info.displayName}
+        </span>
         <span className="tl-context__summary">{summary || (dropped ? "dropped" : pending ? "running…" : "")}</span>
         <span className="tl-context__meta">
           {pending ? <span className="tl-chip tl-chip--pending">running</span> : null}
@@ -692,7 +703,6 @@ function NoiseChip({
     <div
       id={rowId}
       data-testid="session-timeline-row"
-      {...{ elementtiming: "longhouse-session-timeline-row" }}
       data-row-kind="noise-group"
       className={`tl-noise${isSelected ? " is-selected" : ""}${expanded ? " is-expanded" : ""}`}
     >
@@ -706,7 +716,12 @@ function NoiseChip({
         aria-expanded={expanded}
       >
         <span className="tl-noise__arrow">↳</span>
-        <span className="tl-noise__summary">{summary}</span>
+        <span
+          className="tl-noise__summary"
+          {...{ elementtiming: "longhouse-session-timeline-row" }}
+        >
+          {summary}
+        </span>
         <span className="tl-noise__count">{group.interactions.length}</span>
         <span className={`tl-noise__chev${expanded ? " is-open" : ""}`} aria-hidden="true">›</span>
       </button>

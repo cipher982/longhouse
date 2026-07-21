@@ -127,7 +127,6 @@ export function SessionRow({
       type="button"
       className="inbox-row"
       data-testid="session-row"
-      {...{ elementtiming: "longhouse-session-row" }}
       data-session-id={session.id}
       data-thread-id={thread.thread_id}
       data-status={statusTone}
@@ -146,7 +145,12 @@ export function SessionRow({
       onBlur={clearHover}
     >
       <div className="inbox-row-main">
-        <div className="inbox-row-title">{text.title}</div>
+        <div
+          className="inbox-row-title"
+          {...{ elementtiming: "longhouse-session-row" }}
+        >
+          {text.title}
+        </div>
         {summary ? (
           <div
             className={`inbox-row-summary${showSnippet ? " inbox-row-summary--snippet" : ""}`}

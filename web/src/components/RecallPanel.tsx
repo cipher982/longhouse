@@ -43,13 +43,13 @@ function RecallCard({ match }: { match: RecallMatch }) {
     <div
       className="recall-card"
       data-testid="recall-card"
-      {...{ elementtiming: "longhouse-recall-card" }}
     >
       <div className="recall-card-header">
         <Link
           to={match.match_event_id ? `/timeline/${match.session_id}?event_id=${match.match_event_id}` : `/timeline/${match.session_id}`}
           className="recall-card-session-link"
           title="Open session"
+          {...{ elementtiming: "longhouse-recall-card" }}
         >
           Session {match.session_id.slice(0, 8)}…
         </Link>

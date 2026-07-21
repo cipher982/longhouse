@@ -39,6 +39,8 @@ type ActionResult = {
   paintMarker: string;
   paintAfterEpochMs?: number;
 };
+type ApiResponse = Awaited<ReturnType<APIRequestContext["get"]>>;
+type CohortInventory = { sessions: JourneySession[]; complete: boolean };
 
 const JOURNEY_COHORT = "dogfood_scheduled_v1";
 const JOURNEY_OUTPUT = resolve(
@@ -172,6 +174,67 @@ function responseFailure(response: Response | Awaited<ReturnType<APIRequestConte
   return new Error(`http_${Math.floor(response.status() / 100)}xx`);
 }
 
+async function runAndWaitForSuccessfulResponse<T>(
+  page: Page,
+  routeClass: string,
+  timeoutMs: number,
+  action: () => Promise<T>,
+): Promise<{ response: Response; actionResult: T }> {
+  let lastFailure: Response | null = null;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let listener: ((response: Response) => void) | null = null;
+  const cleanup = () => {
+    if (timer) clearTimeout(timer);
+    if (listener) page.off("response", listener);
+    timer = null;
+    listener = null;
+  };
+  const responsePromise = new Promise<Response>((resolve, reject) => {
+    listener = (response: Response) => {
+      if (classifyApiResource(response.url()) !== routeClass) return;
+      if (!response.ok()) {
+        lastFailure = response;
+        return;
+      }
+      cleanup();
+      resolve(response);
+    };
+    page.on("response", listener);
+    timer = setTimeout(() => {
+      const error = lastFailure ? responseFailure(lastFailure) : new Error("timeout");
+      cleanup();
+      reject(error);
+    }, timeoutMs);
+  });
+
+  try {
+    const [actionResult, response] = await Promise.all([action(), responsePromise]);
+    return { response, actionResult };
+  } finally {
+    cleanup();
+  }
+}
+
+async function getWithRetry(
+  request: APIRequestContext,
+  url: string,
+  attempts = 3,
+): Promise<ApiResponse> {
+  let lastError: unknown = null;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      const response = await request.get(url);
+      if (response.ok() || (response.status() !== 429 && response.status() < 500)) return response;
+      if (attempt === attempts) return response;
+    } catch (error) {
+      lastError = error;
+      if (attempt === attempts) throw error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, attempt * 250));
+  }
+  throw lastError instanceof Error ? lastError : new Error("http_retry_exhausted");
+}
+
 function flattenTimelineCards(body: unknown): JourneySession[] {
   if (!body || typeof body !== "object") return [];
   const rows = Array.isArray((body as { sessions?: unknown }).sessions)
@@ -207,9 +270,9 @@ function flattenTimelineCards(body: unknown): JourneySession[] {
   return result;
 }
 
-async function fetchCohortInventory(request: APIRequestContext, apiBaseUrl: string): Promise<JourneySession[]> {
+async function fetchCohortInventory(request: APIRequestContext, apiBaseUrl: string): Promise<CohortInventory> {
   const base = `${apiBaseUrl.replace(/\/$/, "")}/api/timeline/sessions`;
-  const first = await request.get(`${base}?days_back=90&limit=100&offset=0`);
+  const first = await getWithRetry(request, `${base}?days_back=90&limit=100&offset=0`);
   if (!first.ok()) throw responseFailure(first);
   const firstBody = await first.json();
   const total = Number(firstBody?.total ?? 0);
@@ -217,12 +280,16 @@ async function fetchCohortInventory(request: APIRequestContext, apiBaseUrl: stri
   if (total > 100) offsets.add(Math.max(0, total - 100));
   if (total > 200) offsets.add(Math.max(0, Math.floor(total / 2) - 50));
   const sessions = flattenTimelineCards(firstBody);
+  let complete = true;
   for (const offset of [...offsets].filter((value) => value > 0)) {
-    const response = await request.get(`${base}?days_back=90&limit=100&offset=${offset}`);
-    if (!response.ok()) throw responseFailure(response);
+    const response = await getWithRetry(request, `${base}?days_back=90&limit=100&offset=${offset}`);
+    if (!response.ok()) {
+      complete = false;
+      continue;
+    }
     sessions.push(...flattenTimelineCards(await response.json()));
   }
-  return sessions;
+  return { sessions, complete };
 }
 
 async function openReadableSession(page: Page, session: JourneySession | null): Promise<ActionResult> {
@@ -266,7 +333,7 @@ test("scheduled dogfood cohort journey", async ({ apiBaseUrl, context }, testInf
   let tracker: ReturnType<typeof createResponseTracker> | null = null;
 
   try {
-    const health = await context.request.get(`${apiBaseUrl.replace(/\/$/, "")}/api/health`);
+    const health = await getWithRetry(context.request, `${apiBaseUrl.replace(/\/$/, "")}/api/health`);
     if (!health.ok()) throw responseFailure(health);
     const healthBody = await health.json();
     const candidateBuild = healthBody?.build;
@@ -286,7 +353,7 @@ test("scheduled dogfood cohort journey", async ({ apiBaseUrl, context }, testInf
       dirty: candidateBuild.dirty,
     };
 
-    const system = await context.request.get(`${apiBaseUrl.replace(/\/$/, "")}/api/system/info`);
+    const system = await getWithRetry(context.request, `${apiBaseUrl.replace(/\/$/, "")}/api/system/info`);
     if (!system.ok()) throw responseFailure(system);
     if ((await system.json())?.demo_mode === true) throw new Error("demo_target");
   } catch (error) {
@@ -295,7 +362,9 @@ test("scheduled dogfood cohort journey", async ({ apiBaseUrl, context }, testInf
 
   let inventory: JourneySession[] = [];
   try {
-    inventory = await fetchCohortInventory(context.request, apiBaseUrl);
+    const inventoryResult = await fetchCohortInventory(context.request, apiBaseUrl);
+    inventory = inventoryResult.sessions;
+    if (!inventoryResult.complete) preflightFailures.push("inventory_incomplete");
     if (inventory.length === 0) throw new Error("missing_cohort");
   } catch (error) {
     preflightFailures.push(classifyJourneyFailure(error));
@@ -341,14 +410,10 @@ test("scheduled dogfood cohort journey", async ({ apiBaseUrl, context }, testInf
         const before = loadedEntryCount(await summary.textContent());
         const sentinel = page!.getByTestId("session-timeline-load-older");
         if ((await sentinel.count()) === 0) throw new Error("missing_cohort");
-        const responsePromise = page!.waitForResponse(
-          (response) => classifyApiResource(response.url()) === "session_projection",
-          { timeout: 25_000 },
-        );
         const paintAfterEpochMs = Date.now();
-        await page!.getByTestId("session-timeline-list").evaluate((element) => element.scrollTo({ top: 0 }));
-        const response = await responsePromise;
-        if (!response.ok()) throw responseFailure(response);
+        await runAndWaitForSuccessfulResponse(page!, "session_projection", 25_000, () => (
+          page!.getByTestId("session-timeline-list").evaluate((element) => element.scrollTo({ top: 0 }))
+        ));
         await expect.poll(async () => loadedEntryCount(await summary.textContent()), { timeout: 20_000 }).toBeGreaterThan(before);
         const after = loadedEntryCount(await summary.textContent());
         if (after <= before) throw new Error("projection_not_appended");
@@ -362,15 +427,11 @@ test("scheduled dogfood cohort journey", async ({ apiBaseUrl, context }, testInf
 
     phases.push(await measurePhase(page, tracker, "stable_lexical_search", "stable_lexical", "all", async () => {
       if (!lexicalFixture) throw new Error("fixture_not_configured");
-      const responsePromise = page!.waitForResponse(
-        (response) => classifyApiResource(response.url()) === "lexical_search",
-        { timeout: 25_000 },
-      );
       const params = new URLSearchParams({ days_back: "90", query: lexicalFixture });
-      await page!.goto(`/timeline?${params.toString()}`, { waitUntil: "domcontentloaded" });
+      const { response } = await runAndWaitForSuccessfulResponse(page!, "lexical_search", 25_000, () => (
+        page!.goto(`/timeline?${params.toString()}`, { waitUntil: "domcontentloaded" })
+      ));
       await waitForPageReady(page!, { timeout: 25_000 });
-      const response = await responsePromise;
-      if (!response.ok()) throw responseFailure(response);
       const body = await response.json();
       const total = Number(body?.total ?? 0);
       if (total <= 0) throw new Error("empty_result");
@@ -383,14 +444,10 @@ test("scheduled dogfood cohort journey", async ({ apiBaseUrl, context }, testInf
       await page!.goto("/timeline?days_back=90", { waitUntil: "domcontentloaded" });
       await waitForPageReady(page!, { timeout: 25_000 });
       await page!.getByTestId("recall-toggle").click();
-      const responsePromise = page!.waitForResponse(
-        (response) => classifyApiResource(response.url()) === "recall",
-        { timeout: 35_000 },
-      );
       const paintAfterEpochMs = Date.now();
-      await page!.getByTestId("recall-search-input").fill(recallFixture);
-      const response = await responsePromise;
-      if (!response.ok()) throw responseFailure(response);
+      const { response } = await runAndWaitForSuccessfulResponse(page!, "recall", 35_000, () => (
+        page!.getByTestId("recall-search-input").fill(recallFixture)
+      ));
       const body = await response.json();
       const total = Number(body?.total ?? 0);
       if (total <= 0) throw new Error("empty_result");
