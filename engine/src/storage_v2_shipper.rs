@@ -1404,14 +1404,13 @@ fn prepare_next_cursor_envelope_outcome_with_limit(
         resolution.source_epoch,
         &streamed_records,
     )?;
+    // The last visited ID is a durable high-water mark, including at the
+    // current head. Clearing it at the head makes the next reconciliation
+    // indistinguishable from an initial capture and rescans every blob.
     cursor_store_records::store_capture_cursor(
         conn,
         resolution.source_epoch,
-        if blob_visit.has_more {
-            blob_visit.last_blob_id.as_deref()
-        } else {
-            None
-        },
+        blob_visit.last_blob_id.as_deref(),
     )?;
     let source_capture_has_more = blob_visit.has_more;
     let logical_len = cursor_store_records::cursor_record_count(conn, resolution.source_epoch)?;
@@ -3050,9 +3049,19 @@ mod tests {
     fn cursor_preparation_reports_current_only_after_acknowledged_head() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("store.db");
-        let _store = make_cursor_store(&path);
+        let store = make_cursor_store(&path);
+        for index in 0..300 {
+            store
+                .execute(
+                    "INSERT INTO blobs (id, data) VALUES (?1, ?2)",
+                    params![format!("page-{index:03}"), vec![index as u8]],
+                )
+                .unwrap();
+        }
         let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
         let mut shipped = 0;
+        let mut source_epoch = None;
+        let mut reached_current = false;
 
         for _ in 0..16 {
             match prepare_next_cursor_envelope_outcome_with_limit(
@@ -3064,20 +3073,181 @@ mod tests {
             .unwrap()
             {
                 CursorPreparationOutcome::Envelope(prepared) => {
+                    source_epoch = Some(prepared.source_epoch);
                     acknowledge_prepared(&mut conn, &prepared);
                     shipped += 1;
                 }
                 CursorPreparationOutcome::Continue => continue,
                 CursorPreparationOutcome::Current => {
                     assert!(shipped > 0);
-                    return;
+                    reached_current = true;
+                    break;
                 }
                 CursorPreparationOutcome::WaitingOnClaim => {
                     panic!("fixture must not be held by a managed Cursor claim")
                 }
             }
         }
-        panic!("Cursor source did not reach a distinct current outcome");
+        assert!(reached_current, "Cursor source did not reach current");
+        let source_epoch = source_epoch.expect("fixture must prepare at least one envelope");
+        assert_eq!(
+            cursor_store_records::capture_cursor(&conn, source_epoch)
+                .unwrap()
+                .as_deref(),
+            Some("page-299")
+        );
+        assert!(matches!(
+            prepare_next_cursor_envelope_outcome_with_limit(
+                &mut conn,
+                &capabilities(),
+                &path,
+                LIVE_TARGET_BATCH_BYTES as u64,
+            )
+            .unwrap(),
+            CursorPreparationOutcome::Current
+        ));
+
+        let lower_message_id = "1111111111111111111111111111111111111111111111111111111111111111";
+        store
+            .execute(
+                "INSERT INTO blobs (id, data) VALUES (?1, ?2)",
+                params![
+                    lower_message_id,
+                    br#"{"role":"assistant","content":[{"type":"text","text":"lower hash extension"}]}"#
+                ],
+            )
+            .unwrap();
+        let mut extended_root = vec![0xbb; 32];
+        extended_root.extend_from_slice(&[0x11; 32]);
+        set_cursor_root(&store, CURSOR_ROOT_B, &extended_root);
+        let lower_extension = match prepare_next_cursor_envelope_outcome_with_limit(
+            &mut conn,
+            &capabilities(),
+            &path,
+            LIVE_TARGET_BATCH_BYTES as u64,
+        )
+        .unwrap()
+        {
+            CursorPreparationOutcome::Envelope(prepared) => prepared,
+            _ => panic!("a lower-ID blob referenced by a root extension must be captured"),
+        };
+        assert_eq!(lower_extension.source_epoch, source_epoch);
+        assert!(lower_extension.envelope.records.iter().any(|record| {
+            let bytes = BASE64_STANDARD.decode(&record.data_b64).unwrap();
+            let raw: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            raw["kind"] == "root_reference" && raw["blob_id"] == lower_message_id
+        }));
+        assert!(lower_extension
+            .envelope
+            .render
+            .as_ref()
+            .unwrap()
+            .records
+            .iter()
+            .any(|record| record.content_text.as_deref() == Some("lower hash extension")));
+        acknowledge_prepared(&mut conn, &lower_extension);
+        assert!(matches!(
+            prepare_next_cursor_envelope_outcome_with_limit(
+                &mut conn,
+                &capabilities(),
+                &path,
+                LIVE_TARGET_BATCH_BYTES as u64,
+            )
+            .unwrap(),
+            CursorPreparationOutcome::Current
+        ));
+
+        store
+            .execute(
+                "INSERT INTO blobs (id, data) VALUES ('zzzz-tail', X'CAFE')",
+                [],
+            )
+            .unwrap();
+        let tail = match prepare_next_cursor_envelope_outcome_with_limit(
+            &mut conn,
+            &capabilities(),
+            &path,
+            LIVE_TARGET_BATCH_BYTES as u64,
+        )
+        .unwrap()
+        {
+            CursorPreparationOutcome::Envelope(prepared) => prepared,
+            _ => panic!("a new blob beyond the high-water mark must be captured"),
+        };
+        assert!(tail.envelope.records.iter().any(|record| {
+            let bytes = BASE64_STANDARD.decode(&record.data_b64).unwrap();
+            let raw: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            raw["kind"] == "blob" && raw["blob_id"] == "zzzz-tail"
+        }));
+        acknowledge_prepared(&mut conn, &tail);
+        assert!(matches!(
+            prepare_next_cursor_envelope_outcome_with_limit(
+                &mut conn,
+                &capabilities(),
+                &path,
+                LIVE_TARGET_BATCH_BYTES as u64,
+            )
+            .unwrap(),
+            CursorPreparationOutcome::Current
+        ));
+    }
+
+    #[test]
+    fn cursor_exact_blob_page_retains_high_water_after_empty_follow_up() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("store.db");
+        let store = make_cursor_store(&path);
+        // The fixture contributes two blobs, making this exactly one 256-row
+        // capture page. The visitor conservatively reports has_more until the
+        // next empty page confirms EOF.
+        for index in 0..254 {
+            store
+                .execute(
+                    "INSERT INTO blobs (id, data) VALUES (?1, ?2)",
+                    params![format!("page-{index:03}"), vec![index as u8]],
+                )
+                .unwrap();
+        }
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+
+        let first = match prepare_next_cursor_envelope_outcome_with_limit(
+            &mut conn,
+            &capabilities(),
+            &path,
+            LIVE_TARGET_BATCH_BYTES as u64,
+        )
+        .unwrap()
+        {
+            CursorPreparationOutcome::Envelope(prepared) => prepared,
+            _ => panic!("the initial exact page must prepare an envelope"),
+        };
+        acknowledge_prepared(&mut conn, &first);
+        assert!(matches!(
+            prepare_next_cursor_envelope_outcome_with_limit(
+                &mut conn,
+                &capabilities(),
+                &path,
+                LIVE_TARGET_BATCH_BYTES as u64,
+            )
+            .unwrap(),
+            CursorPreparationOutcome::Current
+        ));
+        assert_eq!(
+            cursor_store_records::capture_cursor(&conn, first.source_epoch)
+                .unwrap()
+                .as_deref(),
+            Some("page-253")
+        );
+        assert!(matches!(
+            prepare_next_cursor_envelope_outcome_with_limit(
+                &mut conn,
+                &capabilities(),
+                &path,
+                LIVE_TARGET_BATCH_BYTES as u64,
+            )
+            .unwrap(),
+            CursorPreparationOutcome::Current
+        ));
     }
 
     #[test]
