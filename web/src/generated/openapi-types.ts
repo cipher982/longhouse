@@ -5596,6 +5596,15 @@ export interface components {
             storage_v2_outbox?: {
                 [key: string]: unknown;
             };
+            /** Adaptive Backlog Limiter */
+            adaptive_backlog_limiter?: {
+                [key: string]: unknown;
+            } | null;
+            /** Ship Scheduler */
+            ship_scheduler?: {
+                [key: string]: unknown;
+            } | null;
+            history_import?: components["schemas"]["HistoryImportSnapshot-Input"] | null;
             /**
              * Parse Error Count 1H
              * @default 0
@@ -5709,6 +5718,24 @@ export interface components {
             sessions_digest?: string | null;
             /** Sessions Sequence */
             sessions_sequence?: number | null;
+        };
+        /** HistoryImportSnapshot */
+        "HistoryImportSnapshot-Input": {
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "discovering" | "inventory_ready" | "unavailable";
+            inventory?: components["schemas"]["SourceInventory"] | null;
+        };
+        /** HistoryImportSnapshot */
+        "HistoryImportSnapshot-Output": {
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "discovering" | "inventory_ready" | "unavailable";
+            inventory?: components["schemas"]["SourceInventory"] | null;
         };
         /**
          * HostState
@@ -6044,6 +6071,7 @@ export interface components {
             archive_repair?: {
                 [key: string]: unknown;
             };
+            history_import?: components["schemas"]["HistoryImportSnapshot-Output"];
             /** Parse Errors 1H */
             parse_errors_1h: number;
             /** Consecutive Failures */
@@ -7047,6 +7075,23 @@ export interface components {
              * @description Optional timeout for the live-token contract portion of the proof.
              */
             live_token_timeout_secs?: number | null;
+        };
+        /** ProviderSourceInventory */
+        ProviderSourceInventory: {
+            /** Provider */
+            provider: string;
+            /** Source Count */
+            source_count: number;
+            /** Source Bytes */
+            source_bytes: number;
+            /** Wal Bytes */
+            wal_bytes: number;
+            /** Footprint Bytes */
+            footprint_bytes: number;
+            /** Oldest Modified At Ms */
+            oldest_modified_at_ms?: number | null;
+            /** Newest Modified At Ms */
+            newest_modified_at_ms?: number | null;
         };
         /** QueuedInputSummary */
         QueuedInputSummary: {
@@ -10785,6 +10830,37 @@ export interface components {
             hours_back: number;
             /** Min Total Turn Time Ms */
             min_total_turn_time_ms: number;
+        };
+        /** SourceInventory */
+        SourceInventory: {
+            /**
+             * Schema Version
+             * @constant
+             */
+            schema_version: 1;
+            /** Generation */
+            generation: number;
+            /** Content Sha256 */
+            content_sha256: string;
+            /**
+             * Observed At
+             * Format: date-time
+             */
+            observed_at: string;
+            /** Scan Duration Ms */
+            scan_duration_ms: number;
+            /** Scan Error Count */
+            scan_error_count: number;
+            /** Source Count */
+            source_count: number;
+            /** Source Bytes */
+            source_bytes: number;
+            /** Wal Bytes */
+            wal_bytes: number;
+            /** Footprint Bytes */
+            footprint_bytes: number;
+            /** Providers */
+            providers?: components["schemas"]["ProviderSourceInventory"][];
         };
         /** SourceLineClaimItem */
         SourceLineClaimItem: {

@@ -703,6 +703,35 @@ def test_heartbeat_endpoint_persists_transport_summary_fields(tmp_path):
                         "bytes_per_sec_ewma_10s": 131072.0,
                     }
                 },
+                "adaptive_backlog_limiter": {"historical_cap": 3, "state": "steady"},
+                "ship_scheduler": {"ready_scan": 7, "in_flight_scan": 1},
+                "history_import": {
+                    "state": "inventory_ready",
+                    "inventory": {
+                        "schema_version": 1,
+                        "generation": 4,
+                        "content_sha256": "a" * 64,
+                        "observed_at": "2026-04-23T20:00:02Z",
+                        "scan_duration_ms": 81,
+                        "scan_error_count": 0,
+                        "source_count": 2,
+                        "source_bytes": 300,
+                        "wal_bytes": 0,
+                        "footprint_bytes": 300,
+                        "providers": [
+                            {
+                                "provider": "claude",
+                                "source_count": 2,
+                                "source_bytes": 300,
+                                "wal_bytes": 0,
+                                "footprint_bytes": 300,
+                                "oldest_modified_at_ms": 10,
+                                "newest_modified_at_ms": 20,
+                                "path": "/must/not/survive",
+                            }
+                        ],
+                    },
+                },
                 "events_per_sec_ewma_10s": 12.5,
                 "bytes_per_sec_ewma_10s": 65536.0,
                 "disk_free_bytes": 50_000_000,
@@ -733,6 +762,11 @@ def test_heartbeat_endpoint_persists_transport_summary_fields(tmp_path):
             assert row.ship_latency_p95_ms_1h == 260
             assert raw["last_ship_attempt_at"] == "2026-04-23T20:00:03Z"
             assert raw["last_ship_result"] == "rate_limited"
+            assert raw["adaptive_backlog_limiter"]["historical_cap"] == 3
+            assert raw["ship_scheduler"]["ready_scan"] == 7
+            assert raw["history_import"]["state"] == "inventory_ready"
+            assert raw["history_import"]["inventory"]["generation"] == 4
+            assert "path" not in raw["history_import"]["inventory"]["providers"][0]
             assert raw["last_ship_latency_ms"] == 187
             assert raw["last_ship_http_status"] == 429
             assert raw["last_ship_error_kind"] == "rate_limited"
@@ -748,6 +782,94 @@ def test_heartbeat_endpoint_persists_transport_summary_fields(tmp_path):
             assert raw["ship_lanes"]["archive"]["bytes_per_sec_ewma_10s"] == 131072.0
             assert raw["events_per_sec_ewma_10s"] == 12.5
             assert raw["bytes_per_sec_ewma_10s"] == 65536.0
+    finally:
+        api_app_ref.dependency_overrides = {}
+
+
+def test_heartbeat_legacy_omission_is_unavailable_and_invalid_inventory_soft_fails(tmp_path):
+    from zerg.routers.heartbeat import HeartbeatIn
+    from zerg.services.agent_heartbeat_health import build_machine_transport_health_summary
+
+    SessionLocal = _make_db(tmp_path)
+    client, api_app_ref = _make_client(SessionLocal)
+    try:
+        response = client.post(
+            "/api/agents/heartbeat",
+            json={"version": "legacy", "disk_free_bytes": 100, "is_offline": False},
+        )
+        assert response.status_code == 204
+        with SessionLocal() as db:
+            row = db.query(AgentHeartbeat).one()
+            assert "history_import" not in json.loads(row.raw_json)
+            summary = build_machine_transport_health_summary(
+                row,
+                stale_after_seconds=3600,
+                now=row.received_at.replace(tzinfo=timezone.utc),
+            )
+            assert summary.history_import.state == "unavailable"
+
+        explicit = HeartbeatIn.model_validate({"history_import": {"state": "discovering"}})
+        assert explicit.history_import is not None
+        assert explicit.history_import.state == "discovering"
+
+        malformed = HeartbeatIn.model_validate(
+            {
+                "history_import": {
+                    "state": "inventory_ready",
+                    "inventory": {
+                        "schema_version": 1,
+                        "generation": 1,
+                        "content_sha256": "a" * 64,
+                        "observed_at": "2026-04-23T20:00:02Z",
+                        "scan_duration_ms": 1,
+                        "scan_error_count": 0,
+                        "source_count": 2,
+                        "source_bytes": 10,
+                        "wal_bytes": 0,
+                        "footprint_bytes": 10,
+                        "providers": [
+                            {
+                                "provider": "claude",
+                                "source_count": 1,
+                                "source_bytes": 10,
+                                "wal_bytes": 0,
+                                "footprint_bytes": 10,
+                            }
+                        ],
+                    },
+                }
+            }
+        )
+        assert malformed.history_import is not None
+        assert malformed.history_import.state == "unavailable"
+
+        malformed_response = client.post(
+            "/api/agents/heartbeat",
+            json={
+                "version": "current",
+                "history_import": {
+                    "state": "inventory_ready",
+                    "inventory": {
+                        "schema_version": 1,
+                        "generation": 1,
+                        "content_sha256": "a" * 64,
+                        "observed_at": "2026-04-23T20:00:02Z",
+                        "scan_duration_ms": 1,
+                        "scan_error_count": 0,
+                        "source_count": 2,
+                        "source_bytes": 10,
+                        "wal_bytes": 0,
+                        "footprint_bytes": 10,
+                        "providers": [],
+                    },
+                },
+            },
+        )
+        assert malformed_response.status_code == 204
+        with SessionLocal() as db:
+            latest = db.query(AgentHeartbeat).order_by(AgentHeartbeat.id.desc()).first()
+            assert latest is not None
+            assert json.loads(latest.raw_json)["history_import"]["state"] == "unavailable"
     finally:
         api_app_ref.dependency_overrides = {}
 

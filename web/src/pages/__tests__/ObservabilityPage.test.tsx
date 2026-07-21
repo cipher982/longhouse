@@ -89,6 +89,7 @@ function buildOverview(hoursBack: number) {
         consecutive_failures: 1,
         disk_free_bytes: 1000,
         is_offline: false,
+        history_import: { state: "unavailable", inventory: null },
       },
       {
         device_id: "healthy-machine",
@@ -123,6 +124,41 @@ function buildOverview(hoursBack: number) {
         consecutive_failures: 0,
         disk_free_bytes: 1000,
         is_offline: false,
+        history_import: {
+          state: "inventory_ready",
+          inventory: {
+            schema_version: 1,
+            generation: 2,
+            content_sha256: "a".repeat(64),
+            observed_at: "2026-04-23T20:59:00Z",
+            scan_duration_ms: 41,
+            scan_error_count: 0,
+            source_count: 1250,
+            source_bytes: 1_600_000_000,
+            wal_bytes: 10_612_736,
+            footprint_bytes: 1_610_612_736,
+            providers: [
+              {
+                provider: "claude",
+                source_count: 900,
+                source_bytes: 1_073_741_824,
+                wal_bytes: 0,
+                footprint_bytes: 1_073_741_824,
+                oldest_modified_at_ms: 10,
+                newest_modified_at_ms: 20,
+              },
+              {
+                provider: "codex",
+                source_count: 350,
+                source_bytes: 526_258_176,
+                wal_bytes: 10_612_736,
+                footprint_bytes: 536_870_912,
+                oldest_modified_at_ms: 30,
+                newest_modified_at_ms: 40,
+              },
+            ],
+          },
+        },
       },
     ],
     machine_counts: {
@@ -295,6 +331,12 @@ describe("ObservabilityPage", () => {
     expect(screen.getAllByText("Claude").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Codex").length).toBeGreaterThan(0);
     expect(screen.getByText("1 dead-letter range(s) need repair.")).toBeInTheDocument();
+    expect(screen.getByText("1,250 sources · 1.5 GB on disk")).toBeInTheDocument();
+    expect(screen.getByText("Claude 900")).toBeInTheDocument();
+    expect(screen.getByText("Codex 350")).toBeInTheDocument();
+    expect(
+      screen.getByText("Discovery is complete. Import progress appears separately once source receipts are comparable."),
+    ).toBeInTheDocument();
     expect(screen.getAllByRole("link", { name: "Open machine sessions" })[0]).toHaveAttribute(
       "href",
       "/timeline?device_id=broken-machine",

@@ -53,6 +53,14 @@ function buildWindowLabel(hoursBack: number): string {
   return days === 1 ? "Last 1 Day" : `Last ${days} Days`;
 }
 
+function formatByteSize(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  const unitIndex = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+  const value = bytes / 1024 ** unitIndex;
+  return `${value >= 10 || unitIndex === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[unitIndex]}`;
+}
+
 async function fetchObservabilityOverview(hoursBack: number): Promise<ObservabilityOverviewResponse> {
   const params = new URLSearchParams({
     hours_back: String(hoursBack),
@@ -552,6 +560,34 @@ function MachineHealthPanel({ machines }: { machines: MachineHealthItemResponse[
               <span className="observability-stat-value">{machine.consecutive_failures}</span>
             </div>
           </div>
+          {machine.history_import?.state === "inventory_ready" && machine.history_import.inventory ? (
+            <div className="observability-history-inventory">
+              <div className="observability-history-inventory__header">
+                <span className="observability-stat-label">History discovered</span>
+                <Badge variant={machine.history_import.inventory.scan_error_count > 0 ? "warning" : "neutral"}>
+                  {machine.history_import.inventory.scan_error_count > 0
+                    ? `${machine.history_import.inventory.scan_error_count} scan errors`
+                    : "inventory ready"}
+                </Badge>
+              </div>
+              <strong>
+                {machine.history_import.inventory.source_count.toLocaleString()} sources ·{" "}
+                {formatByteSize(machine.history_import.inventory.footprint_bytes)} on disk
+              </strong>
+              <span className="observability-history-inventory__note">
+                Discovery is complete. Import progress appears separately once source receipts are comparable.
+              </span>
+              <div className="observability-history-inventory__providers">
+                {(machine.history_import.inventory.providers ?? []).map((provider) => (
+                  <span key={provider.provider}>
+                    {toTitleCaseWords(provider.provider)} {provider.source_count.toLocaleString()}
+                  </span>
+                ))}
+              </div>
+            </div>
+          ) : machine.history_import?.state === "discovering" ? (
+            <p className="observability-history-inventory__note">Scanning local transcript sources…</p>
+          ) : null}
           <div className="observability-machine-card__actions">
             <Link
               to={buildTimelineSlicePath({ deviceId: machine.device_id })}

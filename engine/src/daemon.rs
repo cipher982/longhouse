@@ -323,6 +323,7 @@ struct TranscriptWakeSignal {
 
 struct DiscoveryTaskResult {
     files: Vec<(PathBuf, &'static str)>,
+    inventory: crate::state::source_inventory::SourceInventoryObservation,
     priority: WorkPriority,
     reason: &'static str,
 }
@@ -1026,12 +1027,62 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             discovery_result = discovery_tasks.join_next(), if !discovery_tasks.is_empty() => {
                 match discovery_result {
                     Some(Ok(result)) => {
+                        let previous_inventory_generation =
+                            crate::state::source_inventory::load_inventory(&conn)
+                                .ok()
+                                .flatten()
+                                .map(|inventory| inventory.generation);
+                        let inventory = crate::state::source_inventory::persist_inventory(
+                            &conn,
+                            result.inventory,
+                        );
                         let queued = enqueue_discovered_files(
                             &mut scheduler,
                             result.files,
                             result.priority,
                         );
                         tracing::debug!("Queued {} paths for {}", queued, result.reason);
+                        match inventory {
+                            Ok(snapshot) => {
+                                tracing::info!(
+                                    generation = snapshot.generation,
+                                    source_count = snapshot.source_count,
+                                    footprint_bytes = snapshot.footprint_bytes,
+                                    scan_error_count = snapshot.scan_error_count,
+                                    "Updated durable transcript source inventory"
+                                );
+                                if previous_inventory_generation == Some(snapshot.generation) {
+                                    continue;
+                                }
+                                projection_generation = projection_generation.saturating_add(1);
+                                let input = ProjectionBuildInput {
+                                    generation: projection_generation,
+                                    managed_scan_partial: last_projected_managed_scan_partial,
+                                    process_snapshot_complete: last_projected_process_snapshot_complete,
+                                    db_path: projection_db_path.clone(),
+                                    tracker: tracker.clone(),
+                                    parse_tracker: parse_tracker.clone(),
+                                    ship_stats: ship_stats.clone(),
+                                    is_offline: offline.is_offline,
+                                    last_ship_at: last_ship_at.clone(),
+                                    machine_id: config.shipper_config.machine_name.clone(),
+                                    managed: last_projected_managed_observations.clone(),
+                                    unmanaged: last_unmanaged_session_bindings.clone().unwrap_or_default(),
+                                    limiter: adaptive_limiter.snapshot(),
+                                    scheduler: scheduler.snapshot(),
+                                    archive_repair_mode: config.archive_repair_mode,
+                                    last_full_reconciled_at: last_full_reconciled_at.clone(),
+                                    session_snapshot_state: session_snapshot_state.clone(),
+                                };
+                                if !maybe_start_projection_build(&mut projection_build_tasks, input) {
+                                    projection_build_pending = true;
+                                }
+                            }
+                            Err(error) => tracing::warn!(
+                                error = %error,
+                                "Failed to persist transcript source inventory"
+                            ),
+                        }
                     }
                     Some(Err(e)) => {
                         tracing::warn!("Background discovery task failed: {}", e);
@@ -2384,10 +2435,14 @@ fn start_discovery_task(
     reason: &'static str,
 ) {
     let providers = providers.to_vec();
-    discovery_tasks.spawn_blocking(move || DiscoveryTaskResult {
-        files: discovery::discover_all_files(&providers),
-        priority,
-        reason,
+    discovery_tasks.spawn_blocking(move || {
+        let scan = discovery::discover_all_files_with_inventory(&providers);
+        DiscoveryTaskResult {
+            files: scan.files,
+            inventory: scan.inventory,
+            priority,
+            reason,
+        }
     });
 }
 
@@ -4369,6 +4424,7 @@ mod tests {
             sessions_sequence: None,
             adaptive_backlog_limiter: None,
             ship_scheduler: None,
+            history_import: Default::default(),
         }
     }
 

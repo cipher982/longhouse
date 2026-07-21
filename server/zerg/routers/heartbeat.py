@@ -29,6 +29,7 @@ from fastapi import Response
 from fastapi import status
 from pydantic import BaseModel
 from pydantic import Field
+from pydantic import field_validator
 from pydantic import model_validator
 from sqlalchemy.orm import Session
 
@@ -52,6 +53,7 @@ from zerg.models.device_token import DeviceToken
 from zerg.models.live_store import LiveHeartbeatStamp
 from zerg.observability import get_tracer
 from zerg.observability import set_span_attributes
+from zerg.schemas.history_import import HistoryImportSnapshot
 from zerg.services.agents.kernel_capabilities import project_session_capabilities
 from zerg.services.catalogd_supervisor import get_catalogd_client
 from zerg.services.live_session_state import mark_missing_live_sessions
@@ -349,6 +351,9 @@ class HeartbeatIn(BaseModel):
     spool_dead_count: int = 0
     archive_backlog: dict[str, object] = Field(default_factory=dict)
     storage_v2_outbox: dict[str, object] = Field(default_factory=dict)
+    adaptive_backlog_limiter: dict[str, object] | None = None
+    ship_scheduler: dict[str, object] | None = None
+    history_import: HistoryImportSnapshot | None = None
     parse_error_count_1h: int = 0
     consecutive_ship_failures: int = 0
     ship_attempts_1h: int = 0
@@ -386,6 +391,16 @@ class HeartbeatIn(BaseModel):
     # Older engines omit these, which forces the full compatibility path.
     sessions_digest: str | None = Field(None, max_length=128)
     sessions_sequence: int | None = None
+
+    @field_validator("history_import", mode="before")
+    @classmethod
+    def normalize_history_import(cls, value: object) -> HistoryImportSnapshot | None:
+        if value is None:
+            return None
+        try:
+            return HistoryImportSnapshot.model_validate(value)
+        except ValueError:
+            return HistoryImportSnapshot.unavailable()
 
 
 def _machine_process_snapshot_complete(payload: HeartbeatIn, scope_name: str) -> bool:
@@ -760,6 +775,8 @@ async def ingest_heartbeat(
 
                 wire_bytes = len(await request.body())
                 payload_for_retention = payload.model_dump(mode="json")
+                if "history_import" not in payload.model_fields_set:
+                    payload_for_retention.pop("history_import", None)
                 if payload.machine_evidence is not None:
                     payload_for_retention["machine_evidence"] = payload.machine_evidence.model_dump(mode="json", exclude_none=True)
                 payload_json = json.dumps(payload_for_retention)

@@ -144,6 +144,9 @@ pub struct HeartbeatPayload {
     /// Current path-scheduler ready/in-flight pressure by lane.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ship_scheduler: Option<crate::scheduler::SchedulerSnapshot>,
+    /// Durable, path-free discovery inventory used for onboarding progress.
+    #[serde(default)]
+    pub history_import: crate::state::source_inventory::HistoryImportSnapshot,
 }
 
 /// One machine-observed binding of an unmanaged provider CLI process to
@@ -625,6 +628,9 @@ impl HeartbeatPayload {
             sessions_sequence: None,
             adaptive_backlog_limiter: None,
             ship_scheduler: None,
+            history_import: crate::state::source_inventory::HistoryImportSnapshot::load(
+                stats.conn,
+            ),
         }
     }
 }
@@ -2908,6 +2914,7 @@ mod tests {
             sessions_sequence: None,
             adaptive_backlog_limiter: None,
             ship_scheduler: None,
+            history_import: Default::default(),
         };
 
         // Must serialize correctly
@@ -2990,6 +2997,7 @@ mod tests {
             sessions_sequence: None,
             adaptive_backlog_limiter: None,
             ship_scheduler: None,
+            history_import: Default::default(),
         };
 
         let json = serde_json::to_string(&payload).unwrap();
@@ -4063,6 +4071,7 @@ mod tests {
             sessions_sequence: None,
             adaptive_backlog_limiter: None,
             ship_scheduler: None,
+            history_import: Default::default(),
         };
 
         let json = serde_json::to_string(&payload).unwrap();
@@ -4126,6 +4135,7 @@ mod tests {
             sessions_sequence: None,
             adaptive_backlog_limiter: None,
             ship_scheduler: None,
+            history_import: Default::default(),
         };
 
         spool
@@ -4298,6 +4308,7 @@ mod tests {
             sessions_sequence: None,
             adaptive_backlog_limiter: None,
             ship_scheduler: None,
+            history_import: Default::default(),
         };
         let stats = HeartbeatStats {
             conn: &conn,
@@ -4386,6 +4397,7 @@ mod tests {
             sessions_sequence: None,
             adaptive_backlog_limiter: None,
             ship_scheduler: None,
+            history_import: Default::default(),
         };
         let stats = HeartbeatStats {
             conn: &conn,

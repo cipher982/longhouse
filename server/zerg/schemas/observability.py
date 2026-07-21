@@ -8,6 +8,7 @@ from typing import Literal
 
 from pydantic import Field
 
+from zerg.schemas.history_import import HistoryImportSnapshot
 from zerg.services.session_views import SessionTurnTimingResponse
 from zerg.utils.time import UTCBaseModel
 
@@ -54,6 +55,7 @@ class MachineHealthItemResponse(UTCBaseModel):
     spool_pending: int
     spool_dead: int
     archive_repair: dict[str, Any] = Field(default_factory=dict)
+    history_import: HistoryImportSnapshot = Field(default_factory=HistoryImportSnapshot.unavailable)
     parse_errors_1h: int
     consecutive_failures: int
     disk_free_bytes: int

@@ -3,10 +3,14 @@
 //! Discovers session files across Claude, Codex, and Antigravity providers.
 //! Replaces the Claude-only `bench::discover_session_files()`.
 
+use std::collections::BTreeMap;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use walkdir::WalkDir;
+
+use crate::state::source_inventory::{ProviderSourceInventory, SourceInventoryObservation};
 
 const DISCOVERY_MAX_DEPTH: usize = 6;
 
@@ -87,7 +91,24 @@ fn provider_candidates(home: &Path, claude_root: &Path) -> Vec<ProviderConfig> {
 ///
 /// Returns `(path, provider_name)` tuples sorted by modification time (newest first).
 pub fn discover_all_files(providers: &[ProviderConfig]) -> Vec<(PathBuf, &'static str)> {
+    discover_all_files_with_inventory(providers).files
+}
+
+pub struct DiscoveryScan {
+    pub files: Vec<(PathBuf, &'static str)>,
+    pub inventory: SourceInventoryObservation,
+}
+
+/// Discover sources and build a path-free provider inventory in one traversal.
+///
+/// SQLite-backed providers include the main database and its WAL in physical
+/// footprint bytes. SHM files are transient mappings and are intentionally not
+/// counted. The inventory never contains a local path or filename.
+pub fn discover_all_files_with_inventory(providers: &[ProviderConfig]) -> DiscoveryScan {
+    let started = Instant::now();
     let mut files: Vec<(PathBuf, &'static str, SystemTime)> = Vec::new();
+    let mut inventory: BTreeMap<&'static str, ProviderSourceInventory> = BTreeMap::new();
+    let mut scan_error_count = 0_u64;
 
     for provider in providers {
         // Provider transcript layouts are shallow; bounding depth keeps fallback
@@ -96,25 +117,108 @@ pub fn discover_all_files(providers: &[ProviderConfig]) -> Vec<(PathBuf, &'stati
             .follow_links(false)
             .max_depth(DISCOVERY_MAX_DEPTH)
             .into_iter()
-            .filter_map(|e| e.ok())
         {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(_) => {
+                    scan_error_count = scan_error_count.saturating_add(1);
+                    continue;
+                }
+            };
             let path = entry.path();
             if is_provider_session_file(provider, path) {
-                if let Ok(meta) = path.metadata() {
-                    if meta.len() > 0 {
-                        let modified = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
-                        files.push((path.to_path_buf(), provider.name, modified));
+                let meta = match path.metadata() {
+                    Ok(meta) => meta,
+                    Err(_) => {
+                        scan_error_count = scan_error_count.saturating_add(1);
+                        continue;
                     }
+                };
+                if meta.len() == 0 {
+                    continue;
                 }
+                let modified = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+                let source_bytes = meta.len();
+                let (wal_bytes, footprint_errors) = source_wal_bytes(provider, path);
+                let footprint_bytes = source_bytes.saturating_add(wal_bytes);
+                scan_error_count = scan_error_count.saturating_add(footprint_errors);
+                let modified_at_ms = system_time_ms(modified);
+                let provider_inventory = inventory
+                    .entry(provider.name)
+                    .or_insert_with(|| ProviderSourceInventory {
+                        provider: provider.name.to_string(),
+                        ..ProviderSourceInventory::default()
+                    });
+                provider_inventory.source_count =
+                    provider_inventory.source_count.saturating_add(1);
+                provider_inventory.source_bytes = provider_inventory
+                    .source_bytes
+                    .saturating_add(source_bytes);
+                provider_inventory.wal_bytes =
+                    provider_inventory.wal_bytes.saturating_add(wal_bytes);
+                provider_inventory.footprint_bytes = provider_inventory
+                    .footprint_bytes
+                    .saturating_add(footprint_bytes);
+                provider_inventory.oldest_modified_at_ms = Some(
+                    provider_inventory
+                        .oldest_modified_at_ms
+                        .map_or(modified_at_ms, |current| current.min(modified_at_ms)),
+                );
+                provider_inventory.newest_modified_at_ms = Some(
+                    provider_inventory
+                        .newest_modified_at_ms
+                        .map_or(modified_at_ms, |current| current.max(modified_at_ms)),
+                );
+                files.push((path.to_path_buf(), provider.name, modified));
             }
         }
     }
 
     files.sort_by(|a, b| b.2.cmp(&a.2));
-    files
+    let files = files
         .into_iter()
         .map(|(path, provider, _)| (path, provider))
-        .collect()
+        .collect::<Vec<_>>();
+    let providers = inventory.into_values().collect::<Vec<_>>();
+    let source_count = providers.iter().map(|item| item.source_count).sum();
+    let source_bytes = providers.iter().map(|item| item.source_bytes).sum();
+    let wal_bytes = providers.iter().map(|item| item.wal_bytes).sum();
+    let footprint_bytes = providers.iter().map(|item| item.footprint_bytes).sum();
+    DiscoveryScan {
+        files,
+        inventory: SourceInventoryObservation {
+            observed_at: chrono::Utc::now().to_rfc3339(),
+            scan_duration_ms: started.elapsed().as_millis() as u64,
+            scan_error_count,
+            source_count,
+            source_bytes,
+            wal_bytes,
+            footprint_bytes,
+            providers,
+        },
+    }
+}
+
+fn source_wal_bytes(provider: &ProviderConfig, path: &Path) -> (u64, u64) {
+    if provider.name != "opencode" && provider.name != "cursor" {
+        return (0, 0);
+    }
+    let Some(file_name) = path.file_name().and_then(|value| value.to_str()) else {
+        return (0, 1);
+    };
+    let wal_path = path.with_file_name(format!("{file_name}-wal"));
+    match wal_path.metadata() {
+        Ok(metadata) => (metadata.len(), 0),
+        Err(error) if error.kind() == ErrorKind::NotFound => (0, 0),
+        Err(_) => (0, 1),
+    }
+}
+
+fn system_time_ms(value: SystemTime) -> i64 {
+    value
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis().min(i64::MAX as u128) as i64)
+        .unwrap_or(0)
 }
 
 /// Determine the provider name for a file path based on registered providers.
@@ -229,6 +333,7 @@ fn is_workflow_journal(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     /// Root of the committed Claude dynamic-workflow fixture tree.
     /// Mirrors the real on-disk layout produced by a `/deep-research` run.
@@ -249,6 +354,40 @@ mod tests {
             root: root.to_path_buf(),
             extension: "jsonl",
         }
+    }
+
+    #[test]
+    fn inventory_aggregates_without_leaking_paths_and_counts_sqlite_wal() {
+        let tmp = tempfile::tempdir().unwrap();
+        let claude_root = tmp.path().join("private-claude-path");
+        let opencode_root = tmp.path().join("private-opencode-path");
+        fs::create_dir_all(&claude_root).unwrap();
+        fs::create_dir_all(&opencode_root).unwrap();
+        fs::write(claude_root.join("session.jsonl"), vec![b'x'; 7]).unwrap();
+        fs::write(opencode_root.join("opencode.db"), vec![b'x'; 11]).unwrap();
+        fs::write(opencode_root.join("opencode.db-wal"), vec![b'x'; 13]).unwrap();
+        fs::write(opencode_root.join("opencode.db-shm"), vec![b'x'; 17]).unwrap();
+        let providers = vec![
+            claude_provider_for(&claude_root),
+            ProviderConfig {
+                name: "opencode",
+                root: opencode_root,
+                extension: "db",
+            },
+        ];
+
+        let scan = discover_all_files_with_inventory(&providers);
+        assert_eq!(scan.files.len(), 2);
+        assert_eq!(scan.inventory.source_count, 2);
+        assert_eq!(scan.inventory.source_bytes, 18);
+        assert_eq!(scan.inventory.wal_bytes, 13);
+        assert_eq!(scan.inventory.footprint_bytes, 31);
+        assert_eq!(scan.inventory.scan_error_count, 0);
+        assert_eq!(scan.inventory.providers.len(), 2);
+        let encoded = serde_json::to_string(&scan.inventory.providers).unwrap();
+        assert!(!encoded.contains(tmp.path().to_string_lossy().as_ref()));
+        assert!(!encoded.contains("session.jsonl"));
+        assert!(!encoded.contains("opencode.db"));
     }
 
     // === Phase 0 characterization: TODAY's behavior for dynamic-workflow files ===

@@ -203,6 +203,21 @@ pub fn open_db(db_path: Option<&Path>) -> Result<Connection> {
             last_blob_id TEXT,
             updated_at TEXT NOT NULL,
             FOREIGN KEY (source_epoch) REFERENCES source_epoch_registry(source_epoch)
+        );
+
+        CREATE TABLE IF NOT EXISTS source_inventory (
+            singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
+            schema_version INTEGER NOT NULL,
+            generation INTEGER NOT NULL,
+            content_sha256 TEXT NOT NULL,
+            observed_at TEXT NOT NULL,
+            scan_duration_ms INTEGER NOT NULL,
+            scan_error_count INTEGER NOT NULL,
+            source_count INTEGER NOT NULL,
+            source_bytes INTEGER NOT NULL,
+            wal_bytes INTEGER NOT NULL,
+            footprint_bytes INTEGER NOT NULL,
+            providers_json TEXT NOT NULL
         );",
     )?;
 

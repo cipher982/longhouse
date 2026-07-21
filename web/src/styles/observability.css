@@ -425,6 +425,39 @@
     justify-content: flex-start;
   }
 
+  .observability-history-inventory {
+    display: grid;
+    gap: var(--space-2);
+    padding: var(--space-3);
+    border: 1px solid var(--color-border-primary);
+    border-radius: var(--radius-sm);
+    background: color-mix(in srgb, var(--color-surface-elevated) 60%, transparent);
+    font-size: 0.82rem;
+  }
+
+  .observability-history-inventory__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+  }
+
+  .observability-history-inventory__note {
+    margin: 0;
+    color: var(--color-text-muted);
+    font-size: 0.75rem;
+    line-height: 1.4;
+  }
+
+  .observability-history-inventory__providers {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    color: var(--color-text-muted);
+    font-family: var(--font-family-mono, "SFMono-Regular", Menlo, Monaco, monospace);
+    font-size: 0.72rem;
+  }
+
   .observability-machine-stat {
     display: grid;
     gap: 2px;

@@ -252,7 +252,37 @@ def test_machine_archive_backlog_route_returns_latest_heartbeat_archive_state(tm
                 ship_successes_1h=10,
                 disk_free_bytes=100,
                 is_offline=0,
-                raw_json=json.dumps({"archive_backlog": archive_backlog}),
+                raw_json=json.dumps(
+                    {
+                        "archive_backlog": archive_backlog,
+                        "history_import": {
+                            "state": "inventory_ready",
+                            "inventory": {
+                                "schema_version": 1,
+                                "generation": 3,
+                                "content_sha256": "b" * 64,
+                                "observed_at": "2026-06-02T20:14:29Z",
+                                "scan_duration_ms": 32,
+                                "scan_error_count": 0,
+                                "source_count": 3,
+                                "source_bytes": 4000,
+                                "wal_bytes": 96,
+                                "footprint_bytes": 4096,
+                                "providers": [
+                                    {
+                                        "provider": "codex",
+                                        "source_count": 3,
+                                        "source_bytes": 4000,
+                                        "wal_bytes": 96,
+                                        "footprint_bytes": 4096,
+                                        "oldest_modified_at_ms": 10,
+                                        "newest_modified_at_ms": 20,
+                                    }
+                                ],
+                            },
+                        },
+                    }
+                ),
             )
         )
         db.commit()
@@ -274,6 +304,9 @@ def test_machine_archive_backlog_route_returns_latest_heartbeat_archive_state(tm
         assert machine["status"] == "healthy"
         assert machine["status_reason"] == "healthy"
         assert machine["archive_repair"]["pending_ranges"] == 6375
+        assert machine["history_import"]["state"] == "inventory_ready"
+        assert machine["history_import"]["inventory"]["source_count"] == 3
+        assert machine["history_import"]["inventory"]["footprint_bytes"] == 4096
     finally:
         api_app_ref.dependency_overrides = {}
 
