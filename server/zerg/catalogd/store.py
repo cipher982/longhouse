@@ -3311,7 +3311,22 @@ class CatalogStore:
                     if session_facts
                     else None
                 )
-                if projection is None or projection.activity.state not in {"quiescent", "blocked"}:
+                next_queued_receipt = (
+                    orm.query(LiveSessionInputReceipt)
+                    .filter(
+                        LiveSessionInputReceipt.session_id == session_id,
+                        LiveSessionInputReceipt.status == "queued",
+                    )
+                    .order_by(LiveSessionInputReceipt.created_at.asc(), LiveSessionInputReceipt.id.asc())
+                    .first()
+                )
+                collaboration_waits_for_quiescence = bool(
+                    projection is not None
+                    and projection.activity.state == "blocked"
+                    and next_queued_receipt is not None
+                    and str(next_queued_receipt.client_request_id or "").startswith("session-message-")
+                )
+                if projection is None or projection.activity.state not in {"quiescent", "blocked"} or collaboration_waits_for_quiescence:
                     orm.rollback()
                     return {
                         "claimed": False,
@@ -3427,6 +3442,30 @@ class CatalogStore:
                     )
                 if snapshot is None:
                     raise RuntimeError("claimed input receipt disappeared during finish")
+                linked_message_changed = False
+                client_request_id = str(snapshot.client_request_id or "")
+                if client_request_id.startswith("session-message-"):
+                    try:
+                        message_id = int(client_request_id.removeprefix("session-message-"))
+                    except ValueError:
+                        message_id = 0
+                    message = (
+                        orm.query(LiveSessionMessage)
+                        .filter(
+                            LiveSessionMessage.id == message_id,
+                            LiveSessionMessage.owner_id == snapshot.owner_id,
+                        )
+                        .first()
+                    )
+                    if message is not None and message.delivery_status == "queued":
+                        message.delivery_status = status
+                        message.delivery_attempts = max(int(message.delivery_attempts or 0), 1)
+                        message.last_error = error if status == "failed" else None
+                        message.delivered_via = "live_input_queue"
+                        message.delivered_at = observed_at if status == "delivered" else None
+                        message.updated_at = observed_at
+                        orm.commit()
+                        linked_message_changed = True
             except BaseException:
                 orm.rollback()
                 raise
@@ -3437,6 +3476,7 @@ class CatalogStore:
                 "found": True,
                 "changed": True,
                 "receipt": _input_receipt_dto(snapshot),
+                "linked_message_changed": linked_message_changed,
                 "commit_seq": str(commit_seq),
             }
 

@@ -6,14 +6,17 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
+from sqlalchemy.orm import Session
 
 from zerg.catalogd.client import CatalogClient
 from zerg.catalogd.client import CatalogRemoteError
 from zerg.catalogd.schema import create_catalog_engine
 from zerg.catalogd.schema import initialize_catalog_schema
 from zerg.catalogd.server import CatalogDaemon
+from zerg.catalogd.store import CatalogStore
 from zerg.models.live_store import LiveSession
 from zerg.models.live_store import LiveUser
+from zerg.services.live_session_inputs import upsert_live_input_receipt
 
 
 @pytest.fixture
@@ -256,3 +259,76 @@ async def test_catalogd_session_messages_enforce_owner_and_ack_state(daemon_path
     finally:
         await client.close()
         await daemon.close()
+
+
+@pytest.mark.parametrize(
+    ("receipt_status", "error"),
+    [("delivered", None), ("failed", "provider rejected input")],
+)
+def test_queued_input_finish_atomically_converges_linked_message(
+    daemon_paths,
+    receipt_status,
+    error,
+):
+    database_path, _socket_path = daemon_paths
+    sender_id, target_id, _foreign_id = _seed_owner_sessions(database_path)
+    engine = create_catalog_engine(database_path)
+    store = CatalogStore(engine)
+    now = datetime.now(UTC).replace(microsecond=0)
+    created = store.create_session_message(
+        message_key=str(uuid4()),
+        owner_id=7,
+        from_session_id=sender_id,
+        to_session_id=target_id,
+        text="linked queue input",
+        source_event_id=None,
+        created_at=now,
+    )
+    message_id = created["message"]["id"]
+    store.update_session_message_delivery(
+        owner_id=7,
+        message_id=message_id,
+        expected_status="stored_only",
+        delivery_status="queued",
+        delivery_attempts=1,
+        last_error=None,
+        delivered_via="live_input_queue",
+        delivered_at=None,
+        updated_at=now,
+    )
+    with Session(engine) as db:
+        receipt = upsert_live_input_receipt(
+            db,
+            owner_id=7,
+            session_id=target_id,
+            provider="codex",
+            text="linked queue input",
+            intent="queue",
+            status="delivering",
+            client_request_id=f"session-message-{message_id}",
+            delivery_request_id="delivery-1",
+            now=now,
+        )
+        db.commit()
+        receipt_id = str(receipt.id)
+
+    result = store.finish_queued_input(
+        receipt_id=receipt_id,
+        delivery_request_id="delivery-1",
+        status=receipt_status,
+        error=error,
+    )
+    listed = store.list_session_messages(
+        owner_id=7,
+        session_id=target_id,
+        direction="inbound",
+        unacknowledged_only=False,
+        limit=10,
+    )
+
+    assert result["linked_message_changed"] is True
+    assert listed["messages"][0]["delivery_status"] == receipt_status
+    assert listed["messages"][0]["last_error"] == error
+    assert listed["messages"][0]["delivered_via"] == "live_input_queue"
+    assert bool(listed["messages"][0]["delivered_at"]) is (receipt_status == "delivered")
+    engine.dispose()

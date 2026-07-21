@@ -513,12 +513,6 @@ async def wake_next_live_catalog_input(session_id: UUID | str) -> bool:
                 },
                 timeout_seconds=1.0,
             )
-            await _finish_linked_session_message(
-                catalogd,
-                receipt=receipt,
-                delivery_status="failed",
-                error=delivery_error,
-            )
         finally:
             await session_lock_manager.release(lock_scope_id, request_id)
         return False
@@ -533,12 +527,6 @@ async def wake_next_live_catalog_input(session_id: UUID | str) -> bool:
         },
         timeout_seconds=1.0,
     )
-    await _finish_linked_session_message(
-        catalogd,
-        receipt=receipt,
-        delivery_status="delivered",
-        error=None,
-    )
     from zerg.services.session_chat_impl import _schedule_catalog_lock_release
 
     _schedule_catalog_lock_release(
@@ -548,46 +536,6 @@ async def wake_next_live_catalog_input(session_id: UUID | str) -> bool:
         dispatched_at=dispatched_at,
     )
     return True
-
-
-async def _finish_linked_session_message(
-    catalogd,
-    *,
-    receipt: dict,
-    delivery_status: str,
-    error: str | None,
-) -> None:
-    """Converge a queued collaboration message with its input receipt."""
-
-    client_request_id = str(receipt.get("client_request_id") or "")
-    prefix = "session-message-"
-    if not client_request_id.startswith(prefix):
-        return
-    try:
-        message_id = int(client_request_id.removeprefix(prefix))
-        owner_id = int(receipt["owner_id"])
-    except (KeyError, TypeError, ValueError):
-        logger.warning("Invalid linked session-message receipt %s", receipt.get("id"))
-        return
-    now = datetime.now(timezone.utc)
-    try:
-        await catalogd.call(
-            "session.message.delivery.v2",
-            {
-                "owner_id": owner_id,
-                "message_id": message_id,
-                "expected_status": "queued",
-                "delivery_status": delivery_status,
-                "delivery_attempts": 1,
-                "last_error": error,
-                "delivered_via": "live_input_queue",
-                "delivered_at": now.isoformat() if delivery_status == "delivered" else None,
-                "updated_at": now.isoformat(),
-            },
-            timeout_seconds=1.0,
-        )
-    except Exception:
-        logger.warning("Failed to converge queued session message %s", message_id, exc_info=True)
 
 
 async def run_live_catalog_input_recovery_loop() -> None:

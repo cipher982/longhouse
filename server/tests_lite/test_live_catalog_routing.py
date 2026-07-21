@@ -267,6 +267,7 @@ def test_catalog_message_delivery_preserves_owner_and_expected_status(monkeypatc
             target_session=SimpleNamespace(
                 id=target_id,
                 catalog_facts={
+                    "runtime": {"phase": "idle"},
                     "latest_run": {"id": "run-1", "ended_at": None},
                     "connections": [
                         {
@@ -294,7 +295,8 @@ def test_catalog_message_delivery_preserves_owner_and_expected_status(monkeypatc
     assert '"type":"longhouse_collaboration_message"' in observed["input"].text
 
 
-def test_catalog_message_delivery_queues_during_active_turn(monkeypatch):
+@pytest.mark.parametrize("target_phase", ["thinking", "running", "blocked", "stalled", ""])
+def test_catalog_message_delivery_queues_until_quiescent(monkeypatch, target_phase):
     sender_id = UUID("00000000-0000-0000-0000-000000000031")
     target_id = UUID("00000000-0000-0000-0000-000000000032")
     observed = {}
@@ -317,7 +319,7 @@ def test_catalog_message_delivery_queues_during_active_turn(monkeypatch):
             target_session=SimpleNamespace(
                 id=target_id,
                 catalog_facts={
-                    "runtime": {"phase": "thinking"},
+                    "runtime": {"phase": target_phase},
                     "latest_run": {"id": "run-1", "ended_at": None},
                     "connections": [
                         {

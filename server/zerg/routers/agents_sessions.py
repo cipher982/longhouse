@@ -2251,7 +2251,7 @@ async def _attempt_catalog_message_delivery(
         facts = getattr(target_session, "catalog_facts", None)
         runtime = facts.get("runtime") if isinstance(facts, dict) else None
         target_phase = str(runtime.get("phase") or "").strip() if isinstance(runtime, dict) else ""
-        intent = INPUT_INTENT_QUEUE if target_phase in {"running", "thinking"} else INPUT_INTENT_AUTO
+        intent = INPUT_INTENT_AUTO if target_phase in {"idle", "needs_user"} else INPUT_INTENT_QUEUE
 
         response = await _create_catalog_session_input_response(
             source_session=target_session,

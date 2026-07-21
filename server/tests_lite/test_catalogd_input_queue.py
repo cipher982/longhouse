@@ -39,7 +39,7 @@ def daemon_paths():
     root.rmdir()
 
 
-def _seed_queue(engine):
+def _seed_queue(engine, *, client_request_id="queued-1"):
     now = datetime.now(UTC).replace(microsecond=0)
     session_id = uuid4()
     thread_id = uuid4()
@@ -118,7 +118,7 @@ def _seed_queue(engine):
             text="continue the migration",
             intent="auto",
             status="queued",
-            client_request_id="queued-1",
+            client_request_id=client_request_id,
             now=now,
         )
         db.commit()
@@ -392,6 +392,22 @@ def test_catalogd_queue_claim_uses_canonical_activity_and_control(mutates_queue_
     assert result["claimed"] is False
     assert result["reason"] == expected_reason
     assert result["commit_seq"].isdigit()
+
+
+def test_catalogd_blocked_activity_does_not_drain_collaboration_message(tmp_path):
+    engine = create_catalog_engine(tmp_path / "blocked-collaboration.db")
+    initialize_catalog_schema(engine)
+    session_id, _receipt_id = _seed_queue(engine, client_request_id="session-message-42")
+    _replace_activity_head(engine, session_id, kind="blocked")
+
+    result = CatalogStore(engine).claim_queued_input(
+        session_id=str(session_id),
+        delivery_request_id="blocked-collaboration",
+    )
+
+    assert result["claimed"] is False
+    assert result["reason"] == "activity_not_drainable"
+    engine.dispose()
 
 
 @pytest.mark.asyncio
