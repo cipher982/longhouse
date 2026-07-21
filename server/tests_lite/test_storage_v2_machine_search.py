@@ -51,6 +51,38 @@ def test_semantic_machine_search_uses_searchd_without_legacy_db(monkeypatch):
     assert observed["query"] == "database migration"
 
 
+def test_storage_v2_machine_search_hydrates_hits_with_owner_scope(monkeypatch):
+    session_id = "11111111-1111-4111-8111-111111111111"
+    observed = {}
+
+    async def search_v2(**kwargs):
+        assert kwargs["owner_id"] == 7
+        return [{"session_id": session_id, "content_snippet": "scoped hit"}]
+
+    def read_session(requested, *, owner_id):
+        observed.update(requested=requested, owner_id=owner_id)
+        return None, None, "9"
+
+    monkeypatch.setattr(agents_search, "search_storage_v2_rows", search_v2)
+    monkeypatch.setattr(agents_search, "read_live_catalog_session", read_session)
+
+    result = asyncio.run(
+        agents_search.search_storage_v2_sessions(
+            owner_id=7,
+            query="scoped hit",
+            project=None,
+            provider=None,
+            environment=None,
+            days_back=14,
+            limit=10,
+            include_test=False,
+        )
+    )
+
+    assert result == []
+    assert observed == {"requested": agents_search.UUID(session_id), "owner_id": 7}
+
+
 def test_recall_machine_search_uses_searchd_without_legacy_db(monkeypatch):
     async def search_v2(**_kwargs):
         return [

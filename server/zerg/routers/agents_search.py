@@ -223,7 +223,16 @@ async def search_storage_v2_sessions(
         session_id = str(row.get("session_id") or "")
         if session_id and session_id not in best_rows:
             best_rows[session_id] = row
-    projected = await asyncio.gather(*(asyncio.to_thread(read_live_catalog_session, UUID(session_id)) for session_id in best_rows))
+    projected = await asyncio.gather(
+        *(
+            asyncio.to_thread(
+                read_live_catalog_session,
+                UUID(session_id),
+                owner_id=owner_id,
+            )
+            for session_id in best_rows
+        )
+    )
     sessions = []
     for (session, _provider_alias, _commit_seq), row in zip(projected, best_rows.values(), strict=True):
         if session is None:
