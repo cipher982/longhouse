@@ -38,6 +38,7 @@ pub enum EpochStartReason {
     Rewrite,
     Rewind,
     SessionRebind,
+    HostAuthorityReconciled,
 }
 
 impl EpochStartReason {
@@ -50,6 +51,7 @@ impl EpochStartReason {
             Self::Rewrite => "rewrite",
             Self::Rewind => "rewind",
             Self::SessionRebind => "session_rebind",
+            Self::HostAuthorityReconciled => "host_authority_reconciled",
         }
     }
 }
@@ -447,6 +449,7 @@ fn parse_reason(value: &str) -> Result<EpochStartReason> {
         "rewrite" => Ok(EpochStartReason::Rewrite),
         "rewind" => Ok(EpochStartReason::Rewind),
         "session_rebind" => Ok(EpochStartReason::SessionRebind),
+        "host_authority_reconciled" => Ok(EpochStartReason::HostAuthorityReconciled),
         other => bail!("invalid source epoch reason {other:?}"),
     }
 }
@@ -530,6 +533,54 @@ mod tests {
             lane_position(&reopened, archive.source_epoch, SourceLane::Durable).unwrap(),
             8
         );
+    }
+
+    #[test]
+    fn host_authority_reconciled_epoch_remains_readable() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("history.jsonl");
+        fs::write(&source, b"one\ntwo\n").unwrap();
+        let mut conn = crate::state::db::open_db(None).unwrap();
+
+        let initial = observe_file(
+            &mut conn,
+            "claude",
+            "history.jsonl",
+            &source,
+            SourceLane::Durable,
+            0,
+            None,
+            None,
+            SourceChangeHint::None,
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE source_epoch_registry
+             SET start_reason = 'host_authority_reconciled'
+             WHERE source_epoch = ?1",
+            [initial.source_epoch.to_string()],
+        )
+        .unwrap();
+
+        let reconciled = observe_file(
+            &mut conn,
+            "claude",
+            "history.jsonl",
+            &source,
+            SourceLane::Durable,
+            0,
+            None,
+            None,
+            SourceChangeHint::None,
+        )
+        .unwrap();
+
+        assert_eq!(reconciled.source_epoch, initial.source_epoch);
+        assert_eq!(
+            reconciled.start_reason,
+            EpochStartReason::HostAuthorityReconciled
+        );
+        assert!(!reconciled.created);
     }
 
     #[test]

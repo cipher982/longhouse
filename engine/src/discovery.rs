@@ -282,7 +282,11 @@ pub fn session_path_for_watcher_event(
 fn cursor_database_path_for_event(path: &Path) -> Option<PathBuf> {
     match path.file_name().and_then(|name| name.to_str()) {
         Some("store.db") => Some(path.to_path_buf()),
-        Some("store.db-wal") | Some("store.db-shm") => Some(path.with_file_name("store.db")),
+        Some("store.db-wal") => Some(path.with_file_name("store.db")),
+        // SQLite readers update WAL shared-memory coordination state. Treating
+        // that ephemeral write as source data makes our own read enqueue the
+        // database again forever. Durable commits also touch the WAL or DB.
+        Some("store.db-shm") => None,
         _ => None,
     }
 }
@@ -290,9 +294,8 @@ fn cursor_database_path_for_event(path: &Path) -> Option<PathBuf> {
 fn opencode_database_path_for_event(path: &Path) -> Option<PathBuf> {
     match path.file_name().and_then(|name| name.to_str()) {
         Some("opencode.db") => Some(path.to_path_buf()),
-        Some("opencode.db-wal") | Some("opencode.db-shm") => {
-            Some(path.with_file_name("opencode.db"))
-        }
+        Some("opencode.db-wal") => Some(path.with_file_name("opencode.db")),
+        Some("opencode.db-shm") => None,
         _ => None,
     }
 }
@@ -573,7 +576,7 @@ mod tests {
     }
 
     #[test]
-    fn opencode_watcher_sidecars_map_to_canonical_database_file() {
+    fn opencode_watcher_maps_durable_files_but_ignores_shared_memory() {
         let home = PathBuf::from("/tmp/home");
         let claude_root = PathBuf::from("/tmp/custom-claude");
         let providers = provider_candidates(&home, &claude_root);
@@ -593,10 +596,7 @@ mod tests {
             session_path_for_watcher_event(&wal, &providers),
             Some((db.clone(), "opencode"))
         );
-        assert_eq!(
-            session_path_for_watcher_event(&shm, &providers),
-            Some((db, "opencode"))
-        );
+        assert_eq!(session_path_for_watcher_event(&shm, &providers), None);
     }
 
     #[test]
@@ -616,7 +616,7 @@ mod tests {
     }
 
     #[test]
-    fn cursor_watcher_sidecars_map_to_canonical_store_database() {
+    fn cursor_watcher_maps_durable_files_but_ignores_shared_memory() {
         let home = PathBuf::from("/tmp/home");
         let claude_root = PathBuf::from("/tmp/custom-claude");
         let providers = provider_candidates(&home, &claude_root);
@@ -636,9 +636,6 @@ mod tests {
             session_path_for_watcher_event(&wal, &providers),
             Some((db.clone(), "cursor"))
         );
-        assert_eq!(
-            session_path_for_watcher_event(&shm, &providers),
-            Some((db, "cursor"))
-        );
+        assert_eq!(session_path_for_watcher_event(&shm, &providers), None);
     }
 }
