@@ -16,6 +16,9 @@ if [[ "$INSTANCE_SUBDOMAIN" == "demo" ]]; then
 fi
 
 OUTPUT="${LONGHOUSE_JOURNEY_OUTPUT:-$ROOT_DIR/artifacts/cohort-journey/cohort-journey.json}"
+if [[ "$OUTPUT" != /* ]]; then
+  OUTPUT="$ROOT_DIR/$OUTPUT"
+fi
 RAW_OUTPUT="$(mktemp -d "${TMPDIR:-/tmp}/longhouse-cohort-journey.XXXXXX")"
 cleanup() {
   rm -rf "$RAW_OUTPUT"

@@ -196,7 +196,7 @@ export async function waitForElementPaint(
       const inspect = (entries: PerformanceEntry[]) => {
         const match = (entries as Array<PerformanceEntry & { identifier?: string }>).find((entry) => (
           entry.identifier === expectedMarker
-          && performance.timeOrigin + entry.startTime >= minimumEpochMs - 25
+          && performance.timeOrigin + entry.startTime >= minimumEpochMs
         ));
         if (match) finish(performance.timeOrigin + match.startTime);
       };

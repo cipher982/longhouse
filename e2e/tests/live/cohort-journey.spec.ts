@@ -410,7 +410,9 @@ test("scheduled dogfood cohort journey", async ({ apiBaseUrl, context }, testInf
         const before = loadedEntryCount(await summary.textContent());
         const sentinel = page!.getByTestId("session-timeline-load-older");
         if ((await sentinel.count()) === 0) throw new Error("missing_cohort");
-        const paintAfterEpochMs = Date.now();
+        // Use the browser's performance clock so buffered entries painted just
+        // before the append cannot satisfy the post-append evidence boundary.
+        const paintAfterEpochMs = await page!.evaluate(() => performance.timeOrigin + performance.now());
         await runAndWaitForSuccessfulResponse(page!, "session_projection", 25_000, () => (
           page!.getByTestId("session-timeline-list").evaluate((element) => element.scrollTo({ top: 0 }))
         ));

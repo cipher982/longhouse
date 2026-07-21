@@ -13,7 +13,7 @@ test("captures buffered and post-boundary element paints", async ({ page }) => {
   await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
 
   const bufferedPaintAt = await waitForElementPaint(page, "buffered-marker", navigationStartedAt);
-  expect(bufferedPaintAt).toBeGreaterThanOrEqual(navigationStartedAt - 25);
+  expect(bufferedPaintAt).toBeGreaterThanOrEqual(navigationStartedAt);
 
   const appendStartedAt = Date.now();
   const pendingPaint = waitForElementPaint(page, "appended-marker", appendStartedAt);
@@ -28,7 +28,7 @@ test("captures buffered and post-boundary element paints", async ({ page }) => {
   });
 
   const appendedPaintAt = await pendingPaint;
-  expect(appendedPaintAt).toBeGreaterThanOrEqual(appendStartedAt - 25);
+  expect(appendedPaintAt).toBeGreaterThanOrEqual(appendStartedAt);
 
   await page.setContent('<div elementtiming="nested-only-marker"><div>Nested paint</div></div>');
   await expect(waitForElementPaint(page, "nested-only-marker", Date.now(), 250)).rejects.toThrow(
