@@ -75,9 +75,7 @@ pub fn try_collect_process_facts_by_pid() -> Option<HashMap<u32, ProcessFact>> {
         .lines()
         .filter_map(parse_process_fact_for_inventory)
         .collect::<HashMap<_, _>>();
-    if facts.len() != line_count
-        || !facts.contains_key(&std::process::id())
-    {
+    if facts.len() != line_count || !facts.contains_key(&std::process::id()) {
         return None;
     }
     Some(facts)

@@ -215,7 +215,6 @@ fn run_lsof(pid: u32) -> Result<Vec<PathBuf>, String> {
     Ok(parse_lsof(&text))
 }
 
-
 /// Parse `lsof -F n -p <pid>` output. `-F n` only prints `n<path>` records
 /// (and process `p<pid>` headers). We ignore headers and keep paths.
 fn parse_lsof(text: &str) -> Vec<PathBuf> {
@@ -797,15 +796,14 @@ mod tests {
             }),
         };
 
-        let bindings =
-            collect_from_transcripts(
-                "mac",
-                &[(transcript.clone(), "codex")],
-                &scanner.processes,
-                &scanner,
-                now,
-            )
-            .unwrap();
+        let bindings = collect_from_transcripts(
+            "mac",
+            &[(transcript.clone(), "codex")],
+            &scanner.processes,
+            &scanner,
+            now,
+        )
+        .unwrap();
 
         assert_eq!(bindings.len(), 1);
         assert_eq!(bindings[0].provider, "codex");
@@ -833,15 +831,14 @@ mod tests {
             }),
         };
 
-        let bindings =
-            collect_from_transcripts(
-                "mac",
-                &[(transcript.clone(), "codex")],
-                &scanner.processes,
-                &scanner,
-                now,
-            )
-            .unwrap();
+        let bindings = collect_from_transcripts(
+            "mac",
+            &[(transcript.clone(), "codex")],
+            &scanner.processes,
+            &scanner,
+            now,
+        )
+        .unwrap();
 
         assert_eq!(bindings.len(), 1);
         assert_eq!(bindings[0].provider, "codex");
@@ -871,15 +868,14 @@ mod tests {
             }),
         };
 
-        let bindings =
-            collect_from_transcripts(
-                "mac",
-                &[(transcript.clone(), "codex")],
-                &scanner.processes,
-                &scanner,
-                now,
-            )
-            .unwrap();
+        let bindings = collect_from_transcripts(
+            "mac",
+            &[(transcript.clone(), "codex")],
+            &scanner.processes,
+            &scanner,
+            now,
+        )
+        .unwrap();
 
         assert_eq!(bindings.len(), 1);
         assert_eq!(
@@ -907,15 +903,14 @@ mod tests {
             }),
         };
 
-        let bindings =
-            collect_from_transcripts(
-                "mac",
-                &[(transcript.clone(), "claude")],
-                &scanner.processes,
-                &scanner,
-                now,
-            )
-            .unwrap();
+        let bindings = collect_from_transcripts(
+            "mac",
+            &[(transcript.clone(), "claude")],
+            &scanner.processes,
+            &scanner,
+            now,
+        )
+        .unwrap();
 
         assert_eq!(bindings.len(), 1);
         assert_eq!(bindings[0].provider, "claude");
@@ -945,15 +940,14 @@ mod tests {
             open_files: RefCell::new(open_files),
         };
 
-        let bindings =
-            collect_from_transcripts(
-                "mac",
-                &[(transcript.clone(), "codex")],
-                &scanner.processes,
-                &scanner,
-                now,
-            )
-            .unwrap();
+        let bindings = collect_from_transcripts(
+            "mac",
+            &[(transcript.clone(), "codex")],
+            &scanner.processes,
+            &scanner,
+            now,
+        )
+        .unwrap();
         assert_eq!(bindings.len(), 1);
         assert_eq!(bindings[0].pid, Some(newer.pid));
     }

@@ -2,9 +2,9 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::Stdio;
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::OnceLock;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 #[cfg(unix)]
@@ -72,9 +72,7 @@ impl Default for CodexConsoleWorkerPool {
 
 impl CodexConsoleWorkerPool {
     fn reserve_spawn_slot(&mut self) -> bool {
-        if self.shutting_down
-            || self.workers.len() + self.spawning >= CONSOLE_WARM_POOL_TARGET
-        {
+        if self.shutting_down || self.workers.len() + self.spawning >= CONSOLE_WARM_POOL_TARGET {
             return false;
         }
         self.spawning += 1;
@@ -369,9 +367,7 @@ pub async fn prewarm_codex_console_workers() {
     let spawn_finished = pool.spawn_finished.clone();
     let mut discard = None;
     match result {
-        Ok(worker)
-            if !pool.shutting_down && pool.workers.len() < CONSOLE_WARM_POOL_TARGET =>
-        {
+        Ok(worker) if !pool.shutting_down && pool.workers.len() < CONSOLE_WARM_POOL_TARGET => {
             eprintln!(
                 "[codex-exec] latency stage=warm_worker_ready pid={} pool_size={}",
                 worker.pid.unwrap_or(0),
@@ -504,8 +500,14 @@ async fn spawn_initialized_codex_worker(
         .with_context(|| format!("spawning `{codex_bin}` app-server worker"))?;
     let pid = child.id();
     let pgid = pid.and_then(|value| i32::try_from(value).ok());
-    let stdin = child.stdin.take().context("Codex worker stdin unavailable")?;
-    let stdout = child.stdout.take().context("Codex worker stdout unavailable")?;
+    let stdin = child
+        .stdin
+        .take()
+        .context("Codex worker stdin unavailable")?;
+    let stdout = child
+        .stdout
+        .take()
+        .context("Codex worker stdout unavailable")?;
     let stderr = child.stderr.take();
     let stderr_tail = Arc::new(Mutex::new(VecDeque::with_capacity(STDERR_TAIL_LINES)));
     let stderr_task = stderr.map(|stream| {
@@ -657,8 +659,7 @@ pub async fn start_codex_exec_once(config: CodexExecRunConfig) -> Result<CodexEx
             leased_at,
         )
         .await;
-        if let Err(kill_error) =
-            shutdown_worker_process_group(&mut worker.child, worker.pgid).await
+        if let Err(kill_error) = shutdown_worker_process_group(&mut worker.child, worker.pgid).await
         {
             run_result = match run_result {
                 Err(original) => Err(original.context(format!(
@@ -898,7 +899,10 @@ pub async fn shutdown_codex_console_worker_pool() {
         let mut pool = console_worker_pool().lock().await;
         (
             std::mem::take(&mut pool.workers),
-            pool.active_process_groups.values().copied().collect::<Vec<_>>(),
+            pool.active_process_groups
+                .values()
+                .copied()
+                .collect::<Vec<_>>(),
         )
     };
     for pgid in active_process_groups {
@@ -1309,7 +1313,9 @@ impl CodexExecRuntimeSink {
             source_path,
             provider_turn_id,
             wake_reason,
-            std::fs::metadata(source_path).ok().map(|metadata| metadata.len()),
+            std::fs::metadata(source_path)
+                .ok()
+                .map(|metadata| metadata.len()),
         );
         let bytes = payload.to_string().into_bytes();
         let socket_display = socket_path.display().to_string();
@@ -1559,10 +1565,10 @@ fn events_are_critical(events: &[Value]) -> bool {
             .and_then(Value::as_bool)
             == Some(true)
             || event
-            .get("payload")
-            .and_then(|payload| payload.get("item_completed"))
-            .and_then(Value::as_bool)
-            == Some(true)
+                .get("payload")
+                .and_then(|payload| payload.get("item_completed"))
+                .and_then(Value::as_bool)
+                == Some(true)
     })
 }
 
@@ -1743,9 +1749,7 @@ mod tests {
     #[test]
     fn five_hundred_sessions_reserve_only_machine_global_pool_target() {
         let mut pool = CodexConsoleWorkerPool::default();
-        let reservations = (0..500)
-            .filter(|_| pool.reserve_spawn_slot())
-            .count();
+        let reservations = (0..500).filter(|_| pool.reserve_spawn_slot()).count();
 
         assert_eq!(reservations, CONSOLE_WARM_POOL_TARGET);
         assert_eq!(pool.spawning, CONSOLE_WARM_POOL_TARGET);
@@ -1840,7 +1844,10 @@ for line in sys.stdin:
         assert_eq!(payload["session_id"], sink.session_id);
         assert_eq!(payload["run_id"], sink.run_id);
         assert_eq!(payload["turn_id"], sink.turn_id.unwrap());
-        assert_eq!(payload["client_request_id"], sink.client_request_id.unwrap());
+        assert_eq!(
+            payload["client_request_id"],
+            sink.client_request_id.unwrap()
+        );
         assert_eq!(payload["provider_turn_id"], "provider-turn-7");
         assert_eq!(payload["wake_reason"], "turn_completed");
         assert_eq!(payload["file_len_hint"], 321);

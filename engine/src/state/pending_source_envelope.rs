@@ -225,14 +225,11 @@ pub fn persist_or_load(
         |row| row.get(0),
     )?;
     let current_bytes = u64::try_from(current_bytes).context("pending outbox size is negative")?;
-    let candidate_bytes = u64::try_from(
-        candidate.request_body_zstd.len() + candidate.media_objects_zstd.len(),
-    )
-    .context("pending envelope size exceeds u64")?;
+    let candidate_bytes =
+        u64::try_from(candidate.request_body_zstd.len() + candidate.media_objects_zstd.len())
+            .context("pending envelope size exceeds u64")?;
     if !pending_outbox_has_capacity(current_bytes, candidate_bytes) {
-        bail!(
-            "storage-v2 pending outbox byte limit exceeded ({MAX_PENDING_OUTBOX_BYTES} bytes)"
-        );
+        bail!("storage-v2 pending outbox byte limit exceeded ({MAX_PENDING_OUTBOX_BYTES} bytes)");
     }
     tx.execute(
         "INSERT INTO pending_source_envelope (
@@ -344,7 +341,16 @@ pub fn snapshot(conn: &Connection) -> Result<StorageV2OutboxSnapshot> {
             MIN(blocked_at)
          FROM pending_source_envelope",
         [],
-        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
+        |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+            ))
+        },
     )?;
     let latest_block = conn
         .query_row(
@@ -354,7 +360,12 @@ pub fn snapshot(conn: &Connection) -> Result<StorageV2OutboxSnapshot> {
              ORDER BY blocked_at DESC, source_epoch
              LIMIT 1",
             [],
-            |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, Option<String>>(1)?)),
+            |row| {
+                Ok((
+                    row.get::<_, Option<String>>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                ))
+            },
         )
         .optional()?;
     Ok(StorageV2OutboxSnapshot {
@@ -667,7 +678,13 @@ mod tests {
         let blocked_epoch = Uuid::new_v4();
         let blocked = candidate(blocked_epoch, "blocked");
         persist_or_load(&mut conn, &blocked).unwrap();
-        assert!(quarantine(&mut conn, blocked_epoch, "source_epoch_conflict", "proof mismatch").unwrap());
+        assert!(quarantine(
+            &mut conn,
+            blocked_epoch,
+            "source_epoch_conflict",
+            "proof mismatch"
+        )
+        .unwrap());
         let live = candidate(Uuid::new_v4(), "live");
         persist_or_load(&mut conn, &live).unwrap();
 

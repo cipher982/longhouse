@@ -1931,9 +1931,7 @@ for line in sys.stdin:
         let log_text = fs::read_to_string(log_path).unwrap();
         assert!(log_text.contains("\"direction\":\"client_request\""));
         assert!(log_text.contains("\"direction\":\"server_message\""));
-        assert!(log_text.contains(
-            "\"sourceKinds\":[\"appServer\",\"cli\",\"vscode\",\"unknown\"]"
-        ));
+        assert!(log_text.contains("\"sourceKinds\":[\"appServer\",\"cli\",\"vscode\",\"unknown\"]"));
         assert!(!log_text.contains("\"sourceKinds\":[\"appServer\",\"custom\""));
     }
 

@@ -180,7 +180,9 @@ impl SessionWatcher {
 }
 
 fn provider_owns_root(providers: &[ProviderConfig], path: &Path) -> bool {
-    providers.iter().any(|provider| path.starts_with(&provider.root))
+    providers
+        .iter()
+        .any(|provider| path.starts_with(&provider.root))
 }
 
 fn coalesced_batch_to_events(batch: HashMap<PathBuf, (i64, i64)>) -> Vec<WatcherEvent> {

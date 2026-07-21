@@ -2883,7 +2883,9 @@ mod tests {
 
         assert_eq!(health.health_state, "degraded");
         assert!(health.engine_status.fresh);
-        assert!(health.reasons.contains(&"engine_evidence_stale".to_string()));
+        assert!(health
+            .reasons
+            .contains(&"engine_evidence_stale".to_string()));
         assert!(health.engine_status.age_seconds.unwrap_or_default() <= 1);
         assert_eq!(
             health
@@ -2916,7 +2918,9 @@ mod tests {
         );
 
         assert_eq!(health.health_state, "degraded");
-        assert!(health.reasons.contains(&"engine_reconciliation_failed".to_string()));
+        assert!(health
+            .reasons
+            .contains(&"engine_reconciliation_failed".to_string()));
         assert!(health.engine_status.fresh);
     }
 
