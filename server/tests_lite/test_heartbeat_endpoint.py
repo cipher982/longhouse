@@ -874,6 +874,97 @@ def test_heartbeat_legacy_omission_is_unavailable_and_invalid_inventory_soft_fai
         api_app_ref.dependency_overrides = {}
 
 
+def test_heartbeat_mixed_unit_history_progress_is_typed_and_path_free():
+    from zerg.routers.heartbeat import HeartbeatIn
+
+    history_import = {
+        "state": "importing",
+        "inventory": {
+            "schema_version": 1,
+            "generation": 1,
+            "content_sha256": "a" * 64,
+            "observed_at": "2026-07-21T10:00:00Z",
+            "scan_duration_ms": 10,
+            "scan_error_count": 0,
+            "source_count": 2,
+            "source_bytes": 6_000,
+            "wal_bytes": 0,
+            "footprint_bytes": 6_000,
+            "providers": [
+                {
+                    "provider": "codex",
+                    "source_count": 1,
+                    "source_bytes": 1_000,
+                    "wal_bytes": 0,
+                    "footprint_bytes": 1_000,
+                },
+                {
+                    "provider": "opencode",
+                    "source_count": 1,
+                    "source_bytes": 5_000,
+                    "wal_bytes": 0,
+                    "footprint_bytes": 5_000,
+                },
+            ],
+        },
+        "progress": {
+            "acknowledged_source_bytes": 600,
+            "remaining_source_bytes": 600,
+            "acknowledged_records": 27,
+            "remaining_records": 3,
+            "pending_outbox_count": 1,
+            "pending_outbox_bytes": 100,
+            "blocked_source_count": 0,
+            "blocked_bytes": 0,
+            "percent_complete": 99,
+            "providers": [
+                {
+                    "provider": "codex",
+                    "unit": "bytes",
+                    "inventory_source_count": 1,
+                    "inventory_source_bytes": 1_000,
+                    "tracked_source_count": 1,
+                    "complete_source_count": 0,
+                    "observed_units": 1_200,
+                    "acknowledged_units": 600,
+                    "remaining_units": 600,
+                    "exact_total": False,
+                    "inventory_coverage_complete": False,
+                    "path": "/must/not/survive",
+                },
+                {
+                    "provider": "opencode",
+                    "unit": "records",
+                    "inventory_source_count": 1,
+                    "inventory_source_bytes": 5_000,
+                    "tracked_source_count": 2,
+                    "complete_source_count": 1,
+                    "observed_units": 30,
+                    "acknowledged_units": 27,
+                    "remaining_units": 3,
+                    "exact_total": False,
+                    "inventory_coverage_complete": False,
+                },
+            ],
+        },
+    }
+
+    parsed = HeartbeatIn.model_validate({"history_import": history_import})
+    assert parsed.history_import is not None
+    assert parsed.history_import.state == "importing"
+    assert parsed.history_import.progress is not None
+    assert parsed.history_import.progress.remaining_source_bytes == 600
+    assert parsed.history_import.progress.remaining_records == 3
+    encoded = parsed.history_import.model_dump(mode="json", exclude_none=True)
+    assert "percent_complete" not in encoded["progress"]
+    assert "path" not in encoded["progress"]["providers"][0]
+    invalid_current = HeartbeatIn.model_validate(
+        {"history_import": {**history_import, "state": "current"}}
+    )
+    assert invalid_current.history_import is not None
+    assert invalid_current.history_import.state == "unavailable"
+
+
 def test_heartbeat_resolved_sessions_materialize_managed_control(tmp_path):
     SessionLocal = _make_db(tmp_path)
     client, api_app_ref = _make_client(SessionLocal)

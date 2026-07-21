@@ -578,6 +578,10 @@ impl HeartbeatPayload {
                     ..StorageV2OutboxSnapshot::default()
                 }
             });
+        let history_import = crate::state::source_inventory::HistoryImportSnapshot::load(
+            stats.conn,
+            &storage_v2_outbox,
+        );
         let parse_error_count_1h = stats.parse_tracker.count_last_hour();
         let consecutive_ship_failures = stats.tracker.consecutive_count();
         let disk_free_bytes = get_disk_free();
@@ -628,9 +632,7 @@ impl HeartbeatPayload {
             sessions_sequence: None,
             adaptive_backlog_limiter: None,
             ship_scheduler: None,
-            history_import: crate::state::source_inventory::HistoryImportSnapshot::load(
-                stats.conn,
-            ),
+            history_import,
         }
     }
 }

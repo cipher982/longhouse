@@ -5719,14 +5719,38 @@ export interface components {
             /** Sessions Sequence */
             sessions_sequence?: number | null;
         };
+        /** HistoryImportProgress */
+        HistoryImportProgress: {
+            /** Acknowledged Source Bytes */
+            acknowledged_source_bytes: number;
+            /** Remaining Source Bytes */
+            remaining_source_bytes: number;
+            /** Acknowledged Records */
+            acknowledged_records: number;
+            /** Remaining Records */
+            remaining_records: number;
+            /** Pending Outbox Count */
+            pending_outbox_count: number;
+            /** Pending Outbox Bytes */
+            pending_outbox_bytes: number;
+            /** Blocked Source Count */
+            blocked_source_count: number;
+            /** Blocked Bytes */
+            blocked_bytes: number;
+            /** Latest Block Kind */
+            latest_block_kind?: string | null;
+            /** Providers */
+            providers?: components["schemas"]["ProviderHistoryProgress"][];
+        };
         /** HistoryImportSnapshot */
         "HistoryImportSnapshot-Input": {
             /**
              * State
              * @enum {string}
              */
-            state: "discovering" | "inventory_ready" | "unavailable";
+            state: "discovering" | "inventory_ready" | "importing" | "paused" | "backpressured" | "blocked_source" | "offline" | "current" | "unavailable";
             inventory?: components["schemas"]["SourceInventory"] | null;
+            progress?: components["schemas"]["HistoryImportProgress"] | null;
         };
         /** HistoryImportSnapshot */
         "HistoryImportSnapshot-Output": {
@@ -5734,8 +5758,9 @@ export interface components {
              * State
              * @enum {string}
              */
-            state: "discovering" | "inventory_ready" | "unavailable";
+            state: "discovering" | "inventory_ready" | "importing" | "paused" | "backpressured" | "blocked_source" | "offline" | "current" | "unavailable";
             inventory?: components["schemas"]["SourceInventory"] | null;
+            progress?: components["schemas"]["HistoryImportProgress"] | null;
         };
         /**
          * HostState
@@ -7009,6 +7034,34 @@ export interface components {
             scenario: string;
             /** Assertion */
             assertion: string;
+        };
+        /** ProviderHistoryProgress */
+        ProviderHistoryProgress: {
+            /** Provider */
+            provider: string;
+            /**
+             * Unit
+             * @enum {string}
+             */
+            unit: "bytes" | "records" | "unknown";
+            /** Inventory Source Count */
+            inventory_source_count: number;
+            /** Inventory Source Bytes */
+            inventory_source_bytes: number;
+            /** Tracked Source Count */
+            tracked_source_count: number;
+            /** Complete Source Count */
+            complete_source_count: number;
+            /** Observed Units */
+            observed_units: number;
+            /** Acknowledged Units */
+            acknowledged_units: number;
+            /** Remaining Units */
+            remaining_units: number;
+            /** Exact Total */
+            exact_total: boolean;
+            /** Inventory Coverage Complete */
+            inventory_coverage_complete: boolean;
         };
         /** ProviderLiveProofAcceptedResponse */
         ProviderLiveProofAcceptedResponse: {

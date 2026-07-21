@@ -443,6 +443,8 @@
   }
 
   .observability-history-inventory__note {
+    display: grid;
+    gap: 2px;
     margin: 0;
     color: var(--color-text-muted);
     font-size: 0.75rem;

@@ -64,16 +64,105 @@ class SourceInventory(UTCBaseModel):
         return self
 
 
+class ProviderHistoryProgress(UTCBaseModel):
+    provider: str = Field(..., min_length=1, max_length=64)
+    unit: Literal["bytes", "records", "unknown"]
+    inventory_source_count: int = Field(..., ge=0)
+    inventory_source_bytes: int = Field(..., ge=0)
+    tracked_source_count: int = Field(..., ge=0)
+    complete_source_count: int = Field(..., ge=0)
+    observed_units: int = Field(..., ge=0)
+    acknowledged_units: int = Field(..., ge=0)
+    remaining_units: int = Field(..., ge=0)
+    exact_total: bool
+    inventory_coverage_complete: bool
+
+    @model_validator(mode="after")
+    def validate_progress(self) -> ProviderHistoryProgress:
+        if self.complete_source_count > self.tracked_source_count:
+            raise ValueError("complete_source_count must not exceed tracked_source_count")
+        if self.acknowledged_units > self.observed_units:
+            raise ValueError("acknowledged_units must not exceed observed_units")
+        if self.acknowledged_units + self.remaining_units != self.observed_units:
+            raise ValueError("acknowledged_units plus remaining_units must equal observed_units")
+        if self.exact_total and self.unit != "bytes":
+            raise ValueError("only byte progress can have an exact inventory denominator")
+        if self.exact_total and self.observed_units != self.inventory_source_bytes:
+            raise ValueError("exact byte progress must use inventory_source_bytes")
+        if self.unit == "bytes" and self.observed_units < self.inventory_source_bytes:
+            raise ValueError("byte progress cannot observe fewer bytes than inventory")
+        if self.unit == "bytes" and self.inventory_coverage_complete != self.exact_total:
+            raise ValueError("byte inventory coverage requires an exact denominator")
+        if self.unit == "unknown" and self.inventory_coverage_complete:
+            raise ValueError("unknown progress units cannot claim complete inventory coverage")
+        return self
+
+
+class HistoryImportProgress(UTCBaseModel):
+    acknowledged_source_bytes: int = Field(..., ge=0)
+    remaining_source_bytes: int = Field(..., ge=0)
+    acknowledged_records: int = Field(..., ge=0)
+    remaining_records: int = Field(..., ge=0)
+    pending_outbox_count: int = Field(..., ge=0)
+    pending_outbox_bytes: int = Field(..., ge=0)
+    blocked_source_count: int = Field(..., ge=0)
+    blocked_bytes: int = Field(..., ge=0)
+    latest_block_kind: str | None = Field(None, max_length=128)
+    providers: list[ProviderHistoryProgress] = Field(default_factory=list, max_length=64)
+
+    @model_validator(mode="after")
+    def validate_aggregates(self) -> HistoryImportProgress:
+        provider_names = [item.provider for item in self.providers]
+        if provider_names != sorted(set(provider_names)):
+            raise ValueError("progress providers must be unique and sorted")
+        byte_providers = [item for item in self.providers if item.unit == "bytes"]
+        record_providers = [item for item in self.providers if item.unit == "records"]
+        if sum(item.acknowledged_units for item in byte_providers) != self.acknowledged_source_bytes:
+            raise ValueError("byte provider acknowledgements must equal acknowledged_source_bytes")
+        if sum(item.remaining_units for item in byte_providers) != self.remaining_source_bytes:
+            raise ValueError("byte provider remaining units must equal remaining_source_bytes")
+        if sum(item.acknowledged_units for item in record_providers) != self.acknowledged_records:
+            raise ValueError("record provider acknowledgements must equal acknowledged_records")
+        if sum(item.remaining_units for item in record_providers) != self.remaining_records:
+            raise ValueError("record provider remaining units must equal remaining_records")
+        return self
+
+
 class HistoryImportSnapshot(UTCBaseModel):
-    state: Literal["discovering", "inventory_ready", "unavailable"]
+    state: Literal[
+        "discovering",
+        "inventory_ready",
+        "importing",
+        "paused",
+        "backpressured",
+        "blocked_source",
+        "offline",
+        "current",
+        "unavailable",
+    ]
     inventory: SourceInventory | None = None
+    progress: HistoryImportProgress | None = None
 
     @model_validator(mode="after")
     def validate_state(self) -> HistoryImportSnapshot:
-        if self.state == "inventory_ready" and self.inventory is None:
-            raise ValueError("inventory_ready requires inventory")
-        if self.state != "inventory_ready" and self.inventory is not None:
-            raise ValueError("inventory is only valid for inventory_ready")
+        without_inventory = self.state in {"discovering", "unavailable"}
+        if without_inventory and (self.inventory is not None or self.progress is not None):
+            raise ValueError("discovery and unavailable states cannot include inventory progress")
+        if not without_inventory and self.inventory is None:
+            raise ValueError(f"{self.state} requires inventory")
+        if self.progress is not None and self.inventory is None:
+            raise ValueError("progress requires inventory")
+        if self.state == "current":
+            if self.progress is None:
+                raise ValueError("current requires durable progress")
+            if (
+                self.progress.remaining_source_bytes > 0
+                or self.progress.remaining_records > 0
+                or self.progress.pending_outbox_count > 0
+                or self.progress.blocked_source_count > 0
+                or any(not provider.inventory_coverage_complete for provider in self.progress.providers)
+            ):
+                raise ValueError("current requires complete coverage and no durable work")
         return self
 
     @classmethod

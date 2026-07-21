@@ -938,6 +938,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             &task_context,
             &mut deferred_retries,
             offline.is_offline,
+            archive_repair_is_paused(config.archive_repair_mode),
         );
 
         tokio::select! {
@@ -966,6 +967,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         &task_context,
                         &mut deferred_retries,
                         offline.is_offline,
+                        archive_repair_is_paused(config.archive_repair_mode),
                     );
                 }
             }
@@ -1556,6 +1558,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             &task_context,
                             &mut deferred_retries,
                             offline.is_offline,
+                            archive_repair_is_paused(config.archive_repair_mode),
                         );
                         let managed_process_pids = managed_process_pids_from_observations(
                             &result.codex_observations,
@@ -1831,6 +1834,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     &mut in_flight,
                     &task_context,
                     offline.is_offline,
+                    archive_repair_is_paused(config.archive_repair_mode),
                 ).await;
                 if !managed_state_changes.is_empty() {
                     let requires_discovery = managed_state_changes_require_full_reconciliation(
@@ -2183,6 +2187,17 @@ fn build_local_status_projection(
     payload.adaptive_backlog_limiter = limiter_snapshot;
     payload.ship_scheduler = scheduler_snapshot;
     apply_archive_repair_control(&mut payload, &archive_control, archive_repair_mode);
+    let background_active = payload.archive_backlog.pending_ranges > 0
+        || payload.ship_scheduler.as_ref().is_some_and(|scheduler| {
+            scheduler.ready_backlog > 0 || scheduler.in_flight_backlog > 0
+        });
+    payload.history_import.apply_runtime_state(
+        is_offline,
+        payload.archive_backlog.mode == "paused",
+        payload.archive_backlog.state == "blocked",
+        background_active,
+        payload.archive_backlog.dead_ranges > 0,
+    );
     let now = chrono::Utc::now();
     payload.managed_sessions = heartbeat::leases_from_observations(machine_id, observations, now);
     payload
@@ -2529,6 +2544,7 @@ async fn handle_live_transcript_file_events(
     in_flight: &mut JoinSet<PathTaskResult>,
     task_context: &PathTaskContext,
     offline: bool,
+    background_paused: bool,
 ) -> Vec<PathBuf> {
     // Keep the coalescing wait cancellable by transcript wakes. The wake socket
     // is the managed-session completion lane, so it should not sit behind
@@ -2551,6 +2567,7 @@ async fn handle_live_transcript_file_events(
                         task_context,
                         deferred_retries,
                         offline,
+                        background_paused,
                     );
                 }
             }
@@ -3162,13 +3179,19 @@ fn pump_ready_local_work(
     task_context: &PathTaskContext,
     deferred_retries: &mut HashMap<PathBuf, DeferredRetry>,
     offline: bool,
+    background_paused: bool,
 ) {
     drain_due_local_retries(scheduler, deferred_retries);
-    if !offline {
-        start_ready_jobs(scheduler, in_flight, task_context, false);
-    } else {
-        start_ready_jobs(scheduler, in_flight, task_context, true);
-    }
+    start_ready_jobs(
+        scheduler,
+        in_flight,
+        task_context,
+        local_work_is_live_only(offline, background_paused),
+    );
+}
+
+fn local_work_is_live_only(offline: bool, background_paused: bool) -> bool {
+    offline || background_paused
 }
 
 fn drain_due_local_retries(
@@ -5776,6 +5799,32 @@ mod tests {
             Some("user paused while travelling")
         );
         assert!(!payload.is_offline);
+    }
+
+    #[test]
+    fn test_archive_pause_keeps_already_queued_history_and_still_launches_live() {
+        assert!(local_work_is_live_only(false, true));
+        assert!(local_work_is_live_only(true, false));
+        assert!(!local_work_is_live_only(false, false));
+
+        let mut scheduler = PathScheduler::new(4);
+        let history = PathBuf::from("/tmp/history.jsonl");
+        let live = PathBuf::from("/tmp/live.jsonl");
+        scheduler.enqueue(history.clone(), "codex", WorkPriority::Scan);
+        scheduler.enqueue(live.clone(), "codex", WorkPriority::Live);
+
+        let launched = scheduler.pop_launchable_live().unwrap();
+        assert_eq!(launched.path, live);
+        assert!(scheduler.pop_launchable_live().is_none());
+        let snapshot = scheduler.snapshot();
+        assert_eq!(snapshot.ready_scan, 1);
+        assert_eq!(snapshot.in_flight_scan, 0);
+        assert_eq!(snapshot.in_flight_live, 1);
+
+        scheduler.complete(&live, None);
+        let resumed = scheduler.pop_launchable().unwrap();
+        assert_eq!(resumed.path, history);
+        assert_eq!(resumed.priority, WorkPriority::Scan);
     }
 
     #[test]

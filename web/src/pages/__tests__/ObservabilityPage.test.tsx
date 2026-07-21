@@ -125,7 +125,7 @@ function buildOverview(hoursBack: number) {
         disk_free_bytes: 1000,
         is_offline: false,
         history_import: {
-          state: "inventory_ready",
+          state: "importing",
           inventory: {
             schema_version: 1,
             generation: 2,
@@ -155,6 +155,57 @@ function buildOverview(hoursBack: number) {
                 footprint_bytes: 536_870_912,
                 oldest_modified_at_ms: 30,
                 newest_modified_at_ms: 40,
+              },
+            ],
+          },
+          progress: {
+            acknowledged_source_bytes: 1_238_860_800,
+            remaining_source_bytes: 361_139_200,
+            acknowledged_records: 0,
+            remaining_records: 0,
+            pending_outbox_count: 1,
+            pending_outbox_bytes: 4096,
+            blocked_source_count: 0,
+            blocked_bytes: 0,
+            providers: [
+              {
+                provider: "claude",
+                unit: "bytes",
+                inventory_source_count: 900,
+                inventory_source_bytes: 1_073_741_824,
+                tracked_source_count: 700,
+                complete_source_count: 500,
+                observed_units: 1_073_741_824,
+                acknowledged_units: 838_860_800,
+                remaining_units: 234_881_024,
+                exact_total: true,
+                inventory_coverage_complete: true,
+              },
+              {
+                provider: "codex",
+                unit: "bytes",
+                inventory_source_count: 350,
+                inventory_source_bytes: 526_258_176,
+                tracked_source_count: 300,
+                complete_source_count: 250,
+                observed_units: 526_258_176,
+                acknowledged_units: 400_000_000,
+                remaining_units: 126_258_176,
+                exact_total: true,
+                inventory_coverage_complete: true,
+              },
+              {
+                provider: "cursor",
+                unit: "records",
+                inventory_source_count: 1,
+                inventory_source_bytes: 32_000,
+                tracked_source_count: 0,
+                complete_source_count: 0,
+                observed_units: 0,
+                acknowledged_units: 0,
+                remaining_units: 0,
+                exact_total: false,
+                inventory_coverage_complete: false,
               },
             ],
           },
@@ -332,11 +383,11 @@ describe("ObservabilityPage", () => {
     expect(screen.getAllByText("Codex").length).toBeGreaterThan(0);
     expect(screen.getByText("1 dead-letter range(s) need repair.")).toBeInTheDocument();
     expect(screen.getByText("1,250 sources · 1.5 GB on disk")).toBeInTheDocument();
-    expect(screen.getByText("Claude 900")).toBeInTheDocument();
-    expect(screen.getByText("Codex 350")).toBeInTheDocument();
-    expect(
-      screen.getByText("Discovery is complete. Import progress appears separately once source receipts are comparable."),
-    ).toBeInTheDocument();
+    expect(screen.getByText("File logs: 1.2 GB acknowledged · 344 MB remaining")).toBeInTheDocument();
+    expect(screen.getByText("1 durable upload receipt pending")).toBeInTheDocument();
+    expect(screen.getByText("Claude 800 MB / 1.0 GB")).toBeInTheDocument();
+    expect(screen.getByText("Codex 381 MB / 502 MB")).toBeInTheDocument();
+    expect(screen.getByText("Cursor Record discovery pending")).toBeInTheDocument();
     expect(screen.getAllByRole("link", { name: "Open machine sessions" })[0]).toHaveAttribute(
       "href",
       "/timeline?device_id=broken-machine",

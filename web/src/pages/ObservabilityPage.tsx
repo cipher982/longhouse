@@ -61,6 +61,109 @@ function formatByteSize(bytes: number): string {
   return `${value >= 10 || unitIndex === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[unitIndex]}`;
 }
 
+type HistoryImportSnapshot = NonNullable<MachineHealthItemResponse["history_import"]>;
+
+function historyImportStateLabel(state: HistoryImportSnapshot["state"]): string {
+  switch (state) {
+    case "blocked_source":
+      return "source blocked";
+    case "backpressured":
+      return "backpressured";
+    case "inventory_ready":
+      return "inventory ready";
+    default:
+      return state;
+  }
+}
+
+function historyImportVariant(state: HistoryImportSnapshot["state"]): StatusBadgeVariant {
+  if (state === "blocked_source" || state === "offline") return "error";
+  if (state === "paused" || state === "backpressured") return "warning";
+  if (state === "current") return "success";
+  return "neutral";
+}
+
+function HistoryImportPanel({ historyImport }: { historyImport: HistoryImportSnapshot | undefined }) {
+  if (historyImport?.state === "discovering") {
+    return <p className="observability-history-inventory__note">Scanning local transcript sources…</p>;
+  }
+  if (!historyImport?.inventory) return null;
+
+  const { inventory, progress } = historyImport;
+  const progressProviders = progress?.providers ?? [];
+  const inventoryProviders = inventory.providers ?? [];
+  return (
+    <div className="observability-history-inventory">
+      <div className="observability-history-inventory__header">
+        <span className="observability-stat-label">History import</span>
+        <Badge
+          variant={inventory.scan_error_count > 0 ? "warning" : historyImportVariant(historyImport.state)}
+        >
+          {inventory.scan_error_count > 0
+            ? `${inventory.scan_error_count} scan errors`
+            : historyImportStateLabel(historyImport.state)}
+        </Badge>
+      </div>
+      <strong>
+        {inventory.source_count.toLocaleString()} sources · {formatByteSize(inventory.footprint_bytes)} on disk
+      </strong>
+      {progress ? (
+        <div className="observability-history-inventory__note">
+          {progress.acknowledged_source_bytes + progress.remaining_source_bytes > 0 ? (
+            <span>
+              File logs: {formatByteSize(progress.acknowledged_source_bytes)} acknowledged ·{" "}
+              {formatByteSize(progress.remaining_source_bytes)} remaining
+            </span>
+          ) : null}
+          {progress.acknowledged_records + progress.remaining_records > 0 ? (
+            <span>
+              SQLite sources: {progress.acknowledged_records.toLocaleString()} records acknowledged ·{" "}
+              {progress.remaining_records.toLocaleString()} known remaining
+            </span>
+          ) : null}
+          {progress.pending_outbox_count > 0 ? (
+            <span>
+              {progress.pending_outbox_count.toLocaleString()} durable upload{" "}
+              {progress.pending_outbox_count === 1 ? "receipt" : "receipts"} pending
+            </span>
+          ) : null}
+          {progress.blocked_source_count > 0 ? (
+            <span>
+              {progress.blocked_source_count.toLocaleString()} blocked source
+              {progress.blocked_source_count === 1 ? "" : "s"}
+              {progress.latest_block_kind ? ` · ${toTitleCaseWords(progress.latest_block_kind)}` : ""}
+            </span>
+          ) : null}
+        </div>
+      ) : (
+        <span className="observability-history-inventory__note">
+          Discovery is complete. Receipt progress requires a newer Machine Agent.
+        </span>
+      )}
+      <div className="observability-history-inventory__providers">
+        {progressProviders.length > 0
+          ? progressProviders.map((provider) => (
+              <span key={provider.provider}>
+                {toTitleCaseWords(provider.provider)}{" "}
+                {provider.unit === "bytes"
+                  ? `${formatByteSize(provider.acknowledged_units)} / ${formatByteSize(provider.observed_units)}`
+                  : provider.unit === "records"
+                    ? provider.tracked_source_count === 0 && !provider.inventory_coverage_complete
+                      ? "Record discovery pending"
+                      : `${provider.acknowledged_units.toLocaleString()} records · ${provider.remaining_units.toLocaleString()} known remaining${provider.inventory_coverage_complete ? "" : " · discovery in progress"}`
+                    : `${provider.tracked_source_count.toLocaleString()} tracked`}
+              </span>
+            ))
+          : inventoryProviders.map((provider) => (
+              <span key={provider.provider}>
+                {toTitleCaseWords(provider.provider)} {provider.source_count.toLocaleString()}
+              </span>
+            ))}
+      </div>
+    </div>
+  );
+}
+
 async function fetchObservabilityOverview(hoursBack: number): Promise<ObservabilityOverviewResponse> {
   const params = new URLSearchParams({
     hours_back: String(hoursBack),
@@ -560,34 +663,7 @@ function MachineHealthPanel({ machines }: { machines: MachineHealthItemResponse[
               <span className="observability-stat-value">{machine.consecutive_failures}</span>
             </div>
           </div>
-          {machine.history_import?.state === "inventory_ready" && machine.history_import.inventory ? (
-            <div className="observability-history-inventory">
-              <div className="observability-history-inventory__header">
-                <span className="observability-stat-label">History discovered</span>
-                <Badge variant={machine.history_import.inventory.scan_error_count > 0 ? "warning" : "neutral"}>
-                  {machine.history_import.inventory.scan_error_count > 0
-                    ? `${machine.history_import.inventory.scan_error_count} scan errors`
-                    : "inventory ready"}
-                </Badge>
-              </div>
-              <strong>
-                {machine.history_import.inventory.source_count.toLocaleString()} sources ·{" "}
-                {formatByteSize(machine.history_import.inventory.footprint_bytes)} on disk
-              </strong>
-              <span className="observability-history-inventory__note">
-                Discovery is complete. Import progress appears separately once source receipts are comparable.
-              </span>
-              <div className="observability-history-inventory__providers">
-                {(machine.history_import.inventory.providers ?? []).map((provider) => (
-                  <span key={provider.provider}>
-                    {toTitleCaseWords(provider.provider)} {provider.source_count.toLocaleString()}
-                  </span>
-                ))}
-              </div>
-            </div>
-          ) : machine.history_import?.state === "discovering" ? (
-            <p className="observability-history-inventory__note">Scanning local transcript sources…</p>
-          ) : null}
+          <HistoryImportPanel historyImport={machine.history_import} />
           <div className="observability-machine-card__actions">
             <Link
               to={buildTimelineSlicePath({ deviceId: machine.device_id })}
