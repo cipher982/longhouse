@@ -48,6 +48,8 @@ def test_create_server_exposes_only_continuity_tools():
         "session_tail",
         "peers",
         "message_session",
+        "check_messages",
+        "ack_message",
     }
 
 
@@ -122,6 +124,66 @@ async def test_message_session_uses_current_managed_session_env(monkeypatch):
             "to_session_id": "22222222-2222-2222-2222-222222222222",
             "text": "hello",
         },
+        headers={"X-Longhouse-Session-Id": "11111111-1111-1111-1111-111111111111"},
+    )
+
+
+@pytest.mark.asyncio
+async def test_check_messages_uses_current_managed_session_env(monkeypatch):
+    server = create_server("http://example.com", "test-token")
+    tool = server._tool_manager._tools["check_messages"]
+    response = type(
+        "Resp",
+        (),
+        {
+            "status_code": 200,
+            "text": '{"messages":[],"total":0}',
+        },
+    )()
+
+    monkeypatch.setenv("LONGHOUSE_MANAGED_SESSION_ID", "11111111-1111-1111-1111-111111111111")
+    with patch(
+        "zerg.mcp_server.server.LonghouseAPIClient.get",
+        new=AsyncMock(return_value=response),
+    ) as mock_get:
+        result = await tool.run({"direction": "all", "unacknowledged_only": False, "limit": 5})
+
+    assert result == '{"messages":[],"total":0}'
+    mock_get.assert_awaited_once_with(
+        "/api/agents/messages",
+        params={
+            "direction": "all",
+            "unacknowledged_only": False,
+            "limit": 5,
+        },
+        headers={"X-Longhouse-Session-Id": "11111111-1111-1111-1111-111111111111"},
+    )
+
+
+@pytest.mark.asyncio
+async def test_ack_message_uses_current_managed_session_env(monkeypatch):
+    server = create_server("http://example.com", "test-token")
+    tool = server._tool_manager._tools["ack_message"]
+    response = type(
+        "Resp",
+        (),
+        {
+            "status_code": 200,
+            "text": '{"id":42,"acknowledged_at":"2026-07-21T18:00:00Z"}',
+        },
+    )()
+
+    monkeypatch.setenv("LONGHOUSE_MANAGED_SESSION_ID", "11111111-1111-1111-1111-111111111111")
+    with patch(
+        "zerg.mcp_server.server.LonghouseAPIClient.post",
+        new=AsyncMock(return_value=response),
+    ) as mock_post:
+        result = await tool.run({"message_id": 42})
+
+    assert result == '{"id":42,"acknowledged_at":"2026-07-21T18:00:00Z"}'
+    mock_post.assert_awaited_once_with(
+        "/api/agents/messages/42/ack",
+        json={},
         headers={"X-Longhouse-Session-Id": "11111111-1111-1111-1111-111111111111"},
     )
 

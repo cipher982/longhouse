@@ -551,4 +551,81 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
         except Exception as exc:
             return _format_error(exc, api_url)
 
+    # ------------------------------------------------------------------
+    # Tool: check_messages
+    # ------------------------------------------------------------------
+    @server.tool()
+    async def check_messages(
+        direction: str = "inbound",
+        unacknowledged_only: bool = True,
+        limit: int = 20,
+    ) -> str:
+        """Inspect durable messages for the current managed session.
+
+        Use this after receiving a Longhouse collaboration message or when a
+        queued/stored-only message may not have entered the provider context.
+        The current session identity is inferred from the managed environment.
+
+        Args:
+            direction: Message direction: inbound, outbound, or all.
+            unacknowledged_only: Return only messages not yet acknowledged.
+            limit: Maximum messages to return (1-200).
+        """
+        if direction not in {"inbound", "outbound", "all"}:
+            return json.dumps({"error": "direction must be one of: inbound, outbound, all"})
+        if limit < 1 or limit > 200:
+            return json.dumps({"error": "limit must be between 1 and 200"})
+
+        current_session_id = get_managed_session_id()
+        if not current_session_id or not _UUID_RE.match(current_session_id):
+            return json.dumps({"error": "check_messages requires a current managed session context"})
+
+        try:
+            resp = await client.get(
+                "/api/agents/messages",
+                params={
+                    "direction": direction,
+                    "unacknowledged_only": unacknowledged_only,
+                    "limit": limit,
+                },
+                headers={_CURRENT_SESSION_HEADER: current_session_id},
+            )
+            if resp.status_code != 200:
+                return json.dumps({"error": f"API returned {resp.status_code}", "detail": resp.text[:500]})
+            return resp.text
+        except Exception as exc:
+            return _format_error(exc, api_url)
+
+    # ------------------------------------------------------------------
+    # Tool: ack_message
+    # ------------------------------------------------------------------
+    @server.tool()
+    async def ack_message(message_id: int) -> str:
+        """Acknowledge that the current managed session handled a message.
+
+        Acknowledgement is explicit handling state, not a transport read
+        receipt. Only the target session can acknowledge its inbound message.
+
+        Args:
+            message_id: Numeric Longhouse collaboration message id.
+        """
+        if message_id < 1:
+            return json.dumps({"error": "message_id must be a positive integer"})
+
+        current_session_id = get_managed_session_id()
+        if not current_session_id or not _UUID_RE.match(current_session_id):
+            return json.dumps({"error": "ack_message requires a current managed session context"})
+
+        try:
+            resp = await client.post(
+                f"/api/agents/messages/{message_id}/ack",
+                json={},
+                headers={_CURRENT_SESSION_HEADER: current_session_id},
+            )
+            if resp.status_code != 200:
+                return json.dumps({"error": f"API returned {resp.status_code}", "detail": resp.text[:500]})
+            return resp.text
+        except Exception as exc:
+            return _format_error(exc, api_url)
+
     return server
