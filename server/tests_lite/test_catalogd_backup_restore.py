@@ -26,6 +26,10 @@ from zerg.storage_v2.render_objects import RenderObjectSpec
 from zerg.storage_v2.render_objects import RenderRecord
 from zerg.storage_v2.render_objects import read_render_object
 from zerg.storage_v2.render_objects import seal_render_object
+from zerg.storage_v2.object_store import FilesystemImmutableObjectStore
+from zerg.storage_v2.remote_backup import mirror_restore_point
+from zerg.storage_v2.remote_backup import restore_remote_rehearsal
+from zerg.storage_v2.remote_backup import scrub_remote_restore_point
 
 
 @pytest.fixture
@@ -230,6 +234,38 @@ async def test_exact_backup_verify_and_blank_root_restore_without_monolith(backu
     assert not (restored / "longhouse.db").exists()
     assert not (restored / "search.db").exists()
 
+    remote_store = FilesystemImmutableObjectStore(tmp_path / "remote-mirror", tenant_id=raw_spec.tenant_id)
+    remote = mirror_restore_point(
+        store=remote_store,
+        tenant_id=raw_spec.tenant_id,
+        manifest_path=manifest_path,
+        data_root=data_root,
+    )
+    assert remote["object_count"] == 3 and remote["artifact_count"] == 5
+    assert scrub_remote_restore_point(
+        store=remote_store,
+        tenant_id=raw_spec.tenant_id,
+        remote_manifest_key=str(remote["remote_manifest_key"]),
+        remote_manifest_sha256=str(remote["remote_manifest_sha256"]),
+    )["ok"] is True
+    remote_restored = tmp_path / "remote-blank-root"
+    remote_catalog = sqlite_file_path(resolve_live_database_url(f"sqlite:///{remote_restored / 'longhouse.db'}"))
+    assert remote_catalog is not None
+    remote_rehearsal = restore_remote_rehearsal(
+        store=remote_store,
+        tenant_id=raw_spec.tenant_id,
+        remote_manifest_key=str(remote["remote_manifest_key"]),
+        remote_manifest_sha256=str(remote["remote_manifest_sha256"]),
+        destination_root=remote_restored,
+        catalog_destination=remote_catalog,
+    )
+    assert remote_rehearsal["ok"] is True and remote_rehearsal["object_count"] == 3
+    assert read_render_object(
+        remote_restored,
+        sealed_render.object_path,
+        expected_object_hash=sealed_render.object_hash,
+    ).spec == render_spec
+
     restored_daemon = CatalogDaemon(database_path=deployed_catalog, socket_path=restored / "catalogd.sock")
     await restored_daemon.start()
     restored_client = CatalogClient(restored / "catalogd.sock")
@@ -263,6 +299,54 @@ async def test_exact_backup_verify_and_blank_root_restore_without_monolith(backu
     finally:
         await restored_client.close()
         await restored_daemon.close()
+
+    deleted_daemon = CatalogDaemon(database_path=database_path, socket_path=tmp_path / "deleted-catalogd.sock")
+    await deleted_daemon.start()
+    deleted_client = CatalogClient(tmp_path / "deleted-catalogd.sock")
+    deleted_restore_point = tmp_path / "deleted-restore-point"
+    try:
+        await deleted_client.call(
+            "storage.session.delete.v2",
+            {
+                "session_id": str(session_id),
+                "deletion_id": str(uuid4()),
+                "reason": "user_requested",
+                "deleted_at": (now.replace(microsecond=0)).isoformat(),
+            },
+        )
+        deleted_backup = await deleted_client.call(
+            "backup.snapshot.create.v2",
+            {"output_dir": str(deleted_restore_point), "data_root": str(data_root)},
+            timeout_seconds=10,
+        )
+        assert deleted_backup["object_count"] == 0
+    finally:
+        await deleted_client.close()
+        await deleted_daemon.close()
+
+    deleted_remote = mirror_restore_point(
+        store=remote_store,
+        tenant_id=raw_spec.tenant_id,
+        manifest_path=deleted_restore_point / "restore-manifest.json",
+        data_root=data_root,
+    )
+    deleted_destination = tmp_path / "deleted-remote-blank-root"
+    assert restore_remote_rehearsal(
+        store=remote_store,
+        tenant_id=raw_spec.tenant_id,
+        remote_manifest_key=str(deleted_remote["remote_manifest_key"]),
+        remote_manifest_sha256=str(deleted_remote["remote_manifest_sha256"]),
+        destination_root=deleted_destination,
+    )["ok"] is True
+    deleted_restored_daemon = CatalogDaemon(database_path=deleted_destination / "catalog.db", socket_path=deleted_destination / "catalogd.sock")
+    await deleted_restored_daemon.start()
+    deleted_restored_client = CatalogClient(deleted_destination / "catalogd.sock")
+    try:
+        restored_deleted = await deleted_restored_client.call("storage.session.read.v2", {"session_id": str(session_id)})
+        assert restored_deleted["found"] is False and restored_deleted["deleted"] is True
+    finally:
+        await deleted_restored_client.close()
+        await deleted_restored_daemon.close()
 
     raw_path = data_root / sealed_raw.object_path
     original = raw_path.read_bytes()
