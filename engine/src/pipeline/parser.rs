@@ -1119,17 +1119,44 @@ fn parse_gemini_json(path: &Path, session_id: &str) -> Result<ParseResult> {
 // Git repo detection
 // ---------------------------------------------------------------------------
 
-/// Walk up from `cwd` to find the nearest `.git/` directory.
-/// Returns the path to the `.git` directory if found.
+/// Walk up from `cwd` to find the nearest Git directory. Worktrees store a
+/// `.git` pointer file rather than a directory, so resolve that pointer to the
+/// per-worktree Git directory before returning.
 fn find_git_dir(cwd: &Path) -> Option<std::path::PathBuf> {
     let mut dir = cwd;
     loop {
         let candidate = dir.join(".git");
-        if candidate.exists() {
+        if candidate.is_dir() {
             return Some(candidate);
+        }
+        if candidate.is_file() {
+            let pointer = std::fs::read_to_string(&candidate).ok()?;
+            let raw_git_dir = pointer.trim().strip_prefix("gitdir:")?.trim();
+            let git_dir = Path::new(raw_git_dir);
+            return Some(if git_dir.is_absolute() {
+                git_dir.to_path_buf()
+            } else {
+                dir.join(git_dir)
+            });
         }
         dir = dir.parent()?;
     }
+}
+
+/// Resolve the shared Git directory for a linked worktree. Its `commondir`
+/// points back to the repository's canonical `.git` directory, which owns the
+/// remote config and gives all worktrees the same repository identity.
+fn find_common_git_dir(git_dir: &Path) -> std::path::PathBuf {
+    let Ok(raw_common_dir) = std::fs::read_to_string(git_dir.join("commondir")) else {
+        return git_dir.to_path_buf();
+    };
+    let common_dir = Path::new(raw_common_dir.trim());
+    let resolved = if common_dir.is_absolute() {
+        common_dir.to_path_buf()
+    } else {
+        git_dir.join(common_dir)
+    };
+    resolved.canonicalize().unwrap_or(resolved)
 }
 
 /// Parse the `url` of the `[remote "origin"]` section from a `.git/config` file.
@@ -1168,15 +1195,17 @@ fn resolve_git_info(cwd: &Path) -> (Option<String>, Option<String>) {
         }
     };
 
-    // git root = parent of .git dir
-    let git_root = git_dir.parent().unwrap_or(cwd);
+    let common_git_dir = find_common_git_dir(&git_dir);
+
+    // git root = parent of the canonical/shared .git directory
+    let git_root = common_git_dir.parent().unwrap_or(cwd);
     let project = git_root
         .file_name()
         .and_then(|s| s.to_str())
         .map(|s| s.to_string());
 
     // Read remote URL from .git/config
-    let git_repo = read_git_remote_url(&git_dir.join("config"));
+    let git_repo = read_git_remote_url(&common_git_dir.join("config"));
 
     (project, git_repo)
 }
@@ -3614,6 +3643,36 @@ mod tests {
         let (project, _git_repo) = resolve_git_info(&workspace);
 
         assert_eq!(project.as_deref(), Some("workspace"));
+    }
+
+    #[test]
+    fn resolve_git_info_uses_shared_repo_identity_for_linked_worktree() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("longhouse");
+        let common_git_dir = repo.join(".git");
+        let worktree_git_dir = common_git_dir.join("worktrees/coordination");
+        let worktree = dir.path().join("longhouse-agent-coordination-loop");
+        std::fs::create_dir_all(&worktree_git_dir).unwrap();
+        std::fs::create_dir_all(&worktree).unwrap();
+        std::fs::write(
+            common_git_dir.join("config"),
+            "[remote \"origin\"]\n\turl = git@github.com:cipher982/longhouse.git\n",
+        )
+        .unwrap();
+        std::fs::write(worktree_git_dir.join("commondir"), "../..\n").unwrap();
+        std::fs::write(
+            worktree.join(".git"),
+            format!("gitdir: {}\n", worktree_git_dir.display()),
+        )
+        .unwrap();
+
+        let (project, git_repo) = resolve_git_info(&worktree);
+
+        assert_eq!(project.as_deref(), Some("longhouse"));
+        assert_eq!(
+            git_repo.as_deref(),
+            Some("git@github.com:cipher982/longhouse.git")
+        );
     }
 
     #[test]
