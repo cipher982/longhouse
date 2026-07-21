@@ -44,6 +44,9 @@ from zerg.services.shipper.hooks import install_hooks
 from zerg.session_execution_home import ManagedSessionTransport
 from zerg.session_loop_mode import SessionLoopMode
 
+# See ARCHITECTURE.md's "Session modes" section: `launch_local` and
+# `launch_remote` are Helm; `turn_start` and legacy `run_once` are Console.
+
 
 class _NativeClaudeError(Exception):
     """Raised when native Claude launch preparation fails."""
@@ -210,6 +213,9 @@ def _run_native_claude_tui(
     hook_token: str | None = None,
     permission_mode: str = "bypass",
 ) -> int:
+    """ARCHITECTURE.md's "Session modes": Helm launched from a physical terminal.
+    Runs in the foreground and blocks until the user exits Claude.
+    """
     command = build_claude_channel_exec_command(
         provider_session_id=provider_session_id,
         longhouse_session_id=session_id,
@@ -300,6 +306,10 @@ def _launch_detached_native_claude_channel(
     hook_token: str | None = None,
     permission_mode: str = "bypass",
 ) -> dict:
+    """ARCHITECTURE.md's "Session modes": Helm launched remotely/detached.
+    Invoked via `longhouse claude-channel`, it runs headless in a fake PTY for later
+    reattachment; its intentional persistence is not a leak.
+    """
     _ensure_native_claude_prereqs(
         base_url=base_url,
         token=token,
