@@ -34,6 +34,15 @@ def test_canary_producer_source_never_calls_legacy_ingest():
     assert "print(canary_token" not in source
 
 
+def test_canary_producer_resolves_flat_service_bundle(tmp_path):
+    producer = _load_producer()
+    installed_script = tmp_path / "producer.py"
+    installed_helper = tmp_path / "storage_v2_wire.py"
+    installed_script.touch()
+    installed_helper.touch()
+    assert producer._resolve_storage_v2_wire(installed_script) == installed_helper
+
+
 def test_canary_producer_bootstrap_fail_closed_on_missing_cutover(monkeypatch):
     producer = _load_producer()
 

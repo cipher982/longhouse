@@ -46,10 +46,26 @@ import httpx
 INTERVAL_S = float(os.environ.get("LONGHOUSE_CANARY_INTERVAL_S", "30"))
 SESSION_ID_FILE = Path(os.environ.get("LONGHOUSE_CANARY_SESSION_FILE", str(Path.home() / ".longhouse" / "canary-session-id")))
 SEQ_FILE = SESSION_ID_FILE.with_name("canary-seq")
-_WIRE_PATH = Path(__file__).resolve().parents[1] / "lib" / "storage_v2_wire.py"
 _STORAGE_V2_INGEST_PATH = "/api/agents/storage/v2/envelopes"
 _STORAGE_V2_LANE_HEADER = "X-Longhouse-Storage-Lane"
 _SHA256_HEX = re.compile(r"[0-9a-f]{64}\Z")
+
+
+def _resolve_storage_v2_wire(script_path: Path) -> Path:
+    """Resolve both the flat service bundle and repository layouts."""
+
+    resolved = script_path.resolve()
+    candidates = (
+        resolved.with_name("storage_v2_wire.py"),
+        resolved.parents[1] / "lib" / "storage_v2_wire.py",
+    )
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    raise RuntimeError("storage-v2 wire helper is missing from the canary bundle")
+
+
+_WIRE_PATH = _resolve_storage_v2_wire(Path(__file__))
 
 
 def _load_storage_v2_wire():
