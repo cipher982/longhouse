@@ -44,6 +44,13 @@ const THREAD_SUBSCRIBE_BACKGROUND_RETRY_MS: u64 = 500;
 const THREAD_SUBSCRIBE_RETRY_ATTEMPTS: usize = 8;
 const THREAD_SUBSCRIBE_RETRY_DELAY_MS: u64 = 250;
 const CODEX_DISABLE_UPDATE_CHECK_CONFIG: &str = "check_for_update_on_startup=false";
+const LONGHOUSE_COORDINATION_TOOLS: &[&str] = &[
+    "peers",
+    "session_tail",
+    "check_messages",
+    "ack_message",
+    "message_session",
+];
 pub const CODEX_BRIDGE_TOKEN_ENV: &str = "LONGHOUSE_CODEX_BRIDGE_TOKEN";
 pub const BRIDGE_STATE_SCHEMA_VERSION: u32 = 4;
 pub const LAUNCH_MODE_DETACHED_UI: &str = "detached_ui";
@@ -2475,6 +2482,12 @@ fn codex_app_server_args(config: &BridgeRunConfig) -> Vec<OsString> {
         OsString::from("-c"),
         OsString::from(CODEX_DISABLE_UPDATE_CHECK_CONFIG),
     ];
+    for tool in LONGHOUSE_COORDINATION_TOOLS {
+        args.push(OsString::from("-c"));
+        args.push(OsString::from(format!(
+            "mcp_servers.longhouse.tools.{tool}.approval_mode=\"approve\""
+        )));
+    }
     if let Some(effort) = config.model_reasoning_effort.as_deref() {
         args.push(OsString::from("-c"));
         args.push(OsString::from(format!("model_reasoning_effort={effort}")));
@@ -5761,26 +5774,29 @@ mod tests {
             .map(|arg| arg.to_string_lossy().into_owned())
             .collect::<Vec<_>>();
 
-        assert_eq!(
-            args,
-            vec![
-                "-c",
-                CODEX_DISABLE_UPDATE_CHECK_CONFIG,
-                "--ask-for-approval",
-                "never",
-                "--sandbox",
-                "danger-full-access",
-                "app-server",
-                "--listen",
-                "ws://127.0.0.1:0",
-                "--enable",
-                "hooks",
-                "--enable",
-                "exec_permission_approvals",
-                "--enable",
-                "request_permissions_tool",
-            ]
-        );
+        let mut expected = vec!["-c".to_string(), CODEX_DISABLE_UPDATE_CHECK_CONFIG.to_string()];
+        for tool in LONGHOUSE_COORDINATION_TOOLS {
+            expected.extend([
+                "-c".to_string(),
+                format!("mcp_servers.longhouse.tools.{tool}.approval_mode=\"approve\""),
+            ]);
+        }
+        expected.extend([
+            "--ask-for-approval".to_string(),
+            "never".to_string(),
+            "--sandbox".to_string(),
+            "danger-full-access".to_string(),
+            "app-server".to_string(),
+            "--listen".to_string(),
+            "ws://127.0.0.1:0".to_string(),
+            "--enable".to_string(),
+            "hooks".to_string(),
+            "--enable".to_string(),
+            "exec_permission_approvals".to_string(),
+            "--enable".to_string(),
+            "request_permissions_tool".to_string(),
+        ]);
+        assert_eq!(args, expected);
     }
 
     async fn recv_runtime_event_kind(
