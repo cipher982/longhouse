@@ -211,14 +211,20 @@ existing design rather than invent a fourth vocabulary.
 ## Phase A — now, docs/status only, zero behavior or rename risk
 
 Scoped tightly to what's safe to do without touching dispatch, engine
-behavior, or public identifiers, and without colliding with the
-`claude-print` worktree:
+behavior, or public identifiers. Executed from an isolated worktree
+(`session-mode-legibility`), so there is no working-tree collision with any
+other branch; `control_channel.rs` and `schemas/managed_providers.yml` are
+still touched in items 2-3 below where the fix is genuinely a legibility fix
+(a stale/contradictory claim), not because of a coordination requirement with
+other in-progress branches. Any eventual merge-time conflict with unrelated
+work on those files is ordinary git, resolved at merge time.
 
 1. Rewrite `ARCHITECTURE.md`'s glossary to include Shadow/Helm/Console
    accurately, sourced from and linking back to the canonical explanation
    (kept in `ARCHITECTURE.md` itself — see decision below). Update
    `.agents/skills/managed-provider-cli/SKILL.md` to link instead of
-   redefine.
+   redefine. **Shipped:** `fee189fb7` (ARCHITECTURE.md), `2cea77c13` (skill
+   link).
 2. Fix the two concretely-wrong claims found in review: remove/correct
    `opencode.run_once=true` in `schemas/managed_providers.yml` (or
    explicitly justify it as an intentional compatibility shim, in writing, if
