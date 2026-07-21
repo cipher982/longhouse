@@ -311,6 +311,17 @@ pub fn active_source_incarnation(
     Ok(load_active_epoch(conn, provider, opaque_source_id)?.map(|epoch| epoch.file_incarnation))
 }
 
+pub fn active_source_revision(
+    conn: &Connection,
+    provider: &str,
+    opaque_source_id: &str,
+) -> Result<Option<String>> {
+    Ok(
+        load_active_epoch(conn, provider, opaque_source_id)?
+            .and_then(|epoch| epoch.source_revision),
+    )
+}
+
 fn load_lane_position(
     conn: &Connection,
     source_epoch: Uuid,

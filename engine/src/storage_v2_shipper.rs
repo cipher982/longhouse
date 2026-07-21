@@ -1,6 +1,6 @@
 //! Parser-independent raw + parser-versioned render shipping for storage-v2.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -42,7 +42,7 @@ use crate::storage_v2_contract::{self, EnvelopeIdentity, RangeKind};
 pub(crate) const PARSER_REVISION: &str = "engine-parser-v2";
 pub(crate) const ORDERING_REVISION: &str = "semantic-order-v2";
 const OPENCODE_SESSION_PAGE_SIZE: usize = 64;
-const CURSOR_PARSER_REVISION: &str = "cursor-store-render-v2";
+const CURSOR_PARSER_REVISION: &str = "cursor-store-render-v3-receipts";
 const LIVE_TARGET_BATCH_BYTES: usize = 64 * 1024;
 
 pub(crate) struct PreparedStorageV2Envelope {
@@ -1013,10 +1013,207 @@ pub(crate) fn prepare_next_opencode_envelope(
     }
 }
 
+#[derive(Debug, Default)]
+struct CursorTextProjection {
+    suppressed: HashSet<(String, usize)>,
+}
+
+#[derive(Debug)]
+struct CursorStoreTurn {
+    prompt: String,
+    text_blocks: Vec<(String, usize, String)>,
+}
+
+fn cursor_message_blocks(message: &Value) -> Vec<Value> {
+    match message.get("content") {
+        Some(Value::Array(values)) => values.clone(),
+        Some(Value::String(text)) => vec![serde_json::json!({"type":"text","text":text})],
+        _ => Vec::new(),
+    }
+}
+
+fn cursor_text_projection(
+    snapshot: &cursor_store::CursorStoreSnapshot,
+    evidence: Option<&crate::cursor_visibility::CursorVisibilityEvidence>,
+) -> CursorTextProjection {
+    let Some(evidence) = evidence else {
+        return CursorTextProjection::default();
+    };
+    let cursor_store::RootMessageBlobIds::Parsed(root_ids) = &snapshot.root_message_blob_ids else {
+        return CursorTextProjection::default();
+    };
+    let blobs = snapshot
+        .blob_rows
+        .iter()
+        .map(|row| (row.id.as_str(), row.data_bytes.as_slice()))
+        .collect::<HashMap<_, _>>();
+    let mut store_turns = Vec::<CursorStoreTurn>::new();
+    let mut current_turn: Option<CursorStoreTurn> = None;
+    for blob_id in root_ids {
+        let Some(bytes) = blobs.get(blob_id.as_str()) else {
+            continue;
+        };
+        let Ok(message) = serde_json::from_slice::<Value>(bytes) else {
+            continue;
+        };
+        let role = message
+            .get("role")
+            .and_then(Value::as_str)
+            .unwrap_or("assistant");
+        let blocks = cursor_message_blocks(&message);
+        if role == "user" {
+            if let Some(turn) = current_turn.take() {
+                store_turns.push(turn);
+            }
+            let prompt = blocks
+                .iter()
+                .filter_map(|block| block.get("text").and_then(Value::as_str))
+                .find_map(|text| {
+                    let (effective_role, effective_text) = classify_cursor_text(role, text);
+                    (effective_role == "user").then_some(effective_text)
+                })
+                .unwrap_or_default();
+            current_turn = Some(CursorStoreTurn {
+                prompt,
+                text_blocks: Vec::new(),
+            });
+            continue;
+        }
+        let Some(turn) = current_turn.as_mut() else {
+            continue;
+        };
+        for (subordinal, block) in blocks.iter().enumerate() {
+            if block.get("type").and_then(Value::as_str) == Some("text")
+                && block.get("text").and_then(Value::as_str).is_some()
+            {
+                turn.text_blocks.push((
+                    blob_id.clone(),
+                    subordinal,
+                    block
+                        .get("text")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string(),
+                ));
+            }
+        }
+    }
+    if let Some(turn) = current_turn {
+        store_turns.push(turn);
+    }
+
+    let mut projection = CursorTextProjection::default();
+    for store_turn in &store_turns {
+        projection.suppressed.extend(
+            store_turn
+                .text_blocks
+                .iter()
+                .map(|(blob_id, subordinal, _)| (blob_id.clone(), *subordinal)),
+        );
+    }
+    let Some(alignment) = unique_cursor_turn_alignment(&store_turns, &evidence.turns) else {
+        return projection;
+    };
+    for (store_index, evidence_index) in alignment {
+        let store_turn = &store_turns[store_index];
+        let hook_turn = &evidence.turns[evidence_index];
+        if let Some(response_text) = hook_turn.response_text.as_ref() {
+            if let Some(indices) =
+                unique_cursor_receipt_path(&store_turn.text_blocks, response_text)
+            {
+                for index in indices {
+                    let (blob_id, subordinal, _) = &store_turn.text_blocks[index];
+                    projection
+                        .suppressed
+                        .remove(&(blob_id.clone(), *subordinal));
+                }
+            }
+        }
+    }
+    projection
+}
+
+fn unique_cursor_turn_alignment(
+    store_turns: &[CursorStoreTurn],
+    hook_turns: &[crate::cursor_visibility::CursorHookTurn],
+) -> Option<Vec<(usize, usize)>> {
+    if hook_turns.is_empty() {
+        return Some(Vec::new());
+    }
+    let mut states = HashMap::<usize, (u8, Vec<usize>)>::new();
+    for (store_index, store_turn) in store_turns.iter().enumerate() {
+        if store_turn.prompt.trim() == hook_turns[0].prompt.trim() {
+            states.insert(store_index, (1, vec![store_index]));
+        }
+    }
+    for hook_turn in hook_turns.iter().skip(1) {
+        let mut next = HashMap::<usize, (u8, Vec<usize>)>::new();
+        for (previous_index, (path_count, path)) in &states {
+            for (store_index, store_turn) in store_turns.iter().enumerate().skip(*previous_index + 1)
+            {
+                if store_turn.prompt.trim() != hook_turn.prompt.trim() {
+                    continue;
+                }
+                let entry = next.entry(store_index).or_insert_with(|| {
+                    let mut candidate = path.clone();
+                    candidate.push(store_index);
+                    (0, candidate)
+                });
+                entry.0 = entry.0.saturating_add(*path_count).min(2);
+            }
+        }
+        states = next;
+    }
+    let path_count = states
+        .values()
+        .fold(0u8, |total, (count, _)| total.saturating_add(*count).min(2));
+    if path_count != 1 {
+        return None;
+    }
+    let (_, path) = states.into_values().find(|(count, _)| *count == 1)?;
+    Some(path.into_iter().enumerate().map(|(e, s)| (s, e)).collect())
+}
+
+fn unique_cursor_receipt_path(
+    text_blocks: &[(String, usize, String)],
+    response_text: &str,
+) -> Option<Vec<usize>> {
+    let mut paths = HashMap::<usize, Vec<Vec<usize>>>::from([(0, vec![Vec::new()])]);
+    for (index, (_, _, text)) in text_blocks.iter().enumerate() {
+        if text.is_empty() {
+            continue;
+        }
+        let previous = paths.clone();
+        for (offset, candidates) in previous {
+            let Some(suffix) = response_text.get(offset..) else {
+                continue;
+            };
+            if !suffix.starts_with(text) {
+                continue;
+            }
+            let next_offset = offset + text.len();
+            let next_paths = paths.entry(next_offset).or_default();
+            for candidate in candidates {
+                if next_paths.len() >= 2 {
+                    break;
+                }
+                let mut next = candidate;
+                next.push(index);
+                if !next_paths.contains(&next) {
+                    next_paths.push(next);
+                }
+            }
+        }
+    }
+    let paths = paths.remove(&response_text.len())?;
+    (paths.len() == 1).then(|| paths.into_iter().next().expect("one receipt path exists"))
+}
+
 fn cursor_render_records(
     snapshot: &cursor_store::CursorStoreSnapshot,
     selected: &[cursor_store_records::CursorRawRecord],
     started_at_us: i64,
+    visibility_evidence: Option<&crate::cursor_visibility::CursorVisibilityEvidence>,
 ) -> Result<Vec<StorageV2RenderRecord>> {
     let cursor_store::RootMessageBlobIds::Parsed(root_ids) = &snapshot.root_message_blob_ids else {
         return Ok(Vec::new());
@@ -1046,6 +1243,7 @@ fn cursor_render_records(
             (record.source_position, raw_record_ordinal, bytes),
         );
     }
+    let projection = cursor_text_projection(snapshot, visibility_evidence);
     let mut records = Vec::new();
     for (message_order, blob_id) in root_ids.iter().enumerate() {
         let Some((source_position, raw_record_ordinal, blob_bytes)) = selected_blobs.get(blob_id)
@@ -1060,11 +1258,7 @@ fn cursor_render_records(
             .get("role")
             .and_then(Value::as_str)
             .unwrap_or("assistant");
-        let blocks: Vec<Value> = match message.get("content") {
-            Some(Value::Array(values)) => values.clone(),
-            Some(Value::String(text)) => vec![serde_json::json!({"type":"text","text":text})],
-            _ => Vec::new(),
-        };
+        let blocks = cursor_message_blocks(&message);
         for (subordinal, block) in blocks.iter().enumerate() {
             let kind = block
                 .get("type")
@@ -1082,11 +1276,18 @@ fn cursor_render_records(
                     let text = block
                         .get("text")
                         .and_then(Value::as_str)
-                        .unwrap_or_default();
+                        .unwrap_or_default()
+                        .to_string();
+                    if kind == "text" {
+                        let key = (blob_id.clone(), subordinal);
+                        if projection.suppressed.contains(&key) {
+                            continue;
+                        }
+                    }
                     let (effective_role, effective_text) = if kind == "reasoning" {
-                        ("assistant".to_string(), text.to_string())
+                        ("assistant".to_string(), text)
                     } else {
-                        classify_cursor_text(role, text)
+                        classify_cursor_text(role, &text)
                     };
                     (effective_role, Some(effective_text), None, None, None, None)
                 }
@@ -1130,12 +1331,10 @@ fn cursor_render_records(
                     None,
                 ),
             };
+            let event_id_material = format!("cursor:{blob_id}:{subordinal}");
             records.push(StorageV2RenderRecord {
-                event_id: Uuid::new_v5(
-                    &Uuid::NAMESPACE_URL,
-                    format!("cursor:{blob_id}:{subordinal}").as_bytes(),
-                )
-                .to_string(),
+                event_id: Uuid::new_v5(&Uuid::NAMESPACE_URL, event_id_material.as_bytes())
+                    .to_string(),
                 order_time_us: started_at_us + message_order as i64 * 1_000 + subordinal as i64,
                 source_position: *source_position,
                 event_subordinal: subordinal as u32,
@@ -1243,18 +1442,25 @@ fn prepare_next_cursor_envelope_outcome_with_limit(
     let canonical_path = stable_source_path(db_path);
     let path_text = canonical_path.to_string_lossy();
     if let Some(pending) = pending_source_envelope::load_for_path(conn, &path_text)? {
+        let prepared = pending_to_prepared(pending.clone())?;
         let oversized_unattempted = pending.raw_bytes > maximum_batch_bytes
             && pending.range_end.saturating_sub(pending.range_start) > 1
             && pending.attempt_count == 0
             && maximum_batch_bytes < capabilities.max_raw_record_bytes;
-        if !oversized_unattempted
+        let obsolete_unattempted_render = pending.attempt_count == 0
+            && prepared
+                .envelope
+                .render
+                .as_ref()
+                .is_none_or(|render| render.parser_revision != CURSOR_PARSER_REVISION);
+        if !(oversized_unattempted || obsolete_unattempted_render)
             || !pending_source_envelope::discard_unattempted(
                 conn,
                 pending.source_epoch,
                 &pending.envelope_id,
             )?
         {
-            return pending_to_prepared(pending).map(CursorPreparationOutcome::Envelope);
+            return Ok(CursorPreparationOutcome::Envelope(prepared));
         }
     }
     let metadata_before = db_path
@@ -1288,6 +1494,36 @@ fn prepare_next_cursor_envelope_outcome_with_limit(
     let claimed_session_id = claimed_binding
         .as_ref()
         .map(|binding| binding.session_id.clone());
+    let visibility_evidence = claimed_binding
+        .as_ref()
+        .map(|binding| {
+            crate::cursor_visibility::load_cursor_visibility_evidence(
+                &binding.session_id,
+                &snapshot.conversation_uuid,
+            )
+            .map(|evidence| evidence.unwrap_or_default())
+        })
+        .transpose()?;
+    // Do not consume raw records while the provider's turn receipt is still
+    // racing the stop hook.  Both terminal hooks wake the shipper, so the
+    // settled turn will be captured without permanently losing its render.
+    if visibility_evidence
+        .as_ref()
+        .is_some_and(|evidence| evidence.has_unsettled_turn())
+    {
+        return Ok(CursorPreparationOutcome::Current);
+    }
+    if visibility_evidence.is_some() {
+        if let cursor_store::RootMessageBlobIds::Parsed(root_ids) =
+            &store_snapshot.root_message_blob_ids
+        {
+            for ids in root_ids.chunks(256) {
+                store_snapshot
+                    .blob_rows
+                    .extend(cursor_store::read_cursor_blob_rows(db_path, ids)?);
+            }
+        }
+    }
     let opaque_source_id = cursor_store::cursor_opaque_source_id(&snapshot.conversation_uuid);
     let previous_root_ids =
         cursor_store_root::previous_message_blob_ids(conn, &snapshot.conversation_uuid)?;
@@ -1304,6 +1540,10 @@ fn prepare_next_cursor_envelope_outcome_with_limit(
         cursor_store_records::active_cursor_record_count(conn, "cursor", &opaque_source_id)?;
     let active_incarnation =
         source_epoch::active_source_incarnation(conn, "cursor", &opaque_source_id)?;
+    let active_render_revision =
+        source_epoch::active_source_revision(conn, "cursor", &opaque_source_id)?;
+    let parser_replay_required =
+        existing_len > 0 && active_render_revision.as_deref() != Some(CURSOR_PARSER_REVISION);
     let source_len_before_capture = if root_relation
         == cursor_store_root::CursorRootOrderRelation::Rewrite
         || !file_identities_match(active_incarnation.as_deref(), Some(incarnation.as_str()))
@@ -1320,9 +1560,13 @@ fn prepare_next_cursor_envelope_outcome_with_limit(
         source_len_before_capture,
         SourceLane::Durable,
         0,
-        None,
+        Some(CURSOR_PARSER_REVISION),
         claimed_session_id.as_deref(),
-        root_relation.source_change_hint(),
+        if parser_replay_required {
+            SourceChangeHint::Rewrite
+        } else {
+            root_relation.source_change_hint()
+        },
     )?;
     let newly_referenced_ids = match (&previous_root_ids, &snapshot.root_message_blob_ids) {
         (Some(previous), cursor_store::RootMessageBlobIds::Parsed(current))
@@ -1422,9 +1666,9 @@ fn prepare_next_cursor_envelope_outcome_with_limit(
     )?;
     let source_capture_has_more = blob_visit.has_more;
     let logical_len = cursor_store_records::cursor_record_count(conn, resolution.source_epoch)?;
-    // Refresh max_observed_len after adding local records. `None` revision is
-    // intentional: an append changes Cursor's root blob every turn but must
-    // not rotate the epoch.
+    // Refresh max_observed_len after adding local records.  The renderer
+    // revision is stable across ordinary root appends and deliberately rotates
+    // the epoch when replay is required by a parser upgrade.
     let resolution = source_epoch::observe_source(
         conn,
         "cursor",
@@ -1433,7 +1677,7 @@ fn prepare_next_cursor_envelope_outcome_with_limit(
         logical_len,
         SourceLane::Durable,
         source_epoch::lane_position(conn, resolution.source_epoch, SourceLane::Durable)?,
-        None,
+        Some(CURSOR_PARSER_REVISION),
         None,
         SourceChangeHint::None,
     )?;
@@ -1518,8 +1762,12 @@ fn prepare_next_cursor_envelope_outcome_with_limit(
     let observed_at = DateTime::parse_from_rfc3339(&resolution.opened_at)
         .expect("source epoch opened_at is generated internally")
         .with_timezone(&Utc);
-    let mut render_records =
-        cursor_render_records(&store_snapshot, &selected, started_at.timestamp_micros())?;
+    let mut render_records = cursor_render_records(
+        &store_snapshot,
+        &selected,
+        started_at.timestamp_micros(),
+        visibility_evidence.as_ref(),
+    )?;
     if let Some(thread_id) = claimed_binding
         .as_ref()
         .and_then(|binding| binding.thread_id.as_ref())
@@ -2598,6 +2846,320 @@ mod tests {
         assert_eq!(render.records[1].tool_call_id.as_deref(), Some("call-1"));
         assert_eq!(render.records[2].role, "tool");
         assert_eq!(render.records[2].tool_output_text.as_deref(), Some("/tmp"));
+    }
+
+    fn cursor_visibility_fixture(
+        messages: Vec<(&str, Value)>,
+    ) -> (
+        cursor_store::CursorStoreSnapshot,
+        Vec<cursor_store_records::CursorRawRecord>,
+    ) {
+        let mut blob_rows = Vec::new();
+        let mut selected = Vec::new();
+        let mut root_ids = Vec::new();
+        for (source_position, (blob_id, message)) in messages.into_iter().enumerate() {
+            let bytes = serde_json::to_vec(&message).unwrap();
+            root_ids.push(blob_id.to_string());
+            blob_rows.push(cursor_store::CursorStoreBlobRow {
+                id: blob_id.to_string(),
+                data_bytes: bytes.clone(),
+                data_storage_class: cursor_store::SqliteStorageClass::Blob,
+            });
+            selected.push(cursor_store_records::CursorRawRecord {
+                source_position: source_position as u64,
+                bytes: serde_json::to_vec(&serde_json::json!({
+                    "kind": "blob",
+                    "blob_id": blob_id,
+                    "blob_bytes_b64": BASE64_STANDARD.encode(bytes),
+                }))
+                .unwrap(),
+            });
+        }
+        (
+            cursor_store::CursorStoreSnapshot {
+                conversation_uuid: CURSOR_CONVERSATION_ID.to_string(),
+                root_blob_id: None,
+                created_at_ms: Some(1_773_403_200_000),
+                meta_rows: Vec::new(),
+                blob_rows,
+                root_message_blob_ids: cursor_store::RootMessageBlobIds::Parsed(root_ids),
+            },
+            selected,
+        )
+    }
+
+    #[test]
+    fn cursor_failed_retry_artifacts_remain_raw_but_do_not_render_as_replies() {
+        let user = "1111111111111111111111111111111111111111111111111111111111111111";
+        let attempt_one = "2222222222222222222222222222222222222222222222222222222222222222";
+        let attempt_two = "3333333333333333333333333333333333333333333333333333333333333333";
+        let attempt_three = "4444444444444444444444444444444444444444444444444444444444444444";
+        let attempt_four = "5555555555555555555555555555555555555555555555555555555555555555";
+        let (snapshot, selected) = cursor_visibility_fixture(vec![
+            (
+                user,
+                serde_json::json!({"role":"user","content":[{"type":"text","text":"<user_query>hello test 1</user_query>"}]}),
+            ),
+            (
+                attempt_one,
+                serde_json::json!({"role":"assistant","content":[{"type":"text","text":"reply one"}]}),
+            ),
+            (
+                attempt_two,
+                serde_json::json!({"role":"assistant","content":[{"type":"text","text":"reply two"}]}),
+            ),
+            (
+                attempt_three,
+                serde_json::json!({"role":"assistant","content":[{"type":"text","text":"reply three"}]}),
+            ),
+            (
+                attempt_four,
+                serde_json::json!({"role":"assistant","content":[{"type":"text","text":"reply four"}]}),
+            ),
+        ]);
+        let evidence = crate::cursor_visibility::CursorVisibilityEvidence {
+            turns: vec![crate::cursor_visibility::CursorHookTurn {
+                generation_id: "generation-1".to_string(),
+                prompt: "hello test 1".to_string(),
+                response_text: None,
+                stop_status: Some("error".to_string()),
+            }],
+        };
+
+        let rendered = cursor_render_records(&snapshot, &selected, 0, Some(&evidence)).unwrap();
+        assert_eq!(rendered.len(), 1);
+        assert_eq!(rendered[0].role, "user");
+        assert_eq!(rendered[0].content_text.as_deref(), Some("hello test 1"));
+        assert_eq!(
+            selected.len(),
+            5,
+            "all retry artifacts remain in the raw envelope"
+        );
+    }
+
+    #[test]
+    fn cursor_completed_turn_renders_exact_provider_receipt_once() {
+        let user = "1111111111111111111111111111111111111111111111111111111111111111";
+        let progress = "2222222222222222222222222222222222222222222222222222222222222222";
+        let tool = "3333333333333333333333333333333333333333333333333333333333333333";
+        let final_text = "4444444444444444444444444444444444444444444444444444444444444444";
+        let (snapshot, selected) = cursor_visibility_fixture(vec![
+            (
+                user,
+                serde_json::json!({"role":"user","content":[{"type":"text","text":"<user_query>do work</user_query>"}]}),
+            ),
+            (
+                progress,
+                serde_json::json!({"role":"assistant","content":[{"type":"text","text":"progress"}]}),
+            ),
+            (
+                tool,
+                serde_json::json!({"role":"assistant","content":[{"type":"tool-call","toolName":"Shell","toolCallId":"call-1","args":{"command":"pwd"}}]}),
+            ),
+            (
+                final_text,
+                serde_json::json!({"role":"assistant","content":[{"type":"text","text":"done"}]}),
+            ),
+        ]);
+        let evidence = crate::cursor_visibility::CursorVisibilityEvidence {
+            turns: vec![crate::cursor_visibility::CursorHookTurn {
+                generation_id: "generation-2".to_string(),
+                prompt: "do work".to_string(),
+                response_text: Some("progressdone".to_string()),
+                stop_status: Some("completed".to_string()),
+            }],
+        };
+
+        let rendered = cursor_render_records(&snapshot, &selected, 0, Some(&evidence)).unwrap();
+        assert_eq!(rendered.len(), 4);
+        assert_eq!(rendered[0].role, "user");
+        assert_eq!(rendered[1].role, "assistant");
+        assert_eq!(rendered[1].content_text.as_deref(), Some("progress"));
+        assert_eq!(rendered[2].tool_call_id.as_deref(), Some("call-1"));
+        assert_eq!(rendered[3].content_text.as_deref(), Some("done"));
+    }
+
+    #[test]
+    fn cursor_ambiguous_retry_receipt_does_not_choose_first_or_last_artifact() {
+        let user = "1111111111111111111111111111111111111111111111111111111111111111";
+        let attempt_one = "2222222222222222222222222222222222222222222222222222222222222222";
+        let attempt_two = "3333333333333333333333333333333333333333333333333333333333333333";
+        let (snapshot, selected) = cursor_visibility_fixture(vec![
+            (
+                user,
+                serde_json::json!({"role":"user","content":[{"type":"text","text":"<user_query>repeat</user_query>"}]}),
+            ),
+            (
+                attempt_one,
+                serde_json::json!({"role":"assistant","content":[{"type":"text","text":"same answer"}]}),
+            ),
+            (
+                attempt_two,
+                serde_json::json!({"role":"assistant","content":[{"type":"text","text":"same answer"}]}),
+            ),
+        ]);
+        let evidence = crate::cursor_visibility::CursorVisibilityEvidence {
+            turns: vec![crate::cursor_visibility::CursorHookTurn {
+                generation_id: "generation-ambiguous".to_string(),
+                prompt: "repeat".to_string(),
+                response_text: Some("same answer".to_string()),
+                stop_status: Some("completed".to_string()),
+            }],
+        };
+
+        let rendered = cursor_render_records(&snapshot, &selected, 0, Some(&evidence)).unwrap();
+        assert_eq!(rendered.len(), 1);
+        assert_eq!(rendered[0].role, "user");
+    }
+
+    #[test]
+    fn cursor_managed_turn_without_matching_hook_evidence_is_raw_only() {
+        let user = "1111111111111111111111111111111111111111111111111111111111111111";
+        let attempt = "2222222222222222222222222222222222222222222222222222222222222222";
+        let (snapshot, selected) = cursor_visibility_fixture(vec![
+            (
+                user,
+                serde_json::json!({"role":"user","content":[{"type":"text","text":"<user_query>missing hook</user_query>"}]}),
+            ),
+            (
+                attempt,
+                serde_json::json!({"role":"assistant","content":[{"type":"text","text":"unverified artifact"}]}),
+            ),
+        ]);
+        let evidence = crate::cursor_visibility::CursorVisibilityEvidence { turns: Vec::new() };
+
+        let rendered = cursor_render_records(&snapshot, &selected, 0, Some(&evidence)).unwrap();
+        assert_eq!(rendered.len(), 1);
+        assert_eq!(rendered[0].role, "user");
+        assert_eq!(selected.len(), 2, "unverified text remains in raw storage");
+    }
+
+    #[test]
+    fn cursor_repeated_prompt_without_unique_turn_alignment_is_raw_only() {
+        let user_one = "1111111111111111111111111111111111111111111111111111111111111111";
+        let reply_one = "2222222222222222222222222222222222222222222222222222222222222222";
+        let user_two = "3333333333333333333333333333333333333333333333333333333333333333";
+        let reply_two = "4444444444444444444444444444444444444444444444444444444444444444";
+        let (snapshot, selected) = cursor_visibility_fixture(vec![
+            (
+                user_one,
+                serde_json::json!({"role":"user","content":[{"type":"text","text":"<user_query>same prompt</user_query>"}]}),
+            ),
+            (
+                reply_one,
+                serde_json::json!({"role":"assistant","content":[{"type":"text","text":"same reply"}]}),
+            ),
+            (
+                user_two,
+                serde_json::json!({"role":"user","content":[{"type":"text","text":"<user_query>same prompt</user_query>"}]}),
+            ),
+            (
+                reply_two,
+                serde_json::json!({"role":"assistant","content":[{"type":"text","text":"same reply"}]}),
+            ),
+        ]);
+        let evidence = crate::cursor_visibility::CursorVisibilityEvidence {
+            turns: vec![crate::cursor_visibility::CursorHookTurn {
+                generation_id: "generation-repeated".to_string(),
+                prompt: "same prompt".to_string(),
+                response_text: Some("same reply".to_string()),
+                stop_status: Some("completed".to_string()),
+            }],
+        };
+
+        let rendered = cursor_render_records(&snapshot, &selected, 0, Some(&evidence)).unwrap();
+        assert_eq!(rendered.len(), 2);
+        assert!(rendered.iter().all(|record| record.role == "user"));
+    }
+
+    #[test]
+    fn cursor_parser_revision_upgrade_replays_from_a_replacement_epoch() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("store.db");
+        let store = make_cursor_store(&path);
+        store
+            .execute(
+                "UPDATE blobs SET data = ?1 WHERE id = ?2",
+                params![
+                    br#"{"role":"assistant","content":[{"type":"text","text":"legacy render"}]}"#,
+                    CURSOR_MESSAGE_A,
+                ],
+            )
+            .unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        let first = prepare_next_cursor_envelope(&mut conn, &capabilities(), &path)
+            .unwrap()
+            .unwrap();
+        let first_epoch = first.source_epoch;
+        acknowledge_prepared(&mut conn, &first);
+        conn.execute(
+            "UPDATE source_epoch_registry SET source_revision = NULL WHERE source_epoch = ?1",
+            [first_epoch.to_string()],
+        )
+        .unwrap();
+
+        let replay = prepare_next_cursor_envelope(&mut conn, &capabilities(), &path)
+            .unwrap()
+            .unwrap();
+        assert_ne!(replay.source_epoch, first_epoch);
+        assert_eq!(
+            replay.envelope.predecessor_source_epoch,
+            Some(first_epoch.to_string())
+        );
+        assert_eq!(replay.range_start, 0);
+        assert_eq!(
+            replay.envelope.render.as_ref().unwrap().parser_revision,
+            CURSOR_PARSER_REVISION
+        );
+    }
+
+    #[test]
+    fn cursor_unattempted_obsolete_pending_render_is_rebuilt_before_shipping() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("store.db");
+        let store = make_cursor_store(&path);
+        store
+            .execute(
+                "UPDATE blobs SET data = ?1 WHERE id = ?2",
+                params![
+                    br#"{"role":"assistant","content":[{"type":"text","text":"legacy render"}]}"#,
+                    CURSOR_MESSAGE_A,
+                ],
+            )
+            .unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        let first = prepare_next_cursor_envelope(&mut conn, &capabilities(), &path)
+            .unwrap()
+            .unwrap();
+        let pending = pending_source_envelope::load_for_epoch(&conn, first.source_epoch)
+            .unwrap()
+            .unwrap();
+        let mut obsolete = first.envelope.clone();
+        obsolete.render.as_mut().unwrap().parser_revision = "cursor-store-render-v2".to_string();
+        let obsolete_body = serde_json::to_vec(&obsolete).unwrap();
+        let obsolete_body_zstd = encode_zstd(&obsolete_body, "obsolete Cursor request").unwrap();
+        pending_source_envelope::replace_request_body_after_render_conflict(
+            &conn,
+            first.source_epoch,
+            &pending.envelope_id,
+            &pending.request_body_zstd,
+            &obsolete_body_zstd,
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE source_epoch_registry SET source_revision = NULL WHERE source_epoch = ?1",
+            [first.source_epoch.to_string()],
+        )
+        .unwrap();
+
+        let rebuilt = prepare_next_cursor_envelope(&mut conn, &capabilities(), &path)
+            .unwrap()
+            .unwrap();
+        assert_ne!(rebuilt.source_epoch, first.source_epoch);
+        assert_eq!(
+            rebuilt.envelope.render.as_ref().unwrap().parser_revision,
+            CURSOR_PARSER_REVISION
+        );
     }
 
     #[tokio::test]

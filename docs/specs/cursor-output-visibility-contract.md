@@ -1,6 +1,7 @@
 # Cursor Output Visibility Contract
 
-**Status:** Evidence-backed design; production projection change not approved
+**Status:** Receipt-backed managed projection implemented and regression-tested;
+terminal-presentation promotion remains future work
 
 **Owner:** Longhouse
 
@@ -145,20 +146,39 @@ source.
 
 ## User-Facing Projection
 
-Until the visibility record has live coverage and accepted fixtures:
+Managed Cursor sessions now use the hook stream as a fail-closed semantic
+receipt:
 
 - keep all Cursor storage-v2 blobs in the raw archive;
-- continue to project provider-committed responses on successful turns;
-- do not promote uncommitted retry artifacts to ordinary assistant messages;
+- require one unique ordered alignment between the complete hook prompt
+  sequence and store turns;
+- wait while the newest hook turn is unsettled, including the valid
+  `stop(completed)`-before-`afterAgentResponse` race;
+- project assistant prose only when the `afterAgentResponse.text` receipt has
+  exactly one ordered decomposition across the turn's store text blocks;
+- retain tool calls/results in their original store order;
+- do not choose the first or last artifact when the receipt match is missing or
+  ambiguous;
+- treat a missing hook file on a managed binding as incomplete evidence, not as
+  permission to expose every store artifact;
 - represent a failed interactive turn as failed and expose its raw provider
   artifacts in forensic mode;
 - where terminal capture exists, expose terminal replay/frame evidence as a
   separate presentation surface rather than pretending it is a committed
   assistant message.
 
-This is deliberately conservative. It prevents four invisible retries from
+The renderer revision is `cursor-store-render-v3-receipts`. Upgrading an
+already-captured Cursor source rotates to a replacement epoch and replays raw
+records from ordinal zero, so previously published v2 render objects are
+retired rather than left beside corrected output. An obsolete, unattempted
+pending v2 envelope is rebuilt before shipping; an attempted envelope remains
+an exact-retry authority until the host receipts it.
+
+This is deliberately conservative. It prevents four uncommitted retries from
 appearing as four agent replies without deleting them, and it does not claim
-that a displayed-but-uncommitted response was never shown.
+that a displayed-but-uncommitted response was never shown. Terminal evidence
+is still required before such displayed-but-uncommitted text can be promoted
+to an ordinary assistant message.
 
 Promotion of terminal-presented text into a normal assistant message requires
 one of:
@@ -209,9 +229,10 @@ Each live run must retain the universal evidence package: raw terminal,
 timestamped chunks, hooks, provider JSONL, store snapshot, process metadata,
 normalized observations, Longhouse ingest/projection, and assertion results.
 
-## Promotion Gates
+## Terminal-Presentation Promotion Gates
 
-No production projection change is eligible until all of these hold:
+No promotion of terminal-only, uncommitted text into the ordinary transcript
+is eligible until all of these hold:
 
 1. The retained failed canary and current Grok reproduction replay with the
    expected one-presented/four-artifact ambiguity.
@@ -230,12 +251,32 @@ No production projection change is eligible until all of these hold:
 7. The universal release proof records the provider version, adapter version,
    fixture version, evidence completeness, and old/new baseline diff.
 
-## Implemented Investigation Tooling
+## Implemented Receipt Projection and Investigation Tooling
+
+The engine implementation lives in `engine/src/cursor_visibility.rs` and the
+Cursor storage-v2 renderer. Regression coverage proves:
+
+- the retained four-artifact/error shape remains fully raw but renders no
+  fabricated assistant replies;
+- successful hook receipts decompose exactly across multiple progress and
+  final text blocks while tool events retain their position;
+- duplicate hook rows and reversed successful terminal-hook order are safe;
+- missing and ambiguous receipt matches fail closed;
+- stale parser revisions replay through a replacement source epoch;
+- stale unattempted pending renders are rebuilt before shipping.
+
+Read-only validation against the 2026-07-20 retained healthy Cursor store found
+two completed turns whose hook receipt exactly equaled the concatenation of
+four and three store text blocks respectively. Its intervening error turn had
+five store text blocks and no receipt. The 2026-07-21 incident store had four
+assistant retry blobs, one submitted prompt, `stop(error)`, and no response
+receipt.
 
 `server/zerg/qa/cursor_visibility_evidence.py` and
 `scripts/qa/cursor-visibility-evidence.py` replay a terminal byte stream,
 preserve every JSONL assistant artifact, correlate hook response digests, and
-report ambiguity. They intentionally do not modify the production renderer.
+report ambiguity. The QA tool does not modify the renderer; the engine
+integration above owns the production receipt projection.
 
 The first tests cover:
 
@@ -245,5 +286,5 @@ The first tests cover:
 
 Next implementation work should add timestamped PTY chunk capture and immutable
 store/JSONL snapshots to Gate 0, then migrate the visibility scenarios into the
-universal Cursor adapter. Production transcript changes come after those live
-artifacts pass the promotion gates.
+universal Cursor adapter. Those artifacts gate terminal-only promotion, not the
+receipt-backed correction shipped here.
