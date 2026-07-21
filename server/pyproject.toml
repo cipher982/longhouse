@@ -134,4 +134,6 @@ indent-style = "space"
 line-ending = "lf"
 
 [dependency-groups]
-dev = []
+dev = [
+    "pyte>=0.8.2",
+]
