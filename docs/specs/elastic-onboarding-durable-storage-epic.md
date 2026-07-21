@@ -643,9 +643,9 @@ wall-clock critical path without weakening data-authority gates.
 
 ### Scheduling rules
 
-- Keep one implementation owner and one coherent write stream. Use Hatch for
-  independent read-only design, threat-model, and final-diff review; do not
-  create competing authors in the same worktree.
+- Keep one implementation owner and one coherent write stream. Use independent
+  read-only design, threat-model, and final-diff review; do not create
+  competing authors in the same worktree.
 - Group code by one phase acceptance invariant. Small fixes within that slice
   ship together unless the currently deployed build can lose data, cross a
   tenant boundary, corrupt authority, or break live control.

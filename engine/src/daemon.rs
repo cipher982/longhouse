@@ -4385,11 +4385,19 @@ fn retire_legacy_spool_after_storage_v2(
     conn: &rusqlite::Connection,
     path: &Path,
 ) -> anyhow::Result<usize> {
+    // Reaching the storage-v2 source head is also proof that any older v1
+    // pointer gap for this path is durably covered. Seal that legacy cursor
+    // before deleting its spool rows so a process crash cannot regenerate the
+    // same recovery work on every subsequent startup.
+    let path_text = path.to_string_lossy();
+    let file_state = FileState::new(conn);
+    let queued_offset = file_state.get_queued_offset(&path_text)?;
+    file_state.set_acked_offset(&path_text, queued_offset)?;
+
     let spool = Spool::new(conn);
-    let path = path.to_string_lossy();
     let mut retired = 0usize;
     loop {
-        let pending = spool.pending_entries_for_path_now(&path, 1_000)?;
+        let pending = spool.pending_entries_for_path_now(&path_text, 1_000)?;
         if pending.is_empty() {
             return Ok(retired);
         }
@@ -4627,24 +4635,34 @@ mod tests {
     #[test]
     fn test_storage_v2_source_head_retires_only_matching_legacy_spool_rows() {
         let db = tempfile::NamedTempFile::new().unwrap();
+        let target = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(target.path(), vec![b'x'; 200]).unwrap();
+        let target_path = target.path().to_string_lossy().to_string();
         let conn = open_db(Some(db.path())).unwrap();
         let spool = Spool::new(&conn);
         spool
-            .enqueue("codex", "/tmp/target.jsonl", 0, 100, Some("target"))
+            .enqueue("codex", &target_path, 0, 100, Some("target"))
             .unwrap();
         spool
-            .enqueue("codex", "/tmp/target.jsonl", 100, 200, Some("target"))
+            .enqueue("codex", &target_path, 100, 200, Some("target"))
             .unwrap();
         spool
             .enqueue("codex", "/tmp/other.jsonl", 0, 100, Some("other"))
             .unwrap();
+        let file_state = FileState::new(&conn);
+        file_state
+            .set_queued_offset(&target_path, 200, "codex", "target", "target")
+            .unwrap();
+        assert_eq!(file_state.get_offset(&target_path).unwrap(), 0);
 
         assert_eq!(
-            retire_legacy_spool_after_storage_v2(&conn, Path::new("/tmp/target.jsonl")).unwrap(),
+            retire_legacy_spool_after_storage_v2(&conn, target.path()).unwrap(),
             2
         );
+        assert_eq!(file_state.get_offset(&target_path).unwrap(), 200);
+        assert_eq!(shipper::run_startup_recovery(&conn).unwrap(), 0);
         assert!(spool
-            .pending_entries_for_path_now("/tmp/target.jsonl", 10)
+            .pending_entries_for_path_now(&target_path, 10)
             .unwrap()
             .is_empty());
         assert_eq!(
