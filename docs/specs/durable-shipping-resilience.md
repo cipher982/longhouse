@@ -1,6 +1,6 @@
 # Durable Shipping Resilience
 
-**Status:** Core resilience implemented; legacy restart-gap closeout pending
+**Status:** Core resilience implemented; legacy restart-gap closeout accepted
 **Owner:** Longhouse core
 **Created:** 2026-07-17
 **Related:** `speed-of-light-shipper.md`, `transcript-convergence.md`,
@@ -253,15 +253,12 @@ stable macOS source identity across reboot, and durable reconciliation sealing.
 Production restart recovery drained every immutable pending envelope without a
 blocked source or acknowledged-position regression.
 
-One compatibility loop remains before this document's restart invariant is
-accepted: storage-v2 head proof deletes matching v1 spool pointers but the old
-`file_state.acked_offset` remains behind `queued_offset`. The next restart
-therefore reconstructs the same 245 pointers (7,469,578,965 bytes) and retires
-them locally again. The reviewed closeout seals only that obsolete v1 watermark
-after storage-v2 reports `Current` or receipts a final envelope, then deletes
-the matching spool pointers. Acceptance requires the first restart to seal the
-real rows and a second restart to create none while the authoritative v2 lane
-cursor and source epochs remain unchanged.
+The legacy compatibility loop is closed. Storage-v2 head proof now seals only
+the matching v1 `file_state.acked_offset` before retiring its spool pointers;
+it does not advance the authoritative v2 lane. On the production corpus, the
+first restart sealed 245 obsolete ranges (7,469,578,965 bytes) with zero archive
+sends. The immediately following restart created none, while the source-epoch
+registry and v2 durable-position aggregate remained unchanged.
 
 The broader exact-source operator commands, preparation-quarantine model, and
 managed-process reap described below are adjacent resilience work. They do not

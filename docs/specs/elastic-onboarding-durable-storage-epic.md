@@ -1,7 +1,7 @@
 # Elastic Onboarding and Durable Storage Epic
 
-**Status:** Phase 1 and Phase 2A accepted in production; Phase 2B closeout in
-progress; Phase 3 is the next implementation phase
+**Status:** Phases 1 and 2 accepted in production; Phase 3 is the active
+implementation phase
 **Owner:** Longhouse core and hosted operations
 **Created:** 2026-07-20
 **Scope:** Hosted scale, customer import, storage telemetry, and object-store
@@ -684,8 +684,8 @@ silently expand the current phase.
 | --- | --- | --- |
 | 1 — telemetry/baseline | accepted | Retention continues without blocking later phases. |
 | 2A — source inventory | accepted | None. |
-| 2B — progressive import/restart safety | closeout | Deploy the legacy cursor seal, then prove two consecutive restarts create no acknowledged-work replay and no durable cursor/epoch regression. |
-| 3 — remote backup/provider decision | not started | Contract, benchmark, authorization, deletion, catalog backup, and disposable restore proof behind the existing object seam. |
+| 2B — progressive import/restart safety | accepted | No acknowledged work replayed after the accepted restart proof. |
+| 3 — remote backup/provider decision | in progress | Contract, benchmark, authorization, deletion, catalog backup, and disposable restore proof behind the existing object seam. |
 | 4 — optional remote authority | gated by Phase 3 evidence | Proceed only if remote authority beats tested backup/mirroring for launch. |
 | 5 — projection/cold-read economics | not started | Destructive render/search/recall rebuild from raw truth plus current/cold read proof. |
 | 6A — dogfood migration | not started | Offline snapshot, cutover, complete product validation, and exercised rollback. |
@@ -852,14 +852,15 @@ clean; the storage-v2 outbox, blocked-source count, active spool, and archive
 backlog are all zero.
 
 Live restart testing exposed one remaining Phase 2 gate failure: 245 obsolete
-v1 `file_state` gaps representing 7,469,578,965 bytes are recreated on each
-process start even though storage-v2 proves those sources current and retires
-the transient spool rows. The reviewed local closeout changes only the legacy
-acked watermark after storage-v2 head proof; it does not advance the
-authoritative source-epoch durable cursor. Phase 2B is accepted only after that
-change is deployed and two consecutive restarts prove zero regenerated gaps,
-zero blocked envelopes, no durable-position regression, and no false source
-replacement. No other cleanup may delay Phase 3.
+v1 `file_state` gaps representing 7,469,578,965 bytes were recreated on each
+process start even though storage-v2 proved those sources current and retired
+the transient spool rows. Commit `d637260dc` seals only the legacy acknowledged
+watermark after storage-v2 head proof; it does not advance the authoritative
+source-epoch durable cursor. The first production restart sealed the 245 real
+rows with zero archive sends. The immediately following restart recreated zero
+gaps, left storage-v2 pending and blocked envelopes at zero, and preserved the
+source-epoch registry (16,032 rows) and durable-position aggregate
+(36,660,020,266). Phase 2B is accepted; no false source replacement occurred.
 
 Deliver discovery inventory, the onboarding state machine, recent-first
 scheduler, provider fairness, byte-based progress/health surfaces, thin
