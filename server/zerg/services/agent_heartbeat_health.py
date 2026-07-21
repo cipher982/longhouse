@@ -86,6 +86,7 @@ def list_machine_transport_health(
     stale_after_seconds: int = DEFAULT_MACHINE_HEARTBEAT_STALE_AFTER_SECONDS,
     recent_within_seconds: int | None = None,
     limit: int = 20,
+    heartbeat_model: type[Any] = AgentHeartbeat,
 ) -> tuple[list[MachineTransportHealthSummary], int]:
     if device_id:
         summary_map = load_machine_transport_health_map(
@@ -93,6 +94,7 @@ def list_machine_transport_health(
             device_ids=[device_id],
             stale_after_seconds=stale_after_seconds,
             recent_within_seconds=recent_within_seconds,
+            heartbeat_model=heartbeat_model,
         )
         summaries = list(summary_map.values())
     else:
@@ -101,6 +103,7 @@ def list_machine_transport_health(
                 db,
                 stale_after_seconds=stale_after_seconds,
                 recent_within_seconds=recent_within_seconds,
+                heartbeat_model=heartbeat_model,
             ).values()
         )
     if status:
@@ -122,6 +125,7 @@ def load_machine_transport_health_map(
     device_ids: list[str] | tuple[str, ...] | set[str] | None = None,
     stale_after_seconds: int = DEFAULT_MACHINE_HEARTBEAT_STALE_AFTER_SECONDS,
     recent_within_seconds: int | None = None,
+    heartbeat_model: type[Any] = AgentHeartbeat,
 ) -> dict[str, MachineTransportHealthSummary]:
     # Heartbeats are append-only server-side writes, so max(id) gives us the
     # newest durable row per device without a timestamp self-join.
@@ -129,15 +133,15 @@ def load_machine_transport_health_map(
     normalized_recent_within_seconds = int(recent_within_seconds) if recent_within_seconds is not None else None
     if normalized_recent_within_seconds is not None and normalized_recent_within_seconds > 0:
         recent_after = utc_now() - timedelta(seconds=normalized_recent_within_seconds)
-    latest_ids = db.query(func.max(AgentHeartbeat.id).label("heartbeat_id"))
+    latest_ids = db.query(func.max(heartbeat_model.id).label("heartbeat_id"))
     normalized_device_ids = sorted({str(device_id).strip() for device_id in device_ids or [] if str(device_id).strip()})
     if normalized_device_ids:
-        latest_ids = latest_ids.filter(AgentHeartbeat.device_id.in_(normalized_device_ids))
+        latest_ids = latest_ids.filter(heartbeat_model.device_id.in_(normalized_device_ids))
     if recent_after is not None:
-        latest_ids = latest_ids.filter(AgentHeartbeat.received_at >= recent_after)
-    latest_ids = latest_ids.group_by(AgentHeartbeat.device_id).subquery()
+        latest_ids = latest_ids.filter(heartbeat_model.received_at >= recent_after)
+    latest_ids = latest_ids.group_by(heartbeat_model.device_id).subquery()
 
-    rows = db.query(AgentHeartbeat).join(latest_ids, AgentHeartbeat.id == latest_ids.c.heartbeat_id).all()
+    rows = db.query(heartbeat_model).join(latest_ids, heartbeat_model.id == latest_ids.c.heartbeat_id).all()
     now = utc_now()
     return {
         row.device_id: build_machine_transport_health_summary(
@@ -150,7 +154,7 @@ def load_machine_transport_health_map(
 
 
 def build_machine_transport_health_summary(
-    row: AgentHeartbeat,
+    row: Any,
     *,
     stale_after_seconds: int,
     now: datetime | None = None,

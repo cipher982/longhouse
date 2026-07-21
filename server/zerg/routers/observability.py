@@ -10,9 +10,11 @@ from fastapi import HTTPException
 from fastapi import Query
 from sqlalchemy.orm import Session
 
+import zerg.database as database_module
 from zerg.database import get_db
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.auth import get_current_user
+from zerg.models.live_store import LiveHeartbeatStamp
 from zerg.schemas.observability import MachineHealthListResponse
 from zerg.schemas.observability import MachineHealthStatus
 from zerg.schemas.observability import ManagedTurnsSummaryEnvelopeResponse
@@ -40,6 +42,18 @@ router = APIRouter(
     tags=["observability"],
     dependencies=[Depends(get_current_user), Depends(require_single_tenant)],
 )
+
+
+def _live_machine_health_db():
+    factory = database_module.get_live_session_factory()
+    if factory is None:
+        raise HTTPException(status_code=503, detail={"code": "live_store_unavailable", "message": "Live telemetry is unavailable."})
+    with factory() as db:
+        yield db
+
+
+_machine_health_db_dependency = _live_machine_health_db if database_module.live_catalog_enabled() else get_db
+_machine_health_model = LiveHeartbeatStamp if database_module.live_catalog_enabled() else None
 
 
 def _resolve_recent_machine_window_seconds(*, recent_within_hours: int) -> int:
@@ -121,7 +135,7 @@ async def list_machine_health(
         le=24 * 30,
         description="Only include machines with a heartbeat in this recent window",
     ),
-    db: Session = Depends(get_db),
+    db: Session = Depends(_machine_health_db_dependency),
 ) -> MachineHealthListResponse:
     summaries, total = list_machine_transport_health(
         db,
@@ -132,6 +146,7 @@ async def list_machine_health(
             recent_within_hours=recent_within_hours,
         ),
         limit=limit,
+        **({"heartbeat_model": _machine_health_model} if _machine_health_model is not None else {}),
     )
     return build_machine_health_list_response(summaries, total=total)
 

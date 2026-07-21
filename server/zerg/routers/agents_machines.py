@@ -24,6 +24,7 @@ from zerg.database import get_db
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.device_token import DeviceToken
+from zerg.models.live_store import LiveHeartbeatStamp
 from zerg.schemas.machines import ArchiveBacklogControlRequest
 from zerg.schemas.machines import ArchiveBacklogControlResponse
 from zerg.schemas.machines import ArchiveBacklogResponse
@@ -80,6 +81,18 @@ def _legacy_machine_db():
 
 
 _machine_read_db_dependency = get_db if _catalog_db_dependency is get_db else _legacy_machine_db
+
+
+def _live_machine_health_db():
+    factory = database_module.get_live_session_factory()
+    if factory is None:
+        raise HTTPException(status_code=503, detail={"code": "live_store_unavailable", "message": "Live telemetry is unavailable."})
+    with factory() as db:
+        yield db
+
+
+_machine_health_db_dependency = _live_machine_health_db if database_module.live_catalog_enabled() else get_db
+_machine_health_model = LiveHeartbeatStamp if database_module.live_catalog_enabled() else None
 
 
 def _request_owner_id(db: Session | None, device_token: DeviceToken | None) -> int:
@@ -195,7 +208,7 @@ def list_machine_health(
         le=24 * 60 * 60,
         description="Treat heartbeats older than this as offline",
     ),
-    db: Session = Depends(get_db),
+    db: Session = Depends(_machine_health_db_dependency),
     _auth: object = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> MachineHealthListResponse:
@@ -205,6 +218,7 @@ def list_machine_health(
         status=status,
         stale_after_seconds=stale_after_seconds,
         limit=limit,
+        **({"heartbeat_model": _machine_health_model} if _machine_health_model is not None else {}),
     )
     return build_machine_health_list_response(summaries, total=total)
 

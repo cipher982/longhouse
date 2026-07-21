@@ -22,6 +22,8 @@ from zerg.database import Base
 from zerg.database import get_db
 from zerg.database import make_engine
 from zerg.models.agents import AgentHeartbeat
+from zerg.models.live_store import LiveBase
+from zerg.models.live_store import LiveHeartbeatStamp
 from zerg.routers.agents_machines import archive_backlog_control_command_type
 from zerg.schemas.machines import ArchiveBacklogControlRequest
 
@@ -41,6 +43,67 @@ def _make_db(tmp_path):
     Base.metadata.create_all(bind=engine)
     SessionLocal = sessionmaker(bind=engine)
     return SessionLocal
+
+
+def _make_live_db(tmp_path):
+    db_path = tmp_path / "test_live_machine_health.db"
+    engine = make_engine(f"sqlite:///{db_path}")
+    LiveBase.metadata.create_all(bind=engine)
+    return sessionmaker(bind=engine)
+
+
+def test_machine_health_service_reads_bounded_live_heartbeat_stamps(tmp_path, monkeypatch):
+    SessionLocal = _make_live_db(tmp_path)
+    pinned_now = datetime(2026, 7, 21, 7, 10, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(machine_health_service, "utc_now", lambda: pinned_now)
+    history_import = {
+        "state": "inventory_ready",
+        "inventory": {
+            "schema_version": 1,
+            "generation": 1,
+            "content_sha256": "0" * 64,
+            "observed_at": "2026-07-21T07:09:00Z",
+            "scan_duration_ms": 724,
+            "scan_error_count": 0,
+            "source_count": 9947,
+            "source_bytes": 24082968586,
+            "wal_bytes": 66593864,
+            "footprint_bytes": 24149562450,
+            "providers": [
+                {
+                    "provider": "codex",
+                    "source_count": 9947,
+                    "source_bytes": 24082968586,
+                    "wal_bytes": 66593864,
+                    "footprint_bytes": 24149562450,
+                }
+            ],
+        },
+    }
+    with SessionLocal() as db:
+        db.add(
+            LiveHeartbeatStamp(
+                device_id="cinder",
+                received_at=pinned_now - timedelta(minutes=1),
+                version="0.1.28-dev+498e06c4",
+                ship_attempts_1h=4,
+                ship_successes_1h=4,
+                disk_free_bytes=100,
+                raw_json=json.dumps({"history_import": history_import}),
+            )
+        )
+        db.commit()
+        summaries, total = machine_health_service.list_machine_transport_health(
+            db,
+            heartbeat_model=LiveHeartbeatStamp,
+            stale_after_seconds=3600,
+        )
+
+    assert total == 1
+    assert summaries[0].device_id == "cinder"
+    assert summaries[0].history_import.state == "inventory_ready"
+    assert summaries[0].history_import.inventory is not None
+    assert summaries[0].history_import.inventory.source_count == 9947
 
 
 def _make_client(SessionLocal):
