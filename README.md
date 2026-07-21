@@ -127,7 +127,8 @@ Issues: <https://github.com/cipher982/longhouse/issues>
 
 Alpha. Actively developed. Claude Code, Codex, Cursor, OpenCode, and Antigravity sessions sync today. Managed control is deliberately provider-specific: Claude and Codex support send, interrupt, active-turn steer, and continuation; Cursor supports managed terminal send, interrupt, and reattach but not active-turn steer; OpenCode supports managed send, interrupt, launch, and terminate, but not active-turn steer or pause-answer; Antigravity supports queued input injection at a native hook boundary but not remote launch, reattach, interrupt, or steer. The native iOS companion can page on `needs_user` / `blocked` once APNs is configured.
 
-Built by [David Rose](https://github.com/cipher982). Apache-2.0.
+Built and maintained by [David W. Rose](https://drose.io/)
+([cipher982](https://github.com/cipher982)). Apache-2.0.
 
 <!-- readme-test: verifies install from source and health endpoint -->
 ```readme-test
