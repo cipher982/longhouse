@@ -7,11 +7,13 @@ description: Longhouse managed provider CLI control paths for Claude, Codex, Ant
 
 Use this skill when a task touches how Longhouse starts, observes, steers, or repairs provider CLIs. The core rule: Longhouse manages session control, not provider binary distribution.
 
+See [`ARCHITECTURE.md`'s Session modes section](../../ARCHITECTURE.md#session-modes)
+for the canonical definitions of Shadow, Helm, Console, and managed/unmanaged
+sessions.
+
 ## Mental Model
 
 - **Provider CLI**: an upstream executable the user installs separately, such as `claude`, `codex`, or `agy`.
-- **Managed session**: Longhouse owns the control path. It does not imply Longhouse owns, vendors, pins, patches, or updates the provider binary.
-- **Unmanaged session**: Longhouse ingests or discovers a bare provider CLI session but does not own a live control path.
 - **Machine Agent**: `longhouse-engine`; ships local events, owns runtime hooks/state, and may run provider-specific bridge processes.
 - **Runtime Host**: FastAPI/web/database product runtime. It stores session state and exposes `/api/agents/*`.
 
