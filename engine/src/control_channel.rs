@@ -2557,6 +2557,10 @@ mod tests {
             .collect()
     }
 
+    // This is a manually maintained mirror of the provider branches in
+    // `execute_command`; it is not authoritative production dispatch logic.
+    // Keep it synchronized by hand until parity can invoke the real handlers
+    // hermetically without triggering provider side effects.
     const ENGINE_DISPATCH_SUPPORTS: &[(&str, &str, &str)] = &[
         ("codex", "send", COMMAND_SEND_TEXT),
         ("codex", "interrupt", COMMAND_INTERRUPT),
@@ -2567,7 +2571,6 @@ mod tests {
         ("codex", "run_once", COMMAND_RUN_ONCE),
         ("codex", "resume_run_once", COMMAND_RUN_ONCE),
         ("codex", "turn_start", COMMAND_TURN_START),
-        ("cursor", "run_once", COMMAND_RUN_ONCE),
         ("cursor", "turn_start", COMMAND_TURN_START),
         ("cursor", "turn_interrupt", COMMAND_TURN_INTERRUPT),
         ("opencode", "turn_start", COMMAND_TURN_START),
