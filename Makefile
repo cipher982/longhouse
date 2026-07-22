@@ -25,7 +25,7 @@ PERF_PROOF_OUTPUT ?= artifacts/perf-proof/perf-proof.json
 .PHONY: validate-native-device-entrypoints
 .PHONY: perf-proof validate-perf-proof cohort-journey validate-cohort-journey
 .PHONY: validate-legacy-nouns
-.PHONY: provider-release-proof-universal-live-smoke
+.PHONY: provider-release-proof-universal-live-smoke provider-capability-coordination-proof
 
 # ---------------------------------------------------------------------------
 # Help
@@ -614,6 +614,9 @@ provider-release-proof-universal-live-smoke: ## Run all-provider real-bin univer
 	if [ -n "$(JSON)" ]; then set -- "$$@" --json; fi; \
 	if [ -n "$(UNIVERSAL_SCENARIO)" ]; then for scenario in $(UNIVERSAL_SCENARIO); do set -- "$$@" --scenario "$$scenario"; done; fi; \
 	uv run --project server python "$$@"
+
+provider-capability-coordination-proof: ## Emit local diagnostic Codex coordination bootstrap proof
+	@cd server && uv run python -m zerg.qa.provider_coordination_scenarios
 
 provider-release-proof-status: ## Inspect accepted proof baseline; set PROVIDER=... and SCENARIO_ID=...
 	@set -eu; \
