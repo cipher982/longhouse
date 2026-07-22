@@ -20,7 +20,7 @@ from zerg.services.provider_capability_proof import AssertionOutcome
 from zerg.services.provider_capability_proof import EvidenceClass
 from zerg.services.provider_capability_proof import ProviderCapabilityProofRecord
 from zerg.services.provider_capability_proof_store import ProviderCapabilityProofStore
-from zerg.services.session_processing.content import redact_secrets
+from zerg.shared.redaction import redact_text
 
 SCHEMA_VERSION = 1
 PROFILE = "codex_release_identity_v1"
@@ -236,8 +236,8 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
         post_execution_identity = _sha256_file(binary)
     except OSError:
         post_execution_identity = None
-    retained_stdout = redact_secrets(stdout)
-    retained_stderr = redact_secrets(stderr)
+    retained_stdout = redact_text(stdout)
+    retained_stderr = redact_text(stderr)
     reported_version = None
     match = _VERSION_LINE.fullmatch(stdout.strip()) if not timed_out else None
     if match:

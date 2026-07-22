@@ -9,10 +9,10 @@ import re
 
 # Patterns for sensitive data that should be redacted
 _REDACTION_PATTERNS = [
-    # OpenAI API keys (sk-...)
-    (re.compile(r"\bsk-[a-zA-Z0-9]{20,}\b"), "[OPENAI_KEY]"),
     # Anthropic API keys (sk-ant-...)
     (re.compile(r"\bsk-ant-[a-zA-Z0-9-]{20,}\b"), "[ANTHROPIC_KEY]"),
+    # OpenAI API keys (sk-..., sk-proj-..., etc.)
+    (re.compile(r"\bsk-[\w-]{20,}\b"), "[OPENAI_KEY]"),
     # Generic API keys (often formatted as api_key=... or apikey=...)
     (re.compile(r"(?i)(api[_-]?key\s*[=:]\s*)['\"]?[a-zA-Z0-9_-]{20,}['\"]?"), r"\1[REDACTED]"),
     # Bearer tokens
