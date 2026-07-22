@@ -112,6 +112,7 @@ def test_support_state_consumes_matching_v2_proof_without_enabling_machine_wide_
         observed_at=datetime(2026, 7, 22, 17, 0, tzinfo=UTC),
         capability_proof_records={"codex": (record,)},
         provider_executable_identities={"codex": "sha256:provider"},
+        trusted_capability_producer_classes=frozenset({"release_ci"}),
     )
 
     decision = support["providers"]["codex"]["capabilities"]["semantic_capability_shadow"][
@@ -120,6 +121,43 @@ def test_support_state_consumes_matching_v2_proof_without_enabling_machine_wide_
     assert decision["verification"] == "proven"
     assert decision["action"] == "hidden"
     assert support["providers"]["codex"]["capabilities"]["capability_proof_record_count"] == 1
+
+
+def test_local_record_cannot_self_assert_release_ci_trust() -> None:
+    contract = next(contract for contract in all_managed_provider_contracts() if contract.provider == "codex")
+    declaration = contract.capabilities["coordination.message.send"]
+    assertion = declaration["required_assertions"][0]
+    record = ProviderCapabilityProofRecord(
+        provider="codex",
+        provider_version="0.145.0",
+        provider_executable_identity="sha256:provider",
+        provider_contract_digest=contract.contract_entry_digest,
+        adapter_digest=contract.adapter_digest,
+        scenario_id=assertion["scenario_id"],
+        scenario_revision=assertion["minimum_scenario_revision"],
+        oracle_digest=assertion["oracle_digest"],
+        assertion_id=assertion["id"],
+        outcome=AssertionOutcome.PASS,
+        evidence_class=EvidenceClass.HERMETIC,
+        generated_at="2026-07-22T16:00:00Z",
+        producer_class="release_ci",
+        producer_version="2",
+        invocation_id="forged-local-record",
+    )
+    support = collect_provider_support_state(
+        provider_clis={"codex": {"path": "/usr/local/bin/codex", "source": "PATH"}},
+        provider_release_status={"statuses": {"codex": {"current_version": "0.145.0"}}},
+        control_channel={"status": "connected", "control_operations_by_provider": {}},
+        observed_at=datetime(2026, 7, 22, 17, 0, tzinfo=UTC),
+        capability_proof_records={"codex": (record,)},
+        provider_executable_identities={"codex": "sha256:provider"},
+    )
+
+    decision = support["providers"]["codex"]["capabilities"]["semantic_capability_shadow"][
+        "coordination.message.send"
+    ]
+    assert decision["verification"] == "inconclusive"
+    assert "proof_untrusted_producer" in decision["reason_codes"]
 
 
 def test_support_state_separates_candidate_release_from_local_readiness() -> None:
