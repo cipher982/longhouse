@@ -12,6 +12,7 @@ from datetime import datetime
 from datetime import timezone
 from hashlib import sha256
 from pathlib import Path
+from uuid import UUID
 
 import httpx
 import typer
@@ -203,13 +204,14 @@ def _ensure_native_claude_prereqs(
 def _run_native_claude_tui(
     *,
     session_id: str,
-    run_id: str,
+    run_id: str | None,
     provider_session_id: str,
     cwd: Path,
     base_url: str,
     token: str,
     hook_token: str | None = None,
     permission_mode: str = "bypass",
+    resume: bool = False,
 ) -> int:
     """ARCHITECTURE.md's "Session modes": Helm launched from a physical terminal.
     Runs in the foreground and blocks until the user exits Claude.
@@ -219,7 +221,7 @@ def _run_native_claude_tui(
         longhouse_session_id=session_id,
         longhouse_run_id=run_id,
         cwd=str(cwd),
-        resume=False,
+        resume=resume,
         hook_url=base_url,
         claude_command=_resolve_claude_command(),
         permission_mode=permission_mode,
@@ -360,6 +362,7 @@ def _finalize_native_claude_launch(
     attach: bool,
     machine_name: str,
     verbose: bool,
+    resume: bool = False,
 ) -> None:
     session_url = _build_session_url(base_url, result.session_id)
     launch_ui.launch_panel(
@@ -400,13 +403,14 @@ def _finalize_native_claude_launch(
     try:
         exit_code = _run_native_claude_tui(
             session_id=result.session_id,
-            run_id=result.run_id,
+            run_id=result.run_id or None,
             provider_session_id=result.provider_session_id,
             cwd=cwd,
             base_url=base_url,
             token=token,
             hook_token=result.hook_token,
             permission_mode=result.permission_mode,
+            resume=resume,
         )
     finally:
         remove_managed_provider_contract(
@@ -418,7 +422,72 @@ def _finalize_native_claude_launch(
     launch_ui.exit_bookend(
         exit_code=exit_code,
         machine_name=machine_name,
-        reattach_command=f'longhouse continue {result.session_id} "<your next message>"',
+        reattach_command=f"longhouse claude --resume {result.session_id}",
+    )
+
+
+def _resolve_native_claude_resume(
+    *,
+    base_url: str,
+    token: str,
+    session_id: str,
+    machine_name: str,
+) -> tuple[ManagedLocalLaunchResponse, Path]:
+    try:
+        resolved_session_id = str(UUID(session_id))
+    except ValueError as exc:
+        raise _NativeClaudeError("--resume must be a Longhouse session UUID") from exc
+
+    try:
+        with httpx.Client(timeout=30) as client:
+            response = client.get(
+                f"{base_url.rstrip('/')}/api/agents/sessions/{resolved_session_id}",
+                headers={"X-Agents-Token": token},
+            )
+    except httpx.HTTPError as exc:
+        raise _NativeClaudeError(f"Could not load Claude session {resolved_session_id}: {exc}") from exc
+    if response.status_code == 401:
+        raise _NativeClaudeError("Authentication failed. Run 'longhouse auth' to re-authenticate.")
+    if response.status_code == 404:
+        raise _NativeClaudeError(f"Session not found: {resolved_session_id}")
+    if response.status_code != 200:
+        raise _NativeClaudeError(f"Could not load Claude session {resolved_session_id}: HTTP {response.status_code}")
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise _NativeClaudeError("Longhouse returned invalid session JSON") from exc
+    if not isinstance(payload, dict) or str(payload.get("provider") or "").strip() != "claude":
+        raise _NativeClaudeError("--resume requires an existing Claude session")
+    provider_session_id = str(response.headers.get("X-Provider-Session-ID") or "").strip()
+    if not provider_session_id:
+        raise _NativeClaudeError("Claude session has no provider resume identity yet")
+    try:
+        UUID(provider_session_id)
+    except ValueError as exc:
+        raise _NativeClaudeError("Claude session has an invalid provider resume identity") from exc
+    cwd = Path(str(payload.get("cwd") or "").strip())
+    if not cwd.is_absolute() or not cwd.is_dir():
+        raise _NativeClaudeError(f"Claude session workspace is unavailable: {cwd}")
+    permission_mode = str(payload.get("permission_mode") or "bypass").strip() or "bypass"
+    attach_command = build_claude_channel_exec_command(
+        provider_session_id=provider_session_id,
+        longhouse_session_id=resolved_session_id,
+        cwd=str(cwd),
+        resume=True,
+        hook_url=base_url,
+        claude_command=_resolve_claude_command(),
+        permission_mode=permission_mode,
+    )
+    return (
+        ManagedLocalLaunchResponse(
+            session_id=resolved_session_id,
+            provider_session_id=provider_session_id,
+            attach_command=attach_command,
+            source_runner_name=machine_name,
+            managed_transport=ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE.value,
+            permission_mode=permission_mode,
+        ),
+        cwd,
     )
 
 
@@ -439,6 +508,12 @@ def claude(
         help="Loop mode to store on the Longhouse session.",
     ),
     name: str | None = typer.Option(None, "--name", help="Optional display name for the Claude session."),
+    resume: str | None = typer.Option(
+        None,
+        "--resume",
+        metavar="SESSION_ID",
+        help="Resume an existing Longhouse Claude Helm session using Claude's native provider thread.",
+    ),
     remote_approve: bool = typer.Option(
         False,
         "--remote-approve/--no-remote-approve",
@@ -531,6 +606,30 @@ def claude(
     except _NativeClaudeError as exc:
         typer.secho(f"Claude bridge setup failed: {exc}", fg=typer.colors.RED)
         raise typer.Exit(code=EXIT_SETUP_FAILED)
+    if resume:
+        try:
+            resume_result, resume_cwd = _resolve_native_claude_resume(
+                base_url=resolved_url,
+                token=resolved_token,
+                session_id=resume,
+                machine_name=machine_name,
+            )
+        except _NativeClaudeError as exc:
+            typer.secho(f"Claude resume failed: {exc}", fg=typer.colors.RED)
+            raise typer.Exit(code=EXIT_SETUP_FAILED)
+        _finalize_native_claude_launch(
+            base_url=resolved_url,
+            token=resolved_token,
+            cwd=resume_cwd,
+            result=resume_result,
+            config_dir=Path(config_dir) if config_dir else None,
+            open_browser=open_browser,
+            attach=attach,
+            machine_name=machine_name,
+            verbose=verbose,
+            resume=True,
+        )
+        return
     result = _launch_managed_local_from_api(
         url=resolved_url,
         token=resolved_token,

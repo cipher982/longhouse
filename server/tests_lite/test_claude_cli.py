@@ -27,10 +27,18 @@ def _isolate_longhouse_home(monkeypatch, tmp_path):
 
 
 class _FakeResponse:
-    def __init__(self, *, status_code: int, json_data: dict | None = None, text: str = ""):
+    def __init__(
+        self,
+        *,
+        status_code: int,
+        json_data: dict | None = None,
+        text: str = "",
+        headers: dict[str, str] | None = None,
+    ):
         self.status_code = status_code
         self._json_data = json_data or {}
         self.text = text
+        self.headers = headers or {}
 
     def json(self) -> dict:
         return self._json_data
@@ -416,8 +424,17 @@ def test_claude_command_starts_native_channel_bridge_when_api_returns_native_tra
     monkeypatch.setattr(
         claude_cli,
         "_run_native_claude_tui",
-        lambda *, session_id, run_id, provider_session_id, cwd, base_url, token, hook_token=None, permission_mode="bypass": native_launch_calls.append(
-            (session_id, run_id, provider_session_id, str(cwd), base_url, token, hook_token, permission_mode)
+        lambda *,
+        session_id,
+        run_id,
+        provider_session_id,
+        cwd,
+        base_url,
+        token,
+        hook_token=None,
+        permission_mode="bypass",
+        resume=False: native_launch_calls.append(
+            (session_id, run_id, provider_session_id, str(cwd), base_url, token, hook_token, permission_mode, resume)
         )
         or 0,
     )
@@ -464,6 +481,7 @@ def test_claude_command_starts_native_channel_bridge_when_api_returns_native_tra
             "zdt_test_token",
             None,
             "bypass",
+            False,
         )
     ]
     assert open_calls == ["https://longhouse.test/timeline/session-123"]
@@ -550,6 +568,96 @@ def test_claude_no_attach_does_not_record_unlaunched_provider_contract(monkeypat
     assert result.exit_code == 0, result.output
     assert list_managed_session_contracts(tmp_path / ".longhouse") == []
     assert not (provider_home / "managed-local" / "contracts").exists()
+
+
+def test_resolve_native_claude_resume_uses_existing_provider_identity(monkeypatch, tmp_path):
+    session_id = "11111111-1111-4111-8111-111111111111"
+    provider_session_id = "22222222-2222-4222-8222-222222222222"
+
+    class _FakeClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def get(self, url, *, headers):
+            assert url == f"https://longhouse.test/api/agents/sessions/{session_id}"
+            assert headers == {"X-Agents-Token": "zdt_test_token"}
+            return _FakeResponse(
+                status_code=200,
+                json_data={"provider": "claude", "cwd": str(tmp_path), "permission_mode": "bypass"},
+                headers={"X-Provider-Session-ID": provider_session_id},
+            )
+
+    monkeypatch.setattr(claude_cli.httpx, "Client", _FakeClient)
+    monkeypatch.setattr(claude_cli, "_resolve_claude_command", lambda: "/opt/homebrew/bin/claude")
+
+    result, cwd = claude_cli._resolve_native_claude_resume(
+        base_url="https://longhouse.test",
+        token="zdt_test_token",
+        session_id=session_id,
+        machine_name="work-laptop",
+    )
+
+    assert cwd == tmp_path
+    assert result.session_id == session_id
+    assert result.provider_session_id == provider_session_id
+    assert "--resume" in result.attach_command
+    assert provider_session_id in result.attach_command
+
+
+def test_claude_resume_restarts_native_helm_without_creating_session(monkeypatch, tmp_path):
+    runner = CliRunner()
+    session_id = "11111111-1111-4111-8111-111111111111"
+    provider_session_id = "22222222-2222-4222-8222-222222222222"
+    native_launch_calls: list[dict] = []
+
+    monkeypatch.setattr(
+        claude_cli, "_load_api_credentials", lambda **_kwargs: ("https://longhouse.test", "zdt_test_token")
+    )
+    monkeypatch.setattr(claude_cli, "_detect_native_claude_channels_available", lambda: (True, "ok"))
+    monkeypatch.setattr(claude_cli, "_ensure_managed_launch_preflight", lambda **_kwargs: None)
+    monkeypatch.setattr(claude_cli, "get_machine_name_label", lambda: "work-laptop")
+    monkeypatch.setattr(claude_cli, "_collect_claude_launch_env", lambda: {})
+    monkeypatch.setattr(claude_cli, "_ensure_native_claude_prereqs", lambda **_kwargs: None)
+    monkeypatch.setattr(claude_cli, "_interactive_stdio", lambda: True)
+    monkeypatch.setattr(
+        claude_cli,
+        "_resolve_native_claude_resume",
+        lambda **_kwargs: (
+            claude_cli.ManagedLocalLaunchResponse(
+                session_id=session_id,
+                provider_session_id=provider_session_id,
+                attach_command=f"claude --resume {provider_session_id}",
+                source_runner_name="work-laptop",
+                managed_transport="claude_channel_bridge",
+            ),
+            tmp_path,
+        ),
+    )
+    monkeypatch.setattr(
+        claude_cli,
+        "_launch_managed_local_from_api",
+        lambda **_kwargs: pytest.fail("resume must not create another Longhouse session"),
+    )
+    monkeypatch.setattr(
+        claude_cli,
+        "_run_native_claude_tui",
+        lambda **kwargs: native_launch_calls.append(kwargs) or 9,
+    )
+
+    result = runner.invoke(app, ["claude", "--resume", session_id, "--config-dir", str(tmp_path / ".claude")])
+
+    assert result.exit_code == 0, result.output
+    assert f"longhouse claude --resume {session_id}" in result.output
+    assert native_launch_calls[0]["session_id"] == session_id
+    assert native_launch_calls[0]["provider_session_id"] == provider_session_id
+    assert native_launch_calls[0]["run_id"] is None
+    assert native_launch_calls[0]["resume"] is True
 
 
 def test_run_native_claude_tui_checks_channel_readiness_without_delaying_tui(monkeypatch, tmp_path):
@@ -645,7 +753,9 @@ def test_run_claude_auth_status_resolves_claude_and_scrubs_longhouse_config(monk
 
     monkeypatch.delenv(claude_cli._CLAUDE_BIN_ENV, raising=False)
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/tmp/longhouse-owned-claude-dir")
-    monkeypatch.setattr(claude_cli.shutil, "which", lambda command: "/opt/homebrew/bin/claude" if command == "claude" else None)
+    monkeypatch.setattr(
+        claude_cli.shutil, "which", lambda command: "/opt/homebrew/bin/claude" if command == "claude" else None
+    )
     monkeypatch.setattr(claude_cli.subprocess, "run", fake_run)
 
     completed = claude_cli._run_claude_auth_status()

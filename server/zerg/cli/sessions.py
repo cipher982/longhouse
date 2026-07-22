@@ -118,33 +118,6 @@ def _should_use_live_send(session_payload: dict[str, object]) -> bool:
     return bool(capabilities.get("live_control_available")) if isinstance(capabilities, dict) else False
 
 
-def _resolve_continue_route(
-    *,
-    client: httpx.Client,
-    base_url: str,
-    session_id: str,
-    headers: dict[str, str],
-) -> str:
-    try:
-        response = client.get(
-            f"{base_url.rstrip('/')}/api/agents/sessions/{session_id}",
-            headers=headers,
-        )
-    except httpx.HTTPError:
-        return "send-live"
-
-    if response.status_code != 200:
-        return "send-live"
-
-    try:
-        payload = response.json()
-    except ValueError:
-        return "send-live"
-    if not isinstance(payload, dict):
-        return "send-live"
-    return "send-live"
-
-
 def _format_api_error(response: httpx.Response) -> str:
     try:
         payload = response.json()
@@ -424,15 +397,9 @@ def continue_session(
 
     try:
         with httpx.Client(timeout=None) as client:
-            route_name = _resolve_continue_route(
-                client=client,
-                base_url=base_url,
-                session_id=resolved_session_id,
-                headers=headers,
-            )
             with client.stream(
                 "POST",
-                f"{base_url.rstrip('/')}/api/agents/sessions/{resolved_session_id}/{route_name}",
+                f"{base_url.rstrip('/')}/api/agents/sessions/{resolved_session_id}/send-live",
                 headers=headers,
                 json={"message": message},
             ) as response:
