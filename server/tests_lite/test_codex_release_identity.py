@@ -94,6 +94,7 @@ def test_timeout_and_nonzero_are_infrastructure_records(tmp_path: Path, monkeypa
     assert bridge.main(["--request", str(timeout_request), "--output-root", str(timeout_output)]) == 0
     timeout_records = json.loads((timeout_output / "proof-bundle.json").read_text())["records"]
     assert {r["outcome"] for r in timeout_records} == {"pass", "infrastructure_error"}
+    assert {r["provider_version"] for r in timeout_records} == {"unreported"}
     assert json.loads((timeout_output / "execution-summary.json").read_text())["status"] == "timed_out"
 
     monkeypatch.setattr(bridge, "TIMEOUT_SECONDS", 10)

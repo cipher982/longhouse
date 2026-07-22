@@ -302,7 +302,7 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
     }
     _atomic_json(output_root / "execution-summary.json", execution)
     store = ProviderCapabilityProofStore(output_root / "proof-store")
-    provider_version = reported_version or request["expected_provider_version"]
+    provider_version = reported_version or "unreported"
     records = []
     for assertion, assertion_outcome in zip(ASSERTIONS, (identity_outcome, version_outcome)):
         record = _record(
