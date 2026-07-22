@@ -252,7 +252,8 @@ def test_managed_package_root_is_validated_live_only_and_redacted(tmp_path: Path
     assert invocations[0]["managed_package_root"] is None
     assert "helper-bin" not in invocations[0]["path"]
     assert invocations[1]["managed_package_root"] == str(package_root)
-    assert invocations[1]["sandbox_helper_source"] == str(helper)
+    assert invocations[1]["sandbox_helper_source"] == str((tmp_path / "codex").resolve())
+    assert invocations[1]["sandbox_helper_source"] != str(helper)
     shim = Path(invocations[1]["sandbox_helper"])
     assert shim.name == "codex-linux-sandbox"
     assert shim.parent.name == "helper-bin"
@@ -262,10 +263,14 @@ def test_managed_package_root_is_validated_live_only_and_redacted(tmp_path: Path
     assert b"[CODEX_MANAGED_PACKAGE_ROOT]" in retained
     execution = json.loads((output / "execution-summary.json").read_text())
     helper_evidence = execution["sandbox_helper"]
-    assert helper_evidence["source_path"] == str(helper)
-    assert helper_evidence["source_identity"].startswith("sha256:")
-    assert helper_evidence["source_post_identity"] == helper_evidence["source_identity"]
-    assert helper_evidence["source_stable"] is True
+    assert helper_evidence["shim_target_path"] == str((tmp_path / "codex").resolve())
+    assert helper_evidence["shim_target_identity"].startswith("sha256:")
+    assert helper_evidence["shim_target_post_identity"] == helper_evidence["shim_target_identity"]
+    assert helper_evidence["shim_target_stable"] is True
+    assert helper_evidence["vendored_bwrap_path"] == str(helper)
+    assert helper_evidence["vendored_bwrap_identity"].startswith("sha256:")
+    assert helper_evidence["vendored_bwrap_post_identity"] == helper_evidence["vendored_bwrap_identity"]
+    assert helper_evidence["vendored_bwrap_stable"] is True
     assert helper_evidence["shim_removed"] is True
     assert not Path(helper_evidence["shim_path"]).exists()
 

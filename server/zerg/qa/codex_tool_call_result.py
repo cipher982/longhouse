@@ -351,14 +351,16 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
             codex_home.mkdir()
             helper_link: Path | None = None
             if managed_package_resources is not None:
-                _, helper_source, helper_identity = managed_package_resources
+                _, vendored_bwrap, vendored_bwrap_identity = managed_package_resources
                 helper_bin = runtime_root / "helper-bin"
                 helper_bin.mkdir()
                 helper_link = helper_bin / "codex-linux-sandbox"
-                helper_link.symlink_to(helper_source)
+                helper_link.symlink_to(binary)
                 sandbox_helper_evidence = {
-                    "source_path": str(helper_source),
-                    "source_identity": helper_identity,
+                    "shim_target_path": str(binary),
+                    "shim_target_identity": actual_identity,
+                    "vendored_bwrap_path": str(vendored_bwrap),
+                    "vendored_bwrap_identity": vendored_bwrap_identity,
                     "shim_path": str(helper_link),
                 }
             argv = [
@@ -411,13 +413,13 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
                 tool_stdout = tool_result.stdout
                 tool_stderr = tool_result.stderr
         if sandbox_helper_evidence is not None:
-            _, helper_source, helper_identity = managed_package_resources
+            _, vendored_bwrap, vendored_bwrap_identity = managed_package_resources
             try:
-                helper_post_identity = identity_bridge._sha256_file(helper_source)  # noqa: SLF001
+                vendored_bwrap_post_identity = identity_bridge._sha256_file(vendored_bwrap)  # noqa: SLF001
             except OSError:
-                helper_post_identity = None
-            sandbox_helper_evidence["source_post_identity"] = helper_post_identity
-            sandbox_helper_evidence["source_stable"] = helper_post_identity == helper_identity
+                vendored_bwrap_post_identity = None
+            sandbox_helper_evidence["vendored_bwrap_post_identity"] = vendored_bwrap_post_identity
+            sandbox_helper_evidence["vendored_bwrap_stable"] = vendored_bwrap_post_identity == vendored_bwrap_identity
             sandbox_helper_evidence["shim_removed"] = not Path(sandbox_helper_evidence["shim_path"]).exists()
         events, invalid_lines = _jsonl_events(tool_stdout)
         indexed_items = [(index, _event_item(event)) for index, event in enumerate(events)]
@@ -455,7 +457,7 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
             outcomes["tool_result_linked_to_final_agent_message"] = AssertionOutcome.PASS if linked else AssertionOutcome.SEMANTIC_FAIL
             execution_status = "completed"
         if sandbox_helper_evidence is not None and (
-            not sandbox_helper_evidence["source_stable"] or not sandbox_helper_evidence["shim_removed"]
+            not sandbox_helper_evidence["vendored_bwrap_stable"] or not sandbox_helper_evidence["shim_removed"]
         ):
             outcomes["command_execution_completed_with_exact_output"] = AssertionOutcome.INFRASTRUCTURE_ERROR
             outcomes["tool_result_linked_to_final_agent_message"] = AssertionOutcome.INFRASTRUCTURE_ERROR
@@ -485,6 +487,9 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
     if post_execution_identity != pre_execution_identity:
         outcomes = {assertion: AssertionOutcome.INFRASTRUCTURE_ERROR for assertion in ASSERTIONS}
         execution_status = "infrastructure_error"
+    if sandbox_helper_evidence is not None:
+        sandbox_helper_evidence["shim_target_post_identity"] = post_execution_identity
+        sandbox_helper_evidence["shim_target_stable"] = post_execution_identity == actual_identity
     observation = {
         **base_observation,
         "post_execution_identity": post_execution_identity,
