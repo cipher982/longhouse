@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -24,7 +23,8 @@ EXPECTED_COPY = {
         "not active-turn steer",
     ],
     ".agents/skills/managed-provider-cli/SKILL.md": [
-        "OpenCode server-bridge send, interrupt, launch, and terminate are first-class",
+        "OpenCode server-bridge send, interrupt, and terminate are first-class Helm",
+        "The remaining `opencode.launch` remote path is obsolete",
     ],
     "config/session-propagation-sla.toml": [
         "Native OpenCode launch/send/interrupt/terminate exists",
