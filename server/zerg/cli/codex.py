@@ -17,6 +17,7 @@ from urllib.parse import urlsplit
 from urllib.parse import urlunsplit
 from urllib.request import Request
 from urllib.request import urlopen
+from uuid import UUID
 
 import typer
 
@@ -345,6 +346,16 @@ def _build_codex_attach_command(
     session_id: str | None = None,
     thread_id: str | None = None,
 ) -> str:
+    if session_id:
+        cmd = ["longhouse", "codex", "attach", "--session-id", session_id, "--codex-bin", codex_bin]
+        if model_reasoning_effort:
+            cmd += ["--model-reasoning-effort", model_reasoning_effort]
+        if model:
+            cmd += ["--model", model]
+        if bypass_approvals:
+            cmd.append("--dangerously-bypass-approvals-and-sandbox")
+        return shlex.join(cmd)
+
     cmd = [codex_bin, "-c", _CODEX_DISABLE_UPDATE_CHECK_CONFIG]
     if model_reasoning_effort:
         cmd += ["-c", f"model_reasoning_effort={model_reasoning_effort}"]
@@ -354,8 +365,6 @@ def _build_codex_attach_command(
         cmd.append("--dangerously-bypass-approvals-and-sandbox")
     cmd += ["--enable", "tui_app_server", "--remote", ws_url]
     command_text = shlex.join(cmd)
-    if session_id:
-        return f"LONGHOUSE_MANAGED_SESSION_ID={shlex.quote(session_id)} {command_text}"
     return command_text
 
 
@@ -603,6 +612,33 @@ def _install_codex_signal_cleanup() -> dict[signal.Signals, object]:
 def _restore_signal_handlers(previous_handlers: dict[signal.Signals, object]) -> None:
     for sig, handler in previous_handlers.items():
         signal.signal(sig, handler)
+
+
+def _close_native_codex_after_clean_tui_exit(
+    *,
+    session_id: str,
+    config_dir: str | Path | None,
+    machine_name: str,
+) -> None:
+    stop_error = _stop_native_codex_bridge(
+        session_id=session_id,
+        reason=_CODEX_STOP_REASON_CLEAN_TUI_EXIT,
+        timeout_secs=_CODEX_STOP_SIGNAL_TIMEOUT_SECONDS,
+    )
+    if stop_error is not None:
+        typer.secho(
+            f"Managed Codex closed, but its background bridge could not be stopped: {stop_error}",
+            fg=typer.colors.YELLOW,
+        )
+        typer.echo(f"   Stop: longhouse codex stop --session-id {session_id}")
+        raise typer.Exit(code=1)
+    remove_managed_provider_contract(
+        provider="codex",
+        session_id=session_id,
+        config_dir=config_dir,
+        config_dir_is_provider_home=True,
+    )
+    launch_ui.exit_bookend(exit_code=0, machine_name=machine_name)
 
 
 def _run_native_codex_tui(
@@ -988,31 +1024,89 @@ def codex(
     # durable, so keeping an idle bridge/app-server alive would make process
     # lifetime grow with session history. Crashes and terminal-loss signals
     # take the nonzero path above and remain available for recovery.
-    stop_error = _stop_native_codex_bridge(
-        session_id=result.session_id,
-        reason=_CODEX_STOP_REASON_CLEAN_TUI_EXIT,
-        timeout_secs=_CODEX_STOP_SIGNAL_TIMEOUT_SECONDS,
-    )
-    if stop_error is not None:
-        typer.secho(
-            f"Managed Codex closed, but its background bridge could not be stopped: {stop_error}",
-            fg=typer.colors.YELLOW,
-        )
-        typer.echo(f"   Stop: longhouse codex stop --session-id {result.session_id}")
-        raise typer.Exit(code=1)
-    remove_managed_provider_contract(
-        provider="codex",
+    _close_native_codex_after_clean_tui_exit(
         session_id=result.session_id,
         config_dir=resolved_config_dir,
-        config_dir_is_provider_home=True,
+        machine_name=machine_name,
     )
-    launch_ui.exit_bookend(exit_code=0, machine_name=machine_name)
     _emit_warp_cli_agent_event(
         event="status",
         session_id=result.session_id,
         cwd=cwd,
         project=project,
         response="Managed Codex terminal closed; bridge stopped and durable thread retained.",
+    )
+
+
+@app.command("attach")
+def codex_attach(
+    session_id: str = typer.Option(..., "--session-id", help="Managed Longhouse session id to reattach."),
+    codex_bin: str | None = typer.Option(None, "--codex-bin", help=_CODEX_BIN_OPTION_HELP),
+    model: str | None = typer.Option(None, "--model"),
+    model_reasoning_effort: str | None = typer.Option(None, "--model-reasoning-effort"),
+    bypass_approvals: bool = typer.Option(
+        False,
+        "--dangerously-bypass-approvals-and-sandbox",
+        help="Pass Codex's native bypass flag to the reattached TUI.",
+    ),
+    config_dir: str | None = typer.Option(None, "--config-dir", "--codex-dir", "--claude-dir"),
+) -> None:
+    """Reattach a managed Codex TUI and close its bridge on a clean exit."""
+
+    try:
+        normalized_session_id = str(UUID(session_id))
+    except ValueError as exc:
+        raise typer.BadParameter("must be a Longhouse session UUID", param_hint="--session-id") from exc
+    state_file = _default_codex_bridge_state_root() / f"{normalized_session_id}.json"
+    state = _load_native_codex_bridge_state(str(state_file))
+    if state is None:
+        typer.secho(f"Managed Codex session {normalized_session_id} has no bridge state.", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+    ws_url = str(state.get("ws_url") or "").strip()
+    cwd_text = str(state.get("cwd") or "").strip()
+    if not ws_url or not cwd_text:
+        typer.secho(f"Managed Codex session {normalized_session_id} is not reattachable.", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+    resolved_codex_bin = _resolve_codex_binary(codex_bin or str(state.get("codex_bin") or "").strip())
+    if not resolved_codex_bin:
+        typer.secho("Codex executable not found.", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+    previous_handlers = _install_codex_signal_cleanup()
+    try:
+        exit_code = _run_native_codex_tui_with_recovery(
+            state_file=str(state_file),
+            session_id=normalized_session_id,
+            codex_bin=resolved_codex_bin,
+            ws_url=ws_url,
+            cwd=Path(cwd_text),
+            bypass_approvals=bypass_approvals,
+            model=model,
+            model_reasoning_effort=model_reasoning_effort,
+            thread_id=str(state.get("thread_id") or "").strip() or None,
+        )
+    finally:
+        _restore_signal_handlers(previous_handlers)
+    if exit_code != 0:
+        reattach_command = _build_codex_attach_command(
+            codex_bin=resolved_codex_bin,
+            ws_url=ws_url,
+            bypass_approvals=bypass_approvals,
+            model=model,
+            model_reasoning_effort=model_reasoning_effort,
+            session_id=normalized_session_id,
+        )
+        launch_ui.exit_bookend(
+            exit_code=exit_code,
+            machine_name=get_machine_name_label(),
+            reattach_command=reattach_command,
+            reattachable_on_nonzero_exit=True,
+        )
+        raise typer.Exit(code=exit_code)
+    _close_native_codex_after_clean_tui_exit(
+        session_id=normalized_session_id,
+        config_dir=config_dir,
+        machine_name=get_machine_name_label(),
     )
 
 

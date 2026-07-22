@@ -412,10 +412,7 @@ def test_build_codex_attach_command_carries_managed_override_and_session_env():
         thread_id="thr_123",
     )
 
-    assert command.startswith("LONGHOUSE_MANAGED_SESSION_ID=session-123 ")
-    assert "/tmp/codex -c check_for_update_on_startup=false" in command
-    assert "resume thr_123" not in command
-    assert "--enable tui_app_server --remote ws://127.0.0.1:4800" in command
+    assert command == "longhouse codex attach --session-id session-123 --codex-bin /tmp/codex"
 
 
 def test_build_codex_attach_command_carries_model_overrides():
@@ -428,7 +425,7 @@ def test_build_codex_attach_command_carries_model_overrides():
         session_id="session-123",
     )
 
-    assert "-c model_reasoning_effort=low --model gpt-5.4-mini" in command
+    assert command.endswith("--model-reasoning-effort low --model gpt-5.4-mini")
 
 
 def test_start_native_codex_bridge_can_prestart_initial_thread(monkeypatch, tmp_path):
@@ -731,9 +728,7 @@ def test_codex_command_no_attach_prints_attach_command(monkeypatch, tmp_path):
     result = runner.invoke(app, ["codex", "--cwd", str(tmp_path), "--config-dir", str(provider_home), "--no-attach"])
 
     assert result.exit_code == 0, result.output
-    assert "Attach: LONGHOUSE_MANAGED_SESSION_ID=session-123" in result.output
-    assert "/tmp/codex -c check_for_update_on_startup=false" in result.output
-    assert "resume thr_123" not in result.output
+    assert "Attach: longhouse codex attach --session-id session-123 --codex-bin /tmp/codex" in result.output
     contracts = list_managed_session_contracts(tmp_path / ".longhouse")
     assert contracts[0]["provider"] == "codex"
     assert contracts[0]["workspace"]["cwd"] == str(tmp_path)
@@ -784,7 +779,7 @@ def test_codex_command_preserves_bridge_when_auto_attach_exits_nonzero(monkeypat
     assert "still burns" in result.output
     assert "(exit 7)" in result.output
     assert "scattered" not in result.output
-    assert "Rejoin: LONGHOUSE_MANAGED_SESSION_ID=session-123" in result.output
+    assert "Rejoin: longhouse codex attach --session-id session-123" in result.output
     assert stop_calls == []
     contracts = list_managed_session_contracts(tmp_path / ".longhouse")
     assert contracts[0]["provider"] == "codex"
@@ -1055,6 +1050,47 @@ def test_run_native_codex_tui_does_not_relaunch_signal_exit(monkeypatch):
 
     assert exit_code == 130
     assert calls == [{"session_id": "session-123"}]
+
+
+def test_codex_attach_clean_exit_stops_bridge(monkeypatch, tmp_path):
+    session_id = "11111111-1111-4111-8111-111111111111"
+    state_root = tmp_path / "codex-bridge"
+    state_root.mkdir()
+    (state_root / f"{session_id}.json").write_text(
+        json.dumps(
+            {
+                "session_id": session_id,
+                "cwd": str(tmp_path),
+                "codex_bin": "/tmp/codex",
+                "ws_url": "ws://127.0.0.1:4800",
+                "thread_id": "thr_123",
+            }
+        )
+    )
+    tui_calls: list[dict[str, object]] = []
+    close_calls: list[dict[str, object]] = []
+    monkeypatch.setattr(codex_cli, "_default_codex_bridge_state_root", lambda: state_root)
+    monkeypatch.setattr(codex_cli, "_resolve_codex_binary", lambda explicit=None: explicit)
+    monkeypatch.setattr(
+        codex_cli,
+        "_run_native_codex_tui_with_recovery",
+        lambda **kwargs: tui_calls.append(kwargs) or 0,
+    )
+    monkeypatch.setattr(codex_cli, "_install_codex_signal_cleanup", lambda: {})
+    monkeypatch.setattr(codex_cli, "_restore_signal_handlers", lambda _handlers: None)
+    monkeypatch.setattr(codex_cli, "get_machine_name_label", lambda: "work-laptop")
+    monkeypatch.setattr(
+        codex_cli,
+        "_close_native_codex_after_clean_tui_exit",
+        lambda **kwargs: close_calls.append(kwargs),
+    )
+
+    result = CliRunner().invoke(app, ["codex", "attach", "--session-id", session_id])
+
+    assert result.exit_code == 0, result.output
+    assert tui_calls[0]["session_id"] == session_id
+    assert tui_calls[0]["ws_url"] == "ws://127.0.0.1:4800"
+    assert close_calls == [{"session_id": session_id, "config_dir": None, "machine_name": "work-laptop"}]
 
 
 def test_codex_stop_is_explicit_and_removes_contract_after_success(monkeypatch):
