@@ -53,6 +53,8 @@ _SEMANTIC_FAILURE_CODES = frozenset(
 _BUILD_IDENTITY_KEYS = frozenset({"version", "commit", "commit_short", "dirty", "built_at", "channel"})
 _FULL_GIT_SHA = re.compile(r"^[0-9a-f]{40}$")
 _SHORT_GIT_SHA = re.compile(r"^[0-9a-f]{7,12}$")
+_INERT_MCP_COMMAND = Path("/usr/bin/true")
+_INERT_MCP_CONFIG = '[mcp_servers.longhouse]\ncommand = "/usr/bin/true"\nargs = []\n'
 
 
 def _load_request(path: Path) -> dict[str, Any]:
@@ -215,6 +217,36 @@ def _probe_engine_build_identity(engine: Path, request_sha: str, secrets: tuple[
             "evidence": evidence,
         }
     return {"status": "pass", "reason": None, "identity": identity, "evidence": evidence}
+
+
+def _prepare_inert_mcp_bootstrap(
+    codex_home: Path,
+    evidence_root: Path,
+    secrets: tuple[str, ...],
+) -> dict[str, Any]:
+    command_identity = _file_identity(
+        _INERT_MCP_COMMAND,
+        label="qualification inert MCP command",
+        executable=True,
+    )
+    encoded = _INERT_MCP_CONFIG.encode()
+    if any(secret and secret.encode() in encoded for secret in secrets):
+        raise identity_bridge.RequestError("qualification MCP bootstrap unexpectedly contains a credential")
+    config_path = codex_home / "config.toml"
+    config_path.write_text(_INERT_MCP_CONFIG, encoding="utf-8")
+    retained_root = evidence_root / "qualification-bootstrap"
+    retained_root.mkdir()
+    retained_config = retained_root / "codex-config.toml"
+    retained_config.write_text(_INERT_MCP_CONFIG, encoding="utf-8")
+    return {
+        "purpose": "codex_transport_shape_bootstrap_only",
+        "coordination_mcp_semantics": "not_exercised",
+        "ambient_codex_config_used": False,
+        "command": str(_INERT_MCP_COMMAND),
+        "command_identity": command_identity,
+        "config_digest": identity_bridge._sha256(encoded),  # noqa: SLF001
+        "retained_config": str(retained_config),
+    }
 
 
 def _record(
@@ -497,16 +529,19 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
     canary_root.mkdir()
     canary_result: dict[str, Any]
     canary_error: str | None = None
+    mcp_bootstrap: dict[str, Any]
     with tempfile.TemporaryDirectory(prefix="longhouse-helm-qualification-") as runtime:
         runtime_root = Path(runtime)
-        (runtime_root / "codex-home").mkdir()
+        codex_home = runtime_root / "codex-home"
+        codex_home.mkdir()
         (runtime_root / "tmp").mkdir()
+        mcp_bootstrap = _prepare_inert_mcp_bootstrap(codex_home, canary_root, secrets)
         strict_env = {
             "PATH": os.environ.get("PATH", ""),
             "LANG": "C",
             "LC_ALL": "C",
             "HOME": runtime,
-            "CODEX_HOME": str(runtime_root / "codex-home"),
+            "CODEX_HOME": str(codex_home),
             "TMPDIR": str(runtime_root / "tmp"),
             ENGINE_ENV: str(engine),
             PACKAGE_ROOT_ENV: str(package_root),
@@ -633,6 +668,7 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
         "post_package_identity": post_package_identity,
         "package_members": package_members,
         "reported_provider_version": reported_version,
+        "mcp_bootstrap": mcp_bootstrap,
         "canary_result": canary_result,
         "canary_error": canary_error,
         "stop_evidence": stop,

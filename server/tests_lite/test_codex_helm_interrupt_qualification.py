@@ -128,6 +128,11 @@ def _successful_fake_canary(expected_engine: Path, agents_token: str, provider_t
         assert codex_bin.endswith("/bin/codex")
         assert os.environ[profile.PROVIDER_TOKEN_ENV] == provider_token
         assert "PYTHONPATH" not in os.environ
+        isolated_config = Path(os.environ["CODEX_HOME"]) / "config.toml"
+        assert isolated_config.read_text(encoding="utf-8") == profile._INERT_MCP_CONFIG
+        config_bytes = isolated_config.read_bytes()
+        assert agents_token.encode() not in config_bytes
+        assert provider_token.encode() not in config_bytes
         root = evidence_root / "managed-live-interrupt"
         root.mkdir(parents=True)
         (root / "provider.log").write_text(f"{agents_token}\n{provider_token}\n", encoding="utf-8")
@@ -190,6 +195,13 @@ def test_live_helm_profile_reuses_canary_emits_scoped_records_and_scrubs_secrets
     raw_evidence = json.loads((output / "raw-evidence.json").read_text())
     assert raw_evidence["engine_build_identity"]["commit"] == TEST_SHA
     assert raw_evidence["engine_build_identity"]["commit_short"] == TEST_SHA_SHORT
+    bootstrap = raw_evidence["mcp_bootstrap"]
+    assert bootstrap["purpose"] == "codex_transport_shape_bootstrap_only"
+    assert bootstrap["coordination_mcp_semantics"] == "not_exercised"
+    assert bootstrap["ambient_codex_config_used"] is False
+    assert bootstrap["command"] == "/usr/bin/true"
+    retained_config = Path(bootstrap["retained_config"])
+    assert retained_config.read_text(encoding="utf-8") == profile._INERT_MCP_CONFIG
     engine_identity = f"sha256:{hashlib.sha256(engine.read_bytes()).hexdigest()}"
     assert {record["longhouse_build_id"] for record in bundle["records"]} == {engine_identity}
     retained = b"".join(path.read_bytes() for path in output.rglob("*") if path.is_file())
