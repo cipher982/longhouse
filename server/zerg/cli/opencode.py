@@ -37,10 +37,14 @@ from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_OPENCODE_BIN_FLAG
 from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_PATH
 from zerg.services.longhouse_paths import get_managed_local_dir
 from zerg.services.machine_identity import get_machine_name_label
+from zerg.services.managed_provider_capability_decisions import evaluate_managed_provider_capability
 from zerg.services.opencode_bridge_state import generate_server_password
 from zerg.services.opencode_bridge_state import parse_listen_line
 from zerg.services.opencode_bridge_state import remove_opencode_bridge_state
 from zerg.services.opencode_bridge_state import write_opencode_bridge_state
+from zerg.services.provider_capability_contract import ProductAction
+from zerg.services.provider_capability_contract import RuntimeState
+from zerg.services.provider_capability_evaluator import EvaluationContext
 from zerg.session_loop_mode import SessionLoopMode
 
 _OPENCODE_RUNTIME_SOURCE = "opencode_event"
@@ -308,6 +312,24 @@ def _ensure_opencode_coordination_instructions(config_dir: Path | None = None) -
     return path
 
 
+def _opencode_coordination_enabled(*, session_id: str, device_id: str) -> bool:
+    decision = evaluate_managed_provider_capability(
+        capability_id="coordination.awareness.create",
+        context=EvaluationContext(
+            machine_id=device_id,
+            session_id=session_id,
+            provider="opencode",
+            mode="helm",
+            observed_at=datetime.now(timezone.utc),
+            runtime=RuntimeState.READY,
+        ),
+    )
+    return decision is not None and decision.action in {
+        ProductAction.ENABLED,
+        ProductAction.ENABLED_WITH_WARNING,
+    }
+
+
 def _opencode_config_content_with_longhouse_plugin(
     *,
     existing_content: str | None,
@@ -382,7 +404,8 @@ def _write_opencode_runtime_config_content(
     model: str | None = None,
 ) -> Path:
     plugin_path = _ensure_opencode_runtime_plugin(config_dir)
-    instructions_path = _ensure_opencode_coordination_instructions(config_dir)
+    coordination_enabled = _opencode_coordination_enabled(session_id=session_id, device_id=device_id)
+    instructions_path = _ensure_opencode_coordination_instructions(config_dir) if coordination_enabled else None
     api_url = runtime_events_url.partition("/api/agents/")[0]
     content = _opencode_config_content_with_longhouse_plugin(
         existing_content=os.environ.get("OPENCODE_CONFIG_CONTENT"),
@@ -393,7 +416,7 @@ def _write_opencode_runtime_config_content(
         device_id=device_id,
         model=model,
         coordination_instructions_path=instructions_path,
-        longhouse_mcp_command=("longhouse", "mcp-server", "--url", api_url),
+        longhouse_mcp_command=("longhouse", "mcp-server", "--url", api_url) if coordination_enabled else None,
     )
     runtime_dir = _opencode_runtime_dir(config_dir)
     runtime_dir.mkdir(parents=True, exist_ok=True)
@@ -664,7 +687,8 @@ def _run_native_opencode(
     env["OPENCODE_SERVER_PASSWORD"] = server_password
     env.setdefault("OPENCODE_SERVER_USERNAME", "opencode")
     plugin_path = _ensure_opencode_runtime_plugin(config_dir)
-    instructions_path = _ensure_opencode_coordination_instructions(config_dir)
+    coordination_enabled = _opencode_coordination_enabled(session_id=session_id, device_id=machine_name)
+    instructions_path = _ensure_opencode_coordination_instructions(config_dir) if coordination_enabled else None
     env["OPENCODE_CONFIG_CONTENT"] = _opencode_config_content_with_longhouse_plugin(
         existing_content=env.get("OPENCODE_CONFIG_CONTENT"),
         plugin_path=plugin_path,
@@ -673,7 +697,7 @@ def _run_native_opencode(
         session_id=session_id,
         device_id=machine_name,
         coordination_instructions_path=instructions_path,
-        longhouse_mcp_command=("longhouse", "mcp-server", "--url", url),
+        longhouse_mcp_command=("longhouse", "mcp-server", "--url", url) if coordination_enabled else None,
     )
 
     def _record_state(server_url: str) -> None:
