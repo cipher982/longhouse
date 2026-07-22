@@ -148,7 +148,8 @@ enum SessionProjectionStream {
 
         var eventName = ""
         var dataLines: [String] = []
-        for try await line in bytes.lines {
+        for try await rawLine in bytes.lines {
+            let line = normalizedSSELine(rawLine)
             if line.isEmpty {
                 if eventName == "session_delta", !dataLines.isEmpty {
                     let data = Data(dataLines.joined(separator: "\n").utf8)
@@ -191,5 +192,12 @@ enum SessionProjectionStream {
                 dataLines.append(line.dropFirst(5).trimmingCharacters(in: .whitespaces))
             }
         }
+    }
+
+    /// EventSourceResponse uses HTTP-standard CRLF delimiters. Foundation's
+    /// async line sequence removes LF but can retain CR, so normalize it before
+    /// testing for the blank line that terminates an SSE event.
+    static func normalizedSSELine(_ line: String) -> String {
+        line.last == "\r" ? String(line.dropLast()) : line
     }
 }

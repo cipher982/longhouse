@@ -481,6 +481,13 @@ struct LonghouseMenuBarCoreTests {
     }
 
     @Test
+    func realtimeStreamRecognizesCRLFEventBoundaries() {
+        #expect(SessionProjectionStream.normalizedSSELine("event: session_delta\r") == "event: session_delta")
+        #expect(SessionProjectionStream.normalizedSSELine("\r").isEmpty)
+        #expect(SessionProjectionStream.normalizedSSELine("data: {}") == "data: {}")
+    }
+
+    @Test
     func localStatusMonitorWakesForPulseReconciliationAndSessionChanges() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("longhouse-status-monitor-\(UUID().uuidString)")
