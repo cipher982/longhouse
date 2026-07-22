@@ -20,7 +20,6 @@ from zerg.services.provider_capability_proof import AssertionOutcome
 from zerg.services.provider_capability_proof import EvidenceClass
 from zerg.services.provider_capability_proof import ProviderCapabilityProofRecord
 from zerg.services.provider_capability_proof_store import ProviderCapabilityProofStore
-from zerg.shared.redaction import redact_text
 
 SCHEMA_VERSION = 1
 PROFILE = "codex_release_identity_v1"
@@ -33,6 +32,15 @@ _SEMVER = (
 )
 _VERSION_LINE = re.compile(rf"^codex-cli (?P<version>{_SEMVER})$")
 _IDENTITY = re.compile(r"^sha256:[0-9a-f]{64}$")
+_REDACTIONS = (
+    (re.compile(r"\bsk-[\w-]{20,}\b"), "[OPENAI_KEY]"),
+    (re.compile(r"(?i)(bearer\s+)[a-zA-Z0-9_.-]{20,}"), r"\1[BEARER_TOKEN]"),
+    (re.compile(r"\b(?:AKIA|ASIA)[A-Z0-9]{16}\b"), "[AWS_ACCESS_KEY]"),
+    (
+        re.compile(r"(?i)(secret|password|token|credential)[_-]?\s*[=:]\s*['\"]?[^\s'\"]{8,}['\"]?"),
+        r"\1=[REDACTED]",
+    ),
+)
 _REQUEST_KEYS = frozenset(
     {
         "schema_version",
@@ -51,6 +59,12 @@ _REQUEST_KEYS = frozenset(
 
 class RequestError(ValueError):
     pass
+
+
+def _redact_text(value: str) -> str:
+    for pattern, replacement in _REDACTIONS:
+        value = pattern.sub(replacement, value)
+    return value
 
 
 def _now() -> str:
@@ -236,8 +250,8 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
         post_execution_identity = _sha256_file(binary)
     except OSError:
         post_execution_identity = None
-    retained_stdout = redact_text(stdout)
-    retained_stderr = redact_text(stderr)
+    retained_stdout = _redact_text(stdout)
+    retained_stderr = _redact_text(stderr)
     reported_version = None
     match = _VERSION_LINE.fullmatch(stdout.strip()) if not timed_out else None
     if match:
