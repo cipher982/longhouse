@@ -125,7 +125,7 @@ if registration_ready:
     os.replace(tmp, claim_target)
     claim_backup.unlink(missing_ok=True)
 
-if event in {"afterAgentResponse", "stop"}:
+if event in {"afterAgentResponse", "stop", "sessionEnd"}:
     cursor_home = Path(os.environ.get("CURSOR_HOME") or (Path.home() / ".cursor"))
     stores = list((cursor_home / "chats").glob(f"*/{conversation_id}/store.db"))
     wake_socket = home / "agent" / "transcript-wake.sock"

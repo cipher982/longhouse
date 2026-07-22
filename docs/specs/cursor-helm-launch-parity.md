@@ -83,6 +83,12 @@ operation timestamps, terminal outcome, and transcript assertions. It never
 stores credentials or relies on screen-text classification when a provider
 event exists.
 
+Output visibility is a narrower contract than durable transcript capture.
+Cursor reconnect failures can persist multiple assistant artifacts, omit
+`afterAgentResponse`, and still present one response in the TUI. See
+`docs/specs/cursor-output-visibility-contract.md`; raw store evidence must not
+be treated as proof that every artifact was presented.
+
 ## Architecture Under Test
 
 ### Identity and binding

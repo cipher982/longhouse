@@ -17,6 +17,7 @@ mod cursor_helm_control;
 mod cursor_launch_binding;
 mod cursor_print;
 mod cursor_store;
+mod cursor_visibility;
 mod daemon;
 mod device;
 mod discovery;
