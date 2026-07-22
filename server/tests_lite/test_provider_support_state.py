@@ -62,6 +62,7 @@ def test_support_state_provider_capability_axes_match_manifest_contracts() -> No
 
     for contract in all_managed_provider_contracts():
         capabilities = support["providers"][contract.provider]["capabilities"]
+        assert capabilities["implemented_operations"] == _expected_supported_operations(contract)
         assert capabilities["supported_operations"] == _expected_supported_operations(contract)
         assert capabilities["unsupported_operations"] == _expected_unsupported_operations(contract)
         assert "observe_transcript" in capabilities["supported_actions"]
@@ -70,6 +71,12 @@ def test_support_state_provider_capability_axes_match_manifest_contracts() -> No
         assert capabilities["machine_control_operations"] == _expected_machine_operations(contract)
         assert capabilities["live_control_operations"] == _expected_live_operations(contract)
         assert capabilities["missing_live_control_operations"] == []
+        semantic_shadow = capabilities["semantic_capability_shadow"]
+        assert set(semantic_shadow) == set(contract.capabilities)
+        assert capabilities["available_capabilities"] == []
+        for decision in semantic_shadow.values():
+            assert decision["runtime"] == "unknown"
+            assert decision["action"] == "disabled"
 
 
 def test_support_state_separates_candidate_release_from_local_readiness() -> None:

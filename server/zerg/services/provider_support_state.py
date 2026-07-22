@@ -14,11 +14,16 @@ health and doctor surfaces a single, explicit projection to display.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from datetime import UTC
+from datetime import datetime
 from typing import Any
 
 from zerg.services.managed_provider_contracts import all_managed_provider_contracts
 from zerg.services.provider_action_coverage import derive_provider_action_coverage
 from zerg.services.provider_action_coverage import serialize_provider_action_coverage
+from zerg.services.provider_capability_contract import RuntimeState
+from zerg.services.provider_capability_evaluator import EvaluationContext
+from zerg.services.provider_capability_evaluator import evaluate_capability
 
 SCHEMA_VERSION = 1
 CONTRACT_OPERATIONS = (
@@ -52,6 +57,7 @@ def collect_provider_support_state(
     provider_release_status: Mapping[str, Any] | None,
     provider_live_proof: Mapping[str, Any] | None = None,
     control_channel: Mapping[str, Any] | None,
+    observed_at: datetime | None = None,
 ) -> dict[str, Any]:
     provider_clis = dict(provider_clis or {})
     provider_release_status = dict(provider_release_status or {})
@@ -62,6 +68,7 @@ def collect_provider_support_state(
     live_ops_by_provider = dict(control_channel.get("control_operations_by_provider") or {})
     raw_control_status = str(control_channel.get("status") or "").strip()
     control_connected = raw_control_status == "connected"
+    observed_at = observed_at or datetime.now(UTC)
 
     providers: dict[str, Any] = {}
     for contract in all_managed_provider_contracts():
@@ -76,6 +83,11 @@ def collect_provider_support_state(
             live_control_operations=live_control_operations,
         )
         operations = _operation_states(contract, release_info=release_info, live_proof_info=live_proof_info)
+        semantic_capability_shadow = _semantic_capability_shadow(
+            contract,
+            release_info=release_info,
+            observed_at=observed_at,
+        )
         action_coverage = _action_coverage(provider, release_info=release_info)
         version_readiness = _version_readiness(release_info)
         proof = _proof_summary(operations, live_proof_info=live_proof_info)
@@ -101,6 +113,7 @@ def collect_provider_support_state(
                 "resolution_error": cli_info.get("resolution_error"),
             },
             "capabilities": {
+                "implemented_operations": _operation_names_by_support(operations, supported=True),
                 "supported_operations": _operation_names_by_support(operations, supported=True),
                 "unsupported_operations": _operation_names_by_support(operations, supported=False),
                 "supported_actions": _action_names_by_state(action_coverage, "supported"),
@@ -117,6 +130,10 @@ def collect_provider_support_state(
                     live_control_operations=live_control_operations,
                     missing_live_control_operations=missing_live_control_operations,
                 ),
+                "semantic_capability_shadow": semantic_capability_shadow,
+                "available_capabilities": [
+                    capability_id for capability_id, decision in semantic_capability_shadow.items() if decision.get("action") == "enabled"
+                ],
             },
             "proof": proof,
             "operations": operations,
@@ -129,6 +146,30 @@ def collect_provider_support_state(
         "schema_version": SCHEMA_VERSION,
         "summary": _summary(providers),
         "providers": providers,
+    }
+
+
+def _semantic_capability_shadow(
+    contract: Any,
+    *,
+    release_info: Mapping[str, Any],
+    observed_at: datetime,
+) -> dict[str, dict[str, Any]]:
+    context = EvaluationContext(
+        machine_id="provider_support_state",
+        provider=contract.provider,
+        provider_version=str(release_info.get("current_version") or "") or None,
+        observed_at=observed_at,
+        runtime=RuntimeState.UNKNOWN,
+    )
+    return {
+        capability_id: evaluate_capability(
+            capability_id=capability_id,
+            declaration=declaration,
+            provider_contract_digest=contract.contract_entry_digest,
+            context=context,
+        ).serialize()
+        for capability_id, declaration in contract.capabilities.items()
     }
 
 
