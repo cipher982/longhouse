@@ -14,11 +14,18 @@ health and doctor surfaces a single, explicit projection to display.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from datetime import UTC
+from datetime import datetime
 from typing import Any
 
 from zerg.services.managed_provider_contracts import all_managed_provider_contracts
 from zerg.services.provider_action_coverage import derive_provider_action_coverage
 from zerg.services.provider_action_coverage import serialize_provider_action_coverage
+from zerg.services.provider_capability_contract import RuntimeState
+from zerg.services.provider_capability_evaluator import EvaluationContext
+from zerg.services.provider_capability_evaluator import evaluate_capability
+from zerg.services.provider_capability_evaluator import proof_identity_for_declaration
+from zerg.services.provider_capability_proof import ProviderCapabilityProofRecord
 
 SCHEMA_VERSION = 1
 CONTRACT_OPERATIONS = (
@@ -52,6 +59,10 @@ def collect_provider_support_state(
     provider_release_status: Mapping[str, Any] | None,
     provider_live_proof: Mapping[str, Any] | None = None,
     control_channel: Mapping[str, Any] | None,
+    observed_at: datetime | None = None,
+    capability_proof_records: Mapping[str, tuple[ProviderCapabilityProofRecord, ...]] | None = None,
+    provider_executable_identities: Mapping[str, str | None] | None = None,
+    trusted_capability_artifact_ids: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
     provider_clis = dict(provider_clis or {})
     provider_release_status = dict(provider_release_status or {})
@@ -62,6 +73,9 @@ def collect_provider_support_state(
     live_ops_by_provider = dict(control_channel.get("control_operations_by_provider") or {})
     raw_control_status = str(control_channel.get("status") or "").strip()
     control_connected = raw_control_status == "connected"
+    observed_at = observed_at or datetime.now(UTC)
+    capability_proof_records = dict(capability_proof_records or {})
+    provider_executable_identities = dict(provider_executable_identities or {})
 
     providers: dict[str, Any] = {}
     for contract in all_managed_provider_contracts():
@@ -76,6 +90,17 @@ def collect_provider_support_state(
             live_control_operations=live_control_operations,
         )
         operations = _operation_states(contract, release_info=release_info, live_proof_info=live_proof_info)
+        semantic_capability_shadow = _semantic_capability_shadow(
+            contract,
+            release_info=release_info,
+            observed_at=observed_at,
+            records=capability_proof_records.get(provider, ()),
+            provider_executable_identity=provider_executable_identities.get(provider),
+            trusted_artifact_ids=trusted_capability_artifact_ids,
+        )
+        available_operations = [
+            capability_id for capability_id, decision in semantic_capability_shadow.items() if decision.get("action") == "enabled"
+        ]
         action_coverage = _action_coverage(provider, release_info=release_info)
         version_readiness = _version_readiness(release_info)
         proof = _proof_summary(operations, live_proof_info=live_proof_info)
@@ -101,6 +126,7 @@ def collect_provider_support_state(
                 "resolution_error": cli_info.get("resolution_error"),
             },
             "capabilities": {
+                "implemented_operations": _operation_names_by_support(operations, supported=True),
                 "supported_operations": _operation_names_by_support(operations, supported=True),
                 "unsupported_operations": _operation_names_by_support(operations, supported=False),
                 "supported_actions": _action_names_by_state(action_coverage, "supported"),
@@ -117,6 +143,14 @@ def collect_provider_support_state(
                     live_control_operations=live_control_operations,
                     missing_live_control_operations=missing_live_control_operations,
                 ),
+                # operation_decisions is the stable contextual contract. The
+                # shadow alias remains during the static-support migration so
+                # existing diagnostics can compare both projections.
+                "operation_decisions": semantic_capability_shadow,
+                "semantic_capability_shadow": semantic_capability_shadow,
+                "available_operations": available_operations,
+                "available_capabilities": available_operations,
+                "capability_proof_record_count": len(capability_proof_records.get(provider, ())),
             },
             "proof": proof,
             "operations": operations,
@@ -129,6 +163,40 @@ def collect_provider_support_state(
         "schema_version": SCHEMA_VERSION,
         "summary": _summary(providers),
         "providers": providers,
+    }
+
+
+def _semantic_capability_shadow(
+    contract: Any,
+    *,
+    release_info: Mapping[str, Any],
+    observed_at: datetime,
+    records: tuple[ProviderCapabilityProofRecord, ...],
+    provider_executable_identity: str | None,
+    trusted_artifact_ids: frozenset[str],
+) -> dict[str, dict[str, Any]]:
+    context = EvaluationContext(
+        machine_id="provider_support_state",
+        provider=contract.provider,
+        provider_version=str(release_info.get("current_version") or "") or None,
+        provider_executable_identity=provider_executable_identity,
+        observed_at=observed_at,
+        runtime=RuntimeState.UNKNOWN,
+    )
+    return {
+        capability_id: evaluate_capability(
+            capability_id=capability_id,
+            declaration=declaration,
+            provider_contract_digest=contract.contract_entry_digest,
+            context=context,
+            records=records,
+            proof_identity=proof_identity_for_declaration(
+                adapter_digest=contract.adapter_digest,
+                declaration=declaration,
+            ),
+            trusted_artifact_ids=trusted_artifact_ids,
+        ).serialize()
+        for capability_id, declaration in contract.capabilities.items()
     }
 
 

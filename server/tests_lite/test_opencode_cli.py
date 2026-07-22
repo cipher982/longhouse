@@ -536,6 +536,32 @@ def test_opencode_config_content_sets_model(tmp_path):
     assert len(config["plugin"]) == 1
 
 
+def test_opencode_config_content_adds_launch_scoped_coordination_without_overwriting_user_config(tmp_path):
+    instructions_path = tmp_path / "longhouse-coordination.md"
+    instructions_path.write_text("coordination")
+    existing_mcp = {"user-server": {"type": "remote", "url": "https://example.test"}}
+    content = opencode_cli._opencode_config_content_with_longhouse_plugin(
+        existing_content=json.dumps({"instructions": ["user-rules.md"], "mcp": existing_mcp}),
+        plugin_path=tmp_path / "longhouse-opencode-runtime.mjs",
+        runtime_events_url="https://longhouse.test/api/agents/runtime/events/batch",
+        token="zdt_test_token",
+        session_id="session-123",
+        device_id="work-laptop",
+        coordination_instructions_path=instructions_path,
+        longhouse_mcp_command=("longhouse", "mcp-server", "--url", "https://longhouse.test"),
+    )
+
+    config = json.loads(content)
+    assert config["instructions"] == ["user-rules.md", str(instructions_path.resolve())]
+    assert config["mcp"]["user-server"] == existing_mcp["user-server"]
+    assert config["mcp"]["longhouse"] == {
+        "type": "local",
+        "command": ["longhouse", "mcp-server", "--url", "https://longhouse.test"],
+        "enabled": True,
+    }
+    assert "zdt_test_token" not in json.dumps(config["mcp"])
+
+
 def test_opencode_config_content_rejects_invalid_shapes(tmp_path):
     with pytest.raises(opencode_cli._OpenCodeLaunchError, match="JSON object"):
         opencode_cli._opencode_config_content_with_longhouse_plugin(
@@ -575,6 +601,34 @@ def test_write_opencode_runtime_config_content_is_private(monkeypatch, tmp_path)
     plugin_path = tmp_path / "config" / "managed-local" / "opencode" / "longhouse-opencode-runtime.mjs"
     assert plugin_path.exists()
     assert config["plugin"][0][0] == plugin_path.resolve().as_uri()
+    instructions_path = tmp_path / "config" / "managed-local" / "opencode" / "longhouse-coordination.md"
+    assert instructions_path.read_text() == opencode_cli.COORDINATION_INSTRUCTIONS
+    assert instructions_path.stat().st_mode & 0o777 == 0o600
+    assert config["instructions"] == [str(instructions_path.resolve())]
+    assert config["mcp"]["longhouse"]["command"] == [
+        "longhouse",
+        "mcp-server",
+        "--url",
+        "https://longhouse.test",
+    ]
+
+
+def test_write_opencode_runtime_config_respects_coordination_policy(monkeypatch, tmp_path):
+    monkeypatch.delenv("OPENCODE_CONFIG_CONTENT", raising=False)
+    monkeypatch.setenv("LONGHOUSE_COORDINATION_BOOTSTRAP", "0")
+
+    path = opencode_cli._write_opencode_runtime_config_content(
+        config_dir=tmp_path / "config",
+        runtime_events_url="https://longhouse.test/api/agents/runtime/events/batch",
+        token="zdt_test_token",
+        session_id="session-123",
+        device_id="work-laptop",
+    )
+
+    config = json.loads(path.read_text(encoding="utf-8"))
+    assert "instructions" not in config
+    assert "mcp" not in config
+    assert not (tmp_path / "config" / "managed-local" / "opencode" / "longhouse-coordination.md").exists()
 
 
 def test_build_opencode_command_uses_config_content_file_without_echoing_token(tmp_path):

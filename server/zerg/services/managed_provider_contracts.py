@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from dataclasses import field
 
 from zerg.managed_provider_contract_manifest import MACHINE_CONTROL_SUPPORT_OPERATION_BY_SUFFIX
+from zerg.managed_provider_contract_manifest import managed_provider_contract_entry_digest
 from zerg.managed_provider_contract_manifest import managed_provider_contract_items
 from zerg.session_execution_home import ManagedSessionTransport
 
@@ -43,6 +44,8 @@ class ManagedProviderContract:
     managed_transport: ManagedSessionTransport
     control_plane: str
     control_plane_aliases: tuple[str, ...] = ()
+    adapter_digest: str = ""
+    adapter_sources: tuple[str, ...] = ()
     requires_longhouse_cli: bool = True
     launch_local: bool = True
     run_once: bool = False
@@ -66,6 +69,7 @@ class ManagedProviderContract:
     # A provider can be first-class by design while still carrying a lower proof
     # level until scheduled live canaries promote the evidence.
     operation_evidence: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
+    capabilities: Mapping[str, Mapping[str, object]] = field(default_factory=dict)
 
     @property
     def control_planes(self) -> tuple[str, ...]:
@@ -85,6 +89,10 @@ class ManagedProviderContract:
 
     def operation_evidence_for(self, operation: str) -> Mapping[str, str]:
         return self.operation_evidence.get(operation, {})
+
+    @property
+    def contract_entry_digest(self) -> str:
+        return managed_provider_contract_entry_digest(self.provider)
 
     def supports_contract_operation(self, operation: str) -> bool:
         return bool(getattr(self, operation, False))
@@ -121,6 +129,8 @@ def _contract_from_manifest_item(item: dict[str, object]) -> ManagedProviderCont
         managed_transport=ManagedSessionTransport(str(item["managed_transport"])),
         control_plane=str(item["control_plane"]),
         control_plane_aliases=tuple(str(value) for value in item.get("control_plane_aliases") or ()),
+        adapter_digest=str(item.get("adapter_digest") or ""),
+        adapter_sources=tuple(str(value) for value in item.get("adapter_sources") or ()),
         requires_longhouse_cli=bool(item.get("requires_longhouse_cli", True)),
         launch_local=bool(item.get("launch_local", True)),
         run_once=bool(item.get("run_once", False)),
@@ -142,6 +152,11 @@ def _contract_from_manifest_item(item: dict[str, object]) -> ManagedProviderCont
             str(operation): {str(key): str(value) for key, value in dict(evidence).items()}
             for operation, evidence in dict(item.get("operation_evidence") or {}).items()
             if isinstance(evidence, dict)
+        },
+        capabilities={
+            str(capability): dict(declaration)
+            for capability, declaration in dict(item.get("capabilities") or {}).items()
+            if isinstance(declaration, dict)
         },
     )
 

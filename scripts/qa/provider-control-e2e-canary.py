@@ -1138,44 +1138,45 @@ def run_opencode_canary(args: argparse.Namespace, root: Path) -> dict[str, Any]:
     fake_bin = _fake_opencode(root / "bin" / "opencode")
     env = {"FAKE_OPENCODE_EVENTS": str(events_path)}
     try:
-        launch = _run_longhouse(
-            args,
-            [
-                "opencode-channel",
-                "launch",
-                "--session-id",
-                session_id,
-                "--run-id",
-                run_id,
-                "--cwd",
-                str(workspace),
-                "--api-url",
-                "http://longhouse.test",
-                "--api-token",
-                "canary-token",
-                "--device-id",
-                "provider-control-canary",
-                "--config-dir",
-                str(config_dir),
-                "--opencode-bin",
-                str(fake_bin),
-                "--wait-ready-secs",
-                "10",
-            ],
-            env=env,
+        launch_script = """
+import json
+import sys
+from pathlib import Path
+from zerg.cli.opencode_channel import launch_opencode_server_bridge
+
+payload = launch_opencode_server_bridge(
+    session_id=sys.argv[1],
+    run_id=sys.argv[2],
+    cwd=Path(sys.argv[3]),
+    api_url="http://longhouse.test",
+    api_token="canary-token",
+    device_id="provider-control-canary",
+    config_dir=Path(sys.argv[4]),
+    opencode_bin=sys.argv[5],
+    wait_ready_secs=10,
+)
+print(json.dumps(payload, sort_keys=True))
+"""
+        launch = subprocess.run(
+            [*_server_python_cmd(args), "-c", launch_script, session_id, run_id, str(workspace), str(config_dir), str(fake_bin)],
+            cwd=str(_server_cwd(args)),
+            env=_runtime_env(args, env),
+            text=True,
+            capture_output=True,
+            check=False,
             timeout=20,
         )
         if launch.returncode != 0:
             return _fail(
                 "opencode_launch_failed",
-                "opencode-channel launch failed",
+                "OpenCode bridge launch seam failed",
                 evidence=_command_evidence(launch),
             )
         launch_payload = json.loads(launch.stdout)
         if launch_payload.get("run_id") != run_id:
             return _fail(
                 "opencode_run_identity_mismatch",
-                "opencode-channel launch did not preserve the requested run identity",
+                "OpenCode bridge launch did not preserve the requested run identity",
                 requested_run_id=run_id,
                 observed_run_id=launch_payload.get("run_id"),
             )

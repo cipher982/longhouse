@@ -33,8 +33,8 @@ Host at commit `d078bcd9eca6ab3476e0859dae9c4a7afd6d6dba`.
 
 ### What is healthy
 
-- `https://david010.longhouse.ai/api/health` reports healthy and `/api/readyz`
-  reports ready.
+- The dogfood Runtime Host reports healthy at `/api/health` and ready at
+  `/api/readyz`.
 - The Mac control WebSocket is connected and exposes the expected provider
   operations.
 - The live storage lane is succeeding; the ordinary spool and archive backlog
@@ -412,32 +412,12 @@ dogfood refresh and exact-SHA ship verification at cutover.
 - No claim that process existence equals a live control attachment.
 - No redesign of the full browser timeline inside the menu bar.
 
-## Review record
+## Review disposition
 
-### Hatch Claude Fable — REQUEST_CHANGES
-
-Confirmed all four root causes. Required explicit envelope-id/body semantics and
-same-source repair exclusion. Recommended reusing the corrected scheduler,
-collapsing ended-empty epochs only, deterministic headline priority, safe
-process identity checks, and additional empty/deep-lineage fixtures. All were
-accepted above.
-
-### Hatch Cursor Grok — REQUEST_CHANGES
-
-Confirmed all four root causes. Required prepare-by-ended-epoch, multi-hop
-recovery, CAS/audit for the immutable-body exception, no-kill-on-uncertain Codex
-cleanup, and the missing race/crash tests. It recommended manifest probes before
-adding server authority and narrowing the health work to existing axes. All were
-accepted above.
-
-### Final disposition
-
-The reviewers' request-changes verdicts applied to the first draft. The final
-plan incorporates every blocking finding. Non-blocking simplifications were
-also adopted: one lineage scheduler for prevention and recovery, no required
-server API change, no new health protocol, and automatic Codex process cleanup
-only when ownership and detachment are fully proven.
-
-Both reviewers then re-read the revised spec. Hatch Claude Fable returned
-**APPROVE** with no blockers, followed by Hatch Cursor Grok returning
-**APPROVE** with no blockers.
+Independent review confirmed the four root causes and required explicit
+envelope-id/body semantics, same-source repair exclusion, prepare-by-ended-epoch,
+multi-hop recovery, CAS/audit for the immutable-body exception, safe process
+identity checks, and the missing race/crash fixtures. The final plan incorporates
+those findings while retaining one lineage scheduler, no required server API
+change, no new health protocol, and automatic process cleanup only when ownership
+and detachment are fully proven.

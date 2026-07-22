@@ -13,6 +13,11 @@ providers:
   control_plane: codex_bridge
   control_plane_aliases:
   - codex_app_server
+  adapter_sources:
+  - server/zerg/cli/codex.py
+  - server/zerg/mcp_server/server.py
+  - engine/src/codex_bridge.rs
+  - engine/src/codex_ws_relay.rs
   launch_local: true
   run_once: true
   reattach: true
@@ -27,6 +32,74 @@ providers:
   # Coordination awareness is durable MCP server metadata, not startup hook
   # context. This avoids Codex's deferred post-compaction SessionStart cards.
   startup_coordination_context: false
+  capabilities:
+    coordination.awareness.create:
+      disposition: implemented
+      reason_code: semantic_proof_missing
+      policy_key: provider.codex.coordination_awareness
+      action_gate: ceiling
+      contexts:
+        modes: [helm, console]
+      runtime_prerequisites: [session_context]
+      required_assertions:
+      - id: coordination_instructions_model_visible
+        scenario_id: codex_coordination_awareness_create
+        oracle_source: server/zerg/qa/provider_coordination_oracles.py
+        minimum_scenario_revision: 1
+        acceptable_evidence: [live_token]
+        max_age_seconds: 86400
+    coordination.awareness.post_compaction:
+      disposition: implemented
+      reason_code: semantic_proof_missing
+      policy_key: provider.codex.coordination_awareness
+      action_gate: ceiling
+      contexts:
+        modes: [helm, console]
+      runtime_prerequisites: [session_context]
+      required_assertions:
+      - id: coordination_instructions_model_visible_after_compaction
+        scenario_id: codex_coordination_awareness_post_compaction
+        oracle_source: server/zerg/qa/provider_coordination_oracles.py
+        minimum_scenario_revision: 1
+        acceptable_evidence: [live_token]
+        max_age_seconds: 86400
+      - id: no_duplicate_visible_bootstrap
+        scenario_id: codex_coordination_awareness_post_compaction
+        oracle_source: server/zerg/qa/provider_coordination_oracles.py
+        minimum_scenario_revision: 1
+        acceptable_evidence: [hermetic, live_token]
+        max_age_seconds: 604800
+    coordination.message.send:
+      disposition: implemented
+      reason_code: semantic_proof_missing
+      policy_key: provider.codex.coordination_message
+      action_gate: strict
+      contexts:
+        modes: [helm, console]
+      runtime_prerequisites: [session_context]
+      required_assertions:
+      - id: directed_message_persisted_and_delivered
+        scenario_id: codex_coordination_message
+        oracle_source: server/zerg/qa/provider_coordination_oracles.py
+        minimum_scenario_revision: 1
+        acceptable_evidence: [hermetic, live_token]
+        max_age_seconds: 604800
+    coordination.message.receive:
+      disposition: implemented
+      reason_code: semantic_proof_missing
+      policy_key: provider.codex.coordination_message
+      action_gate: ceiling
+      contexts:
+        modes: [helm, console]
+      runtime_prerequisites: [session_context]
+      required_assertions:
+      - id: attributed_message_visible
+        scenario_id: codex_coordination_message
+        oracle_source: server/zerg/qa/provider_coordination_oracles.py
+        minimum_scenario_revision: 1
+        acceptable_evidence: [hermetic, live_token]
+        max_age_seconds: 604800
+
   can_resume: true
   turn_start: true
   operation_evidence:
@@ -92,6 +165,9 @@ providers:
   console_adapter: claude_print
   control_plane: claude_channel_bridge
   control_plane_aliases: []
+  adapter_sources:
+  - server/zerg/services/shipper/hooks.py
+  - engine/src/claude_print.rs
   launch_local: true
   run_once: false
   reattach: true
@@ -104,6 +180,74 @@ providers:
   runtime_phase: true
   transcript_binding: true
   startup_coordination_context: true
+  capabilities:
+    coordination.awareness.create:
+      disposition: implemented
+      reason_code: semantic_proof_missing
+      policy_key: provider.claude.coordination_awareness
+      action_gate: ceiling
+      contexts:
+        modes: [helm, console]
+      runtime_prerequisites: [session_context]
+      required_assertions:
+      - id: coordination_instructions_model_visible
+        scenario_id: claude_coordination_awareness_create
+        oracle_source: server/zerg/qa/provider_coordination_oracles.py
+        minimum_scenario_revision: 1
+        acceptable_evidence: [live_token]
+        max_age_seconds: 86400
+    coordination.awareness.post_compaction:
+      disposition: implemented
+      reason_code: semantic_proof_missing
+      policy_key: provider.claude.coordination_awareness
+      action_gate: ceiling
+      contexts:
+        modes: [helm, console]
+      runtime_prerequisites: [session_context]
+      required_assertions:
+      - id: coordination_instructions_model_visible_after_compaction
+        scenario_id: claude_coordination_awareness_post_compaction
+        oracle_source: server/zerg/qa/provider_coordination_oracles.py
+        minimum_scenario_revision: 1
+        acceptable_evidence: [live_token]
+        max_age_seconds: 86400
+      - id: no_duplicate_visible_bootstrap
+        scenario_id: claude_coordination_awareness_post_compaction
+        oracle_source: server/zerg/qa/provider_coordination_oracles.py
+        minimum_scenario_revision: 1
+        acceptable_evidence: [hermetic, live_token]
+        max_age_seconds: 604800
+    coordination.message.send:
+      disposition: implemented
+      reason_code: semantic_proof_missing
+      policy_key: provider.claude.coordination_message
+      action_gate: strict
+      contexts:
+        modes: [helm, console]
+      runtime_prerequisites: [session_context]
+      required_assertions:
+      - id: directed_message_persisted_and_delivered
+        scenario_id: claude_coordination_message
+        oracle_source: server/zerg/qa/provider_coordination_oracles.py
+        minimum_scenario_revision: 1
+        acceptable_evidence: [hermetic, live_token]
+        max_age_seconds: 604800
+    coordination.message.receive:
+      disposition: implemented
+      reason_code: semantic_proof_missing
+      policy_key: provider.claude.coordination_message
+      action_gate: ceiling
+      contexts:
+        modes: [helm, console]
+      runtime_prerequisites: [session_context]
+      required_assertions:
+      - id: attributed_message_visible
+        scenario_id: claude_coordination_message
+        oracle_source: server/zerg/qa/provider_coordination_oracles.py
+        minimum_scenario_revision: 1
+        acceptable_evidence: [hermetic, live_token]
+        max_age_seconds: 604800
+
   can_resume: true
   turn_start: true
   operation_evidence:
@@ -172,6 +316,12 @@ providers:
   console_adapter: opencode_run
   control_plane: opencode_server_bridge
   control_plane_aliases: []
+  adapter_sources:
+  - server/zerg/cli/opencode.py
+  - server/zerg/cli/opencode_bridge.py
+  - server/zerg/mcp_server/server.py
+  - engine/src/opencode_control.rs
+  - engine/src/opencode_run.rs
   launch_local: true
   run_once: false
   reattach: true
@@ -184,6 +334,80 @@ providers:
   runtime_phase: true
   transcript_binding: true
   startup_coordination_context: false
+  capabilities:
+    coordination.awareness.create:
+      disposition: implemented
+      reason_code: semantic_proof_missing
+      policy_key: provider.opencode.coordination_awareness
+      action_gate: ceiling
+      contexts:
+        modes: [helm]
+      runtime_prerequisites: [session_context]
+      required_assertions:
+      - id: launch_scoped_coordination_config_loaded
+        scenario_id: opencode_coordination_launch_config
+        oracle_source: server/zerg/qa/provider_opencode_coordination_oracles.py
+        minimum_scenario_revision: 1
+        acceptable_evidence: [live_no_token]
+        max_age_seconds: 604800
+      - id: coordination_instructions_model_visible
+        scenario_id: opencode_coordination_awareness_create
+        oracle_source: server/zerg/qa/provider_coordination_oracles.py
+        minimum_scenario_revision: 1
+        acceptable_evidence: [live_token]
+        max_age_seconds: 86400
+    coordination.awareness.post_compaction:
+      disposition: implemented
+      reason_code: semantic_proof_missing
+      policy_key: provider.opencode.coordination_awareness
+      action_gate: ceiling
+      contexts:
+        modes: [helm]
+      runtime_prerequisites: [session_context]
+      required_assertions:
+      - id: coordination_instructions_model_visible_after_compaction
+        scenario_id: opencode_coordination_awareness_post_compaction
+        oracle_source: server/zerg/qa/provider_coordination_oracles.py
+        minimum_scenario_revision: 1
+        acceptable_evidence: [live_token]
+        max_age_seconds: 86400
+      - id: no_duplicate_visible_bootstrap
+        scenario_id: opencode_coordination_awareness_post_compaction
+        oracle_source: server/zerg/qa/provider_coordination_oracles.py
+        minimum_scenario_revision: 1
+        acceptable_evidence: [hermetic, live_token]
+        max_age_seconds: 604800
+    coordination.message.send:
+      disposition: implemented
+      reason_code: semantic_proof_missing
+      policy_key: provider.opencode.coordination_message
+      action_gate: strict
+      contexts:
+        modes: [helm]
+      runtime_prerequisites: [session_context]
+      required_assertions:
+      - id: directed_message_persisted_and_delivered
+        scenario_id: opencode_coordination_message
+        oracle_source: server/zerg/qa/provider_coordination_oracles.py
+        minimum_scenario_revision: 1
+        acceptable_evidence: [hermetic, live_token]
+        max_age_seconds: 604800
+    coordination.message.receive:
+      disposition: implemented
+      reason_code: semantic_proof_missing
+      policy_key: provider.opencode.coordination_message
+      action_gate: ceiling
+      contexts:
+        modes: [helm]
+      runtime_prerequisites: [session_context]
+      required_assertions:
+      - id: attributed_message_visible
+        scenario_id: opencode_coordination_message
+        oracle_source: server/zerg/qa/provider_coordination_oracles.py
+        minimum_scenario_revision: 1
+        acceptable_evidence: [hermetic, live_token]
+        max_age_seconds: 604800
+
   can_resume: false
   turn_start: true
   operation_evidence:
@@ -250,6 +474,11 @@ providers:
   console_adapter: null
   control_plane: antigravity_hook_inbox
   control_plane_aliases: []
+  adapter_sources:
+  - server/zerg/cli/antigravity.py
+  - server/zerg/cli/antigravity_channel.py
+  - server/zerg/services/managed_local_control.py
+  - engine/src/managed_antigravity_scan.rs
   launch_local: true
   run_once: false
   reattach: false
@@ -262,6 +491,22 @@ providers:
   runtime_phase: true
   transcript_binding: true
   startup_coordination_context: false
+  capabilities:
+    session.input.steer_active:
+      disposition: upstream_absent
+      reason_code: upstream_unavailable
+      policy_key: provider.antigravity.steer_active_turn
+      action_gate: strict
+      contexts:
+        modes: [helm]
+      runtime_prerequisites: []
+      required_assertions:
+      - id: rejected_before_control_write
+        scenario_id: antigravity_steer_rejection
+        oracle_source: server/zerg/qa/provider_control_oracles.py
+        minimum_scenario_revision: 1
+        acceptable_evidence: [hermetic]
+        max_age_seconds: 604800
   can_resume: false
   turn_start: false
   operation_evidence:
@@ -328,6 +573,12 @@ providers:
   control_plane_aliases:
   - cursor_acp
   - cursor_exec
+  adapter_sources:
+  - server/zerg/cli/cursor.py
+  - server/zerg/cli/cursor_helm.py
+  - server/zerg/services/managed_local_control.py
+  - engine/src/cursor_helm_control.rs
+  - engine/src/cursor_print.rs
   launch_local: true
   # Console launch is represented by turn_start.
   run_once: false
@@ -341,6 +592,22 @@ providers:
   runtime_phase: true
   transcript_binding: true
   startup_coordination_context: false
+  capabilities:
+    session.input.steer_active:
+      disposition: upstream_absent
+      reason_code: upstream_unavailable
+      policy_key: provider.cursor.steer_active_turn
+      action_gate: strict
+      contexts:
+        modes: [helm, console]
+      runtime_prerequisites: []
+      required_assertions:
+      - id: rejected_before_control_write
+        scenario_id: cursor_steer_rejection
+        oracle_source: server/zerg/qa/provider_control_oracles.py
+        minimum_scenario_revision: 1
+        acceptable_evidence: [hermetic]
+        max_age_seconds: 604800
   can_resume: false
   turn_start: true
   operation_evidence:

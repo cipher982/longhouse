@@ -32,6 +32,7 @@ from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_TRANSPORT_E
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_UNAVAILABLE_ERROR
 from zerg.services.managed_control_dispatcher import dispatch_managed_control_command
 from zerg.services.managed_control_dispatcher import select_managed_control_transport
+from zerg.services.managed_provider_contracts import contract_for_provider
 from zerg.services.provisional_events import durable_transcript_event_predicate
 from zerg.services.session_observations import OBS_KIND_RUNTIME_SIGNAL
 from zerg.services.session_runtime import runtime_event_from_observation
@@ -818,6 +819,10 @@ async def steer_text_to_managed_local_session(
     error=MANAGED_LOCAL_STEER_TURN_ENDED)` so the router can map to a
     structured 409.
     """
+
+    contract = contract_for_provider(_provider_name(session))
+    if contract is None or not contract.steer_active_turn:
+        return ManagedLocalSendResult(ok=False, error="Provider does not support active-turn steer")
 
     if not _managed_local_action_available(db, session, "send"):
         return ManagedLocalSendResult(ok=False, error="Session is not managed_local")
