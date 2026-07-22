@@ -12,10 +12,13 @@ from zerg.qa import codex_helm_interrupt as profile
 from zerg.qa import codex_release_identity
 from zerg.qa import provider_qualification
 
+TEST_SHA = "1234567890abcdef1234567890abcdef12345678"
+TEST_SHA_SHORT = TEST_SHA[:8]
+
 
 @pytest.fixture(autouse=True)
 def _stable_runner_checkout(monkeypatch) -> None:
-    monkeypatch.setattr(codex_release_identity, "_git_sha", lambda _root: "test-sha")
+    monkeypatch.setattr(codex_release_identity, "_git_sha", lambda _root: TEST_SHA)
     monkeypatch.setattr(codex_release_identity, "_git_dirty", lambda _root: False)
     for name in (
         profile.ENGINE_ENV,
@@ -46,9 +49,28 @@ def _package(tmp_path: Path) -> tuple[Path, Path, str]:
     return root, binary, identity
 
 
-def _engine(tmp_path: Path) -> Path:
+def _engine(
+    tmp_path: Path,
+    *,
+    identity_overrides: dict | None = None,
+    raw_stdout: str | None = None,
+) -> Path:
     path = tmp_path / "longhouse-engine"
-    path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    identity = {
+        "version": "0.2.0",
+        "commit": TEST_SHA,
+        "commit_short": TEST_SHA_SHORT,
+        "dirty": False,
+        "built_at": "2026-07-22T12:00:00Z",
+        "channel": "dev",
+    }
+    identity.update(identity_overrides or {})
+    stdout = raw_stdout if raw_stdout is not None else json.dumps(identity)
+    path.write_text(
+        f"#!{sys.executable}\nimport sys\n"
+        f"print({stdout!r}) if sys.argv[1:] == ['build-identity', '--json'] else sys.exit(2)\n",
+        encoding="utf-8",
+    )
     path.chmod(0o700)
     return path
 
@@ -67,7 +89,7 @@ def _request(tmp_path: Path, binary: Path, identity: str) -> Path:
                 "invocation_id": "interrupt-run-1",
                 "producer_class": "local_diagnostic",
                 "producer_version": "test",
-                "longhouse_git_sha": "test-sha",
+                "longhouse_git_sha": TEST_SHA,
             }
         ),
         encoding="utf-8",
@@ -134,6 +156,15 @@ def test_live_helm_profile_reuses_canary_emits_scoped_records_and_scrubs_secrets
     package_root, binary, identity = _package(tmp_path)
     engine = _engine(tmp_path)
     agents_token, provider_token = _seed_environment(monkeypatch, package_root, engine)
+    real_run = profile.subprocess.run
+    engine_probe_environments: list[dict[str, str]] = []
+
+    def recording_run(argv, **kwargs):
+        if argv == [str(engine), "build-identity", "--json"]:
+            engine_probe_environments.append(dict(kwargs["env"]))
+        return real_run(argv, **kwargs)
+
+    monkeypatch.setattr(profile.subprocess, "run", recording_run)
     monkeypatch.setattr(
         profile.bridge_canary,
         "run_managed_live_interrupt",
@@ -153,12 +184,72 @@ def test_live_helm_profile_reuses_canary_emits_scoped_records_and_scrubs_secrets
     assert execution["provider_version_probe_invocations"] == 1
     assert execution["managed_bridge_starts_observed"] == 1
     assert "provider_starts" not in execution
+    assert engine_probe_environments == [{"PATH": os.environ.get("PATH", ""), "LANG": "C", "LC_ALL": "C"}]
+    assert profile.AGENTS_TOKEN_ENV not in engine_probe_environments[0]
+    assert profile.PROVIDER_TOKEN_ENV not in engine_probe_environments[0]
+    raw_evidence = json.loads((output / "raw-evidence.json").read_text())
+    assert raw_evidence["engine_build_identity"]["commit"] == TEST_SHA
+    assert raw_evidence["engine_build_identity"]["commit_short"] == TEST_SHA_SHORT
     engine_identity = f"sha256:{hashlib.sha256(engine.read_bytes()).hexdigest()}"
     assert {record["longhouse_build_id"] for record in bundle["records"]} == {engine_identity}
     retained = b"".join(path.read_bytes() for path in output.rglob("*") if path.is_file())
     assert agents_token.encode() not in retained
     assert provider_token.encode() not in retained
     assert b"[QUALIFICATION_SECRET_" in retained
+
+
+def test_engine_build_identity_mismatch_blocks_before_provider_or_canary_start(tmp_path: Path, monkeypatch) -> None:
+    package_root, binary, identity = _package(tmp_path)
+    other_sha = "abcdef1234567890abcdef1234567890abcdef12"
+    engine = _engine(
+        tmp_path,
+        identity_overrides={"commit": other_sha, "commit_short": other_sha[:8]},
+    )
+    _seed_environment(monkeypatch, package_root, engine)
+    monkeypatch.setattr(
+        profile.bridge_canary,
+        "run_managed_live_interrupt",
+        lambda *_args, **_kwargs: pytest.fail("canary must not start"),
+    )
+
+    output = tmp_path / "output"
+    result = provider_qualification.run(_request(tmp_path, binary, identity), output)
+
+    assert result["execution_status"] == "blocked"
+    assert set(result["assertions"].values()) == {"blocked"}
+    execution = json.loads((output / "execution-summary.json").read_text())
+    assert execution["engine_build_identity_probe_invocations"] == 1
+    assert execution["provider_version_probe_invocations"] == 0
+    assert execution["managed_bridge_starts_observed"] == 0
+
+
+@pytest.mark.parametrize(
+    ("engine_kwargs", "reason"),
+    [
+        ({"identity_overrides": {"dirty": True}}, "engine_build_identity_mismatch"),
+        ({"raw_stdout": "not-json"}, "malformed_engine_build_identity"),
+    ],
+)
+def test_dirty_or_malformed_engine_build_identity_blocks_before_canary(
+    tmp_path: Path, monkeypatch, engine_kwargs: dict, reason: str
+) -> None:
+    package_root, binary, identity = _package(tmp_path)
+    engine = _engine(tmp_path, **engine_kwargs)
+    _seed_environment(monkeypatch, package_root, engine)
+    monkeypatch.setattr(
+        profile.bridge_canary,
+        "run_managed_live_interrupt",
+        lambda *_args, **_kwargs: pytest.fail("canary must not start"),
+    )
+
+    output = tmp_path / "output"
+    result = provider_qualification.run(_request(tmp_path, binary, identity), output)
+
+    assert result["execution_status"] == "blocked"
+    execution = json.loads((output / "execution-summary.json").read_text())
+    assert execution["reason"] == reason
+    assert execution["provider_version_probe_invocations"] == 0
+    assert execution["managed_bridge_starts_observed"] == 0
 
 
 @pytest.mark.parametrize(

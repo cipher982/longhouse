@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import platform
+import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -49,6 +50,9 @@ _SEMANTIC_FAILURE_CODES = frozenset(
         "managed_live_interrupt_timeout",
     }
 )
+_BUILD_IDENTITY_KEYS = frozenset({"version", "commit", "commit_short", "dirty", "built_at", "channel"})
+_FULL_GIT_SHA = re.compile(r"^[0-9a-f]{40}$")
+_SHORT_GIT_SHA = re.compile(r"^[0-9a-f]{7,12}$")
 
 
 def _load_request(path: Path) -> dict[str, Any]:
@@ -149,6 +153,68 @@ def _managed_bridge_starts_observed(canary_result: dict[str, Any]) -> int:
     if not isinstance(summary, dict):
         return 0
     return int(bool(str(summary.get("session_id") or "").strip()))
+
+
+def _probe_engine_build_identity(engine: Path, request_sha: str, secrets: tuple[str, ...]) -> dict[str, Any]:
+    command = [str(engine), "build-identity", "--json"]
+    probe_env = {"PATH": os.environ.get("PATH", ""), "LANG": "C", "LC_ALL": "C"}
+    try:
+        result = subprocess.run(
+            command,
+            text=True,
+            capture_output=True,
+            env=probe_env,
+            timeout=identity_bridge.TIMEOUT_SECONDS,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return {
+            "status": "infrastructure_error",
+            "reason": type(exc).__name__,
+            "identity": None,
+            "evidence": {"argv": command, "error": type(exc).__name__},
+        }
+    evidence = {
+        "argv": command,
+        "returncode": result.returncode,
+        "stdout": _redact_text(result.stdout, secrets),
+        "stderr": _redact_text(result.stderr, secrets),
+    }
+    try:
+        identity = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        identity = None
+    well_formed = bool(
+        result.returncode == 0
+        and isinstance(identity, dict)
+        and set(identity) == _BUILD_IDENTITY_KEYS
+        and all(
+            isinstance(identity.get(key), str) and bool(identity[key].strip())
+            for key in ("version", "commit", "commit_short", "built_at", "channel")
+        )
+        and identity.get("channel") in {"dev", "release"}
+        and isinstance(identity.get("dirty"), bool)
+        and _FULL_GIT_SHA.fullmatch(str(identity.get("commit") or ""))
+        and _SHORT_GIT_SHA.fullmatch(str(identity.get("commit_short") or ""))
+        and str(identity.get("commit") or "").startswith(str(identity.get("commit_short") or ""))
+    )
+    if not well_formed:
+        return {
+            "status": "blocked",
+            "reason": "malformed_engine_build_identity",
+            "identity": identity if isinstance(identity, dict) else None,
+            "evidence": evidence,
+        }
+    commit = str(identity["commit"])
+    commit_short = str(identity["commit_short"])
+    if commit != request_sha or commit_short != request_sha[: len(commit_short)] or identity["dirty"] is not False:
+        return {
+            "status": "blocked",
+            "reason": "engine_build_identity_mismatch",
+            "identity": identity,
+            "evidence": evidence,
+        }
+    return {"status": "pass", "reason": None, "identity": identity, "evidence": evidence}
 
 
 def _record(
@@ -295,6 +361,7 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
             execution={
                 "status": "blocked",
                 "reason": "required_environment_missing",
+                "engine_build_identity_probe_invocations": 0,
                 "provider_version_probe_invocations": 0,
                 "managed_bridge_starts_observed": 0,
             },
@@ -307,6 +374,37 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
     engine_identity = _file_identity(engine, label=ENGINE_ENV, executable=True)
     package_root, package_identity, package_members = _package_identity(values[PACKAGE_ROOT_ENV], provider_bin)
     secrets = (values[AGENTS_TOKEN_ENV], values[PROVIDER_TOKEN_ENV])
+    engine_build_probe = _probe_engine_build_identity(engine, request["longhouse_git_sha"], secrets)
+    engine_observation = {
+        "engine_executable_identity": engine_identity,
+        "package_identity": package_identity,
+        "engine_build_identity": engine_build_probe["identity"],
+        "engine_build_identity_probe": engine_build_probe["evidence"],
+    }
+    if engine_build_probe["status"] != "pass":
+        outcome = AssertionOutcome.BLOCKED if engine_build_probe["status"] == "blocked" else AssertionOutcome.INFRASTRUCTURE_ERROR
+        outcomes = {assertion: outcome for assertion in ASSERTIONS}
+        return _emit(
+            request=request,
+            output_root=output_root,
+            provider_identity=provider_identity,
+            provider_version="unreported",
+            engine_identity=engine_identity,
+            runner_sha=runner_sha,
+            outcomes=outcomes,
+            evidence_class=EvidenceClass.LIVE_NO_TOKEN,
+            execution={
+                "status": engine_build_probe["status"],
+                "reason": engine_build_probe["reason"],
+                "engine_build_identity_probe_invocations": 1,
+                "provider_version_probe_invocations": 0,
+                "managed_bridge_starts_observed": 0,
+            },
+            observation={
+                **engine_observation,
+                "blocked_reason": engine_build_probe["reason"],
+            },
+        )
 
     version_env = {"PATH": os.environ.get("PATH", ""), "LANG": "C", "LC_ALL": "C"}
     try:
@@ -332,12 +430,12 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
             execution={
                 "status": "infrastructure_error",
                 "reason": type(exc).__name__,
+                "engine_build_identity_probe_invocations": 1,
                 "provider_version_probe_invocations": 1,
                 "managed_bridge_starts_observed": 0,
             },
             observation={
-                "engine_executable_identity": engine_identity,
-                "package_identity": package_identity,
+                **engine_observation,
                 "version_probe_error": type(exc).__name__,
             },
         )
@@ -357,12 +455,12 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
             execution={
                 "status": "infrastructure_error",
                 "reason": "provider_version_probe_failed",
+                "engine_build_identity_probe_invocations": 1,
                 "provider_version_probe_invocations": 1,
                 "managed_bridge_starts_observed": 0,
             },
             observation={
-                "engine_executable_identity": engine_identity,
-                "package_identity": package_identity,
+                **engine_observation,
                 "version_probe": {
                     "returncode": version.returncode,
                     "stdout": _redact_text(version.stdout, secrets),
@@ -384,12 +482,12 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
             execution={
                 "status": "completed",
                 "reason": "provider_version_mismatch",
+                "engine_build_identity_probe_invocations": 1,
                 "provider_version_probe_invocations": 1,
                 "managed_bridge_starts_observed": 0,
             },
             observation={
-                "engine_executable_identity": engine_identity,
-                "package_identity": package_identity,
+                **engine_observation,
                 "expected_provider_version": request["expected_provider_version"],
                 "reported_provider_version": reported_version,
             },
@@ -527,6 +625,8 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
         "post_provider_executable_identity": post_provider_identity,
         "engine_path": str(engine),
         "engine_executable_identity": engine_identity,
+        "engine_build_identity": engine_build_probe["identity"],
+        "engine_build_identity_probe": engine_build_probe["evidence"],
         "post_engine_executable_identity": post_engine_identity,
         "package_root": str(package_root),
         "package_identity": package_identity,
@@ -549,6 +649,7 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
         evidence_class=EvidenceClass.LIVE_TOKEN,
         execution={
             "status": execution_status,
+            "engine_build_identity_probe_invocations": 1,
             "provider_version_probe_invocations": 1,
             "managed_bridge_starts_observed": _managed_bridge_starts_observed(canary_result),
             "canary_invoked": True,
