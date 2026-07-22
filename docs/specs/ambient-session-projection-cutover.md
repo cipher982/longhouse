@@ -33,7 +33,7 @@ replaced by the AI title generated from the first durable user message. A
 network outage delays enrichment only; it cannot turn a known local session
 into `ACTIVITY UNKNOWN`, hide it, or block the menu.
 
-The title service has one job: produce a short, stable 2–4 word title from the
+The title service has one job: produce a short, stable 3–5 word title from the
 first actual user prompt. The Runtime Host owns its state machine and result.
 Provider launchers may retain a local prompt fallback, but no client makes a
 per-session title RPC to render a menu.
@@ -81,7 +81,7 @@ the rendered string.
 
 | Fact | Owner | Transport | Allowed fallback |
 | --- | --- | --- | --- |
-| local provider/process/bridge evidence, local workspace, Helm control path | Machine Agent | atomic local status file + file monitor | last coherent local value, marked with age |
+| local provider/process/bridge evidence, local workspace, local launch mode, Helm control path | Machine Agent | atomic local status file + file monitor | last coherent local value, marked with age |
 | local phase observation | Machine Agent | embedded in that session row | `unknown` only when no fresh local observation exists |
 | managed mode and canonical presentation/control facts | Runtime Host catalog | one session SSE stream | retain last stream value with age/provenance |
 | short AI title and title state/source | Runtime Host title pipeline | same session SSE stream | local prompt/workspace fallback, explicitly `prompt` |
@@ -97,7 +97,7 @@ complete snapshot because an unrelated source refreshed.
 | local presence, workspace path/label, bridge/process evidence | local fragment | local value remains until its evidence expires |
 | local phase preview | local fragment | ambient evidence only; never grants control or establishes lifecycle/terminal state |
 | activity and presentation | runtime fragment | canonical Runtime Host value wins when present and ordered; local phase remains a labelled fallback only |
-| mode, lifecycle, control grants | runtime fragment | Runtime Host only; missing/stale remote evidence does not delete local presence |
+| canonical mode, lifecycle, control grants | runtime fragment | Runtime Host only; missing/stale remote evidence does not delete local presence |
 | title, title state, title source | runtime fragment | `ready/ai` wins; otherwise retain a local prompt/workspace fallback |
 
 The only local timestamps needed are the row generation time and phase/activity
@@ -110,9 +110,10 @@ observation times. Do not add a generic per-field timestamp map.
 Add `local_projection.schema_version: 2` and a separately monotonic
 `local_projection.sequence`, plus a versioned `local_projection.sessions[]`
 collection. Each row is already
-joined by the Machine Agent and contains: session id, provider, mode, workspace
-label/path, launch/control-path evidence, local liveness, local phase and
-`phase_observed_at`, local activity time, and per-field observation timestamps.
+joined by the Machine Agent and contains: session id, provider, local launch
+mode, workspace label/path, launch/control-path evidence, local liveness,
+local phase and `phase_observed_at`, local activity time, and row generation
+time.
 `phase_ledger` may remain temporarily for diagnostics, but is not a required
 input to normal UI projection.
 
@@ -152,11 +153,13 @@ health.
 
 The stream is best-effort enrichment. A delta replaces the runtime fragment,
 including explicit nulls, only when its numeric `commit_seq` is newer. A
-`session_remove` or `replay_complete` clears stale runtime fragments only; it
-never deletes a locally-present row. Reconnects use bounded backoff and a stale
-stream does not erase local rows or local fallback titles. An integration test
-proves that the stable id Swift sends is the same id stored as `device_id` by
-the Runtime Host.
+`session_remove` carries its own `commit_seq` and clears a runtime fragment only
+when newer. `replay_complete` carries a monotonic replay generation plus its
+targeted seen-id set; it clears only an older runtime fragment absent from that
+set. Neither event ever deletes a locally-present row. Reconnects use bounded
+backoff and a stale stream does not erase local rows or local fallback titles.
+An integration test proves that the stable id Swift sends is the same id stored
+as `device_id` by the Runtime Host.
 
 ### Native desktop input
 
