@@ -11,6 +11,7 @@ import yaml
 from zerg.managed_provider_contract_manifest import _validate_machine_control_supports
 from zerg.managed_provider_contract_manifest import _validate_operation_evidence
 from zerg.managed_provider_contract_manifest import normalize_contract_manifest
+from zerg.managed_provider_contract_manifest import managed_provider_contract_entry_digest
 from zerg.managed_provider_contract_manifest import render_contract_manifest_json
 from zerg.provider_cli_contract import PROVIDER_CLI_BINARY_BY_PROVIDER
 from zerg.provider_cli_contract import PROVIDER_CLI_ENV_BY_PROVIDER
@@ -121,6 +122,23 @@ def test_startup_coordination_context_support_is_explicit():
         "antigravity": False,
         "cursor": False,
     }
+
+
+def test_semantic_capabilities_are_authored_only_for_current_coordination_implementations():
+    claude = contract_for_provider("claude")
+    codex = contract_for_provider("codex")
+    assert claude is not None and codex is not None
+    expected = {
+        "coordination.awareness.create",
+        "coordination.awareness.post_compaction",
+        "coordination.message.send",
+        "coordination.message.receive",
+    }
+    assert set(claude.capabilities) == expected
+    assert set(codex.capabilities) == expected
+    assert all(not contract.capabilities for contract in all_managed_provider_contracts() if contract.provider not in {"claude", "codex"})
+    assert claude.contract_entry_digest == managed_provider_contract_entry_digest("claude")
+    assert claude.contract_entry_digest != codex.contract_entry_digest
 
 
 def test_control_plane_index_rejects_contract_collisions():
