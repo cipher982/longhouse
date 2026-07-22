@@ -98,6 +98,9 @@ def collect_provider_support_state(
             provider_executable_identity=provider_executable_identities.get(provider),
             trusted_producer_classes=trusted_capability_producer_classes,
         )
+        available_operations = [
+            capability_id for capability_id, decision in semantic_capability_shadow.items() if decision.get("action") == "enabled"
+        ]
         action_coverage = _action_coverage(provider, release_info=release_info)
         version_readiness = _version_readiness(release_info)
         proof = _proof_summary(operations, live_proof_info=live_proof_info)
@@ -140,10 +143,13 @@ def collect_provider_support_state(
                     live_control_operations=live_control_operations,
                     missing_live_control_operations=missing_live_control_operations,
                 ),
+                # operation_decisions is the stable contextual contract. The
+                # shadow alias remains during the static-support migration so
+                # existing diagnostics can compare both projections.
+                "operation_decisions": semantic_capability_shadow,
                 "semantic_capability_shadow": semantic_capability_shadow,
-                "available_capabilities": [
-                    capability_id for capability_id, decision in semantic_capability_shadow.items() if decision.get("action") == "enabled"
-                ],
+                "available_operations": available_operations,
+                "available_capabilities": available_operations,
                 "capability_proof_record_count": len(capability_proof_records.get(provider, ())),
             },
             "proof": proof,

@@ -76,6 +76,8 @@ def test_support_state_provider_capability_axes_match_manifest_contracts() -> No
         assert capabilities["live_control_operations"] == _expected_live_operations(contract)
         assert capabilities["missing_live_control_operations"] == []
         semantic_shadow = capabilities["semantic_capability_shadow"]
+        assert capabilities["operation_decisions"] == semantic_shadow
+        assert capabilities["available_operations"] == capabilities["available_capabilities"]
         assert set(semantic_shadow) == set(contract.capabilities)
         assert capabilities["available_capabilities"] == []
         for decision in semantic_shadow.values():
