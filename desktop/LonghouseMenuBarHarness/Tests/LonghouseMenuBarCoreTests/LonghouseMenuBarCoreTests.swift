@@ -481,10 +481,12 @@ struct LonghouseMenuBarCoreTests {
     }
 
     @Test
-    func realtimeStreamRecognizesCRLFEventBoundaries() {
-        #expect(SessionProjectionStream.normalizedSSELine("event: session_delta\r") == "event: session_delta")
-        #expect(SessionProjectionStream.normalizedSSELine("\r").isEmpty)
-        #expect(SessionProjectionStream.normalizedSSELine("data: {}") == "data: {}")
+    func realtimeStreamPreservesCRLFEventBoundaries() {
+        var decoder = SessionProjectionStream.SSELineDecoder()
+        let payload = Data("event: session_delta\r\ndata: {}\r\n\r\n".utf8)
+        let lines = payload.compactMap { decoder.append($0) }
+
+        #expect(lines == ["event: session_delta", "data: {}", ""])
     }
 
     @Test
