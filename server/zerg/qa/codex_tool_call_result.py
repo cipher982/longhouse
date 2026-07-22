@@ -49,14 +49,22 @@ def _redact(value: str, secret: str, managed_package_root: str | None = None) ->
     return identity_bridge._redact_text(value)  # noqa: SLF001
 
 
-def _managed_package_root() -> str | None:
+def _managed_package_resources() -> tuple[str, Path, str] | None:
     raw = os.environ.get(MANAGED_PACKAGE_ROOT_ENV)
     if raw is None:
         return None
     path = Path(raw)
     if not path.is_absolute() or not path.is_dir():
         raise identity_bridge.RequestError(f"{MANAGED_PACKAGE_ROOT_ENV} must be an absolute directory")
-    return raw
+    helper = path / "codex-resources" / "bwrap"
+    if helper.is_symlink() or not helper.is_file() or not os.access(helper, os.X_OK):
+        raise identity_bridge.RequestError(f"{MANAGED_PACKAGE_ROOT_ENV} must contain executable official codex-resources/bwrap")
+    try:
+        helper.resolve(strict=True).relative_to(path.resolve(strict=True))
+        helper_identity = identity_bridge._sha256_file(helper)  # noqa: SLF001
+    except (OSError, ValueError) as exc:
+        raise identity_bridge.RequestError("official Codex sandbox helper cannot be resolved inside package root") from exc
+    return raw, helper, helper_identity
 
 
 def _jsonl_events(stdout: str) -> tuple[list[dict[str, Any]], list[str]]:
@@ -231,7 +239,8 @@ def _run_process_group(
 def run(request_path: Path, output_root: Path) -> dict[str, Any]:
     request = _load_request(request_path)
     output_root = output_root.expanduser().resolve()
-    managed_package_root = _managed_package_root()
+    managed_package_resources = _managed_package_resources()
+    managed_package_root = managed_package_resources[0] if managed_package_resources else None
     repo_root = Path(__file__).resolve().parents[3]
     binary, actual_identity, runner_sha = identity_bridge._preflight(request, output_root, repo_root)  # noqa: SLF001
     generated_at = identity_bridge._now()  # noqa: SLF001
@@ -315,6 +324,7 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
     }
     outcomes = {assertion: AssertionOutcome.BLOCKED for assertion in ASSERTIONS}
     outcomes["exact_executable_identity_observed"] = AssertionOutcome.PASS
+    sandbox_helper_evidence: dict[str, Any] | None = None
     version_infrastructure_error = version_result is None or version_result.returncode != 0
     if version_infrastructure_error:
         outcomes["reported_version_matches_expected"] = AssertionOutcome.INFRASTRUCTURE_ERROR
@@ -339,6 +349,18 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
             codex_home = runtime_root / "codex-home"
             workspace.mkdir()
             codex_home.mkdir()
+            helper_link: Path | None = None
+            if managed_package_resources is not None:
+                _, helper_source, helper_identity = managed_package_resources
+                helper_bin = runtime_root / "helper-bin"
+                helper_bin.mkdir()
+                helper_link = helper_bin / "codex-linux-sandbox"
+                helper_link.symlink_to(helper_source)
+                sandbox_helper_evidence = {
+                    "source_path": str(helper_source),
+                    "source_identity": helper_identity,
+                    "shim_path": str(helper_link),
+                }
             argv = [
                 str(binary),
                 "exec",
@@ -365,6 +387,7 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
             }
             if managed_package_root is not None:
                 tool_env[MANAGED_PACKAGE_ROOT_ENV] = managed_package_root
+                tool_env["PATH"] = f"{helper_link.parent}{os.pathsep}{tool_env['PATH']}"
             tool_result: subprocess.CompletedProcess[str] | None = None
             tool_stdout = ""
             tool_stderr = ""
@@ -387,6 +410,15 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
             else:
                 tool_stdout = tool_result.stdout
                 tool_stderr = tool_result.stderr
+        if sandbox_helper_evidence is not None:
+            _, helper_source, helper_identity = managed_package_resources
+            try:
+                helper_post_identity = identity_bridge._sha256_file(helper_source)  # noqa: SLF001
+            except OSError:
+                helper_post_identity = None
+            sandbox_helper_evidence["source_post_identity"] = helper_post_identity
+            sandbox_helper_evidence["source_stable"] = helper_post_identity == helper_identity
+            sandbox_helper_evidence["shim_removed"] = not Path(sandbox_helper_evidence["shim_path"]).exists()
         events, invalid_lines = _jsonl_events(tool_stdout)
         indexed_items = [(index, _event_item(event)) for index, event in enumerate(events)]
         command_items = [(index, item) for index, item in indexed_items if item.get("type") == "command_execution"]
@@ -422,6 +454,12 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
             )
             outcomes["tool_result_linked_to_final_agent_message"] = AssertionOutcome.PASS if linked else AssertionOutcome.SEMANTIC_FAIL
             execution_status = "completed"
+        if sandbox_helper_evidence is not None and (
+            not sandbox_helper_evidence["source_stable"] or not sandbox_helper_evidence["shim_removed"]
+        ):
+            outcomes["command_execution_completed_with_exact_output"] = AssertionOutcome.INFRASTRUCTURE_ERROR
+            outcomes["tool_result_linked_to_final_agent_message"] = AssertionOutcome.INFRASTRUCTURE_ERROR
+            execution_status = "infrastructure_error"
         tool_observation = {
             "argv": argv,
             "returncode": tool_result.returncode if tool_result else None,
@@ -466,6 +504,7 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
         execution={
             "status": execution_status,
             "processes_started": 1 + int(tool_observation is not None and tool_observation.get("status") != "not_run"),
+            "sandbox_helper": sandbox_helper_evidence,
         },
         observation=observation,
         evidence_class=(EvidenceClass.LIVE_TOKEN if semantic_process_attempted else EvidenceClass.LIVE_NO_TOKEN),

@@ -30,6 +30,7 @@ def _fake_codex(tmp_path: Path, *, behavior: str = "pass") -> tuple[Path, str, P
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -37,10 +38,14 @@ from pathlib import Path
 
 calls = Path({str(calls)!r})
 with calls.open("a", encoding="utf-8") as handle:
+    sandbox_helper = shutil.which("codex-linux-sandbox")
     handle.write(json.dumps({{
         "argv": sys.argv[1:],
         "has_api_key": bool(os.environ.get("CODEX_API_KEY")),
         "managed_package_root": os.environ.get("CODEX_MANAGED_PACKAGE_ROOT"),
+        "sandbox_helper": sandbox_helper,
+        "sandbox_helper_source": os.path.realpath(sandbox_helper) if sandbox_helper else None,
+        "path": os.environ.get("PATH"),
     }}) + "\\n")
 if sys.argv[1:] == ["--version"]:
     print("codex-cli 1.2.3")
@@ -85,6 +90,15 @@ if behavior == "mutate":
     return path, f"sha256:{digest}", calls
 
 
+def _official_package_root(tmp_path: Path) -> tuple[Path, Path]:
+    package_root = tmp_path / "official-codex-package"
+    helper = package_root / "codex-resources" / "bwrap"
+    helper.parent.mkdir(parents=True)
+    helper.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    helper.chmod(0o700)
+    return package_root, helper
+
+
 def _request(tmp_path: Path, binary: Path, identity: str, **changes: object) -> Path:
     payload: dict[str, object] = {
         "schema_version": 1,
@@ -127,9 +141,12 @@ def test_live_profile_emits_strict_v2_bundle_and_least_privilege_command(tmp_pat
     raw = (output / "raw-evidence.json").read_bytes()
     assert bundle["execution_metadata"]["raw_evidence_digest"] == f"sha256:{hashlib.sha256(raw).hexdigest()}"
     invocations = [json.loads(line) for line in calls.read_text().splitlines()]
-    assert invocations[0] == {"argv": ["--version"], "has_api_key": False, "managed_package_root": None}
+    assert invocations[0]["argv"] == ["--version"]
+    assert invocations[0]["has_api_key"] is False
+    assert invocations[0]["managed_package_root"] is None
     assert invocations[1]["has_api_key"] is True
     assert invocations[1]["managed_package_root"] is None
+    assert invocations[1]["sandbox_helper"] is None
     live = invocations[1]["argv"]
     assert "--sandbox" in live and live[live.index("--sandbox") + 1] == "workspace-write"
     assert 'approval_policy="never"' in live
@@ -226,18 +243,31 @@ def test_secret_is_never_serialized_even_when_provider_echoes_it(tmp_path: Path,
 
 
 def test_managed_package_root_is_validated_live_only_and_redacted(tmp_path: Path, monkeypatch) -> None:
-    package_root = tmp_path / "official-codex-package"
-    package_root.mkdir()
+    package_root, helper = _official_package_root(tmp_path)
     monkeypatch.setenv(profile.MANAGED_PACKAGE_ROOT_ENV, str(package_root))
 
     _, output, calls = _run(tmp_path, monkeypatch)
 
     invocations = [json.loads(line) for line in calls.read_text().splitlines()]
     assert invocations[0]["managed_package_root"] is None
+    assert "helper-bin" not in invocations[0]["path"]
     assert invocations[1]["managed_package_root"] == str(package_root)
+    assert invocations[1]["sandbox_helper_source"] == str(helper)
+    shim = Path(invocations[1]["sandbox_helper"])
+    assert shim.name == "codex-linux-sandbox"
+    assert shim.parent.name == "helper-bin"
+    assert invocations[1]["path"].split(":", 1)[0] == str(shim.parent)
+    assert not shim.exists()
     retained = b"".join(path.read_bytes() for path in output.rglob("*") if path.is_file())
-    assert str(package_root).encode() not in retained
     assert b"[CODEX_MANAGED_PACKAGE_ROOT]" in retained
+    execution = json.loads((output / "execution-summary.json").read_text())
+    helper_evidence = execution["sandbox_helper"]
+    assert helper_evidence["source_path"] == str(helper)
+    assert helper_evidence["source_identity"].startswith("sha256:")
+    assert helper_evidence["source_post_identity"] == helper_evidence["source_identity"]
+    assert helper_evidence["source_stable"] is True
+    assert helper_evidence["shim_removed"] is True
+    assert not Path(helper_evidence["shim_path"]).exists()
 
 
 @pytest.mark.parametrize("package_root", ["", "relative/package", "/definitely/not/a/codex/package"])
@@ -248,6 +278,31 @@ def test_managed_package_root_must_be_an_absolute_directory(tmp_path: Path, monk
     output = tmp_path / "output"
 
     with pytest.raises(codex_release_identity.RequestError, match="must be an absolute directory"):
+        provider_qualification.run(_request(tmp_path, binary, identity), output)
+
+    assert not calls.exists()
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("resource_shape", ["missing", "not_executable", "system_symlink"])
+def test_managed_package_root_rejects_non_official_helper(
+    tmp_path: Path, monkeypatch, resource_shape: str
+) -> None:
+    binary, identity, calls = _fake_codex(tmp_path)
+    package_root = tmp_path / "candidate-package"
+    package_root.mkdir()
+    helper = package_root / "codex-resources" / "bwrap"
+    if resource_shape != "missing":
+        helper.parent.mkdir()
+        if resource_shape == "system_symlink":
+            helper.symlink_to("/bin/sh")
+        else:
+            helper.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    monkeypatch.setenv(profile.API_KEY_ENV, "seeded-test-api-key-not-a-real-secret")
+    monkeypatch.setenv(profile.MANAGED_PACKAGE_ROOT_ENV, str(package_root))
+    output = tmp_path / "output"
+
+    with pytest.raises(codex_release_identity.RequestError, match="official codex-resources/bwrap"):
         provider_qualification.run(_request(tmp_path, binary, identity), output)
 
     assert not calls.exists()
