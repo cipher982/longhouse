@@ -24,6 +24,7 @@ use crate::claude_channel_control::{
     interrupt as claude_channel_interrupt, send_text as claude_channel_send_text,
     ClaudeChannelControlError, ClaudeChannelInterruptConfig, ClaudeChannelSendConfig,
 };
+use crate::claude_print::{start_claude_print_turn, ClaudePrintRunConfig, CLAUDE_PRINT_ADAPTER};
 use crate::codex_bridge::{
     cmd_codex_bridge_interrupt, cmd_codex_bridge_pause_response, cmd_codex_bridge_send,
     cmd_codex_bridge_steer, validate_codex_bridge_attached, BridgeInterruptConfig,
@@ -537,6 +538,18 @@ pub fn spawn_control_channel(
                 tracing::warn!(%error, "Failed to reconcile OpenCode Console turn claims")
             }
         }
+        match crate::claude_print::recover_claude_print_turns(
+            &config.machine_name,
+            config.db_path.clone(),
+        )
+        .await
+        {
+            Ok(count) if count > 0 => {
+                tracing::info!(count, "Recovered Claude Console turn monitors")
+            }
+            Ok(_) => {}
+            Err(error) => tracing::warn!(%error, "Failed to reconcile Claude Console turn claims"),
+        }
         run_reconnect_loop(config, status).await;
     }))
 }
@@ -869,6 +882,11 @@ async fn execute_command(
                     crate::opencode_run::interrupt_opencode_run_turn(&run_id, &session_id)
                         .map_err(CommandError::command_failed)?;
                     OPENCODE_RUN_ADAPTER
+                }
+                "claude" => {
+                    crate::claude_print::interrupt_claude_print_turn(&run_id, &session_id)
+                        .map_err(CommandError::command_failed)?;
+                    CLAUDE_PRINT_ADAPTER
                 }
                 _ => {
                     return Err(CommandError {
@@ -1307,7 +1325,10 @@ async fn execute_turn_start(
             .unwrap_or(-1),
     );
     let provider = payload_required_string(payload, "provider")?;
-    if !matches!(provider.as_str(), "codex" | "cursor" | "opencode") {
+    if !matches!(
+        provider.as_str(),
+        "codex" | "cursor" | "opencode" | "claude"
+    ) {
         return Err(CommandError {
             code: "provider_unsupported".to_string(),
             message: format!("provider={provider} has no Console turn adapter"),
@@ -1331,7 +1352,7 @@ async fn execute_turn_start(
     let resume_provider_thread_id = payload_optional_string(payload, "resume_provider_thread_id");
     let permission_mode =
         payload_optional_string(payload, "permission_mode").unwrap_or_else(|| {
-            if matches!(provider.as_str(), "cursor" | "opencode") {
+            if matches!(provider.as_str(), "cursor" | "opencode" | "claude") {
                 "bypass"
             } else {
                 "remote_approve"
@@ -1342,6 +1363,12 @@ async fn execute_turn_start(
         return Err(CommandError {
             code: "permission_mode_unsupported".to_string(),
             message: "OpenCode Console currently supports bypass permission mode only".to_string(),
+        });
+    }
+    if provider == "claude" && permission_mode != "bypass" {
+        return Err(CommandError {
+            code: "permission_mode_unsupported".to_string(),
+            message: "Claude Console currently supports bypass permission mode only".to_string(),
         });
     }
     if provider == "cursor" && !matches!(permission_mode.as_str(), "bypass" | "auto_approve") {
@@ -1419,7 +1446,41 @@ async fn execute_turn_start(
         .db_path
         .clone()
         .or_else(|| crate::config::get_agent_db_path().ok());
-    let launch_result = if provider == "cursor" {
+    let launch_result = if provider == "claude" {
+        start_claude_print_turn(ClaudePrintRunConfig {
+            session_id: session_id.to_string(),
+            thread_id: thread_id.clone(),
+            turn_id: turn_id.clone(),
+            run_id: run_id.clone(),
+            client_request_id: client_request_id.clone(),
+            cwd,
+            claude_bin: std::env::var("LONGHOUSE_CLAUDE_BIN")
+                .unwrap_or_else(|_| crate::claude_print::DEFAULT_CLAUDE_BIN.to_string()),
+            prompt: message,
+            resume_provider_thread_id,
+            model: payload_optional_string(payload, "model"),
+            permission_mode,
+            machine_name: config.machine_name.clone(),
+            local_db_path,
+        })
+        .await
+        .map(|summary| {
+            json!({
+                "session_id": summary.session_id,
+                "thread_id": thread_id,
+                "run_id": summary.run_id,
+                "provider": "claude",
+                "transport": CLAUDE_PRINT_ADAPTER,
+                "provider_thread_id": summary.provider_thread_id,
+                "launch_id": summary.launch_id,
+                "pid": summary.pid,
+                "process_group_id": summary.process_group_id,
+                "stdout_path": summary.stdout_path,
+                "stderr_path": summary.stderr_path,
+                "argv": summary.argv,
+            })
+        })
+    } else if provider == "cursor" {
         start_cursor_print_turn(CursorPrintRunConfig {
             session_id: session_id.to_string(),
             thread_id: thread_id.clone(),
@@ -1534,7 +1595,7 @@ async fn execute_turn_start(
         Ok(result) => {
             if matches!(
                 result.get("transport").and_then(Value::as_str),
-                Some(CURSOR_PRINT_ADAPTER | OPENCODE_RUN_ADAPTER)
+                Some(CURSOR_PRINT_ADAPTER | OPENCODE_RUN_ADAPTER | CLAUDE_PRINT_ADAPTER)
             ) {
                 return Ok(result);
             }
@@ -2351,6 +2412,8 @@ mod tests {
         ("claude", "interrupt", COMMAND_INTERRUPT),
         ("claude", "steer", COMMAND_STEER_TEXT),
         ("claude", "answer_pause", COMMAND_ANSWER_PAUSE),
+        ("claude", "turn_start", COMMAND_TURN_START),
+        ("claude", "turn_interrupt", COMMAND_TURN_INTERRUPT),
         ("opencode", "send", COMMAND_SEND_TEXT),
         ("opencode", "interrupt", COMMAND_INTERRUPT),
         ("opencode", "terminate", COMMAND_TERMINATE),
@@ -3898,7 +3961,7 @@ exit 1
                         std::time::Instant::now() < deadline,
                         "OpenCode fake turn timed out"
                     );
-                    runtime.block_on(tokio::time::sleep(Duration::from_millis(20)));
+                    runtime.block_on(async { tokio::time::sleep(Duration::from_millis(20)).await });
                 }
                 response
             };
@@ -3913,6 +3976,206 @@ exit 1
             let argv = second["result"]["argv"].as_array().unwrap();
             let session_flag = argv.iter().position(|value| value == "--session").unwrap();
             assert_eq!(argv[session_flag + 1], "ses_console_test");
+        });
+    }
+
+    #[test]
+    fn claude_console_turn_start_is_bounded_bound_and_natively_resumable() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let temp = tempfile::TempDir::new().unwrap();
+        let workspace = temp.path().join("workspace");
+        std::fs::create_dir(&workspace).unwrap();
+        let args_path = temp.path().join("claude-args.txt");
+        let env_path = temp.path().join("claude-env.txt");
+        let fake = temp.path().join("claude");
+        write_test_executable(
+            &fake,
+            &format!(
+                r#"#!/bin/sh
+printf '%s\n' "$@" > '{}'
+printf '%s|%s|%s|%s\n' "$LONGHOUSE_MANAGED_SESSION_ID" "$LONGHOUSE_RUN_ID" "$LONGHOUSE_CHANNEL_SESSION_ID" "$LONGHOUSE_PERMISSION_HOOK_ENABLED" > '{}'
+provider_id=""
+previous=""
+last=""
+for value in "$@"; do
+  if [ "$previous" = "--session-id" ] || [ "$previous" = "--resume" ]; then provider_id="$value"; fi
+  previous="$value"
+  last="$value"
+done
+printf '{{"type":"system","subtype":"init","session_id":"%s"}}\n' "$provider_id"
+if [ "$last" = "sleep prompt" ]; then sleep 30; fi
+printf '{{"type":"assistant","message":{{"content":[{{"type":"text","text":"done"}}]}}}}\n'
+printf '{{"type":"result","subtype":"success","is_error":false}}\n'
+"#,
+                args_path.display(),
+                env_path.display(),
+            ),
+        );
+        let claude_home = temp.path().join("claude-home");
+        let hook_dir = claude_home.join("hooks");
+        std::fs::create_dir_all(&hook_dir).unwrap();
+        std::fs::write(hook_dir.join("longhouse-hook.sh"), "#!/bin/sh\n").unwrap();
+        std::fs::write(
+            claude_home.join("settings.json"),
+            serde_json::to_vec(&json!({
+                "hooks": {"SessionStart": [{"hooks": [{"command": hook_dir.join("longhouse-hook.sh")}]}]}
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let longhouse_home = temp.path().join("longhouse");
+        let session_id = Uuid::new_v4().to_string();
+        let thread_id = Uuid::new_v4().to_string();
+        let vars = vec![
+            (
+                "LONGHOUSE_HOME".to_string(),
+                Some(longhouse_home.display().to_string()),
+            ),
+            (
+                "CLAUDE_CONFIG_DIR".to_string(),
+                Some(claude_home.display().to_string()),
+            ),
+            (
+                "LONGHOUSE_CLAUDE_BIN".to_string(),
+                Some(fake.display().to_string()),
+            ),
+            (
+                "LONGHOUSE_CHANNEL_SESSION_ID".to_string(),
+                Some("must-clear".to_string()),
+            ),
+            (
+                "LONGHOUSE_PERMISSION_HOOK_ENABLED".to_string(),
+                Some("1".to_string()),
+            ),
+        ];
+        temp_env::with_vars(vars, || {
+            let run_turn = |resume: Option<&str>| {
+                let run_id = Uuid::new_v4().to_string();
+                let mut payload = json!({
+                    "provider": "claude",
+                    "thread_id": thread_id,
+                    "turn_id": Uuid::new_v4().to_string(),
+                    "run_id": run_id,
+                    "client_request_id": format!("request-{run_id}"),
+                    "cwd": workspace,
+                    "message": "private prompt",
+                    "permission_mode": "bypass",
+                });
+                if let Some(provider_thread_id) = resume {
+                    payload["resume_provider_thread_id"] = json!(provider_thread_id);
+                }
+                let mut cache = command_cache();
+                let response = runtime.block_on(handle_command_frame(
+                    json!({
+                        "type": "command",
+                        "command_id": run_id,
+                        "session_id": session_id,
+                        "command_type": COMMAND_TURN_START,
+                        "payload": payload,
+                    }),
+                    &mut cache,
+                    &test_config(),
+                ));
+                assert_eq!(response["ok"], true, "{response}");
+                let argv = response["result"]["argv"].as_array().unwrap();
+                assert_eq!(
+                    argv.last().and_then(Value::as_str),
+                    Some("[prompt omitted]")
+                );
+                assert!(!argv.iter().any(|value| value == "private prompt"));
+                let deadline = std::time::Instant::now() + Duration::from_secs(5);
+                loop {
+                    let claim = crate::turn_claims::default_registry()
+                        .unwrap()
+                        .read(&run_id)
+                        .unwrap();
+                    if claim.state == "terminal" {
+                        assert!(claim.provider_identity_confirmed);
+                        assert_eq!(claim.result.unwrap()["terminal_state"], "run_completed");
+                        break;
+                    }
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "Claude fake turn timed out"
+                    );
+                    runtime.block_on(async { tokio::time::sleep(Duration::from_millis(20)).await });
+                }
+                assert_eq!(
+                    std::fs::read_to_string(&env_path).unwrap().trim(),
+                    format!("{session_id}|{run_id}||")
+                );
+                response
+            };
+
+            let first = run_turn(None);
+            let provider_thread_id = first["result"]["provider_thread_id"]
+                .as_str()
+                .unwrap()
+                .to_string();
+            let first_args = std::fs::read_to_string(&args_path).unwrap();
+            assert!(first_args.contains("--session-id"));
+            assert!(first_args.contains(&provider_thread_id));
+            assert!(first_args.contains("private prompt"));
+
+            let second = run_turn(Some(&provider_thread_id));
+            assert_eq!(second["result"]["provider_thread_id"], provider_thread_id);
+            let second_args = std::fs::read_to_string(&args_path).unwrap();
+            assert!(second_args.contains("--resume"));
+            assert!(second_args.contains(&provider_thread_id));
+
+            let interrupt_run_id = Uuid::new_v4().to_string();
+            let interrupt_turn_id = Uuid::new_v4().to_string();
+            let mut cache = command_cache();
+            let started = runtime.block_on(handle_command_frame(
+                json!({
+                    "type": "command",
+                    "command_id": interrupt_run_id,
+                    "session_id": session_id,
+                    "command_type": COMMAND_TURN_START,
+                    "payload": {
+                        "provider": "claude",
+                        "thread_id": thread_id,
+                        "turn_id": interrupt_turn_id,
+                        "run_id": interrupt_run_id,
+                        "client_request_id": "claude-interrupt",
+                        "cwd": workspace,
+                        "message": "sleep prompt",
+                        "permission_mode": "bypass",
+                        "resume_provider_thread_id": provider_thread_id,
+                    },
+                }),
+                &mut cache,
+                &test_config(),
+            ));
+            assert_eq!(started["ok"], true, "{started}");
+            let interrupt_deadline = std::time::Instant::now() + Duration::from_secs(5);
+            loop {
+                let claim = crate::turn_claims::default_registry()
+                    .unwrap()
+                    .read(&interrupt_run_id)
+                    .unwrap();
+                if claim.provider_identity_confirmed {
+                    break;
+                }
+                assert!(std::time::Instant::now() < interrupt_deadline);
+                runtime.block_on(async { tokio::time::sleep(Duration::from_millis(20)).await });
+            }
+            crate::claude_print::interrupt_claude_print_turn(&interrupt_run_id, &session_id)
+                .unwrap();
+            let cancel_deadline = std::time::Instant::now() + Duration::from_secs(5);
+            loop {
+                let claim = crate::turn_claims::default_registry()
+                    .unwrap()
+                    .read(&interrupt_run_id)
+                    .unwrap();
+                if claim.state == "terminal" {
+                    assert_eq!(claim.result.unwrap()["terminal_state"], "run_cancelled");
+                    break;
+                }
+                assert!(std::time::Instant::now() < cancel_deadline);
+                runtime.block_on(async { tokio::time::sleep(Duration::from_millis(20)).await });
+            }
         });
     }
 

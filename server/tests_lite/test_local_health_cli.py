@@ -1202,9 +1202,11 @@ def test_collect_local_health_degrades_for_concrete_provider_support_failure(mon
                 "supports": [
                     "claude.send",
                     "claude.interrupt",
-                    "claude.steer",
-                    "claude.answer_pause",
-                ],
+                        "claude.steer",
+                        "claude.answer_pause",
+                        "claude.turn_start",
+                        "claude.turn_interrupt",
+                    ],
             }
         },
     )
@@ -1291,6 +1293,8 @@ def test_collect_local_health_keeps_release_coverage_gap_visible_when_live_proof
                     "claude.interrupt",
                     "claude.steer",
                     "claude.answer_pause",
+                    "claude.turn_start",
+                    "claude.turn_interrupt",
                 ],
             }
         },

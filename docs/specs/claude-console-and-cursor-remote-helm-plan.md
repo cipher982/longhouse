@@ -1,6 +1,6 @@
 # Claude Console Plan
 
-Status: proposed implementation plan; no behavior shipped
+Status: implemented 2026-07-21; production adapter and stock-Claude fresh/resume canary shipped
 Owner: Longhouse Machine Agent + session kernel
 Date: 2026-07-21
 Related:
@@ -21,21 +21,21 @@ through `longhouse cursor` and turn-scoped Console through `cursor_print`.
 A persistent no-terminal Cursor process would recreate the invalid
 `session.launch` abstraction without adding an upstream control capability.
 
-Do not preserve or extend provider-facing `session.launch`. The existing
-persistent no-terminal Claude/Codex/OpenCode launch paths are separate deletion
-work tracked by `docs/specs/turn-scoped-console-execution.md` and the
-`session-launch-removal` docket item. Claude Console must use one invocation
-per turn and must not reuse the persistent Claude channel launcher.
+Provider-facing `session.launch` and the persistent no-terminal
+Claude/Codex/OpenCode launch paths were deleted in the same cutover. Claude
+Console uses one invocation per turn and does not reuse the persistent Claude
+channel launcher.
 
-The adapter-scoped provider schema remains desirable, but it is not a
-prerequisite for Claude Console. The current schema can promote
-`console_adapter: claude_print` and `turn_start: true` after live proof.
+The current provider schema now advertises `console_adapter: claude_print` and
+`turn_start: true`, backed by production dispatch, hermetic lifecycle tests,
+and a stock-Claude fresh/resume canary. The larger adapter-scoped schema
+cleanup remains separate legibility work.
 
 ## Current Capability Truth
 
 | Provider | Terminal-originated Helm | Console `turn_start` | Active-turn steer |
 | --- | --- | --- | --- |
-| Claude | shipped through `longhouse claude` | missing adapter | Helm only |
+| Claude | shipped through `longhouse claude` | shipped through `claude_print` | Helm only |
 | Codex | shipped through `longhouse codex` | shipped through `codex_exec` | Helm only |
 | Cursor | shipped through `longhouse cursor` | shipped through `cursor_print` | unsupported upstream |
 | OpenCode | shipped through `longhouse opencode` | shipped through `opencode_run` | unsupported upstream |
@@ -61,7 +61,8 @@ The original investigation checked:
 The live probe emitted parseable stream JSON, a matching `system.init` session
 ID, assistant records, and a final `result` record. Each invocation exited, and
 a second process using `--resume` restored the same provider conversation.
-This proves CLI feasibility, not Longhouse product readiness.
+The production canary now proves the same fresh/resume behavior through
+Longhouse's `claude_print` adapter and durable turn-claim path.
 
 ## Dormant `companion-claude-print` Worktree
 
@@ -96,9 +97,9 @@ not a branch to merge or rebase.
 - Its private binding-probe tree is not Claude's canonical storage-v2 binding
   authority.
 
-## Target Design
+## Shipped Design
 
-Add `engine/src/claude_print.rs` beside `cursor_print.rs` and
+`engine/src/claude_print.rs` now sits beside `cursor_print.rs` and
 `opencode_run.rs`, following their current shared conventions:
 
 1. `execute_turn_start` durably claims `run_id` before adapter selection.
@@ -170,20 +171,23 @@ context, readable prose/reasoning/tools, interrupt, post-cancel resume, Machine
 Agent restart, Runtime Host outage/recovery, cold reopen, search, and no
 duplicate Shadow session on the exact supported Claude version.
 
-## Delivery Slices
+## Delivery Record
 
-1. Port the adapter onto current main with hermetic argv, stream, terminal, and
-   failure tests; capability remains false.
-2. Wire durable claims, interrupt, restart reconciliation, native hook/storage
-   binding, and convergence tests; capability remains false.
-3. Run live fresh/resume/cancel/restart/outage proof on the supported Claude
-   build.
-4. Update the authored manifest, regenerate contracts, and promote Claude
-   Console only after all surfaces agree.
+1. Ported the adapter onto current main with hermetic argv, stream, terminal,
+   identity, redaction, and failure tests.
+2. Wired durable claims, exact-process interrupt, restart reconciliation, and
+   native hook/storage binding.
+3. Passed the production-path fake-provider test for fresh/resume/cancel and
+   the authenticated stock-Claude fresh/resume canary.
+4. Updated the authored manifest, regenerated contracts, and promoted Claude
+   Console across engine, Runtime Host, machine directory, and local health.
 
-`session.launch` removal is not blocked on this plan. It may land before or
-alongside Claude Console; no compatibility path in this plan depends on remote
-detached launch.
+The broader release-proof matrix (live restart, Runtime Host outage/recovery,
+search, and cold reopen) remains a release-hardening gate, not an alternate
+implementation or a reason to retain detached launch machinery.
+
+`session.launch` removal landed alongside Claude Console. No compatibility path
+depends on remote detached launch.
 
 ## Acceptance
 

@@ -87,7 +87,7 @@ providers:
   provider_cli_env: null
   requires_longhouse_cli: true
   managed_transport: claude_channel_bridge
-  console_adapter: null
+  console_adapter: claude_print
   control_plane: claude_channel_bridge
   control_plane_aliases: []
   launch_local: true
@@ -103,7 +103,7 @@ providers:
   transcript_binding: true
   startup_coordination_context: true
   can_resume: true
-  turn_start: false
+  turn_start: true
   operation_evidence:
     launch_local:
       level: live_no_token
@@ -112,7 +112,8 @@ providers:
       next: promote with live token channel/PTY transcript canary
     run_once:
       level: none
-      source: no Claude turn-scoped Console adapter is implemented; use the managed channel/PTY path
+      source: legacy session.run_once is retired; Claude Console uses session.turn.start through
+        claude_print
     reattach:
       level: hermetic
       source: Claude channel bridge session state and resume unit coverage
@@ -149,13 +150,18 @@ providers:
       source: Claude hook transcript binding tests
       next: promote when Claude release-canary live transcript assertion exists
     turn_start:
-      level: none
-      source: Claude turn-scoped Console adapter is not machine-advertised
+      level: hermetic
+      source: engine production-dispatch test proves bounded fresh/resume claude_print argv,
+        binding env, identity, and terminal evidence
+      next: promote with live fresh/resume/interrupt/restart/outage transcript convergence
+        proof
   machine_control_supports:
   - claude.send
   - claude.interrupt
   - claude.steer
   - claude.answer_pause
+  - claude.turn_start
+  - claude.turn_interrupt
 - provider: opencode
   provider_cli_binary: opencode
   provider_cli_env: LONGHOUSE_OPENCODE_BIN

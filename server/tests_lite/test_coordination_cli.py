@@ -944,12 +944,6 @@ def test_sessions_continue_command_prints_managed_local_acceptance(monkeypatch):
     assert "dispatch_ms: 12.4" in result.output
     assert fake_client.calls == [
         {
-            "method": "GET",
-            "url": "https://longhouse.test/api/agents/sessions/22222222-2222-2222-2222-222222222222",
-            "headers": {"X-Agents-Token": "zdt_test_token"},
-            "params": None,
-        },
-        {
             "method": "POST",
             "url": "https://longhouse.test/api/agents/sessions/22222222-2222-2222-2222-222222222222/send-live",
             "headers": {"X-Agents-Token": "zdt_test_token"},
@@ -1000,12 +994,6 @@ def test_sessions_continue_always_uses_send_live(monkeypatch):
     assert result.exit_code == 0, result.output
     assert "Accepted by session 22222222-2222-2222-2222-222222222222" in result.output
     assert fake_client.calls == [
-        {
-            "method": "GET",
-            "url": "https://longhouse.test/api/agents/sessions/22222222-2222-2222-2222-222222222222",
-            "headers": {"X-Agents-Token": "zdt_test_token"},
-            "params": None,
-        },
         {
             "method": "POST",
             "url": "https://longhouse.test/api/agents/sessions/22222222-2222-2222-2222-222222222222/send-live",

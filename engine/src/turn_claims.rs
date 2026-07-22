@@ -12,7 +12,7 @@ use serde::Serialize;
 use serde_json::Value;
 use uuid::Uuid;
 
-const CLAIM_SCHEMA_VERSION: u32 = 4;
+const CLAIM_SCHEMA_VERSION: u32 = 5;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct TurnClaim {
@@ -26,6 +26,8 @@ pub struct TurnClaim {
     pub client_request_id: Option<String>,
     #[serde(default)]
     pub provider_thread_id: Option<String>,
+    #[serde(default)]
+    pub provider_identity_confirmed: bool,
     #[serde(default)]
     pub source_path: Option<String>,
     pub provider: String,
@@ -93,6 +95,7 @@ impl TurnClaimRegistry {
             turn_id: turn_id.map(str::to_string),
             client_request_id: client_request_id.map(str::to_string),
             provider_thread_id: None,
+            provider_identity_confirmed: false,
             source_path: None,
             provider: provider.to_string(),
             state: "claimed".to_string(),
@@ -238,6 +241,7 @@ impl TurnClaimRegistry {
     ) -> Result<TurnClaim> {
         let mut claim = self.read(run_id)?;
         claim.provider_thread_id = Some(provider_thread_id.to_string());
+        claim.provider_identity_confirmed = true;
         claim.source_path = source_path.map(str::to_string);
         claim.updated_at = Utc::now().to_rfc3339();
         self.write(&claim)?;

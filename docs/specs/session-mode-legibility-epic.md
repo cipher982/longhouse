@@ -1,7 +1,8 @@
 # Session-Mode and Provider-Contract Legibility
 
 **Status:** Phase A shipped 2026-07-21 (item 3 partially — see item 3 note).
-Phase B not started, not scheduled.
+Phase B's behavioral slice shipped 2026-07-21: remote `session.launch` was
+deleted and Claude Console was added. Schema-v2 cleanup remains deferred.
 **Owner:** Longhouse core
 **Created:** 2026-07-21
 **Related:** `ARCHITECTURE.md`, `docs/specs/managed-session-state-normalization-epic.md`,
@@ -92,17 +93,16 @@ real behavioral work it can't honestly be separated from.
    the fix has to make one registry authoritative, not add a third table that
    will drift the same way.
    Separately, the narrower claim from the original draft —
-   `opencode.run_once=true` — is real and still live: `run_once_supported_providers()`
-   consumes it and `remote_session_launch.py:84-85` uses that set, so it is a
-   genuine stale server-level claim, just not the *machine_control_supports*
-   false-advertisement the existing engine test already guards against.
+   `opencode.run_once=true` — was real and live at review time:
+   `run_once_supported_providers()` consumed it and `remote_session_launch.py`
+   used that set. Both the stale claim and the remote-launch consumer are now
+   gone.
 
-5. **The Claude file contains one supported Helm launcher and one obsolete
-   persistent remote launcher.** `console_turns.py` is already explicitly
-   Console-named and provider-neutral. `_run_native_claude_tui` is the real
-   terminal-originated Helm path. `_launch_detached_native_claude_channel` is
-   `session.launch` compatibility machinery awaiting deletion, not another
-   valid Helm launch surface.
+5. **The Claude file contained one supported Helm launcher and one obsolete
+   persistent remote launcher.** `_run_native_claude_tui` remains the real
+   terminal-originated Helm path. `_launch_detached_native_claude_channel` and
+   its `session.launch` machinery were deleted; they were never another valid
+   Helm launch surface.
 
 6. **Two generations of the same concept coexist with no lifecycle marker,
    and this is partly deliberate mid-migration state, not pure neglect.**
@@ -258,9 +258,8 @@ work on those files is ordinary git, resolved at merge time.
 4. Add module-level docstring banners to `_run_native_claude_tui` and
    `_launch_detached_native_claude_channel` stating plainly which product
    mode each implements. **Shipped:** `79528983b`, then corrected after review:
-   `_run_native_claude_tui` is Helm; the detached helper is obsolete
-   `session.launch` compatibility machinery and implements no valid product
-   mode.
+   `_run_native_claude_tui` is Helm; the detached helper implemented no valid
+   product mode and was subsequently deleted with `session.launch`.
 5. Add a **hard-failing CI check**, not an advisory lint, that fails the build
    if a second location in the repo redefines Shadow/Helm/Console or
    Managed/Unmanaged in its own prose instead of linking to the canonical
@@ -290,19 +289,22 @@ repeat it next time a spec changes:
   completion, so this can't silently re-drift the way the original
   `rust-edge-provider-parity` guardrail did.
 
-## Phase B — deferred, bundled with real behavioral work
+## Phase B — behavioral slice shipped; schema cleanup deferred
 
-Explicitly **not** part of this phase; recorded here so it isn't lost and
-isn't attempted piecemeal:
+Disposition as of 2026-07-21:
 
 - The adapter-scoped schema v2 migration (real restructure of
   `managed_providers.yml`).
 - Deleting the legacy `execution_lifetime`/`run_once`/launch-boolean fields
   per `turn-scoped-console-execution.md`'s already-agreed trigger.
-- Deleting provider-facing `session.launch`, `launch_remote`, and the
-  persistent no-terminal Claude/Codex/OpenCode launch implementations.
-- Public renames of the Claude launch functions/CLI surface.
-- Building the actual Claude Console (`turn_start`) adapter.
+- ~~Deleting provider-facing `session.launch`, `launch_remote`, and the
+  persistent no-terminal Claude/Codex/OpenCode launch implementations.~~
+  Shipped; new engines reject the command rather than treating it as legacy.
+- ~~Public renames/removal of the obsolete Claude remote-launch surface.~~
+  Shipped while preserving terminal-originated `longhouse claude` Helm.
+- ~~Building the actual Claude Console (`turn_start`) adapter.~~ Shipped as
+  `claude_print`, with production-path lifecycle coverage and stock-Claude
+  fresh/resume proof.
 - Cursor does not get remote Helm; its existing `cursor_print` Console adapter
   owns no-terminal UI dispatch.
 - No idle-timeout policy is added to preserve remote detached launch. The

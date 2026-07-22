@@ -189,7 +189,7 @@ Provider names choose adapters; they do not define launch modes.
 | --- | --- | --- | --- |
 | `codex_exec` | `codex exec` | `codex exec resume <thread>` | execution exists; promote behind common contract |
 | `cursor_print` | `create-chat` + native `--print --resume` | native `--print --resume` | implementation locked; promote only after live product proof |
-| `claude_print` | `claude --print --session-id` | `claude --print --resume` | feasibility evidence only; managed adapter and live resume proof needed |
+| `claude_print` | `claude --print --session-id` | `claude --print --resume` | shipped; production-path lifecycle test and stock-Claude fresh/resume canary pass |
 | `opencode_run` | `opencode run` | `opencode run --session` | feasibility evidence only; managed adapter and live resume proof needed |
 
 Console eligibility requires proven fresh-turn and same-thread resume behavior.
@@ -259,9 +259,9 @@ Future proven active-turn controls extend this response additively.
 Raw diagnostics may expose adapter, connection, resume, and process detail.
 Clients do not infer product actions from raw Machine Agent support strings.
 
-## What We Delete
+## Deleted Provider-Facing Launch Split
 
-After compatibility migration:
+The 2026-07-21 cutover removed:
 
 - Console `execution_lifetime` and its `one_shot` / `live_control` values;
 - launch-form `initial_prompt`, Task, and **Keep runtime open**;
@@ -277,15 +277,15 @@ After compatibility migration:
 
 | Current path | Console disposition | Helm disposition |
 | --- | --- | --- |
-| Codex detached-UI bridge launch | delete after `codex_exec` cutover | keep Codex bridge + TUI attach |
-| Claude remote channel launch | delete after `claude_print` resume proof | keep `longhouse claude` channel/PTY |
-| OpenCode remote server-bridge launch | delete after `opencode_run` resume proof | keep `longhouse opencode` serve + TUI attach |
+| Codex detached-UI bridge launch | deleted | keep Codex bridge + TUI attach |
+| Claude remote channel launch | deleted | keep `longhouse claude` channel/PTY |
+| OpenCode remote server-bridge launch | deleted | keep `longhouse opencode` serve + TUI attach |
 | Cursor ACP | keep as Console adapter | n/a |
 | Cursor Helm PTY | n/a | keep |
 
-Installed older Machine Agents may receive temporary command translation at one
-explicit compatibility boundary. New code must not add callers to the legacy
-commands.
+New Machine Agents explicitly reject `session.launch`; no product client
+advertises or sends it. Historical database records remain readable evidence,
+not executable compatibility behavior.
 
 ## Implementation Plan
 
@@ -304,7 +304,8 @@ Do not expose empty-thread creation to users yet.
 
 ### 2. Reach provider parity
 
-- Implement `claude_print` using stream JSON plus native session resume.
+- ~~Implement `claude_print` using stream JSON plus native session resume.~~
+  Shipped with fresh/resume/cancel lifecycle coverage and stock-Claude proof.
 - Implement `opencode_run` using JSON output plus native session resume.
 - Prove same-thread resume and transcript binding with real provider canaries.
 - Advertise only adapter controls that are actually proven.
@@ -322,8 +323,9 @@ provider set pass end-to-end tests.
 ### 4. Delete the old split
 
 - Remove Console `live_control` and `one_shot` orchestration branches.
-- Remove the engine `COMMAND_RUN_ONCE` handler, `console_prompt.rs`, persistent
-  remote Console launch paths, and legacy capability inference.
+- Remove the remaining engine `COMMAND_RUN_ONCE` compatibility handler and
+  legacy capability fields when their callers are gone. `console_prompt.rs`
+  and persistent remote Console launch paths were deleted on 2026-07-21.
 - Remove Console launch-attempt/readiness plumbing made redundant by turns.
 - Collapse provider manifest data to adapter identity, proof, and optional
   active controls.

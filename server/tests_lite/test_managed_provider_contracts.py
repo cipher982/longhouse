@@ -256,6 +256,8 @@ def test_claude_contract_is_first_class_channel_control_provider():
         "claude.interrupt",
         "claude.steer",
         "claude.answer_pause",
+        "claude.turn_start",
+        "claude.turn_interrupt",
     )
 
 
@@ -360,6 +362,8 @@ def test_codex_exec_is_direct_one_shot_control_not_a_steer_alias():
         ("claude", "session.answer_pause", "claude.answer_pause"),
         ("claude", "session.terminate", None),
         ("claude", "session.run_once", None),
+        ("claude", "session.turn.start", "claude.turn_start"),
+        ("claude", "session.turn.interrupt", "claude.turn_interrupt"),
         ("opencode", "session.send_text", "opencode.send"),
         ("opencode", "session.interrupt", "opencode.interrupt"),
         ("opencode", "session.steer_text", None),

@@ -168,10 +168,13 @@ def test_directory_returns_online_machine_with_supports(tmp_path):
     assert entry.online is True
     assert entry.control_channel_status == "connected"
     assert entry.supports == ("claude.turn_start", "codex.send", "codex.turn_start")  # sorted
-    assert entry.control_operations_by_provider == {"codex": ("send", "turn_start")}
+    assert entry.control_operations_by_provider == {
+        "claude": ("turn_start",),
+        "codex": ("send", "turn_start"),
+    }
     assert entry.engine_build == "test-build"
     assert entry.launch.blocked_by is None
-    assert [option.provider for option in entry.launch.providers] == ["codex"]
+    assert [option.provider for option in entry.launch.providers] == ["claude", "codex"]
     assert entry.launch.default_provider == "codex"
 
 
@@ -231,7 +234,7 @@ def test_directory_surfaces_online_machine_without_codex_launch_as_blocked(tmp_p
     assert entries[0].control_operations_by_provider == {"codex": ("send",)}
 
 
-def test_directory_does_not_expose_unproven_claude_console_adapter(tmp_path):
+def test_directory_exposes_proven_claude_console_adapter(tmp_path):
     SessionLocal = _make_db(tmp_path)
     _seed_user(SessionLocal)
     registry = MachineControlChannelRegistry()
@@ -240,6 +243,9 @@ def test_directory_does_not_expose_unproven_claude_console_adapter(tmp_path):
     entries = build_machines_directory(owner_id=OWNER_ID, enrollments=_enrollments(SessionLocal), registry=registry)
 
     assert len(entries) == 1
+    assert tuple(option.provider for option in entries[0].launch.providers) == ("claude",)
+    assert entries[0].launch.blocked_by is None
+    assert entries[0].launch.default_provider == "claude"
 
 
 def test_directory_exposes_proven_opencode_console_adapter(tmp_path):
@@ -322,9 +328,9 @@ def test_directory_sorts_ready_then_connected_blocked_then_offline_by_name(tmp_p
 
     assert [entry.device_id for entry in entries] == [
         "a-ready",
+        "z-ready",
         "a-blocked",
         "z-blocked",
-        "z-ready",
         "a-offline",
         "z-offline",
     ]

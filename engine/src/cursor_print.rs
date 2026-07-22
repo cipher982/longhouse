@@ -62,7 +62,6 @@ struct CursorPrintSink {
     launch_id: String,
     process_group_id: Option<i32>,
     machine_name: String,
-    cwd: String,
     local_db_path: Option<PathBuf>,
     runtime_events_outbox_dir: PathBuf,
 }
@@ -186,7 +185,6 @@ pub async fn start_cursor_print_turn(
         launch_id: launch_id.clone(),
         process_group_id: Some(process_group_id),
         machine_name: config.machine_name.clone(),
-        cwd: config.cwd.to_string_lossy().to_string(),
         local_db_path: config.local_db_path.clone(),
         runtime_events_outbox_dir: crate::config::get_agent_runtime_events_outbox_dir()?,
     };
@@ -270,12 +268,6 @@ pub async fn recover_cursor_print_turns(
             );
             continue;
         }
-        let result = claim.result.as_ref().and_then(Value::as_object);
-        let cwd = result
-            .and_then(|value| value.get("cwd"))
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string();
         let sink = CursorPrintSink {
             session_id: claim.session_id.clone(),
             thread_id: claim.thread_id.clone(),
@@ -286,7 +278,6 @@ pub async fn recover_cursor_print_turns(
             launch_id: claim.launch_id.clone().unwrap_or_default(),
             process_group_id: claim.process_group_id,
             machine_name: machine_name.to_string(),
-            cwd,
             local_db_path: local_db_path.clone(),
             runtime_events_outbox_dir: crate::config::get_agent_runtime_events_outbox_dir()?,
         };

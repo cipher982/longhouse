@@ -4,7 +4,14 @@ from zerg.services.managed_provider_contracts import all_managed_provider_contra
 from zerg.services.provider_support_state import CONTRACT_OPERATIONS
 from zerg.services.provider_support_state import collect_provider_support_state
 
-CLAUDE_LIVE_CONTROL_OPERATIONS = ["send", "interrupt", "steer", "answer_pause", "launch", "continue"]
+CLAUDE_LIVE_CONTROL_OPERATIONS = [
+    "send",
+    "interrupt",
+    "steer",
+    "answer_pause",
+    "turn_start",
+    "turn_interrupt",
+]
 OPENCODE_LIVE_CONTROL_OPERATIONS = [
     "send",
     "interrupt",
@@ -299,7 +306,14 @@ def test_support_state_keeps_claude_first_class_with_mixed_proof() -> None:
         control_channel={
             "status": "connected",
             "control_operations_by_provider": {
-                "claude": ["send", "interrupt", "steer", "answer_pause"]
+                "claude": [
+                    "send",
+                    "interrupt",
+                    "steer",
+                    "answer_pause",
+                    "turn_start",
+                    "turn_interrupt",
+                ]
             },
         },
     )
@@ -311,6 +325,7 @@ def test_support_state_keeps_claude_first_class_with_mixed_proof() -> None:
         "interrupt",
         "steer",
         "answer_pause",
+        "turn_interrupt",
     ]
     assert "steer_active_turn" in claude["capabilities"]["supported_operations"]
     assert claude["proof"]["minimum_evidence_level"] == "hermetic"
@@ -355,6 +370,7 @@ def test_support_state_reports_partial_live_control_operations() -> None:
         "interrupt",
         "steer",
         "answer_pause",
+        "turn_interrupt",
     ]
 
 
@@ -458,7 +474,7 @@ def test_support_state_keeps_release_warning_advisory() -> None:
         control_channel={
             "status": "connected",
             "control_operations_by_provider": {
-                "claude": ["send", "interrupt", "steer", "answer_pause", "launch", "continue"]
+                "claude": CLAUDE_LIVE_CONTROL_OPERATIONS
             },
         },
     )
