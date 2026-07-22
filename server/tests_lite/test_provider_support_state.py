@@ -80,8 +80,10 @@ def test_support_state_provider_capability_axes_match_manifest_contracts() -> No
         assert capabilities["available_operations"] == capabilities["available_capabilities"]
         assert set(semantic_shadow) == set(contract.capabilities)
         assert capabilities["available_capabilities"] == []
-        for decision in semantic_shadow.values():
-            assert decision["runtime"] == "unknown"
+        for capability_id, decision in semantic_shadow.items():
+            declaration = contract.capabilities[capability_id]
+            expected_runtime = "unknown" if declaration["runtime_prerequisites"] else "not_required"
+            assert decision["runtime"] == expected_runtime
             assert decision["action"] == "hidden"
 
 

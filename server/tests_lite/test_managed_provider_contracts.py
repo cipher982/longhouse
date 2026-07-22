@@ -125,7 +125,7 @@ def test_startup_coordination_context_support_is_explicit():
     }
 
 
-def test_semantic_capabilities_are_authored_only_for_current_coordination_implementations():
+def test_semantic_capabilities_include_exact_coordination_and_steer_limitations():
     claude = contract_for_provider("claude")
     codex = contract_for_provider("codex")
     opencode = contract_for_provider("opencode")
@@ -139,11 +139,14 @@ def test_semantic_capabilities_are_authored_only_for_current_coordination_implem
     assert set(claude.capabilities) == expected
     assert set(codex.capabilities) == expected
     assert set(opencode.capabilities) == expected
-    assert all(
-        not contract.capabilities
-        for contract in all_managed_provider_contracts()
-        if contract.provider not in {"claude", "codex", "opencode"}
-    )
+    cursor = contract_for_provider("cursor")
+    antigravity = contract_for_provider("antigravity")
+    assert cursor is not None and antigravity is not None
+    for contract in (cursor, antigravity):
+        assert set(contract.capabilities) == {"session.input.steer_active"}
+        declaration = contract.capabilities["session.input.steer_active"]
+        assert declaration["disposition"] == "upstream_absent"
+        assert declaration["reason_code"] == "upstream_unavailable"
     assert opencode.capabilities["coordination.awareness.create"]["contexts"]["modes"] == ["helm"]
     assert claude.contract_entry_digest == managed_provider_contract_entry_digest("claude")
     assert claude.contract_entry_digest != codex.contract_entry_digest

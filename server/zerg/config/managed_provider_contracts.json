@@ -685,6 +685,7 @@
       "adapter_sources": [
         "server/zerg/cli/antigravity.py",
         "server/zerg/cli/antigravity_channel.py",
+        "server/zerg/services/managed_local_control.py",
         "engine/src/managed_antigravity_scan.rs"
       ],
       "launch_local": true,
@@ -699,6 +700,33 @@
       "runtime_phase": true,
       "transcript_binding": true,
       "startup_coordination_context": false,
+      "capabilities": {
+        "session.input.steer_active": {
+          "disposition": "upstream_absent",
+          "reason_code": "upstream_unavailable",
+          "policy_key": "provider.antigravity.steer_active_turn",
+          "action_gate": "strict",
+          "contexts": {
+            "modes": [
+              "helm"
+            ]
+          },
+          "runtime_prerequisites": [],
+          "required_assertions": [
+            {
+              "id": "rejected_before_control_write",
+              "scenario_id": "antigravity_steer_rejection",
+              "oracle_source": "server/zerg/qa/provider_control_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "12d58e296eef2f2042c5474b43a633601aa1a6130a4c9c9b7f4725a60f7b7d28"
+            }
+          ]
+        }
+      },
       "can_resume": false,
       "turn_start": false,
       "operation_evidence": {
@@ -759,7 +787,7 @@
       "machine_control_supports": [
         "antigravity.send"
       ],
-      "adapter_digest": "9733d7c4daaf7b6a84bf8ce84387f3300647796306a7a2004894c464b5808ccf"
+      "adapter_digest": "86ff5db6a902cf3cce2097c650e72a0a5f673ed0d9083df90f387aec66574a80"
     },
     {
       "provider": "cursor",
@@ -776,6 +804,7 @@
       "adapter_sources": [
         "server/zerg/cli/cursor.py",
         "server/zerg/cli/cursor_helm.py",
+        "server/zerg/services/managed_local_control.py",
         "engine/src/cursor_helm_control.rs",
         "engine/src/cursor_print.rs"
       ],
@@ -791,6 +820,34 @@
       "runtime_phase": true,
       "transcript_binding": true,
       "startup_coordination_context": false,
+      "capabilities": {
+        "session.input.steer_active": {
+          "disposition": "upstream_absent",
+          "reason_code": "upstream_unavailable",
+          "policy_key": "provider.cursor.steer_active_turn",
+          "action_gate": "strict",
+          "contexts": {
+            "modes": [
+              "helm",
+              "console"
+            ]
+          },
+          "runtime_prerequisites": [],
+          "required_assertions": [
+            {
+              "id": "rejected_before_control_write",
+              "scenario_id": "cursor_steer_rejection",
+              "oracle_source": "server/zerg/qa/provider_control_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "12d58e296eef2f2042c5474b43a633601aa1a6130a4c9c9b7f4725a60f7b7d28"
+            }
+          ]
+        }
+      },
       "can_resume": false,
       "turn_start": true,
       "operation_evidence": {
@@ -851,7 +908,7 @@
         "cursor.turn_start",
         "cursor.turn_interrupt"
       ],
-      "adapter_digest": "bb5109b1b33cd46e111f661f622f35496d38cf1cfd1648558cd82afd00dd0ef1"
+      "adapter_digest": "71649a24170368c1de0080130660853ada052d06a483022b55953a775c8c7cde"
     }
   ]
 }

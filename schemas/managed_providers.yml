@@ -471,6 +471,7 @@ providers:
   adapter_sources:
   - server/zerg/cli/antigravity.py
   - server/zerg/cli/antigravity_channel.py
+  - server/zerg/services/managed_local_control.py
   - engine/src/managed_antigravity_scan.rs
   launch_local: true
   run_once: false
@@ -484,6 +485,22 @@ providers:
   runtime_phase: true
   transcript_binding: true
   startup_coordination_context: false
+  capabilities:
+    session.input.steer_active:
+      disposition: upstream_absent
+      reason_code: upstream_unavailable
+      policy_key: provider.antigravity.steer_active_turn
+      action_gate: strict
+      contexts:
+        modes: [helm]
+      runtime_prerequisites: []
+      required_assertions:
+      - id: rejected_before_control_write
+        scenario_id: antigravity_steer_rejection
+        oracle_source: server/zerg/qa/provider_control_oracles.py
+        minimum_scenario_revision: 1
+        acceptable_evidence: [hermetic]
+        max_age_seconds: 604800
   can_resume: false
   turn_start: false
   operation_evidence:
@@ -553,6 +570,7 @@ providers:
   adapter_sources:
   - server/zerg/cli/cursor.py
   - server/zerg/cli/cursor_helm.py
+  - server/zerg/services/managed_local_control.py
   - engine/src/cursor_helm_control.rs
   - engine/src/cursor_print.rs
   launch_local: true
@@ -568,6 +586,22 @@ providers:
   runtime_phase: true
   transcript_binding: true
   startup_coordination_context: false
+  capabilities:
+    session.input.steer_active:
+      disposition: upstream_absent
+      reason_code: upstream_unavailable
+      policy_key: provider.cursor.steer_active_turn
+      action_gate: strict
+      contexts:
+        modes: [helm, console]
+      runtime_prerequisites: []
+      required_assertions:
+      - id: rejected_before_control_write
+        scenario_id: cursor_steer_rejection
+        oracle_source: server/zerg/qa/provider_control_oracles.py
+        minimum_scenario_revision: 1
+        acceptable_evidence: [hermetic]
+        max_age_seconds: 604800
   can_resume: false
   turn_start: true
   operation_evidence:
