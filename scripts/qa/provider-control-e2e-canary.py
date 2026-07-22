@@ -1129,11 +1129,6 @@ server.serve_forever()
 
 
 def run_opencode_canary(args: argparse.Namespace, root: Path) -> dict[str, Any]:
-    server_root = _repo_root_from_script() / "server"
-    if str(server_root) not in sys.path:
-        sys.path.insert(0, str(server_root))
-    from zerg.cli.opencode_channel import launch_opencode_server_bridge
-
     session_id = str(uuid.uuid4())
     run_id = str(uuid.uuid4())
     workspace = root / "workspace"
@@ -1142,23 +1137,46 @@ def run_opencode_canary(args: argparse.Namespace, root: Path) -> dict[str, Any]:
     events_path = root / "opencode-events.jsonl"
     fake_bin = _fake_opencode(root / "bin" / "opencode")
     env = {"FAKE_OPENCODE_EVENTS": str(events_path)}
-    previous_events_path = os.environ.get("FAKE_OPENCODE_EVENTS")
     try:
-        os.environ["FAKE_OPENCODE_EVENTS"] = str(events_path)
         # Helm creation is terminal-originated; there is intentionally no
         # `opencode-channel launch` command. Start the hermetic local bridge as
         # test setup, then prove the supported send/interrupt/attach commands.
-        launch_payload = launch_opencode_server_bridge(
-            session_id=session_id,
-            run_id=run_id,
-            cwd=workspace,
-            api_url="http://longhouse.test",
-            api_token="canary-token",
-            device_id="provider-control-canary",
-            config_dir=config_dir,
-            opencode_bin=str(fake_bin),
-            wait_ready_secs=10,
+        setup_code = textwrap.dedent(
+            f"""
+            import json
+            from pathlib import Path
+            from zerg.cli.opencode_channel import launch_opencode_server_bridge
+
+            result = launch_opencode_server_bridge(
+                session_id={session_id!r},
+                run_id={run_id!r},
+                cwd=Path({str(workspace)!r}),
+                api_url="http://longhouse.test",
+                api_token="canary-token",
+                device_id="provider-control-canary",
+                config_dir=Path({str(config_dir)!r}),
+                opencode_bin={str(fake_bin)!r},
+                wait_ready_secs=10,
+            )
+            print(json.dumps(result, sort_keys=True))
+            """
         )
+        setup = subprocess.run(
+            [*_server_python_cmd(args), "-c", setup_code],
+            cwd=str(_server_cwd(args)),
+            env=_runtime_env(args, env),
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=20,
+        )
+        if setup.returncode != 0:
+            return _fail(
+                "opencode_local_setup_failed",
+                "local OpenCode bridge setup failed",
+                evidence=_command_evidence(setup),
+            )
+        launch_payload = json.loads(setup.stdout)
         if launch_payload.get("run_id") != run_id:
             return _fail(
                 "opencode_run_identity_mismatch",
@@ -1272,10 +1290,6 @@ def run_opencode_canary(args: argparse.Namespace, root: Path) -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001
         return _exception_failure("opencode_canary_exception", exc)
     finally:
-        if previous_events_path is None:
-            os.environ.pop("FAKE_OPENCODE_EVENTS", None)
-        else:
-            os.environ["FAKE_OPENCODE_EVENTS"] = previous_events_path
         _run_longhouse(
             args,
             [
