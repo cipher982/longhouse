@@ -90,7 +90,7 @@ async def test_catalogd_owns_permission_registration_resolution_and_poll(daemon_
                 "request_payload": {"tool_name": "Bash", "tool_input": {"command": "pwd"}},
                 "can_respond": True,
                 "occurred_at": now.isoformat(),
-                "expires_at": None,
+                "expires_at": (now + timedelta(seconds=20)).isoformat(),
                 "single_active": True,
             }
         }
@@ -139,6 +139,7 @@ async def test_catalogd_owns_permission_registration_resolution_and_poll(daemon_
             {
                 "source": "cursor_permission_gate",
                 "provider": "cursor",
+                "reply_transport": "cursor_permission_poll",
                 "provider_request_id": "cursor-expired",
                 "request_key": f"cursor:cursor:{session_id}:cursor-expired",
                 "occurred_at": (now - timedelta(seconds=30)).isoformat(),
@@ -146,6 +147,7 @@ async def test_catalogd_owns_permission_registration_resolution_and_poll(daemon_
             }
         )
         expired = (await client.call("interaction.register.v2", expired_registration))["interaction"]
+        assert expired["reply_transport"] == "cursor_permission_poll"
         deadline_decision = await client.call(
             "interaction.decision.read.v2",
             {"session_id": session_id, "interaction_id": expired["id"], "request_key": None},
@@ -181,6 +183,141 @@ async def test_catalogd_owns_permission_registration_resolution_and_poll(daemon_
         runtime = db.query(LiveRuntimeState).filter_by(runtime_key=runtime_key).one()
         assert runtime.pending_interaction_id is None
         assert db.query(LiveArchiveOutbox).count() == 0
+    engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_catalogd_repairs_only_the_exact_legacy_permission_gate_record(daemon_paths):
+    database_path, socket_path = daemon_paths
+    engine = create_catalog_engine(database_path)
+    initialize_catalog_schema(engine)
+    now = datetime.now(UTC).replace(microsecond=0)
+    session_id = str(uuid4())
+    runtime_key = f"cursor:{session_id}"
+    request_key = make_pause_request_key(
+        provider="cursor",
+        runtime_key=runtime_key,
+        provider_request_id="legacy-shell",
+    )
+    interaction_id = str(uuid5(NAMESPACE_URL, f"longhouse-pause:{request_key}"))
+    with Session(engine) as db:
+        db.add(
+            LiveSessionCatalog(
+                session_id=session_id,
+                provider="cursor",
+                environment="prod",
+                device_id="zerg",
+                started_at=now,
+            )
+        )
+        db.add(
+            LiveRuntimeState(
+                runtime_key=runtime_key,
+                session_id=UUID(session_id),
+                provider="cursor",
+                phase="idle",
+                phase_source="cursor_hook",
+                timeline_anchor_at=now,
+                pending_interaction_id=request_key,
+                pending_interaction_kind="permission_prompt",
+                pending_interaction_opened_at=now,
+                pending_interaction_updated_at=now,
+                pending_interaction_can_respond=1,
+                pending_interaction_projection_json={"id": interaction_id, "request_key": request_key},
+                runtime_version=1,
+                updated_at=now,
+            )
+        )
+        db.add(
+            LiveInteractionRequest(
+                id=interaction_id,
+                session_id=session_id,
+                runtime_key=runtime_key,
+                provider="cursor",
+                source="claude_permission_gate",
+                reply_transport="claude_pretooluse_pull",
+                provider_request_id="legacy-shell",
+                request_key=request_key,
+                kind="permission_prompt",
+                request_payload_json={},
+                projection_json={
+                    "tool_name": "Shell",
+                    "title": "Permission: Shell",
+                    "summary": "Claude wants to use Shell.",
+                },
+                status="pending",
+                can_respond=1,
+                occurred_at=now,
+                expires_at=None,
+                last_seen_at=now,
+                updated_at=now,
+            )
+        )
+        db.commit()
+    engine.dispose()
+
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path, default_timeout_seconds=5.0)
+    try:
+        repaired = await client.call(
+            "interaction.repair.expire.v2",
+            {
+                "session_id": session_id,
+                "interaction_id": interaction_id,
+                "expected_updated_at": now.isoformat(),
+                "expected_source": "claude_permission_gate",
+                "expected_reply_transport": "claude_pretooluse_pull",
+                "now": (now + timedelta(seconds=1)).isoformat(),
+                "dry_run": True,
+            },
+        )
+        assert repaired["repaired"] is False
+        assert repaired["dry_run"] is True
+        assert repaired["interaction"]["status"] == "pending"
+
+        repaired = await client.call(
+            "interaction.repair.expire.v2",
+            {
+                "session_id": session_id,
+                "interaction_id": interaction_id,
+                "expected_updated_at": now.isoformat(),
+                "expected_source": "claude_permission_gate",
+                "expected_reply_transport": "claude_pretooluse_pull",
+                "now": (now + timedelta(seconds=1)).isoformat(),
+                "dry_run": False,
+            },
+        )
+        assert repaired["repaired"] is True
+        assert repaired["interaction"]["status"] == "expired"
+        assert repaired["interaction"]["can_respond"] is False
+
+        replay = await client.call(
+            "interaction.repair.expire.v2",
+            {
+                "session_id": session_id,
+                "interaction_id": interaction_id,
+                "expected_updated_at": now.isoformat(),
+                "expected_source": "claude_permission_gate",
+                "expected_reply_transport": "claude_pretooluse_pull",
+                "now": (now + timedelta(seconds=2)).isoformat(),
+                "dry_run": False,
+            },
+        )
+        assert replay == {"repaired": False, "reason": "compare_and_set_failed", "commit_seq": replay["commit_seq"]}
+    finally:
+        await client.close()
+        await daemon.close()
+
+    engine = create_catalog_engine(database_path)
+    initialize_catalog_schema(engine)
+    with Session(engine) as db:
+        row = db.get(LiveInteractionRequest, interaction_id)
+        assert row.status == "expired"
+        assert row.expires_at is None
+        runtime = db.query(LiveRuntimeState).filter_by(runtime_key=runtime_key).one()
+        assert runtime.pending_interaction_id is None
+        assert runtime.pending_interaction_can_respond == 0
     engine.dispose()
 
 

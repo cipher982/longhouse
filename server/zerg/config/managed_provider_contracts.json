@@ -228,7 +228,7 @@
         "codex.resume_run_once",
         "codex.turn_start"
       ],
-      "adapter_digest": "8af670e9438c0ca92c76e5c653303cea5a8916119c7b5d62ec872d540fc5267b"
+      "adapter_digest": "d50464c1c967067490564e417389bdecaf3a3cc818ccb3c8b1d55389d05af261"
     },
     {
       "provider": "claude",
@@ -682,7 +682,7 @@
         "opencode.turn_start",
         "opencode.turn_interrupt"
       ],
-      "adapter_digest": "424389c918a39d9b14ac7bb8123d11fb6769da505922be5f968196aeba184d4e"
+      "adapter_digest": "059befb4632dde171db4105f4203c5871724ca5e45ee44a8560ade3473d0c4d4"
     },
     {
       "provider": "antigravity",
@@ -919,7 +919,7 @@
         "cursor.turn_start",
         "cursor.turn_interrupt"
       ],
-      "adapter_digest": "71649a24170368c1de0080130660853ada052d06a483022b55953a775c8c7cde"
+      "adapter_digest": "239926d5929a1304093dcae629721ede1170a23579e66bebc96cb6fd8e631f93"
     }
   ]
 }

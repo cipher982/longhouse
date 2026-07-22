@@ -263,6 +263,9 @@ def _runtime_interaction_dto(runtime: LiveRuntimeState) -> dict[str, Any] | None
     if kind == "permission_prompt" and provider == "claude":
         source = "claude_permission_gate"
         reply_transport = "claude_pretooluse_pull"
+    elif kind == "permission_prompt" and provider == "cursor":
+        source = "cursor_permission_gate"
+        reply_transport = "cursor_permission_poll"
     elif kind == "permission_prompt" and provider == "opencode":
         source = "opencode_bridge"
         reply_transport = "managed_push"
@@ -1878,6 +1881,124 @@ class CatalogStore:
                 "total": len(result),
                 "commit_seq": str(_current_commit_seq(connection)),
             }
+
+    def expire_due_interactions(self, *, now: datetime) -> dict[str, Any]:
+        """Terminalize elapsed held permissions and clear their runtime pointers.
+
+        This is deliberately a catalog mutation, rather than a read-time filter:
+        callers observing a deadline receive the same canonical facts as every
+        other consumer.
+        """
+
+        reason = "Approval deadline expired"
+        with _write_transaction(self.engine) as connection:
+            orm = Session(bind=connection, join_transaction_mode="create_savepoint", expire_on_commit=False)
+            try:
+                due = (
+                    orm.query(LiveInteractionRequest)
+                    .filter(
+                        LiveInteractionRequest.status == "pending",
+                        LiveInteractionRequest.kind == "permission_prompt",
+                        LiveInteractionRequest.expires_at.is_not(None),
+                        LiveInteractionRequest.expires_at <= now,
+                    )
+                    .all()
+                )
+                for row in due:
+                    row.status = "expired"
+                    row.can_respond = 0
+                    row.resolved_at = now
+                    row.last_seen_at = now
+                    row.updated_at = now
+                    row.response_payload_json = {"permissionDecision": "deny", "permissionDecisionReason": reason}
+                    row.response_text = reason
+                    runtime = orm.get(LiveRuntimeState, row.runtime_key)
+                    if runtime is not None and runtime.pending_interaction_id == row.request_key:
+                        runtime.pending_interaction_id = None
+                        runtime.pending_interaction_kind = None
+                        runtime.pending_interaction_opened_at = None
+                        runtime.pending_interaction_updated_at = None
+                        runtime.pending_interaction_projection_json = None
+                        runtime.pending_interaction_can_respond = 0
+                        runtime.runtime_version = int(runtime.runtime_version or 0) + 1
+                        runtime.updated_at = now
+                orm.commit()
+            except BaseException:
+                orm.rollback()
+                raise
+            finally:
+                orm.close()
+            commit_seq = _advance_commit_seq(connection, now) if due else _current_commit_seq(connection)
+            return {"expired_count": len(due), "commit_seq": str(commit_seq)}
+
+    def repair_expire_interaction(
+        self,
+        *,
+        session_id: str,
+        interaction_id: str,
+        expected_updated_at: datetime,
+        expected_source: str,
+        expected_reply_transport: str,
+        now: datetime,
+        dry_run: bool,
+    ) -> dict[str, Any]:
+        """CAS-protected operator repair for one known malformed interaction."""
+
+        reason = "legacy_provider_gate_contract_invalid"
+        with _write_transaction(self.engine) as connection:
+            orm = Session(bind=connection, join_transaction_mode="create_savepoint", expire_on_commit=False)
+            try:
+                row = (
+                    orm.query(LiveInteractionRequest)
+                    .filter(
+                        LiveInteractionRequest.id == interaction_id,
+                        LiveInteractionRequest.session_id == session_id,
+                        LiveInteractionRequest.status == "pending",
+                        LiveInteractionRequest.updated_at == expected_updated_at,
+                        LiveInteractionRequest.source == expected_source,
+                        LiveInteractionRequest.reply_transport == expected_reply_transport,
+                    )
+                    .one_or_none()
+                )
+                if row is None:
+                    orm.rollback()
+                    return {"repaired": False, "reason": "compare_and_set_failed", "commit_seq": str(_current_commit_seq(connection))}
+                if dry_run:
+                    receipt = _interaction_dto(row)
+                    orm.rollback()
+                    return {
+                        "repaired": False,
+                        "dry_run": True,
+                        "reason": "would_expire_legacy_provider_gate_contract_invalid",
+                        "interaction": receipt,
+                        "commit_seq": str(_current_commit_seq(connection)),
+                    }
+                row.status = "expired"
+                row.can_respond = 0
+                row.resolved_at = now
+                row.last_seen_at = now
+                row.updated_at = now
+                row.response_payload_json = {"permissionDecision": "deny", "permissionDecisionReason": reason}
+                row.response_text = reason
+                runtime = orm.get(LiveRuntimeState, row.runtime_key)
+                if runtime is not None and runtime.pending_interaction_id == row.request_key:
+                    runtime.pending_interaction_id = None
+                    runtime.pending_interaction_kind = None
+                    runtime.pending_interaction_opened_at = None
+                    runtime.pending_interaction_updated_at = None
+                    runtime.pending_interaction_projection_json = None
+                    runtime.pending_interaction_can_respond = 0
+                    runtime.runtime_version = int(runtime.runtime_version or 0) + 1
+                    runtime.updated_at = now
+                repaired = _interaction_dto(row)
+                orm.commit()
+            except BaseException:
+                orm.rollback()
+                raise
+            finally:
+                orm.close()
+            commit_seq = _advance_commit_seq(connection, now)
+            return {"repaired": True, "reason": reason, "interaction": repaired, "commit_seq": str(commit_seq)}
 
     def resolve_interaction(
         self,

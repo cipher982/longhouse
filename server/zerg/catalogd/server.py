@@ -291,6 +291,10 @@ class CatalogDaemon:
             return await self._list_interactions(request)
         if request.method == "interaction.resolve.v2":
             return await self._resolve_interaction(request)
+        if request.method == "interaction.expire_due.v2":
+            return await self._expire_due_interactions(request)
+        if request.method == "interaction.repair.expire.v2":
+            return await self._repair_expire_interaction(request)
         if request.method == "interaction.decision.read.v2":
             return await self._read_interaction_decision(request)
         if request.method == "session.input.queued.list.v2":
@@ -1446,6 +1450,46 @@ class CatalogDaemon:
             return self._error(request, "invalid_request", str(exc))
         assert self._store is not None
         result = await self._run_store(self._store.resolve_interaction, **params)
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _expire_due_interactions(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"now"}:
+            return self._error(request, "invalid_request", "interaction.expire_due.v2 requires now")
+        try:
+            now = _parse_datetime(request.params["now"], "now")
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        assert self._store is not None
+        result = await self._run_store(self._store.expire_due_interactions, now=now)
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _repair_expire_interaction(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        expected = {
+            "session_id",
+            "interaction_id",
+            "expected_updated_at",
+            "expected_source",
+            "expected_reply_transport",
+            "now",
+            "dry_run",
+        }
+        if set(request.params) != expected:
+            return self._error(request, "invalid_request", "interaction.repair.expire.v2 has invalid parameters")
+        params = dict(request.params)
+        if not _is_canonical_uuid(params["session_id"]) or not _is_canonical_uuid(params["interaction_id"]):
+            return self._error(request, "invalid_request", "session_id and interaction_id must be canonical UUIDs")
+        for field in ("expected_source", "expected_reply_transport"):
+            if not _is_string(params[field], maximum=64):
+                return self._error(request, "invalid_request", f"{field} must be a non-empty string")
+        if type(params["dry_run"]) is not bool:
+            return self._error(request, "invalid_request", "dry_run must be a boolean")
+        try:
+            params["expected_updated_at"] = _parse_datetime(params["expected_updated_at"], "expected_updated_at")
+            params["now"] = _parse_datetime(params["now"], "now")
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        assert self._store is not None
+        result = await self._run_store(self._store.repair_expire_interaction, **params)
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _read_interaction_decision(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
@@ -2771,6 +2815,10 @@ class CatalogDaemon:
             await asyncio.sleep(self._checkpoint_interval_seconds)
             try:
                 await self._run_store(self._store.checkpoint_passive)
+                # Deadline cleanup is catalog maintenance, not a side effect
+                # of interactive reads. This yields one canonical terminal
+                # fact without turning each timeline poll into a global write.
+                await self._run_store(self._store.expire_due_interactions, now=datetime.now(UTC))
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -3422,6 +3470,18 @@ def _validate_interaction_registration(value: object) -> dict:
     result["occurred_at"] = _parse_datetime(result["occurred_at"], "interaction.occurred_at")
     if result["expires_at"] is not None:
         result["expires_at"] = _parse_datetime(result["expires_at"], "interaction.expires_at")
+    if result["kind"] == "permission_prompt":
+        contracts = {
+            "claude": ("claude_permission_gate", "claude_pretooluse_pull"),
+            "cursor": ("cursor_permission_gate", "cursor_permission_poll"),
+        }
+        contract = contracts.get(result["provider"])
+        if contract is None:
+            raise ValueError("permission_prompt provider is unsupported")
+        if (result["source"], result["reply_transport"]) != contract:
+            raise ValueError("permission_prompt source/transport does not match provider")
+        if result["expires_at"] is None:
+            raise ValueError("permission_prompt expires_at is required")
     return result
 
 

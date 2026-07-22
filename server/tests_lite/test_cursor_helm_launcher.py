@@ -576,6 +576,7 @@ def test_cursor_helm_policy_owns_provider_args_and_permission_env() -> None:
     inherited = {
         "PATH": "/bin",
         "LONGHOUSE_PERMISSION_HOOK_ENABLED": "1",
+        "LONGHOUSE_PERMISSION_HOOK_TIMEOUT_S": "120",
         "LONGHOUSE_HOOK_URL": "https://outer.invalid",
         "LONGHOUSE_HOOK_TOKEN": "outer-token",
     }
@@ -588,6 +589,7 @@ def test_cursor_helm_policy_owns_provider_args_and_permission_env() -> None:
         hook_token="inner-token",
     )
     assert "LONGHOUSE_PERMISSION_HOOK_ENABLED" not in local
+    assert "LONGHOUSE_PERMISSION_HOOK_TIMEOUT_S" not in local
     assert "LONGHOUSE_HOOK_URL" not in local
     assert "LONGHOUSE_HOOK_TOKEN" not in local
 
@@ -600,6 +602,7 @@ def test_cursor_helm_policy_owns_provider_args_and_permission_env() -> None:
         hook_token="inner-token",
     )
     assert "LONGHOUSE_PERMISSION_HOOK_ENABLED" not in automatic
+    assert "LONGHOUSE_PERMISSION_HOOK_TIMEOUT_S" not in automatic
     assert "LONGHOUSE_HOOK_URL" not in automatic
     assert "LONGHOUSE_HOOK_TOKEN" not in automatic
 

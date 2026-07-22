@@ -36,6 +36,7 @@ from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentSession
 from zerg.services.session_pause_requests import PENDING_STATUS
 from zerg.services.session_pause_requests import REPLY_TRANSPORT_CLAUDE_PULL
+from zerg.services.session_pause_requests import REPLY_TRANSPORT_CURSOR_POLL
 from zerg.services.session_pause_requests import make_pause_request_key
 from zerg.services.session_pause_requests import normalize_utc
 from zerg.services.session_pause_requests import resolve_pause_request
@@ -60,6 +61,16 @@ PERMISSION_GATE_SOURCE = "claude_permission_gate"
 CURSOR_PERMISSION_GATE_SOURCE = "cursor_permission_gate"
 PERMISSION_GATE_SOURCES = {PERMISSION_GATE_SOURCE, CURSOR_PERMISSION_GATE_SOURCE}
 PERMISSION_PROMPT_KIND = "permission_prompt"
+
+
+def _permission_contract(provider: str) -> tuple[str, str, str]:
+    """Return the closed, provider-owned contract for held permission prompts."""
+
+    if provider == "cursor":
+        return CURSOR_PERMISSION_GATE_SOURCE, REPLY_TRANSPORT_CURSOR_POLL, "Cursor"
+    if provider == "claude":
+        return PERMISSION_GATE_SOURCE, REPLY_TRANSPORT_CLAUDE_PULL, "Claude"
+    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Unsupported permission-gate provider: {provider}")
 
 
 class PermissionRequestIn(UTCBaseModel):
@@ -150,8 +161,7 @@ async def register_permission_request(
     provider = (payload.provider or "claude").strip() or "claude"
     occurred_at = (payload.occurred_at or datetime.now(timezone.utc)).astimezone(timezone.utc)
     expires_at = occurred_at + timedelta(seconds=payload.wait_timeout_seconds)
-    source = CURSOR_PERMISSION_GATE_SOURCE if provider == "cursor" else PERMISSION_GATE_SOURCE
-    provider_label = "Cursor" if provider == "cursor" else "Claude" if provider == "claude" else provider.title()
+    source, reply_transport, provider_label = _permission_contract(provider)
     runtime_key = runtime_key_for_session(provider, payload.session_id)
     request_key = make_pause_request_key(
         provider=provider,
@@ -177,7 +187,7 @@ async def register_permission_request(
                         "provider": provider,
                         "device_id": None,
                         "source": source,
-                        "reply_transport": REPLY_TRANSPORT_CLAUDE_PULL,
+                        "reply_transport": reply_transport,
                         "provider_request_id": tool_use_id,
                         "request_key": request_key,
                         "kind": PERMISSION_PROMPT_KIND,
@@ -218,7 +228,7 @@ async def register_permission_request(
         request_key=request_key,
         occurred_at=occurred_at,
         provider_request_id=tool_use_id,
-        provider_ref={"source": source, "reply_transport": REPLY_TRANSPORT_CLAUDE_PULL},
+        provider_ref={"source": source, "reply_transport": reply_transport},
         kind=PERMISSION_PROMPT_KIND,
         tool_name=tool_name,
         title=f"Permission: {tool_name}" if tool_name else "Tool permission",

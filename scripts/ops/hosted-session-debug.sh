@@ -128,7 +128,7 @@ lh_hosted_get_instance "$LH_INSTANCE_ID"
 INSTANCE_URL="$LH_INSTANCE_URL"
 CONTAINER_NAME="${LH_INSTANCE_CONTAINER_NAME:-}"
 HOST_DATA_PATH="${LH_INSTANCE_DATA_PATH:-/var/app-data/longhouse/${INSTANCE_SUBDOMAIN}}"
-HOST_DB_PATH="${HOST_DATA_PATH%/}/longhouse.db"
+HOST_DB_PATH="${HOST_DATA_PATH%/}/longhouse-live.db"
 
 if [[ -z "$CONTAINER_NAME" ]]; then
   echo "Control-plane response did not include a container name for $INSTANCE_SUBDOMAIN" >&2
@@ -215,6 +215,28 @@ payload: dict[str, object] = {
         "session_turns": table_exists("session_turns"),
     },
 }
+
+if table_exists("live_sessions"):
+    payload["catalog_schema"] = "live"
+    payload["session"] = one("SELECT * FROM live_sessions WHERE session_id=?", (session_id,))
+    payload["runtime_state"] = one(
+        "SELECT * FROM live_runtime_state WHERE session_id=? ORDER BY updated_at DESC LIMIT 1", (session_id,)
+    )
+    payload["interactions"] = rows(
+        """SELECT id, provider, source, reply_transport, kind, status, can_respond,
+                  occurred_at, last_seen_at, resolved_at, expires_at, projection_json
+           FROM live_interaction_requests WHERE session_id=?
+           ORDER BY occurred_at DESC LIMIT ?""",
+        (session_id, limit),
+    )
+    payload["timeline_card"] = one("SELECT * FROM live_timeline_cards WHERE session_id=?", (session_id,))
+    payload["event_stats"] = None
+    payload["recent_events"] = []
+    payload["runtime_observation_stats"] = None
+    payload["recent_runtime_observations"] = []
+    payload["recent_turns"] = []
+    json.dump(payload, sys.stdout, default=str)
+    raise SystemExit(0)
 
 if table_exists("sessions"):
     wanted = [
