@@ -35,6 +35,7 @@ from zerg.session_execution_home import ManagedSessionTransport
 def _manifest_item(provider: str = "test") -> dict:
     return {
         "provider": provider,
+        "adapter_sources": ["server/zerg/managed_provider_contract_manifest.py"],
         "launch_local": True,
         "reattach": True,
         "send_input": True,
@@ -139,6 +140,9 @@ def test_semantic_capabilities_are_authored_only_for_current_coordination_implem
     assert all(not contract.capabilities for contract in all_managed_provider_contracts() if contract.provider not in {"claude", "codex"})
     assert claude.contract_entry_digest == managed_provider_contract_entry_digest("claude")
     assert claude.contract_entry_digest != codex.contract_entry_digest
+    assert len(claude.adapter_digest) == 64
+    assert "server/zerg/services/shipper/hooks.py" in claude.adapter_sources
+    assert claude.adapter_digest != codex.adapter_digest
 
 
 def test_control_plane_index_rejects_contract_collisions():

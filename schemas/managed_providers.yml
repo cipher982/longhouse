@@ -13,6 +13,11 @@ providers:
   control_plane: codex_bridge
   control_plane_aliases:
   - codex_app_server
+  adapter_sources:
+  - server/zerg/cli/codex.py
+  - server/zerg/mcp_server/server.py
+  - engine/src/codex_bridge.rs
+  - engine/src/codex_ws_relay.rs
   launch_local: true
   run_once: true
   reattach: true
@@ -151,6 +156,9 @@ providers:
   console_adapter: claude_print
   control_plane: claude_channel_bridge
   control_plane_aliases: []
+  adapter_sources:
+  - server/zerg/services/shipper/hooks.py
+  - engine/src/claude_print.rs
   launch_local: true
   run_once: false
   reattach: true
@@ -290,6 +298,11 @@ providers:
   console_adapter: opencode_run
   control_plane: opencode_server_bridge
   control_plane_aliases: []
+  adapter_sources:
+  - server/zerg/cli/opencode.py
+  - server/zerg/cli/opencode_bridge.py
+  - engine/src/opencode_control.rs
+  - engine/src/opencode_run.rs
   launch_local: true
   run_once: false
   reattach: true
@@ -368,6 +381,10 @@ providers:
   console_adapter: null
   control_plane: antigravity_hook_inbox
   control_plane_aliases: []
+  adapter_sources:
+  - server/zerg/cli/antigravity.py
+  - server/zerg/cli/antigravity_channel.py
+  - engine/src/managed_antigravity_scan.rs
   launch_local: true
   run_once: false
   reattach: false
@@ -446,6 +463,11 @@ providers:
   control_plane_aliases:
   - cursor_acp
   - cursor_exec
+  adapter_sources:
+  - server/zerg/cli/cursor.py
+  - server/zerg/cli/cursor_helm.py
+  - engine/src/cursor_helm_control.rs
+  - engine/src/cursor_print.rs
   launch_local: true
   # Console launch is represented by turn_start.
   run_once: false

@@ -29,7 +29,7 @@ _REQUIRED_BOOL_FIELDS = (
     "can_resume",
     "turn_start",
 )
-_STRING_LIST_FIELDS = ("control_plane_aliases", "machine_control_supports")
+_STRING_LIST_FIELDS = ("control_plane_aliases", "machine_control_supports", "adapter_sources")
 _OPERATION_EVIDENCE_FIELDS = (
     "launch_local",
     "run_once",
@@ -235,7 +235,9 @@ def normalize_contract_manifest(payload: dict[str, Any]) -> dict[str, Any]:
         _validate_operation_evidence(item)
         _validate_machine_control_supports(item)
         _validate_capabilities(item)
-        items.append(dict(item))
+        normalized_item = dict(item)
+        normalized_item["adapter_digest"] = _adapter_digest(item)
+        items.append(normalized_item)
     return {
         "schema_version": 1,
         "providers": items,
@@ -265,3 +267,21 @@ def managed_provider_contract_entry_digest(provider: str) -> str:
         raise ValueError(f"unknown managed provider: {provider}")
     encoded = json.dumps(item, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode()
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _adapter_digest(item: dict[str, Any]) -> str:
+    provider = str(item.get("provider") or "<unknown>")
+    root = Path(__file__).resolve().parents[2]
+    digest = hashlib.sha256()
+    for raw_path in item.get("adapter_sources") or ():
+        relative = Path(str(raw_path))
+        if relative.is_absolute() or ".." in relative.parts:
+            raise ValueError(f"managed provider contract {provider}: unsafe adapter source {raw_path!r}")
+        path = root / relative
+        if not path.is_file():
+            raise ValueError(f"managed provider contract {provider}: adapter source not found: {raw_path}")
+        digest.update(str(relative).encode())
+        digest.update(b"\0")
+        digest.update(path.read_bytes())
+        digest.update(b"\0")
+    return digest.hexdigest()

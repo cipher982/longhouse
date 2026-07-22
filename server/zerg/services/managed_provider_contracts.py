@@ -44,6 +44,8 @@ class ManagedProviderContract:
     managed_transport: ManagedSessionTransport
     control_plane: str
     control_plane_aliases: tuple[str, ...] = ()
+    adapter_digest: str = ""
+    adapter_sources: tuple[str, ...] = ()
     requires_longhouse_cli: bool = True
     launch_local: bool = True
     run_once: bool = False
@@ -127,6 +129,8 @@ def _contract_from_manifest_item(item: dict[str, object]) -> ManagedProviderCont
         managed_transport=ManagedSessionTransport(str(item["managed_transport"])),
         control_plane=str(item["control_plane"]),
         control_plane_aliases=tuple(str(value) for value in item.get("control_plane_aliases") or ()),
+        adapter_digest=str(item.get("adapter_digest") or ""),
+        adapter_sources=tuple(str(value) for value in item.get("adapter_sources") or ()),
         requires_longhouse_cli=bool(item.get("requires_longhouse_cli", True)),
         launch_local=bool(item.get("launch_local", True)),
         run_once=bool(item.get("run_once", False)),
