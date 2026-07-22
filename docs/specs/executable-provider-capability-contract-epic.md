@@ -472,6 +472,22 @@ supported sets.
 
 ## Delivery Plan
 
+### Implementation status — 2026-07-22
+
+- Phases 0–2 are implemented: stable semantics, append-only assertion records,
+  scoped applicability, exact-artifact trust inputs, contextual evaluation,
+  and the `operation_decisions` diagnostic projection.
+- Phase 3 is active: CI emits an immutable hermetic proof bundle with raw
+  evidence, stock OpenCode executes its launch-scoped configuration, and
+  Cursor/Antigravity reject unsupported active steer before control writes.
+- Phase 4 has one deliberately narrow consumer: OpenCode Helm coordination
+  injection consults the shared evaluator under a ceiling policy. Mutation
+  dispatch remains on the legacy gates until authenticated release proof is
+  fetched and re-evaluated with session-scoped runtime facts.
+- Cursor and Antigravity do not declare coordination awareness. Their current
+  upstreams have no launch-scoped instruction override that Longhouse can use
+  without mutating user workspace/global configuration.
+
 ### Phase 0 — Freeze semantics and product behavior
 
 Deliver semantic mappings, all state enums, action precedence, gate policy,
