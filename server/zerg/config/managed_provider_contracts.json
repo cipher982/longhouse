@@ -42,6 +42,9 @@
               "console"
             ]
           },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
           "required_assertions": [
             {
               "id": "coordination_instructions_model_visible",
@@ -52,7 +55,7 @@
                 "live_token"
               ],
               "max_age_seconds": 86400,
-              "oracle_digest": "d33421707935ded95b85c6cc5a8c80db97e428983c806116ac33900b723ad7c2"
+              "oracle_digest": "f04baee795132903cb82a5bf5f5a5fe2ce0eca8f7b4d561d92eca58de77f3620"
             }
           ]
         },
@@ -67,6 +70,9 @@
               "console"
             ]
           },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
           "required_assertions": [
             {
               "id": "coordination_instructions_model_visible_after_compaction",
@@ -77,7 +83,7 @@
                 "live_token"
               ],
               "max_age_seconds": 86400,
-              "oracle_digest": "d33421707935ded95b85c6cc5a8c80db97e428983c806116ac33900b723ad7c2"
+              "oracle_digest": "f04baee795132903cb82a5bf5f5a5fe2ce0eca8f7b4d561d92eca58de77f3620"
             },
             {
               "id": "no_duplicate_visible_bootstrap",
@@ -89,7 +95,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "d33421707935ded95b85c6cc5a8c80db97e428983c806116ac33900b723ad7c2"
+              "oracle_digest": "f04baee795132903cb82a5bf5f5a5fe2ce0eca8f7b4d561d92eca58de77f3620"
             }
           ]
         },
@@ -104,6 +110,9 @@
               "console"
             ]
           },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
           "required_assertions": [
             {
               "id": "directed_message_persisted_and_delivered",
@@ -115,7 +124,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "d33421707935ded95b85c6cc5a8c80db97e428983c806116ac33900b723ad7c2"
+              "oracle_digest": "f04baee795132903cb82a5bf5f5a5fe2ce0eca8f7b4d561d92eca58de77f3620"
             }
           ]
         },
@@ -130,6 +139,9 @@
               "console"
             ]
           },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
           "required_assertions": [
             {
               "id": "attributed_message_visible",
@@ -141,7 +153,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "d33421707935ded95b85c6cc5a8c80db97e428983c806116ac33900b723ad7c2"
+              "oracle_digest": "f04baee795132903cb82a5bf5f5a5fe2ce0eca8f7b4d561d92eca58de77f3620"
             }
           ]
         }
@@ -255,6 +267,9 @@
               "console"
             ]
           },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
           "required_assertions": [
             {
               "id": "coordination_instructions_model_visible",
@@ -265,7 +280,7 @@
                 "live_token"
               ],
               "max_age_seconds": 86400,
-              "oracle_digest": "d33421707935ded95b85c6cc5a8c80db97e428983c806116ac33900b723ad7c2"
+              "oracle_digest": "f04baee795132903cb82a5bf5f5a5fe2ce0eca8f7b4d561d92eca58de77f3620"
             }
           ]
         },
@@ -280,6 +295,9 @@
               "console"
             ]
           },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
           "required_assertions": [
             {
               "id": "coordination_instructions_model_visible_after_compaction",
@@ -290,7 +308,7 @@
                 "live_token"
               ],
               "max_age_seconds": 86400,
-              "oracle_digest": "d33421707935ded95b85c6cc5a8c80db97e428983c806116ac33900b723ad7c2"
+              "oracle_digest": "f04baee795132903cb82a5bf5f5a5fe2ce0eca8f7b4d561d92eca58de77f3620"
             },
             {
               "id": "no_duplicate_visible_bootstrap",
@@ -302,7 +320,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "d33421707935ded95b85c6cc5a8c80db97e428983c806116ac33900b723ad7c2"
+              "oracle_digest": "f04baee795132903cb82a5bf5f5a5fe2ce0eca8f7b4d561d92eca58de77f3620"
             }
           ]
         },
@@ -317,6 +335,9 @@
               "console"
             ]
           },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
           "required_assertions": [
             {
               "id": "directed_message_persisted_and_delivered",
@@ -328,7 +349,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "d33421707935ded95b85c6cc5a8c80db97e428983c806116ac33900b723ad7c2"
+              "oracle_digest": "f04baee795132903cb82a5bf5f5a5fe2ce0eca8f7b4d561d92eca58de77f3620"
             }
           ]
         },
@@ -343,6 +364,9 @@
               "console"
             ]
           },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
           "required_assertions": [
             {
               "id": "attributed_message_visible",
@@ -354,7 +378,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "d33421707935ded95b85c6cc5a8c80db97e428983c806116ac33900b723ad7c2"
+              "oracle_digest": "f04baee795132903cb82a5bf5f5a5fe2ce0eca8f7b4d561d92eca58de77f3620"
             }
           ]
         }

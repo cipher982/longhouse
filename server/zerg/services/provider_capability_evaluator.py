@@ -37,6 +37,7 @@ class EvaluationContext:
     provider_executable_identity: str | None = None
     runtime: RuntimeState = RuntimeState.UNKNOWN
     resolved_policy: Mapping[str, bool] | None = None
+    policy_provenance: Mapping[str, str] | None = None
 
 
 @dataclass(frozen=True)
@@ -96,7 +97,10 @@ def evaluate_capability(
     if context.resolved_policy is not None and context.resolved_policy.get(policy_key, True) is False:
         disposition = CapabilityDisposition.POLICY_DISABLED
 
+    runtime_prerequisites = tuple(declaration.get("runtime_prerequisites") or ())
     runtime = context.runtime if context.session_id else RuntimeState.UNKNOWN
+    if not runtime_prerequisites:
+        runtime = RuntimeState.NOT_REQUIRED
     reason_codes: list[str] = []
     qualifying: list[str] = []
     rejected: list[str] = []
@@ -141,6 +145,8 @@ def evaluate_capability(
             if selection.qualifying_pass is not None:
                 qualifying.append(selection.qualifying_pass.artifact_id)
                 continue
+            if selection.latest_run is None:
+                reason_codes.append("semantic_proof_missing")
             rejected.extend(artifact_id for artifact_id, _ in selection.rejected)
             rejected_reasons = {reason for _, reasons in selection.rejected for reason in reasons}
             reason_codes.extend(sorted(rejected_reasons))

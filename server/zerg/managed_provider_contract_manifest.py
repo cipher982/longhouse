@@ -182,6 +182,11 @@ def _validate_capabilities(item: dict[str, Any]) -> None:
         modes = contexts.get("modes", [])
         if not isinstance(modes, list) or not all(isinstance(mode, str) and mode for mode in modes):
             raise ValueError(f"{prefix}.contexts.modes must be a string list")
+        runtime_prerequisites = declaration.get("runtime_prerequisites")
+        if not isinstance(runtime_prerequisites, list) or not all(
+            isinstance(prerequisite, str) and prerequisite for prerequisite in runtime_prerequisites
+        ):
+            raise ValueError(f"{prefix}.runtime_prerequisites must be a string list")
         assertions = declaration.get("required_assertions")
         if not isinstance(assertions, list) or not assertions:
             raise ValueError(f"{prefix}.required_assertions must be a non-empty list")

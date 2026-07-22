@@ -166,6 +166,21 @@ def test_context_outside_authored_modes_is_hidden() -> None:
     assert decision.action is ProductAction.HIDDEN
 
 
+def test_missing_records_have_explicit_reason() -> None:
+    contract, declaration = _contract_and_declaration()
+
+    decision = evaluate_capability(
+        capability_id="coordination.message.send",
+        declaration=declaration,
+        provider_contract_digest=contract.contract_entry_digest,
+        context=_context(),
+        proof_identity=_identity(),
+    )
+
+    assert decision.verification is VerificationState.MISSING
+    assert "semantic_proof_missing" in decision.reason_codes
+
+
 def test_expired_proof_is_stale_and_cannot_enable_strict_action() -> None:
     contract, declaration = _contract_and_declaration()
     record = _record(contract.contract_entry_digest, generated_at="2026-07-01T16:00:00Z")
