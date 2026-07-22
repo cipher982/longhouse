@@ -516,7 +516,8 @@ def test_full_fake_canary_can_go_green() -> None:
         assert "--dangerously-bypass-approvals-and-sandbox" in codex_args
 
         stop_lines = fixture["calls"].read_text(encoding="utf-8").splitlines()
-        assert len(stop_lines) == 4
+        assert len(stop_lines) == 3
+        assert all(json.loads(line)[:2] == ["codex-bridge", "stop"] for line in stop_lines)
 
 
 def test_real_tool_exec_canary_proves_command_execution_shape() -> None:

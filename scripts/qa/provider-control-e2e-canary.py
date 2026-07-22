@@ -1129,6 +1129,11 @@ server.serve_forever()
 
 
 def run_opencode_canary(args: argparse.Namespace, root: Path) -> dict[str, Any]:
+    server_root = _repo_root_from_script() / "server"
+    if str(server_root) not in sys.path:
+        sys.path.insert(0, str(server_root))
+    from zerg.cli.opencode_channel import launch_opencode_server_bridge
+
     session_id = str(uuid.uuid4())
     run_id = str(uuid.uuid4())
     workspace = root / "workspace"
@@ -1137,41 +1142,23 @@ def run_opencode_canary(args: argparse.Namespace, root: Path) -> dict[str, Any]:
     events_path = root / "opencode-events.jsonl"
     fake_bin = _fake_opencode(root / "bin" / "opencode")
     env = {"FAKE_OPENCODE_EVENTS": str(events_path)}
+    previous_events_path = os.environ.get("FAKE_OPENCODE_EVENTS")
     try:
-        launch = _run_longhouse(
-            args,
-            [
-                "opencode-channel",
-                "launch",
-                "--session-id",
-                session_id,
-                "--run-id",
-                run_id,
-                "--cwd",
-                str(workspace),
-                "--api-url",
-                "http://longhouse.test",
-                "--api-token",
-                "canary-token",
-                "--device-id",
-                "provider-control-canary",
-                "--config-dir",
-                str(config_dir),
-                "--opencode-bin",
-                str(fake_bin),
-                "--wait-ready-secs",
-                "10",
-            ],
-            env=env,
-            timeout=20,
+        os.environ["FAKE_OPENCODE_EVENTS"] = str(events_path)
+        # Helm creation is terminal-originated; there is intentionally no
+        # `opencode-channel launch` command. Start the hermetic local bridge as
+        # test setup, then prove the supported send/interrupt/attach commands.
+        launch_payload = launch_opencode_server_bridge(
+            session_id=session_id,
+            run_id=run_id,
+            cwd=workspace,
+            api_url="http://longhouse.test",
+            api_token="canary-token",
+            device_id="provider-control-canary",
+            config_dir=config_dir,
+            opencode_bin=str(fake_bin),
+            wait_ready_secs=10,
         )
-        if launch.returncode != 0:
-            return _fail(
-                "opencode_launch_failed",
-                "opencode-channel launch failed",
-                evidence=_command_evidence(launch),
-            )
-        launch_payload = json.loads(launch.stdout)
         if launch_payload.get("run_id") != run_id:
             return _fail(
                 "opencode_run_identity_mismatch",
@@ -1285,6 +1272,10 @@ def run_opencode_canary(args: argparse.Namespace, root: Path) -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001
         return _exception_failure("opencode_canary_exception", exc)
     finally:
+        if previous_events_path is None:
+            os.environ.pop("FAKE_OPENCODE_EVENTS", None)
+        else:
+            os.environ["FAKE_OPENCODE_EVENTS"] = previous_events_path
         _run_longhouse(
             args,
             [
