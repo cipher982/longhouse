@@ -128,7 +128,8 @@ def test_startup_coordination_context_support_is_explicit():
 def test_semantic_capabilities_are_authored_only_for_current_coordination_implementations():
     claude = contract_for_provider("claude")
     codex = contract_for_provider("codex")
-    assert claude is not None and codex is not None
+    opencode = contract_for_provider("opencode")
+    assert claude is not None and codex is not None and opencode is not None
     expected = {
         "coordination.awareness.create",
         "coordination.awareness.post_compaction",
@@ -137,7 +138,13 @@ def test_semantic_capabilities_are_authored_only_for_current_coordination_implem
     }
     assert set(claude.capabilities) == expected
     assert set(codex.capabilities) == expected
-    assert all(not contract.capabilities for contract in all_managed_provider_contracts() if contract.provider not in {"claude", "codex"})
+    assert set(opencode.capabilities) == expected
+    assert all(
+        not contract.capabilities
+        for contract in all_managed_provider_contracts()
+        if contract.provider not in {"claude", "codex", "opencode"}
+    )
+    assert opencode.capabilities["coordination.awareness.create"]["contexts"]["modes"] == ["helm"]
     assert claude.contract_entry_digest == managed_provider_contract_entry_digest("claude")
     assert claude.contract_entry_digest != codex.contract_entry_digest
     assert len(claude.adapter_digest) == 64
