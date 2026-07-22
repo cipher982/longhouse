@@ -1,6 +1,6 @@
 # Local Health: Cursor Lineage, Managed Control, and Menu Recovery
 
-**Status:** Finalized after independent review; implementation not started
+**Status:** Implemented and verified locally; deployment pending
 **Owner:** Longhouse Machine Agent and macOS app
 **Investigated:** 2026-07-22
 **Related:** `immutable-source-outbox.md`, `macos-launch-product-shape.md`,
@@ -275,10 +275,9 @@ control is lost: 33 other sessions remain attached.
 - Continue a fresh lightweight bridge heartbeat only while the user's upstream
   TUI/proxy connection is genuinely attached; process existence alone is not
   attachment.
-- Automatic reaping is allowed only when the spawn record contains the process
-  group and identity and a pre-kill check matches PID, process start time, argv,
-  ownership, no UI/proxy attachment, no active turn, and no owned thread. Any
-  missing or mismatched fact defaults to no-kill and an explicit cleanup action.
+- Never automatically reap a provider process for this control-path failure.
+  Provider liveness and Longhouse control ownership are independent; expose an
+  explicit cleanup action and require a clean provider exit or user stop.
 - If the TUI remains attached, keep pass-through behavior but expose no control
   capability and do not advertise the bridge as healthy.
 - Machine health reports “1 session lost remote control,” not “Longhouse lost
@@ -365,9 +364,8 @@ probes initiated by explicit repair are counted separately.
 ### Phase 4 — terminalize detached Codex control
 
 - Materialize terminal `provider_thread_switched` facts.
-- Stop rejected-thread notification spam and safely reap only process groups
-  that pass the full ownership/attachment proof; otherwise leave an explicit
-  cleanup action.
+- Stop rejected-thread notification spam and leave provider processes intact,
+  with an explicit cleanup action when one is useful.
 - Project per-session degradation without machine-wide control loss.
 
 Gate: an unrelated thread cannot be adopted, the original session becomes
@@ -425,8 +423,8 @@ accepted above.
 ### Hatch Cursor Grok — REQUEST_CHANGES
 
 Confirmed all four root causes. Required prepare-by-ended-epoch, multi-hop
-recovery, CAS/audit for the immutable-body exception, no-kill-on-uncertain Codex
-cleanup, and the missing race/crash tests. It recommended manifest probes before
+recovery, CAS/audit for the immutable-body exception, safe Codex lifecycle
+handling, and the missing race/crash tests. It recommended manifest probes before
 adding server authority and narrowing the health work to existing axes. All were
 accepted above.
 
@@ -435,9 +433,17 @@ accepted above.
 The reviewers' request-changes verdicts applied to the first draft. The final
 plan incorporates every blocking finding. Non-blocking simplifications were
 also adopted: one lineage scheduler for prevention and recovery, no required
-server API change, no new health protocol, and automatic Codex process cleanup
-only when ownership and detachment are fully proven.
+server API change, no new health protocol, and no automatic provider-process
+cleanup for a control identity failure.
 
 Both reviewers then re-read the revised spec. Hatch Claude Fable returned
 **APPROVE** with no blockers, followed by Hatch Cursor Grok returning
 **APPROVE** with no blockers.
+
+### Implementation review — 2026-07-22
+
+Hatch Cursor Grok reviewed the completed implementation after core E2E. Its
+first pass found incomplete host proof, a stale wire predecessor, detached-state
+projection gaps, and an underspecified menu fixture. Those findings were fixed
+and reverified. The final implementation review returned **APPROVE** with no
+correctness or safety blockers.

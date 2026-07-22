@@ -9,7 +9,8 @@ public enum MenuBarPanelSizing {
     public static func measuredSize(
         for hostingView: NSView,
         width: CGFloat = MenuBarPanelLayout.panelWidth,
-        fallbackHeight: CGFloat = MenuBarPanelLayout.defaultWindowHeight
+        fallbackHeight: CGFloat = MenuBarPanelLayout.defaultWindowHeight,
+        maximumHeight: CGFloat = MenuBarPanelLayout.maximumWindowHeight
     ) -> NSSize {
         hostingView.invalidateIntrinsicContentSize()
         hostingView.frame = NSRect(
@@ -21,7 +22,7 @@ public enum MenuBarPanelSizing {
         hostingView.layoutSubtreeIfNeeded()
 
         let fittingSize = hostingView.fittingSize
-        let measuredHeight = max(ceil(fittingSize.height), 1)
+        let measuredHeight = min(max(ceil(fittingSize.height), 1), maximumHeight)
 
         return NSSize(
             width: width,

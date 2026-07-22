@@ -183,6 +183,18 @@ unacknowledged and unavailable.
 transport error, and is never retried as one. It triggers exactly one bounded
 reconciliation, then quarantine.
 
+The only request-body supersession exception is a lineage-only repair after
+quarantine. It requires Runtime Host manifest proof that the rejected target
+epoch and every skipped empty predecessor are absent, and that the nearest
+receipt-backed local ancestor is still the host's open epoch with the same
+tenant, machine, provider, source, range kind, and accepted cursor. Local proof
+also requires every skipped epoch to have no records, pending request, or
+receipt-gated durable progress. The replacement changes only
+`predecessor_source_epoch`, uses a compare-and-swap against the persisted body,
+and archives both bodies plus the reason and structured proof before clearing
+quarantine. Missing or conflicting proof leaves the original immutable intent
+blocked.
+
 ## Server contract
 
 The Runtime Host keeps exact replay as the normal ambiguous-commit recovery:

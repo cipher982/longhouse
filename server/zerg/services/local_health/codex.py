@@ -383,8 +383,11 @@ def _codex_managed_session_row(
     bridge_has_thread = _normalize_optional_string(state.get("thread_id")) is not None
     detached_ui_control_ready = bool(app_server is not None and bridge_status == "ready" and bridge_has_thread)
     normalized_state = "attached" if attached_process is not None or detached_ui_control_ready else "detached"
-    if reason_codes:
+    provider_thread_switched = "provider_thread_switched" in reason_codes
+    if reason_codes and not provider_thread_switched:
         normalized_state = "degraded"
+    elif provider_thread_switched:
+        normalized_state = "detached"
     launch_mode = _normalize_optional_string(state.get("launch_mode"))
     ui_attached = attached_process is not None
     ui_presence = _codex_ui_presence(

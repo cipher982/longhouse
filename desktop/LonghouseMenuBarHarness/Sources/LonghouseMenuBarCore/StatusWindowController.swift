@@ -81,7 +81,17 @@ public final class StatusWindowController: NSWindowController {
             return
         }
 
-        let size = MenuBarPanelSizing.measuredSize(for: hostingController.view)
+        let maximumHeight = min(
+            MenuBarPanelLayout.maximumWindowHeight,
+            max(
+                MenuBarPanelLayout.defaultWindowHeight,
+                ((window.screen ?? NSScreen.main)?.visibleFrame.height ?? MenuBarPanelLayout.maximumWindowHeight) - 24
+            )
+        )
+        let size = MenuBarPanelSizing.measuredSize(
+            for: hostingController.view,
+            maximumHeight: maximumHeight
+        )
         if window.contentRect(forFrameRect: window.frame).size != size {
             window.setContentSize(size)
         }

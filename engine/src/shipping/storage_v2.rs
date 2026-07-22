@@ -166,6 +166,8 @@ pub struct StorageV2SourceEpoch {
     pub opaque_source_id: String,
     pub range_kind: String,
     pub state: String,
+    pub predecessor_source_epoch: Option<String>,
+    pub replaced_by_source_epoch: Option<String>,
     pub accepted_through: String,
 }
 

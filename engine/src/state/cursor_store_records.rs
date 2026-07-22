@@ -60,6 +60,35 @@ pub fn cursor_record_count(conn: &Connection, source_epoch: Uuid) -> Result<u64>
     u64::try_from(count).context("Cursor record count is negative")
 }
 
+/// Select the oldest epoch in one Cursor source lineage whose frozen records
+/// extend beyond its receipt-gated durable cursor.
+pub fn oldest_undrained_epoch(
+    conn: &Connection,
+    provider: &str,
+    opaque_source_id: &str,
+) -> Result<Option<Uuid>> {
+    let epoch: Option<String> = conn
+        .query_row(
+            "SELECT epoch.source_epoch
+             FROM source_epoch_registry AS epoch
+             WHERE epoch.provider = ?1 AND epoch.opaque_source_id = ?2
+               AND (SELECT COUNT(*) FROM cursor_store_raw_record AS raw
+                    WHERE raw.source_epoch = epoch.source_epoch)
+                   > COALESCE((SELECT lane.last_position
+                               FROM source_epoch_lane_state AS lane
+                               WHERE lane.source_epoch = epoch.source_epoch
+                                 AND lane.lane = 'durable'), 0)
+             ORDER BY epoch.created_at, epoch.source_epoch
+             LIMIT 1",
+            params![provider, opaque_source_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    epoch
+        .map(|value| Uuid::parse_str(&value).context("undrained Cursor epoch is not a UUID"))
+        .transpose()
+}
+
 pub fn cursor_record_hash(bytes: &[u8]) -> String {
     hex_hash(bytes)
 }
@@ -306,5 +335,52 @@ mod tests {
         );
         store_capture_cursor(&conn, epoch, None).unwrap();
         assert_eq!(capture_cursor(&conn, epoch).unwrap(), None);
+    }
+
+    #[test]
+    fn oldest_undrained_epoch_preserves_lineage_order() {
+        let temp = tempfile::NamedTempFile::new().unwrap();
+        let mut conn = open_db(Some(temp.path())).unwrap();
+        let first = Uuid::new_v4();
+        let second = Uuid::new_v4();
+        let now = Utc::now().to_rfc3339();
+        for (epoch, created_at) in [
+            (first, "2026-07-21T00:00:00Z"),
+            (second, "2026-07-21T00:01:00Z"),
+        ] {
+            conn.execute(
+                "INSERT INTO source_epoch_registry (
+                    source_epoch, provider, opaque_source_id, file_incarnation,
+                    start_reason, max_observed_len, created_at, updated_at
+                 ) VALUES (?1, 'cursor', 'shared-source', 'fixture', 'initial', 1, ?2, ?3)",
+                params![epoch.to_string(), created_at, now],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO source_epoch_lane_state (source_epoch, lane, last_position, updated_at)
+                 VALUES (?1, 'durable', 0, ?2)",
+                params![epoch.to_string(), now],
+            )
+            .unwrap();
+            append_unseen_cursor_records(&mut conn, epoch, &[epoch.to_string().into_bytes()])
+                .unwrap();
+        }
+
+        assert_eq!(
+            oldest_undrained_epoch(&conn, "cursor", "shared-source").unwrap(),
+            Some(first)
+        );
+        crate::state::source_epoch::acknowledge_position(
+            &mut conn,
+            first,
+            crate::state::source_epoch::SourceLane::Durable,
+            0,
+            1,
+        )
+        .unwrap();
+        assert_eq!(
+            oldest_undrained_epoch(&conn, "cursor", "shared-source").unwrap(),
+            Some(second)
+        );
     }
 }

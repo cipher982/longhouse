@@ -180,6 +180,18 @@ pub fn open_db(db_path: Option<&Path>) -> Result<Connection> {
             FOREIGN KEY (source_epoch) REFERENCES source_epoch_registry(source_epoch)
         );
 
+        CREATE TABLE IF NOT EXISTS pending_source_envelope_supersession (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_epoch TEXT NOT NULL,
+            envelope_id TEXT NOT NULL,
+            old_request_body_zstd BLOB NOT NULL,
+            new_request_body_zstd BLOB NOT NULL,
+            reason TEXT NOT NULL,
+            proof_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (source_epoch) REFERENCES source_epoch_registry(source_epoch)
+        );
+
         CREATE TABLE IF NOT EXISTS cursor_store_root_state (
             conversation_uuid TEXT PRIMARY KEY,
             root_blob_id TEXT NOT NULL,
@@ -288,6 +300,17 @@ pub fn open_db(db_path: Option<&Path>) -> Result<Connection> {
         )?;
     }
 
+    let supersession_columns: std::collections::HashSet<String> = conn
+        .prepare("PRAGMA table_info(pending_source_envelope_supersession)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<std::result::Result<_, _>>()?;
+    if !supersession_columns.contains("proof_json") {
+        conn.execute_batch(
+            "ALTER TABLE pending_source_envelope_supersession
+             ADD COLUMN proof_json TEXT NOT NULL DEFAULT '{}';",
+        )?;
+    }
+
     // Old builds could create duplicate pending pointers for the same file/range.
     // Collapse those rows before enforcing uniqueness so restart recovery becomes idempotent.
     conn.execute(
@@ -324,7 +347,10 @@ pub fn open_db(db_path: Option<&Path>) -> Result<Connection> {
          ON source_epoch_registry(provider, opaque_source_id, file_incarnation, created_at DESC);
 
          CREATE INDEX IF NOT EXISTS idx_pending_source_envelope_path
-         ON pending_source_envelope(source_path, created_at);",
+         ON pending_source_envelope(source_path, created_at);
+
+         CREATE INDEX IF NOT EXISTS idx_pending_source_supersession_epoch
+         ON pending_source_envelope_supersession(source_epoch, created_at);",
     )?;
 
     tracing::debug!("Opened shipper DB: {}", path.display());

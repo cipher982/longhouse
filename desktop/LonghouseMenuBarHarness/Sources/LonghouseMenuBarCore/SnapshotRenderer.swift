@@ -25,11 +25,7 @@ public enum SnapshotRenderer {
         .background(Color.black)
 
         let hostingView = NSHostingView(rootView: rootView)
-        let fittingSize = hostingView.fittingSize
-        let renderSize = NSSize(
-            width: max(MenuBarPanelLayout.panelWidth, fittingSize.width),
-            height: max(MenuBarPanelLayout.defaultWindowHeight, fittingSize.height)
-        )
+        let renderSize = MenuBarPanelSizing.measuredSize(for: hostingView)
         hostingView.frame = NSRect(origin: .zero, size: renderSize)
         hostingView.layoutSubtreeIfNeeded()
 

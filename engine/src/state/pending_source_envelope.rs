@@ -105,7 +105,7 @@ pub fn load_for_path(
                 last_attempt_at, blocked_at, block_kind, block_detail
          FROM pending_source_envelope
          WHERE source_path = ?1
-         ORDER BY created_at, source_epoch
+         ORDER BY (blocked_at IS NOT NULL), created_at, source_epoch
          LIMIT 1",
         [source_path],
         row_to_pending,
@@ -430,6 +430,59 @@ pub fn replace_request_body_after_render_conflict(
     Ok(())
 }
 
+/// Replace a rejected request only after local lineage proof establishes that
+/// its requested epoch never opened remotely and every skipped predecessor is
+/// empty. The old and new exact bodies remain durable for audit/restart proof.
+pub fn replace_request_body_after_lineage_repair(
+    conn: &mut Connection,
+    source_epoch: Uuid,
+    envelope_id: &str,
+    expected_request_body_zstd: &[u8],
+    replacement_request_body_zstd: &[u8],
+    reason: &str,
+    proof_json: &str,
+) -> Result<()> {
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let changed = tx.execute(
+        "UPDATE pending_source_envelope
+         SET request_body_zstd = ?1,
+             blocked_at = NULL,
+             block_kind = NULL,
+             block_detail = NULL
+         WHERE source_epoch = ?2 AND envelope_id = ?3
+           AND request_body_zstd = ?4
+           AND blocked_at IS NOT NULL
+           AND block_kind = 'source_epoch_conflict_unresolved'
+           AND block_detail LIKE '%source_epoch_not_found%'",
+        params![
+            replacement_request_body_zstd,
+            source_epoch.to_string(),
+            envelope_id,
+            expected_request_body_zstd,
+        ],
+    )?;
+    if changed != 1 {
+        bail!("lineage recovery no longer matches the blocked pending envelope");
+    }
+    tx.execute(
+        "INSERT INTO pending_source_envelope_supersession (
+             source_epoch, envelope_id, old_request_body_zstd,
+             new_request_body_zstd, reason, proof_json, created_at
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![
+            source_epoch.to_string(),
+            envelope_id,
+            expected_request_body_zstd,
+            replacement_request_body_zstd,
+            reason,
+            proof_json,
+            Utc::now().to_rfc3339(),
+        ],
+    )?;
+    tx.commit()?;
+    Ok(())
+}
+
 /// Advance the durable cursor and forget the exact retry in one transaction.
 pub fn acknowledge_and_delete(
     conn: &mut Connection,
@@ -657,8 +710,9 @@ fn from_sql_u64(index: usize, value: i64) -> rusqlite::Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::{
-        pending_outbox_has_capacity, persist_or_load, quarantine, retry_paths, snapshot,
-        PendingSourceEnvelope, MAX_PENDING_OUTBOX_BYTES,
+        pending_outbox_has_capacity, persist_or_load, quarantine,
+        replace_request_body_after_lineage_repair, retry_paths, snapshot, PendingSourceEnvelope,
+        MAX_PENDING_OUTBOX_BYTES,
     };
     use crate::state::db::open_db;
     use rusqlite::params;
@@ -740,6 +794,66 @@ mod tests {
                 raw_bytes: 8,
             }]
         );
+    }
+
+    #[test]
+    fn lineage_repair_is_audited_and_only_unblocks_missing_predecessors() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        let epoch = Uuid::new_v4();
+        let pending = candidate(epoch, "/tmp/cursor.db");
+        persist_or_load(&mut conn, &pending).unwrap();
+        quarantine(
+            &mut conn,
+            epoch,
+            "source_epoch_conflict_unresolved",
+            "source_epoch_not_found: predecessor is absent",
+        )
+        .unwrap();
+
+        replace_request_body_after_lineage_repair(
+            &mut conn,
+            epoch,
+            &pending.envelope_id,
+            &pending.request_body_zstd,
+            b"replacement",
+            "fixture lineage proof",
+            r#"{"v":1,"fixture":true}"#,
+        )
+        .unwrap();
+        let repaired = super::load_for_epoch(&conn, epoch).unwrap().unwrap();
+        assert_eq!(repaired.request_body_zstd, b"replacement");
+        assert!(repaired.blocked_at.is_none());
+        let audit: (Vec<u8>, Vec<u8>, String, String) = conn
+            .query_row(
+                "SELECT old_request_body_zstd, new_request_body_zstd, reason, proof_json
+                 FROM pending_source_envelope_supersession WHERE source_epoch = ?1",
+                [epoch.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(audit.0, pending.request_body_zstd);
+        assert_eq!(audit.1, b"replacement");
+        assert_eq!(audit.2, "fixture lineage proof");
+        assert_eq!(audit.3, r#"{"v":1,"fixture":true}"#);
+        assert!(replace_request_body_after_lineage_repair(
+            &mut conn,
+            epoch,
+            &pending.envelope_id,
+            &pending.request_body_zstd,
+            b"stale replacement",
+            "stale proof",
+            r#"{"v":1}"#,
+        )
+        .is_err());
+        let audit_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pending_source_envelope_supersession WHERE source_epoch = ?1",
+                [epoch.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(audit_count, 1);
     }
 
     fn candidate(source_epoch: Uuid, source_path: &str) -> PendingSourceEnvelope {

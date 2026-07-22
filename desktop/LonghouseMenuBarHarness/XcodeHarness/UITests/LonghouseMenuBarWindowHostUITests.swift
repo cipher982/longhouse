@@ -17,18 +17,20 @@ final class LonghouseMenuBarWindowHostUITests: XCTestCase {
         let window = app.windows.firstMatch
         XCTAssertTrue(window.waitForExistence(timeout: 5), "Window host did not appear")
         XCTAssertEqual(window.title, "Longhouse Desktop")
-        XCTAssertTrue(app.staticTexts["Engine service is stopped"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Local shipping needs repair"].waitForExistence(timeout: 5))
+        let scrollingContent = app.scrollViews.firstMatch
+        XCTAssertTrue(scrollingContent.waitForExistence(timeout: 5), "Scrollable panel content was not found")
         let repairButton = try XCTUnwrap(
-            findButton(in: app, candidates: [AccessibilityID.Button.repair, "Repair"], container: window),
+            findButton(in: app, candidates: [AccessibilityID.Button.repair, "Repair"], container: scrollingContent),
             "Repair button was not found"
         )
-        tapWhenVisible(repairButton, in: window)
+        tapWhenVisible(repairButton, in: scrollingContent)
 
         let logsButton = try XCTUnwrap(
-            findButton(in: app, candidates: [AccessibilityID.Button.openLogs, "Logs"], container: window),
+            findButton(in: app, candidates: [AccessibilityID.Button.openLogs, "Logs"], container: scrollingContent),
             "Logs button was not found"
         )
-        tapWhenVisible(logsButton, in: window)
+        tapWhenVisible(logsButton, in: scrollingContent)
 
         let actions = try waitForActionRecords(at: actionLogURL, count: 2)
         XCTAssertEqual(actions.map(\.action), ["repairInstall", "openLogs"])
@@ -41,17 +43,89 @@ final class LonghouseMenuBarWindowHostUITests: XCTestCase {
     }
 
     @MainActor
+    func testHighCardinalitySessionsKeepActionsInViewport() throws {
+        let fixtureURL = try makeHighCardinalityBrokenFixture(sessionCount: 34)
+        let actionLogURL = makeTemporaryFileURL(named: "actions.jsonl")
+        defer {
+            try? FileManager.default.removeItem(at: fixtureURL.deletingLastPathComponent())
+            try? FileManager.default.removeItem(at: actionLogURL.deletingLastPathComponent())
+        }
+
+        let app = launchApp(fixtureURL: fixtureURL, actionLogURL: actionLogURL)
+        let window = app.windows.firstMatch
+        XCTAssertTrue(window.waitForExistence(timeout: 5), "High-cardinality window did not appear")
+        XCTAssertLessThanOrEqual(window.frame.height, 800, "Panel exceeded its bounded viewport")
+        XCTAssertTrue(app.scrollViews.firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons[AccessibilityID.Button.repair].isHittable)
+        XCTAssertTrue(app.buttons[AccessibilityID.Button.openLogs].isHittable)
+    }
+
+    @MainActor
     private func launchApp(fixture: String, actionLogURL: URL) -> XCUIApplication {
+        launchApp(fixtureURL: fixtureURL(named: fixture), actionLogURL: actionLogURL)
+    }
+
+    @MainActor
+    private func launchApp(fixtureURL: URL, actionLogURL: URL) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = [
             "-ApplePersistenceIgnoreState", "YES",
-            "--input", fixtureURL(named: fixture).path,
+            "--input", fixtureURL.path,
             "--effect-mode", "log-only",
             "--action-log", actionLogURL.path,
         ]
         app.launch()
         app.activate()
         return app
+    }
+
+    private func makeHighCardinalityBrokenFixture(sessionCount: Int) throws -> URL {
+        var broken = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: fixtureURL(named: "broken"))) as? [String: Any]
+        )
+        let degraded = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: fixtureURL(named: "managed-degraded")))
+                as? [String: Any]
+        )
+        let template = try XCTUnwrap((degraded["managed_sessions"] as? [[String: Any]])?.first)
+        broken["managed_sessions"] = (0..<sessionCount).map { index in
+            var session = template
+            session["session_id"] = "fixture-session-\(index)"
+            session["workspace_label"] = "workspace-\(index)"
+            if index == sessionCount - 1 {
+                session["state"] = "detached"
+                session["phase"] = "provider thread switched"
+                session["bridge_status"] = "detached"
+                session["reason_codes"] = ["provider_thread_switched"]
+            } else {
+                session["state"] = "attached"
+                session["bridge_status"] = "running"
+                session["reason_codes"] = []
+            }
+            return session
+        }
+        broken["managed_summary"] = [
+            "attached_count": sessionCount - 1,
+            "detached_count": 1,
+            "degraded_count": 0,
+            "orphan_bridge_count": 0,
+        ]
+        var engineStatus = try XCTUnwrap(broken["engine_status"] as? [String: Any])
+        var payload = try XCTUnwrap(engineStatus["payload"] as? [String: Any])
+        payload["storage_v2_outbox"] = [
+            "pending_count": 480,
+            "pending_bytes": 1_966_080,
+            "blocked_source_count": 480,
+            "blocked_bytes": 1_966_080,
+            "latest_block_kind": "source_epoch_conflict_unresolved",
+            "latest_block_detail": "source_epoch_not_found",
+            "byte_limit": 1_073_741_824,
+        ]
+        engineStatus["payload"] = payload
+        broken["engine_status"] = engineStatus
+        let outputURL = makeTemporaryFileURL(named: "high-cardinality-broken.json")
+        try JSONSerialization.data(withJSONObject: broken).write(to: outputURL)
+        return outputURL
     }
 
     private func fixtureURL(named name: String) -> URL {

@@ -253,9 +253,9 @@ def _managed_health_flags(
     managed_detached: int,
     unknown_managed_phase_count: int,
 ) -> tuple[bool, bool]:
-    if orphan_bridge_count > 0 or managed_degraded > 0:
+    if orphan_bridge_count > 0:
         return True, False
-    if managed_detached > 0:
+    if managed_degraded > 0 or managed_detached > 0:
         return False, True
     return False, False
 
@@ -489,10 +489,12 @@ def _degraded_health_headline(
     elif "storage_v2_outbox_unreadable" in reasons:
         headline = "Source upload state unavailable"
     elif "managed_session_detached" in reasons:
-        if managed_detached == 1 and managed_attached == 0:
-            headline = "Managed session control is detached"
+        if managed_detached == 1:
+            headline = "1 session lost remote control"
         else:
-            headline = "Managed session control is detached"
+            headline = f"{managed_detached} sessions lost remote control"
+    elif "managed_session_control_degraded" in reasons:
+        headline = "Managed session control is degraded"
     return headline
 
 

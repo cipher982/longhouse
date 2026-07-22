@@ -631,6 +631,144 @@ async fn reconcile_storage_v2_conflict(
     }))
 }
 
+async fn reconcile_blocked_cursor_lineage(
+    conn: &mut Connection,
+    client: &ShipperClient,
+    prepared: &PreparedStorageV2Envelope,
+    request_timeout: Duration,
+) -> Result<bool> {
+    let Some(pending) = pending_source_envelope::load_for_epoch(conn, prepared.source_epoch)?
+    else {
+        return Ok(false);
+    };
+    if pending.block_kind.as_deref() != Some("source_epoch_conflict_unresolved")
+        || !pending
+            .block_detail
+            .as_deref()
+            .is_some_and(|detail| detail.contains("source_epoch_not_found"))
+    {
+        return Ok(false);
+    }
+    let requested_predecessor = prepared
+        .envelope
+        .predecessor_source_epoch
+        .as_deref()
+        .map(Uuid::parse_str)
+        .transpose()?;
+    let Some(requested_predecessor) = requested_predecessor else {
+        return Ok(false);
+    };
+    let lineage_proof =
+        source_epoch::wire_predecessor_proof_for_epoch(conn, prepared.source_epoch)?;
+    let Some(wire_predecessor) = lineage_proof.wire_predecessor else {
+        return Ok(false);
+    };
+    if requested_predecessor == wire_predecessor {
+        return Ok(false);
+    }
+    if !lineage_proof
+        .skipped_empty_epochs
+        .contains(&requested_predecessor)
+    {
+        return Ok(false);
+    }
+
+    // An admitted target epoch makes its frozen body immutable forever.
+    match client
+        .storage_v2_source_manifest(&prepared.source_epoch.to_string(), 0, Some(request_timeout))
+        .await
+    {
+        Err(error)
+            if error
+                .downcast_ref::<crate::shipping::client::StorageV2SourceNotFound>()
+                .is_some() => {}
+        Ok(_) => return Ok(false),
+        Err(error) => return Err(error),
+    }
+
+    // Local proof establishes zero records, receipt-gated durable progress,
+    // and pending request for every skipped epoch. Require matching host
+    // absence before changing the rejected request's wire predecessor.
+    for skipped_epoch in &lineage_proof.skipped_empty_epochs {
+        match client
+            .storage_v2_source_manifest(&skipped_epoch.to_string(), 0, Some(request_timeout))
+            .await
+        {
+            Err(error)
+                if error
+                    .downcast_ref::<crate::shipping::client::StorageV2SourceNotFound>()
+                    .is_some() => {}
+            Ok(_) => return Ok(false),
+            Err(error) => return Err(error),
+        }
+    }
+
+    let admitted = client
+        .storage_v2_source_manifest(&wire_predecessor.to_string(), 0, Some(request_timeout))
+        .await?;
+    let durable_position =
+        source_epoch::lane_position(conn, wire_predecessor, SourceLane::Durable)?;
+    let host_accepted_through = admitted
+        .source_epoch
+        .accepted_through
+        .parse::<u64>()
+        .context("Runtime Host Cursor predecessor accepted_through is invalid")?;
+    if admitted.v != 2
+        || admitted.source_epoch.source_epoch != wire_predecessor.to_string()
+        || admitted.source_epoch.tenant_id != prepared.envelope.tenant_id
+        || admitted.source_epoch.machine_id != prepared.envelope.machine_id
+        || admitted.source_epoch.provider != "cursor"
+        || admitted.source_epoch.opaque_source_id != prepared.envelope.opaque_source_id
+        || admitted.source_epoch.range_kind != "record_ordinal"
+        || admitted.source_epoch.state != "open"
+        || admitted.source_epoch.replaced_by_source_epoch.is_some()
+        || durable_position == 0
+        || host_accepted_through != durable_position
+    {
+        return Ok(false);
+    }
+
+    let mut replacement = prepared.envelope.clone();
+    replacement.predecessor_source_epoch = Some(wire_predecessor.to_string());
+    let replacement_body = serde_json::to_vec(&replacement)
+        .context("serializing host-proven Cursor lineage repair")?;
+    let replacement_body_zstd =
+        encode_zstd(&replacement_body, "host-proven Cursor lineage repair body")?;
+    let proof_json = serde_json::json!({
+        "v": 1,
+        "requested_source_epoch": prepared.source_epoch.to_string(),
+        "requested_epoch_absent_remotely": true,
+        "skipped_empty_epochs": lineage_proof
+            .skipped_empty_epochs
+            .iter()
+            .map(Uuid::to_string)
+            .collect::<Vec<_>>(),
+        "skipped_epochs_absent_remotely": true,
+        "wire_predecessor": wire_predecessor.to_string(),
+        "host_state": admitted.source_epoch.state,
+        "host_accepted_through": host_accepted_through.to_string(),
+        "local_durable_position": durable_position.to_string(),
+    })
+    .to_string();
+    pending_source_envelope::replace_request_body_after_lineage_repair(
+        conn,
+        pending.source_epoch,
+        &pending.envelope_id,
+        &pending.request_body_zstd,
+        &replacement_body_zstd,
+        "Runtime Host proved requested predecessor absent and nearest admitted local ancestor open",
+        &proof_json,
+    )?;
+    tracing::warn!(
+        source_epoch = %prepared.source_epoch,
+        old_predecessor = %requested_predecessor,
+        new_predecessor = %wire_predecessor,
+        host_accepted_through,
+        "Repaired blocked Cursor lineage from Runtime Host manifest proof"
+    );
+    Ok(true)
+}
+
 fn proven_manifest_prefix(
     prepared: &PreparedStorageV2Envelope,
     manifest: &StorageV2SourceManifest,
@@ -1087,12 +1225,9 @@ fn cursor_text_projection(
         for (subordinal, block) in blocks.iter().enumerate() {
             let kind = block.get("type").and_then(Value::as_str);
             if matches!(kind, Some("text" | "reasoning")) {
-                turn.suppressible_blocks
-                    .push((blob_id.clone(), subordinal));
+                turn.suppressible_blocks.push((blob_id.clone(), subordinal));
             }
-            if kind == Some("text")
-                && block.get("text").and_then(Value::as_str).is_some()
-            {
+            if kind == Some("text") && block.get("text").and_then(Value::as_str).is_some() {
                 turn.text_blocks.push((
                     blob_id.clone(),
                     subordinal,
@@ -1178,7 +1313,8 @@ fn unique_cursor_turn_alignment(
     for hook_turn in hook_turns.iter().skip(1) {
         let mut next = HashMap::<usize, (u8, Vec<usize>)>::new();
         for (previous_index, (path_count, path)) in &states {
-            for (store_index, store_turn) in store_turns.iter().enumerate().skip(*previous_index + 1)
+            for (store_index, store_turn) in
+                store_turns.iter().enumerate().skip(*previous_index + 1)
             {
                 if store_turn.prompt.trim() != hook_turn.prompt.trim() {
                     continue;
@@ -1472,24 +1608,31 @@ fn prepare_next_cursor_envelope_outcome_with_limit(
     let path_text = canonical_path.to_string_lossy();
     if let Some(pending) = pending_source_envelope::load_for_path(conn, &path_text)? {
         let prepared = pending_to_prepared(pending.clone())?;
-        let oversized_unattempted = pending.raw_bytes > maximum_batch_bytes
-            && pending.range_end.saturating_sub(pending.range_start) > 1
-            && pending.attempt_count == 0
-            && maximum_batch_bytes < capabilities.max_raw_record_bytes;
-        let obsolete_unattempted_render = pending.attempt_count == 0
-            && prepared
-                .envelope
-                .render
-                .as_ref()
-                .is_none_or(|render| render.parser_revision != CURSOR_PARSER_REVISION);
-        if !(oversized_unattempted || obsolete_unattempted_render)
-            || !pending_source_envelope::discard_unattempted(
-                conn,
-                pending.source_epoch,
-                &pending.envelope_id,
-            )?
-        {
-            return Ok(CursorPreparationOutcome::Envelope(prepared));
+        if pending.blocked_at.is_some() {
+            tracing::debug!(
+                source_epoch = %pending.source_epoch,
+                "Deferring blocked Cursor envelope to lineage selection"
+            );
+        } else {
+            let oversized_unattempted = pending.raw_bytes > maximum_batch_bytes
+                && pending.range_end.saturating_sub(pending.range_start) > 1
+                && pending.attempt_count == 0
+                && maximum_batch_bytes < capabilities.max_raw_record_bytes;
+            let obsolete_unattempted_render = pending.attempt_count == 0
+                && prepared
+                    .envelope
+                    .render
+                    .as_ref()
+                    .is_none_or(|render| render.parser_revision != CURSOR_PARSER_REVISION);
+            if !(oversized_unattempted || obsolete_unattempted_render)
+                || !pending_source_envelope::discard_unattempted(
+                    conn,
+                    pending.source_epoch,
+                    &pending.envelope_id,
+                )?
+            {
+                return Ok(CursorPreparationOutcome::Envelope(prepared));
+            }
         }
     }
     let metadata_before = db_path
@@ -1589,8 +1732,8 @@ fn prepare_next_cursor_envelope_outcome_with_limit(
         source_epoch::active_source_revision(conn, "cursor", &opaque_source_id)?;
     let parser_replay_required =
         existing_len > 0 && active_render_revision.as_deref() != Some(CURSOR_PARSER_REVISION);
-    let source_len_before_capture = if root_relation
-        == cursor_store_root::CursorRootOrderRelation::Rewrite
+    let source_len_before_capture = if parser_replay_required
+        || root_relation == cursor_store_root::CursorRootOrderRelation::Rewrite
         || !file_identities_match(active_incarnation.as_deref(), Some(incarnation.as_str()))
     {
         0
@@ -1710,7 +1853,8 @@ fn prepare_next_cursor_envelope_outcome_with_limit(
         blob_visit.last_blob_id.as_deref(),
     )?;
     let source_capture_has_more = blob_visit.has_more;
-    let logical_len = cursor_store_records::cursor_record_count(conn, resolution.source_epoch)?;
+    let captured_logical_len =
+        cursor_store_records::cursor_record_count(conn, resolution.source_epoch)?;
     // Refresh max_observed_len after adding local records.  The renderer
     // revision is stable across ordinary root appends and deliberately rotates
     // the epoch when replay is required by a parser upgrade.
@@ -1719,21 +1863,36 @@ fn prepare_next_cursor_envelope_outcome_with_limit(
         "cursor",
         &opaque_source_id,
         &incarnation,
-        logical_len,
+        captured_logical_len,
         SourceLane::Durable,
         source_epoch::lane_position(conn, resolution.source_epoch, SourceLane::Durable)?,
         Some(CURSOR_PARSER_REVISION),
         None,
         SourceChangeHint::None,
     )?;
+    let active_source_epoch = resolution.source_epoch;
+    let target_source_epoch =
+        cursor_store_records::oldest_undrained_epoch(conn, "cursor", &opaque_source_id)?
+            .unwrap_or(active_source_epoch);
+    let resolution = source_epoch::resolution_for_epoch(conn, target_source_epoch)?;
+    let logical_len = cursor_store_records::cursor_record_count(conn, target_source_epoch)?;
+    let wire_predecessor = source_epoch::wire_predecessor_for_epoch(conn, target_source_epoch)?;
+
+    if let Some(blocked) = pending_source_envelope::load_for_epoch(conn, target_source_epoch)? {
+        if blocked.blocked_at.is_some() {
+            return pending_to_prepared(blocked).map(CursorPreparationOutcome::Envelope);
+        }
+    }
     let range_start =
         source_epoch::lane_position(conn, resolution.source_epoch, SourceLane::Durable)?;
     if range_start >= logical_len {
-        return Ok(if source_capture_has_more {
-            CursorPreparationOutcome::Continue
-        } else {
-            CursorPreparationOutcome::Current
-        });
+        return Ok(
+            if source_capture_has_more && target_source_epoch == active_source_epoch {
+                CursorPreparationOutcome::Continue
+            } else {
+                CursorPreparationOutcome::Current
+            },
+        );
     }
     let selected = cursor_store_records::cursor_records_from(
         conn,
@@ -1842,7 +2001,7 @@ fn prepare_next_cursor_envelope_outcome_with_limit(
             provider: "cursor".to_string(),
             opaque_source_id,
             source_epoch: resolution.source_epoch.to_string(),
-            predecessor_source_epoch: resolution.predecessor_epoch.map(|value| value.to_string()),
+            predecessor_source_epoch: wire_predecessor.map(|value| value.to_string()),
             epoch_opened_at: resolution.opened_at,
             range_kind: "record_ordinal".to_string(),
             range_start,
@@ -1878,7 +2037,9 @@ fn prepare_next_cursor_envelope_outcome_with_limit(
         event_count,
         has_reply_evidence,
         raw_bytes,
-        has_more: range_end < logical_len || source_capture_has_more,
+        has_more: range_end < logical_len
+            || source_capture_has_more
+            || target_source_epoch != active_source_epoch,
         media_objects: Vec::new(),
     };
     persist_prepared(conn, &path_text, prepared).map(CursorPreparationOutcome::Envelope)
@@ -2232,6 +2393,18 @@ pub(crate) async fn ship_next_cursor_envelope(
     ))?;
     match prepared {
         CursorPreparationOutcome::Envelope(prepared) => {
+            let source_is_blocked =
+                pending_source_envelope::load_for_epoch(conn, prepared.source_epoch)?
+                    .is_some_and(|pending| pending.blocked_at.is_some());
+            if source_is_blocked {
+                return if reconcile_blocked_cursor_lineage(conn, client, &prepared, request_timeout)
+                    .await?
+                {
+                    Ok(CursorStorageV2ShipResult::Continue)
+                } else {
+                    Ok(CursorStorageV2ShipResult::Current)
+                };
+            }
             ship_prepared_envelope(conn, client, capabilities, prepared, lane, request_timeout)
                 .await
                 .map(CursorStorageV2ShipResult::Shipped)
@@ -3213,7 +3386,9 @@ mod tests {
         let first_epoch = first.source_epoch;
         acknowledge_prepared(&mut conn, &first);
         conn.execute(
-            "UPDATE source_epoch_registry SET source_revision = NULL WHERE source_epoch = ?1",
+            "UPDATE source_epoch_registry
+             SET source_revision = NULL, max_observed_len = 132
+             WHERE source_epoch = ?1",
             [first_epoch.to_string()],
         )
         .unwrap();
@@ -3230,6 +3405,198 @@ mod tests {
         assert_eq!(
             replay.envelope.render.as_ref().unwrap().parser_revision,
             CURSOR_PARSER_REVISION
+        );
+        let epoch_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM source_epoch_registry", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(
+            epoch_count, 2,
+            "parser replay must not look like a truncation"
+        );
+    }
+
+    #[tokio::test]
+    async fn cursor_lineage_repair_requires_host_proof_and_collapses_empty_epochs() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("store.db");
+        let _store = make_cursor_store(&path);
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        let first = prepare_next_cursor_envelope(&mut conn, &capabilities(), &path)
+            .unwrap()
+            .unwrap();
+        let first_epoch = first.source_epoch;
+        acknowledge_prepared(&mut conn, &first);
+        let durable_position =
+            source_epoch::lane_position(&conn, first_epoch, SourceLane::Durable).unwrap();
+        let source_id = first.envelope.opaque_source_id.clone();
+        let incarnation = source_epoch::active_source_incarnation(&conn, "cursor", &source_id)
+            .unwrap()
+            .unwrap();
+        let mut predecessor = first_epoch;
+        for revision in ["fixture-empty-1", "fixture-empty-2", CURSOR_PARSER_REVISION] {
+            let next = source_epoch::observe_source(
+                &mut conn,
+                "cursor",
+                &source_id,
+                &incarnation,
+                0,
+                SourceLane::Durable,
+                0,
+                Some(revision),
+                None,
+                SourceChangeHint::None,
+            )
+            .unwrap();
+            assert_eq!(next.predecessor_epoch, Some(predecessor));
+            predecessor = next.source_epoch;
+        }
+        cursor_store_records::append_unseen_cursor_records(
+            &mut conn,
+            predecessor,
+            &[b"descendant-record".to_vec()],
+        )
+        .unwrap();
+
+        let fresh = prepare_next_cursor_envelope(&mut conn, &capabilities(), &path)
+            .unwrap()
+            .unwrap();
+        assert_eq!(fresh.source_epoch, predecessor);
+        assert_eq!(
+            fresh.envelope.predecessor_source_epoch,
+            Some(first_epoch.to_string())
+        );
+        let pending = pending_source_envelope::load_for_epoch(&conn, predecessor)
+            .unwrap()
+            .unwrap();
+        let mut poisoned = fresh.envelope.clone();
+        poisoned.predecessor_source_epoch = Some(
+            source_epoch::resolution_for_epoch(&conn, predecessor)
+                .unwrap()
+                .predecessor_epoch
+                .unwrap()
+                .to_string(),
+        );
+        let poisoned_zstd = encode_zstd(
+            &serde_json::to_vec(&poisoned).unwrap(),
+            "poisoned fixture body",
+        )
+        .unwrap();
+        pending_source_envelope::replace_request_body_after_render_conflict(
+            &conn,
+            predecessor,
+            &pending.envelope_id,
+            &pending.request_body_zstd,
+            &poisoned_zstd,
+        )
+        .unwrap();
+        pending_source_envelope::quarantine(
+            &mut conn,
+            predecessor,
+            "source_epoch_conflict_unresolved",
+            "source_epoch_not_found: fixture predecessor absent",
+        )
+        .unwrap();
+        let poisoned_prepared = pending_to_prepared(
+            pending_source_envelope::load_for_epoch(&conn, predecessor)
+                .unwrap()
+                .unwrap(),
+        )
+        .unwrap();
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let host_manifest = serde_json::json!({
+            "v": 2,
+            "source_epoch": {
+                "source_epoch": first_epoch.to_string(),
+                "tenant_id": fresh.envelope.tenant_id,
+                "machine_id": fresh.envelope.machine_id,
+                "provider": "cursor",
+                "opaque_source_id": source_id,
+                "range_kind": "record_ordinal",
+                "state": "open",
+                "predecessor_source_epoch": null,
+                "replaced_by_source_epoch": null,
+                "accepted_through": durable_position.to_string()
+            },
+            "objects": [],
+            "commit_seq": "42",
+            "observed_at": "2026-07-22T12:00:00Z"
+        })
+        .to_string();
+        let server = tokio::spawn(async move {
+            for (status, body) in [
+                ("200 OK", host_manifest.clone()),
+                (
+                    "404 Not Found",
+                    r#"{"detail":{"code":"source_epoch_not_found","message":"missing","details":{}}}"#.to_string(),
+                ),
+                (
+                    "404 Not Found",
+                    r#"{"detail":{"code":"source_epoch_not_found","message":"missing","details":{}}}"#.to_string(),
+                ),
+                (
+                    "404 Not Found",
+                    r#"{"detail":{"code":"source_epoch_not_found","message":"missing","details":{}}}"#.to_string(),
+                ),
+                ("200 OK", host_manifest),
+            ] {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let _ = read_http_request(&mut socket).await;
+                let response = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(), body
+                );
+                socket.write_all(response.as_bytes()).await.unwrap();
+            }
+        });
+        let client = ShipperClient::with_compression(
+            &ShipperConfig {
+                api_url: format!("http://{address}"),
+                timeout_seconds: 5,
+                ..ShipperConfig::default()
+            },
+            CompressionAlgo::Gzip,
+        )
+        .unwrap();
+
+        assert!(!reconcile_blocked_cursor_lineage(
+            &mut conn,
+            &client,
+            &poisoned_prepared,
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap());
+        assert!(
+            pending_source_envelope::load_for_epoch(&conn, predecessor)
+                .unwrap()
+                .unwrap()
+                .blocked_at
+                .is_some(),
+            "a hosted manifest for the requested epoch must keep the body quarantined"
+        );
+        assert!(reconcile_blocked_cursor_lineage(
+            &mut conn,
+            &client,
+            &poisoned_prepared,
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap());
+        server.await.unwrap();
+        let repaired = pending_source_envelope::load_for_epoch(&conn, predecessor)
+            .unwrap()
+            .unwrap();
+        assert!(repaired.blocked_at.is_none());
+        assert_eq!(
+            pending_to_prepared(repaired)
+                .unwrap()
+                .envelope
+                .predecessor_source_epoch,
+            Some(first_epoch.to_string())
         );
     }
 
@@ -4661,6 +5028,8 @@ mod tests {
                 opaque_source_id: prepared.envelope.opaque_source_id.clone(),
                 range_kind: prepared.envelope.range_kind.clone(),
                 state: "open".to_string(),
+                predecessor_source_epoch: None,
+                replaced_by_source_epoch: None,
                 accepted_through: prefix_end.to_string(),
             },
             objects: vec![crate::shipping::storage_v2::StorageV2SourceObject {

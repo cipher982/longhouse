@@ -462,6 +462,18 @@ def test_collect_local_health_surfaces_immutable_source_conflict_as_facts(monkey
     assert snapshot["attention"]["state"] == "needs_attention"
 
 
+def test_durable_conflict_headline_outranks_one_detached_session():
+    assert (
+        local_health_service._degraded_health_headline(
+            ["managed_session_detached", "storage_v2_sources_blocked"],
+            service_status="running",
+            managed_attached=33,
+            managed_detached=1,
+        )
+        == "Source upload conflict"
+    )
+
+
 def test_collect_local_health_does_not_treat_unknown_outbox_as_empty(monkeypatch, tmp_path: Path):
     _disable_real_runner_env(monkeypatch, tmp_path)
     monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
@@ -1908,7 +1920,7 @@ def test_collect_local_health_flags_detached_managed_session(monkeypatch, tmp_pa
 
     assert snapshot["health_state"] == "degraded"
     assert snapshot["severity"] == "yellow"
-    assert snapshot["headline"] == "Managed session control is detached"
+    assert snapshot["headline"] == "1 session lost remote control"
     assert snapshot["projection_authority"] == "machine_preview"
     assert "managed_session_detached" in snapshot["reasons"]
     assert snapshot["managed_summary"] == {
@@ -2660,8 +2672,8 @@ def test_collect_local_health_marks_failed_thread_subscription_as_degraded(monke
 
     snapshot = local_health_service.collect_local_health(tmp_path)
 
-    assert snapshot["health_state"] == "broken"
-    assert snapshot["headline"] == "Longhouse lost managed session control"
+    assert snapshot["health_state"] == "degraded"
+    assert snapshot["headline"] == "Managed session control is degraded"
     assert snapshot["managed_summary"]["degraded_count"] == 1
     assert snapshot["managed_summary"]["detached_count"] == 0
     assert snapshot["managed_sessions"][0]["state"] == "degraded"
@@ -2669,6 +2681,29 @@ def test_collect_local_health_marks_failed_thread_subscription_as_degraded(monke
     assert snapshot["managed_sessions"][0]["thread_subscription_attempts"] == 4
     assert snapshot["managed_sessions"][0]["thread_subscription_last_error"] is not None
     assert snapshot["managed_sessions"][0]["reason_codes"] == ["thread_subscription_failed"]
+
+
+def test_provider_thread_switch_projects_terminal_detached_control():
+    row = local_health_service._codex_managed_session_row(
+        state={"thread_id": "thread-original", "cwd": "/tmp/project", "launch_mode": "tui"},
+        session_id="session-detached",
+        bridge_pid=123,
+        codex_bin="/usr/bin/codex",
+        bridge_status="detached",
+        bridge_heartbeat_at="2026-07-22T12:00:00Z",
+        attached_process={"pid": 456},
+        app_server={"pid": 789},
+        phase_state=None,
+        thread_subscription_status="provider_thread_switched",
+        thread_subscription_attempts=1,
+        thread_subscription_last_error="provider_thread_switched",
+        live_runtime_ingest_health=None,
+        reason_codes=["provider_thread_switched"],
+    )
+
+    assert row["state"] == "detached"
+    assert row["ui_presence"] == "detached"
+    assert row["reason_codes"] == ["provider_thread_switched"]
 
 
 def test_collect_local_health_names_subagent_control_failure(monkeypatch, tmp_path: Path):
@@ -2726,7 +2761,7 @@ def test_collect_local_health_names_subagent_control_failure(monkeypatch, tmp_pa
 
     snapshot = local_health_service.collect_local_health(tmp_path)
 
-    assert snapshot["health_state"] == "broken"
+    assert snapshot["health_state"] == "degraded"
     assert snapshot["managed_sessions"][0]["state"] == "degraded"
     assert snapshot["managed_sessions"][0]["reason_codes"] == ["control_attached_to_subagent"]
 
@@ -2813,7 +2848,7 @@ def test_collect_local_health_names_stale_subagent_bridge_path(monkeypatch, tmp_
 
     snapshot = local_health_service.collect_local_health(tmp_path)
 
-    assert snapshot["health_state"] == "broken"
+    assert snapshot["health_state"] == "degraded"
     assert snapshot["managed_sessions"][0]["state"] == "degraded"
     assert snapshot["managed_sessions"][0]["thread_subscription_status"] == "subscribed"
     assert snapshot["managed_sessions"][0]["reason_codes"] == ["control_attached_to_subagent"]
@@ -3829,8 +3864,8 @@ def test_collect_local_health_fast_treats_stale_evidence_as_degraded(monkeypatch
 
     snapshot = local_health_service.collect_local_health(tmp_path, fast=True)
 
-    assert snapshot["health_state"] == "broken"
-    assert snapshot["headline"] == "Longhouse lost managed session control"
+    assert snapshot["health_state"] == "degraded"
+    assert snapshot["headline"] == "Managed session control is degraded"
     assert snapshot["managed_sessions"][0]["state"] == "degraded"
     assert "managed_session_control_degraded" in snapshot["reasons"]
 

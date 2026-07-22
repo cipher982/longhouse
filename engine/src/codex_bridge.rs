@@ -3381,9 +3381,6 @@ async fn process_notification(
             let mut adopted_active_tui_thread = false;
             if let Some(next_id) = different_notification_thread_id(&params, context) {
                 if context.rejected_thread_ids.contains(&next_id) {
-                    eprintln!(
-                        "[codex-bridge] ignoring notification for rejected Codex thread: {next_id}"
-                    );
                     return Ok(None);
                 } else if active_tui_thread_switch_can_follow(method, context) {
                     adopted_active_tui_thread = adopt_thread_identity(
@@ -3461,11 +3458,7 @@ async fn process_notification(
         | "item/fileChange/outputDelta"
         | "item/mcpToolCall/progress" => {
             if let Some(next_id) = different_notification_thread_id(&params, context) {
-                if context.rejected_thread_ids.contains(&next_id) {
-                    eprintln!(
-                        "[codex-bridge] ignoring notification for rejected Codex thread: {next_id}"
-                    );
-                } else {
+                if !context.rejected_thread_ids.contains(&next_id) {
                     mark_provider_thread_switched(
                         config,
                         context,
@@ -3504,11 +3497,7 @@ async fn process_notification(
         }
         "turn/completed" => {
             if let Some(next_id) = different_notification_thread_id(&params, context) {
-                if context.rejected_thread_ids.contains(&next_id) {
-                    eprintln!(
-                        "[codex-bridge] ignoring notification for rejected Codex thread: {next_id}"
-                    );
-                } else {
+                if !context.rejected_thread_ids.contains(&next_id) {
                     mark_provider_thread_switched(
                         config,
                         context,
@@ -3849,9 +3838,10 @@ fn mark_provider_thread_switched(
         next_id,
         next_path.as_deref(),
     );
-    eprintln!("[codex-bridge] {message}");
-    context.rejected_thread_ids.insert(next_id.to_string());
-    context.state.status = "degraded".to_string();
+    if context.rejected_thread_ids.insert(next_id.to_string()) {
+        eprintln!("[codex-bridge] {message}");
+    }
+    context.state.status = "detached".to_string();
     context.state.last_error = Some(message.clone());
     context.state.active_turn_id = None;
     context.state.last_turn_status = None;
@@ -7716,7 +7706,7 @@ mod tests {
             context.state.thread_subscription_status.as_deref(),
             Some(ThreadSubscriptionStatus::ProviderThreadSwitched.as_str())
         );
-        assert_eq!(context.state.status, "degraded");
+        assert_eq!(context.state.status, "detached");
         assert!(context
             .state
             .last_error
@@ -7770,7 +7760,7 @@ mod tests {
             context.state.thread_path.as_deref(),
             Some("/tmp/thread-live.jsonl")
         );
-        assert_eq!(context.state.status, "degraded");
+        assert_eq!(context.state.status, "detached");
         assert_eq!(context.state.active_turn_id, None);
         assert_eq!(context.runtime_tracker.active_turn_id, None);
         assert_eq!(
@@ -8115,7 +8105,7 @@ mod tests {
         assert_eq!(context.state.thread_id.as_deref(), Some("thr-parent"));
         assert_eq!(context.state.thread_path.as_deref(), Some(parent.as_str()));
         assert_eq!(context.runtime.thread_id.as_deref(), Some("thr-parent"));
-        assert_eq!(context.state.status, "degraded");
+        assert_eq!(context.state.status, "detached");
         assert_eq!(
             context.state.thread_subscription_status.as_deref(),
             Some(ThreadSubscriptionStatus::ProviderThreadSwitched.as_str())

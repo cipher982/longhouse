@@ -742,7 +742,9 @@ pub(crate) fn leases_from_observations(
                 .thread_id
                 .as_deref()
                 .is_some_and(|value| !value.trim().is_empty());
-        let lease_state = if !obs.bridge_alive {
+        let provider_thread_switched =
+            obs.thread_subscription_status.as_deref() == Some("provider_thread_switched");
+        let lease_state = if !obs.bridge_alive || provider_thread_switched {
             "detached"
         } else if (bridge_ready && obs.has_tui_attachment || detached_ui_control_ready)
             && !thread_failed
@@ -1039,7 +1041,9 @@ pub(crate) fn machine_evidence_from_observations(
                     .thread_id
                     .as_deref()
                     .is_some_and(|value| !value.trim().is_empty());
-            let state = if !obs.bridge_alive {
+            let provider_thread_switched =
+                obs.thread_subscription_status.as_deref() == Some("provider_thread_switched");
+            let state = if !obs.bridge_alive || provider_thread_switched {
                 "detached"
             } else if (obs.status == "ready" && obs.has_tui_attachment || detached_control_ready)
                 && !thread_failed
@@ -3374,7 +3378,7 @@ mod tests {
     }
 
     #[test]
-    fn leases_from_observations_marks_provider_thread_switch_as_degraded() {
+    fn leases_from_observations_marks_provider_thread_switch_as_detached() {
         let now = Utc::now();
 
         let mut obs = test_observation("provider-switch-session", "ws://127.0.0.1:45679/session");
@@ -3383,7 +3387,7 @@ mod tests {
         let leases = leases_from_observations("cinder", &[obs], now);
 
         assert_eq!(leases.len(), 1);
-        assert_eq!(leases[0].state, "degraded");
+        assert_eq!(leases[0].state, "detached");
         assert_eq!(
             leases[0].thread_subscription_status.as_deref(),
             Some("provider_thread_switched")

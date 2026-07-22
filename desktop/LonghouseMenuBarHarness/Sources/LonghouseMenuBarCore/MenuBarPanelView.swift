@@ -3,6 +3,7 @@ import SwiftUI
 public enum MenuBarPanelLayout {
     public static let panelWidth: CGFloat = 376
     public static let defaultWindowHeight: CGFloat = 560
+    public static let maximumWindowHeight: CGFloat = 760
     public static let chromeCornerRadius: CGFloat = 13
     public static let chromeHorizontalPadding: CGFloat = 14
     public static let chromeBottomPadding: CGFloat = 14
@@ -304,14 +305,20 @@ public struct MenuBarPanelView: View {
 
     private var primarySurface: some View {
         VStack(alignment: .leading, spacing: 0) {
-            managedRuntimeSurface
+            ScrollView(.vertical) {
+                VStack(alignment: .leading, spacing: 0) {
+                    managedRuntimeSurface
 
-            if !unmanagedActivityEntries.isEmpty {
-                sectionDivider.padding(.horizontal, 4)
-                PanelSection(title: "Observed agents", trailing: snapshot.liveUnmanagedSummaryLabel) {
-                    UnmanagedActivityList(entries: unmanagedActivityEntries)
+                    if !unmanagedActivityEntries.isEmpty {
+                        sectionDivider.padding(.horizontal, 4)
+                        PanelSection(title: "Observed agents", trailing: snapshot.liveUnmanagedSummaryLabel) {
+                            UnmanagedActivityList(entries: unmanagedActivityEntries)
+                        }
+                    }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .frame(maxHeight: 240)
 
             sectionDivider.padding(.horizontal, 4)
             systemFactsSection
@@ -418,7 +425,14 @@ public struct MenuBarPanelView: View {
     }
 
     private var managedSessionEntries: [ManagedSessionEntry] {
-        snapshot.currentManagedSessions.map { managedSessionEntry(for: $0) }
+        snapshot.currentManagedSessions
+            .enumerated()
+            .sorted { lhs, rhs in
+                let leftAttention = lhs.element.needsManagedSessionAttention ? 0 : 1
+                let rightAttention = rhs.element.needsManagedSessionAttention ? 0 : 1
+                return leftAttention == rightAttention ? lhs.offset < rhs.offset : leftAttention < rightAttention
+            }
+            .map { managedSessionEntry(for: $0.element) }
     }
 
     /// Live provider CLIs Longhouse does not own on this Mac right now.
@@ -681,15 +695,27 @@ public struct MenuBarPanelView: View {
     }
 
     private var watchingActions: some View {
-        Button {
-            perform(.openLogs)
-        } label: {
-            Label("Open Logs", systemImage: "doc.text.magnifyingglass")
-                .frame(maxWidth: .infinity)
+        VStack(spacing: 8) {
+            Button {
+                perform(.repairInstall)
+            } label: {
+                Label("Repair", systemImage: "wrench.and.screwdriver")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.regular)
+            .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Button.repair)
+
+            Button {
+                perform(.openLogs)
+            } label: {
+                Label("Open Logs", systemImage: "doc.text.magnifyingglass")
+                    .frame(maxWidth: .infinity)
+            }
+            .modifier(SecondaryActionButtonStyle())
+            .controlSize(.regular)
+            .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Button.openLogs)
         }
-        .modifier(SecondaryActionButtonStyle())
-        .controlSize(.regular)
-        .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Button.openLogs)
     }
 
     private var healthyToolsMenu: some View {

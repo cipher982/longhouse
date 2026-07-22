@@ -322,6 +322,97 @@ pub fn active_source_revision(
     )
 }
 
+pub fn resolution_for_epoch(
+    conn: &Connection,
+    source_epoch: Uuid,
+) -> Result<SourceEpochResolution> {
+    conn.query_row(
+        "SELECT predecessor_epoch, start_reason, created_at, bound_session_id
+         FROM source_epoch_registry WHERE source_epoch = ?1",
+        [source_epoch.to_string()],
+        |row| {
+            let predecessor: Option<String> = row.get(0)?;
+            let reason: String = row.get(1)?;
+            Ok((
+                predecessor,
+                reason,
+                row.get::<_, String>(2)?,
+                row.get::<_, Option<String>>(3)?,
+            ))
+        },
+    )
+    .context("loading source epoch resolution")
+    .and_then(|(predecessor, reason, opened_at, bound_session_id)| {
+        Ok(SourceEpochResolution {
+            source_epoch,
+            predecessor_epoch: predecessor
+                .map(|value| Uuid::parse_str(&value))
+                .transpose()?,
+            created: false,
+            start_reason: parse_reason(&reason)?,
+            opened_at,
+            bound_session_id,
+        })
+    })
+}
+
+/// Return the nearest prior materialized epoch. Any skipped epoch must be
+/// empty and unacknowledged; a non-empty undrained ancestor is a hard ordering
+/// failure and must be selected before this descendant.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WirePredecessorProof {
+    pub wire_predecessor: Option<Uuid>,
+    pub skipped_empty_epochs: Vec<Uuid>,
+}
+
+pub fn wire_predecessor_proof_for_epoch(
+    conn: &Connection,
+    source_epoch: Uuid,
+) -> Result<WirePredecessorProof> {
+    let mut predecessor = resolution_for_epoch(conn, source_epoch)?.predecessor_epoch;
+    let mut skipped_empty_epochs = Vec::new();
+    while let Some(epoch) = predecessor {
+        let (parent, raw_count, durable_position, pending_count): (Option<String>, i64, i64, i64) =
+            conn.query_row(
+                "SELECT registry.predecessor_epoch,
+                    (SELECT COUNT(*) FROM cursor_store_raw_record AS raw
+                     WHERE raw.source_epoch = registry.source_epoch),
+                    COALESCE((SELECT lane.last_position
+                              FROM source_epoch_lane_state AS lane
+                              WHERE lane.source_epoch = registry.source_epoch
+                                AND lane.lane = 'durable'), 0),
+                    (SELECT COUNT(*) FROM pending_source_envelope AS pending
+                     WHERE pending.source_epoch = registry.source_epoch)
+             FROM source_epoch_registry AS registry
+             WHERE registry.source_epoch = ?1",
+                [epoch.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )?;
+        if durable_position > 0 {
+            return Ok(WirePredecessorProof {
+                wire_predecessor: Some(epoch),
+                skipped_empty_epochs,
+            });
+        }
+        if raw_count > 0 {
+            bail!("source epoch descendant selected before non-empty ancestor {epoch}");
+        }
+        if pending_count > 0 {
+            bail!("source epoch descendant selected before pending ancestor {epoch}");
+        }
+        skipped_empty_epochs.push(epoch);
+        predecessor = parent.map(|value| Uuid::parse_str(&value)).transpose()?;
+    }
+    Ok(WirePredecessorProof {
+        wire_predecessor: None,
+        skipped_empty_epochs,
+    })
+}
+
+pub fn wire_predecessor_for_epoch(conn: &Connection, source_epoch: Uuid) -> Result<Option<Uuid>> {
+    Ok(wire_predecessor_proof_for_epoch(conn, source_epoch)?.wire_predecessor)
+}
+
 fn load_lane_position(
     conn: &Connection,
     source_epoch: Uuid,
@@ -889,5 +980,68 @@ mod tests {
         assert_eq!(repair.source_epoch, managed.source_epoch);
         assert_eq!(repair.bound_session_id.as_deref(), Some("managed-session"));
         assert!(!repair.created);
+    }
+
+    #[test]
+    fn wire_predecessor_collapses_only_empty_unadmitted_epochs() {
+        let mut conn = crate::state::db::open_db(None).unwrap();
+        let first = observe_source(
+            &mut conn,
+            "cursor",
+            "shared",
+            "fixture",
+            1,
+            SourceLane::Durable,
+            0,
+            Some("revision-1"),
+            None,
+            SourceChangeHint::None,
+        )
+        .unwrap();
+        crate::state::cursor_store_records::append_unseen_cursor_records(
+            &mut conn,
+            first.source_epoch,
+            &[b"first".to_vec()],
+        )
+        .unwrap();
+        acknowledge_position(&mut conn, first.source_epoch, SourceLane::Durable, 0, 1).unwrap();
+        let empty = observe_source(
+            &mut conn,
+            "cursor",
+            "shared",
+            "fixture",
+            0,
+            SourceLane::Durable,
+            0,
+            Some("revision-2"),
+            None,
+            SourceChangeHint::None,
+        )
+        .unwrap();
+        let descendant = observe_source(
+            &mut conn,
+            "cursor",
+            "shared",
+            "fixture",
+            0,
+            SourceLane::Durable,
+            0,
+            Some("revision-3"),
+            None,
+            SourceChangeHint::None,
+        )
+        .unwrap();
+
+        assert_eq!(
+            wire_predecessor_for_epoch(&conn, descendant.source_epoch).unwrap(),
+            Some(first.source_epoch)
+        );
+        crate::state::cursor_store_records::append_unseen_cursor_records(
+            &mut conn,
+            empty.source_epoch,
+            &[b"preserved".to_vec()],
+        )
+        .unwrap();
+        assert!(wire_predecessor_for_epoch(&conn, descendant.source_epoch).is_err());
     }
 }
