@@ -613,6 +613,24 @@ def test_write_opencode_runtime_config_content_is_private(monkeypatch, tmp_path)
     ]
 
 
+def test_write_opencode_runtime_config_respects_coordination_policy(monkeypatch, tmp_path):
+    monkeypatch.delenv("OPENCODE_CONFIG_CONTENT", raising=False)
+    monkeypatch.setenv("LONGHOUSE_COORDINATION_BOOTSTRAP", "0")
+
+    path = opencode_cli._write_opencode_runtime_config_content(
+        config_dir=tmp_path / "config",
+        runtime_events_url="https://longhouse.test/api/agents/runtime/events/batch",
+        token="zdt_test_token",
+        session_id="session-123",
+        device_id="work-laptop",
+    )
+
+    config = json.loads(path.read_text(encoding="utf-8"))
+    assert "instructions" not in config
+    assert "mcp" not in config
+    assert not (tmp_path / "config" / "managed-local" / "opencode" / "longhouse-coordination.md").exists()
+
+
 def test_build_opencode_command_uses_config_content_file_without_echoing_token(tmp_path):
     config_path = tmp_path / "session.config-content.json"
     config_path.write_text('{"plugin":[]}\n', encoding="utf-8")

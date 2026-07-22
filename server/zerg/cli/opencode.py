@@ -313,6 +313,10 @@ def _ensure_opencode_coordination_instructions(config_dir: Path | None = None) -
 
 
 def _opencode_coordination_enabled(*, session_id: str, device_id: str) -> bool:
+    policy_key = "provider.opencode.coordination_awareness"
+    raw_policy = os.environ.get("LONGHOUSE_COORDINATION_BOOTSTRAP")
+    policy_enabled = str(raw_policy or "1").strip().lower() not in {"0", "false", "no", "off"}
+    policy_source = "env:LONGHOUSE_COORDINATION_BOOTSTRAP" if raw_policy is not None else "default:enabled"
     decision = evaluate_managed_provider_capability(
         capability_id="coordination.awareness.create",
         context=EvaluationContext(
@@ -322,6 +326,8 @@ def _opencode_coordination_enabled(*, session_id: str, device_id: str) -> bool:
             mode="helm",
             observed_at=datetime.now(timezone.utc),
             runtime=RuntimeState.READY,
+            resolved_policy={policy_key: policy_enabled},
+            policy_provenance={policy_key: policy_source},
         ),
     )
     return decision is not None and decision.action in {
@@ -958,7 +964,7 @@ def opencode(
         return
     if not is_interactive:
         typer.secho(
-            "Skipping OpenCode attach because stdin/stdout are not TTYs; " "server left running for reattach.",
+            "Skipping OpenCode attach because stdin/stdout are not TTYs; server left running for reattach.",
             fg=typer.colors.YELLOW,
         )
         typer.echo(f"Run: {attach_command}")

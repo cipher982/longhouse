@@ -480,6 +480,9 @@ supported sets.
 - Phase 3 is active: CI emits an immutable hermetic proof bundle with raw
   evidence, stock OpenCode executes its launch-scoped configuration, and
   Cursor/Antigravity reject unsupported active steer before control writes.
+  The current CI bundle intentionally uses a fixture provider identity to test
+  the pipeline; it cannot qualify a real installed provider. Authenticated CI
+  artifact fetch and stock/live proof backfill remain Phase 3 work.
 - Phase 4 has one deliberately narrow consumer: OpenCode Helm coordination
   injection consults the shared evaluator under a ceiling policy. Mutation
   dispatch remains on the legacy gates until authenticated release proof is
