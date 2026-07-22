@@ -9,8 +9,25 @@ set -euo pipefail
 
 # Use repository-local cache/temp for uv reliability
 export XDG_CACHE_HOME="$(pwd)/.uv_cache"
-export TMPDIR="${LONGHOUSE_TEST_TMPDIR:-/tmp/longhouse-tests-${UID:-$(id -u)}-${PPID}}"
+test_uid="${UID:-$(id -u)}"
+if [ -n "${LONGHOUSE_TEST_TMPDIR:-}" ]; then
+    export TMPDIR="$LONGHOUSE_TEST_TMPDIR"
+    cleanup_test_tmpdir=0
+else
+    export TMPDIR="/tmp/longhouse-tests-${test_uid}-${PPID}"
+    cleanup_test_tmpdir=1
+fi
 export UV_CACHE_DIR="$XDG_CACHE_HOME"
+
+cleanup_runner_tmpdir() {
+    if [ "$cleanup_test_tmpdir" -ne 1 ]; then
+        return
+    fi
+    case "$TMPDIR" in
+        "/tmp/longhouse-tests-${test_uid}-"*) rm -r -- "$TMPDIR" 2>/dev/null || true ;;
+    esac
+}
+trap cleanup_runner_tmpdir EXIT
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
