@@ -738,10 +738,43 @@ def _managed_bridge_credentials_gap(args: argparse.Namespace) -> dict[str, Any] 
     )
 
 
+def _verify_bridge_stopped(state_file: Path, *, timeout_secs: float = 5.0) -> dict[str, Any]:
+    socket_file = state_file.with_suffix(".sock")
+    deadline = time.monotonic() + timeout_secs
+    state: dict[str, Any] | None = None
+    error: str | None = None
+    while True:
+        try:
+            state = _read_json(state_file)
+            error = None
+        except (OSError, json.JSONDecodeError) as exc:
+            state = None
+            error = f"{type(exc).__name__}: {exc}"
+        terminal_state = bool(state and state.get("status") == "stopped" and not state.get("active_turn_id"))
+        socket_absent = not socket_file.exists()
+        if terminal_state and socket_absent:
+            return {
+                "verified": True,
+                "terminal_state": True,
+                "socket_absent": True,
+                "state": state,
+            }
+        if time.monotonic() >= deadline:
+            return {
+                "verified": False,
+                "terminal_state": terminal_state,
+                "socket_absent": socket_absent,
+                "state": state,
+                "error": error,
+            }
+        time.sleep(0.1)
+
+
 def _stop_bridge(args: argparse.Namespace, session_id: str, isolation_root: Path) -> dict[str, Any]:
     engine = _resolve_executable(args.engine, "longhouse-engine")
     if not engine:
         return {"attempted": False, "error": "engine_not_found"}
+    state_file = _bridge_state_root(isolation_root) / f"{session_id}.json"
     result = _run(
         [
             engine,
@@ -753,11 +786,17 @@ def _stop_bridge(args: argparse.Namespace, session_id: str, isolation_root: Path
             str(_bridge_state_root(isolation_root)),
             "--reason",
             "provider_release_canary",
+            "--force",
         ],
         cwd=args.repo_root,
         timeout=30,
     )
-    return {"attempted": True, "evidence": _command_evidence(result)}
+    verification = _verify_bridge_stopped(state_file) if result.returncode == 0 else None
+    return {
+        "attempted": True,
+        "evidence": _command_evidence(result),
+        "verification": verification,
+    }
 
 
 def _record_terminal_session(
@@ -1044,6 +1083,7 @@ def run_managed_live_interrupt(args: argparse.Namespace, evidence_root: Path, co
         return credentials_gap
     isolation_root: Path | None = None
     session_id: str | None = None
+    start_summary: dict[str, Any] | None = None
     try:
         summary, start_result, isolation_root = _start_bridge(
             args,
@@ -1051,6 +1091,7 @@ def run_managed_live_interrupt(args: argparse.Namespace, evidence_root: Path, co
             codex_bin=codex_bin,
             launch_mode="detached_ui",
         )
+        start_summary = summary
         session_id = str(summary.get("session_id") or "")
         state_file = Path(str(summary.get("state_file") or ""))
         thread_id = str(summary.get("thread_id") or "")
@@ -1060,6 +1101,7 @@ def run_managed_live_interrupt(args: argparse.Namespace, evidence_root: Path, co
                 "managed live-interrupt bridge start did not return session_id, thread_id, and state_file",
                 evidence_root=str(root),
                 summary=summary,
+                start_summary=summary,
                 start=_command_evidence(start_result, secrets=[args.agents_token]),
             )
 
@@ -1093,7 +1135,12 @@ def run_managed_live_interrupt(args: argparse.Namespace, evidence_root: Path, co
                 "codex-bridge send failed before managed live-interrupt canary could interrupt",
                 evidence_root=str(root),
                 evidence=_command_evidence(send_result, secrets=[args.agents_token]),
+                start_summary=summary,
             )
+        try:
+            send_summary = _load_json_stdout(send_result)
+        except ValueError:
+            send_summary = {}
 
         interrupt_result = _run(
             [
@@ -1118,6 +1165,8 @@ def run_managed_live_interrupt(args: argparse.Namespace, evidence_root: Path, co
                 evidence_root=str(root),
                 evidence=_command_evidence(interrupt_result, secrets=[args.agents_token]),
                 state=state,
+                start_summary=summary,
+                send_summary=send_summary,
             )
 
         deadline = time.monotonic() + args.live_interrupt_timeout_secs
@@ -1128,9 +1177,12 @@ def run_managed_live_interrupt(args: argparse.Namespace, evidence_root: Path, co
         if not _terminal_turn_state(state):
             return _fail(
                 "managed_live_interrupt_timeout",
-                (f"managed live-interrupt turn did not reach a terminal state within {args.live_interrupt_timeout_secs}s"),
+                ("managed live-interrupt turn did not reach a terminal state within " f"{args.live_interrupt_timeout_secs}s"),
                 evidence_root=str(root),
                 state=state,
+                start_summary=summary,
+                send_summary=send_summary,
+                last_turn_status=state.get("last_turn_status"),
             )
         if state.get("last_turn_status") not in {"interrupted", "cancelled"}:
             return _fail(
@@ -1138,22 +1190,27 @@ def run_managed_live_interrupt(args: argparse.Namespace, evidence_root: Path, co
                 "managed live-interrupt turn reached a terminal state that was not interrupted/cancelled",
                 evidence_root=str(root),
                 state=state,
+                start_summary=summary,
+                send_summary=send_summary,
+                last_turn_status=state.get("last_turn_status"),
             )
-        try:
-            send_summary = _load_json_stdout(send_result)
-        except ValueError:
-            send_summary = {}
         return _status(
             "pass",
             evidence_root=str(root),
             state_file=str(state_file),
             thread_id=thread_id,
             marker=marker,
+            start_summary=summary,
             send_summary=send_summary,
             last_turn_status=state.get("last_turn_status"),
         )
     except Exception as exc:  # noqa: BLE001
-        return _fail("managed_live_interrupt_exception", str(exc), evidence_root=str(root))
+        return _fail(
+            "managed_live_interrupt_exception",
+            str(exc),
+            evidence_root=str(root),
+            start_summary=start_summary,
+        )
     finally:
         if session_id and isolation_root:
             stop = _stop_bridge(args, session_id, isolation_root)

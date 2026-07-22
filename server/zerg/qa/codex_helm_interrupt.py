@@ -144,6 +144,13 @@ def _stop_evidence(canary_root: Path) -> dict[str, Any] | None:
     return value if isinstance(value, dict) else None
 
 
+def _managed_bridge_starts_observed(canary_result: dict[str, Any]) -> int:
+    summary = canary_result.get("start_summary")
+    if not isinstance(summary, dict):
+        return 0
+    return int(bool(str(summary.get("session_id") or "").strip()))
+
+
 def _record(
     *,
     request: dict[str, Any],
@@ -285,7 +292,12 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
             runner_sha=runner_sha,
             outcomes=outcomes,
             evidence_class=EvidenceClass.LIVE_NO_TOKEN,
-            execution={"status": "blocked", "reason": "required_environment_missing", "provider_starts": 0},
+            execution={
+                "status": "blocked",
+                "reason": "required_environment_missing",
+                "provider_version_probe_invocations": 0,
+                "managed_bridge_starts_observed": 0,
+            },
             observation={"blocked_reason": "required_environment_missing", "missing_environment": list(missing)},
         )
 
@@ -317,7 +329,12 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
             runner_sha=runner_sha,
             outcomes=outcomes,
             evidence_class=EvidenceClass.LIVE_NO_TOKEN,
-            execution={"status": "infrastructure_error", "reason": type(exc).__name__, "provider_starts": 0},
+            execution={
+                "status": "infrastructure_error",
+                "reason": type(exc).__name__,
+                "provider_version_probe_invocations": 1,
+                "managed_bridge_starts_observed": 0,
+            },
             observation={
                 "engine_executable_identity": engine_identity,
                 "package_identity": package_identity,
@@ -340,7 +357,8 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
             execution={
                 "status": "infrastructure_error",
                 "reason": "provider_version_probe_failed",
-                "provider_starts": 1,
+                "provider_version_probe_invocations": 1,
+                "managed_bridge_starts_observed": 0,
             },
             observation={
                 "engine_executable_identity": engine_identity,
@@ -363,7 +381,12 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
             runner_sha=runner_sha,
             outcomes=outcomes,
             evidence_class=EvidenceClass.LIVE_NO_TOKEN,
-            execution={"status": "completed", "reason": "provider_version_mismatch", "provider_starts": 1},
+            execution={
+                "status": "completed",
+                "reason": "provider_version_mismatch",
+                "provider_version_probe_invocations": 1,
+                "managed_bridge_starts_observed": 0,
+            },
             observation={
                 "engine_executable_identity": engine_identity,
                 "package_identity": package_identity,
@@ -418,15 +441,43 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
     canary_error = _redact_text(canary_error, secrets) if canary_error else None
     stop = _stop_evidence(canary_root)
 
+    start_summary = canary_result.get("start_summary") if isinstance(canary_result.get("start_summary"), dict) else {}
     send_summary = canary_result.get("send_summary") if isinstance(canary_result.get("send_summary"), dict) else {}
-    active_turn = bool(
+    retained_state = canary_result.get("state") if isinstance(canary_result.get("state"), dict) else {}
+    send_active_evidence = bool(
         str(send_summary.get("thread_id") or "").strip()
         and str(send_summary.get("turn_id") or "").strip()
-        and str(send_summary.get("turn_status") or "").lower() in {"inprogress", "in_progress", "running"}
+        and str(send_summary.get("turn_status") or "").strip()
     )
-    terminal = str(canary_result.get("last_turn_status") or "").lower() in {"interrupted", "cancelled"}
+    send_active = send_active_evidence and str(send_summary.get("turn_status") or "").lower() in {
+        "inprogress",
+        "in_progress",
+        "running",
+    }
+    state_active_evidence = bool(
+        str(retained_state.get("active_turn_id") or "").strip()
+        and str(retained_state.get("last_turn_status") or "").strip()
+        and str(retained_state.get("thread_id") or start_summary.get("thread_id") or "").strip()
+    )
+    state_active = state_active_evidence and str(retained_state.get("last_turn_status") or "").lower() in {
+        "inprogress",
+        "in_progress",
+        "running",
+    }
+    active_turn = send_active or state_active
+    active_evidence_available = send_active_evidence or state_active_evidence
+    terminal_status = canary_result.get("last_turn_status") or retained_state.get("last_turn_status")
+    terminal_evidence_available = bool(str(terminal_status or "").strip())
+    terminal = str(terminal_status or "").lower() in {"interrupted", "cancelled"}
     cleanup = bool(
-        stop and stop.get("attempted") is True and isinstance(stop.get("evidence"), dict) and stop["evidence"].get("returncode") == 0
+        stop
+        and stop.get("attempted") is True
+        and isinstance(stop.get("evidence"), dict)
+        and stop["evidence"].get("returncode") == 0
+        and isinstance(stop.get("verification"), dict)
+        and stop["verification"].get("verified") is True
+        and stop["verification"].get("terminal_state") is True
+        and stop["verification"].get("socket_absent") is True
     )
     failure_code = str(canary_result.get("failure_code") or "")
     semantic_completion = canary_result.get("status") == "pass" or failure_code in _SEMANTIC_FAILURE_CODES
@@ -435,11 +486,23 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
         execution_status = "infrastructure_error"
     else:
         outcomes = {
-            "active_managed_turn_observed": (AssertionOutcome.PASS if active_turn else AssertionOutcome.SEMANTIC_FAIL),
-            "interrupt_terminal_cancelled_or_interrupted": (AssertionOutcome.PASS if terminal else AssertionOutcome.SEMANTIC_FAIL),
+            "active_managed_turn_observed": (
+                AssertionOutcome.PASS
+                if active_turn
+                else AssertionOutcome.SEMANTIC_FAIL
+                if active_evidence_available
+                else AssertionOutcome.INFRASTRUCTURE_ERROR
+            ),
+            "interrupt_terminal_cancelled_or_interrupted": (
+                AssertionOutcome.PASS
+                if terminal
+                else AssertionOutcome.SEMANTIC_FAIL
+                if terminal_evidence_available
+                else AssertionOutcome.INFRASTRUCTURE_ERROR
+            ),
             "managed_bridge_cleanup_completed": (AssertionOutcome.PASS if cleanup else AssertionOutcome.INFRASTRUCTURE_ERROR),
         }
-        execution_status = "completed" if cleanup else "infrastructure_error"
+        execution_status = "infrastructure_error" if AssertionOutcome.INFRASTRUCTURE_ERROR in outcomes.values() else "completed"
 
     try:
         post_engine_identity = identity_bridge._sha256_file(engine)  # noqa: SLF001
@@ -486,7 +549,8 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
         evidence_class=EvidenceClass.LIVE_TOKEN,
         execution={
             "status": execution_status,
-            "provider_starts": 2,
+            "provider_version_probe_invocations": 1,
+            "managed_bridge_starts_observed": _managed_bridge_starts_observed(canary_result),
             "canary_invoked": True,
             "canary_status": canary_result.get("status"),
             "canary_failure_code": failure_code or None,

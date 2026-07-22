@@ -86,6 +86,18 @@ def _seed_environment(monkeypatch, package_root: Path, engine: Path) -> tuple[st
     return agents_token, provider_token
 
 
+def _verified_stop(*, returncode: int = 0, verified: bool = True) -> dict:
+    return {
+        "attempted": True,
+        "evidence": {"returncode": returncode},
+        "verification": {
+            "verified": verified,
+            "terminal_state": verified,
+            "socket_absent": verified,
+        },
+    }
+
+
 def _successful_fake_canary(expected_engine: Path, agents_token: str, provider_token: str):
     def run(args, evidence_root: Path, codex_bin: str) -> dict:
         assert args.engine == str(expected_engine)
@@ -97,12 +109,15 @@ def _successful_fake_canary(expected_engine: Path, agents_token: str, provider_t
         root = evidence_root / "managed-live-interrupt"
         root.mkdir(parents=True)
         (root / "provider.log").write_text(f"{agents_token}\n{provider_token}\n", encoding="utf-8")
+        stop = _verified_stop()
+        stop["evidence"]["stderr"] = agents_token
         (root / "stop.json").write_text(
-            json.dumps({"attempted": True, "evidence": {"returncode": 0, "stderr": agents_token}}),
+            json.dumps(stop),
             encoding="utf-8",
         )
         return {
             "status": "pass",
+            "start_summary": {"session_id": "session-1"},
             "send_summary": {
                 "thread_id": "thread-1",
                 "turn_id": "turn-1",
@@ -134,6 +149,10 @@ def test_live_helm_profile_reuses_canary_emits_scoped_records_and_scrubs_secrets
     assert {record["mode"] for record in bundle["records"]} == {"helm"}
     assert {record["permission_mode"] for record in bundle["records"]} == {"bypass"}
     assert {record["evidence_class"] for record in bundle["records"]} == {"live_token"}
+    execution = bundle["execution_metadata"]
+    assert execution["provider_version_probe_invocations"] == 1
+    assert execution["managed_bridge_starts_observed"] == 1
+    assert "provider_starts" not in execution
     engine_identity = f"sha256:{hashlib.sha256(engine.read_bytes()).hexdigest()}"
     assert {record["longhouse_build_id"] for record in bundle["records"]} == {engine_identity}
     retained = b"".join(path.read_bytes() for path in output.rglob("*") if path.is_file())
@@ -172,7 +191,9 @@ def test_missing_required_input_blocks_without_provider_or_canary_start(
 
     assert result["execution_status"] == "blocked"
     assert set(result["assertions"].values()) == {"blocked"}
-    assert json.loads((output / "execution-summary.json").read_text())["provider_starts"] == 0
+    execution = json.loads((output / "execution-summary.json").read_text())
+    assert execution["provider_version_probe_invocations"] == 0
+    assert execution["managed_bridge_starts_observed"] == 0
     assert called is False
 
 
@@ -184,11 +205,10 @@ def test_completed_canary_shape_failure_is_semantic_evidence(tmp_path: Path, mon
     def semantic_failure(_args, evidence_root: Path, _codex_bin: str) -> dict:
         root = evidence_root / "managed-live-interrupt"
         root.mkdir(parents=True)
-        (root / "stop.json").write_text(
-            json.dumps({"attempted": True, "evidence": {"returncode": 0}}), encoding="utf-8"
-        )
+        (root / "stop.json").write_text(json.dumps(_verified_stop()), encoding="utf-8")
         return {
             "status": "pass",
+            "start_summary": {"session_id": "session-1"},
             "send_summary": {"thread_id": "thread-1", "turn_id": "turn-1", "turn_status": "inProgress"},
             "last_turn_status": "completed",
         }
@@ -202,6 +222,62 @@ def test_completed_canary_shape_failure_is_semantic_evidence(tmp_path: Path, mon
     assert result["assertions"]["managed_bridge_cleanup_completed"] == "pass"
 
 
+def test_timeout_failure_preserves_observed_active_turn_without_inventing_terminal_state(
+    tmp_path: Path, monkeypatch
+) -> None:
+    package_root, binary, identity = _package(tmp_path)
+    engine = _engine(tmp_path)
+    _seed_environment(monkeypatch, package_root, engine)
+
+    def timeout_failure(_args, evidence_root: Path, _codex_bin: str) -> dict:
+        root = evidence_root / "managed-live-interrupt"
+        root.mkdir(parents=True)
+        (root / "stop.json").write_text(json.dumps(_verified_stop()), encoding="utf-8")
+        return {
+            "status": "fail",
+            "failure_code": "managed_live_interrupt_timeout",
+            "start_summary": {"session_id": "session-1"},
+            "send_summary": {"thread_id": "thread-1", "turn_id": "turn-1", "turn_status": "inProgress"},
+            "state": {"active_turn_id": "turn-1", "last_turn_status": "inProgress"},
+        }
+
+    monkeypatch.setattr(profile.bridge_canary, "run_managed_live_interrupt", timeout_failure)
+    result = provider_qualification.run(_request(tmp_path, binary, identity), tmp_path / "output")
+
+    assert result["execution_status"] == "completed"
+    assert result["assertions"]["active_managed_turn_observed"] == "pass"
+    assert result["assertions"]["interrupt_terminal_cancelled_or_interrupted"] == "semantic_fail"
+    assert result["assertions"]["managed_bridge_cleanup_completed"] == "pass"
+
+
+def test_missing_active_turn_evidence_is_infrastructure_not_invented_semantic_failure(
+    tmp_path: Path, monkeypatch
+) -> None:
+    package_root, binary, identity = _package(tmp_path)
+    engine = _engine(tmp_path)
+    _seed_environment(monkeypatch, package_root, engine)
+
+    def incomplete_failure(_args, evidence_root: Path, _codex_bin: str) -> dict:
+        root = evidence_root / "managed-live-interrupt"
+        root.mkdir(parents=True)
+        (root / "stop.json").write_text(json.dumps(_verified_stop()), encoding="utf-8")
+        return {
+            "status": "fail",
+            "failure_code": "managed_live_interrupt_not_interrupted",
+            "start_summary": {"session_id": "session-1", "thread_id": "thread-1"},
+            "send_summary": {},
+            "state": {"active_turn_id": None, "last_turn_status": "completed"},
+        }
+
+    monkeypatch.setattr(profile.bridge_canary, "run_managed_live_interrupt", incomplete_failure)
+    result = provider_qualification.run(_request(tmp_path, binary, identity), tmp_path / "output")
+
+    assert result["execution_status"] == "infrastructure_error"
+    assert result["assertions"]["active_managed_turn_observed"] == "infrastructure_error"
+    assert result["assertions"]["interrupt_terminal_cancelled_or_interrupted"] == "semantic_fail"
+    assert result["assertions"]["managed_bridge_cleanup_completed"] == "pass"
+
+
 def test_cleanup_failure_is_infrastructure_not_semantic(tmp_path: Path, monkeypatch) -> None:
     package_root, binary, identity = _package(tmp_path)
     engine = _engine(tmp_path)
@@ -211,7 +287,7 @@ def test_cleanup_failure_is_infrastructure_not_semantic(tmp_path: Path, monkeypa
     def failed_cleanup(args, evidence_root: Path, codex_bin: str) -> dict:
         result = canary(args, evidence_root, codex_bin)
         stop = evidence_root / "managed-live-interrupt" / "stop.json"
-        stop.write_text(json.dumps({"attempted": True, "evidence": {"returncode": 7}}), encoding="utf-8")
+        stop.write_text(json.dumps(_verified_stop(verified=False)), encoding="utf-8")
         return result
 
     monkeypatch.setattr(profile.bridge_canary, "run_managed_live_interrupt", failed_cleanup)
