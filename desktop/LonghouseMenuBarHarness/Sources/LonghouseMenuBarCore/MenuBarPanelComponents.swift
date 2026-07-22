@@ -510,6 +510,9 @@ public enum ManagedAttentionKind: Equatable, Sendable {
     case detached
     /// Managed but the bridge itself is in trouble.
     case degraded
+    /// Runtime Host phase truth has not arrived yet. Report once in the header,
+    /// rather than repeating a diagnostic sentence on every row.
+    case phaseUnavailable
     /// Unknown — raw state we don't have a rule for.
     case unknown(String)
 }
@@ -739,6 +742,8 @@ private func attentionPill(_ kind: ManagedAttentionKind, identifier: String? = n
         statePill(title: "DEGRADED", color: attentionColor(kind), identifier: identifier)
     case .idle:
         EmptyView()
+    case .phaseUnavailable:
+        EmptyView()
     case .unknown(let label):
         let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
         let title = trimmed.isEmpty ? "UNKNOWN" : trimmed.uppercased()
@@ -758,7 +763,7 @@ private func attentionColor(_ kind: ManagedAttentionKind) -> Color {
         return Color(red: 0.90, green: 0.67, blue: 0.16)
     case .degraded:
         return Color(red: 0.86, green: 0.29, blue: 0.23)
-    case .idle:
+    case .idle, .phaseUnavailable:
         return Color.secondary
     case .unknown:
         return Color.secondary

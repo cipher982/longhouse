@@ -285,6 +285,73 @@ struct LonghouseMenuBarCoreTests {
     }
 
     @Test
+    func localRefreshPreservesCanonicalPhaseAndControlProjection() throws {
+        let connection = RealtimeConnectionSnapshot(
+            runtimeUrl: "https://runtime.example",
+            machineName: "cinder",
+            tokenPath: "/tmp/device-token"
+        )
+        let canonical = ManagedSessionSnapshot(
+            sessionId: "session-1", provider: "codex", workspaceLabel: "zerg",
+            timelineTitle: "Fix refresh clobbering", branch: "main",
+            state: "attached", phase: "Using shell", rawPhase: "executing",
+            phaseProvenance: "runtime_host", phaseObservedAt: "2026-07-22T20:29:17Z",
+            lastActivityAt: "2026-07-22T20:30:31Z", bridgeStatus: "ready",
+            bridgePid: 42, bridgeHeartbeatAt: "2026-07-22T20:30:32Z",
+            uiAttached: true, uiPresence: "foreground_tui", reasonCodes: [],
+            authority: "runtime_host", stateContractVersion: 1,
+            presentationPolicyVersion: 1, commitSeq: "738014", mode: "helm",
+            presentation: SessionPresentationSnapshot(
+                primary: SessionPresentationLabelSnapshot(key: "executing", label: "Using shell", tone: "running"),
+                access: SessionPresentationLabelSnapshot(key: "live_control", label: "Live control", tone: "live")
+            ),
+            activity: SessionActivitySnapshot(
+                state: "executing", rawKind: "running", tool: "shell",
+                observedAt: "2026-07-22T20:29:17Z"
+            ),
+            control: SessionControlSnapshot(
+                ownership: "owned", connection: "connected",
+                actions: SessionControlActionsSnapshot(
+                    terminate: SessionActionSnapshot(state: "available", reason: nil),
+                    reattach: SessionActionSnapshot(state: "unavailable", reason: "already_connected")
+                )
+            )
+        )
+        let localPreview = ManagedSessionSnapshot(
+            sessionId: "session-1", provider: "codex", workspaceLabel: "zerg",
+            timelineTitle: "Fix refresh clobbering", branch: "new-local-branch",
+            state: "attached", phase: nil, lastActivityAt: "2026-07-22T20:30:33Z",
+            bridgeStatus: "ready", bridgePid: 42,
+            bridgeHeartbeatAt: "2026-07-22T20:30:33Z",
+            uiAttached: true, uiPresence: "foreground_tui", reasonCodes: [],
+            authority: "machine_preview"
+        )
+        let previous = HealthSnapshot(
+            schemaVersion: 1, collectedAt: "2026-07-22T20:30:32Z",
+            healthState: "healthy", severity: "green", headline: "Healthy",
+            reasons: [], suggestedActions: [], service: nil, engineStatus: nil,
+            outbox: nil, activitySummary: nil, managedSessions: [canonical],
+            realtime: connection, launchReadiness: nil
+        )
+        let refreshed = HealthSnapshot(
+            schemaVersion: 1, collectedAt: "2026-07-22T20:30:33Z",
+            healthState: "healthy", severity: "green", headline: "Healthy",
+            reasons: [], suggestedActions: [], service: nil, engineStatus: nil,
+            outbox: nil, activitySummary: nil, managedSessions: [localPreview],
+            realtime: connection, launchReadiness: nil
+        ).preservingRealtimeProjection(from: previous)
+
+        let session = try #require(refreshed.managedSessions?.first)
+        #expect(session.branch == "new-local-branch")
+        #expect(session.authority == "runtime_host")
+        #expect(session.phase == "Using shell")
+        #expect(session.presentation?.primary?.key == "executing")
+        #expect(session.control?.connection == "connected")
+        #expect(session.canStopFromMenuBar)
+        #expect(session.menuBarAttentionKind == .working)
+    }
+
+    @Test
     func localEngineProjectionCannotRewriteSessionState() throws {
         let session = ManagedSessionSnapshot(
             sessionId: "session-1", provider: "codex", workspaceLabel: "zerg",
@@ -391,6 +458,26 @@ struct LonghouseMenuBarCoreTests {
         #expect(titleOnlyUpdate.activity == updated.activity)
         #expect(titleOnlyUpdate.control == updated.control)
         #expect(titleOnlyUpdate.canStopFromMenuBar)
+    }
+
+    @Test
+    func realtimeShadowProjectionCannotEnterManagedSessionList() {
+        let snapshot = HealthSnapshot(
+            schemaVersion: 1, collectedAt: "2026-07-22T20:30:32Z",
+            healthState: "healthy", severity: "green", headline: "Healthy",
+            reasons: [], suggestedActions: [], service: nil, engineStatus: nil,
+            outbox: nil, activitySummary: nil, managedSessions: [],
+            launchReadiness: nil
+        )
+        let shadow = SessionProjection(
+            sessionId: "shadow-1", timelineTitle: "Historical shadow session",
+            summaryTitle: nil, firstUserMessage: nil, titleState: "ready",
+            titleSource: "ai", runtimePhase: nil, displayPhase: "Inactive",
+            lastActivityAt: "2026-07-22T20:30:00Z", source: "runtime_host",
+            authority: "runtime_host", mode: "shadow"
+        )
+
+        #expect(snapshot.applying(shadow).managedSessions?.isEmpty == true)
     }
 
     @Test
@@ -2001,7 +2088,7 @@ struct LonghouseMenuBarCoreTests {
         #expect(snapshot.healthState == "broken")
         #expect(snapshot.managedAttentionSeverity == nil)
         #expect(snapshot.menuBarPresentation(relativeTo: Date()).promotion == .normal)
-        #expect(session.menuBarAttentionKind == .unknown("canonical presentation unavailable"))
+        #expect(session.menuBarAttentionKind == .phaseUnavailable)
         #expect(session.rawPhase == "future_magic")
     }
 
@@ -2058,7 +2145,7 @@ struct LonghouseMenuBarCoreTests {
             reasonCodes: []
         )
 
-        #expect(session.menuBarAttentionKind == .unknown("canonical presentation unavailable"))
+        #expect(session.menuBarAttentionKind == .phaseUnavailable)
         #expect(session.normalizedUIPresence == nil)
         #expect(session.isConsoleManagedSession == false)
         #expect(session.needsManagedSessionAttention == false)
@@ -2088,7 +2175,7 @@ struct LonghouseMenuBarCoreTests {
         #expect(session.isConsoleManagedSession == true)
         #expect(session.needsManagedSessionAttention == false)
         #expect(session.isBackgroundManagedSession == true)
-        #expect(session.menuBarAttentionKind == .unknown("canonical presentation unavailable"))
+        #expect(session.menuBarAttentionKind == .phaseUnavailable)
     }
 
     @Test
@@ -2113,7 +2200,7 @@ struct LonghouseMenuBarCoreTests {
 
         #expect(session.isConsoleManagedSession == true)
         #expect(session.needsManagedSessionAttention == false)
-        #expect(session.menuBarAttentionKind == .unknown("canonical presentation unavailable"))
+        #expect(session.menuBarAttentionKind == .phaseUnavailable)
     }
 
     @Test
@@ -2139,7 +2226,7 @@ struct LonghouseMenuBarCoreTests {
         #expect(session.isConsoleManagedSession == false)
         #expect(session.needsManagedSessionAttention == true)
         #expect(session.isBackgroundManagedSession == true)
-        #expect(session.menuBarAttentionKind == .unknown("canonical presentation unavailable"))
+        #expect(session.menuBarAttentionKind == .phaseUnavailable)
         #expect(session.canStopFromMenuBar == false)
     }
 
@@ -2161,7 +2248,7 @@ struct LonghouseMenuBarCoreTests {
             reasonCodes: []
         )
 
-        #expect(session.menuBarAttentionKind == .unknown("canonical presentation unavailable"))
+        #expect(session.menuBarAttentionKind == .phaseUnavailable)
     }
 
     @Test
@@ -2182,7 +2269,7 @@ struct LonghouseMenuBarCoreTests {
         )
 
         #expect(session.normalizedState == "unknown")
-        #expect(session.menuBarAttentionKind == .unknown("canonical presentation unavailable"))
+        #expect(session.menuBarAttentionKind == .phaseUnavailable)
     }
 
     @Test

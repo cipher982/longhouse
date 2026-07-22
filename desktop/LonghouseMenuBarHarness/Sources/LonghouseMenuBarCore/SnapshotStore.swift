@@ -203,7 +203,7 @@ public final class SnapshotStore: ObservableObject {
                 self.transientRetryTask?.cancel()
                 self.transientRetryTask = nil
                 self.isRecovering = false
-                let snapshot = loadedSnapshot.preservingSessionTitles(from: self.snapshot)
+                let snapshot = loadedSnapshot.preservingRealtimeProjection(from: self.snapshot)
                 self.snapshot = snapshot
                 self.connectRealtimeIfNeeded(snapshot.realtime)
                 self.monitorLocalStatusIfNeeded(snapshot.engineStatus?.path)
