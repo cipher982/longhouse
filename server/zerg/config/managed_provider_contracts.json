@@ -46,11 +46,13 @@
             {
               "id": "coordination_instructions_model_visible",
               "scenario_id": "codex_coordination_awareness_create",
+              "oracle_source": "server/zerg/qa/provider_coordination_oracles.py",
               "minimum_scenario_revision": 1,
               "acceptable_evidence": [
                 "live_token"
               ],
-              "max_age_seconds": 86400
+              "max_age_seconds": 86400,
+              "oracle_digest": "d33421707935ded95b85c6cc5a8c80db97e428983c806116ac33900b723ad7c2"
             }
           ]
         },
@@ -69,21 +71,25 @@
             {
               "id": "coordination_instructions_model_visible_after_compaction",
               "scenario_id": "codex_coordination_awareness_post_compaction",
+              "oracle_source": "server/zerg/qa/provider_coordination_oracles.py",
               "minimum_scenario_revision": 1,
               "acceptable_evidence": [
                 "live_token"
               ],
-              "max_age_seconds": 86400
+              "max_age_seconds": 86400,
+              "oracle_digest": "d33421707935ded95b85c6cc5a8c80db97e428983c806116ac33900b723ad7c2"
             },
             {
               "id": "no_duplicate_visible_bootstrap",
               "scenario_id": "codex_coordination_awareness_post_compaction",
+              "oracle_source": "server/zerg/qa/provider_coordination_oracles.py",
               "minimum_scenario_revision": 1,
               "acceptable_evidence": [
                 "hermetic",
                 "live_token"
               ],
-              "max_age_seconds": 604800
+              "max_age_seconds": 604800,
+              "oracle_digest": "d33421707935ded95b85c6cc5a8c80db97e428983c806116ac33900b723ad7c2"
             }
           ]
         },
@@ -102,12 +108,14 @@
             {
               "id": "directed_message_persisted_and_delivered",
               "scenario_id": "codex_coordination_message",
+              "oracle_source": "server/zerg/qa/provider_coordination_oracles.py",
               "minimum_scenario_revision": 1,
               "acceptable_evidence": [
                 "hermetic",
                 "live_token"
               ],
-              "max_age_seconds": 604800
+              "max_age_seconds": 604800,
+              "oracle_digest": "d33421707935ded95b85c6cc5a8c80db97e428983c806116ac33900b723ad7c2"
             }
           ]
         },
@@ -126,12 +134,14 @@
             {
               "id": "attributed_message_visible",
               "scenario_id": "codex_coordination_message",
+              "oracle_source": "server/zerg/qa/provider_coordination_oracles.py",
               "minimum_scenario_revision": 1,
               "acceptable_evidence": [
                 "hermetic",
                 "live_token"
               ],
-              "max_age_seconds": 604800
+              "max_age_seconds": 604800,
+              "oracle_digest": "d33421707935ded95b85c6cc5a8c80db97e428983c806116ac33900b723ad7c2"
             }
           ]
         }
@@ -249,11 +259,13 @@
             {
               "id": "coordination_instructions_model_visible",
               "scenario_id": "claude_coordination_awareness_create",
+              "oracle_source": "server/zerg/qa/provider_coordination_oracles.py",
               "minimum_scenario_revision": 1,
               "acceptable_evidence": [
                 "live_token"
               ],
-              "max_age_seconds": 86400
+              "max_age_seconds": 86400,
+              "oracle_digest": "d33421707935ded95b85c6cc5a8c80db97e428983c806116ac33900b723ad7c2"
             }
           ]
         },
@@ -272,21 +284,25 @@
             {
               "id": "coordination_instructions_model_visible_after_compaction",
               "scenario_id": "claude_coordination_awareness_post_compaction",
+              "oracle_source": "server/zerg/qa/provider_coordination_oracles.py",
               "minimum_scenario_revision": 1,
               "acceptable_evidence": [
                 "live_token"
               ],
-              "max_age_seconds": 86400
+              "max_age_seconds": 86400,
+              "oracle_digest": "d33421707935ded95b85c6cc5a8c80db97e428983c806116ac33900b723ad7c2"
             },
             {
               "id": "no_duplicate_visible_bootstrap",
               "scenario_id": "claude_coordination_awareness_post_compaction",
+              "oracle_source": "server/zerg/qa/provider_coordination_oracles.py",
               "minimum_scenario_revision": 1,
               "acceptable_evidence": [
                 "hermetic",
                 "live_token"
               ],
-              "max_age_seconds": 604800
+              "max_age_seconds": 604800,
+              "oracle_digest": "d33421707935ded95b85c6cc5a8c80db97e428983c806116ac33900b723ad7c2"
             }
           ]
         },
@@ -305,12 +321,14 @@
             {
               "id": "directed_message_persisted_and_delivered",
               "scenario_id": "claude_coordination_message",
+              "oracle_source": "server/zerg/qa/provider_coordination_oracles.py",
               "minimum_scenario_revision": 1,
               "acceptable_evidence": [
                 "hermetic",
                 "live_token"
               ],
-              "max_age_seconds": 604800
+              "max_age_seconds": 604800,
+              "oracle_digest": "d33421707935ded95b85c6cc5a8c80db97e428983c806116ac33900b723ad7c2"
             }
           ]
         },
@@ -329,12 +347,14 @@
             {
               "id": "attributed_message_visible",
               "scenario_id": "claude_coordination_message",
+              "oracle_source": "server/zerg/qa/provider_coordination_oracles.py",
               "minimum_scenario_revision": 1,
               "acceptable_evidence": [
                 "hermetic",
                 "live_token"
               ],
-              "max_age_seconds": 604800
+              "max_age_seconds": 604800,
+              "oracle_digest": "d33421707935ded95b85c6cc5a8c80db97e428983c806116ac33900b723ad7c2"
             }
           ]
         }

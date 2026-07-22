@@ -43,6 +43,7 @@ providers:
       required_assertions:
       - id: coordination_instructions_model_visible
         scenario_id: codex_coordination_awareness_create
+        oracle_source: server/zerg/qa/provider_coordination_oracles.py
         minimum_scenario_revision: 1
         acceptable_evidence: [live_token]
         max_age_seconds: 86400
@@ -56,11 +57,13 @@ providers:
       required_assertions:
       - id: coordination_instructions_model_visible_after_compaction
         scenario_id: codex_coordination_awareness_post_compaction
+        oracle_source: server/zerg/qa/provider_coordination_oracles.py
         minimum_scenario_revision: 1
         acceptable_evidence: [live_token]
         max_age_seconds: 86400
       - id: no_duplicate_visible_bootstrap
         scenario_id: codex_coordination_awareness_post_compaction
+        oracle_source: server/zerg/qa/provider_coordination_oracles.py
         minimum_scenario_revision: 1
         acceptable_evidence: [hermetic, live_token]
         max_age_seconds: 604800
@@ -74,6 +77,7 @@ providers:
       required_assertions:
       - id: directed_message_persisted_and_delivered
         scenario_id: codex_coordination_message
+        oracle_source: server/zerg/qa/provider_coordination_oracles.py
         minimum_scenario_revision: 1
         acceptable_evidence: [hermetic, live_token]
         max_age_seconds: 604800
@@ -87,6 +91,7 @@ providers:
       required_assertions:
       - id: attributed_message_visible
         scenario_id: codex_coordination_message
+        oracle_source: server/zerg/qa/provider_coordination_oracles.py
         minimum_scenario_revision: 1
         acceptable_evidence: [hermetic, live_token]
         max_age_seconds: 604800
@@ -182,6 +187,7 @@ providers:
       required_assertions:
       - id: coordination_instructions_model_visible
         scenario_id: claude_coordination_awareness_create
+        oracle_source: server/zerg/qa/provider_coordination_oracles.py
         minimum_scenario_revision: 1
         acceptable_evidence: [live_token]
         max_age_seconds: 86400
@@ -195,11 +201,13 @@ providers:
       required_assertions:
       - id: coordination_instructions_model_visible_after_compaction
         scenario_id: claude_coordination_awareness_post_compaction
+        oracle_source: server/zerg/qa/provider_coordination_oracles.py
         minimum_scenario_revision: 1
         acceptable_evidence: [live_token]
         max_age_seconds: 86400
       - id: no_duplicate_visible_bootstrap
         scenario_id: claude_coordination_awareness_post_compaction
+        oracle_source: server/zerg/qa/provider_coordination_oracles.py
         minimum_scenario_revision: 1
         acceptable_evidence: [hermetic, live_token]
         max_age_seconds: 604800
@@ -213,6 +221,7 @@ providers:
       required_assertions:
       - id: directed_message_persisted_and_delivered
         scenario_id: claude_coordination_message
+        oracle_source: server/zerg/qa/provider_coordination_oracles.py
         minimum_scenario_revision: 1
         acceptable_evidence: [hermetic, live_token]
         max_age_seconds: 604800
@@ -226,6 +235,7 @@ providers:
       required_assertions:
       - id: attributed_message_visible
         scenario_id: claude_coordination_message
+        oracle_source: server/zerg/qa/provider_coordination_oracles.py
         minimum_scenario_revision: 1
         acceptable_evidence: [hermetic, live_token]
         max_age_seconds: 604800

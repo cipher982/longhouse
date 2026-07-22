@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from copy import deepcopy
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -189,6 +190,7 @@ def _validate_capabilities(item: dict[str, Any]) -> None:
                 raise ValueError(f"{prefix}.required_assertions entries must be objects")
             for field in ("id", "scenario_id"):
                 _validate_capability_string(f"{prefix}.required_assertions", assertion, field)
+            _validate_capability_string(f"{prefix}.required_assertions", assertion, "oracle_source")
             revision = assertion.get("minimum_scenario_revision")
             if not isinstance(revision, int) or isinstance(revision, bool) or revision < 1:
                 raise ValueError(f"{prefix}.required_assertions minimum_scenario_revision must be positive")
@@ -235,8 +237,15 @@ def normalize_contract_manifest(payload: dict[str, Any]) -> dict[str, Any]:
         _validate_operation_evidence(item)
         _validate_machine_control_supports(item)
         _validate_capabilities(item)
-        normalized_item = dict(item)
+        normalized_item = deepcopy(item)
         normalized_item["adapter_digest"] = _adapter_digest(item)
+        for declaration in normalized_item.get("capabilities", {}).values():
+            for assertion in declaration.get("required_assertions", []):
+                assertion["oracle_digest"] = _source_digest(
+                    provider=str(item["provider"]),
+                    raw_path=str(assertion["oracle_source"]),
+                    label="oracle source",
+                )
         items.append(normalized_item)
     return {
         "schema_version": 1,
@@ -285,3 +294,13 @@ def _adapter_digest(item: dict[str, Any]) -> str:
         digest.update(path.read_bytes())
         digest.update(b"\0")
     return digest.hexdigest()
+
+
+def _source_digest(*, provider: str, raw_path: str, label: str) -> str:
+    relative = Path(raw_path)
+    if relative.is_absolute() or ".." in relative.parts:
+        raise ValueError(f"managed provider contract {provider}: unsafe {label} {raw_path!r}")
+    path = Path(__file__).resolve().parents[2] / relative
+    if not path.is_file():
+        raise ValueError(f"managed provider contract {provider}: {label} not found: {raw_path}")
+    return hashlib.sha256(path.read_bytes()).hexdigest()
