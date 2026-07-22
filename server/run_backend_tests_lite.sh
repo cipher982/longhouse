@@ -14,7 +14,7 @@ if [ -n "${LONGHOUSE_TEST_TMPDIR:-}" ]; then
     export TMPDIR="$LONGHOUSE_TEST_TMPDIR"
     cleanup_test_tmpdir=0
 else
-    export TMPDIR="/tmp/longhouse-tests-${test_uid}-${PPID}"
+    export TMPDIR="$(mktemp -d "/tmp/longhouse-tests-${test_uid}-XXXXXX")"
     cleanup_test_tmpdir=1
 fi
 export UV_CACHE_DIR="$XDG_CACHE_HOME"

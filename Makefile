@@ -26,8 +26,6 @@ PERF_PROOF_OUTPUT ?= artifacts/perf-proof/perf-proof.json
 .PHONY: perf-proof validate-perf-proof cohort-journey validate-cohort-journey
 .PHONY: validate-legacy-nouns
 .PHONY: provider-release-proof-universal-live-smoke provider-capability-coordination-proof
-.PHONY: test-shipper-synthetic-live-bench
-
 # ---------------------------------------------------------------------------
 # Help
 # ---------------------------------------------------------------------------

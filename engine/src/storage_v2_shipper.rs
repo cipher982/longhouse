@@ -660,10 +660,7 @@ async fn reconcile_blocked_cursor_lineage(
     };
     let lineage_proof =
         source_epoch::wire_predecessor_proof_for_epoch(conn, prepared.source_epoch)?;
-    let Some(wire_predecessor) = lineage_proof.wire_predecessor else {
-        return Ok(false);
-    };
-    if requested_predecessor == wire_predecessor {
+    if lineage_proof.wire_predecessor == Some(requested_predecessor) {
         return Ok(false);
     }
     if !lineage_proof
@@ -703,33 +700,45 @@ async fn reconcile_blocked_cursor_lineage(
         }
     }
 
-    let admitted = client
-        .storage_v2_source_manifest(&wire_predecessor.to_string(), 0, Some(request_timeout))
-        .await?;
-    let durable_position =
-        source_epoch::lane_position(conn, wire_predecessor, SourceLane::Durable)?;
-    let host_accepted_through = admitted
-        .source_epoch
-        .accepted_through
-        .parse::<u64>()
-        .context("Runtime Host Cursor predecessor accepted_through is invalid")?;
-    if admitted.v != 2
-        || admitted.source_epoch.source_epoch != wire_predecessor.to_string()
-        || admitted.source_epoch.tenant_id != prepared.envelope.tenant_id
-        || admitted.source_epoch.machine_id != prepared.envelope.machine_id
-        || admitted.source_epoch.provider != "cursor"
-        || admitted.source_epoch.opaque_source_id != prepared.envelope.opaque_source_id
-        || admitted.source_epoch.range_kind != "record_ordinal"
-        || admitted.source_epoch.state != "open"
-        || admitted.source_epoch.replaced_by_source_epoch.is_some()
-        || durable_position == 0
-        || host_accepted_through != durable_position
-    {
-        return Ok(false);
-    }
+    let (host_state, host_accepted_through, durable_position) =
+        if let Some(wire_predecessor) = lineage_proof.wire_predecessor {
+            let admitted = client
+                .storage_v2_source_manifest(&wire_predecessor.to_string(), 0, Some(request_timeout))
+                .await?;
+            let durable_position =
+                source_epoch::lane_position(conn, wire_predecessor, SourceLane::Durable)?;
+            let host_accepted_through = admitted
+                .source_epoch
+                .accepted_through
+                .parse::<u64>()
+                .context("Runtime Host Cursor predecessor accepted_through is invalid")?;
+            if admitted.v != 2
+                || admitted.source_epoch.source_epoch != wire_predecessor.to_string()
+                || admitted.source_epoch.tenant_id != prepared.envelope.tenant_id
+                || admitted.source_epoch.machine_id != prepared.envelope.machine_id
+                || admitted.source_epoch.provider != "cursor"
+                || admitted.source_epoch.opaque_source_id != prepared.envelope.opaque_source_id
+                || admitted.source_epoch.range_kind != "record_ordinal"
+                || admitted.source_epoch.state != "open"
+                || admitted.source_epoch.replaced_by_source_epoch.is_some()
+                || durable_position == 0
+                || host_accepted_through != durable_position
+            {
+                return Ok(false);
+            }
+            (
+                Some(admitted.source_epoch.state),
+                Some(host_accepted_through),
+                Some(durable_position),
+            )
+        } else {
+            (None, None, None)
+        };
 
     let mut replacement = prepared.envelope.clone();
-    replacement.predecessor_source_epoch = Some(wire_predecessor.to_string());
+    replacement.predecessor_source_epoch = lineage_proof
+        .wire_predecessor
+        .map(|epoch| epoch.to_string());
     let replacement_body = serde_json::to_vec(&replacement)
         .context("serializing host-proven Cursor lineage repair")?;
     let replacement_body_zstd =
@@ -744,10 +753,10 @@ async fn reconcile_blocked_cursor_lineage(
             .map(Uuid::to_string)
             .collect::<Vec<_>>(),
         "skipped_epochs_absent_remotely": true,
-        "wire_predecessor": wire_predecessor.to_string(),
-        "host_state": admitted.source_epoch.state,
-        "host_accepted_through": host_accepted_through.to_string(),
-        "local_durable_position": durable_position.to_string(),
+        "wire_predecessor": lineage_proof.wire_predecessor.map(|epoch| epoch.to_string()),
+        "host_state": host_state,
+        "host_accepted_through": host_accepted_through.map(|position| position.to_string()),
+        "local_durable_position": durable_position.map(|position| position.to_string()),
     })
     .to_string();
     pending_source_envelope::replace_request_body_after_lineage_repair(
@@ -756,14 +765,14 @@ async fn reconcile_blocked_cursor_lineage(
         &pending.envelope_id,
         &pending.request_body_zstd,
         &replacement_body_zstd,
-        "Runtime Host proved requested predecessor absent and nearest admitted local ancestor open",
+        "Runtime Host proved requested predecessor chain absent and nearest admitted local ancestor valid",
         &proof_json,
     )?;
     tracing::warn!(
         source_epoch = %prepared.source_epoch,
         old_predecessor = %requested_predecessor,
-        new_predecessor = %wire_predecessor,
-        host_accepted_through,
+        new_predecessor = ?lineage_proof.wire_predecessor,
+        ?host_accepted_through,
         "Repaired blocked Cursor lineage from Runtime Host manifest proof"
     );
     Ok(true)
