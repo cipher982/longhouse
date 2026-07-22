@@ -30,6 +30,7 @@ def _fake_codex(tmp_path: Path, *, behavior: str = "pass") -> tuple[Path, str, P
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -64,12 +65,18 @@ if behavior == "nonzero":
     print(os.environ.get("CODEX_API_KEY", ""), file=sys.stderr)
     raise SystemExit(7)
 output = "0123456789abcdef0123456789abcdef\\n"
+shell_command = command
+if behavior == "command_prefix":
+    shell_command = "printf prefix && " + command
+elif behavior == "command_suffix":
+    shell_command = command + " && printf suffix"
+reported_command = command if behavior == "raw_command" else "/bin/zsh -lc " + shlex.quote(shell_command)
 print(json.dumps({{"type": "item.started", "item": {{
-    "id": "tool-1", "type": "command_execution", "command": command,
+    "id": "tool-1", "type": "command_execution", "command": reported_command,
     "aggregated_output": "", "exit_code": None, "status": "in_progress"
 }}}}))
 print(json.dumps({{"type": "item.completed", "item": {{
-    "id": "tool-1", "type": "command_execution", "command": command,
+    "id": "tool-1", "type": "command_execution", "command": reported_command,
     "aggregated_output": output, "exit_code": 0, "status": "completed"
 }}}}))
 if behavior == "extra_command":
@@ -161,6 +168,7 @@ def test_live_profile_emits_strict_v2_bundle_and_least_privilege_command(tmp_pat
     tool_run = raw_evidence["tool_run"]
     assert tool_run["command_event_count"] == 2
     assert tool_run["command_item_count"] == 1
+    assert tool_run["command_shapes_exact"] is True
     assert tool_run["observed_output"] not in tool_run["argv"][-1]
     assert tool_run["final_agent_message"] == tool_run["observed_output"]
     assert {record["mode"] for record in bundle["records"]} == {None}
@@ -214,6 +222,24 @@ def test_more_than_one_command_is_a_semantic_failure(tmp_path: Path, monkeypatch
     assert result["execution_status"] == "completed"
     assert result["assertions"]["command_execution_completed_with_exact_output"] == "semantic_fail"
     assert result["assertions"]["tool_result_linked_to_final_agent_message"] == "semantic_fail"
+
+
+def test_exact_raw_command_shape_is_accepted(tmp_path: Path, monkeypatch) -> None:
+    result, _, _ = _run(tmp_path, monkeypatch, behavior="raw_command")
+
+    assert result["assertions"]["command_execution_completed_with_exact_output"] == "pass"
+    assert result["assertions"]["tool_result_linked_to_final_agent_message"] == "pass"
+
+
+@pytest.mark.parametrize("behavior", ["command_prefix", "command_suffix"])
+def test_prefixed_or_suffixed_shell_command_is_rejected(tmp_path: Path, monkeypatch, behavior: str) -> None:
+    result, output, _ = _run(tmp_path, monkeypatch, behavior=behavior)
+
+    assert result["execution_status"] == "completed"
+    assert result["assertions"]["command_execution_completed_with_exact_output"] == "semantic_fail"
+    assert result["assertions"]["tool_result_linked_to_final_agent_message"] == "semantic_fail"
+    tool_run = json.loads((output / "raw-evidence.json").read_text())["tool_run"]
+    assert tool_run["command_shapes_exact"] is False
 
 
 @pytest.mark.parametrize("behavior", ["nonzero", "timeout"])

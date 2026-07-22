@@ -34,6 +34,7 @@ ASSERTIONS = (
     "command_execution_completed_with_exact_output",
     "tool_result_linked_to_final_agent_message",
 )
+_SHELL_NAMES = frozenset({"bash", "dash", "ksh", "sh", "zsh"})
 
 
 def _load_request(path: Path) -> dict[str, Any]:
@@ -89,6 +90,18 @@ def _jsonl_events(stdout: str) -> tuple[list[dict[str, Any]], list[str]]:
 def _event_item(event: dict[str, Any]) -> dict[str, Any]:
     item = event.get("item")
     return item if isinstance(item, dict) else {}
+
+
+def _command_matches_expected(observed: object, expected: str) -> bool:
+    if not isinstance(observed, str):
+        return False
+    if observed == expected:
+        return True
+    try:
+        parts = shlex.split(observed)
+    except ValueError:
+        return False
+    return len(parts) == 3 and Path(parts[0]).name in _SHELL_NAMES and parts[1] in {"-c", "-lc"} and parts[2] == expected
 
 
 def _record(
@@ -425,6 +438,9 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
         indexed_items = [(index, _event_item(event)) for index, event in enumerate(events)]
         command_items = [(index, item) for index, item in indexed_items if item.get("type") == "command_execution"]
         command_item_ids = {str(item.get("id")) for _, item in command_items if item.get("id") is not None}
+        command_shapes_exact = bool(command_items) and all(
+            _command_matches_expected(item.get("command"), command) for _, item in command_items
+        )
         matching_commands = [
             (index, item)
             for index, event in enumerate(events)
@@ -432,12 +448,12 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
             and (item := _event_item(event)).get("type") == "command_execution"
             and item.get("status") == "completed"
             and item.get("exit_code") == 0
-            and command in str(item.get("command") or "")
+            and _command_matches_expected(item.get("command"), command)
             and re.fullmatch(r"[0-9a-f]{32}\n", str(item.get("aggregated_output") or "")) is not None
         ]
         agent_messages = [(index, item) for index, item in indexed_items if item.get("type") == "agent_message"]
         final_message = agent_messages[-1] if agent_messages else None
-        command_passed = len(command_item_ids) == 1 and len(matching_commands) == 1
+        command_passed = command_shapes_exact and len(command_item_ids) == 1 and len(matching_commands) == 1
         raw_command_output = str(matching_commands[0][1].get("aggregated_output") or "") if command_passed else None
         observed_output = raw_command_output.rstrip("\n") if raw_command_output is not None else None
         linked = bool(
@@ -476,6 +492,7 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
             "event_count": len(events),
             "command_event_count": len(command_items),
             "command_item_count": len(command_item_ids),
+            "command_shapes_exact": command_shapes_exact,
             "matching_command_count": len(matching_commands),
             "raw_command_output": raw_command_output,
             "observed_output": observed_output,
