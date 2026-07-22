@@ -42,12 +42,11 @@ def test_codex_hook_script_has_managed_session_id_support():
 
 
 def test_codex_hook_does_not_fetch_dynamic_startup_context():
-    # The coordination bootstrap is static and local. Startup continuity's
-    # hosted project-summary fetch remains lab-only.
+    # Coordination awareness is carried by durable MCP server metadata.
     assert '/api/agents/sessions/startup-context' not in CODEX_HOOK_SCRIPT
     assert 'LONGHOUSE_HOOK_URL' not in CODEX_HOOK_SCRIPT
     assert 'LONGHOUSE_HOOK_TOKEN' not in CODEX_HOOK_SCRIPT
-    assert 'LONGHOUSE_COORDINATION_BOOTSTRAP' in CODEX_HOOK_SCRIPT
+    assert 'LONGHOUSE_COORDINATION_BOOTSTRAP' not in CODEX_HOOK_SCRIPT
 
 
 def test_codex_hook_hot_path_stays_local_only():
@@ -60,7 +59,7 @@ def test_codex_hook_hot_path_stays_local_only():
 
 def test_codex_hook_script_maps_all_events():
     """Hook script must handle the Codex hook events that produce liveness facts."""
-    assert "SessionStart)" in CODEX_HOOK_SCRIPT
+    assert "SessionStart)" not in CODEX_HOOK_SCRIPT
     assert "UserPromptSubmit)" in CODEX_HOOK_SCRIPT
     assert "PreToolUse)" in CODEX_HOOK_SCRIPT
     assert "PostToolUse)" in CODEX_HOOK_SCRIPT
@@ -144,7 +143,6 @@ def test_install_codex_hooks_creates_valid_hooks_json(tmp_path, monkeypatch):
 
     # Must have all Codex hook events that map to explicit liveness facts.
     expected_events = {
-        "SessionStart",
         "UserPromptSubmit",
         "PreToolUse",
         "PostToolUse",
@@ -152,6 +150,7 @@ def test_install_codex_hooks_creates_valid_hooks_json(tmp_path, monkeypatch):
         "Stop",
     }
     assert expected_events.issubset(hooks)
+    assert "SessionStart" not in hooks
 
     # Each event should be an array of MatcherGroups
     for event in expected_events:
@@ -192,10 +191,32 @@ def test_install_codex_hooks_preserves_existing_hooks_json(tmp_path, monkeypatch
     data = json.loads(hooks_json.read_text())
     session_start = data["hooks"]["SessionStart"]
 
-    # Should have both: user hook preserved, Longhouse hook added
-    assert len(session_start) == 2
+    # The user hook remains; Longhouse no longer adds a SessionStart hook.
+    assert len(session_start) == 1
     assert "/usr/local/bin/my-hook.sh" in session_start[0]["hooks"][0]["command"]
-    assert "longhouse-codex-hook.sh" in session_start[1]["hooks"][0]["command"]
+
+
+def test_install_codex_hooks_removes_obsolete_longhouse_session_start_only(tmp_path, monkeypatch):
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+    codex_dir = tmp_path / ".codex"
+    codex_dir.mkdir()
+    user_hook = {"hooks": [{"type": "command", "command": "/usr/local/bin/my-hook.sh"}]}
+    old_longhouse_hook = {
+        "hooks": [
+            {
+                "type": "command",
+                "command": str(codex_dir / "hooks" / "longhouse-codex-hook.sh"),
+            }
+        ]
+    }
+    (codex_dir / "hooks.json").write_text(
+        json.dumps({"hooks": {"SessionStart": [user_hook, old_longhouse_hook]}})
+    )
+
+    install_codex_hooks(engine_path="/usr/bin/longhouse-engine")
+
+    data = json.loads((codex_dir / "hooks.json").read_text())
+    assert data["hooks"]["SessionStart"] == [user_hook]
 
 
 def test_install_codex_hooks_is_idempotent(tmp_path, monkeypatch):
@@ -210,7 +231,6 @@ def test_install_codex_hooks_is_idempotent(tmp_path, monkeypatch):
     data = json.loads((codex_dir / "hooks.json").read_text())
 
     for event in (
-        "SessionStart",
         "UserPromptSubmit",
         "PreToolUse",
         "PostToolUse",

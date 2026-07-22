@@ -115,7 +115,7 @@ def test_startup_coordination_context_support_is_explicit():
         contract.provider: contract.startup_coordination_context
         for contract in all_managed_provider_contracts()
     } == {
-        "codex": True,
+        "codex": False,
         "claude": True,
         "opencode": False,
         "antigravity": False,

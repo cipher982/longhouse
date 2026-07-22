@@ -12,7 +12,6 @@ from zerg.services.shipper.hooks import COORDINATION_BOOTSTRAP
 from zerg.services.shipper.hooks import HOOK_SCRIPT
 
 
-@pytest.mark.parametrize("script", [HOOK_SCRIPT, CODEX_HOOK_SCRIPT])
 @pytest.mark.parametrize(
     ("managed", "flag_value", "expects_context"),
     [
@@ -24,7 +23,6 @@ from zerg.services.shipper.hooks import HOOK_SCRIPT
 )
 def test_static_coordination_bootstrap_is_default_on_but_managed_only(
     tmp_path,
-    script,
     managed,
     flag_value,
     expects_context,
@@ -34,7 +32,7 @@ def test_static_coordination_bootstrap_is_default_on_but_managed_only(
 
     hook = tmp_path / "longhouse-hook.sh"
     hook.write_text(
-        script.replace("__LONGHOUSE_HOME__", str(tmp_path / "longhouse"))
+        HOOK_SCRIPT.replace("__LONGHOUSE_HOME__", str(tmp_path / "longhouse"))
         .replace("__HINDSIGHT_ROOT__", str(tmp_path / "hindsight"))
         .replace("__ENGINE_PATH__", "/bin/true")
     )
@@ -75,6 +73,40 @@ def test_static_coordination_bootstrap_is_default_on_but_managed_only(
             "additionalContext": COORDINATION_BOOTSTRAP,
         }
     }
+
+
+def test_codex_hook_never_emits_session_start_context(tmp_path):
+    if shutil.which("jq") is None:
+        pytest.skip("jq is required to execute provider hook fixtures")
+
+    hook = tmp_path / "longhouse-codex-hook.sh"
+    hook.write_text(
+        CODEX_HOOK_SCRIPT.replace("__LONGHOUSE_HOME__", str(tmp_path / "longhouse"))
+        .replace("__ENGINE_PATH__", "/bin/true")
+    )
+    hook.chmod(0o755)
+    env = os.environ.copy()
+    env["LONGHOUSE_MANAGED_SESSION_ID"] = "11111111-1111-1111-1111-111111111111"
+
+    completed = subprocess.run(
+        ["/bin/bash", str(hook)],
+        input=json.dumps(
+            {
+                "hook_event_name": "SessionStart",
+                "source": "compact",
+                "session_id": "provider-session-id",
+                "cwd": str(tmp_path),
+                "transcript_path": str(tmp_path / "transcript.jsonl"),
+            }
+        ),
+        text=True,
+        capture_output=True,
+        check=False,
+        env=env,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout == ""
 
 
 @pytest.mark.parametrize("script", [HOOK_SCRIPT, CODEX_HOOK_SCRIPT])

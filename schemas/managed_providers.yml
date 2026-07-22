@@ -24,7 +24,9 @@ providers:
   tail_output: true
   runtime_phase: true
   transcript_binding: true
-  startup_coordination_context: true
+  # Coordination awareness is durable MCP server metadata, not startup hook
+  # context. This avoids Codex's deferred post-compaction SessionStart cards.
+  startup_coordination_context: false
   can_resume: true
   turn_start: true
   operation_evidence:

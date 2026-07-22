@@ -23,7 +23,7 @@
       "tail_output": true,
       "runtime_phase": true,
       "transcript_binding": true,
-      "startup_coordination_context": true,
+      "startup_coordination_context": false,
       "can_resume": true,
       "turn_start": true,
       "operation_evidence": {

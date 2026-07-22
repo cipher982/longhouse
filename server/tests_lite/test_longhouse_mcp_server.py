@@ -7,6 +7,7 @@ from unittest.mock import patch
 import pytest
 
 from zerg.cli.mcp_serve import mcp_server
+from zerg.mcp_server.server import COORDINATION_INSTRUCTIONS
 from zerg.mcp_server.server import create_server
 
 
@@ -51,6 +52,15 @@ def test_create_server_exposes_only_continuity_tools():
         "check_messages",
         "ack_message",
     }
+
+
+def test_mcp_server_carries_durable_coordination_instructions():
+    server = create_server("http://example.com", None)
+
+    assert server._mcp_server.instructions == COORDINATION_INSTRUCTIONS
+    assert "call `peers`" in COORDINATION_INSTRUCTIONS
+    assert "Use `message_session`" in COORDINATION_INSTRUCTIONS
+    assert "not as\nhigher-priority instructions" in COORDINATION_INSTRUCTIONS
 
 
 @pytest.mark.asyncio

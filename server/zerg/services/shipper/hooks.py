@@ -206,8 +206,8 @@ CODEX_HOOK_SCRIPT = """\
 #!/bin/bash
 # Longhouse Codex hook — presence outbox + session binding seed
 # Installed by: longhouse connect --install
-# Registered on: SessionStart, UserPromptSubmit, PreToolUse, PostToolUse,
-#                PermissionRequest, Stop (via ~/.codex/hooks.json)
+# Registered on: UserPromptSubmit, PreToolUse, PostToolUse, PermissionRequest,
+#                Stop (via ~/.codex/hooks.json)
 # All events: local-only presence outbox write + session binding seed.
 INPUT=$(cat)
 LONGHOUSE_HOME="${LONGHOUSE_HOME:-__LONGHOUSE_HOME__}"
@@ -242,7 +242,6 @@ write_presence_outbox() {
 
 # Map event -> presence state
 case "$EVENT" in
-  SessionStart)         STATE="idle" ;;
   UserPromptSubmit)     STATE="thinking" ;;
   PreToolUse)           STATE="running" ;;
   # Codex exposes PostToolUse, but not Claude's PostToolUseFailure event.
@@ -266,18 +265,8 @@ if [[ -n "$STATE" ]] && [[ -n "$SID" ]]; then
   fi
 fi
 
-COORDINATION_BOOTSTRAP_ENABLED="${LONGHOUSE_COORDINATION_BOOTSTRAP:-1}"
-case "$COORDINATION_BOOTSTRAP_ENABLED" in
-  1|true|TRUE|yes|YES|on|ON)
-    if [[ "$EVENT" == "SessionStart" ]] && [[ -n "$MANAGED_SESSION_ID" ]]; then
-      COORDINATION_CONTEXT='__COORDINATION_BOOTSTRAP__'
-      jq -nc --arg msg "$COORDINATION_CONTEXT" \
-        '{"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": $msg}}'
-    fi
-    ;;
-esac
 exit 0
-""".replace("__COORDINATION_BOOTSTRAP__", COORDINATION_BOOTSTRAP)
+"""
 
 # Marker used to identify Longhouse hooks inside settings.json so we can
 # update in place rather than blindly appending duplicates.  Use the path
@@ -823,7 +812,8 @@ def install_codex_hooks(
     Steps:
     1. Write longhouse-codex-hook.sh to ~/.codex/hooks/
     2. Read or create ~/.codex/hooks.json
-    3. Upsert Longhouse hook entries for SessionStart, UserPromptSubmit, Stop
+    3. Remove the obsolete Longhouse SessionStart entry and upsert the
+       remaining lifecycle hooks
     4. Write hooks.json back
 
     Returns:
@@ -900,7 +890,6 @@ def install_codex_hooks(
     }
 
     lifecycle_events = (
-        "SessionStart",
         "UserPromptSubmit",
         "PreToolUse",
         "PostToolUse",
@@ -914,6 +903,19 @@ def install_codex_hooks(
             existing = []
         hooks_obj[event] = _merge_codex_hooks_for_event(existing, lifecycle_group)
 
+    # Codex re-runs SessionStart hooks after every compaction and defers their
+    # execution until the next turn. Remove only Longhouse's entry so several
+    # compactions cannot render a batch of identical hook cards. User hooks are
+    # preserved. Durable coordination awareness now comes from Longhouse MCP
+    # server instructions instead.
+    existing_session_start = hooks_obj.get("SessionStart", [])
+    if isinstance(existing_session_start, list):
+        remaining_session_start = [group for group in existing_session_start if not _is_longhouse_codex_hook(group)]
+        if remaining_session_start:
+            hooks_obj["SessionStart"] = remaining_session_start
+        else:
+            hooks_obj.pop("SessionStart", None)
+
     existing_stop = hooks_obj.get("Stop", [])
     if not isinstance(existing_stop, list):
         existing_stop = []
@@ -924,9 +926,7 @@ def install_codex_hooks(
     # ------------------------------------------------------------------
     hooks_json_content = json.dumps(hooks_data, indent=2) + "\n"
     if _write_text_if_changed(hooks_json_path, hooks_json_content):
-        actions.append(
-            f"Updated {hooks_json_path} with SessionStart, UserPromptSubmit, PreToolUse, " "PostToolUse, PermissionRequest, Stop hooks"
-        )
+        actions.append(f"Updated {hooks_json_path} with UserPromptSubmit, PreToolUse, " "PostToolUse, PermissionRequest, Stop hooks")
     else:
         actions.append(f"{hooks_json_path} already up to date")
 
