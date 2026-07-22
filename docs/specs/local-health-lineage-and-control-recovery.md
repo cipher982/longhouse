@@ -33,8 +33,7 @@ Host at commit `d078bcd9eca6ab3476e0859dae9c4a7afd6d6dba`.
 
 ### What is healthy
 
-- `https://david010.longhouse.ai/api/health` reports healthy and `/api/readyz`
-  reports ready.
+- The hosted canary health and readiness endpoints report healthy and ready.
 - The Mac control WebSocket is connected and exposes the expected provider
   operations.
 - The live storage lane is succeeding; the ordinary spool and archive backlog
@@ -410,40 +409,9 @@ dogfood refresh and exact-SHA ship verification at cutover.
 - No claim that process existence equals a live control attachment.
 - No redesign of the full browser timeline inside the menu bar.
 
-## Review record
+## Design disposition
 
-### Hatch Claude Fable — REQUEST_CHANGES
-
-Confirmed all four root causes. Required explicit envelope-id/body semantics and
-same-source repair exclusion. Recommended reusing the corrected scheduler,
-collapsing ended-empty epochs only, deterministic headline priority, safe
-process identity checks, and additional empty/deep-lineage fixtures. All were
-accepted above.
-
-### Hatch Cursor Grok — REQUEST_CHANGES
-
-Confirmed all four root causes. Required prepare-by-ended-epoch, multi-hop
-recovery, CAS/audit for the immutable-body exception, safe Codex lifecycle
-handling, and the missing race/crash tests. It recommended manifest probes before
-adding server authority and narrowing the health work to existing axes. All were
-accepted above.
-
-### Final disposition
-
-The reviewers' request-changes verdicts applied to the first draft. The final
-plan incorporates every blocking finding. Non-blocking simplifications were
-also adopted: one lineage scheduler for prevention and recovery, no required
-server API change, no new health protocol, and no automatic provider-process
-cleanup for a control identity failure.
-
-Both reviewers then re-read the revised spec. Hatch Claude Fable returned
-**APPROVE** with no blockers, followed by Hatch Cursor Grok returning
-**APPROVE** with no blockers.
-
-### Implementation review — 2026-07-22
-
-Hatch Cursor Grok reviewed the completed implementation after core E2E. Its
-first pass found incomplete host proof, a stale wire predecessor, detached-state
-projection gaps, and an underspecified menu fixture. Those findings were fixed
-and reverified. The final implementation review returned **APPROVE** with no
-correctness or safety blockers.
+The implementation uses one lineage scheduler for prevention and recovery, no
+new server authority or health protocol, and no automatic provider-process
+cleanup for a control identity failure. Request supersession remains a narrow,
+host-proven, durable-audit exception rather than a general mutable outbox.
