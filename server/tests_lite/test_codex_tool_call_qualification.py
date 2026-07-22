@@ -1,0 +1,192 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+from zerg.qa import codex_release_identity
+from zerg.qa import codex_tool_call_result as profile
+from zerg.qa import provider_qualification
+
+
+@pytest.fixture(autouse=True)
+def _stable_runner_checkout(monkeypatch) -> None:
+    monkeypatch.setattr(codex_release_identity, "_git_sha", lambda _root: "test-sha")
+    monkeypatch.setattr(codex_release_identity, "_git_dirty", lambda _root: False)
+
+
+def _fake_codex(tmp_path: Path, *, behavior: str = "pass") -> tuple[Path, str, Path]:
+    path = tmp_path / "codex"
+    calls = tmp_path / "calls.jsonl"
+    path.write_text(
+        f"""#!{sys.executable}
+import json
+import os
+import re
+import sys
+import time
+from pathlib import Path
+
+calls = Path({str(calls)!r})
+with calls.open("a", encoding="utf-8") as handle:
+    handle.write(json.dumps(sys.argv[1:]) + "\\n")
+if sys.argv[1:] == ["--version"]:
+    print("codex-cli 1.2.3")
+    raise SystemExit(0)
+prompt = sys.argv[-1]
+marker = re.search(r"LONGHOUSE_CODEX_TOOL_[0-9a-f]+", prompt).group(0)
+command = "printf '%s\\\\n' '" + marker + "'"
+behavior = {behavior!r}
+if behavior == "timeout":
+    time.sleep(1)
+if behavior == "nonzero":
+    print(os.environ.get("CODEX_API_KEY", ""), file=sys.stderr)
+    raise SystemExit(7)
+output = marker + "\\n" if behavior != "semantic_mismatch" else "WRONG\\n"
+print(json.dumps({{"type": "item.completed", "item": {{
+    "id": "tool-1", "type": "command_execution", "command": command,
+    "aggregated_output": output, "exit_code": 0, "status": "completed"
+}}}}))
+print(json.dumps({{"type": "item.completed", "item": {{
+    "id": "message-1", "type": "agent_message", "text": "DONE " + marker
+}}}}))
+print(os.environ.get("CODEX_API_KEY", ""), file=sys.stderr)
+if behavior == "mutate":
+    with Path(__file__).open("a", encoding="utf-8") as handle:
+        handle.write("# mutation\\n")
+""",
+        encoding="utf-8",
+    )
+    path.chmod(0o700)
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    return path, f"sha256:{digest}", calls
+
+
+def _request(tmp_path: Path, binary: Path, identity: str, **changes: object) -> Path:
+    payload: dict[str, object] = {
+        "schema_version": 1,
+        "provider": "codex",
+        "profile": profile.PROFILE,
+        "provider_bin": str(binary),
+        "expected_provider_version": "1.2.3",
+        "expected_executable_identity": identity,
+        "invocation_id": "tool-run-1",
+        "producer_class": "local_diagnostic",
+        "producer_version": "test",
+        "longhouse_git_sha": "test-sha",
+    }
+    payload.update(changes)
+    path = tmp_path / "request.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+def _run(tmp_path: Path, monkeypatch, *, behavior: str = "pass") -> tuple[dict, Path, Path]:
+    binary, identity, calls = _fake_codex(tmp_path, behavior=behavior)
+    request = _request(tmp_path, binary, identity)
+    output = tmp_path / "output"
+    monkeypatch.setenv(profile.API_KEY_ENV, "seeded-test-api-key-not-a-real-secret")
+    result = provider_qualification.run(request, output)
+    return result, output, calls
+
+
+def test_live_profile_emits_strict_v2_bundle_and_least_privilege_command(tmp_path: Path, monkeypatch) -> None:
+    result, output, calls = _run(tmp_path, monkeypatch)
+
+    assert result["execution_status"] == "completed"
+    bundle = json.loads((output / "proof-bundle.json").read_text())
+    assert bundle["coverage_manifest"] == json.loads((output / "coverage-manifest.json").read_text())
+    assert bundle["coverage_manifest"]["scenario_id"] == "codex_tool_call_result"
+    assert bundle["coverage_manifest"]["scenario_revision"] == 1
+    assert {record["outcome"] for record in bundle["records"]} == {"pass"}
+    assert {record["evidence_class"] for record in bundle["records"]} == {"live_token"}
+    assert {record["assertion_id"] for record in bundle["records"]} == set(profile.ASSERTIONS)
+    raw = (output / "raw-evidence.json").read_bytes()
+    assert bundle["execution_metadata"]["raw_evidence_digest"] == f"sha256:{hashlib.sha256(raw).hexdigest()}"
+    invocations = [json.loads(line) for line in calls.read_text().splitlines()]
+    assert invocations[0] == ["--version"]
+    live = invocations[1]
+    assert "--sandbox" in live and live[live.index("--sandbox") + 1] == "workspace-write"
+    assert 'approval_policy="never"' in live
+    assert "--ephemeral" in live
+    assert "--ignore-user-config" in live
+    assert "--dangerously-bypass-approvals-and-sandbox" not in live
+
+
+def test_missing_credential_is_blocked_without_process_execution(tmp_path: Path, monkeypatch) -> None:
+    binary, identity, calls = _fake_codex(tmp_path)
+    monkeypatch.delenv(profile.API_KEY_ENV, raising=False)
+    output = tmp_path / "output"
+
+    result = provider_qualification.run(_request(tmp_path, binary, identity), output)
+
+    assert result["execution_status"] == "blocked"
+    assert not calls.exists()
+    execution = json.loads((output / "execution-summary.json").read_text())
+    assert execution["processes_started"] == 0
+    outcomes = result["assertions"]
+    assert outcomes["exact_executable_identity_observed"] == "pass"
+    assert set(outcomes.values()) == {"pass", "blocked"}
+
+
+def test_semantic_mismatch_does_not_change_execution_state(tmp_path: Path, monkeypatch) -> None:
+    result, output, _ = _run(tmp_path, monkeypatch, behavior="semantic_mismatch")
+
+    assert result["execution_status"] == "completed"
+    assert result["assertions"]["command_execution_completed_with_exact_output"] == "semantic_fail"
+    assert result["assertions"]["tool_result_linked_to_final_agent_message"] == "semantic_fail"
+    assert json.loads((output / "execution-summary.json").read_text())["status"] == "completed"
+
+
+@pytest.mark.parametrize("behavior", ["nonzero", "timeout"])
+def test_process_failure_is_infrastructure_error(tmp_path: Path, monkeypatch, behavior: str) -> None:
+    if behavior == "timeout":
+        monkeypatch.setattr(profile, "TIMEOUT_SECONDS", 0.01)
+    result, output, _ = _run(tmp_path, monkeypatch, behavior=behavior)
+
+    assert result["execution_status"] in {"infrastructure_error", "timed_out"}
+    assert result["assertions"]["command_execution_completed_with_exact_output"] == "infrastructure_error"
+    assert result["assertions"]["tool_result_linked_to_final_agent_message"] == "infrastructure_error"
+    assert json.loads((output / "execution-summary.json").read_text())["status"] == result["execution_status"]
+
+
+def test_subject_mutation_invalidates_all_assertions(tmp_path: Path, monkeypatch) -> None:
+    result, _, _ = _run(tmp_path, monkeypatch, behavior="mutate")
+
+    assert result["execution_status"] == "infrastructure_error"
+    assert set(result["assertions"].values()) == {"infrastructure_error"}
+
+
+def test_secret_is_never_serialized_even_when_provider_echoes_it(tmp_path: Path, monkeypatch) -> None:
+    secret = "seeded-test-api-key-not-a-real-secret"
+    _, output, _ = _run(tmp_path, monkeypatch)
+
+    retained = b"".join(path.read_bytes() for path in output.rglob("*") if path.is_file())
+    assert secret.encode() not in retained
+    assert b"[CODEX_API_KEY]" in retained
+
+
+def test_router_and_profile_requests_are_strict(tmp_path: Path, monkeypatch) -> None:
+    binary, identity, _ = _fake_codex(tmp_path)
+    monkeypatch.setenv(profile.API_KEY_ENV, "seeded-test-api-key-not-a-real-secret")
+    bad_schema = _request(tmp_path, binary, identity, schema_version=2)
+    assert provider_qualification.main(["--request", str(bad_schema), "--output-root", str(tmp_path / "one")]) == 2
+    unknown = _request(tmp_path, binary, identity, profile="codex_unknown_v1")
+    assert provider_qualification.main(["--request", str(unknown), "--output-root", str(tmp_path / "two")]) == 2
+    extra = _request(tmp_path, binary, identity, unexpected=True)
+    assert provider_qualification.main(["--request", str(extra), "--output-root", str(tmp_path / "three")]) == 2
+
+
+def test_router_imports_without_optional_server_dependencies() -> None:
+    server_root = Path(provider_qualification.__file__).resolve().parents[2]
+    command = (
+        "import sys; "
+        f"sys.path.insert(0, {str(server_root)!r}); "
+        "import zerg.qa.provider_qualification"
+    )
+    result = subprocess.run([sys.executable, "-S", "-c", command], capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr

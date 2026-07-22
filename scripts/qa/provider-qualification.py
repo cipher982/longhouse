@@ -11,7 +11,7 @@ SERVER = str(ROOT / "server")
 if SERVER not in sys.path:
     sys.path.insert(0, SERVER)
 
-from zerg.qa.codex_release_identity import main  # noqa: E402
+from zerg.qa.provider_qualification import main  # noqa: E402
 
 
 if __name__ == "__main__":

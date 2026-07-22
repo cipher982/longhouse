@@ -98,7 +98,7 @@ def _atomic_json(path: Path, payload: Any) -> None:
         Path(name).unlink(missing_ok=True)
 
 
-def _load_request(path: Path) -> dict[str, Any]:
+def _load_request_for_profile(path: Path, profile: str) -> dict[str, Any]:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
@@ -110,7 +110,7 @@ def _load_request(path: Path) -> dict[str, Any]:
         raise RequestError(f"unknown request keys: {sorted(unknown)}")
     if payload.get("schema_version") != SCHEMA_VERSION:
         raise RequestError("schema_version must be 1")
-    if payload.get("provider") != "codex" or payload.get("profile") != PROFILE:
+    if payload.get("provider") != "codex" or payload.get("profile") != profile:
         raise RequestError("unsupported provider/profile")
     for key in _REQUEST_KEYS - {"schema_version", "provider", "profile"}:
         if not isinstance(payload.get(key), str) or not payload[key].strip():
@@ -124,6 +124,10 @@ def _load_request(path: Path) -> dict[str, Any]:
     if payload["producer_class"] != "local_diagnostic":
         raise RequestError("producer_class must be local_diagnostic")
     return payload
+
+
+def _load_request(path: Path) -> dict[str, Any]:
+    return _load_request_for_profile(path, PROFILE)
 
 
 def _git_sha(root: Path) -> str | None:
