@@ -1419,6 +1419,7 @@ class CatalogDaemon:
         if type(limit) is not int or not 1 <= limit <= 20:
             return self._error(request, "invalid_request", "limit must be an integer from 1 through 20")
         assert self._store is not None
+        await self._run_store(self._store.expire_due_interactions, now=datetime.now(UTC), session_id=session_id)
         result = await self._run_store(
             self._store.list_interactions,
             session_id=session_id,
@@ -1505,6 +1506,7 @@ class CatalogDaemon:
         if params["request_key"] is not None and not _is_string(params["request_key"], maximum=255):
             return self._error(request, "invalid_request", "request_key must contain 1 to 255 characters")
         assert self._store is not None
+        await self._run_store(self._store.expire_due_interactions, now=datetime.now(UTC), session_id=params["session_id"])
         result = await self._run_store(self._store.read_interaction_decision, **params)
         return CatalogRpcResponse(id=request.id, result=result)
 

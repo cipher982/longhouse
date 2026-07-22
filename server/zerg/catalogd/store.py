@@ -1882,7 +1882,7 @@ class CatalogStore:
                 "commit_seq": str(_current_commit_seq(connection)),
             }
 
-    def expire_due_interactions(self, *, now: datetime) -> dict[str, Any]:
+    def expire_due_interactions(self, *, now: datetime, session_id: str | None = None) -> dict[str, Any]:
         """Terminalize elapsed held permissions and clear their runtime pointers.
 
         This is deliberately a catalog mutation, rather than a read-time filter:
@@ -1894,16 +1894,15 @@ class CatalogStore:
         with _write_transaction(self.engine) as connection:
             orm = Session(bind=connection, join_transaction_mode="create_savepoint", expire_on_commit=False)
             try:
-                due = (
-                    orm.query(LiveInteractionRequest)
-                    .filter(
-                        LiveInteractionRequest.status == "pending",
-                        LiveInteractionRequest.kind == "permission_prompt",
-                        LiveInteractionRequest.expires_at.is_not(None),
-                        LiveInteractionRequest.expires_at <= now,
-                    )
-                    .all()
+                due_query = orm.query(LiveInteractionRequest).filter(
+                    LiveInteractionRequest.status == "pending",
+                    LiveInteractionRequest.kind == "permission_prompt",
+                    LiveInteractionRequest.expires_at.is_not(None),
+                    LiveInteractionRequest.expires_at <= now,
                 )
+                if session_id is not None:
+                    due_query = due_query.filter(LiveInteractionRequest.session_id == session_id)
+                due = due_query.all()
                 for row in due:
                     row.status = "expired"
                     row.can_respond = 0
