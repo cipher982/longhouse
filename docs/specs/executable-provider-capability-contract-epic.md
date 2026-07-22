@@ -92,9 +92,8 @@ A source audit rated the current system **3.5/5: evidence-aware capability
 registry**: strong schema integrity, weaker separation, identity, provider
 parity, and negative semantic proof.
 
-The first draft was independently reviewed by Hatch Claude Fable, Codex Sol,
-and OpenRouter Kimi K3. All approved the core direction with required structural
-changes. This revision adopts their shared conclusions:
+Independent architecture review approved the core direction with required
+structural changes. This revision adopts the resulting conclusions:
 
 - proof sufficiency is predicate-based, not a scalar rank;
 - identity is scoped to provider implementation and scenario, not global SHA;
