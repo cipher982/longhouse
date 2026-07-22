@@ -133,7 +133,7 @@ def _load_request(path: Path) -> dict[str, Any]:
 def _git_sha(root: Path) -> str | None:
     try:
         result = subprocess.run(
-            ["git", "-C", str(root), "rev-parse", "HEAD"],
+            ["git", "-c", f"safe.directory={root}", "-C", str(root), "rev-parse", "HEAD"],
             text=True,
             capture_output=True,
             check=False,
@@ -147,7 +147,7 @@ def _git_sha(root: Path) -> str | None:
 def _git_dirty(root: Path) -> bool:
     try:
         result = subprocess.run(
-            ["git", "-C", str(root), "status", "--porcelain"],
+            ["git", "-c", f"safe.directory={root}", "-C", str(root), "status", "--porcelain"],
             text=True,
             capture_output=True,
             check=False,
