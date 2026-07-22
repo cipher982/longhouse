@@ -344,6 +344,12 @@ providers:
         modes: [helm]
       runtime_prerequisites: [session_context]
       required_assertions:
+      - id: launch_scoped_coordination_config_loaded
+        scenario_id: opencode_coordination_launch_config
+        oracle_source: server/zerg/qa/provider_opencode_coordination_oracles.py
+        minimum_scenario_revision: 1
+        acceptable_evidence: [live_no_token]
+        max_age_seconds: 604800
       - id: coordination_instructions_model_visible
         scenario_id: opencode_coordination_awareness_create
         oracle_source: server/zerg/qa/provider_coordination_oracles.py

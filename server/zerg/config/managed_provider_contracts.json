@@ -497,6 +497,17 @@
           ],
           "required_assertions": [
             {
+              "id": "launch_scoped_coordination_config_loaded",
+              "scenario_id": "opencode_coordination_launch_config",
+              "oracle_source": "server/zerg/qa/provider_opencode_coordination_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_no_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "774348f8a581a99515357cae7a07434a1f208fcccb6a30d8e5a6009ae17559f7"
+            },
+            {
               "id": "coordination_instructions_model_visible",
               "scenario_id": "opencode_coordination_awareness_create",
               "oracle_source": "server/zerg/qa/provider_coordination_oracles.py",

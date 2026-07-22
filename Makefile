@@ -618,6 +618,7 @@ provider-release-proof-universal-live-smoke: ## Run all-provider real-bin univer
 provider-capability-coordination-proof: ## Emit local diagnostic Codex coordination bootstrap proof
 	@set -eu; \
 	set -- -m zerg.qa.provider_coordination_scenarios; \
+	if [ -n "$(PROVIDER)" ]; then set -- "$$@" --provider "$(PROVIDER)"; fi; \
 	if [ -n "$(STORE_ROOT)" ]; then set -- "$$@" --store-root "$(STORE_ROOT)"; fi; \
 	if [ -n "$(PRODUCER_CLASS)" ]; then set -- "$$@" --producer-class "$(PRODUCER_CLASS)"; fi; \
 	if [ -n "$(INVOCATION_ID)" ]; then set -- "$$@" --invocation-id "$(INVOCATION_ID)"; fi; \
