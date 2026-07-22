@@ -285,6 +285,9 @@ instructions. Stock Codex converts those instructions into model-visible MCP
 namespace metadata on every turn, including after compaction. Longhouse no
 longer registers its Codex `SessionStart` hook. Repair removes only the old
 Longhouse matcher group and preserves user-defined `SessionStart` hooks.
+The Codex bridge already owns initial presence and transcript binding when it
+observes the provider thread path, so deleting this hook does not transfer
+those responsibilities to the next user prompt.
 
 This fixes a concrete stock Codex 0.144.6 behavior: each compaction enqueues a
 new `SessionStart(source=compact)`, pending starts are stored in a FIFO rather

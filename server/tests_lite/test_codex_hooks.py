@@ -72,6 +72,11 @@ def test_is_longhouse_codex_hook_identifies_our_hooks():
     assert _is_longhouse_codex_hook(our_hook) is True
 
 
+def test_is_longhouse_codex_hook_does_not_claim_user_longhouse_named_hook():
+    user_hook = {"hooks": [{"type": "command", "command": "/usr/local/bin/longhouse-helper.sh"}]}
+    assert _is_longhouse_codex_hook(user_hook) is False
+
+
 def test_is_longhouse_codex_hook_ignores_other_hooks():
     other_hook = {"hooks": [{"type": "command", "command": "/usr/local/bin/my-custom-hook.sh"}]}
     assert _is_longhouse_codex_hook(other_hook) is False
@@ -85,8 +90,8 @@ def test_merge_codex_hooks_appends_when_empty():
 
 
 def test_merge_codex_hooks_replaces_existing():
-    old = {"hooks": [{"type": "command", "command": "longhouse-old.sh"}]}
-    new = {"hooks": [{"type": "command", "command": "longhouse-new.sh"}]}
+    old = {"hooks": [{"type": "command", "command": "/old/hooks/longhouse-codex-hook.sh"}]}
+    new = {"hooks": [{"type": "command", "command": "/new/hooks/longhouse-codex-hook.sh"}]}
     result = _merge_codex_hooks_for_event([old], new)
     assert len(result) == 1
     assert result[0] == new

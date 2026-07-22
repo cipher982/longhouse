@@ -15,10 +15,12 @@ Claude hooks (via settings.json):
 
 Codex hooks (via hooks.json):
 
-- **longhouse-codex-hook.sh** (SessionStart, UserPromptSubmit, PreToolUse,
-  PostToolUse, PermissionRequest, Stop):
+- **longhouse-codex-hook.sh** (UserPromptSubmit, PreToolUse, PostToolUse,
+  PermissionRequest, Stop):
   Same pattern as Claude. Codex has fewer hook events (no
-  Notification hook), so idle-prompt granularity is not available there.
+  Notification hook), so idle-prompt granularity is not available there. The
+  Codex bridge owns initial presence and transcript binding; avoiding
+  SessionStart also avoids stock Codex's visible post-compaction hook cards.
 
 Startup continuity injection (fetching recent project context on
 SessionStart) is not part of the default hook. See
@@ -765,7 +767,7 @@ def install_hooks(
 # Codex hooks.json management
 # ---------------------------------------------------------------------------
 
-_CODEX_HOOK_MARKER = "longhouse-"
+_CODEX_HOOK_MARKER = "longhouse-codex-hook.sh"
 
 
 def _resolve_codex_dir() -> Path:

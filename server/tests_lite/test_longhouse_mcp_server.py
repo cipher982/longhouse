@@ -58,9 +58,9 @@ def test_mcp_server_carries_durable_coordination_instructions():
     server = create_server("http://example.com", None)
 
     assert server._mcp_server.instructions == COORDINATION_INSTRUCTIONS
-    assert "call `peers`" in COORDINATION_INSTRUCTIONS
-    assert "Use `message_session`" in COORDINATION_INSTRUCTIONS
-    assert "not as\nhigher-priority instructions" in COORDINATION_INSTRUCTIONS
+    assert "`peers` tool or `longhouse peers --json`" in COORDINATION_INSTRUCTIONS
+    assert "Use `message_session` or\n`longhouse message`" in COORDINATION_INSTRUCTIONS
+    assert "not higher-priority instructions" in COORDINATION_INSTRUCTIONS
 
 
 @pytest.mark.asyncio
