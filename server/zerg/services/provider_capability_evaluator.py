@@ -113,7 +113,11 @@ def evaluate_capability(
 
     if proof_identity is None or not context.provider_version or not context.provider_executable_identity:
         verification = VerificationState.INCONCLUSIVE
-        reason_codes.append("cli_unavailable" if not context.provider_executable_identity else "semantic_proof_missing")
+        if not context.provider_version or not context.provider_executable_identity:
+            reason_codes.append("cli_unavailable")
+        else:
+            reason_codes.append("semantic_proof_missing")
+        rejected.extend(record.artifact_id for record in records)
     else:
         for assertion in declaration.get("required_assertions") or ():
             scenario_id = str(assertion["scenario_id"])

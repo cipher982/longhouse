@@ -95,6 +95,24 @@ def test_generated_declaration_supplies_scoped_adapter_and_oracle_identity() -> 
     assert len(identity.oracle_digests["codex_coordination_message"]) == 64
 
 
+def test_incomplete_cli_context_keeps_records_visible_but_inconclusive() -> None:
+    contract, declaration = _contract_and_declaration()
+    record = _record(contract.contract_entry_digest)
+
+    decision = evaluate_capability(
+        capability_id="coordination.message.send",
+        declaration=declaration,
+        provider_contract_digest=contract.contract_entry_digest,
+        context=_context(provider_version=None),
+        records=(record,),
+        proof_identity=_identity(),
+    )
+
+    assert decision.verification is VerificationState.INCONCLUSIVE
+    assert decision.rejected_artifact_ids == (record.artifact_id,)
+    assert "cli_unavailable" in decision.reason_codes
+
+
 def test_provider_wide_context_cannot_enable_session_action() -> None:
     contract, declaration = _contract_and_declaration()
     record = _record(contract.contract_entry_digest)
