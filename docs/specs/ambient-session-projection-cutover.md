@@ -88,14 +88,28 @@ the rendered string.
 | deep verifier output, provider versions, transcript/hook scans | explicit diagnostics | `longhouse doctor` / diagnostic commands | no ambient UI dependency |
 
 No layer is allowed to derive or overwrite another layer's fields. The Swift
-reducer merges by field ownership and freshness; it does not replace a complete
-snapshot because an unrelated source refreshed.
+reducer holds two typed fragments per id, `LocalSessionFragment` and optional
+`RuntimeSessionFragment`; it does not merge untyped dictionaries or replace a
+complete snapshot because an unrelated source refreshed.
+
+| Rendered field | Primary source | Conflict rule |
+| --- | --- | --- |
+| local presence, workspace path/label, bridge/process evidence | local fragment | local value remains until its evidence expires |
+| local phase preview | local fragment | ambient evidence only; never grants control or establishes lifecycle/terminal state |
+| activity and presentation | runtime fragment | canonical Runtime Host value wins when present and ordered; local phase remains a labelled fallback only |
+| mode, lifecycle, control grants | runtime fragment | Runtime Host only; missing/stale remote evidence does not delete local presence |
+| title, title state, title source | runtime fragment | `ready/ai` wins; otherwise retain a local prompt/workspace fallback |
+
+The only local timestamps needed are the row generation time and phase/activity
+observation times. Do not add a generic per-field timestamp map.
 
 ## Target contracts
 
 ### `engine-status.json`: complete local projection
 
-Add a versioned `local_projection.sessions[]` collection. Each row is already
+Add `local_projection.schema_version: 2` and a separately monotonic
+`local_projection.sequence`, plus a versioned `local_projection.sessions[]`
+collection. Each row is already
 joined by the Machine Agent and contains: session id, provider, mode, workspace
 label/path, launch/control-path evidence, local liveness, local phase and
 `phase_observed_at`, local activity time, and per-field observation timestamps.
@@ -108,25 +122,51 @@ OpenCode title discovery, Runtime Host HTTP, or title generation. Startup/wake
 and bounded reconciliation populate retained observations; publication simply
 writes the latest coherent projection atomically.
 
-### Runtime Host: one stream, including bootstrap
+The same projection includes non-secret `runtime_connection` metadata needed
+for native streaming: Runtime Host URL, stable machine/device identifier, and
+token-file path. It never embeds a token. A shared schema fixture is consumed
+by Rust writer and Swift decoder tests.
 
-`/api/agents/sessions/stream` initial replay is the sole remote bootstrap. It
-must include the same title/title-state/source and canonical session facts as a
-detail read for every locally relevant session. The desktop opens it once,
-filters to local ids, then consumes deltas. Delete the per-session Swift
-`bootstrap()` requests and delete Python per-session title enrichment from
-ambient local health.
+If the phase-ledger read fails, the writer retains the previous valid local
+phase until normal phase freshness expiry. It does not replace fresh evidence
+with `unknown` merely because one reconciliation read failed.
 
-The stream is best-effort enrichment. Reconnects use bounded backoff and a
-stale stream does not erase local rows or local fallback titles.
+### Runtime Host: one targeted stream, including bootstrap
+
+`/api/agents/sessions/stream` gains a targeted `session_ids` replay contract.
+Its initial replay is the sole remote bootstrap and must include every requested
+local id regardless of timeline age, card visibility, autonomous status, or the
+ordinary limit. Both the live-catalog and legacy/self-host stream branches emit
+the same canonical delta shape as the detail route: title/title-state/source,
+mode, presentation, activity, control, contract versions, and numeric
+`commit_seq`. The stream terminates its initial targeted replay with an explicit
+`replay_complete` event.
+
+The desktop opens one stream using the current local ids and filters events in
+the reducer against the *current* local-id set, not a frozen connection-time
+allow-list. A local id appearing after connection is therefore eligible for a
+subsequent delta; reconnect/replay is triggered on the id-set change when it
+needs guaranteed bootstrap coverage. Delete the per-session Swift `bootstrap()`
+requests and delete Python per-session title enrichment from ambient local
+health.
+
+The stream is best-effort enrichment. A delta replaces the runtime fragment,
+including explicit nulls, only when its numeric `commit_seq` is newer. A
+`session_remove` or `replay_complete` clears stale runtime fragments only; it
+never deletes a locally-present row. Reconnects use bounded backoff and a stale
+stream does not erase local rows or local fallback titles. An integration test
+proves that the stable id Swift sends is the same id stored as `device_id` by
+the Runtime Host.
 
 ### Native desktop input
 
 At boot, Swift decodes the local status file directly, then `LocalStatusMonitor`
-applies incremental local projection updates. It starts the Runtime Host stream
-once local session ids and connection metadata are present. The Python CLI is
-kept only as a compatibility/diagnostic surface; it is not the normal menu-bar
-data plane and it does not poll every 30 seconds.
+applies incremental local projection updates and can create/update local rows.
+It starts the Runtime Host stream once local session ids and connection metadata
+are present. Normal cold start, panel opening, timer refresh, and file-change
+handling execute no `local-health` CLI process. The Python CLI is kept only as a
+compatibility/diagnostic surface; it is not the normal menu-bar data plane and
+it does not poll every 30 seconds.
 
 The desktop reducer retains local and remote fragments by session id. It must
 not preserve an old complete CLI snapshot over a fresher local projection or
@@ -134,18 +174,19 @@ vice versa.
 
 ### Titles
 
-On receipt of the first durable `user` content event for a session, the Runtime
-Host enqueues exactly one idempotent short-title request. The request uses the
-configured low-latency title model, a strict short-title schema, and a bounded
-timeout. It records `pending`, `ready/ai`, or a retryable failure with attempt
-and age. Replays/deduplication are keyed by `(session_id, first_user_event_id)`;
-later user messages cannot replace a ready AI title unless the user explicitly
-renames the session.
+The existing Runtime Host title reconciler remains the one implementation. Its
+storage candidate must be proven to represent the first durable user content,
+and its write-once anchor, bounded timeout/retry, and emitted title delta must
+be retained. The semantic invariant is one **active** AI-title attempt per
+session basis; failures may retry, but a later prompt cannot overwrite a ready
+AI title. User rename wins via compare-and-set/write-once protection against a
+concurrent completion. Align the title prompt contract with the current product
+constraint: 3–5 words and at most 42 characters.
 
-Title title generation must not sit on the ingest acknowledgement path. Its
-eventual result emits the normal session delta, so every client converges
-without polling. The prompt fallback remains immediately available and is
-always labelled by `title_source`.
+Title generation remains off the ingest acknowledgement path. Its eventual
+result emits the normal session delta, so every client converges without
+polling. The prompt fallback remains immediately available and is always
+labelled by `title_source`.
 
 ## Non-options
 
@@ -161,23 +202,30 @@ always labelled by `title_source`.
 
 ## Migration plan
 
-1. **Projection schema and writer.** Add `local_projection.sessions` in Rust,
+1. **Projection schema and writer.** Add schema-versioned
+   `local_projection.sessions` and `runtime_connection` in Rust,
    populated from retained resolved observations and fresh phase evidence at
    projection build time. Keep legacy `sessions`/`phase_ledger` for one
    compatibility release. Add engine tests proving phase is embedded and a
    writer never invokes discovery.
-2. **Reader compatibility.** Teach Python and Swift to prefer the new embedded
-   rows and fall back to legacy rows only when the new schema is absent. Remove
-   Python's Runtime Host title enrichment. Convert `local-health --fast` into a
+2. **Reader compatibility.** Teach Python and Swift to prefer schema 2 rows
+   and fall back to legacy rows only when the new schema is absent or malformed.
+   Dual-write legacy fields until the minimum supported desktop version has
+   consumed schema 2; prove new-engine/old-desktop, old-engine/new-desktop,
+   and downgrade behavior. Remove Python's Runtime Host title enrichment only
+   when all ambient clients have moved to the stream. Convert `local-health --fast` into a
    deprecated compatibility spelling of the same complete local read; keep
    expensive diagnostics only behind explicit doctor/deep commands.
-3. **Desktop cutover.** Make native status-file decode the normal source,
-   remove periodic CLI refresh and cache it only as last-good recovery. Start
-   one SSE stream after local ids are known. Remove `SessionProjectionStream`
-   per-id bootstrap entirely.
-4. **Title-pipeline hardening.** Assert first-user-event idempotency, timeout
-   behavior, provenance, and delta emission. Instrument queue-to-title latency
-   and failure reason without exposing a degraded placeholder as a title.
+3. **Stream parity and desktop cutover.** First make both server stream branches
+   satisfy targeted-replay canonical parity. Then make native status-file decode
+   the normal source, remove periodic CLI refresh and retain cache only as
+   last-good recovery. Start one targeted SSE stream after local ids are known,
+   with id-set churn and replay-complete handling. Only then remove
+   `SessionProjectionStream` per-id bootstrap.
+4. **Title-pipeline proof.** Test the existing title reconciler's first-user
+   basis, write-once anchor, timeout/retry, provenance, delta emission, and
+   rename race. Instrument queue-to-title latency and failure reason without
+   exposing a degraded placeholder as a title.
 5. **Remove compatibility.** After one released client generation consumes the
    new local projection, remove legacy rejoin code and the ambient fast mode.
 
@@ -205,13 +253,16 @@ always labelled by `title_source`.
 - Python compatibility tests: new projection is read without process scans or
   Runtime Host HTTP; legacy file still reads correctly during migration.
 - Swift reducer tests: local-first render, remote title overlay, remote outage,
-  stream reconnect, and field-ownership/freshness conflicts.
-- Swift URLProtocol integration: exactly one stream request, no
-  `/api/agents/sessions/{id}` bootstrap calls, and initial replay updates AI
-  titles.
-- Server tests: title request fires once for the first durable user event,
-  handles timeout/retry, carries `title_state`/`title_source` in initial replay
-  and delta, and never replaces a ready title from a later prompt.
+  stream reconnect, remote removal, explicit-null clearing, out-of-order
+  commit sequence, id-set churn, replay completion, and field ownership.
+- Swift URLProtocol integration: exactly one targeted stream request, no
+  `/api/agents/sessions/{id}` bootstrap calls, initial replay updates AI titles,
+  and normal operation launches zero CLI processes.
+- Server tests: canonical delta parity across live-catalog and legacy stream
+  branches; targeted replay includes a locally requested session beyond the
+  ordinary 40/14-day/visibility filters; device-id namespace agreement; title
+  candidate basis, timeout/retry, write-once anchor, rename race,
+  `title_state`/`title_source` replay and delta.
 - End-to-end fixture: managed Helm session shows `thinking` locally before
   Runtime Host connectivity, then receives its AI title with no panel refresh
   or process scan.
@@ -223,3 +274,13 @@ which fixes the observed false unknown activity. `91d07ab46` makes the current
 menu fast snapshot fetch AI titles for all rows, fixing immediate visibility.
 They are containment fixes, not the target architecture: phase merging moves
 to the writer and the title HTTP fan-out is removed in migration steps 1–3.
+
+## Review record
+
+Hatch SOL and Hatch Fable independently reviewed the initial draft on
+2026-07-22 and both returned **REFINE**. This revision incorporates their
+cutover blockers: a fixed schema version separate from sequence; native session
+and connection decoding; typed local/remote fragments and ordered removals;
+targeted stream replay with branch parity; dynamic local-id filtering; and
+scope reduction to prove the existing title reconciler rather than replace it.
+Approval requires the acceptance and regression gates above.
