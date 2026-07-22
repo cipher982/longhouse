@@ -16,6 +16,7 @@
         "server/zerg/cli/codex.py",
         "server/zerg/mcp_server/server.py",
         "engine/src/codex_bridge.rs",
+        "engine/src/codex_exec.rs",
         "engine/src/codex_ws_relay.rs"
       ],
       "launch_local": true,
@@ -228,7 +229,7 @@
         "codex.resume_run_once",
         "codex.turn_start"
       ],
-      "adapter_digest": "8af670e9438c0ca92c76e5c653303cea5a8916119c7b5d62ec872d540fc5267b"
+      "adapter_digest": "62c0e830a5bbd6e88144d0f72dbcd7e12d1001d10f51e939c428e7552bb876a9"
     },
     {
       "provider": "claude",
@@ -682,7 +683,7 @@
         "opencode.turn_start",
         "opencode.turn_interrupt"
       ],
-      "adapter_digest": "424389c918a39d9b14ac7bb8123d11fb6769da505922be5f968196aeba184d4e"
+      "adapter_digest": "059befb4632dde171db4105f4203c5871724ca5e45ee44a8560ade3473d0c4d4"
     },
     {
       "provider": "antigravity",

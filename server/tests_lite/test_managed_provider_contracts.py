@@ -179,6 +179,7 @@ def test_semantic_capabilities_include_exact_coordination_and_steer_limitations(
     assert claude.contract_entry_digest != codex.contract_entry_digest
     assert len(claude.adapter_digest) == 64
     assert "server/zerg/services/shipper/hooks.py" in claude.adapter_sources
+    assert "engine/src/codex_exec.rs" in codex.adapter_sources
     assert claude.adapter_digest != codex.adapter_digest
 
 

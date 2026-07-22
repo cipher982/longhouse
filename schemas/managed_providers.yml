@@ -17,6 +17,7 @@ providers:
   - server/zerg/cli/codex.py
   - server/zerg/mcp_server/server.py
   - engine/src/codex_bridge.rs
+  - engine/src/codex_exec.rs
   - engine/src/codex_ws_relay.rs
   launch_local: true
   run_once: true
