@@ -67,6 +67,7 @@ extension HealthSnapshot {
         let needsUser = sessions.filter { $0.explicitlyNeedsUser }.count
         let working = sessions.filter { $0.menuBarAttentionKind == .working }.count
         let blocked = sessions.filter { $0.menuBarAttentionKind == .blocked && !$0.explicitlyNeedsUser }.count
+        let unavailable = sessions.filter { $0.menuBarAttentionKind == .phaseUnavailable }.count
         let unknown = sessions.filter {
             if case .unknown = $0.menuBarAttentionKind { return true }
             return false
@@ -74,7 +75,7 @@ extension HealthSnapshot {
         let degraded = sessions.filter {
             $0.menuBarAttentionKind == .degraded || $0.menuBarAttentionKind == .detached
         }.count
-        let idle = max(0, sessions.count - needsUser - working - blocked - degraded - unknown)
+        let idle = max(0, sessions.count - needsUser - working - blocked - degraded - unavailable - unknown)
 
         let repairReasons: Set<String> = [
             "storage_v2_sources_blocked", "storage_v2_outbox_unreadable",
@@ -136,7 +137,10 @@ extension HealthSnapshot {
         if idle > 0 { counts.append("\(idle) idle") }
         if blocked > 0 { counts.append("\(blocked) blocked") }
         if degraded > 0 { counts.append("\(degraded) limited") }
-        if unknown > 0 { counts.append("\(unknown) phase unavailable") }
+        if unavailable > 0 {
+            counts.append("\(unavailable) phase\(unavailable == 1 ? "" : "s") unavailable")
+        }
+        if unknown > 0 { counts.append("\(unknown) unknown") }
         if backgroundManagedCount > 0 { counts.append("\(backgroundManagedCount) background") }
         counts.append("updated \(snapshotAgeCompactLabel(relativeTo: referenceDate))")
 

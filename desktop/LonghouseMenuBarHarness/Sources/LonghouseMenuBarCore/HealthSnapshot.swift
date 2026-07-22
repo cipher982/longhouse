@@ -116,7 +116,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
             }
             return session.sessionId == projection.sessionId ? session.applying(projection) : session
         }
-        if !matched {
+        if !matched, projection.mode != "shadow" {
             sessions.append(ManagedSessionSnapshot(projection: projection))
         }
         return HealthSnapshot(
@@ -180,6 +180,32 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
             return session.preservingTitle(from: previousSession)
         }
         return replacingManagedSessions(sessions)
+    }
+
+    /// A CLI refresh is authoritative for local process presence, but it only
+    /// carries machine-preview session rows. Keep the Runtime Host projection
+    /// already delivered by the live stream until that stream sends a newer
+    /// delta. Otherwise every ordinary refresh erases phase and control truth.
+    func preservingRealtimeProjection(from previous: HealthSnapshot?) -> HealthSnapshot {
+        let refreshed = preservingSessionTitles(from: previous)
+        guard let previous,
+              realtime != nil,
+              realtime == previous.realtime,
+              let previousSessions = previous.managedSessions
+        else { return refreshed }
+
+        let previousById = Dictionary(
+            uniqueKeysWithValues: previousSessions.compactMap { session in
+                session.sessionId.map { ($0, session) }
+            }
+        )
+        let sessions = refreshed.managedSessions?.map { session in
+            guard let sessionId = session.sessionId,
+                  let previousSession = previousById[sessionId]
+            else { return session }
+            return session.preservingRuntimeHostProjection(from: previousSession)
+        }
+        return refreshed.replacingManagedSessions(sessions)
     }
 
     private func replacingManagedSessions(
@@ -1725,6 +1751,30 @@ public struct ManagedSessionSnapshot: Codable, Equatable, Identifiable, Sendable
         )
     }
 
+    func preservingRuntimeHostProjection(from previous: ManagedSessionSnapshot) -> ManagedSessionSnapshot {
+        guard authority != "runtime_host", previous.authority == "runtime_host" else { return self }
+        return ManagedSessionSnapshot(
+            sessionId: sessionId, provider: provider, workspaceLabel: workspaceLabel,
+            timelineTitle: timelineTitle, summaryTitle: summaryTitle,
+            firstUserMessage: firstUserMessage, titleState: titleState,
+            titleSource: titleSource, titleProvenance: titleProvenance,
+            branch: branch, state: state,
+            phase: previous.phase, rawPhase: previous.rawPhase,
+            phaseProvenance: previous.phaseProvenance,
+            phaseObservedAt: previous.phaseObservedAt,
+            lastActivityAt: previous.lastActivityAt ?? lastActivityAt,
+            bridgeStatus: bridgeStatus, bridgePid: bridgePid,
+            bridgeHeartbeatAt: bridgeHeartbeatAt, launchMode: launchMode,
+            uiAttached: uiAttached, uiPresence: uiPresence, reasonCodes: reasonCodes,
+            authority: previous.authority,
+            stateContractVersion: previous.stateContractVersion,
+            presentationPolicyVersion: previous.presentationPolicyVersion,
+            commitSeq: previous.commitSeq, mode: previous.mode,
+            presentation: previous.presentation, activity: previous.activity,
+            control: previous.control
+        )
+    }
+
     public var normalizedState: String {
         let normalized = state?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if let normalized, !normalized.isEmpty {
@@ -1783,7 +1833,7 @@ public struct ManagedSessionSnapshot: Codable, Equatable, Identifiable, Sendable
             default: return .unknown(key)
             }
         }
-        return .unknown("canonical presentation unavailable")
+        return .phaseUnavailable
     }
 }
 

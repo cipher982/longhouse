@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 
 struct SessionProjection: Sendable {
     let sessionId: String
@@ -69,6 +70,11 @@ enum SessionProjectionEvent: Sendable {
 }
 
 enum SessionProjectionStream {
+    private static let logger = Logger(
+        subsystem: "ai.longhouse.desktop",
+        category: "session-projection-stream"
+    )
+
     private struct Delta: Decodable {
         let sessionId: String
         let timelineTitle: String?
@@ -92,17 +98,84 @@ enum SessionProjectionStream {
 
     private struct Remove: Decodable { let sessionId: String }
 
-    static func projections(connection: RealtimeConnectionSnapshot) -> AsyncStream<SessionProjectionEvent> {
+    private struct SessionDetail: Decodable {
+        struct State: Decodable {
+            let stateContractVersion: Int?
+            let presentationPolicyVersion: Int?
+            let mode: String?
+            let presentation: SessionPresentationSnapshot?
+            let activity: SessionActivitySnapshot?
+            let control: SessionControlSnapshot?
+            let commitSeq: Int?
+        }
+
+        let id: String
+        let timelineTitle: String?
+        let titleState: String?
+        let titleSource: String?
+        let runtimePhase: String?
+        let displayPhase: String?
+        let lastActivityAt: String?
+        let sessionState: State
+
+        var projection: SessionProjection {
+            SessionProjection(
+                sessionId: id, timelineTitle: timelineTitle, summaryTitle: nil,
+                firstUserMessage: nil, titleState: titleState, titleSource: titleSource,
+                runtimePhase: runtimePhase, displayPhase: displayPhase,
+                lastActivityAt: lastActivityAt, source: "runtime_host",
+                authority: "runtime_host",
+                stateContractVersion: sessionState.stateContractVersion,
+                presentationPolicyVersion: sessionState.presentationPolicyVersion,
+                commitSeq: sessionState.commitSeq.map(String.init), mode: sessionState.mode,
+                presentation: sessionState.presentation, activity: sessionState.activity,
+                control: sessionState.control
+            )
+        }
+    }
+
+    struct SSELineDecoder {
+        private var buffer: [UInt8] = []
+
+        mutating func append(_ byte: UInt8) -> String? {
+            guard byte == 0x0A else {
+                buffer.append(byte)
+                return nil
+            }
+            if buffer.last == 0x0D {
+                buffer.removeLast()
+            }
+            let line = String(decoding: buffer, as: UTF8.self)
+            buffer.removeAll(keepingCapacity: true)
+            return line
+        }
+    }
+
+    static func projections(
+        connection: RealtimeConnectionSnapshot,
+        sessionIds: [String]
+    ) -> AsyncStream<SessionProjectionEvent> {
         AsyncStream { continuation in
             let task = Task.detached(priority: .userInitiated) {
                 var backoff = Duration.milliseconds(250)
+                let allowedSessionIds = Set(sessionIds)
                 while !Task.isCancelled {
                     do {
-                        try await drain(connection: connection, continuation: continuation)
+                        try await bootstrap(
+                            connection: connection,
+                            sessionIds: sessionIds,
+                            continuation: continuation
+                        )
+                        try await drain(
+                            connection: connection,
+                            allowedSessionIds: allowedSessionIds,
+                            continuation: continuation
+                        )
                         backoff = .milliseconds(250)
                     } catch is CancellationError {
                         break
                     } catch {
+                        logger.error("Runtime Host session stream failed: \(String(describing: error), privacy: .public)")
                         try? await Task.sleep(for: backoff)
                         backoff = min(backoff * 2, .seconds(10))
                     }
@@ -115,6 +188,7 @@ enum SessionProjectionStream {
 
     private static func drain(
         connection: RealtimeConnectionSnapshot,
+        allowedSessionIds: Set<String>,
         continuation: AsyncStream<SessionProjectionEvent>.Continuation
     ) async throws {
         guard let rawURL = connection.runtimeUrl,
@@ -145,16 +219,24 @@ enum SessionProjectionStream {
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
             throw URLError(.badServerResponse)
         }
+        logger.info("Runtime Host session stream connected")
 
         var eventName = ""
         var dataLines: [String] = []
-        for try await line in bytes.lines {
+        var lineDecoder = SSELineDecoder()
+        for try await byte in bytes {
+            guard let line = lineDecoder.append(byte) else { continue }
             if line.isEmpty {
                 if eventName == "session_delta", !dataLines.isEmpty {
                     let data = Data(dataLines.joined(separator: "\n").utf8)
                     let decoder = JSONDecoder()
                     decoder.keyDecodingStrategy = .convertFromSnakeCase
                     let delta = try decoder.decode(Delta.self, from: data)
+                    guard allowedSessionIds.contains(delta.sessionId) else {
+                        eventName = ""
+                        dataLines.removeAll(keepingCapacity: true)
+                        continue
+                    }
                     continuation.yield(
                         .delta(SessionProjection(
                             sessionId: delta.sessionId,
@@ -181,7 +263,10 @@ enum SessionProjectionStream {
                     let data = Data(dataLines.joined(separator: "\n").utf8)
                     let decoder = JSONDecoder()
                     decoder.keyDecodingStrategy = .convertFromSnakeCase
-                    continuation.yield(.remove(sessionId: try decoder.decode(Remove.self, from: data).sessionId))
+                    let sessionId = try decoder.decode(Remove.self, from: data).sessionId
+                    if allowedSessionIds.contains(sessionId) {
+                        continuation.yield(.remove(sessionId: sessionId))
+                    }
                 }
                 eventName = ""
                 dataLines.removeAll(keepingCapacity: true)
@@ -189,6 +274,51 @@ enum SessionProjectionStream {
                 eventName = line.dropFirst(6).trimmingCharacters(in: .whitespaces)
             } else if line.hasPrefix("data:") {
                 dataLines.append(line.dropFirst(5).trimmingCharacters(in: .whitespaces))
+            }
+        }
+    }
+
+    private static func bootstrap(
+        connection: RealtimeConnectionSnapshot,
+        sessionIds: [String],
+        continuation: AsyncStream<SessionProjectionEvent>.Continuation
+    ) async throws {
+        guard let rawURL = connection.runtimeUrl,
+              let baseURL = URL(string: rawURL),
+              let tokenPath = connection.tokenPath
+        else { throw URLError(.badURL) }
+        let token = try String(contentsOfFile: tokenPath, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !token.isEmpty else { throw URLError(.userAuthenticationRequired) }
+
+        await withTaskGroup(of: SessionProjection?.self) { group in
+            for sessionId in sessionIds {
+                group.addTask {
+                    do {
+                        let url = baseURL
+                            .appendingPathComponent("api/agents/sessions")
+                            .appendingPathComponent(sessionId)
+                        var request = URLRequest(url: url)
+                        request.setValue(token, forHTTPHeaderField: "X-Agents-Token")
+                        let (data, response) = try await URLSession.shared.data(for: request)
+                        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+                            return nil
+                        }
+                        let decoder = JSONDecoder()
+                        decoder.keyDecodingStrategy = .convertFromSnakeCase
+                        return try decoder.decode(SessionDetail.self, from: data).projection
+                    } catch {
+                        logger.error(
+                            "Runtime Host session bootstrap failed for \(sessionId, privacy: .public): \(String(describing: error), privacy: .public)"
+                        )
+                        return nil
+                    }
+                }
+            }
+            for await projection in group {
+                if let projection {
+                    continuation.yield(.delta(projection))
+                }
             }
         }
     }

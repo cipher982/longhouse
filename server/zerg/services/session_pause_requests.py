@@ -31,8 +31,9 @@ QUESTION_PAYLOAD_KEYS = ("questions", "question", "prompt", "input", "schema", "
 # Longhouse pushes the decision to the running provider over managed control
 # (Codex app-server, OpenCode bridge). Carried in provider_ref.reply_transport.
 REPLY_TRANSPORT_CLAUDE_PULL = "claude_pretooluse_pull"
+REPLY_TRANSPORT_CURSOR_POLL = "cursor_permission_poll"
 REPLY_TRANSPORT_MANAGED_PUSH = "managed_push"
-PULL_REPLY_TRANSPORTS = {REPLY_TRANSPORT_CLAUDE_PULL}
+PULL_REPLY_TRANSPORTS = {REPLY_TRANSPORT_CLAUDE_PULL, REPLY_TRANSPORT_CURSOR_POLL}
 
 
 def pending_interaction_from_live_runtime(runtime: LiveRuntimeState | None) -> dict[str, Any] | None:

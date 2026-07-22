@@ -29,6 +29,7 @@ public final class SnapshotStore: ObservableObject {
     private var realtimeTask: Task<Void, Never>?
     private var transientRetryTask: Task<Void, Never>?
     private var realtimeConnection: RealtimeConnectionSnapshot?
+    private var realtimeSessionIds: [String] = []
     private var localStatusMonitor: LocalStatusMonitor?
     private var localStatusPath: String?
     private var activeRefreshReason: SnapshotRefreshReason?
@@ -203,9 +204,12 @@ public final class SnapshotStore: ObservableObject {
                 self.transientRetryTask?.cancel()
                 self.transientRetryTask = nil
                 self.isRecovering = false
-                let snapshot = loadedSnapshot.preservingSessionTitles(from: self.snapshot)
+                let snapshot = loadedSnapshot.preservingRealtimeProjection(from: self.snapshot)
                 self.snapshot = snapshot
-                self.connectRealtimeIfNeeded(snapshot.realtime)
+                self.connectRealtimeIfNeeded(
+                    snapshot.realtime,
+                    sessionIds: (snapshot.managedSessions ?? []).compactMap(\.sessionId)
+                )
                 self.monitorLocalStatusIfNeeded(snapshot.engineStatus?.path)
                 self.appendHistorySample(for: snapshot)
                 self.persistCachedSnapshot(snapshot)
@@ -276,18 +280,27 @@ public final class SnapshotStore: ObservableObject {
             || (currentArchive?.deadRanges ?? 0 > 0) != (nextArchive?.deadRanges ?? 0 > 0)
     }
 
-    private func connectRealtimeIfNeeded(_ connection: RealtimeConnectionSnapshot?) {
-        guard connection != realtimeConnection else { return }
+    private func connectRealtimeIfNeeded(
+        _ connection: RealtimeConnectionSnapshot?,
+        sessionIds: [String]
+    ) {
+        let normalizedSessionIds = Array(Set(sessionIds)).sorted()
+        guard connection != realtimeConnection || normalizedSessionIds != realtimeSessionIds else { return }
         realtimeTask?.cancel()
         realtimeTask = nil
         realtimeConnection = connection
+        realtimeSessionIds = normalizedSessionIds
         guard let connection,
               connection.runtimeUrl != nil,
-              connection.tokenPath != nil
+              connection.tokenPath != nil,
+              !normalizedSessionIds.isEmpty
         else { return }
 
         realtimeTask = Task { [weak self] in
-            for await event in SessionProjectionStream.projections(connection: connection) {
+            for await event in SessionProjectionStream.projections(
+                connection: connection,
+                sessionIds: normalizedSessionIds
+            ) {
                 guard !Task.isCancelled, let self, let snapshot = self.snapshot else { return }
                 switch event {
                 case let .delta(projection):

@@ -342,6 +342,7 @@ def _cursor_helm_child_env(
     env["LONGHOUSE_CURSOR_LAUNCH_ID"] = launch_id
     for permission_var in (
         "LONGHOUSE_PERMISSION_HOOK_ENABLED",
+        "LONGHOUSE_PERMISSION_HOOK_TIMEOUT_S",
         "LONGHOUSE_HOOK_URL",
         "LONGHOUSE_HOOK_TOKEN",
     ):

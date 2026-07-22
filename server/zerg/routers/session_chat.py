@@ -106,6 +106,7 @@ from zerg.services.session_kernel_projection import session_lock_scope_id
 from zerg.services.session_locks import session_lock_manager
 from zerg.services.session_pause_requests import PENDING_STATUS as PAUSE_PENDING_STATUS
 from zerg.services.session_pause_requests import REPLY_TRANSPORT_CLAUDE_PULL
+from zerg.services.session_pause_requests import REPLY_TRANSPORT_CURSOR_POLL
 from zerg.services.session_pause_requests import get_pause_request_for_session
 from zerg.services.session_pause_requests import is_pull_reply_transport
 from zerg.services.session_pause_requests import list_pause_requests_for_session
@@ -1100,7 +1101,7 @@ async def _respond_to_live_pause_request(
         )
     request_key = str(interaction.get("request_key") or "").strip()
     status_value = "resolved" if decision == "answer" else "rejected"
-    if interaction.get("reply_transport") == REPLY_TRANSPORT_CLAUDE_PULL:
+    if interaction.get("reply_transport") in {REPLY_TRANSPORT_CLAUDE_PULL, REPLY_TRANSPORT_CURSOR_POLL}:
         permission_decision = "allow" if decision == "answer" else "deny"
         resolved = await _resolve_catalog_interaction(
             session_id=source_session.id,
