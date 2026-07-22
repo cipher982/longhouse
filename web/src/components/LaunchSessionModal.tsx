@@ -391,8 +391,6 @@ function launchBlockedLabel(machine: MachineDirectoryEntry): string {
   switch (machine.launch.blocked_by) {
     case "control_down":
       return lastSeenLabel(machine);
-    case "no_codex_support":
-      return "Console launch unavailable";
     case "no_launch_support":
       return "Console launch unavailable";
     case "engine_too_old":

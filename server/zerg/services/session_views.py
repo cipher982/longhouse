@@ -47,15 +47,14 @@ from zerg.services.send_affordance import OFFLINE_HOST_STATES
 from zerg.services.send_affordance import SendDisabledReason
 from zerg.services.send_affordance import project_send_affordance
 from zerg.services.session_capabilities import build_session_capability_display
-from zerg.services.session_continue_targets import resolve_native_continue_target
 from zerg.services.session_kernel_projection import SessionControlProjection
 from zerg.services.session_kernel_projection import project_session_control_fields
 from zerg.services.session_kernel_projection import project_session_kernel_fields
-from zerg.services.session_launch_lifecycle import RemoteExecutionLifetime
-from zerg.services.session_launch_lifecycle import RemoteLaunchErrorCode
-from zerg.services.session_launch_lifecycle import RemoteLaunchLifecycle
-from zerg.services.session_launch_lifecycle import RemoteLaunchLifecycleState
-from zerg.services.session_launch_lifecycle import project_remote_launch_lifecycle
+from zerg.services.session_launch_lifecycle import ExecutionLifetime
+from zerg.services.session_launch_lifecycle import LaunchErrorCode
+from zerg.services.session_launch_lifecycle import LaunchLifecycle
+from zerg.services.session_launch_lifecycle import LaunchLifecycleState
+from zerg.services.session_launch_lifecycle import project_launch_lifecycle
 from zerg.services.session_liveness_facts import build_session_liveness_facts
 from zerg.services.session_runtime import EXPLICIT_CLOSED_TERMINAL_STATES
 from zerg.services.session_runtime import SessionRuntimeView
@@ -175,9 +174,7 @@ def build_session_capabilities_response(
     runtime_display=None,
     runtime_facts=None,
     kernel_capabilities: KernelSessionCapabilities | None = None,
-    can_continue: bool = False,
-    continue_targets: list[SessionContinueTarget] | None = None,
-    launch_lifecycle: RemoteLaunchLifecycle | None = None,
+    launch_lifecycle: LaunchLifecycle | None = None,
     session_mode: str | None = None,
 ) -> SessionCapabilitiesResponse:
     if capability_flags is None:
@@ -255,16 +252,6 @@ def build_session_capabilities_response(
         can_start_turn=(bool(kernel_capabilities.can_start_turn) if kernel_capabilities is not None else False),
         start_turn_blocked_by=(kernel_capabilities.start_turn_blocked_by if kernel_capabilities is not None else None),
         can_interrupt_active_turn=(bool(kernel_capabilities.can_interrupt_active_turn) if kernel_capabilities is not None else False),
-        # can_continue means "launch a fresh managed process from this
-        # transcript" — a CLOSED-session operation by definition. Do NOT gate it
-        # on lifecycle_closed; that defeated the whole resume feature (the button
-        # vanished the moment the session closed). It is already self-gated by
-        # requiring a native continue target (resolve_native_continue_target):
-        # managed sessions need proven managed-control history, and unmanaged
-        # sessions need a provider alias + transcript + closed state to be
-        # explicitly adoptable.
-        can_continue=bool(can_continue),
-        continue_targets=continue_targets or [],
         attach_images=_attach_images_capability(capability_flags, live_control_available=effective_live_control),
     )
 
@@ -323,20 +310,6 @@ def _attach_images_capability(capability_flags, *, live_control_available: bool 
         return False
     live = bool(capability_flags.live_control_available) if live_control_available is None else bool(live_control_available)
     return live
-
-
-def _native_continue_target(db, session: AgentSession) -> SessionContinueTarget | None:
-    resolution = resolve_native_continue_target(db, session)
-    if resolution is None:
-        return None
-    return SessionContinueTarget(
-        provider=session.provider,
-        device_id=session.device_id,
-        cwd=session.cwd,
-        carry_context="native",
-        native_resume_available=True,
-        adoption_mode=resolution.adoption_mode,
-    )
 
 
 def _provider_label(session: AgentSession | None) -> str | None:
@@ -760,24 +733,6 @@ class SessionControlResponse(BaseModel):
     attach_command: Optional[str] = Field(None, description="Local reattach command for managed-local sessions")
 
 
-class SessionContinueTarget(BaseModel):
-    """Compact native continuation target exposed to web/iOS clients."""
-
-    provider: str = Field(..., description="Provider that can resume this target")
-    device_id: str | None = Field(None, description="Recorded source device id for the session")
-    cwd: str | None = Field(None, description="Recorded working directory for the session")
-    carry_context: Literal["native"] = Field("native", description="Continuation context strategy")
-    native_resume_available: bool = Field(True, description="True when provider-native resume data exists")
-    adoption_mode: Literal["managed_resume", "adopt_unmanaged"] = Field(
-        "managed_resume",
-        description=(
-            "managed_resume: re-launch an already-managed session. "
-            "adopt_unmanaged: explicitly bring an imported/raw transcript under "
-            "Longhouse management by launching a fresh managed process."
-        ),
-    )
-
-
 class SessionCapabilitiesResponse(BaseModel):
     live_control_available: bool = Field(False, description="True when Longhouse can inject into the live session now")
     host_reattach_available: bool = Field(False, description="True when this session can be resumed from its host terminal")
@@ -847,14 +802,6 @@ class SessionCapabilitiesResponse(BaseModel):
     attach_images: bool = Field(
         False,
         description="True when the session can accept image attachments on input (codex_app_server only)",
-    )
-    can_continue: bool = Field(
-        False,
-        description="True when Longhouse has a native continuation target for this session",
-    )
-    continue_targets: list[SessionContinueTarget] = Field(
-        default_factory=list,
-        description="Compact continuation targets available to clients",
     )
 
 
@@ -1064,17 +1011,17 @@ class SessionResponse(UTCBaseModel):
     )
     loop_mode: SessionLoopMode = Field(SessionLoopMode.ASSIST, description="Session loop mode: assist|autopilot")
     user_state: str = Field("active", description="User classification: active|parked|snoozed|archived")
-    launch_state: Optional[RemoteLaunchLifecycleState] = Field(
+    launch_state: Optional[LaunchLifecycleState] = Field(
         None,
         description=(
             "Remote-launch lifecycle: launching|live|launching_unknown|launch_failed|launch_orphaned; null when there is no launch attempt"
         ),
     )
-    execution_lifetime: Optional[RemoteExecutionLifetime] = Field(
+    execution_lifetime: Optional[ExecutionLifetime] = Field(
         None,
         description="Remote launch execution lifetime: one_shot|live_control; null when there is no launch attempt",
     )
-    launch_error_code: Optional[RemoteLaunchErrorCode] = Field(
+    launch_error_code: Optional[LaunchErrorCode] = Field(
         None,
         description="Remote-launch error code when launch_state=launch_failed/launch_orphaned",
     )
@@ -1808,7 +1755,7 @@ def build_session_response(
         effective_launch_attempt = _latest_launch_attempt(store.db, session.id)
     else:
         effective_launch_attempt = launch_attempt
-    archive_launch_lifecycle = None if launch_readiness is not None else project_remote_launch_lifecycle(effective_launch_attempt)
+    archive_launch_lifecycle = None if launch_readiness is not None else project_launch_lifecycle(effective_launch_attempt)
     launch_state = launch_readiness.launch_state if launch_readiness is not None else None
     execution_lifetime = launch_readiness.execution_lifetime if launch_readiness is not None else None
     launch_error_code = launch_readiness.launch_error_code if launch_readiness is not None else None
@@ -1818,8 +1765,6 @@ def build_session_response(
         execution_lifetime = archive_launch_lifecycle.execution_lifetime
         launch_error_code = archive_launch_lifecycle.error_code
         launch_error_message = archive_launch_lifecycle.error_message
-    continue_target = _native_continue_target(store.db, session)
-    continue_targets = [continue_target] if continue_target is not None else []
     lineage_projection = kernel_projection.lineage
     title_state, title_source = resolve_title_provenance(
         anchor_title=session.anchor_title,
@@ -1862,8 +1807,6 @@ def build_session_response(
             runtime_display=runtime_display,
             runtime_facts=None,
             kernel_capabilities=resolved_kernel_capabilities,
-            can_continue=continue_target is not None,
-            continue_targets=continue_targets,
             launch_lifecycle=archive_launch_lifecycle,
             session_mode=session_state.mode,
         ),
@@ -2101,8 +2044,6 @@ def build_live_launch_placeholder_response(
         can_tail_output=False,
         can_resume=False,
         attach_images=False,
-        can_continue=False,
-        continue_targets=[],
     )
     transcript_preview_response = build_session_transcript_preview_response(
         transcript_preview,
@@ -2254,13 +2195,10 @@ def build_active_session_response(
     end_time = _ended or now
     duration_minutes = int((end_time - _started).total_seconds() / 60) if _started else 0
     message_count = (session.user_messages or 0) + (session.assistant_messages or 0)
-    continue_target = _native_continue_target(store.db, session)
-    continue_targets = [continue_target] if continue_target is not None else []
-
     from zerg.services.session_preferences import load_session_preferences
 
     preferences = load_session_preferences(session.id, standalone_session=session)
-    launch_lifecycle = project_remote_launch_lifecycle(launch_attempt)
+    launch_lifecycle = project_launch_lifecycle(launch_attempt)
     session_state = build_archive_session_state_facts(
         session=session,
         capabilities=capability_flags,
@@ -2290,8 +2228,6 @@ def build_active_session_response(
             runtime_display=runtime_display,
             runtime_facts=None,
             kernel_capabilities=resolved_kernel_capabilities,
-            can_continue=continue_target is not None,
-            continue_targets=continue_targets,
             launch_lifecycle=launch_lifecycle,
             session_mode=session_state.mode,
         ),

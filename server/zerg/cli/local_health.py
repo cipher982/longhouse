@@ -428,17 +428,16 @@ def _render_snapshot(snapshot: dict[str, object], *, json_output: bool) -> None:
         typer.echo("Control Channel")
         typer.echo(f"  status: {control_channel.get('status') or '-'}")
         typer.echo(f"  ws url: {control_channel.get('ws_url') or '-'}")
-        launchable = ", ".join(control_channel.get("launchable_providers") or []) or "-"
-        typer.echo(f"  launch providers: {launchable}")
+        console_ready = ", ".join(control_channel.get("console_ready_providers") or []) or "-"
+        typer.echo(f"  Console providers: {console_ready}")
         operations = dict(control_channel.get("control_operations_by_provider") or {})
         if operations:
             rendered_operations = ", ".join(
                 f"{provider}:{'/'.join(str(item) for item in ops)}" for provider, ops in sorted(operations.items())
             )
             typer.echo(f"  provider operations: {rendered_operations}")
-        typer.echo(f"  codex launch: {'yes' if control_channel.get('can_launch_codex') else 'no'}")
-        if control_channel.get("launch_blocked_by"):
-            typer.echo(f"  launch blocked by: {control_channel['launch_blocked_by']}")
+        if control_channel.get("console_blocked_by"):
+            typer.echo(f"  Console blocked by: {control_channel['console_blocked_by']}")
         if control_channel.get("last_error_code") or control_channel.get("last_error_message"):
             last_error_code = control_channel.get("last_error_code") or "-"
             last_error_message = control_channel.get("last_error_message") or "-"

@@ -64,7 +64,7 @@ struct LaunchSessionSheet: View {
     }
 
     private var availableProviders: [String] {
-        selectedMachine?.remoteLaunchProviders ?? []
+        selectedMachine?.consoleLaunchProviders ?? []
     }
 
     private var canSubmit: Bool {
@@ -386,8 +386,6 @@ struct LaunchSessionSheet: View {
         switch machine.launch.blockedBy {
         case "control_down":
             return lastSeenLabel(machine)
-        case "no_codex_support":
-            return "Console launch unavailable"
         case "no_launch_support":
             return "Console launch unavailable"
         case "engine_too_old":
@@ -824,11 +822,8 @@ private func previewMachine(
         machineName: machineName,
         online: online,
         controlChannelStatus: controlChannelStatus,
-        supports: ["codex.launch", "codex.run_once", "codex.send", "claude.launch"],
-        controlOperationsByProvider: ["codex": ["launch", "run_once", "send"], "claude": ["launch"]],
-        canLaunchCodex: true,
-        launchableProviders: providers,
-        launchBlockedBy: launchBlockedBy,
+        supports: ["codex.turn_start", "codex.send", "claude.turn_start"],
+        controlOperationsByProvider: ["codex": ["turn_start", "send"], "claude": ["turn_start"]],
         lastSeenAt: lastSeenAt,
         engineBuild: "dev",
         launch: MachineLaunchProjection(

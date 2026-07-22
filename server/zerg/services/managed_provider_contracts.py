@@ -45,7 +45,6 @@ class ManagedProviderContract:
     control_plane_aliases: tuple[str, ...] = ()
     requires_longhouse_cli: bool = True
     launch_local: bool = True
-    launch_remote: bool = False
     run_once: bool = False
     reattach: bool = False
     send_input: bool = False
@@ -75,8 +74,7 @@ class ManagedProviderContract:
     @property
     def connection_capabilities(self) -> dict[str, int]:
         # SessionConnection.can_resume is the host reattach bit. The provider
-        # contract's can_resume flag is the separate machine-control continue
-        # capability used by continue_supported_providers().
+        # contract's can_resume flag records provider-native resume support.
         return {
             "can_send_input": int(self.send_input),
             "can_interrupt": int(self.interrupt),
@@ -125,7 +123,6 @@ def _contract_from_manifest_item(item: dict[str, object]) -> ManagedProviderCont
         control_plane_aliases=tuple(str(value) for value in item.get("control_plane_aliases") or ()),
         requires_longhouse_cli=bool(item.get("requires_longhouse_cli", True)),
         launch_local=bool(item.get("launch_local", True)),
-        launch_remote=bool(item.get("launch_remote", False)),
         run_once=bool(item.get("run_once", False)),
         reattach=bool(item.get("reattach", False)),
         send_input=bool(item.get("send_input", False)),
@@ -225,30 +222,8 @@ def provider_for_control_plane(control_plane: str | None) -> str | None:
     return contract.provider if contract is not None else None
 
 
-def remote_launch_supported_providers() -> frozenset[str]:
-    return frozenset(contract.provider for contract in _CONTRACTS if contract.launch_remote)
-
-
 def run_once_supported_providers() -> frozenset[str]:
     return frozenset(contract.provider for contract in _CONTRACTS if contract.run_once)
-
-
-def continue_supported_providers() -> frozenset[str]:
-    """Providers whose closed/detached sessions can be resumed (continued).
-
-    Driven by the manifest ``can_resume`` flag so adding a provider is data,
-    not a new branch in the continue resolvers.
-    """
-
-    return frozenset(contract.provider for contract in _CONTRACTS if contract.can_resume)
-
-
-def machine_control_launch_capability_by_provider() -> dict[str, str]:
-    return {
-        contract.provider: capability
-        for contract in _CONTRACTS
-        if (capability := contract.machine_control_capability_for_operation("launch")) is not None
-    }
 
 
 def machine_control_operations_by_provider(

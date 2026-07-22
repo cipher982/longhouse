@@ -20,7 +20,7 @@ import {
 } from "react-router-dom";
 import { toast } from "react-hot-toast";
 import { Button, EmptyState, Spinner } from "../components/ui";
-import { PlayIcon, TrashIcon } from "../components/icons";
+import { TrashIcon } from "../components/icons";
 import { SessionChat, type SessionChatTarget } from "../components/SessionChat";
 import { SessionContextPane } from "../components/session-workspace/SessionContextPane";
 import { SessionInfoDrawer } from "../components/session-workspace/SessionInfoDrawer";
@@ -47,23 +47,9 @@ import {
   type PauseRequestResponseRequest,
 } from "../services/api/agents";
 import { ApiError, DEMO_READ_ONLY_MESSAGE } from "../services/api/base";
-import {
-  continueRemoteSession,
-  type LaunchState,
-  type RemoteSessionLaunchResponse,
-} from "../services/api/launch";
 import { getSessionInteractionCapabilities } from "../lib/sessionWorkspace";
 import "../styles/session-workspace.css";
 
-function formatContinueFailure(result: RemoteSessionLaunchResponse): string {
-  const prefix = result.launch_error_code ? `${result.launch_error_code}: ` : "";
-  return `${prefix}${result.launch_error_message || "The machine did not continue this session."}`;
-}
-
-type LocalContinueLaunchState = {
-  sessionId: string;
-  state: LaunchState;
-};
 function SessionDetailWorkspaceRoute({
   highlightEventId,
   returnTo,
@@ -134,10 +120,7 @@ function SessionDetailWorkspaceRoute({
     useLoopModeChange(session);
   const queryClient = useQueryClient();
   const [confirmingArchive, setConfirmingArchive] = useState(false);
-  const [continuingSession, setContinuingSession] = useState(false);
   const [copyingShareLink, setCopyingShareLink] = useState(false);
-  const [continueLaunchState, setContinueLaunchState] =
-    useState<LocalContinueLaunchState | null>(null);
 
   const handleArchiveConfirm = useCallback(async () => {
     if (!session) return;
@@ -185,35 +168,8 @@ function SessionDetailWorkspaceRoute({
     }
   }, [session, currentUser]);
 
-  const continuationSession = currentThreadSession || session;
-  const continueTarget =
-    continuationSession?.capabilities?.continue_targets?.[0] ?? null;
-  const continuationInputAction = continuationSession?.session_state.mode === "console"
-    ? continuationSession.session_state.control.actions.start_turn
-    : continuationSession?.session_state.control.actions.send_input;
-  const canContinueSession = Boolean(
-    continuationSession?.capabilities?.can_continue &&
-      continueTarget &&
-      continuationInputAction?.state !== "available",
-  );
-  // Adopting an unmanaged/raw transcript starts a fresh managed process — be
-  // honest about that vs. re-launching an already-managed session.
-  const isAdoptUnmanaged = continueTarget?.adoption_mode === "adopt_unmanaged";
-  const continueIdleLabel = isAdoptUnmanaged ? "Continue in Longhouse" : "Continue";
-  const continueTitle = isAdoptUnmanaged
-    ? "Starts a fresh managed Longhouse process from this transcript"
-    : "Continue session";
   const sessionLaunchState = session?.launch_state ?? null;
-  const localContinueLaunchState =
-    continueLaunchState && continueLaunchState.sessionId === continuationSession?.id
-      ? continueLaunchState.state
-      : null;
-  const effectiveLaunchState =
-    sessionLaunchState && sessionLaunchState !== "launching" && sessionLaunchState !== "launching_unknown"
-      ? sessionLaunchState
-      : (localContinueLaunchState ?? sessionLaunchState);
-  const continueLaunchInProgress =
-    effectiveLaunchState === "launching" || effectiveLaunchState === "launching_unknown";
+  const effectiveLaunchState = sessionLaunchState;
 
   const refreshSessionQueries = useCallback(
     (targetSessionId: string) => {
@@ -224,52 +180,6 @@ function SessionDetailWorkspaceRoute({
     },
     [queryClient],
   );
-
-  const handleContinueSession = useCallback(async () => {
-    const sessionToContinue = continuationSession;
-    if (!canContinueSession || !continueTarget || !sessionToContinue || continuingSession || continueLaunchInProgress) return;
-    if (config.demoMode) {
-      toast(DEMO_READ_ONLY_MESSAGE);
-      return;
-    }
-    setContinuingSession(true);
-    try {
-      const result = await continueRemoteSession(sessionToContinue.id, {
-        device_id: continueTarget.device_id || undefined,
-        cwd: continueTarget.cwd || undefined,
-        client_request_id: `continue-${crypto.randomUUID()}`,
-      });
-      refreshSessionQueries(sessionToContinue.id);
-      if (result.session_id !== sessionToContinue.id) {
-        refreshSessionQueries(result.session_id);
-      }
-      if (result.launch_state === "launch_failed" || result.launch_state === "launch_orphaned") {
-        setContinueLaunchState(null);
-        toast.error(formatContinueFailure(result));
-      } else if (result.launch_state === "live") {
-        setContinueLaunchState(null);
-        toast.success("Session continued");
-      } else {
-        setContinueLaunchState({
-          sessionId: sessionToContinue.id,
-          state: result.launch_state,
-        });
-        toast("Continuing session");
-      }
-    } catch (err) {
-      setContinueLaunchState(null);
-      toast.error(err instanceof ApiError ? err.message : "Failed to continue session");
-    } finally {
-      setContinuingSession(false);
-    }
-  }, [
-    canContinueSession,
-    continuationSession,
-    continueLaunchInProgress,
-    continueTarget,
-    continuingSession,
-    refreshSessionQueries,
-  ]);
 
   const workspaceReady = !sessionLoading && !eventsLoading;
 
@@ -429,20 +339,6 @@ function SessionDetailWorkspaceRoute({
 
   const headerRight = (
     <div className="session-workspace-header__actions">
-      {canContinueSession ? (
-        <Button
-          variant="primary"
-          size="sm"
-          onClick={() => void handleContinueSession()}
-          disabled={continuingSession || continueLaunchInProgress}
-          title={continueTitle}
-          aria-label={continueTitle}
-          data-testid="session-continue-button"
-        >
-          {continuingSession || continueLaunchInProgress ? <Spinner size="sm" /> : <PlayIcon width={13} height={13} />}
-          <span>{continuingSession || continueLaunchInProgress ? "Continuing" : continueIdleLabel}</span>
-        </Button>
-      ) : null}
       {shouldShowCopyLinkButton ? (
         <Button
           variant="ghost"

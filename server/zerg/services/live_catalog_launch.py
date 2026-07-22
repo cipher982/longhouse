@@ -470,14 +470,14 @@ def live_launch_result(attempt: LiveSessionLaunchAttempt) -> dict[str, Any]:
         "adopted": "live",
         "dispatched": "launching_unknown",
     }.get(state, "launching")
-    from zerg.services.session_launch_lifecycle import format_remote_launch_error_message
-    from zerg.services.session_launch_lifecycle import normalize_remote_launch_error_code
+    from zerg.services.session_launch_lifecycle import format_launch_error_message
+    from zerg.services.session_launch_lifecycle import normalize_launch_error_code
 
-    error_code = normalize_remote_launch_error_code(attempt.error_code) if attempt.error_code is not None else None
+    error_code = normalize_launch_error_code(attempt.error_code) if attempt.error_code is not None else None
     return {
         "session_id": UUID(str(attempt.session_id)),
         "launch_state": projected_state,
         "execution_lifetime": str(attempt.execution_lifetime or "live_control"),
         "launch_error_code": error_code,
-        "launch_error_message": format_remote_launch_error_message(error_code, attempt.error_message),
+        "launch_error_message": format_launch_error_message(error_code, attempt.error_message),
     }

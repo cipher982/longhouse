@@ -106,7 +106,7 @@ def test_check_provider_support_reports_capability_axes(monkeypatch):
                         "capabilities": {
                             "live_control_operations": ["send", "steer"],
                             "supported_operations": ["launch_local", "send_input", "interrupt", "steer_active_turn"],
-                            "unsupported_operations": ["launch_remote"],
+                            "unsupported_operations": ["turn_start"],
                         },
                         "proof": {"minimum_evidence_level": "source_review"},
                         "version_readiness": {"state": "no_artifact"},
@@ -140,7 +140,7 @@ def test_check_provider_support_reports_capability_axes(monkeypatch):
     assert labels["claude managed support ready"].status == doctor_cli.PASS
     assert labels["claude managed support ready"].detail == (
         "live=send, steer; contract=launch_local, send_input, interrupt, steer_active_turn; "
-        "unsupported=launch_remote; proof_min=source_review; version=no_artifact; "
+        "unsupported=turn_start; proof_min=source_review; version=no_artifact; "
         "local_proof=ok,version=match,freshness=fresh,verdict=yellow,failure=insufficient_coverage"
     )
     assert labels["opencode managed support provider_cli_missing"].status == doctor_cli.WARN

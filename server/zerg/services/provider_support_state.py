@@ -23,8 +23,8 @@ from zerg.services.provider_action_coverage import serialize_provider_action_cov
 SCHEMA_VERSION = 1
 CONTRACT_OPERATIONS = (
     "launch_local",
-    "launch_remote",
     "run_once",
+    "turn_start",
     "reattach",
     "send_input",
     "interrupt",

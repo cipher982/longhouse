@@ -38,28 +38,23 @@ function renderModal(props: Partial<React.ComponentProps<typeof LaunchSessionMod
 
 function machine(overrides: Partial<MachineDirectoryEntry> = {}): MachineDirectoryEntry {
   const online = overrides.online ?? true;
-  const canLaunch = overrides.can_launch_codex ?? online;
   const controlChannelStatus: MachineDirectoryEntry["control_channel_status"] = online ? "connected" : "disconnected";
-  const launchBlockedBy: MachineDirectoryEntry["launch_blocked_by"] =
-    overrides.launch_blocked_by ?? (canLaunch ? null : online ? "no_codex_support" : "control_down");
-  const operations = overrides.control_operations_by_provider ?? (canLaunch ? { codex: ["turn_start"] } : {});
+  const operations = overrides.control_operations_by_provider ?? (online ? { codex: ["turn_start"] } : {});
   const providerOptions = Object.entries(operations)
     .filter(([, providerOperations]) => providerOperations.includes("turn_start"))
     .map(([provider]) => ({ provider }));
+  const launchBlockedBy = providerOptions.length > 0 ? null : online ? "no_launch_support" : "control_down";
   return {
     device_id: "cinder",
     machine_name: "cinder",
     online,
     control_channel_status: controlChannelStatus,
-    supports: canLaunch ? ["codex.turn_start"] : [],
+    supports: online ? ["codex.turn_start"] : [],
     control_operations_by_provider: operations,
-    can_launch_codex: canLaunch,
-    launchable_providers: canLaunch ? ["codex"] : [],
-    launch_blocked_by: launchBlockedBy,
     last_seen_at: null,
     engine_build: null,
     launch: overrides.launch ?? {
-      blocked_by: providerOptions.length > 0 ? null : launchBlockedBy,
+      blocked_by: launchBlockedBy,
       providers: providerOptions,
       default_provider:
         providerOptions.find((option) => option.provider === "codex")?.provider ??
@@ -95,32 +90,24 @@ describe("LaunchSessionModal", () => {
           machine_name: "cinder",
           online: false,
           control_channel_status: "disconnected",
-          can_launch_codex: false,
-          launch_blocked_by: "control_down",
         }),
         machine({
           device_id: "old-ci-1",
           machine_name: "old-ci-1",
           online: false,
           control_channel_status: "disconnected",
-          can_launch_codex: false,
-          launch_blocked_by: "control_down",
         }),
         machine({
           device_id: "old-ci-2",
           machine_name: "old-ci-2",
           online: false,
           control_channel_status: "disconnected",
-          can_launch_codex: false,
-          launch_blocked_by: "control_down",
         }),
         machine({
           device_id: "old-ci-3",
           machine_name: "old-ci-3",
           online: false,
           control_channel_status: "disconnected",
-          can_launch_codex: false,
-          launch_blocked_by: "control_down",
         }),
       ],
     });
@@ -132,7 +119,7 @@ describe("LaunchSessionModal", () => {
     expect(screen.queryByText(/does not advertise codex\.launch/)).not.toBeInTheDocument();
   });
 
-  it("shows connected machines blocked by missing Codex launch support", async () => {
+  it("shows connected machines blocked by missing Console turn support", async () => {
     apiMocks.listMachines.mockResolvedValue({
       machines: [
         machine({
@@ -140,8 +127,8 @@ describe("LaunchSessionModal", () => {
           machine_name: "old-engine",
           online: true,
           supports: ["codex.send"],
-          can_launch_codex: false,
-          launch_blocked_by: "no_codex_support",
+          control_operations_by_provider: {},
+          launch: { blocked_by: "no_launch_support", providers: [], default_provider: null },
         }),
       ],
     });
@@ -160,9 +147,7 @@ describe("LaunchSessionModal", () => {
           online: true,
           supports: ["antigravity.send"],
           control_operations_by_provider: {},
-          can_launch_codex: false,
-          launchable_providers: [],
-          launch_blocked_by: "no_launch_support",
+          launch: { blocked_by: "no_launch_support", providers: [], default_provider: null },
         }),
       ],
     });
@@ -222,8 +207,6 @@ describe("LaunchSessionModal", () => {
           machine_name: "cube",
           online: false,
           control_channel_status: "disconnected",
-          can_launch_codex: false,
-          launch_blocked_by: "control_down",
         }),
       ],
     });
@@ -266,10 +249,8 @@ describe("LaunchSessionModal", () => {
           machine_name: "cinder",
           online: true,
           control_channel_status: "connected",
-          supports: ["codex.launch", "codex.run_once"],
+          supports: ["codex.turn_start", "codex.run_once"],
           control_operations_by_provider: { codex: ["turn_start"] },
-          can_launch_codex: true,
-          launch_blocked_by: null,
           last_seen_at: "2026-05-12T13:00:00Z",
           engine_build: "abc",
         }),
@@ -310,7 +291,6 @@ describe("LaunchSessionModal", () => {
             codex: ["turn_start"],
             opencode: ["turn_start", "turn_interrupt"],
           },
-          launchable_providers: ["codex", "opencode"],
           supports: ["codex.turn_start", "opencode.turn_start", "opencode.turn_interrupt"],
           launch: {
             blocked_by: null,
@@ -389,8 +369,6 @@ describe("LaunchSessionModal", () => {
           device_id: "cinder",
           machine_name: "cinder",
           online: true,
-          can_launch_codex: true,
-          launch_blocked_by: null,
         }),
       ],
     });

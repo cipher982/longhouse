@@ -19,7 +19,7 @@ health/repair, managed provider launch, attach, send, interrupt, terminate, and
 provider proof.
 
 OpenCode is the best live-control reference implementation because the Machine
-Agent owns native remote launch, send, interrupt, and terminate. It is not yet a
+Agent owns its native managed control path for send, interrupt, and terminate. It is not yet a
 complete no-Python device story if local attach or human launch still requires
 the Python CLI. Codex is similar: the bridge/control loop is Rust, but
 `longhouse codex` is still Python and therefore remains a device packaging
@@ -289,8 +289,8 @@ Success criteria:
 - The design includes token secrecy and state permission requirements.
 - The design has a rollback path: Python bridge can remain behind an explicit
   debug flag until the Rust bridge is proven.
-- Route Machine Agent `claude.launch` through Rust, preserving PTY behavior,
-  `--dangerously-load-development-channels`, hook env, and readiness wait.
+- Keep terminal-originated `longhouse claude` Helm launch behavior unchanged
+  while moving its device-side channel machinery to Rust.
 - Route `claude.send`, `claude.steer`, and `claude.answer_pause` through the
   Rust bridge.
 - Route `claude.interrupt` through Rust with process identity validation.
@@ -299,7 +299,7 @@ Success criteria:
 - Update provider contracts only if evidence level changes are earned by
   tests/canaries.
 - `control_channel.rs` no longer shells out to `longhouse claude-channel` for
-  remote launch/send/interrupt/steer/answer-pause.
+  send/interrupt/steer/answer-pause.
 - Tokens are absent from argv and logs.
 - Existing managed Claude UX remains the same for local TUI launch and remote
   control.
@@ -346,13 +346,13 @@ Suggested checks:
 
 ### Phase 5: OpenCode Native Entrypoint Completion
 
-Goal: Finish the OpenCode no-Python story now that remote control is native.
+Goal: Finish the OpenCode no-Python story now that managed control is native.
 
 Steps:
 
 1. Replace local `longhouse opencode` launch/attach/stop compatibility paths
    with the native entrypoint where they are still Python-owned.
-2. Preserve the current Rust remote launch/send/interrupt/terminate behavior.
+2. Preserve the current Rust Helm send/interrupt/terminate behavior.
 3. Keep active-turn steer and answer-pause unsupported unless provider
    semantics change and proof is added.
 
@@ -379,8 +379,8 @@ Steps:
 2. Add plugin install idempotency/concurrency tests.
 3. Add hook schema drift tests against captured live/fake `agy` hook payloads.
 4. Add capability/error tests proving only send is advertised.
-5. Document that launch is local observe/send only; remote launch, reattach,
-   interrupt, steer, answer-pause, and terminate remain unsupported.
+5. Document that launch is local observe/send only; Console execution,
+   reattach, interrupt, steer, answer-pause, and terminate remain unsupported.
 
 Success criteria:
 

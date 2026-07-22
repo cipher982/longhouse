@@ -136,7 +136,7 @@ def test_matching_insufficient_coverage_remains_release_warning(monkeypatch, tmp
                 "failure_code": "insufficient_coverage",
                 "generated_at": _fresh_generated_at(),
                 "operation_evidence": {
-                    "launch_remote": {
+                    "terminate": {
                         "status": "not_run",
                         "source": "scheduled Claude release canary",
                     }
@@ -161,7 +161,7 @@ def test_matching_insufficient_coverage_remains_release_warning(monkeypatch, tmp
     assert claude["risk"] == "warning"
     assert claude["verdict"] == "yellow"
     assert claude["failure_code"] == "insufficient_coverage"
-    assert claude["operation_evidence"]["launch_remote"]["status"] == "not_run"
+    assert claude["operation_evidence"]["terminate"]["status"] == "not_run"
 
 
 def test_local_version_probe_failure_is_not_release_warning(monkeypatch, tmp_path: Path) -> None:

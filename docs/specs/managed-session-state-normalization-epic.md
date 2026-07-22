@@ -635,8 +635,8 @@ in a separate diagnostics/cleanup section.
 
 - Helm launcher, child process, PTY, socket, and readiness are adapter-owned
   evidence.
-- Lack of remote launch or active-turn steer is explicit capability asymmetry,
-  not degradation.
+- Lack of active-turn steer is explicit capability asymmetry, not degradation;
+  Helm is terminal-originated by definition.
 
 ### Antigravity
 

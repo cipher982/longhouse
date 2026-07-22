@@ -57,10 +57,8 @@ Longhouse already has strong positive evidence in some paths:
 - managed-local wrappers (`longhouse claude`, `longhouse codex`, `longhouse
   opencode`, `longhouse agy`) call `/api/sessions/managed-local/this-device`
   before starting the provider process;
-- remote launches from web/iOS call `/api/sessions/launch` or continue routes
-  before dispatching work to the Machine Agent;
-- those server paths pre-create `AgentSession`, `SessionThread`, launch attempt,
-  and sometimes `SessionRun` rows.
+- Console creation from web/iOS creates an empty durable session and thread
+  before the composer dispatches a turn-scoped invocation to the Machine Agent;
 
 The missing step is to persist a small, explicit launch-provenance fact on those
 rows and keep it sticky when archive ingest later refreshes the same session.
@@ -144,7 +142,7 @@ Unknown or invalid values normalize to `NULL`. Store `NULL` for "not yet
 known"; do not store a string value such as `unknown`.
 
 `SessionRun.launch_origin` remains the per-run execution lifecycle label
-(`longhouse_spawned`, `longhouse_continued`, `external_adopted`). It is not a
+(`longhouse_spawned`, `external_adopted`). It is not a
 human-intent label: QA harnesses and automation can create
 `longhouse_spawned` runs. `launch_actor` is the durable human/automation
 provenance for default product visibility. `execution_home` remains the control
@@ -185,10 +183,10 @@ provenance from inheritance is ignored. Bare `codex` or `claude` Shadow ingest
 remains unlabeled until a separate shell-integration or process-lineage proof
 lands.
 
-### Web / iOS / API Launch
+### Web / iOS / API Console Creation
 
-Remote launch session shells should create sessions based on the authenticated
-principal, not merely based on the route or shared service:
+Console session shells should record provenance from the authenticated
+principal, not merely from the route or shared service:
 
 ```text
 browser/native authenticated user -> launch_actor = human_ui
@@ -197,7 +195,7 @@ launch_surface = api
 ```
 
 If web/iOS later send an explicit client surface, the server can store `web` or
-`ios`; V1 may use `api` for all browser/native remote launches because the load
+`ios`; V1 may use `api` for all browser/native Console creation because the load
 bearing distinction is `human_ui` versus automation.
 
 ### Automation
@@ -277,16 +275,16 @@ fully labeled.
 3. Normalize/persist the fields in `AgentsStore.ingest_session`, including
    existing-session refresh and timeline card updates.
 4. Set managed-local browser-auth launch shells to `human_shell` / `terminal`.
-5. Set remote browser/iOS launch shells to `human_ui` / `api`, accepting a
-   validated `web`/`ios` client surface hint when present; agents-token launch
+5. Set browser/iOS Console session shells to `human_ui` / `api`, accepting a
+   validated `web`/`ios` client surface hint when present; agents-token Console
    routes stamp `automation` / `api`.
 6. Pass `LONGHOUSE_LAUNCH_ACTOR` and `LONGHOUSE_LAUNCH_SURFACE` from managed
    local provider wrappers only under the interactive/no-automation guard.
 7. Extend engine compressor metadata/env propagation.
 8. Add focused tests for:
    - managed-local shell rows carry human-shell provenance;
-   - browser/native remote launch rows carry human-ui provenance;
-   - agents-token remote launch rows do not get human-ui provenance;
+   - browser/native Console rows carry human-ui provenance;
+   - agents-token Console rows do not get human-ui provenance;
    - ingest persists provenance and does not clear it on later unlabeled ingest;
    - ingest does not overwrite existing conflicting provenance;
    - hidden origins still hide and clear inherited human provenance when they

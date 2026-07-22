@@ -194,18 +194,6 @@ export interface SessionControl {
 
 export type SendDisabledReason = "session_closed" | "control_offline" | "input_not_supported" | "read_only";
 
-export interface SessionContinueTarget {
-  provider: string;
-  device_id?: string | null;
-  cwd?: string | null;
-  carry_context: "native";
-  native_resume_available: boolean;
-  // managed_resume: re-launch an already-managed session.
-  // adopt_unmanaged: explicitly bring an imported/raw transcript under
-  // Longhouse management by launching a fresh managed process.
-  adoption_mode?: "managed_resume" | "adopt_unmanaged";
-}
-
 export interface SessionCapabilities {
   live_control_available: boolean;
   host_reattach_available: boolean;
@@ -239,8 +227,6 @@ export interface SessionCapabilities {
    * truth so the web client doesn't have to know the transport set.
   */
   attach_images?: boolean;
-  can_continue?: boolean;
-  continue_targets?: SessionContinueTarget[];
 }
 
 export interface AgentSessionsListResponse {

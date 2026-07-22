@@ -15,7 +15,6 @@ os.environ.setdefault("JWT_SECRET", "test-jwt-secret-value")
 os.environ.setdefault("INTERNAL_API_SECRET", "test-internal-secret-value")
 
 from tests_lite._capability_test_helper import build_session_capabilities
-from zerg.services.session_views import SessionContinueTarget
 from zerg.services.session_views import build_session_capabilities_response
 
 
@@ -104,7 +103,6 @@ def test_active_steerable_session_exposes_steer_as_primary_intent():
     assert response.default_input_intent == "steer"
     assert response.composer_enabled is True
     assert response.send_disabled_reason is None
-
 
 def test_active_claude_channel_session_exposes_steer_as_primary_intent():
     session = _session(
@@ -283,29 +281,3 @@ def test_unknown_control_cold_start_does_not_override_positive_host_display():
     assert response.live_control_available is True
     assert response.input_mode == "live"
     assert response.send_disabled_reason is None
-
-
-def test_can_continue_survives_closed_lifecycle():
-    """Regression (button-vanishes bug): can_continue must NOT be gated on
-    lifecycle. Continue launches a fresh managed process from the transcript,
-    which is a closed-session operation by definition. can_resume (reattach to a
-    live/detached process) still legitimately drops on close."""
-    session = _session(provider="claude", managed_transport="claude_channel_bridge")
-    target = SessionContinueTarget(
-        provider="claude",
-        device_id="cinder",
-        cwd="/Users/me/repo",
-        carry_context="native",
-        native_resume_available=True,
-    )
-
-    response = build_session_capabilities_response(
-        session=session,
-        capability_flags=build_session_capabilities(session),
-        runtime_display=_runtime(lifecycle="closed", host_state="offline", state="closed"),
-        can_continue=True,
-        continue_targets=[target],
-    )
-
-    assert response.can_continue is True, "Continue must persist on a closed managed session"
-    assert response.continue_targets and response.continue_targets[0].carry_context == "native"

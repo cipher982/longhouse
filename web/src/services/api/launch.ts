@@ -55,14 +55,6 @@ export type RemoteLaunchErrorCode =
   | "transcript_not_found"
   | "launch_timeout";
 
-export type RemoteSessionLaunchResponse = {
-  session_id: string;
-  launch_state: LaunchState;
-  execution_lifetime: ExecutionLifetime;
-  launch_error_code: RemoteLaunchErrorCode | null;
-  launch_error_message: string | null;
-};
-
 export type ConsoleSessionCreateRequest = {
   device_id: string;
   provider: string;
@@ -82,24 +74,6 @@ export async function createConsoleSession(
   body: ConsoleSessionCreateRequest,
 ): Promise<ConsoleSessionCreateResponse> {
   return request<ConsoleSessionCreateResponse>("/sessions/console", {
-    method: "POST",
-    body: JSON.stringify(body),
-  });
-}
-
-export type RemoteSessionContinueRequest = {
-  device_id?: string | null;
-  cwd?: string | null;
-  message?: string | null;
-  execution_lifetime?: ExecutionLifetime | null;
-  client_request_id: string;
-};
-
-export async function continueRemoteSession(
-  sessionId: string,
-  body: RemoteSessionContinueRequest,
-): Promise<RemoteSessionLaunchResponse> {
-  return request<RemoteSessionLaunchResponse>(`/sessions/${sessionId}/continue`, {
     method: "POST",
     body: JSON.stringify(body),
   });

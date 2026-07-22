@@ -14,7 +14,6 @@ providers:
   control_plane_aliases:
   - codex_app_server
   launch_local: true
-  launch_remote: false
   run_once: true
   reattach: true
   send_input: true
@@ -33,9 +32,6 @@ providers:
       level: live_no_token
       source: scripts/qa/codex-provider-release-canary.py managed_tui_attach
       next: promote to live_token when scheduled prompt canary is budgeted
-    launch_remote:
-      level: none
-      source: provider-facing session.launch / detached_ui remote launch removed; Helm is terminal-originated launch_local
     run_once:
       level: hermetic
       source: engine codex_exec argv/runtime terminal tests plus server one-shot launch
@@ -95,7 +91,6 @@ providers:
   control_plane: claude_channel_bridge
   control_plane_aliases: []
   launch_local: true
-  launch_remote: false
   run_once: false
   reattach: true
   send_input: true
@@ -115,9 +110,6 @@ providers:
       source: longhouse provider-live canary --provider claude binary/auth/channel/PTY
         checks
       next: promote with live token channel/PTY transcript canary
-    launch_remote:
-      level: none
-      source: provider-facing session.launch / claude.launch remote path removed; Helm is terminal-originated launch_local
     run_once:
       level: none
       source: no Claude turn-scoped Console adapter is implemented; use the managed channel/PTY path
@@ -144,7 +136,7 @@ providers:
     terminate:
       level: hermetic
       source: Claude channel/process control tests
-      next: prove graceful process cleanup in live remote launch lane
+      next: prove graceful process cleanup in a live managed Helm session
     tail_output:
       level: hermetic
       source: Claude transcript ingest and channel observation tests
@@ -173,7 +165,6 @@ providers:
   control_plane: opencode_server_bridge
   control_plane_aliases: []
   launch_local: true
-  launch_remote: false
   run_once: false
   reattach: true
   send_input: true
@@ -193,9 +184,6 @@ providers:
       source: longhouse provider-live canary --provider opencode server readiness/schema/session
         checks
       next: promote with release-canary prompt transcript proof
-    launch_remote:
-      level: none
-      source: provider-facing session.launch / opencode.launch remote path removed; Helm is terminal-originated launch_local
     run_once:
       level: none
       source: OpenCode Console uses turn_start; session.run_once is not supported by the engine
@@ -255,7 +243,6 @@ providers:
   control_plane: antigravity_hook_inbox
   control_plane_aliases: []
   launch_local: true
-  launch_remote: false
   run_once: false
   reattach: false
   send_input: true
@@ -275,9 +262,6 @@ providers:
       source: longhouse provider-live canary --provider antigravity version/help/plugin
         checks
       next: prove real agy loop invocation
-    launch_remote:
-      level: none
-      source: unsupported until Antigravity launch semantics are proven
     run_once:
       level: none
       source: run-once canary not implemented yet
@@ -337,9 +321,7 @@ providers:
   - cursor_acp
   - cursor_exec
   launch_local: true
-  # Console launch is represented by turn_start, not the legacy remote-launch
-  # or run_once contracts.
-  launch_remote: false
+  # Console launch is represented by turn_start.
   run_once: false
   reattach: true
   send_input: true
@@ -357,9 +339,6 @@ providers:
     launch_local:
       level: hermetic
       source: Cursor product-path canary must pass post-deploy before live-token promotion
-    launch_remote:
-      level: none
-      source: unavailable until stock Cursor exposes a durable headless conversation source
     run_once:
       level: none
       source: unavailable until stock Cursor exposes a durable headless conversation source

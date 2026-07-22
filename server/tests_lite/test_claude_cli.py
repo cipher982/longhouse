@@ -552,60 +552,6 @@ def test_claude_no_attach_does_not_record_unlaunched_provider_contract(monkeypat
     assert not (provider_home / "managed-local" / "contracts").exists()
 
 
-def test_launch_detached_native_claude_channel_waits_for_channel_state(monkeypatch, tmp_path):
-    prereq_calls: list[dict] = []
-    popen_calls: list[dict] = []
-
-    class _FakeProcess:
-        pid = 12345
-
-        def poll(self):
-            return None
-
-    def fake_popen(cmd, **kwargs):
-        popen_calls.append({"cmd": list(cmd), **kwargs})
-        return _FakeProcess()
-
-    monkeypatch.setattr(
-        claude_cli,
-        "_ensure_native_claude_prereqs",
-        lambda **kwargs: prereq_calls.append(kwargs),
-    )
-    monkeypatch.setattr(claude_cli.shutil, "which", lambda command: "/usr/bin/script" if command == "script" else None)
-    monkeypatch.setattr(claude_cli.subprocess, "Popen", fake_popen)
-    monkeypatch.setattr(
-        claude_cli,
-        "wait_for_claude_channel_state",
-        lambda **_kwargs: {"ready": True, "port": 49200},
-    )
-
-    result = claude_cli._launch_detached_native_claude_channel(
-        session_id="11111111-1111-4111-8111-111111111111",
-        run_id="33333333-3333-4333-8333-333333333333",
-        provider_session_id="22222222-2222-4222-8222-222222222222",
-        cwd=tmp_path,
-        base_url="https://longhouse.test",
-        token="zdt_test_token",
-        config_dir=tmp_path / ".claude",
-    )
-
-    assert result["provider"] == "claude"
-    assert result["transport"] == "claude_channel_bridge"
-    assert result["pid"] == 12345
-    assert result["channel_state"] == {"ready": True, "port": 49200}
-    assert prereq_calls[0]["base_url"] == "https://longhouse.test"
-    assert popen_calls[0]["cwd"] == str(tmp_path)
-    assert popen_calls[0]["cmd"][0] == "script"
-    assert popen_calls[0]["stdout"] == claude_cli.subprocess.DEVNULL
-    assert popen_calls[0]["stderr"] == claude_cli.subprocess.DEVNULL
-    assert popen_calls[0]["env"]["LONGHOUSE_HOOK_TOKEN"] == "zdt_test_token"
-    command_text = " ".join(popen_calls[0]["cmd"])
-    assert "claude" in command_text
-    assert "11111111-1111-4111-8111-111111111111" in command_text
-    assert "LONGHOUSE_RUN_ID=33333333-3333-4333-8333-333333333333" in command_text
-    assert "zdt_test_token" not in command_text
-
-
 def test_run_native_claude_tui_checks_channel_readiness_without_delaying_tui(monkeypatch, tmp_path):
     thread_calls: list[dict] = []
     wait_calls: list[dict] = []

@@ -158,17 +158,16 @@ pub fn discover_all_files_with_inventory(providers: &[ProviderConfig]) -> Discov
                 let footprint_bytes = source_bytes.saturating_add(wal_bytes);
                 scan_error_count = scan_error_count.saturating_add(footprint_errors);
                 let modified_at_ms = system_time_ms(modified);
-                let provider_inventory = inventory
-                    .entry(provider.name)
-                    .or_insert_with(|| ProviderSourceInventory {
-                        provider: provider.name.to_string(),
-                        ..ProviderSourceInventory::default()
-                    });
-                provider_inventory.source_count =
-                    provider_inventory.source_count.saturating_add(1);
-                provider_inventory.source_bytes = provider_inventory
-                    .source_bytes
-                    .saturating_add(source_bytes);
+                let provider_inventory =
+                    inventory
+                        .entry(provider.name)
+                        .or_insert_with(|| ProviderSourceInventory {
+                            provider: provider.name.to_string(),
+                            ..ProviderSourceInventory::default()
+                        });
+                provider_inventory.source_count = provider_inventory.source_count.saturating_add(1);
+                provider_inventory.source_bytes =
+                    provider_inventory.source_bytes.saturating_add(source_bytes);
                 provider_inventory.wal_bytes =
                     provider_inventory.wal_bytes.saturating_add(wal_bytes);
                 provider_inventory.footprint_bytes = provider_inventory

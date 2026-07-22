@@ -70,22 +70,6 @@ DEFAULT_INVENTORY: tuple[dict[str, Any], ...] = (
         "python_dependency_kind": "entrypoint",
     },
     {
-        "id": "claude-remote-launch-native",
-        "category": "native_device",
-        "provider": "claude",
-        "path": "engine/src/claude_channel_launch.rs",
-        "symbol": "launch_detached",
-        "native_dispatch_symbols": [
-            "ClaudeChannelLaunchConfig",
-            "build_launch_command_plan",
-            "launch_detached",
-        ],
-        "owner_area": "claude-native",
-        "replacement_phase": "phase3",
-        "reason": "Machine Agent remote Claude launch now spawns stock Claude and waits for channel state in Rust.",
-        "device_command": True,
-    },
-    {
         "id": "claude-channel-server-native",
         "category": "native_device",
         "provider": "claude",
@@ -97,7 +81,7 @@ DEFAULT_INVENTORY: tuple[dict[str, Any], ...] = (
         ],
         "owner_area": "claude-native",
         "replacement_phase": "phase3",
-        "reason": "Claude channel MCP server used by native remote launch now runs inside longhouse-engine.",
+        "reason": "Claude's managed Helm channel server runs inside longhouse-engine.",
         "device_command": True,
     },
     {

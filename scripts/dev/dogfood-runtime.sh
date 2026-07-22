@@ -280,7 +280,7 @@ run_repo_longhouse() {
   "${cmd[@]}"
 }
 
-print_launch_readiness_summary() {
+print_runtime_readiness_summary() {
   local snapshot_path="$1"
   python3 - "$snapshot_path" <<'PY'
 import json
@@ -291,19 +291,15 @@ snapshot = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
 launch = snapshot.get("launch_readiness") or {}
 control = snapshot.get("control_channel") or {}
 
-def render_bool(value):
-    return "true" if bool(value) else "false"
-
 def render_list(value):
     items = [str(item) for item in list(value or []) if str(item).strip()]
     return ", ".join(items) if items else "-"
 
-print("==> Launch readiness summary")
+print("==> Runtime readiness summary")
 print(f"  launch_readiness.state: {launch.get('state') or '-'}")
 print(f"  control_channel_status: {control.get('status') or '-'}")
-print(f"  can_launch_codex: {render_bool(control.get('can_launch_codex'))}")
-print(f"  launch_blocked_by: {control.get('launch_blocked_by') or '-'}")
-print(f"  launchable_providers: {render_list(control.get('launchable_providers'))}")
+print(f"  console_blocked_by: {control.get('console_blocked_by') or '-'}")
+print(f"  console_ready_providers: {render_list(control.get('console_ready_providers'))}")
 print(f"  launch_readiness.reasons: {render_list(launch.get('reasons'))}")
 print(f"  launch_readiness.warnings: {render_list(launch.get('warnings'))}")
 PY
@@ -321,7 +317,7 @@ run_check() {
   log ""
   snapshot_file="$(mktemp -t longhouse-dogfood-health.XXXXXX.json)"
   if run_repo_longhouse local-health --json >"$snapshot_file"; then
-    print_launch_readiness_summary "$snapshot_file"
+    print_runtime_readiness_summary "$snapshot_file"
     if [[ "$FULL_HEALTH" == "1" || "$FULL_HEALTH" == "true" || "$FULL_HEALTH" == "yes" ]]; then
       log ""
       log "==> Local health"

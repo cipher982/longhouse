@@ -232,8 +232,7 @@ Move the remaining outbox kinds in this order:
 
 1. runtime events;
 2. managed-local launch;
-3. remote launch and outcome;
-4. session input receipts.
+3. session input receipts.
 
 For kinds that update live state after archive commit, split the current drain
 into prepare/apply/ack operations so retries cannot regress newer live state.

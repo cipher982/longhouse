@@ -80,10 +80,8 @@ manifest/engine field names below refer to the same three modes:
 | Helm | `launch_local`, plus adapter-proven live controls such as `steer_active_turn` and `send_input` |
 | Console | `turn_start` (current); `run_once` (legacy, being retired — see `docs/specs/turn-scoped-console-execution.md`) |
 
-`launch_remote` / provider-facing `session.launch` is obsolete compatibility
-machinery for persistent no-terminal processes. It is not a fourth mode or a
-valid Helm launch surface and is scheduled for deletion by
-`docs/specs/turn-scoped-console-execution.md`.
+`launch_remote` / provider-facing `session.launch` was removed. Persistent
+no-terminal processes are not a fourth mode or a valid Helm launch surface.
 
 ## Glossary
 

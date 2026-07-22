@@ -1,14 +1,12 @@
 # Machine Directory and Console Launch
 
-Status: Active epic; launch UI revision required before further implementation
+Status: Canonical Console launch contract
 Owner: Runtime Host machine surface + web/iOS launch UX
 Created: 2026-07-14
 Related:
 - `VISION.md`
 - `docs/specs/agents-machine-surface.md`
-- `docs/specs/machine-control-truth.md`
 - `docs/specs/human-launch-provenance.md`
-- `docs/specs/renderable-session-launch-pipeline.md`
 - `docs/specs/turn-scoped-console-execution.md`
 
 > **Execution-model correction (2026-07-14):**
@@ -42,7 +40,7 @@ directory joins durable enrollment with the live Machine Agent control-channel
 registry, and `/api/agents/machines` plus `/api/timeline/machines` expose the
 same response model.
 
-The response currently exposes several overlapping representations of launch
+The response previously exposed several overlapping representations of launch
 truth:
 
 - `supports`
@@ -52,8 +50,8 @@ truth:
 - `launch_blocked_by`
 - `online` and `control_channel_status`
 
-Web and iOS then reconcile those fields independently. The implementations
-already disagree:
+Web and iOS then reconciled those fields independently. The implementations
+disagreed:
 
 - web treats `launch` or `run_once` as launchable;
 - iOS requires live-control `launch`;
@@ -93,8 +91,8 @@ fresh `session/new` and resumed `session/load` turns. Cursor Helm remains the
 separate terminal-owned `longhouse cursor` path.
 
 Antigravity is not a launch target yet. Its proven Machine Agent surface is
-`antigravity.send`; it has neither remote launch nor run-once evidence. Adding
-it requires a provider execution path, lifecycle/binding contract, and live
+`antigravity.send`; it has no turn-scoped Console adapter. Adding it requires a
+provider execution path, lifecycle/binding contract, and live
 proof—not merely exposing another picker row.
 
 ### 1. Offline Machines Remain Visible
@@ -210,9 +208,9 @@ defaults:
   "control_channel_status": "connected",
   "last_seen_at": "2026-07-14T17:41:07Z",
   "engine_build": "30381fc7",
-  "supports": ["codex.run_once", "codex.resume_run_once"],
+  "supports": ["codex.turn_start"],
   "control_operations_by_provider": {
-    "codex": ["run_once", "resume_run_once"]
+    "codex": ["turn_start"]
   },
   "launch": {
     "blocked_by": null,
@@ -251,17 +249,13 @@ An offline enrollment remains present:
 - `launch.providers` is derived once from
   `control_operations_by_provider`; clients do not merge raw `supports` or
   legacy convenience fields.
-- Legacy `launchable_providers` is diagnostic compatibility data and does not
-  define Console eligibility.
 - `default_provider` must name an entry in `launch.providers`.
 - Offline entries do not claim last-known provider support. Current capability
   remains live truth.
 - `supports` and `control_operations_by_provider` remain raw/mechanical
   evidence for agent and diagnostic consumers.
-- `online`, `can_launch_codex`, `launchable_providers`, and
-  `launch_blocked_by` remain compatibility and diagnostic fields. Human clients
-  stop reading them for launch decisions; deleting them is not part of this
-  epic.
+- The removed `can_launch_codex`, `launchable_providers`, and
+  `launch_blocked_by` compatibility fields must not be reintroduced.
 
 The first implementation should use the existing blocked-reason vocabulary.
 Do not add speculative status variants. `policy_restricted` lands only with a
@@ -272,7 +266,7 @@ real Control Plane entitlement input.
 | Surface | Current responsibility or drift | Epic destination |
 | --- | --- | --- |
 | `server/zerg/services/machines_directory.py` | joins enrollment/live registry and derives overlapping fields | owns canonical `launch` projection and stable ordering |
-| `server/zerg/schemas/machines.py` | flat raw plus compatibility schema | typed nested launch options/defaults |
+| `server/zerg/schemas/machines.py` | raw mechanical evidence plus canonical launch schema | typed nested launch options/defaults |
 | `server/zerg/routers/agents_machines.py` | canonical machine-auth route | unchanged route over expanded shared model |
 | `server/zerg/routers/timeline.py` | user-auth veneer | unchanged veneer over the same projection |
 | `server/zerg/services/managed_provider_contracts.py` | canonical provider-operation mechanics | remains the input to launch projection |
@@ -280,7 +274,6 @@ real Control Plane entitlement input.
 | `web/src/components/LaunchSessionModal.tsx` | capability merging, defaults, hidden offline machines | native web rendering of backend launch semantics |
 | `ios/Sources/Shared/LonghouseAPI.swift` | hand-maintained DTO plus capability inference | hand-owned nested DTO plus transport only |
 | `ios/Sources/LonghouseApp/LaunchSessionSheet.swift` | capability/default inference and process-lifetime form | native grouped UI plus turn-scoped Console creation |
-| `scripts/ops/remote-launch-smoke.py` | Codex compatibility fallback | canonical launch-option assertion |
 | `server/zerg/cli/local_health.py` and dogfood scripts | operator diagnostics over raw truth | continue using raw operations, not human projection copy |
 | `web/src/pages/DevicesPage.tsx` | credential-centric management | deferred machine-management epic |
 
@@ -496,8 +489,6 @@ observed or in a dedicated automation-hygiene sweep.
 
 - Keep `supports` and `control_operations_by_provider` available to
   `local-health`, provider proof, dogfood checks, and scripts.
-- Migrate `remote-launch-smoke.py` away from `can_launch_codex` compatibility
-  once `launch.providers` is available.
 - Do not make diagnostic tools consume human status copy or icons.
 - Keep shipping health, control reachability, and provider launch readiness as
   separate axes.
@@ -522,8 +513,8 @@ contract in this document. Then deliver narrow slices:
 6. Web compact summary card and accessible machine listbox/popover.
 7. Cross-surface state, accessibility, and visual matrix verification.
 8. Remove remaining client compatibility inference and helpers.
-9. Stop. Machine credential management, producer-wide cleanup, generator
-   expansion, and legacy field deletion remain separate follow-ons.
+9. Stop. Machine credential management, producer-wide cleanup, and generator
+   expansion remain separate follow-ons.
 
 Each slice should be independently shippable. Do not combine API migration,
 both UI rewrites, and machine-management mutations in one change.

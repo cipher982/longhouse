@@ -26,10 +26,8 @@ sessions.
   control operations. Steer uses `claude-channel send --meta intent=steer` and
   Runtime Host must gate explicit `intent=steer` on a fresh active runtime
   phase; idle channel injection is not steer.
-- Helm creation is terminal-originated through `longhouse claude`. The
-  Machine Agent's remaining `claude.launch` / detached PTY path is obsolete
-  `session.launch` compatibility machinery scheduled for deletion; do not add
-  callers, tests that promote it as a product capability, or fallback paths.
+- Helm creation is terminal-originated through `longhouse claude`; the Machine
+  Agent has no remote Helm-originating launch command.
 - Longhouse's channel is a private MCP server, not an Anthropic allowlisted
   channel plugin.
 - Claude hook tokens must be passed through process env, never embedded in
@@ -55,17 +53,15 @@ Codex execution paths:
   `codex` TUI attached through `--remote`.
 - For Console, `codex_exec` runs one turn, exits, and resumes durable provider
   state in a later invocation.
-- For obsolete compatibility, `launch_mode=detached_ui` creates a persistent
-  process without a terminal through `session.launch`. It is scheduled for
-  deletion and must not be treated as supported Helm or extended.
+- `launch_mode=detached_ui` is an internal bridge posture shared with local
+  no-attach operation. It is not a product mode or a remote Helm launch grant.
 - A nonzero `codex --remote` auto-attach exit is a foreground TUI/client-link failure, not proof the managed session ended. Preserve the bridge and print a reattach command; only explicit stop paths should terminate the bridge/app-server.
 
 Bridge state:
 
 - Supported Helm writers persist TUI sessions as `launch_mode=tui`.
-- Existing `launch_mode=detached_ui` state belongs to the obsolete remote
-  launch path. Preserve it only long enough for safe compatibility/removal;
-  do not create new product behavior around it.
+- Existing `launch_mode=detached_ui` state may come from local no-attach
+  operation. Do not infer Helm provenance or remote launch authority from it.
 - Do not automatically reap managed provider bridges or their app-server/server
   children. A missing TUI, wrapper signal, nonzero attach exit, or dead control
   bridge is degradation evidence, not permission to terminate user execution.
@@ -87,8 +83,7 @@ Hard Codex contract:
 - OpenCode server-bridge send, interrupt, and terminate are first-class Helm
   control operations after terminal launch. Active-turn steer is not
   advertised until OpenCode exposes and proves a true mid-turn injection
-  semantic. The remaining `opencode.launch` remote path is obsolete
-  `session.launch` compatibility machinery, not supported Helm.
+  semantic. There is no remote Helm-originating launch path.
 - Bridge state lives under `~/.claude/managed-local/opencode-server/` and
   stores the local server password in a 0600 state file so `longhouse
   opencode-channel attach` can reconnect without printing secrets. Runtime
@@ -106,7 +101,7 @@ Hard Codex contract:
   control plane is `antigravity_hook_inbox`; advertise `antigravity.send`
   only when a real `agy` loop canary proves active hooks claim pending input
   and the assistant response includes the injected marker. Do not advertise
-  Antigravity remote launch, reattach, interrupt, or active-turn steer until a
+  Antigravity Console execution, reattach, interrupt, or active-turn steer until a
   stable provider surface proves those semantics.
 
 ## Workflows

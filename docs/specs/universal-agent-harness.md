@@ -115,7 +115,6 @@ Current action ids:
 ```text
 provider_identity
 launch_local
-launch_remote
 run_once
 session_identity
 send_message
@@ -254,14 +253,6 @@ timeline projection, and operation evidence. They prove the shared projection
 surface is wired through the harness and release proof; provider-live lanes add
 stronger raw evidence when they run.
 
-`launch_remote_projection` is the portable no-token executable scenario for the
-abstract `launch_remote` action. It exercises Longhouse's canonical
-remote-launch lifecycle projection for dispatched, adopted/live, and failed
-launch attempts, records provider machine-control support metadata, and leaves
-providers without remote-launch support as explicit `unsupported_gap` rows. It
-does not dispatch a real Machine Agent command; real Runtime Host remote launch
-remains a stronger provider/live lane.
-
 `full_action_suite` is an opt-in portable aggregate scenario. It runs the
 action matrix plus the safe no-token control/observe scenarios, writes a single
 coverage artifact, and verifies that every abstract action id is either covered
@@ -269,12 +260,10 @@ by an executable scenario result or by an explicit matrix/contract row. It now
 executes `baseline_compare` through the same provider-release-proof baseline
 diff CLI used by release watch, and executes `tool_call_result` through the
 portable `tool_call_result_projection` DB-ingest lane. It also executes
-`launch_remote` through the portable `launch_remote_projection` lifecycle lane,
 and forwards explicit old/new proof artifacts into nested
-`old_new_release_diff`.
-It keeps real Machine Agent remote dispatch, live-token provider tool
-execution, and staged old/new prerequisites out of the portable bundle; those
-remain stronger opt-in lanes. A blocked suite is expected while permission
+`old_new_release_diff`. Live-token provider tool execution and staged old/new
+prerequisites stay out of the portable bundle as stronger opt-in lanes. A
+blocked suite is expected while permission
 prompts, live answer-pause delivery, and some provider-specific control lanes
 are still explicit gaps.
 

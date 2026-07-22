@@ -299,7 +299,7 @@ def test_support_state_keeps_claude_first_class_with_mixed_proof() -> None:
         control_channel={
             "status": "connected",
             "control_operations_by_provider": {
-                "claude": ["send", "interrupt", "steer", "answer_pause", "launch", "continue"]
+                "claude": ["send", "interrupt", "steer", "answer_pause"]
             },
         },
     )
@@ -311,11 +311,9 @@ def test_support_state_keeps_claude_first_class_with_mixed_proof() -> None:
         "interrupt",
         "steer",
         "answer_pause",
-        "launch",
-        "continue",
     ]
     assert "steer_active_turn" in claude["capabilities"]["supported_operations"]
-    assert claude["proof"]["minimum_evidence_level"] == "source_review"
+    assert claude["proof"]["minimum_evidence_level"] == "hermetic"
     assert claude["version_readiness"]["state"] == "no_artifact"
 
 
@@ -345,20 +343,18 @@ def test_support_state_reports_partial_live_control_operations() -> None:
         provider_release_status={"statuses": {"claude": {"status": "no_artifact", "risk": "none"}}},
         control_channel={
             "status": "connected",
-            "control_operations_by_provider": {"claude": ["launch"]},
+            "control_operations_by_provider": {"claude": ["send"]},
         },
     )
 
     claude = support["providers"]["claude"]
     assert claude["state"] == "live_control_partial"
     assert claude["capabilities"]["live_control_state"] == "partial"
-    assert claude["capabilities"]["live_control_operations"] == ["launch"]
+    assert claude["capabilities"]["live_control_operations"] == ["send"]
     assert claude["capabilities"]["missing_live_control_operations"] == [
-        "send",
         "interrupt",
         "steer",
         "answer_pause",
-        "continue",
     ]
 
 

@@ -169,9 +169,6 @@ def test_directory_returns_online_machine_with_supports(tmp_path):
     assert entry.control_channel_status == "connected"
     assert entry.supports == ("claude.turn_start", "codex.send", "codex.turn_start")  # sorted
     assert entry.control_operations_by_provider == {"codex": ("send", "turn_start")}
-    assert entry.can_launch_codex is True
-    assert entry.launchable_providers == ("codex",)
-    assert entry.launch_blocked_by is None
     assert entry.engine_build == "test-build"
     assert entry.launch.blocked_by is None
     assert [option.provider for option in entry.launch.providers] == ["codex"]
@@ -189,9 +186,6 @@ def test_directory_surfaces_offline_enrolled_machine_with_empty_supports(tmp_pat
     assert [(e.device_id, e.online, e.supports) for e in entries] == [("homelab", False, ())]
     assert entries[0].control_channel_status == "disconnected"
     assert entries[0].control_operations_by_provider == {}
-    assert entries[0].can_launch_codex is False
-    assert entries[0].launchable_providers == ()
-    assert entries[0].launch_blocked_by == "control_down"
     assert entries[0].launch.providers == ()
     assert entries[0].launch.blocked_by == "control_down"
 
@@ -235,9 +229,6 @@ def test_directory_surfaces_online_machine_without_codex_launch_as_blocked(tmp_p
     assert entries[0].online is True
     assert entries[0].control_channel_status == "connected"
     assert entries[0].control_operations_by_provider == {"codex": ("send",)}
-    assert entries[0].can_launch_codex is False
-    assert entries[0].launchable_providers == ()
-    assert entries[0].launch_blocked_by == "no_launch_support"
 
 
 def test_directory_does_not_expose_unproven_claude_console_adapter(tmp_path):
@@ -249,9 +240,6 @@ def test_directory_does_not_expose_unproven_claude_console_adapter(tmp_path):
     entries = build_machines_directory(owner_id=OWNER_ID, enrollments=_enrollments(SessionLocal), registry=registry)
 
     assert len(entries) == 1
-    assert entries[0].can_launch_codex is False
-    assert entries[0].launchable_providers == ()
-    assert entries[0].launch_blocked_by == "no_launch_support"
 
 
 def test_directory_exposes_proven_opencode_console_adapter(tmp_path):
@@ -263,9 +251,6 @@ def test_directory_exposes_proven_opencode_console_adapter(tmp_path):
     entries = build_machines_directory(owner_id=OWNER_ID, enrollments=_enrollments(SessionLocal), registry=registry)
 
     assert len(entries) == 1
-    assert entries[0].can_launch_codex is False
-    assert entries[0].launchable_providers == ("opencode",)
-    assert entries[0].launch_blocked_by is None
 
 
 def test_directory_reports_antigravity_send_without_launchability(tmp_path):
@@ -278,9 +263,6 @@ def test_directory_reports_antigravity_send_without_launchability(tmp_path):
 
     assert len(entries) == 1
     assert entries[0].control_operations_by_provider == {"antigravity": ("send",)}
-    assert entries[0].can_launch_codex is False
-    assert entries[0].launchable_providers == ()
-    assert entries[0].launch_blocked_by == "no_launch_support"
     assert entries[0].launch.blocked_by == "no_launch_support"
 
 
@@ -296,8 +278,6 @@ def test_directory_reports_cursor_native_console_turn_start(tmp_path):
         registry=registry,
     )[0]
 
-    assert entry.launchable_providers == ("cursor",)
-    assert entry.launch_blocked_by is None
     assert tuple(option.provider for option in entry.launch.providers) == ("cursor",)
     assert entry.launch.blocked_by is None
     assert entry.launch.default_provider == "cursor"
@@ -479,9 +459,6 @@ def test_agents_machines_route_matches_timeline_route(tmp_path):
     assert body["machines"][0]["supports"] == ["codex.turn_start"]
     assert body["machines"][0]["control_channel_status"] == "connected"
     assert body["machines"][0]["control_operations_by_provider"] == {"codex": ["turn_start"]}
-    assert body["machines"][0]["can_launch_codex"] is True
-    assert body["machines"][0]["launchable_providers"] == ["codex"]
-    assert body["machines"][0]["launch_blocked_by"] is None
     assert body["machines"][0]["launch"] == {
         "blocked_by": None,
         "providers": [{"provider": "codex"}],
@@ -491,9 +468,6 @@ def test_agents_machines_route_matches_timeline_route(tmp_path):
     assert body["machines"][1]["supports"] == []
     assert body["machines"][1]["control_channel_status"] == "disconnected"
     assert body["machines"][1]["control_operations_by_provider"] == {}
-    assert body["machines"][1]["can_launch_codex"] is False
-    assert body["machines"][1]["launchable_providers"] == []
-    assert body["machines"][1]["launch_blocked_by"] == "control_down"
     assert body["machines"][1]["launch"] == {
         "blocked_by": "control_down",
         "providers": [],
@@ -659,7 +633,7 @@ def test_provider_live_proof_route_rejects_machine_without_provider_support(tmp_
     SessionLocal = _make_db(tmp_path)
     _seed_user(SessionLocal)
     registry = MachineControlChannelRegistry()
-    _register(registry, owner_id=OWNER_ID, device_id="cinder", supports=("claude.launch",))
+    _register(registry, owner_id=OWNER_ID, device_id="cinder", supports=("claude.send",))
 
     original, module = _swap_agents_machines_registry(registry)
     try:

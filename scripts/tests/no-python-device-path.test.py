@@ -139,22 +139,6 @@ def _inventory(*entries: dict) -> list[dict]:
             "device_command": True,
         },
         {
-            "id": "claude-remote-launch-native",
-            "category": "native_device",
-            "provider": "claude",
-            "path": "engine/src/claude_channel_launch.rs",
-            "symbol": "launch_detached",
-            "native_dispatch_symbols": [
-                "ClaudeChannelLaunchConfig",
-                "build_launch_command_plan",
-                "launch_detached",
-            ],
-            "owner_area": "claude-native",
-            "replacement_phase": "phase3",
-            "reason": "test",
-            "device_command": True,
-        },
-        {
             "id": "claude-channel-server-native",
             "category": "native_device",
             "provider": "claude",

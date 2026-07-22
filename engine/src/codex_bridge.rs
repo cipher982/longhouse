@@ -5779,7 +5779,10 @@ mod tests {
             .map(|arg| arg.to_string_lossy().into_owned())
             .collect::<Vec<_>>();
 
-        let mut expected = vec!["-c".to_string(), CODEX_DISABLE_UPDATE_CHECK_CONFIG.to_string()];
+        let mut expected = vec![
+            "-c".to_string(),
+            CODEX_DISABLE_UPDATE_CHECK_CONFIG.to_string(),
+        ];
         for tool in LONGHOUSE_COORDINATION_TOOLS {
             expected.extend([
                 "-c".to_string(),
@@ -9447,7 +9450,7 @@ mod tests {
         let mut context = make_test_context(&temp);
         context.runtime.runtime_tx = Some(runtime_tx);
         let mut config = make_test_run_config(&temp);
-        // Zero-prompt remote-launch posture: auto_approve on, hold off.
+        // Zero-prompt detached bridge posture: auto_approve on, hold off.
         config.auto_approve = true;
         config.hold_permission_requests = false;
 

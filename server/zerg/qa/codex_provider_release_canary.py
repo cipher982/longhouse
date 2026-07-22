@@ -390,15 +390,6 @@ def build_operation_evidence(
     if reattach:
         evidence["reattach"] = reattach
 
-    detached_ui = _canary_operation_entry(
-        contract,
-        "launch_remote",
-        canary_name="detached_ui",
-        canary=canaries.get("detached_ui") or {},
-    )
-    if detached_ui:
-        evidence["launch_remote"] = detached_ui
-
     tail_output = _canary_operation_entry(
         contract,
         "tail_output",
@@ -880,64 +871,6 @@ def run_managed_tui_attach(args: argparse.Namespace, evidence_root: Path, codex_
             (root / "stop.json").write_text(json.dumps(stop, indent=2), encoding="utf-8")
 
 
-def run_detached_ui(args: argparse.Namespace, evidence_root: Path, codex_bin: str) -> dict[str, Any]:
-    root = evidence_root / "detached-ui"
-    root.mkdir(parents=True, exist_ok=True)
-    credentials_gap = _managed_bridge_credentials_gap(args)
-    if credentials_gap is not None:
-        return credentials_gap
-    isolation_root: Path | None = None
-    session_id: str | None = None
-    try:
-        summary, start_result, isolation_root = _start_bridge(
-            args,
-            evidence_root=root,
-            codex_bin=codex_bin,
-            launch_mode="detached_ui",
-        )
-        session_id = str(summary.get("session_id") or "")
-        thread_id = str(summary.get("thread_id") or "")
-        state_file = Path(str(summary.get("state_file") or ""))
-        if not thread_id or not state_file.exists():
-            return _fail(
-                "detached_ui_incomplete_start",
-                "detached-ui bridge start did not return thread_id and state_file",
-                evidence_root=str(root),
-                summary=summary,
-                start=_command_evidence(start_result),
-            )
-        state = _read_json(state_file)
-        if state.get("launch_mode") != "detached_ui":
-            return _fail(
-                "detached_ui_wrong_launch_mode",
-                "detached-ui bridge did not persist launch_mode=detached_ui",
-                evidence_root=str(root),
-                state=state,
-            )
-        ipc_socket = state_file.with_suffix(".sock")
-        if not ipc_socket.exists():
-            return _fail(
-                "detached_ui_ipc_missing",
-                "detached-ui bridge did not expose its IPC socket",
-                evidence_root=str(root),
-                state_file=str(state_file),
-                expected_ipc_socket=str(ipc_socket),
-            )
-        return _status(
-            "pass",
-            thread_id=thread_id,
-            state_file=str(state_file),
-            ipc_socket=str(ipc_socket),
-            evidence_root=str(root),
-        )
-    except Exception as exc:  # noqa: BLE001
-        return _fail("detached_ui_exception", str(exc), evidence_root=str(root))
-    finally:
-        if session_id and isolation_root:
-            stop = _stop_bridge(args, session_id, isolation_root)
-            (root / "stop.json").write_text(json.dumps(stop, indent=2), encoding="utf-8")
-
-
 def _terminal_turn_state(state: dict[str, Any]) -> bool:
     terminal_status = state.get("last_turn_status") in {
         "completed",
@@ -1361,7 +1294,6 @@ def _profile_requested(args: argparse.Namespace) -> bool:
             args.run_fake_app_server,
             args.run_raw_fresh_remote,
             args.run_managed_tui_attach,
-            args.run_detached_ui,
             args.run_managed_live_send,
             args.run_managed_live_interrupt,
             args.run_real_tool,
@@ -1426,7 +1358,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--run-fake-app-server", action="store_true")
     parser.add_argument("--run-raw-fresh-remote", action="store_true")
     parser.add_argument("--run-managed-tui-attach", action="store_true")
-    parser.add_argument("--run-detached-ui", action="store_true")
     parser.add_argument("--run-managed-live-send", action="store_true")
     parser.add_argument("--run-managed-live-interrupt", action="store_true")
     parser.add_argument("--run-real-tool", action="store_true")
@@ -1481,7 +1412,6 @@ def run_codex_provider_release_canary(args: argparse.Namespace | Mapping[str, An
         args.run_fake_app_server = True
         args.run_raw_fresh_remote = True
         args.run_managed_tui_attach = True
-        args.run_detached_ui = True
         args.run_managed_live_send = True
         args.run_managed_live_interrupt = True
         args.run_real_tool = True
@@ -1513,11 +1443,6 @@ def run_codex_provider_release_canary(args: argparse.Namespace | Mapping[str, An
         run_managed_tui_attach(args, evidence_root, codex_bin)
         if args.run_managed_tui_attach
         else _status("not_run", reason="pass --run-managed-tui-attach to exercise this canary")
-    )
-    canaries["detached_ui"] = (
-        run_detached_ui(args, evidence_root, codex_bin)
-        if args.run_detached_ui
-        else _status("not_run", reason="pass --run-detached-ui to exercise this canary")
     )
     canaries["managed_live_send"] = (
         run_managed_live_send(args, evidence_root, codex_bin)

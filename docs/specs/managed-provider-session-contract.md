@@ -168,7 +168,7 @@ OpenCode:
 
 - contract records the `opencode` bridge state path and plugin config content
   path
-- OpenCode server-bridge sessions support managed send, interrupt, launch, and
+- OpenCode server-bridge Helm sessions support managed send, interrupt, and
   terminate through the local `opencode serve` bridge, but do not advertise
   active-turn steer until OpenCode exposes a proven mid-turn injection semantic.
 - the contract should still verify cwd and bridge state

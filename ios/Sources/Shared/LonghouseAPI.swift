@@ -830,7 +830,7 @@ struct LonghouseAPI: Sendable {
     }
 }
 
-// MARK: - Remote session launch
+// MARK: - Console session launch
 
 public struct MachineLaunchProviderOption: Decodable, Sendable, Hashable {
     public let provider: String
@@ -849,9 +849,6 @@ public struct MachineDirectoryEntry: Decodable, Sendable, Hashable {
     public let controlChannelStatus: String?
     public let supports: [String]
     public let controlOperationsByProvider: [String: [String]]
-    public let canLaunchCodex: Bool?
-    public let launchableProviders: [String]
-    public let launchBlockedBy: String?
     public let lastSeenAt: String?
     public let engineBuild: String?
     public let launch: MachineLaunchProjection
@@ -863,9 +860,6 @@ public struct MachineDirectoryEntry: Decodable, Sendable, Hashable {
         controlChannelStatus: String?,
         supports: [String],
         controlOperationsByProvider: [String: [String]] = [:],
-        canLaunchCodex: Bool?,
-        launchableProviders: [String] = [],
-        launchBlockedBy: String?,
         lastSeenAt: String?,
         engineBuild: String?,
         launch: MachineLaunchProjection
@@ -876,9 +870,6 @@ public struct MachineDirectoryEntry: Decodable, Sendable, Hashable {
         self.controlChannelStatus = controlChannelStatus
         self.supports = supports
         self.controlOperationsByProvider = controlOperationsByProvider
-        self.canLaunchCodex = canLaunchCodex
-        self.launchableProviders = launchableProviders
-        self.launchBlockedBy = launchBlockedBy
         self.lastSeenAt = lastSeenAt
         self.engineBuild = engineBuild
         self.launch = launch
@@ -886,7 +877,7 @@ public struct MachineDirectoryEntry: Decodable, Sendable, Hashable {
 
     private enum CodingKeys: String, CodingKey {
         case deviceId, machineName, online, controlChannelStatus, supports
-        case controlOperationsByProvider, canLaunchCodex, launchableProviders, launchBlockedBy, lastSeenAt, engineBuild, launch
+        case controlOperationsByProvider, lastSeenAt, engineBuild, launch
     }
 
     public init(from decoder: Decoder) throws {
@@ -897,16 +888,12 @@ public struct MachineDirectoryEntry: Decodable, Sendable, Hashable {
         controlChannelStatus = try c.decodeIfPresent(String.self, forKey: .controlChannelStatus)
         supports = try c.decodeIfPresent([String].self, forKey: .supports) ?? []
         controlOperationsByProvider = try c.decodeIfPresent([String: [String]].self, forKey: .controlOperationsByProvider) ?? [:]
-        canLaunchCodex = try c.decodeIfPresent(Bool.self, forKey: .canLaunchCodex)
-        launchableProviders = try c.decodeIfPresent([String].self, forKey: .launchableProviders) ?? []
-        launchBlockedBy = try c.decodeIfPresent(String.self, forKey: .launchBlockedBy)
         lastSeenAt = try c.decodeIfPresent(String.self, forKey: .lastSeenAt)
         engineBuild = try c.decodeIfPresent(String.self, forKey: .engineBuild)
         launch = try c.decode(MachineLaunchProjection.self, forKey: .launch)
     }
 
-    public var supportsCodexLaunch: Bool { canLaunchCodex ?? supports.contains("codex.launch") }
-    public var remoteLaunchProviders: [String] {
+    public var consoleLaunchProviders: [String] {
         launch.providers.map(\.provider)
     }
 

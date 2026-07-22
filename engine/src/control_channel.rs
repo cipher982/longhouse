@@ -355,7 +355,6 @@ fn validate_managed_provider_contract_manifest(payload: &Value) -> Result<(), St
         .ok_or_else(|| "providers[] missing".to_string())?;
     let operations = [
         "launch_local",
-        "launch_remote",
         "run_once",
         "reattach",
         "send_input",
@@ -2645,10 +2644,6 @@ mod tests {
             .iter()
             .any(|item| item.as_str() == Some("codex.continue")));
         assert_eq!(
-            codex_contract.get("launch_remote").and_then(Value::as_bool),
-            Some(false)
-        );
-        assert_eq!(
             codex_contract.get("launch_local").and_then(Value::as_bool),
             Some(true)
         );
@@ -2676,10 +2671,6 @@ mod tests {
         assert!(!supports
             .iter()
             .any(|item| item.as_str() == Some("claude.continue")));
-        assert_eq!(
-            claude_contract.get("launch_remote").and_then(Value::as_bool),
-            Some(false)
-        );
         assert_eq!(
             claude_contract.get("can_resume").and_then(Value::as_bool),
             Some(true)
@@ -2754,7 +2745,6 @@ mod tests {
             let evidence = provider["operation_evidence"].as_object().unwrap();
             for operation in [
                 "launch_local",
-                "launch_remote",
                 "run_once",
                 "reattach",
                 "send_input",

@@ -21,7 +21,6 @@ from typing import Any
 PROVIDER_STATUS_SCHEMA_VERSION = 1
 CONTRACT_OPERATIONS = (
     "launch_local",
-    "launch_remote",
     "run_once",
     "reattach",
     "send_input",
@@ -139,7 +138,6 @@ def run_contract_profile(args: argparse.Namespace, contract: dict[str, Any]) -> 
         provider_cli_binary=contract["provider_cli_binary"],
         provider_cli_env=contract.get("provider_cli_env"),
         requires_longhouse_cli=contract["requires_longhouse_cli"],
-        launch_remote=contract["launch_remote"],
         send_input=contract["send_input"],
         interrupt=contract["interrupt"],
         steer_active_turn=contract["steer_active_turn"],
@@ -163,7 +161,7 @@ def _live_canary_profile(provider: str) -> tuple[str, str]:
         "claude": (
             "claude_channel_live_contract",
             "longhouse provider-live canary --provider claude owns the no-token binary/auth/channel-shape canary; "
-            "detached launch and active-turn steer still need live evidence.",
+            "active-turn steer still needs live evidence.",
         ),
         "opencode": (
             "opencode_server_live_contract",

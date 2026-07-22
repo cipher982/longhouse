@@ -22,7 +22,6 @@ os.environ.setdefault("GOOGLE_CLIENT_ID", "test-google-client-id")
 os.environ.setdefault("GOOGLE_CLIENT_SECRET", Fernet.generate_key().decode())
 
 import zerg.services.managed_control_dispatcher as managed_control_dispatcher_module
-import zerg.services.remote_session_launch as remote_session_launch_module
 import zerg.services.session_chat_impl as session_chat_impl_module
 import zerg.services.session_turns as session_turns_module
 from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
@@ -51,12 +50,8 @@ from zerg.services.live_archive_outbox import MANAGED_LOCAL_LAUNCH_KIND
 from zerg.services.live_archive_outbox import RUNTIME_EVENT_KIND
 from zerg.services.live_archive_outbox import SESSION_INPUT_RECEIPT_KIND
 from zerg.services.live_archive_outbox import drain_live_archive_outbox
-from zerg.services.machine_control_channel import MachineControlChannelRegistry
-from zerg.services.machine_control_channel import MachineControlCommandResponse
 from zerg.services.machine_control_channel import get_machine_control_channel_registry
 from zerg.services.managed_local_launcher import ManagedLocalLaunchParams
-from zerg.services.remote_session_launch import RemoteLaunchParams
-from zerg.services.remote_session_launch import launch_remote_session
 from zerg.services.session_hot_cards import upsert_timeline_card_from_session
 from zerg.services.session_inputs import INPUT_STATUS_DELIVERED
 from zerg.services.session_locks import session_lock_manager
@@ -75,11 +70,6 @@ class _FakeRequest:
 
     async def body(self) -> bytes:
         return self._body
-
-
-class _FakeWebSocket:
-    async def send_json(self, _message):  # pragma: no cover - send_command is scripted
-        pass
 
 
 class _AutoCompletingMachineWebSocket:
@@ -103,36 +93,6 @@ class _AutoCompletingMachineWebSocket:
         )
 
 
-class _StubRegistry(MachineControlChannelRegistry):
-    def __init__(self) -> None:
-        super().__init__()
-        self.sent: list[dict] = []
-
-    async def send_command(self, **kwargs):  # type: ignore[override]
-        self.sent.append(kwargs)
-        return MachineControlCommandResponse(
-            transport_ok=True,
-            message={
-                "type": "command_result",
-                "ok": True,
-                "result": {"session_id": kwargs.get("session_id", "")},
-            },
-        )
-
-    async def send_command_nowait(self, **kwargs):  # type: ignore[override]
-        self.sent.append(kwargs)
-        return MachineControlCommandResponse(
-            transport_ok=True,
-            message={
-                "type": "command",
-                "command_id": kwargs.get("command_id"),
-                "command_type": kwargs.get("command_type"),
-                "session_id": kwargs.get("session_id", ""),
-                "payload": kwargs.get("payload") or {},
-            },
-        )
-
-
 async def _wait_until(predicate, *, timeout: float = 1.0) -> None:
     deadline = asyncio.get_running_loop().time() + timeout
     while asyncio.get_running_loop().time() < deadline:
@@ -140,17 +100,6 @@ async def _wait_until(predicate, *, timeout: float = 1.0) -> None:
             return
         await asyncio.sleep(0.01)
     raise AssertionError("condition was not reached before timeout")
-
-
-async def _register_online(registry: MachineControlChannelRegistry) -> None:
-    await registry.register(
-        owner_id=OWNER_ID,
-        device_id="cinder",
-        machine_name="cinder",
-        engine_build="test",
-        supports=["codex.launch"],
-        websocket=_FakeWebSocket(),
-    )
 
 
 async def _register_managed_control_channel() -> _AutoCompletingMachineWebSocket:
@@ -261,7 +210,6 @@ async def test_hot_routes_keep_request_pool_free_while_real_writer_is_saturated(
     monkeypatch.setattr(runtime_router, "live_store_configured", lambda: True)
     monkeypatch.setattr(runtime_router, "get_write_serializer", lambda: serializer)
     monkeypatch.setattr(runtime_router, "get_live_write_serializer", lambda: live_serializer)
-    monkeypatch.setattr(remote_session_launch_module, "get_live_write_serializer", lambda: live_serializer)
     monkeypatch.setattr(session_chat_router, "get_live_write_serializer", lambda: live_serializer)
     monkeypatch.setattr(managed_control_dispatcher_module, "get_live_write_serializer", lambda: live_serializer)
     monkeypatch.setattr(session_turns_module, "get_write_serializer", lambda: serializer)
@@ -444,34 +392,6 @@ async def test_hot_routes_keep_request_pool_free_while_real_writer_is_saturated(
             assert live_runtime.phase == "running"
             assert live_runtime.active_tool == "Shell"
             assert live_db.query(LiveArchiveOutbox).filter(LiveArchiveOutbox.kind == RUNTIME_EVENT_KIND).count() == 0
-
-        registry = _StubRegistry()
-        await _register_online(registry)
-        with request_factory() as launch_db:
-            launch = await asyncio.wait_for(
-                launch_remote_session(
-                    launch_db,
-                    RemoteLaunchParams(
-                        owner_id=OWNER_ID,
-                        device_id="cinder",
-                        provider="codex",
-                        cwd="/Users/me/repo",
-                    ),
-                    registry=registry,
-                ),
-                timeout=ROUTE_TIMEOUT_SECONDS,
-        )
-        assert launch.launch_state == "launching_unknown"
-        assert len(registry.sent) == 1
-        with live_factory() as live_db:
-            readiness = (
-                live_db.query(LiveLaunchReadiness)
-                .filter(LiveLaunchReadiness.session_id == str(launch.session_id))
-                .one()
-            )
-            assert readiness.state == "dispatched"
-            assert readiness.device_id == "cinder"
-            assert readiness.provider == "codex"
 
         await asyncio.sleep(0.01)
         with request_factory() as managed_launch_db:

@@ -340,31 +340,6 @@ async def lifespan(app: FastAPI):
                 failed.append(f"ops_events_bridge ({e})")
                 logger.exception("Failed to start ops_events_bridge")
 
-            # Remote launch reaper: orphan expired launch rows.
-            try:
-                from zerg.database import get_session_factory as _get_sf
-                from zerg.services.remote_session_launch import reap_orphaned_launches
-
-                async def _launch_reaper_loop() -> None:
-                    while True:
-                        try:
-                            await asyncio.sleep(60)
-                            db = _get_sf()()
-                            try:
-                                reap_orphaned_launches(db)
-                            finally:
-                                db.close()
-                        except asyncio.CancelledError:
-                            raise
-                        except Exception:  # noqa: BLE001
-                            logger.exception("Remote launch reaper tick failed")
-
-                asyncio.create_task(_launch_reaper_loop())
-                started.append("remote_launch_reaper")
-            except Exception as e:  # noqa: BLE001
-                failed.append(f"remote_launch_reaper ({e})")
-                logger.exception("Failed to start remote_launch_reaper")
-
             # Machine-control operation reaper: expire commands whose result
             # did not return before their operation lease.
             try:

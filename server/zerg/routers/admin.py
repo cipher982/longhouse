@@ -38,12 +38,10 @@ from zerg.schemas.usage import AdminUsersResponse
 from zerg.services.agents.kernel_capabilities import project_session_capabilities
 from zerg.services.runner_connection_manager import get_runner_connection_manager
 from zerg.services.session_kernel_projection import project_session_control_fields
-from zerg.services.session_launch_lifecycle import project_remote_launch_lifecycle
 
 # Usage service
 from zerg.services.usage_service import get_all_users_usage
 from zerg.services.usage_service import get_user_usage_detail
-from zerg.utils.time import UTCBaseModel
 
 router = APIRouter(
     prefix="/admin",
@@ -690,76 +688,3 @@ async def get_user_usage_details(
     if result is None:
         raise HTTPException(status_code=404, detail="User not found")
     return result
-
-
-# ---------------------------------------------------------------------------
-# Remote launch debug view (Phase 4 of remote-session-launch epic)
-# ---------------------------------------------------------------------------
-
-
-class RemoteLaunchDebugEntry(UTCBaseModel):
-    session_id: str
-    device_id: str | None
-    provider: str
-    cwd: str | None
-    launch_state: str
-    launch_error_code: str | None
-    launch_error_message: str | None
-    launch_lease_until: datetime | None
-    started_at: datetime
-    ended_at: datetime | None
-
-
-class RemoteLaunchDebugResponse(UTCBaseModel):
-    entries: list[RemoteLaunchDebugEntry]
-    total: int
-
-
-@router.get("/launches/debug", response_model=RemoteLaunchDebugResponse)
-async def list_remote_launch_debug(
-    limit: int = Query(50, ge=1, le=200, description="Max rows to return"),
-    include_live: bool = Query(False, description="Include launch_state=live rows (default: only show non-healthy)"),
-    include_test: bool = Query(False, description="Include test/e2e launch attempts"),
-    db: Session = Depends(get_db),
-    current_user=Depends(require_admin),
-):
-    """Admin-only view of remote launches that are not cleanly live.
-
-    Surfaces launching / launching_unknown / launch_failed / launch_orphaned
-    rows so an operator can debug propagation or control-channel issues.
-    """
-    from zerg.models.agents import SessionLaunchAttempt
-
-    q = db.query(SessionLaunchAttempt, AgentSession).join(AgentSession, AgentSession.id == SessionLaunchAttempt.session_id)
-    if not include_test:
-        q = q.filter(AgentSession.environment.notin_(["test", "e2e"]))
-    if not include_live:
-        q = q.filter(
-            (SessionLaunchAttempt.state.in_(["failed", "abandoned"]))
-            | (SessionLaunchAttempt.state.in_(["pending", "dispatched"]) & SessionLaunchAttempt.run_id.is_(None))
-        )
-    total = q.count()
-    all_rows = q.order_by(SessionLaunchAttempt.created_at.desc(), SessionLaunchAttempt.id.desc()).limit(limit).all()
-
-    filtered = [
-        (attempt, session, lifecycle)
-        for attempt, session in all_rows
-        if (lifecycle := project_remote_launch_lifecycle(attempt)) is not None
-    ]
-    entries = [
-        RemoteLaunchDebugEntry(
-            session_id=str(session.id),
-            device_id=session.device_id,
-            provider=attempt.provider or session.provider,
-            cwd=session.cwd,
-            launch_state=lifecycle.state,
-            # Admin debug keeps the raw machine-reported code; product projections normalize it.
-            launch_error_code=attempt.error_code,
-            launch_error_message=attempt.error_message,
-            launch_lease_until=lifecycle.lease_until,
-            started_at=session.started_at,
-            ended_at=session.ended_at,
-        )
-        for attempt, session, lifecycle in filtered
-    ]
-    return RemoteLaunchDebugResponse(entries=entries, total=total)

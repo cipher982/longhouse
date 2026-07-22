@@ -9,7 +9,7 @@ pub mod pending_source_envelope;
 pub mod session_binding;
 pub mod session_phase;
 pub mod session_title;
-pub mod source_inventory;
 pub mod source_epoch;
+pub mod source_inventory;
 pub mod spool;
 pub mod unmanaged_process_binding;

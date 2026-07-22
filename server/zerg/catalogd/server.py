@@ -275,8 +275,6 @@ class CatalogDaemon:
             return await self._prepare_control_command(request)
         if request.method == "control.operation.finish.v2":
             return await self._finish_control_operation(request)
-        if request.method == "session.launch.idempotency.v2":
-            return await self._read_launch_idempotency(request)
         if request.method == "session.console.create.v2":
             return await self._create_console_session(request)
         if request.method == "session.console.turn.enqueue.v2":
@@ -285,16 +283,8 @@ class CatalogDaemon:
             return await self._read_current_console_turn(request)
         if request.method == "session.console.turn.update.v2":
             return await self._update_console_turn(request)
-        if request.method == "session.launch.intent.create.v2":
-            return await self._create_launch_intent(request)
         if request.method == "session.launch.local.create.v2":
             return await self._create_local_launch(request)
-        if request.method == "session.launch.outcome.apply.v2":
-            return await self._apply_launch_outcome(request)
-        if request.method == "session.continue.intent.create.v2":
-            return await self._create_continue_intent(request)
-        if request.method == "session.continue.outcome.apply.v2":
-            return await self._apply_continue_outcome(request)
         if request.method == "interaction.register.v2":
             return await self._register_interaction(request)
         if request.method == "interaction.list.v2":
@@ -1305,32 +1295,6 @@ class CatalogDaemon:
         )
         return CatalogRpcResponse(id=request.id, result=result)
 
-    async def _read_launch_idempotency(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"owner_id", "device_id", "provider", "client_request_id"}:
-            return self._error(request, "invalid_request", "session.launch.idempotency.v2 has invalid parameters")
-        params = dict(request.params)
-        if type(params["owner_id"]) is not int or params["owner_id"] <= 0:
-            return self._error(request, "invalid_request", "owner_id must be a positive integer")
-        for field, maximum in (("device_id", 255), ("provider", 64), ("client_request_id", 255)):
-            if not _is_string(params[field], maximum=maximum):
-                return self._error(request, "invalid_request", f"{field} must contain 1 to {maximum} characters")
-        assert self._store is not None
-        result = await self._run_store(self._store.read_launch_idempotency, **params)
-        return CatalogRpcResponse(id=request.id, result=result)
-
-    async def _create_launch_intent(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"launch"}:
-            return self._error(request, "invalid_request", "session.launch.intent.create.v2 requires launch")
-        try:
-            launch = _validate_launch_rpc(request.params["launch"])
-        except ValueError as exc:
-            return self._error(request, "invalid_request", str(exc))
-        assert self._store is not None
-        result = await self._run_store(self._store.create_launch_intent, launch=launch)
-        if result.get("idempotency_conflict") is True:
-            return self._error(request, "conflict", "launch command identity was reused with different attributes")
-        return CatalogRpcResponse(id=request.id, result=result)
-
     async def _create_console_session(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
         if set(request.params) != {"session"} or not isinstance(request.params["session"], dict):
             return self._error(request, "invalid_request", "session.console.create.v2 requires session")
@@ -1418,57 +1382,6 @@ class CatalogDaemon:
         result = await self._run_store(self._store.create_local_launch, launch=launch)
         if result.get("idempotency_conflict") is True:
             return self._error(request, "conflict", "local launch identity was reused with different attributes")
-        return CatalogRpcResponse(id=request.id, result=result)
-
-    async def _apply_launch_outcome(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"launch", "outcome"}:
-            return self._error(request, "invalid_request", "session.launch.outcome.apply.v2 has invalid parameters")
-        try:
-            launch = _validate_launch_rpc(request.params["launch"])
-            outcome = _validate_launch_outcome(request.params["outcome"])
-        except ValueError as exc:
-            return self._error(request, "invalid_request", str(exc))
-        assert self._store is not None
-        result = await self._run_store(self._store.apply_launch_outcome, launch=launch, outcome=outcome)
-        if result.get("found") is not True:
-            return self._error(
-                request,
-                "conflict",
-                "launch intent was not found",
-                details={"reason": "launch_not_found"},
-            )
-        return CatalogRpcResponse(id=request.id, result=result)
-
-    async def _create_continue_intent(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"launch"}:
-            return self._error(request, "invalid_request", "session.continue.intent.create.v2 requires launch")
-        try:
-            launch = _validate_continue_launch_rpc(request.params["launch"])
-        except ValueError as exc:
-            return self._error(request, "invalid_request", str(exc))
-        assert self._store is not None
-        result = await self._run_store(self._store.create_continue_intent, launch=launch)
-        if result.get("idempotency_conflict") is True:
-            return self._error(request, "conflict", "continue command identity was reused with different attributes")
-        return CatalogRpcResponse(id=request.id, result=result)
-
-    async def _apply_continue_outcome(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"launch", "outcome"}:
-            return self._error(request, "invalid_request", "session.continue.outcome.apply.v2 has invalid parameters")
-        try:
-            launch = _validate_continue_launch_rpc(request.params["launch"])
-            outcome = _validate_continue_outcome(request.params["outcome"])
-        except ValueError as exc:
-            return self._error(request, "invalid_request", str(exc))
-        assert self._store is not None
-        result = await self._run_store(self._store.apply_launch_outcome, launch=launch, outcome=outcome)
-        if result.get("found") is not True:
-            return self._error(
-                request,
-                "conflict",
-                "continue intent was not found",
-                details={"reason": "launch_not_found"},
-            )
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _register_interaction(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
@@ -3281,28 +3194,6 @@ _MANAGED_LEASE_FIELDS = {
     "observed_at",
     "lease_ttl_ms",
 }
-_LAUNCH_FIELDS = {
-    "session_id",
-    "primary_thread_id",
-    "run_id",
-    "owner_id",
-    "device_id",
-    "machine_id",
-    "provider",
-    "cwd",
-    "git_repo",
-    "git_branch",
-    "project",
-    "display_name",
-    "initial_prompt",
-    "execution_lifetime",
-    "client_request_id",
-    "command_id",
-    "started_at",
-    "expires_at",
-    "launch_actor",
-    "launch_surface",
-}
 _LOCAL_LAUNCH_FIELDS = {
     "owner_id",
     "git_repo",
@@ -3328,8 +3219,6 @@ _LOCAL_LAUNCH_PLAN_FIELDS = {
     "managed_transport",
     "attach_command",
 }
-_CONTINUE_LAUNCH_FIELDS = _LAUNCH_FIELDS | {"mode", "launch_origin", "resume"}
-_CONTINUE_RESUME_FIELDS = {"thread_id", "thread_path"}
 _INTERACTION_REGISTRATION_FIELDS = {
     "session_id",
     "runtime_key",
@@ -3448,61 +3337,6 @@ def _validate_input_receipt(value: object) -> dict:
     return result
 
 
-def _validate_launch_rpc(value: object) -> dict:
-    if not isinstance(value, dict) or set(value) != _LAUNCH_FIELDS:
-        raise ValueError("launch has invalid fields")
-    result = dict(value)
-    for field in ("session_id", "primary_thread_id"):
-        raw = result[field]
-        try:
-            parsed = uuid.UUID(raw) if isinstance(raw, str) else None
-        except ValueError:
-            parsed = None
-        if parsed is None or str(parsed) != raw:
-            raise ValueError(f"launch.{field} must be a canonical UUID")
-    run_id = result["run_id"]
-    if run_id is not None:
-        try:
-            parsed_run = uuid.UUID(run_id) if isinstance(run_id, str) else None
-        except ValueError:
-            parsed_run = None
-        if parsed_run is None or str(parsed_run) != run_id:
-            raise ValueError("launch.run_id must be a canonical UUID or null")
-    if type(result["owner_id"]) is not int or result["owner_id"] <= 0:
-        raise ValueError("launch.owner_id must be a positive integer")
-    for field, maximum in (
-        ("device_id", 255),
-        ("machine_id", 255),
-        ("provider", 64),
-        ("cwd", 4096),
-        ("project", 255),
-        ("display_name", 255),
-        ("command_id", 96),
-    ):
-        if not _is_string(result[field], maximum=maximum):
-            raise ValueError(f"launch.{field} must contain 1 to {maximum} characters")
-    for field, maximum in (
-        ("git_repo", 500),
-        ("git_branch", 255),
-        ("client_request_id", 255),
-        ("launch_actor", 32),
-        ("launch_surface", 32),
-    ):
-        raw = result[field]
-        if raw is not None and (not isinstance(raw, str) or not raw or len(raw) > maximum):
-            raise ValueError(f"launch.{field} must be null or contain 1 to {maximum} characters")
-    prompt = result["initial_prompt"]
-    if prompt is not None and (not isinstance(prompt, str) or len(prompt.encode("utf-8")) > 512 * 1024):
-        raise ValueError("launch.initial_prompt must be null or at most 512 KiB")
-    if result["execution_lifetime"] not in {"live_control", "one_shot"}:
-        raise ValueError("launch.execution_lifetime is not recognized")
-    result["started_at"] = _parse_datetime(result["started_at"], "launch.started_at")
-    result["expires_at"] = _parse_datetime(result["expires_at"], "launch.expires_at")
-    if result["expires_at"] <= result["started_at"]:
-        raise ValueError("launch.expires_at must be later than started_at")
-    return result
-
-
 def _validate_local_launch_rpc(value: object) -> dict:
     if not isinstance(value, dict) or set(value) != _LOCAL_LAUNCH_FIELDS:
         raise ValueError("local launch has invalid fields")
@@ -3549,57 +3383,6 @@ def _validate_local_launch_rpc(value: object) -> dict:
     if runner_id is not None and (type(runner_id) is not int or runner_id <= 0):
         raise ValueError("local launch.plan.source_runner_id must be a positive integer or null")
     result["plan"] = plan
-    return result
-
-
-def _validate_continue_launch_rpc(value: object) -> dict:
-    if not isinstance(value, dict) or set(value) != _CONTINUE_LAUNCH_FIELDS:
-        raise ValueError("continue launch has invalid fields")
-    result = _validate_launch_rpc({field: value[field] for field in _LAUNCH_FIELDS})
-    if value["mode"] != "continue" or value["launch_origin"] != "longhouse_continued":
-        raise ValueError("continue launch mode or origin is invalid")
-    resume = value["resume"]
-    if not isinstance(resume, dict) or set(resume) != _CONTINUE_RESUME_FIELDS:
-        raise ValueError("continue launch.resume has invalid fields")
-    if not _is_string(resume["thread_id"], maximum=512):
-        raise ValueError("continue launch.resume.thread_id must contain 1 to 512 characters")
-    thread_path = resume["thread_path"]
-    if thread_path is not None and (not isinstance(thread_path, str) or not thread_path or len(thread_path) > 4096):
-        raise ValueError("continue launch.resume.thread_path must be null or contain 1 to 4096 characters")
-    result.update(mode="continue", launch_origin="longhouse_continued", resume=dict(resume))
-    return result
-
-
-def _validate_launch_outcome(value: object) -> dict:
-    if not isinstance(value, dict) or set(value) != {"state", "error_code", "error_message"}:
-        raise ValueError("outcome has invalid fields")
-    result = dict(value)
-    if result["state"] not in {"dispatched", "adopted", "failed", "abandoned"}:
-        raise ValueError("outcome.state is not recognized")
-    for field, maximum in (("error_code", 64), ("error_message", 4096)):
-        raw = result[field]
-        if raw is not None and (not isinstance(raw, str) or not raw or len(raw) > maximum):
-            raise ValueError(f"outcome.{field} must be null or contain 1 to {maximum} characters")
-    return result
-
-
-def _validate_continue_outcome(value: object) -> dict:
-    fields = {
-        "state",
-        "error_code",
-        "error_message",
-        "provider_thread_id",
-        "thread_path",
-        "external_name",
-    }
-    if not isinstance(value, dict) or set(value) != fields:
-        raise ValueError("continue outcome has invalid fields")
-    result = _validate_launch_outcome({field: value[field] for field in ("state", "error_code", "error_message")})
-    for field, maximum in (("provider_thread_id", 512), ("thread_path", 4096), ("external_name", 255)):
-        raw = value[field]
-        if raw is not None and (not isinstance(raw, str) or not raw or len(raw) > maximum):
-            raise ValueError(f"continue outcome.{field} must be null or contain 1 to {maximum} characters")
-        result[field] = raw
     return result
 
 

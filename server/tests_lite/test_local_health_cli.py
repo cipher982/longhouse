@@ -492,7 +492,7 @@ def test_collect_local_health_surfaces_control_channel_status(monkeypatch, tmp_p
                 "last_error_code": "connect_failed",
                 "last_error_message": "tls handshake failed",
                 "reconnect_backoff_seconds": 4,
-                "supports": ["codex.send", "codex.launch"],
+                "supports": ["codex.send", "codex.turn_start"],
             }
         },
     )
@@ -501,17 +501,14 @@ def test_collect_local_health_surfaces_control_channel_status(monkeypatch, tmp_p
 
     control = snapshot["control_channel"]
     assert control["status"] == "disconnected"
-    assert control["can_launch_codex"] is False
-    assert control["can_launch_claude"] is False
-    assert control["can_launch_opencode"] is False
-    assert control["launchable_providers"] == []
-    assert control["launch_blocked_by"] == "control_down"
+    assert control["console_ready_providers"] == []
+    assert control["console_blocked_by"] == "control_down"
     assert control["last_error_code"] == "connect_failed"
-    assert control["supports"] == ["codex.send", "codex.launch"]
+    assert control["supports"] == ["codex.send", "codex.turn_start"]
     assert control["control_operations_by_provider"] == {}
 
 
-def test_collect_local_health_marks_connected_control_channel_launch_ready(monkeypatch, tmp_path: Path):
+def test_collect_local_health_marks_connected_console_adapters_ready(monkeypatch, tmp_path: Path):
     _disable_real_runner_env(monkeypatch, tmp_path)
     monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
     monkeypatch.setattr(local_health_service.shutil, "which", lambda name: None)
@@ -523,22 +520,18 @@ def test_collect_local_health_marks_connected_control_channel_launch_ready(monke
                 "enabled": True,
                 "status": "connected",
                 "ws_url": "wss://demo.longhouse.ai/api/agents/control/ws",
-                "supports": ["codex.launch", "claude.launch", "opencode.launch"],
+                "supports": ["codex.turn_start", "opencode.turn_start"],
             }
         },
     )
 
     snapshot = local_health_service.collect_local_health(tmp_path)
 
-    assert snapshot["control_channel"]["can_launch_codex"] is True
-    assert snapshot["control_channel"]["can_launch_claude"] is True
-    assert snapshot["control_channel"]["can_launch_opencode"] is True
-    assert snapshot["control_channel"]["launchable_providers"] == ["claude", "codex", "opencode"]
-    assert snapshot["control_channel"]["launch_blocked_by"] is None
+    assert snapshot["control_channel"]["console_ready_providers"] == ["codex", "opencode"]
+    assert snapshot["control_channel"]["console_blocked_by"] is None
     assert snapshot["control_channel"]["control_operations_by_provider"] == {
-        "claude": ["launch"],
-        "codex": ["launch"],
-        "opencode": ["launch"],
+        "codex": ["turn_start"],
+        "opencode": ["turn_start"],
     }
     contracts = snapshot["provider_contracts"]["providers"]
     assert contracts["claude"]["operations"]["steer_active_turn"] == {
@@ -550,14 +543,12 @@ def test_collect_local_health_marks_connected_control_channel_launch_ready(monke
     assert contracts["opencode"]["operations"]["steer_active_turn"]["supported"] is False
     provider_support = snapshot["provider_support_state"]["providers"]
     assert provider_support["claude"]["state"] == "provider_cli_missing"
-    assert provider_support["claude"]["capabilities"]["live_control_operations"] == ["launch"]
-    assert provider_support["claude"]["proof"]["minimum_evidence_level"] == "source_review"
     assert "steer_active_turn" in provider_support["claude"]["capabilities"]["supported_operations"]
     assert "steer_active_turn" in provider_support["opencode"]["capabilities"]["unsupported_operations"]
     assert contracts["opencode"]["operations"]["steer_active_turn"]["evidence_level"] == "none"
 
 
-def test_collect_local_health_marks_opencode_only_control_channel_launch_ready(monkeypatch, tmp_path: Path):
+def test_collect_local_health_marks_opencode_only_console_ready(monkeypatch, tmp_path: Path):
     _disable_real_runner_env(monkeypatch, tmp_path)
     monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
     _write_engine_status(
@@ -568,18 +559,16 @@ def test_collect_local_health_marks_opencode_only_control_channel_launch_ready(m
                 "enabled": True,
                 "status": "connected",
                 "ws_url": "wss://demo.longhouse.ai/api/agents/control/ws",
-                "supports": ["opencode.launch"],
+                "supports": ["opencode.turn_start"],
             }
         },
     )
 
     snapshot = local_health_service.collect_local_health(tmp_path)
 
-    assert snapshot["control_channel"]["can_launch_codex"] is False
-    assert snapshot["control_channel"]["can_launch_opencode"] is True
-    assert snapshot["control_channel"]["launchable_providers"] == ["opencode"]
-    assert snapshot["control_channel"]["launch_blocked_by"] is None
-    assert snapshot["control_channel"]["control_operations_by_provider"] == {"opencode": ["launch"]}
+    assert snapshot["control_channel"]["console_ready_providers"] == ["opencode"]
+    assert snapshot["control_channel"]["console_blocked_by"] is None
+    assert snapshot["control_channel"]["control_operations_by_provider"] == {"opencode": ["turn_start"]}
 
 
 def test_collect_local_health_reports_antigravity_send_without_launchability(monkeypatch, tmp_path: Path):
@@ -600,9 +589,8 @@ def test_collect_local_health_reports_antigravity_send_without_launchability(mon
 
     snapshot = local_health_service.collect_local_health(tmp_path)
 
-    assert snapshot["control_channel"]["can_launch_codex"] is False
-    assert snapshot["control_channel"]["launchable_providers"] == []
-    assert snapshot["control_channel"]["launch_blocked_by"] == "no_launch_support"
+    assert snapshot["control_channel"]["console_ready_providers"] == []
+    assert snapshot["control_channel"]["console_blocked_by"] == "no_console_support"
     assert snapshot["control_channel"]["control_operations_by_provider"] == {"antigravity": ["send"]}
 
 
@@ -1216,8 +1204,6 @@ def test_collect_local_health_degrades_for_concrete_provider_support_failure(mon
                     "claude.interrupt",
                     "claude.steer",
                     "claude.answer_pause",
-                    "claude.launch",
-                    "claude.continue",
                 ],
             }
         },
@@ -1265,7 +1251,7 @@ def test_collect_local_health_keeps_release_coverage_gap_visible_when_live_proof
                     "artifact_version": "v2.1.153",
                     "local_version_matches": True,
                     "operation_evidence": {
-                        "launch_remote": {
+                        "terminate": {
                             "status": "not_run",
                             "source": "scheduled Claude release canary",
                         }
@@ -1305,8 +1291,6 @@ def test_collect_local_health_keeps_release_coverage_gap_visible_when_live_proof
                     "claude.interrupt",
                     "claude.steer",
                     "claude.answer_pause",
-                    "claude.launch",
-                    "claude.continue",
                 ],
             }
         },
@@ -1325,8 +1309,8 @@ def test_collect_local_health_keeps_release_coverage_gap_visible_when_live_proof
     assert claude_support["state"] == "ready"
     assert claude_support["version_readiness"]["state"] == "installed_release_needs_attention"
     assert claude_support["proof"]["state"] == "release_incomplete"
-    assert claude_support["proof"]["release_gap_operations"] == ["launch_remote"]
-    assert claude_support["operations"]["launch_remote"]["release_evidence"]["status"] == "not_run"
+    assert claude_support["proof"]["release_gap_operations"] == ["terminate"]
+    assert claude_support["operations"]["terminate"]["release_evidence"]["status"] == "not_run"
 
 
 def test_collect_local_health_projects_matching_provider_live_proof(monkeypatch, tmp_path: Path):
@@ -3136,12 +3120,12 @@ def test_local_health_render_prints_missing_provider_live_control(capsys):
                                 "continue",
                             ],
                             "supported_operations": ["launch_local", "send_input", "interrupt", "steer_active_turn"],
-                            "unsupported_operations": ["launch_remote", "reattach"],
+                            "unsupported_operations": ["turn_start", "reattach"],
                         },
                         "proof": {
                             "state": "mixed",
                             "minimum_evidence_level": "source_review",
-                            "minimum_evidence_operations": ["launch_remote"],
+                            "minimum_evidence_operations": ["reattach"],
                         },
                         "version_readiness": {"state": "no_artifact"},
                     }
@@ -3157,7 +3141,7 @@ def test_local_health_render_prints_missing_provider_live_control(capsys):
     assert "    live: launch" in output
     assert "    missing live: send, interrupt, steer, answer_pause, continue" in output
     assert "    contract: launch_local, send_input, interrupt, steer_active_turn" in output
-    assert "    unsupported: launch_remote, reattach" in output
+    assert "    unsupported: turn_start, reattach" in output
 
 
 def test_local_health_render_prints_archive_backlog_distribution(capsys):

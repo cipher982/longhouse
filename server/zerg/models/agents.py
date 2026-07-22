@@ -1084,7 +1084,7 @@ class SessionInputAttachment(AgentsBase):
 #   - Edge:          provider-neutral relationship evidence between graph nodes
 #   - Run:           one provider CLI process invocation
 #   - Connection:    Longhouse's relationship to a run (control plane + state)
-#   - LaunchAttempt: pre-process launch lifecycle for remote launches
+#   - LaunchAttempt: managed launch/registration lifecycle
 #
 # Phase 1 is purely additive. AgentSession child tables also gain nullable
 # thread_id / run_id columns to start the migration off session_id parentage;

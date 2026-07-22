@@ -475,7 +475,6 @@ def test_full_fake_canary_can_go_green() -> None:
         assert set(payload["operation_evidence"]) == {
             "interrupt",
             "launch_local",
-            "launch_remote",
             "permission_prompt",
             "reattach",
             "run_once",
@@ -487,7 +486,6 @@ def test_full_fake_canary_can_go_green() -> None:
             payload["operation_evidence"]["launch_local"]["canary"]
             == "managed_tui_attach"
         )
-        assert payload["operation_evidence"]["launch_remote"]["canary"] == "detached_ui"
         assert payload["operation_evidence"]["reattach"]["level"] == "live_no_token"
         assert (
             payload["operation_evidence"]["send_input"]["canary"] == "managed_live_send"
@@ -828,7 +826,6 @@ def test_requested_managed_bridge_lanes_without_credentials_are_yellow() -> None
             fixture,
             [
                 "--run-managed-tui-attach",
-                "--run-detached-ui",
                 "--run-managed-live-send",
                 "--run-managed-live-interrupt",
                 "--source-review-status",
@@ -848,11 +845,6 @@ def test_requested_managed_bridge_lanes_without_credentials_are_yellow() -> None
             "--api-url",
             "--agents-token",
         ]
-        assert payload["canaries"]["detached_ui"]["status"] == "not_run"
-        assert (
-            payload["canaries"]["detached_ui"]["failure_code"]
-            == "managed_bridge_credentials_missing"
-        )
         assert payload["canaries"]["managed_live_send"]["status"] == "not_run"
         assert (
             payload["canaries"]["managed_live_send"]["failure_code"]
@@ -868,7 +860,6 @@ def test_requested_managed_bridge_lanes_without_credentials_are_yellow() -> None
             payload["operation_evidence"]["launch_local"]["failure_code"]
             == "managed_bridge_credentials_missing"
         )
-        assert payload["operation_evidence"]["launch_remote"]["status"] == "not_run"
         assert payload["operation_evidence"]["reattach"]["status"] == "not_run"
         assert payload["operation_evidence"]["interrupt"]["status"] == "not_run"
 

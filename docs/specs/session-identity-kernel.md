@@ -38,7 +38,7 @@ In scope:
   are session-keyed today, so subagents and resume actually fix.
 - Lightweight `thread_aliases` table to carry provider/source identity evidence
   without overloading a single column.
-- Real `launch_attempts` table for remote-launch lifecycle.
+- Real `launch_attempts` table for managed-local registration lifecycle.
 - Single server-derived capability projection consumed by web, iOS, CLI.
 - Kill path-bound managed identity (`session_binding(path → session_id)`).
 
@@ -437,7 +437,7 @@ Tests (full combinations):
   no event/runtime collision.
 - External provider CLI adopted: `launch_origin = external_adopted`, no
   launch attempt row, thread created via alias evidence.
-- Failed remote launch: `launch_attempts.state = failed` with no run.
+- Failed managed-local registration: `launch_attempts.state = failed` with no open run.
 - Path move/rename of provider transcript: same thread, alias updated, no new
   session.
 - PID reuse on same host across reboots: `boot_id` distinguishes runs.

@@ -24,9 +24,6 @@ const workspaceMocks = vi.hoisted(() => ({
 const secondClockMocks = vi.hoisted(() => ({
   useSecondClock: vi.fn(),
 }));
-const launchApiMocks = vi.hoisted(() => ({
-  continueRemoteSession: vi.fn(),
-}));
 const agentApiMocks = vi.hoisted(() => ({
   createSessionShare: vi.fn(),
   respondToPauseRequest: vi.fn(),
@@ -76,14 +73,6 @@ vi.mock("react-hot-toast", () => {
   return {
     toast,
     default: toast,
-  };
-});
-
-vi.mock("../../services/api/launch", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../services/api/launch")>();
-  return {
-    ...actual,
-    continueRemoteSession: launchApiMocks.continueRemoteSession,
   };
 });
 
@@ -364,13 +353,6 @@ function mockWorkspaceState({
 describe("SessionDetailPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    launchApiMocks.continueRemoteSession.mockResolvedValue({
-      session_id: "session-codex",
-      launch_state: "live",
-      execution_lifetime: "live_control",
-      launch_error_code: null,
-      launch_error_message: null,
-    });
     agentApiMocks.respondToPauseRequest.mockResolvedValue({
       status: "resolved",
       pause_request: makePauseRequest({ status: "resolved" }),
@@ -607,115 +589,13 @@ describe("SessionDetailPage", () => {
     );
   });
 
-  it("continues an offline session with the native continuation target", async () => {
-    const user = userEvent.setup();
-    launchApiMocks.continueRemoteSession.mockResolvedValueOnce({
-      session_id: "session-codex",
-      launch_state: "launching",
-      execution_lifetime: "live_control",
-      launch_error_code: null,
-      launch_error_message: null,
-    });
-    const session = makeSession({
-      ended_at: null,
-      status: "active",
-      presence_state: null,
-      active_tool: null,
-      runtime_source: null,
-      confidence: null,
-      display_phase: null,
-      last_live_at: null,
-      runtime_display: makeRuntimeDisplay({
-        truth_tier: "stale",
-        signal_tier: "transcript_progress",
-        state: null,
-        tone: "inactive",
-        headline: "Inactive",
-        detail: null,
-        phase_label: "Inactive",
-        compact_tool_label: null,
-        is_live: false,
-        is_executing: false,
-        needs_attention: false,
-        is_idle: false,
-        is_managed_local_truth: true,
-        has_signal: true,
-        control_path: "managed",
-        activity_recency: "stale",
-        lifecycle: "open",
-        host_state: "offline",
-      }),
-      capabilities: makeCapabilities({
-        live_control_available: false,
-        host_reattach_available: false,
-        reply_to_live_session_available: false,
-        can_send_input: false,
-        can_continue: true,
-        continue_targets: [
-          {
-            provider: "codex",
-            device_id: "cinder",
-            cwd: "/Users/example/git/zerg",
-            carry_context: "native",
-            native_resume_available: true,
-          },
-        ],
-      }),
-    });
+  it("does not offer remote Helm launch from a session detail", () => {
+    const session = makeSession();
     mockWorkspaceState({ session, model: buildTimelineModel([]) });
 
     renderSessionDetailPage();
-    const continueButton = screen.getByTestId("session-continue-button");
-    await user.click(continueButton);
 
-    await waitFor(() => {
-      expect(launchApiMocks.continueRemoteSession).toHaveBeenCalledWith(
-        "session-codex",
-        expect.objectContaining({
-          device_id: "cinder",
-          cwd: "/Users/example/git/zerg",
-          client_request_id: expect.stringMatching(/^continue-/),
-        }),
-      );
-    });
-    expect(screen.getByTestId("launch-pending-banner")).toHaveTextContent(
-      "Starting session on cinder",
-    );
-    expect(continueButton).toBeDisabled();
-    await user.click(continueButton);
-    expect(launchApiMocks.continueRemoteSession).toHaveBeenCalledTimes(1);
-  });
-
-  it("labels an adopt_unmanaged continue target as 'Continue in Longhouse'", async () => {
-    const session = makeSession({
-      capabilities: makeCapabilities({
-        live_control_available: false,
-        host_reattach_available: false,
-        reply_to_live_session_available: false,
-        can_send_input: false,
-        can_continue: true,
-        continue_targets: [
-          {
-            provider: "claude",
-            device_id: "cinder",
-            cwd: "/Users/example/git/me",
-            carry_context: "native",
-            native_resume_available: true,
-            adoption_mode: "adopt_unmanaged",
-          },
-        ],
-      }),
-    });
-    mockWorkspaceState({ session, model: buildTimelineModel([]) });
-
-    renderSessionDetailPage();
-    const continueButton = screen.getByTestId("session-continue-button");
-    // Honest copy: adopting an unmanaged transcript starts a fresh managed process.
-    expect(continueButton).toHaveTextContent("Continue in Longhouse");
-    expect(continueButton).toHaveAttribute(
-      "title",
-      "Starts a fresh managed Longhouse process from this transcript",
-    );
+    expect(screen.queryByTestId("session-continue-button")).not.toBeInTheDocument();
   });
 
   it("keeps unresolved live tool calls pending from the row into the inspector", () => {

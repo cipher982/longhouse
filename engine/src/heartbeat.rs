@@ -2723,7 +2723,7 @@ pub fn write_status_file(
         phase_ledger_status: PhaseLedgerStatus,
         /// Machine Agent live-control WebSocket status. This is separate from
         /// durable HTTPS shipping health; event shipping can be healthy while
-        /// remote launch/control is unavailable.
+        /// interactive control or Console dispatch is unavailable.
         #[serde(skip_serializing_if = "Option::is_none")]
         control_channel: Option<serde_json::Value>,
         last_updated: String,
@@ -4168,7 +4168,7 @@ mod tests {
             Some(serde_json::json!({
                 "enabled": true,
                 "status": "connected",
-                "supports": ["codex.launch"],
+                "supports": ["codex.turn_start"],
             })),
             &ProjectionReconciliation::idle(),
             &status_path,
@@ -4198,7 +4198,7 @@ mod tests {
         assert!(build["channel"].is_string());
         assert!(build["dirty"].is_boolean());
         assert_eq!(parsed["control_channel"]["status"], "connected");
-        assert_eq!(parsed["control_channel"]["supports"][0], "codex.launch");
+        assert_eq!(parsed["control_channel"]["supports"][0], "codex.turn_start");
         assert_eq!(
             parsed["local_projection"]["reconciliation"]["state"],
             "idle"

@@ -1,4 +1,4 @@
-"""Hot-lane launch readiness facts for managed remote launches."""
+"""Hot-lane readiness facts for managed local launches."""
 
 from __future__ import annotations
 
@@ -13,26 +13,24 @@ from sqlalchemy.orm import Session
 
 from zerg.models.live_store import LiveArchiveOutbox
 from zerg.models.live_store import LiveLaunchReadiness
-from zerg.services.session_launch_lifecycle import RemoteExecutionLifetime
-from zerg.services.session_launch_lifecycle import RemoteLaunchErrorCode
-from zerg.services.session_launch_lifecycle import RemoteLaunchLifecycleState
-from zerg.services.session_launch_lifecycle import format_remote_launch_error_message
-from zerg.services.session_launch_lifecycle import normalize_remote_execution_lifetime
-from zerg.services.session_launch_lifecycle import normalize_remote_launch_error_code
+from zerg.services.session_launch_lifecycle import ExecutionLifetime
+from zerg.services.session_launch_lifecycle import LaunchErrorCode
+from zerg.services.session_launch_lifecycle import LaunchLifecycleState
+from zerg.services.session_launch_lifecycle import format_launch_error_message
+from zerg.services.session_launch_lifecycle import normalize_execution_lifetime
+from zerg.services.session_launch_lifecycle import normalize_launch_error_code
 from zerg.utils.time import normalize_utc
 
 LiveLaunchReadinessState = Literal["pending", "dispatched", "adopted", "failed", "abandoned"]
 MANAGED_LOCAL_LAUNCH_OUTBOX_KIND = "managed_local_launch.v1"
-REMOTE_LAUNCH_OUTBOX_KIND = "remote_launch.v1"
-REMOTE_LAUNCH_OUTCOME_OUTBOX_KIND = "remote_launch_outcome.v1"
 
 
 @dataclass(frozen=True)
 class LiveLaunchReadinessView:
     session_id: UUID
-    launch_state: RemoteLaunchLifecycleState
-    execution_lifetime: RemoteExecutionLifetime
-    launch_error_code: RemoteLaunchErrorCode | None
+    launch_state: LaunchLifecycleState
+    execution_lifetime: ExecutionLifetime
+    launch_error_code: LaunchErrorCode | None
     launch_error_message: str | None
     owner_id: str | None = None
     provider: str | None = None
@@ -55,9 +53,9 @@ def _owner_key(owner_id: int | str | None) -> str | None:
 
 def project_live_launch_readiness(row: LiveLaunchReadiness) -> LiveLaunchReadinessView:
     raw_state = str(row.state or "").strip()
-    execution_lifetime = normalize_remote_execution_lifetime(row.execution_lifetime)
+    execution_lifetime = normalize_execution_lifetime(row.execution_lifetime)
     if raw_state == "failed":
-        launch_state: RemoteLaunchLifecycleState = "launch_failed"
+        launch_state: LaunchLifecycleState = "launch_failed"
     elif raw_state == "abandoned":
         launch_state = "launch_orphaned"
     elif raw_state == "adopted":
@@ -67,13 +65,13 @@ def project_live_launch_readiness(row: LiveLaunchReadiness) -> LiveLaunchReadine
     else:
         launch_state = "launching"
 
-    error_code = normalize_remote_launch_error_code(row.error_code) if row.error_code is not None else None
+    error_code = normalize_launch_error_code(row.error_code) if row.error_code is not None else None
     return LiveLaunchReadinessView(
         session_id=UUID(str(row.session_id)),
         launch_state=launch_state,
         execution_lifetime=execution_lifetime,
         launch_error_code=error_code,
-        launch_error_message=format_remote_launch_error_message(error_code, row.error_message),
+        launch_error_message=format_launch_error_message(error_code, row.error_message),
         owner_id=row.owner_id,
         provider=row.provider,
         device_id=row.device_id,
@@ -152,7 +150,7 @@ def upsert_live_launch_readiness(
     owner_id: int,
     device_id: str,
     provider: str,
-    execution_lifetime: RemoteExecutionLifetime,
+    execution_lifetime: ExecutionLifetime,
     state: LiveLaunchReadinessState,
     command_id: str,
     client_request_id: str | None,
@@ -231,25 +229,12 @@ def reap_expired_live_launch_readiness(
 
 
 def _has_pending_launch_outbox(db: Session, *, session_id: str) -> bool:
-    for kind in (MANAGED_LOCAL_LAUNCH_OUTBOX_KIND, REMOTE_LAUNCH_OUTBOX_KIND):
-        key = f"{kind}:{session_id}"
-        exists = (
-            db.query(LiveArchiveOutbox.id)
-            .filter(LiveArchiveOutbox.kind == kind)
-            .filter(LiveArchiveOutbox.idempotency_key == key)
-            .filter(LiveArchiveOutbox.drained_at.is_(None))
-            .first()
-        )
-        if exists is not None:
-            return True
-    outcome_prefix = f"{REMOTE_LAUNCH_OUTCOME_OUTBOX_KIND}:{session_id}:"
-    outcome_exists = (
+    key = f"{MANAGED_LOCAL_LAUNCH_OUTBOX_KIND}:{session_id}"
+    return (
         db.query(LiveArchiveOutbox.id)
-        .filter(LiveArchiveOutbox.kind == REMOTE_LAUNCH_OUTCOME_OUTBOX_KIND)
-        .filter(LiveArchiveOutbox.idempotency_key.like(f"{outcome_prefix}%"))
+        .filter(LiveArchiveOutbox.kind == MANAGED_LOCAL_LAUNCH_OUTBOX_KIND)
+        .filter(LiveArchiveOutbox.idempotency_key == key)
         .filter(LiveArchiveOutbox.drained_at.is_(None))
         .first()
+        is not None
     )
-    if outcome_exists is not None:
-        return True
-    return False

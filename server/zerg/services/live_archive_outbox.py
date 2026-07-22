@@ -15,34 +15,22 @@ from sqlalchemy.orm import Session
 
 from zerg.models.agents import AgentHeartbeat
 from zerg.models.agents import AgentSession
-from zerg.models.agents import SessionConnection
 from zerg.models.agents import SessionInput
-from zerg.models.agents import SessionLaunchAttempt
-from zerg.models.agents import SessionRun
 from zerg.models.agents import SessionThread
 from zerg.models.agents import SessionTurn
 from zerg.models.live_store import LiveArchiveOutbox
 from zerg.models.live_store import LiveLaunchReadiness
 from zerg.models.live_store import LiveSessionInputReceipt
 from zerg.models.live_store import LiveSessionLaunchAttempt
-from zerg.services.agents.kernel_writes import ensure_open_run_for_session
-from zerg.services.agents.kernel_writes import ensure_primary_thread
-from zerg.services.agents.kernel_writes import record_thread_alias
 from zerg.services.agents.kernel_writes import set_thread_execution_target
-from zerg.services.agents.kernel_writes import upsert_connection_for_run
 from zerg.services.live_catalog_launch import update_live_launch_catalog_outcome
 from zerg.services.live_launch_readiness import MANAGED_LOCAL_LAUNCH_OUTBOX_KIND
-from zerg.services.live_launch_readiness import REMOTE_LAUNCH_OUTBOX_KIND
-from zerg.services.live_launch_readiness import REMOTE_LAUNCH_OUTCOME_OUTBOX_KIND
 from zerg.services.live_launch_readiness import update_live_launch_readiness_state
 from zerg.services.managed_local_launcher import ManagedLocalLaunchPlan
-from zerg.services.managed_local_launcher import managed_provider_requires_readiness_proof
 from zerg.services.managed_local_launcher import materialize_managed_local_launch_plan_sync
-from zerg.services.managed_provider_contracts import require_contract_for_provider
 from zerg.services.session_inputs import INPUT_STATUS_DELIVERED
 from zerg.services.session_inputs import INPUT_STATUS_DELIVERING
 from zerg.services.session_inputs import VALID_INTENTS
-from zerg.services.session_kernel_projection import is_synthetic_provider_session_id
 from zerg.services.session_runtime import RuntimeEventIngest
 from zerg.services.session_runtime import ingest_runtime_events
 from zerg.session_loop_mode import SessionLoopMode
@@ -50,18 +38,12 @@ from zerg.utils.time import normalize_utc
 
 HEARTBEAT_STAMP_KIND = "heartbeat_stamp.v1"
 MANAGED_LOCAL_LAUNCH_KIND = MANAGED_LOCAL_LAUNCH_OUTBOX_KIND
-REMOTE_LAUNCH_KIND = REMOTE_LAUNCH_OUTBOX_KIND
-REMOTE_LAUNCH_OUTCOME_KIND = REMOTE_LAUNCH_OUTCOME_OUTBOX_KIND
 RUNTIME_EVENT_KIND = "runtime_event.v1"
 SESSION_INPUT_RECEIPT_KIND = "session_input_receipt.v1"
 CONSOLE_SESSION_CREATE_KIND = "console_session_create.v1"
 AUTO_RESUME_PHASES = {"thinking", "running"}
-ONE_SHOT_CONTROL_PLANE_BY_PROVIDER = {
-    "codex": "codex_exec",
-    "cursor": "cursor_acp",
-}
 _LAUNCH_RECEIPT_RETENTION = timedelta(days=30)
-_LAUNCH_RECEIPT_KINDS = (MANAGED_LOCAL_LAUNCH_KIND, REMOTE_LAUNCH_KIND, REMOTE_LAUNCH_OUTCOME_KIND)
+_LAUNCH_RECEIPT_KINDS = (MANAGED_LOCAL_LAUNCH_KIND,)
 
 
 @dataclass(frozen=True)
@@ -225,60 +207,6 @@ def enqueue_managed_local_launch_outbox(
         )
     )
     return True
-
-
-def remote_launch_idempotency_key(*, session_id: UUID | str) -> str:
-    return f"{REMOTE_LAUNCH_KIND}:{str(session_id).strip()}"
-
-
-def remote_launch_outcome_idempotency_key(*, session_id: UUID | str) -> str:
-    return f"{REMOTE_LAUNCH_OUTCOME_KIND}:{str(session_id).strip()}"
-
-
-def enqueue_remote_launch_outbox(
-    db: Session,
-    *,
-    launch: dict[str, Any],
-    idempotency_key: str | None = None,
-    completed: bool = False,
-) -> bool:
-    """Persist remote-launch idempotency evidence."""
-
-    session_id = str(launch.get("session_id") or "").strip()
-    if not session_id:
-        raise ValueError("remote launch outbox is missing session_id")
-    key = idempotency_key or remote_launch_idempotency_key(session_id=session_id)
-    return _enqueue_json_outbox(
-        db,
-        idempotency_key=key,
-        kind=REMOTE_LAUNCH_KIND,
-        payload={"launch": _jsonable(launch)},
-        completed=completed,
-    )
-
-
-def enqueue_remote_launch_outcome_outbox(
-    db: Session,
-    *,
-    launch: dict[str, Any],
-    outcome: dict[str, Any],
-    idempotency_key: str | None = None,
-    completed: bool = False,
-) -> bool:
-    """Persist remote-launch outcome idempotency evidence."""
-
-    session_id = str(launch.get("session_id") or "").strip()
-    if not session_id:
-        raise ValueError("remote launch outcome outbox is missing session_id")
-    outcome_state = str(outcome.get("state") or "unknown").strip() or "unknown"
-    key = idempotency_key or f"{remote_launch_outcome_idempotency_key(session_id=session_id)}:{outcome_state}"
-    return _enqueue_json_outbox(
-        db,
-        idempotency_key=key,
-        kind=REMOTE_LAUNCH_OUTCOME_KIND,
-        payload={"launch": _jsonable(launch), "outcome": _jsonable(outcome)},
-        completed=completed,
-    )
 
 
 def _enqueue_json_outbox(
@@ -464,12 +392,6 @@ def apply_live_archive_outbox_to_archive(row: LiveArchiveOutbox, archive_db: Ses
     if row.kind == MANAGED_LOCAL_LAUNCH_KIND:
         _drain_managed_local_launch(row, archive_db)
         return {}
-    if row.kind == REMOTE_LAUNCH_KIND:
-        _drain_remote_launch(row, archive_db)
-        return {}
-    if row.kind == REMOTE_LAUNCH_OUTCOME_KIND:
-        _drain_remote_launch_outcome(row, archive_db)
-        return {}
     if row.kind == CONSOLE_SESSION_CREATE_KIND:
         _drain_console_session_create(row, archive_db)
         return {}
@@ -539,12 +461,6 @@ def _drain_managed_local_launch(row: LiveArchiveOutbox, archive_db: Session) -> 
     )
 
 
-def _drain_remote_launch(row: LiveArchiveOutbox, archive_db: Session) -> None:
-    payload = json.loads(row.payload_json or "{}")
-    launch = _restore_jsonable(payload.get("launch") or {})
-    _materialize_remote_launch(archive_db, launch, outcome=None)
-
-
 def _drain_console_session_create(row: LiveArchiveOutbox, archive_db: Session) -> None:
     payload = json.loads(row.payload_json or "{}")
     data = _restore_jsonable(payload.get("session") or {})
@@ -602,440 +518,8 @@ def _drain_console_session_create(row: LiveArchiveOutbox, archive_db: Session) -
     )
 
 
-def _drain_remote_launch_outcome(row: LiveArchiveOutbox, archive_db: Session) -> None:
-    payload = json.loads(row.payload_json or "{}")
-    launch = _restore_jsonable(payload.get("launch") or {})
-    outcome = _restore_jsonable(payload.get("outcome") or {})
-    _materialize_remote_launch(archive_db, launch, outcome=outcome)
-
-
-def _materialize_remote_launch(
-    db: Session,
-    launch: dict[str, Any],
-    *,
-    outcome: dict[str, Any] | None,
-) -> None:
-    session_id = UUID(str(launch.get("session_id") or ""))
-    provider = str(launch.get("provider") or "").strip().lower()
-    device_id = str(launch.get("device_id") or "").strip()
-    cwd = str(launch.get("cwd") or "").strip()
-    project = str(launch.get("project") or "").strip() or "managed-local"
-    execution_lifetime = str(launch.get("execution_lifetime") or "live_control").strip() or "live_control"
-    command_id = str(launch.get("command_id") or "").strip() or None
-    started_at = normalize_utc(launch.get("started_at")) or datetime.now(timezone.utc)
-    expires_at = normalize_utc(launch.get("expires_at"))
-
-    session = db.get(AgentSession, session_id)
-    if session is None:
-        session = AgentSession(
-            id=session_id,
-            provider=provider,
-            environment="development",
-            project=project,
-            device_id=device_id,
-            device_name=str(launch.get("machine_id") or "").strip() or device_id,
-            cwd=cwd,
-            git_repo=str(launch.get("git_repo") or "").strip() or None,
-            git_branch=str(launch.get("git_branch") or "").strip() or None,
-            started_at=started_at,
-            ended_at=None,
-            user_messages=0,
-            assistant_messages=0,
-            tool_calls=0,
-            loop_mode=SessionLoopMode.ASSIST.value,
-        )
-        db.add(session)
-        db.flush()
-    else:
-        session.device_id = device_id or session.device_id
-        session.device_name = str(launch.get("machine_id") or "").strip() or device_id or session.device_name
-        session.cwd = cwd or session.cwd
-        session.git_repo = str(launch.get("git_repo") or "").strip() or session.git_repo
-        session.git_branch = str(launch.get("git_branch") or "").strip() or session.git_branch
-        session.project = project or session.project
-
-    requested_thread_id_text = str(launch.get("primary_thread_id") or "").strip()
-    requested_thread_id = UUID(requested_thread_id_text) if requested_thread_id_text else None
-    thread = db.query(SessionThread).filter(SessionThread.session_id == session.id, SessionThread.is_primary == 1).one_or_none()
-    if thread is None and requested_thread_id is not None:
-        thread = SessionThread(
-            id=requested_thread_id,
-            session_id=session.id,
-            provider=provider,
-            branch_kind="root",
-            is_primary=1,
-            created_at=started_at,
-            updated_at=started_at,
-        )
-        db.add(thread)
-        db.flush()
-        session.primary_thread_id = thread.id
-    elif thread is None:
-        thread = ensure_primary_thread(db, session)
-    resume_payload = launch.get("resume") if isinstance(launch.get("resume"), dict) else {}
-    provider_thread_id = str(resume_payload.get("thread_id") or launch.get("provider_thread_id") or "").strip() or None
-    if provider_thread_id and not is_synthetic_provider_session_id(session, provider_thread_id):
-        record_thread_alias(
-            db,
-            thread=thread,
-            provider=provider,
-            alias_kind="provider_session_id",
-            alias_value=provider_thread_id,
-        )
-    thread_path = str(resume_payload.get("thread_path") or launch.get("thread_path") or "").strip() or None
-    if thread_path:
-        record_thread_alias(
-            db,
-            thread=thread,
-            provider=provider,
-            alias_kind="source_path",
-            alias_value=thread_path,
-        )
-    launch_origin = str(launch.get("launch_origin") or "longhouse_spawned").strip() or "longhouse_spawned"
-    is_continue = str(launch.get("mode") or "").strip() == "continue" or launch_origin == "longhouse_continued"
-    attempt = _remote_launch_attempt_for_command(db, command_id=command_id)
-    if attempt is None:
-        attempt = SessionLaunchAttempt(
-            session_id=session.id,
-            thread_id=thread.id,
-            provider=provider,
-            host_id=device_id,
-            owner_id=int(launch.get("owner_id") or 0) or None,
-            execution_lifetime=execution_lifetime,
-            client_request_id=str(launch.get("client_request_id") or "").strip() or None,
-            command_id=command_id,
-            state="pending",
-            expires_at=expires_at,
-        )
-        db.add(attempt)
-        db.flush()
-    else:
-        attempt.session_id = session.id
-        attempt.thread_id = attempt.thread_id or thread.id
-        attempt.provider = provider
-        attempt.host_id = device_id
-        attempt.owner_id = int(launch.get("owner_id") or 0) or attempt.owner_id
-        attempt.execution_lifetime = execution_lifetime
-        attempt.client_request_id = str(launch.get("client_request_id") or "").strip() or attempt.client_request_id
-        attempt.command_id = command_id or attempt.command_id
-
-    if execution_lifetime == "one_shot":
-        if is_continue:
-            _release_open_runs_for_thread(db, thread=thread, now=datetime.now(timezone.utc))
-        run = _ensure_one_shot_remote_run(db, launch=launch, thread_id=thread.id, provider=provider, device_id=device_id, cwd=cwd)
-        attempt.run_id = run.id
-
-    if not outcome:
-        if attempt.state not in {"dispatched", "adopted", "failed", "abandoned"}:
-            attempt.state = "pending"
-            attempt.expires_at = expires_at
-        return
-
-    state = str(outcome.get("state") or "").strip()
-    if state == "dispatched":
-        if attempt.state not in {"adopted", "failed", "abandoned"}:
-            attempt.state = "dispatched"
-            attempt.error_message = str(outcome.get("error_message") or "").strip() or None
-            attempt.expires_at = expires_at
-        return
-
-    if state == "adopted":
-        if execution_lifetime == "one_shot":
-            _attach_one_shot_remote_launch(
-                db,
-                session=session,
-                attempt=attempt,
-                launch=launch,
-                outcome=outcome,
-                cwd=cwd,
-            )
-        else:
-            _attach_live_remote_launch(
-                db,
-                session=session,
-                attempt=attempt,
-                launch=launch,
-                outcome=outcome,
-                cwd=cwd,
-            )
-        return
-
-    if state == "failed":
-        session.ended_at = datetime.now(timezone.utc)
-        if execution_lifetime == "one_shot":
-            _mark_one_shot_remote_run_failed(db, attempt=attempt, error_code=str(outcome.get("error_code") or "provider_launch_failed"))
-        attempt.state = "failed"
-        attempt.error_code = str(outcome.get("error_code") or "provider_launch_failed")
-        attempt.error_message = str(outcome.get("error_message") or "unknown error")
-        attempt.expires_at = None
-
-
-def _remote_launch_attempt_for_command(db: Session, *, command_id: str | None) -> SessionLaunchAttempt | None:
-    if not command_id:
-        return None
-    return db.query(SessionLaunchAttempt).filter(SessionLaunchAttempt.command_id == command_id).first()
-
-
-def _ensure_one_shot_remote_run(
-    db: Session,
-    *,
-    launch: dict[str, Any],
-    thread_id: UUID,
-    provider: str,
-    device_id: str,
-    cwd: str,
-) -> SessionRun:
-    run_id = UUID(str(launch.get("run_id") or ""))
-    run = db.get(SessionRun, run_id)
-    if run is not None:
-        return run
-    run = SessionRun(
-        id=run_id,
-        thread_id=thread_id,
-        provider=provider,
-        host_id=device_id,
-        cwd=cwd,
-        launch_origin=str(launch.get("launch_origin") or "longhouse_spawned").strip() or "longhouse_spawned",
-        started_at=normalize_utc(launch.get("started_at")) or datetime.now(timezone.utc),
-    )
-    db.add(run)
-    db.flush()
-    return run
-
-
-def _attach_live_remote_launch(
-    db: Session,
-    *,
-    session: AgentSession,
-    attempt: SessionLaunchAttempt,
-    launch: dict[str, Any],
-    outcome: dict[str, Any],
-    cwd: str,
-) -> None:
-    thread = ensure_primary_thread(db, session)
-    launch_origin = str(launch.get("launch_origin") or "longhouse_spawned").strip() or "longhouse_spawned"
-    is_continue = str(launch.get("mode") or "").strip() == "continue" or launch_origin == "longhouse_continued"
-    provider_thread_id = str(outcome.get("provider_thread_id") or "").strip() or None
-    if provider_thread_id and not is_synthetic_provider_session_id(session, provider_thread_id):
-        record_thread_alias(
-            db,
-            thread=thread,
-            provider=session.provider,
-            alias_kind="provider_session_id",
-            alias_value=provider_thread_id,
-        )
-    thread_path = str(outcome.get("thread_path") or "").strip() or None
-    if thread_path:
-        record_thread_alias(
-            db,
-            thread=thread,
-            provider=session.provider,
-            alias_kind="source_path",
-            alias_value=thread_path,
-        )
-    if is_continue:
-        run_id_text = str(launch.get("run_id") or "").strip()
-        run_id = UUID(run_id_text) if run_id_text else None
-        run = db.get(SessionRun, run_id) if run_id is not None else None
-        if run is None:
-            _release_open_runs_for_thread(db, thread=thread, now=datetime.now(timezone.utc))
-            run = SessionRun(
-                id=run_id,
-                thread_id=thread.id,
-                provider=session.provider,
-                host_id=session.device_id,
-                cwd=cwd or session.cwd,
-                launch_origin=launch_origin,
-                started_at=normalize_utc(launch.get("started_at")) or datetime.now(timezone.utc),
-            )
-            db.add(run)
-            db.flush()
-    else:
-        run_id_text = str(launch.get("run_id") or "").strip()
-        run_id = UUID(run_id_text) if run_id_text else None
-        run = db.get(SessionRun, run_id) if run_id is not None else None
-        if run is None and run_id is not None:
-            run = SessionRun(
-                id=run_id,
-                thread_id=thread.id,
-                provider=session.provider,
-                host_id=session.device_id,
-                cwd=cwd or session.cwd,
-                launch_origin=launch_origin,
-                started_at=normalize_utc(launch.get("started_at")) or datetime.now(timezone.utc),
-            )
-            db.add(run)
-            db.flush()
-        if run is None:
-            run = ensure_open_run_for_session(
-                db,
-                session,
-                launch_origin=launch_origin,
-                host_id=session.device_id,
-            )
-        run.cwd = cwd or run.cwd
-    contract = require_contract_for_provider(session.provider)
-    caps = contract.connection_capabilities
-    requires_readiness_proof = managed_provider_requires_readiness_proof(session.provider)
-    conn = upsert_connection_for_run(
-        db,
-        run=run,
-        control_plane=contract.control_plane,
-        acquisition_kind="spawned_control",
-        state="detached" if requires_readiness_proof else "attached",
-        external_name=str(outcome.get("external_name") or launch.get("machine_id") or launch.get("device_id") or "").strip() or None,
-        can_send_input=0 if requires_readiness_proof else caps["can_send_input"],
-        can_interrupt=caps["can_interrupt"],
-        can_terminate=caps["can_terminate"],
-        can_tail_output=caps["can_tail_output"],
-        can_resume=caps["can_resume"],
-    )
-    now = datetime.now(timezone.utc)
-    conn.last_health_at = None if requires_readiness_proof else now
-    session.ended_at = None
-    attempt.state = "adopted"
-    attempt.run_id = run.id
-    attempt.expires_at = None
-    attempt.error_code = None
-    attempt.error_message = None
-
-
-def _release_open_runs_for_thread(db: Session, *, thread, now: datetime) -> None:
-    open_runs = db.query(SessionRun).filter(SessionRun.thread_id == thread.id, SessionRun.ended_at.is_(None)).all()
-    if not open_runs:
-        return
-    open_run_ids = [run.id for run in open_runs]
-    for run in open_runs:
-        run.ended_at = now
-    for conn in (
-        db.query(SessionConnection)
-        .filter(SessionConnection.run_id.in_(open_run_ids))
-        .filter(SessionConnection.state.in_(("attached", "degraded")))
-        .all()
-    ):
-        conn.state = "released"
-        conn.released_at = now
-        conn.last_health_at = now
-        conn.can_send_input = 0
-        conn.can_interrupt = 0
-        conn.can_terminate = 0
-        conn.can_tail_output = 0
-        conn.can_resume = 0
-
-
-def _attach_one_shot_remote_launch(
-    db: Session,
-    *,
-    session: AgentSession,
-    attempt: SessionLaunchAttempt,
-    launch: dict[str, Any],
-    outcome: dict[str, Any],
-    cwd: str,
-) -> None:
-    thread = ensure_primary_thread(db, session)
-    run = _ensure_one_shot_remote_run(
-        db,
-        launch=launch,
-        thread_id=thread.id,
-        provider=session.provider,
-        device_id=str(launch.get("device_id") or ""),
-        cwd=cwd,
-    )
-    pid = outcome.get("pid")
-    if pid is not None:
-        run.pid = int(pid)
-    argv = outcome.get("argv")
-    if isinstance(argv, list):
-        run.argv_redacted_json = [str(item) for item in argv]
-    run_ended_at = run.ended_at
-    state = "ended" if run_ended_at is not None else "attached"
-    control_plane = ONE_SHOT_CONTROL_PLANE_BY_PROVIDER.get(session.provider, f"{session.provider}_exec")
-    conn = upsert_connection_for_run(
-        db,
-        run=run,
-        control_plane=control_plane,
-        acquisition_kind="spawned_control",
-        state=state,
-        external_name=str(outcome.get("external_name") or launch.get("machine_id") or launch.get("device_id") or "").strip() or None,
-        device_id=str(launch.get("device_id") or "").strip() or None,
-        can_send_input=0,
-        can_interrupt=0,
-        can_terminate=0,
-        can_tail_output=0,
-        can_resume=0,
-    )
-    now = datetime.now(timezone.utc)
-    if run_ended_at is not None:
-        conn.released_at = run_ended_at
-        conn.last_health_at = run_ended_at
-    else:
-        conn.last_health_at = now
-    session.ended_at = None
-    attempt.state = "adopted"
-    attempt.run_id = run.id
-    attempt.expires_at = None
-    attempt.error_code = None
-    attempt.error_message = None
-
-
-def _mark_one_shot_remote_run_failed(db: Session, *, attempt: SessionLaunchAttempt, error_code: str) -> None:
-    if attempt.run_id is None:
-        return
-    run = db.get(SessionRun, attempt.run_id)
-    if run is None:
-        return
-    now = datetime.now(timezone.utc)
-    run_ended_at = run.ended_at
-    if run_ended_at is None:
-        run.ended_at = now
-        run.exit_status = (error_code or "provider_launch_failed")[:64]
-        connection_released_at = now
-    else:
-        connection_released_at = run_ended_at
-        if not run.exit_status:
-            run.exit_status = (error_code or "provider_launch_failed")[:64]
-    for conn in (
-        db.query(SessionConnection)
-        .filter(SessionConnection.run_id == run.id)
-        .filter(SessionConnection.state.in_(("attached", "degraded", "detached")))
-        .all()
-    ):
-        conn.state = "ended"
-        conn.released_at = connection_released_at
-        conn.last_health_at = connection_released_at
-        conn.can_send_input = 0
-        conn.can_interrupt = 0
-        conn.can_terminate = 0
-        conn.can_tail_output = 0
-        conn.can_resume = 0
-
-
 def _mark_live_side_effects_after_archive_commit(row: LiveArchiveOutbox, live_db: Session) -> None:
-    if row.kind not in {MANAGED_LOCAL_LAUNCH_KIND, REMOTE_LAUNCH_OUTCOME_KIND}:
-        return
-    if row.kind == REMOTE_LAUNCH_OUTCOME_KIND:
-        payload = json.loads(row.payload_json or "{}")
-        launch = _restore_jsonable(payload.get("launch") or {})
-        outcome = _restore_jsonable(payload.get("outcome") or {})
-        state = str(outcome.get("state") or "").strip()
-        if state in {"adopted", "failed", "dispatched"}:
-            session_id = UUID(str(launch.get("session_id") or ""))
-            current = live_db.get(LiveLaunchReadiness, str(session_id))
-            if current is not None:
-                current_state = str(current.state or "").strip()
-                current_rank = _remote_launch_state_rank(current_state)
-                next_rank = _remote_launch_state_rank(state)
-                if current_rank > next_rank or (current_rank == next_rank and current_state != state):
-                    return
-            update_live_launch_readiness_state(
-                live_db,
-                session_id=session_id,
-                state=state,
-                error_code=str(outcome.get("error_code") or "").strip() or None,
-                error_message=str(outcome.get("error_message") or "").strip() or None,
-                clear_expires=state in {"adopted", "failed"},
-                now=datetime.now(timezone.utc),
-            )
+    if row.kind != MANAGED_LOCAL_LAUNCH_KIND:
         return
     payload = json.loads(row.payload_json or "{}")
     launch = _restore_jsonable(payload.get("launch") or {})
@@ -1059,16 +543,6 @@ def _mark_live_side_effects_after_archive_commit(row: LiveArchiveOutbox, live_db
         clear_expires=True,
         now=datetime.now(timezone.utc),
     )
-
-
-def _remote_launch_state_rank(state: str) -> int:
-    return {
-        "pending": 0,
-        "dispatched": 1,
-        "adopted": 2,
-        "failed": 2,
-        "abandoned": 2,
-    }.get(str(state or "").strip(), 0)
 
 
 def _restore_managed_local_launch_plan(plan_payload: dict[str, Any]) -> ManagedLocalLaunchPlan:

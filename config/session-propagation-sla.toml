@@ -207,7 +207,7 @@ shutdown = "provider-supported OpenCode exit path"
 truth_source = "managed_process_scan"
 required_observers = ["managed_sessions_snapshot", "timeline_sse", "browser_card", "hosted_db"]
 metrics = ["warm_session_created_to_card_paint_ms", "warm_close_local_to_paint_ms"]
-notes = "Native OpenCode launch/send/interrupt/terminate exists; this SLA case stays blocked until profiler coverage can measure lifecycle propagation honestly."
+notes = "Terminal-originated OpenCode Helm send/interrupt/terminate exists; this SLA case stays blocked until profiler coverage can measure lifecycle propagation honestly."
 
 [[cases]]
 id = "unmanaged_codex_direct_graceful_close"
@@ -344,7 +344,7 @@ shutdown = "not applicable"
 truth_source = "none"
 required_observers = []
 metrics = []
-notes = "Managed OpenCode remote send/interrupt is a product contract; this SLA row remains undefined until a dedicated profiler case defines truth sources, observers, and metrics."
+notes = "Managed OpenCode Helm send/interrupt is a product contract; this SLA row remains undefined until a dedicated profiler case defines truth sources, observers, and metrics."
 
 [[cases]]
 id = "ios_timeline_realtime_propagation"

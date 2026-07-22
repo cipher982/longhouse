@@ -86,10 +86,6 @@ def test_each_managed_provider_emits_profile_artifact() -> None:
             assert payload["operation_evidence"]["launch_local"]["level"] == "none"
             assert payload["operation_evidence"]["launch_local"]["failure_code"] == "insufficient_coverage"
 
-            if provider == "claude":
-                assert payload["operation_evidence"]["launch_remote"]["status"] == "pass"
-                assert payload["operation_evidence"]["launch_remote"]["level"] == "source_review"
-                assert payload["operation_evidence"]["launch_remote"]["canary"] == "source_review"
             if provider == "opencode":
                 assert payload["operation_evidence"]["send_input"]["status"] == "not_run"
                 assert payload["operation_evidence"]["send_input"]["canary"] == "opencode_server_live_contract"
@@ -97,7 +93,6 @@ def test_each_managed_provider_emits_profile_artifact() -> None:
             if provider == "antigravity":
                 assert payload["operation_evidence"]["send_input"]["status"] == "not_run"
                 assert payload["operation_evidence"]["send_input"]["canary"] == "antigravity_real_agy_send"
-                assert payload["operation_evidence"]["launch_remote"]["status"] == "unsupported"
 
 
 def test_profile_canary_can_use_release_version_without_local_binary() -> None:
@@ -120,7 +115,6 @@ def test_profile_canary_can_use_release_version_without_local_binary() -> None:
         assert payload["provider_version"] == "1.2.3"
         assert payload["canaries"]["binary_identity"]["status"] == "not_run"
         assert payload["verdict"] == "yellow"
-        assert payload["operation_evidence"]["launch_remote"]["status"] == "pass"
         assert payload["operation_evidence"]["steer_active_turn"]["status"] == "not_run"
 
 
@@ -179,7 +173,6 @@ def test_source_review_failure_marks_supported_operations_failed() -> None:
         assert payload["failure_code"] == "source_review_failed"
         assert payload["operation_evidence"]["send_input"]["status"] == "fail"
         assert payload["operation_evidence"]["send_input"]["failure_code"] == "source_review_failed"
-        assert payload["operation_evidence"]["launch_remote"]["status"] == "fail"
 
 
 def main() -> int:

@@ -54,7 +54,6 @@ from zerg.services.machine_repair import recommended_machine_repair_command
 from zerg.services.machine_state import machine_state_source_hash
 from zerg.services.machine_state import read_machine_state
 from zerg.services.managed_provider_contracts import all_managed_provider_contracts
-from zerg.services.managed_provider_contracts import machine_control_launch_capability_by_provider
 from zerg.services.managed_provider_contracts import machine_control_operations_by_provider
 from zerg.services.managed_session_contracts import REASON_BRIDGE_STATE_PATH_MISSING
 from zerg.services.managed_session_contracts import REASON_PROVIDER_SESSION_CWD_MISSING
@@ -177,7 +176,6 @@ from .constants import DISK_BROKEN_BYTES
 from .constants import DISK_DEGRADED_BYTES
 from .constants import ENGINE_FRESH_SECONDS
 from .constants import ENGINE_STALE_SECONDS
-from .constants import LAUNCH_CAPABILITY_BY_PROVIDER
 from .constants import LIVENESS_MODEL_CODEX_BRIDGE
 from .constants import LIVENESS_MODEL_ENGINE_STATUS
 from .constants import LIVENESS_MODEL_PROCESS_SCAN

@@ -286,7 +286,7 @@ struct LonghouseAPITests {
     }
 
     @Test
-    func machineDirectoryEntryUsesExplicitLaunchCapabilityFields() throws {
+    func machineDirectoryEntryUsesCanonicalLaunchProjection() throws {
         let data = try #require("""
         {
           "machines": [
@@ -296,8 +296,6 @@ struct LonghouseAPITests {
               "online": true,
               "control_channel_status": "connected",
               "supports": [],
-              "can_launch_codex": true,
-              "launch_blocked_by": null,
               "last_seen_at": "2026-05-24T00:00:00Z",
               "engine_build": "dev",
               "launch": {
@@ -312,9 +310,7 @@ struct LonghouseAPITests {
               "machine_name": "offline",
               "online": true,
               "control_channel_status": "disconnected",
-              "supports": ["codex.launch"],
-              "can_launch_codex": false,
-              "launch_blocked_by": "control_down",
+              "supports": [],
               "last_seen_at": null,
               "engine_build": null,
               "launch": {
@@ -332,7 +328,7 @@ struct LonghouseAPITests {
 
         #expect(decoded.machines[0].isLaunchable)
         #expect(!decoded.machines[1].isLaunchable)
-        #expect(decoded.machines[1].launchBlockedBy == "control_down")
+        #expect(decoded.machines[1].launch.blockedBy == "control_down")
     }
 
     @Test
@@ -402,14 +398,12 @@ struct LonghouseAPITests {
           "machine_name": "cinder",
           "online": true,
           "control_channel_status": "connected",
-          "supports": ["codex.launch", "codex.run_once", "claude.launch"],
+          "supports": ["codex.turn_start", "claude.turn_start", "opencode.turn_start"],
           "control_operations_by_provider": {
-            "codex": ["launch", "run_once"],
-            "claude": ["launch"]
+            "codex": ["turn_start"],
+            "claude": ["turn_start"],
+            "opencode": ["turn_start"]
           },
-          "can_launch_codex": true,
-          "launchable_providers": ["claude", "codex", "opencode"],
-          "launch_blocked_by": null,
           "last_seen_at": null,
           "engine_build": "dev",
           "launch": {
@@ -425,8 +419,8 @@ struct LonghouseAPITests {
         }
         """
         let entry = try JSONDecoder.snakeCase.decode(MachineDirectoryEntry.self, from: Data(json.utf8))
-        #expect(entry.launchableProviders == ["claude", "codex", "opencode"])
-        #expect(entry.controlOperationsByProvider["codex"] == ["launch", "run_once"])
+        #expect(entry.consoleLaunchProviders == ["claude", "codex", "opencode"])
+        #expect(entry.controlOperationsByProvider["codex"] == ["turn_start"])
         #expect(entry.defaultProvider == "codex")
         #expect(entry.isLaunchable)
     }
@@ -439,13 +433,10 @@ struct LonghouseAPITests {
           "machine_name": "cinder",
           "online": true,
           "control_channel_status": "connected",
-          "supports": ["codex.run_once"],
+          "supports": ["codex.turn_start"],
           "control_operations_by_provider": {
-            "codex": ["run_once"]
+            "codex": ["turn_start"]
           },
-          "can_launch_codex": false,
-          "launchable_providers": [],
-          "launch_blocked_by": null,
           "last_seen_at": null,
           "engine_build": "dev",
           "launch": {
@@ -457,7 +448,7 @@ struct LonghouseAPITests {
         }
         """
         let entry = try JSONDecoder.snakeCase.decode(MachineDirectoryEntry.self, from: Data(json.utf8))
-        #expect(entry.remoteLaunchProviders == ["codex"])
+        #expect(entry.consoleLaunchProviders == ["codex"])
         #expect(entry.defaultProvider == "codex")
         #expect(entry.isLaunchable)
     }

@@ -55,9 +55,6 @@ class MachineEntry:
     control_channel_status: str
     supports: tuple[str, ...]
     control_operations_by_provider: dict[str, tuple[str, ...]]
-    can_launch_codex: bool
-    launchable_providers: tuple[str, ...]
-    launch_blocked_by: str | None
     last_seen_at: datetime | None
     engine_build: str | None
     launch: MachineLaunchProjection
@@ -72,9 +69,6 @@ class MachineEntry:
             "control_operations_by_provider": {
                 provider: list(operations) for provider, operations in sorted(self.control_operations_by_provider.items())
             },
-            "can_launch_codex": self.can_launch_codex,
-            "launchable_providers": list(self.launchable_providers),
-            "launch_blocked_by": self.launch_blocked_by,
             "last_seen_at": self.last_seen_at.isoformat() if self.last_seen_at else None,
             "engine_build": self.engine_build,
             "launch": self.launch.to_response(),
@@ -152,10 +146,6 @@ def build_machines_directory(
             supports,
             connected=True,
         )
-        launchable_providers = tuple(
-            sorted(provider for provider, operations in control_operations_by_provider.items() if "turn_start" in operations)
-        )
-        can_launch_codex = "codex" in launchable_providers
         launch = _launch_projection(control_operations_by_provider, connected=True)
         entry = MachineEntry(
             device_id=conn_info.device_id,
@@ -164,9 +154,6 @@ def build_machines_directory(
             control_channel_status=CONTROL_CONNECTED,
             supports=supports,
             control_operations_by_provider=control_operations_by_provider,
-            can_launch_codex=can_launch_codex,
-            launchable_providers=launchable_providers,
-            launch_blocked_by=None if launchable_providers else LAUNCH_BLOCKED_NO_LAUNCH_SUPPORT,
             last_seen_at=conn_info.last_seen_at,
             engine_build=conn_info.engine_build,
             launch=launch,
@@ -185,9 +172,6 @@ def build_machines_directory(
             control_channel_status=CONTROL_DISCONNECTED,
             supports=(),
             control_operations_by_provider={},
-            can_launch_codex=False,
-            launchable_providers=(),
-            launch_blocked_by=LAUNCH_BLOCKED_CONTROL_DOWN,
             last_seen_at=_as_utc(last_used),
             engine_build=None,
             launch=_launch_projection({}, connected=False),

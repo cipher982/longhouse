@@ -37,9 +37,9 @@ def _attempt(
 
 
 def _project(attempt):
-    from zerg.services.session_launch_lifecycle import project_remote_launch_lifecycle
+    from zerg.services.session_launch_lifecycle import project_launch_lifecycle
 
-    return project_remote_launch_lifecycle(attempt)
+    return project_launch_lifecycle(attempt)
 
 
 @pytest.mark.parametrize(
@@ -56,7 +56,7 @@ def _project(attempt):
         ("abandoned", uuid4(), "launch_orphaned"),
     ],
 )
-def test_remote_launch_lifecycle_transition_matrix(raw_state, run_id, expected):
+def test_managed_launch_lifecycle_transition_matrix(raw_state, run_id, expected):
     lifecycle = _project(_attempt(state=raw_state, run_id=run_id))
 
     assert lifecycle is not None
@@ -79,7 +79,7 @@ def test_one_shot_reserved_run_id_is_not_launch_adoption(raw_state, expected):
     assert lifecycle.state == expected
 
 
-def test_remote_launch_lifecycle_carries_user_visible_error_and_lease():
+def test_managed_launch_lifecycle_carries_user_visible_error_and_lease():
     lease_until = datetime(2026, 5, 24, 12, 0, tzinfo=timezone.utc)
     lifecycle = _project(
         _attempt(
@@ -97,7 +97,7 @@ def test_remote_launch_lifecycle_carries_user_visible_error_and_lease():
     assert lifecycle.lease_until == lease_until
 
 
-def test_remote_launch_lifecycle_normalizes_unknown_error_codes():
+def test_managed_launch_lifecycle_normalizes_unknown_error_codes():
     lifecycle = _project(
         _attempt(
             state="failed",
@@ -112,5 +112,5 @@ def test_remote_launch_lifecycle_normalizes_unknown_error_codes():
     assert lifecycle.error_message == "Provider failed to start: internal details stay in the message"
 
 
-def test_remote_launch_lifecycle_requires_durable_attempt():
+def test_managed_launch_lifecycle_requires_durable_attempt():
     assert _project(None) is None

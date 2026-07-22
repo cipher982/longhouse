@@ -88,7 +88,7 @@ longhouse opencode     # OpenCode, managed live control`}
         When Longhouse launches the session, it owns the session record and
         local observation path. Claude is the strongest managed path today, and{" "}
         <code>longhouse codex</code> also keeps a Codex session steerable.
-        OpenCode supports managed send, interrupt, launch, and terminate but
+        OpenCode Helm supports managed send, interrupt, and terminate but
         not active-turn steer. Antigravity starts as managed observe-only:
         archive, transcript, and phase signals without remote send controls yet.
       </p>

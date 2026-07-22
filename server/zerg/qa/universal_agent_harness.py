@@ -109,7 +109,6 @@ SCENARIOS = (
     "run_prompt_once",
     "launch_managed_session",
     "managed_session_e2e",
-    "launch_remote_projection",
     "send_receive",
     "steer_active_turn",
     "pause_request_detect",
@@ -217,7 +216,6 @@ FULL_ACTION_SUITE_SCENARIOS = (
     "run_prompt_once",
     "launch_managed_session",
     "managed_session_e2e",
-    "launch_remote_projection",
     "send_receive",
     "steer_active_turn",
     "pause_request_detect",
@@ -239,7 +237,6 @@ FULL_ACTION_SUITE_SCENARIOS = (
 ACTION_EXECUTION_SCENARIO_BY_ID = {
     "provider_identity": ("probe_identity",),
     "launch_local": ("launch_managed_session",),
-    "launch_remote": ("launch_remote_projection",),
     "run_once": ("run_prompt_once",),
     "session_identity": ("launch_managed_session", "resume_reattach", "managed_session_e2e"),
     "send_message": ("send_receive", "interrupt_cancel", "managed_session_e2e"),
@@ -296,15 +293,6 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         "contract_bool",
         "live_no_token",
         "Start or attach a managed session on the same machine without spending model tokens.",
-    ),
-    ActionDefinition(
-        "launch_remote",
-        "Launch Remote Session",
-        "control",
-        "launch_remote",
-        "contract_bool",
-        "hermetic",
-        "Launch or continue a managed session through the Runtime Host/Machine Agent control plane.",
     ),
     ActionDefinition(
         "run_once",
@@ -4653,7 +4641,6 @@ class UniversalProviderAdapter:
                 "repo_root": default_repo_root(),
                 "source_review_status": "pass",
                 "run_managed_tui_attach": True,
-                "run_detached_ui": True,
             }
         )
         if not canary_artifact_path.is_file():
@@ -5225,7 +5212,6 @@ def _contract_snapshot(provider: str) -> dict[str, Any] | None:
         "machine_control_supports": list(contract.machine_control_supports),
         "operations": {
             "launch_local": contract.launch_local,
-            "launch_remote": contract.launch_remote,
             "run_once": contract.run_once,
             "reattach": contract.reattach,
             "send_input": contract.send_input,
@@ -6998,7 +6984,6 @@ def antigravity_provider_live_raw_events(
 def codex_provider_release_raw_events(artifact: Mapping[str, Any]) -> list[dict[str, Any]]:
     canaries = dict(artifact.get("canaries") or {})
     managed_tui = dict(canaries.get("managed_tui_attach") or {})
-    detached_ui = dict(canaries.get("detached_ui") or {})
     provider_session_id = _first_codex_thread_id(artifact) or "codex-managed-session-e2e"
     rows: list[dict[str, Any]] = []
     if managed_tui:
@@ -7011,19 +6996,6 @@ def codex_provider_release_raw_events(artifact: Mapping[str, Any]) -> list[dict[
                 "source_canary": "managed_tui_attach",
                 "thread_id": managed_tui.get("thread_id"),
                 "status": managed_tui.get("status"),
-                "evidence_origin": "codex_provider_release_canary",
-            }
-        )
-    if detached_ui:
-        rows.append(
-            {
-                "type": "session_reattach",
-                "role": "system",
-                "text": "Codex detached UI bridge exposed a resumable provider thread and IPC socket.",
-                "provider_session_id": provider_session_id,
-                "source_canary": "detached_ui",
-                "thread_id": detached_ui.get("thread_id"),
-                "status": detached_ui.get("status"),
                 "evidence_origin": "codex_provider_release_canary",
             }
         )
@@ -7044,7 +7016,7 @@ def codex_provider_release_raw_events(artifact: Mapping[str, Any]) -> list[dict[
 
 def _first_codex_thread_id(artifact: Mapping[str, Any]) -> str | None:
     canaries = dict(artifact.get("canaries") or {})
-    for name in ("managed_tui_attach", "detached_ui", "managed_live_send", "managed_live_interrupt"):
+    for name in ("managed_tui_attach", "managed_live_send", "managed_live_interrupt"):
         canary = canaries.get(name)
         if isinstance(canary, Mapping):
             thread_id = _clean_optional_str(canary.get("thread_id"))
@@ -7546,7 +7518,7 @@ def _codex_canary_credentials_gap(artifact: Mapping[str, Any], canary_names: tup
 
 
 def _codex_managed_bridge_credentials_gap(artifact: Mapping[str, Any]) -> list[str]:
-    return _codex_canary_credentials_gap(artifact, ("managed_tui_attach", "detached_ui"))
+    return _codex_canary_credentials_gap(artifact, ("managed_tui_attach",))
 
 
 def run_provider_control_e2e_canary(
@@ -8093,107 +8065,6 @@ def run_launch_managed_session(adapter: AgentHarnessAdapter, package: EvidencePa
     )
 
 
-def run_launch_remote_projection(
-    adapter: AgentHarnessAdapter,
-    package: EvidencePackage,
-) -> ScenarioResult:
-    adapter.prepare(package)
-    contract = contract_for_provider(adapter.config.provider)
-    if contract is None or not contract.launch_remote:
-        payload = {
-            "status": STATUS_UNSUPPORTED_GAP,
-            "scenario": "launch_remote_projection",
-            "failure_code": "launch_remote_unsupported",
-            "message": f"{adapter.config.provider} does not advertise remote launch support.",
-            "operation_evidence": {
-                "launch_remote": {
-                    "status": STATUS_UNSUPPORTED_GAP,
-                    "level": "none",
-                    "canary": "universal_launch_remote_projection",
-                    "failure_code": "launch_remote_unsupported",
-                }
-            },
-        }
-        package.write_json("assertions/launch_remote_projection.json", payload)
-        adapter.cleanup(package)
-        return scenario_result(
-            provider=adapter.config.provider,
-            scenario="launch_remote_projection",
-            package=package,
-            payload=payload,
-        )
-
-    os.environ.setdefault("TESTING", "1")
-    from zerg.services.session_launch_lifecycle import project_remote_launch_lifecycle
-
-    now = datetime(2026, 6, 19, 12, 0, tzinfo=UTC)
-    attempts = {
-        "dispatched": SimpleNamespace(
-            state="dispatched",
-            execution_lifetime="live_control",
-            error_code=None,
-            error_message=None,
-            expires_at=now + timedelta(seconds=120),
-            run_id=None,
-        ),
-        "adopted": SimpleNamespace(
-            state="adopted",
-            execution_lifetime="live_control",
-            error_code=None,
-            error_message=None,
-            expires_at=None,
-            run_id="run-universal-launch-remote",
-        ),
-        "failed": SimpleNamespace(
-            state="failed",
-            execution_lifetime="live_control",
-            error_code="provider_launch_failed",
-            error_message="provider exited before transcript binding",
-            expires_at=None,
-            run_id=None,
-        ),
-    }
-    projections: dict[str, Any] = {}
-    for name, attempt in attempts.items():
-        projection = project_remote_launch_lifecycle(attempt)
-        projections[name] = _json_safe(projection.__dict__)
-    assertions = {
-        "dispatched_projects_launching_unknown": projections["dispatched"]["state"] == "launching_unknown",
-        "adopted_projects_live": projections["adopted"]["state"] == "live",
-        "failed_preserves_error_code": projections["failed"]["error_code"] == "provider_launch_failed",
-    }
-    status = STATUS_PASS if all(assertions.values()) else STATUS_FAIL
-    payload = {
-        "status": status,
-        "scenario": "launch_remote_projection",
-        "provider": adapter.config.provider,
-        "control_plane": contract.control_plane,
-        "machine_control_supports": list(contract.machine_control_supports),
-        "assertions": assertions,
-        "projections": projections,
-        "operation_evidence": {
-            "launch_remote": {
-                "status": status,
-                "level": "hermetic" if status == STATUS_PASS else "none",
-                "canary": "universal_launch_remote_projection",
-                "failure_code": None if status == STATUS_PASS else "launch_remote_projection_failed",
-            }
-        },
-    }
-    if status != STATUS_PASS:
-        payload["failure_code"] = "launch_remote_projection_failed"
-        payload["message"] = "Remote-launch lifecycle projection assertions failed."
-    package.write_json("longhouse/remote-launch-projection.json", payload)
-    package.write_json("assertions/launch_remote_projection.json", payload)
-    adapter.cleanup(package)
-    return scenario_result(
-        provider=adapter.config.provider,
-        scenario="launch_remote_projection",
-        package=package,
-        payload=payload,
-    )
-
-
 def run_send_receive(adapter: AgentHarnessAdapter, package: EvidencePackage, prompt: str | None) -> ScenarioResult:
     adapter.prepare(package)
     payload = adapter.send_receive(package, prompt or "LONGHOUSE UNIVERSAL HARNESS")
@@ -8525,7 +8396,6 @@ SCENARIO_RUNNERS = {
     "timeline_projection": run_timeline_projection,
     "run_prompt_once": run_prompt_once,
     "launch_managed_session": run_launch_managed_session,
-    "launch_remote_projection": run_launch_remote_projection,
     "send_receive": run_send_receive,
     "managed_session_e2e": run_managed_session_e2e,
     "steer_active_turn": run_steer_active_turn,

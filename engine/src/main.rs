@@ -1,7 +1,6 @@
 mod bench;
 mod build_identity;
 mod claude_channel_control;
-mod claude_channel_launch;
 mod claude_channel_server;
 mod codex_app_server_canary;
 mod codex_attachments;

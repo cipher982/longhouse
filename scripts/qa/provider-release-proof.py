@@ -550,7 +550,6 @@ def _proof_preflight(args: argparse.Namespace) -> dict[str, Any]:
         )
     if args.provider == "codex" and (
         args.codex_run_managed_tui_attach
-        or args.codex_run_detached_ui
         or args.codex_run_managed_live_send
         or args.codex_run_managed_live_interrupt
     ):
@@ -681,8 +680,6 @@ def _run_source_canary(
             argv.append("--run-raw-fresh-remote")
         if args.codex_run_managed_tui_attach:
             argv.append("--run-managed-tui-attach")
-        if args.codex_run_detached_ui:
-            argv.append("--run-detached-ui")
         if args.codex_run_managed_live_send:
             argv.append("--run-managed-live-send")
         if args.codex_run_managed_live_interrupt:
@@ -2344,7 +2341,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--codex-run-fake-app-server", action="store_true")
     parser.add_argument("--codex-run-raw-fresh-remote", action="store_true")
     parser.add_argument("--codex-run-managed-tui-attach", action="store_true")
-    parser.add_argument("--codex-run-detached-ui", action="store_true")
     parser.add_argument("--codex-run-managed-live-send", action="store_true")
     parser.add_argument("--codex-run-managed-live-interrupt", action="store_true")
     parser.add_argument("--codex-run-real-tool", action="store_true")

@@ -6,7 +6,6 @@ os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 
 from zerg.routers.agents_control import CONTROL_HEARTBEAT_TIMEOUT_SECS
-from zerg.routers.agents_control import _reconcile_late_launch_result
 from zerg.routers.agents_control import _reconcile_machine_control_operation_result
 
 
@@ -45,7 +44,6 @@ async def test_machine_control_result_reconcile_uses_write_serializer(monkeypatc
         ("execute", "machine-control-result", "fallback-db", False),
         ("reconcile", "serializer-db", "machine-op:test", 7, "cinder"),
     ]
-
 
 @pytest.mark.asyncio
 async def test_machine_control_result_reconcile_prefers_live_serializer(monkeypatch):
@@ -122,29 +120,4 @@ async def test_machine_control_result_reconcile_uses_catalogd_without_db(monkeyp
             {"owner_id": 7, "device_id": "cinder", "message": message},
             2.0,
         )
-    ]
-
-
-@pytest.mark.asyncio
-async def test_late_launch_result_reconcile_uses_write_serializer(monkeypatch):
-    calls = []
-
-    class FakeSerializer:
-        async def execute_or_direct(self, fn, fallback_db, *, auto_commit, label):
-            calls.append(("execute", label, fallback_db, auto_commit))
-            return fn("serializer-db")
-
-    def fake_reconcile(db, message):
-        calls.append(("reconcile", db, message["command_id"]))
-        return False
-
-    monkeypatch.setattr("zerg.routers.agents_control.get_write_serializer", lambda: FakeSerializer())
-    monkeypatch.setattr("zerg.routers.agents_control.reconcile_launch_from_command_result", fake_reconcile)
-
-    matched = await _reconcile_late_launch_result("fallback-db", {"command_id": "launch:test"})
-
-    assert matched is False
-    assert calls == [
-        ("execute", "remote-launch-result", "fallback-db", False),
-        ("reconcile", "serializer-db", "launch:test"),
     ]

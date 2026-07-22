@@ -7,7 +7,6 @@ import os
 import shlex
 import shutil
 import subprocess
-import sys
 import threading
 from datetime import datetime
 from datetime import timezone
@@ -45,8 +44,7 @@ from zerg.session_execution_home import ManagedSessionTransport
 from zerg.session_loop_mode import SessionLoopMode
 
 # See ARCHITECTURE.md's "Session modes" section: terminal-originated
-# `launch_local` is Helm; `turn_start` is Console. `launch_remote` is obsolete
-# persistent no-terminal compatibility machinery scheduled for deletion.
+# `launch_local` is Helm; `turn_start` is Console.
 
 
 class _NativeClaudeError(Exception):
@@ -63,7 +61,6 @@ _CLAUDE_LAUNCH_ENV_KEYS = (
 _FORCE_NATIVE_CLAUDE_CHANNELS_ENV = "LONGHOUSE_FORCE_NATIVE_CLAUDE_CHANNELS"
 _CLAUDE_TERMINAL_POST_TIMEOUT_SECS = 2.0
 _CLAUDE_TERMINAL_SOURCE = "claude_channel_wrapper"
-_CLAUDE_REMOTE_LAUNCH_LOG_DIR = "claude-channel-launch"
 _CLAUDE_SUBPROCESS_ENV_BLOCKLIST = ("CLAUDE_CONFIG_DIR",)
 _CLAUDE_BIN_ENV = "LONGHOUSE_CLAUDE_BIN"
 _CLAUDE_CHANNEL_READY_TIMEOUT_SECS = 20.0
@@ -261,109 +258,6 @@ def _warn_if_claude_channel_not_ready(*, session_id: str) -> None:
             err=True,
             fg=typer.colors.YELLOW,
         )
-
-
-def _remote_launch_log_path(*, session_id: str, config_dir: Path | None) -> Path:
-    base = _resolve_claude_dir(config_dir) / "logs" / _CLAUDE_REMOTE_LAUNCH_LOG_DIR
-    base.mkdir(parents=True, exist_ok=True)
-    return base / f"{session_id}.log"
-
-
-def _terminate_detached_process(process: subprocess.Popen) -> None:
-    if process.poll() is not None:
-        return
-    try:
-        process.terminate()
-        process.wait(timeout=2)
-    except Exception:
-        try:
-            process.kill()
-        except Exception:
-            return
-
-
-def _build_detached_claude_pty_command(command: str, log_path: Path) -> list[str]:
-    """Wrap Claude in script(1) so stock Claude sees a PTY even without a visible terminal."""
-
-    if shutil.which("script") is None:
-        raise _NativeClaudeError("Detached Claude launch requires script(1) to provide a pseudo-terminal")
-    # macOS ships BSD script(1); Linux dogfood uses util-linux script(1).
-    if sys.platform == "darwin":
-        return ["script", "-q", str(log_path), *shlex.split(command)]
-    return ["script", "-q", "-c", command, str(log_path)]
-
-
-def _launch_detached_native_claude_channel(
-    *,
-    session_id: str,
-    run_id: str,
-    provider_session_id: str,
-    cwd: Path,
-    base_url: str,
-    token: str,
-    config_dir: Path | None = None,
-    wait_ready_secs: float = 20.0,
-    resume: bool = False,
-    hook_token: str | None = None,
-    permission_mode: str = "bypass",
-) -> dict:
-    """Deprecated ``session.launch`` compatibility path.
-
-    This starts a persistent no-terminal Claude PTY. It is neither Helm nor
-    Console under the canonical session-mode model and is scheduled for
-    deletion; new callers must use terminal-originated Helm or turn-scoped
-    Console instead.
-    """
-    _ensure_native_claude_prereqs(
-        base_url=base_url,
-        token=token,
-        workspace_path=cwd,
-        config_dir=config_dir,
-    )
-    command = build_claude_channel_exec_command(
-        provider_session_id=provider_session_id,
-        longhouse_session_id=session_id,
-        longhouse_run_id=run_id,
-        cwd=str(cwd),
-        resume=resume,
-        hook_url=base_url,
-        claude_command=_resolve_claude_command(),
-        permission_mode=permission_mode,
-    )
-    log_path = _remote_launch_log_path(session_id=session_id, config_dir=config_dir)
-    process: subprocess.Popen | None = None
-    try:
-        pty_command = _build_detached_claude_pty_command(command, log_path)
-        # In remote-approve mode the permission gate authenticates as this session
-        # via the session-scoped hook token; otherwise the durable device token.
-        env = _claude_subprocess_env(LONGHOUSE_HOOK_TOKEN=hook_token or token)
-        process = subprocess.Popen(
-            pty_command,
-            cwd=str(cwd),
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            env=env,
-            start_new_session=True,
-        )
-        state = wait_for_claude_channel_state(
-            session_id=session_id,
-            timeout_secs=wait_ready_secs,
-        )
-    except Exception:
-        if process is not None:
-            _terminate_detached_process(process)
-        raise
-
-    return {
-        "session_id": session_id,
-        "provider_session_id": provider_session_id,
-        "provider": "claude",
-        "transport": ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE.value,
-        "pid": process.pid if process is not None else None,
-        "channel_state": state,
-        "log_path": str(log_path),
-    }
 
 
 def _post_claude_terminal_signal(

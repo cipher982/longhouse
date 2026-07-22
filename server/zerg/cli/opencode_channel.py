@@ -35,7 +35,6 @@ from zerg.cli.opencode import _write_opencode_runtime_config_content
 
 app = typer.Typer(no_args_is_help=True)
 
-OPENCODE_REMOTE_LAUNCH_TOKEN_ENV = "LONGHOUSE_OPENCODE_REMOTE_LAUNCH_TOKEN"
 OPENCODE_SERVER_BRIDGE_TRANSPORT = "opencode_server_bridge"
 _DEFAULT_USERNAME = "opencode"
 # Bridge state schema. Writers emit this; readers reject anything higher as
@@ -481,11 +480,11 @@ def launch_opencode_server_bridge(
     opencode_bin: str | None = None,
     config_dir: Path | None = None,
     wait_ready_secs: int = 45,
-    # Default to detached: a bare bridge launch (remote/headless control path)
+    # Default to detached: a bare bridge launch (headless/no-attach control path)
     # has no TUI in this process and is a background reattachable server. The
     # interactive `longhouse opencode` wrapper passes attached_tui explicitly
     # with its owner pid. Defaulting to attached_tui here would mislabel
-    # remote-launched servers as foreground TUIs.
+    # headless servers as foreground TUIs.
     launch_mode: str = LAUNCH_MODE_DETACHED,
     owner_wrapper_pid: int | None = None,
     model: str | None = None,
@@ -736,39 +735,6 @@ def run_opencode_attach(
     return int(completed.returncode)
 
 
-@app.command(name="launch")
-def launch_command(
-    session_id: str = typer.Option(..., "--session-id"),
-    run_id: str = typer.Option(..., "--run-id"),
-    cwd: Path = typer.Option(..., "--cwd", exists=True, file_okay=False, dir_okay=True, resolve_path=True),
-    api_url: str = typer.Option(..., "--api-url"),
-    api_token: str | None = typer.Option(None, "--api-token", hidden=True),
-    device_id: str = typer.Option(..., "--device-id"),
-    display_name: str | None = typer.Option(None, "--display-name"),
-    config_dir: str | None = typer.Option(None, "--config-dir", "--claude-dir"),
-    opencode_bin: str | None = typer.Option(None, "--opencode-bin"),
-    wait_ready_secs: int = typer.Option(45, "--wait-ready-secs"),
-) -> None:
-    token = (api_token or os.environ.get(OPENCODE_REMOTE_LAUNCH_TOKEN_ENV) or "").strip()
-    try:
-        payload = launch_opencode_server_bridge(
-            session_id=session_id,
-            run_id=run_id,
-            cwd=cwd,
-            api_url=api_url,
-            api_token=token,
-            device_id=device_id,
-            display_name=display_name,
-            opencode_bin=opencode_bin,
-            config_dir=Path(config_dir) if config_dir else None,
-            wait_ready_secs=wait_ready_secs,
-        )
-    except (_OpenCodeLaunchError, OpenCodeServerBridgeError) as exc:
-        typer.echo(str(exc), err=True)
-        raise typer.Exit(code=1) from exc
-    typer.echo(json.dumps(payload, sort_keys=True))
-
-
 @app.command(name="send")
 def send_command(
     session_id: str = typer.Option(..., "--session-id"),
@@ -860,7 +826,6 @@ __all__ = [
     "LAUNCH_MODE_ATTACHED_TUI",
     "LAUNCH_MODE_DETACHED",
     "LAUNCH_MODE_KEEP_SERVER",
-    "OPENCODE_REMOTE_LAUNCH_TOKEN_ENV",
     "OPENCODE_SERVER_BRIDGE_TRANSPORT",
     "OpenCodeServerBridgeError",
     "OpenCodeServerBridgeState",

@@ -8,7 +8,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 EXPECTED_COPY = {
     "README.md": [
-        "OpenCode supports managed send, interrupt, launch, and terminate, but not active-turn steer or pause-answer",
+        "OpenCode Helm supports send, interrupt, and terminate but not active-turn steer or pause-answer",
     ],
     "web/src/pages/docs/IntegrationsPage.tsx": [
         "remote send,",
@@ -16,22 +16,22 @@ EXPECTED_COPY = {
         "Active-turn steer and pause-answer",
     ],
     "web/src/pages/docs/QuickStartPage.tsx": [
-        "OpenCode supports managed send, interrupt, launch, and terminate but",
+        "OpenCode Helm supports managed send, interrupt, and terminate but",
         "not active-turn steer",
     ],
     "web/src/pages/docs/CLIReferencePage.tsx": [
-        "OpenCode supports managed send, interrupt, launch, and terminate but",
+        "OpenCode Helm supports managed send, interrupt, and terminate but",
         "not active-turn steer",
     ],
     ".agents/skills/managed-provider-cli/SKILL.md": [
-        "OpenCode server-bridge send, interrupt, launch, and terminate are first-class",
+        "OpenCode server-bridge send, interrupt, and terminate are first-class Helm",
     ],
     "config/session-propagation-sla.toml": [
-        "Native OpenCode launch/send/interrupt/terminate exists",
-        "Managed OpenCode remote send/interrupt is a product contract",
+        "Terminal-originated OpenCode Helm send/interrupt/terminate exists",
+        "Managed OpenCode Helm send/interrupt is a product contract",
     ],
     "docs/specs/managed-provider-session-contract.md": [
-        "OpenCode server-bridge sessions support managed send, interrupt, launch, and",
+        "OpenCode server-bridge Helm sessions support managed send, interrupt, and",
         "terminate through the local `opencode serve` bridge",
     ],
 }

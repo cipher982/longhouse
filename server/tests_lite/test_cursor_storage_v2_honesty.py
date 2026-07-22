@@ -15,7 +15,6 @@ def test_cursor_contract_advertises_helm_and_native_console_turns():
     assert contract.send_input is True
     assert contract.interrupt is True
     assert contract.terminate is True
-    assert contract.launch_remote is False
     assert contract.run_once is False
     assert contract.can_resume is False
     assert contract.tail_output is True

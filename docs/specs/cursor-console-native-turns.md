@@ -99,8 +99,8 @@ by text comparison.
 
 The provider contract names `cursor_print` as Cursor's Console adapter and
 advertises `cursor.turn_start` plus `cursor.turn_interrupt` only after the live
-product canary passes. `launch_remote` and legacy `run_once` remain separate
-operations and are not used to infer turn-scoped Console support.
+product canary passes. Removed launch/run-once capabilities are not used to
+infer turn-scoped Console support.
 
 Historical ACP sessions remain readable. They cannot be continued after
 cutover and return an explicit legacy-adapter-unavailable result. The legacy

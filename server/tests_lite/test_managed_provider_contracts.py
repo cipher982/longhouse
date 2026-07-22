@@ -16,17 +16,14 @@ from zerg.provider_cli_contract import PROVIDER_CLI_BINARY_BY_PROVIDER
 from zerg.provider_cli_contract import PROVIDER_CLI_ENV_BY_PROVIDER
 from zerg.services.managed_provider_contracts import _contracts_by_control_plane
 from zerg.services.managed_provider_contracts import all_managed_provider_contracts
-from zerg.services.managed_provider_contracts import continue_supported_providers
 from zerg.services.managed_provider_contracts import contract_for_control_plane
 from zerg.services.managed_provider_contracts import contract_for_provider
 from zerg.services.managed_provider_contracts import control_plane_for_provider
 from zerg.services.managed_provider_contracts import machine_control_capability_for_command
-from zerg.services.managed_provider_contracts import machine_control_launch_capability_by_provider
 from zerg.services.managed_provider_contracts import machine_control_operations_by_provider
 from zerg.services.managed_provider_contracts import managed_provider_names
 from zerg.services.managed_provider_contracts import managed_transport_for_control_plane
 from zerg.services.managed_provider_contracts import provider_for_control_plane
-from zerg.services.managed_provider_contracts import remote_launch_supported_providers
 from zerg.services.managed_provider_contracts import run_once_supported_providers
 from zerg.services.managed_provider_contracts import steer_control_planes
 from zerg.services.managed_provider_contracts import trusted_non_runner_control_planes
@@ -38,7 +35,6 @@ def _manifest_item(provider: str = "test") -> dict:
     return {
         "provider": provider,
         "launch_local": True,
-        "launch_remote": True,
         "reattach": True,
         "send_input": True,
         "interrupt": True,
@@ -53,7 +49,6 @@ def _manifest_item(provider: str = "test") -> dict:
         "turn_start": True,
         "operation_evidence": {
             "launch_local": {"level": "hermetic", "source": "test"},
-            "launch_remote": {"level": "hermetic", "source": "test"},
             "reattach": {"level": "hermetic", "source": "test"},
             "send_input": {"level": "hermetic", "source": "test"},
             "interrupt": {"level": "hermetic", "source": "test"},
@@ -201,12 +196,11 @@ def test_provider_contract_maps_transport_and_control_plane(provider, transport,
     assert managed_transport_for_control_plane(control_plane) == transport
 
 
-def test_codex_contract_keeps_helm_and_console_without_remote_launch():
+def test_codex_contract_keeps_helm_and_console_controls():
     codex = contract_for_provider("codex")
 
     assert codex is not None
     assert codex.launch_local is True
-    assert codex.launch_remote is False
     assert codex.run_once is True
     assert codex.send_input is True
     assert codex.interrupt is True
@@ -231,7 +225,6 @@ def test_codex_contract_keeps_helm_and_console_without_remote_launch():
         "resume_run_once",
         "turn_start",
     )
-    assert remote_launch_supported_providers() == frozenset()
     assert run_once_supported_providers() == frozenset({"codex"})
 
 
@@ -246,16 +239,11 @@ def test_codex_and_managed_claude_advertise_remote_pause_answering():
     assert "antigravity.answer_pause" not in supports_by_provider["antigravity"]
 
 
-def test_continue_supported_providers_matches_manifest_can_resume():
-    assert continue_supported_providers() == frozenset({"codex", "claude"})
-
-
 def test_claude_contract_is_first_class_channel_control_provider():
     claude = contract_for_provider("claude")
 
     assert claude is not None
     assert claude.launch_local is True
-    assert claude.launch_remote is False
     assert claude.send_input is True
     assert claude.interrupt is True
     assert claude.steer_active_turn is True
@@ -276,7 +264,6 @@ def test_opencode_contract_is_server_bridge_control_provider_without_active_turn
 
     assert opencode is not None
     assert opencode.launch_local is True
-    assert opencode.launch_remote is False
     assert opencode.send_input is True
     assert opencode.interrupt is True
     assert opencode.steer_active_turn is False
@@ -284,7 +271,6 @@ def test_opencode_contract_is_server_bridge_control_provider_without_active_turn
     assert opencode.reattach is True
     assert opencode.can_resume is False
     assert opencode.turn_start is True
-    assert opencode.operation_evidence_for("launch_remote")["level"] == "none"
     assert opencode.operation_evidence_for("terminate")["level"] == "hermetic"
     assert opencode.machine_control_supports == (
         "opencode.send",
@@ -308,7 +294,6 @@ def test_antigravity_contract_is_hook_inbox_send_only():
 
     assert contract is not None
     assert contract.launch_local is True
-    assert contract.launch_remote is False
     assert contract.send_input is True
     assert contract.interrupt is False
     assert contract.steer_active_turn is False
@@ -404,7 +389,7 @@ def test_machine_control_command_projection_is_manifest_backed_for_every_provide
         "turn_start": "session.turn.start",
         "turn_interrupt": "session.turn.interrupt",
     }
-    launch_only_operations = {"launch", "continue", "resume_run_once"}
+    extra_operations = {"resume_run_once"}
 
     for contract in all_managed_provider_contracts():
         supports = set(contract.machine_control_supports)
@@ -417,18 +402,8 @@ def test_machine_control_command_projection_is_manifest_backed_for_every_provide
         for support in supports:
             provider, operation = support.split(".", 1)
             assert provider == contract.provider
-            assert operation in command_by_operation or operation in launch_only_operations
+            assert operation in command_by_operation or operation in extra_operations
 
-    assert machine_control_launch_capability_by_provider() == {
-        contract.provider: f"{contract.provider}.launch"
-        for contract in all_managed_provider_contracts()
-        if f"{contract.provider}.launch" in contract.machine_control_supports
-    }
-    assert continue_supported_providers() == frozenset(
-        contract.provider
-        for contract in all_managed_provider_contracts()
-        if contract.can_resume
-    )
     # can_resume remains a local Helm/reattach fact. Provider-facing
     # session.launch / *.continue machine supports are intentionally gone;
     # Console resume still uses *.resume_run_once when run_once is supported.
@@ -442,10 +417,6 @@ def test_machine_control_command_projection_is_manifest_backed_for_every_provide
         for contract in all_managed_provider_contracts()
         if contract.run_once
     )
-
-
-def test_machine_control_launch_capability_map_comes_from_provider_contracts():
-    assert machine_control_launch_capability_by_provider() == {}
 
 
 def test_machine_control_operations_by_provider_projects_live_supports():

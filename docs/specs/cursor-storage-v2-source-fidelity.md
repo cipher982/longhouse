@@ -45,8 +45,8 @@ Cursor is two independent axes:
 
 The Cursor provider contract advertises transcript and phase capabilities only
 for sessions with the proven native source and observed binding claim.
-`launch_remote` / `run_once` remain unavailable for the Helm transport.
-Cursor Console is separately represented by `session.turn.start` through the
+Helm never originates from a remote client. Cursor Console is separately
+represented by `session.turn.start` through the
 native `cursor_print` adapter; it is not an ACP fallback and does not grant
 Helm capabilities. Helm `send`, graceful Ctrl-C `interrupt`, native `resume`,
 permission response, and explicit `terminate` remain separate capabilities.

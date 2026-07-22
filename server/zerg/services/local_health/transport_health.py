@@ -9,8 +9,6 @@ from zerg.services.transport_health import TransportHealthSample
 from zerg.services.transport_health import assess_transport_health
 from zerg.services.transport_health import transport_health_sample_from_engine_status_payload
 
-from .constants import LAUNCH_CAPABILITY_BY_PROVIDER
-
 
 def _collect_transport_health(
     engine_status: dict[str, Any],
@@ -83,15 +81,10 @@ def _collect_control_channel_health(engine_status: dict[str, Any]) -> dict[str, 
     control_operations_by_provider = {}
     for provider, operations in sorted(operations_by_provider.items()):
         control_operations_by_provider[provider] = list(operations)
-    launchable_providers = sorted(
-        provider
-        for provider, operations in operations_by_provider.items()
-        if "launch" in operations and provider in LAUNCH_CAPABILITY_BY_PROVIDER
-    )
-    can_launch_codex = "codex" in launchable_providers
-    launch_blocked_by = None
-    if not launchable_providers:
-        launch_blocked_by = "no_launch_support" if connected else "control_down"
+    console_ready_providers = sorted(provider for provider, operations in operations_by_provider.items() if "turn_start" in operations)
+    console_blocked_by = None
+    if not console_ready_providers:
+        console_blocked_by = "no_console_support" if connected else "control_down"
 
     return {
         "source": "engine_status",
@@ -105,11 +98,8 @@ def _collect_control_channel_health(engine_status: dict[str, Any]) -> dict[str, 
         "reconnect_backoff_seconds": raw_control.get("reconnect_backoff_seconds"),
         "supports": supports,
         "control_operations_by_provider": control_operations_by_provider,
-        "can_launch_codex": can_launch_codex,
-        "can_launch_claude": "claude" in launchable_providers,
-        "can_launch_opencode": "opencode" in launchable_providers,
-        "launchable_providers": launchable_providers,
-        "launch_blocked_by": launch_blocked_by,
+        "console_ready_providers": console_ready_providers,
+        "console_blocked_by": console_blocked_by,
     }
 
 

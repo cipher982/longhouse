@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import json
 import os
 import subprocess
 from pathlib import Path
-from uuid import uuid4
 
 import typer
 
@@ -77,90 +75,6 @@ def serve(
     _append_option(argv, "--claude-pid", claude_pid)
     _append_option(argv, "--cwd", cwd)
     _exec_engine(argv, os.environ.copy())
-
-
-@app.command("launch", hidden=True)
-def launch(
-    session_id: str = typer.Option(..., "--session-id", help="Longhouse session ID."),
-    run_id: str = typer.Option(..., "--run-id", help="Catalog-owned Longhouse run ID."),
-    provider_session_id: str | None = typer.Option(None, "--provider-session-id", help="Claude provider session ID."),
-    cwd: Path = typer.Option(..., "--cwd", exists=True, file_okay=False, dir_okay=True, resolve_path=True),
-    api_url: str = typer.Option(..., "--api-url", help="Longhouse API URL."),
-    api_token: str = typer.Option(
-        ...,
-        "--api-token",
-        envvar="LONGHOUSE_CLAUDE_REMOTE_LAUNCH_TOKEN",
-        help="Longhouse device token.",
-    ),
-    claude_dir: Path | None = typer.Option(None, "--claude-dir", file_okay=False, dir_okay=True, resolve_path=True),
-    wait_ready_secs: float = typer.Option(20.0, "--wait-ready-secs", min=0.1),
-    resume: bool = typer.Option(
-        False,
-        "--resume",
-        help="Resume an existing Claude session by id instead of creating a new one.",
-    ),
-    permission_mode: str = typer.Option(
-        "bypass",
-        "--permission-mode",
-        help="bypass (autonomous, default) or remote_approve (answer permission prompts via Longhouse).",
-    ),
-    hook_token: str | None = typer.Option(
-        None,
-        "--hook-token",
-        help="Session-scoped hook token for the permission gate (required for remote_approve).",
-    ),
-) -> None:
-    """Launch a detached Claude channel session for the Machine Agent control path."""
-
-    from zerg.cli.claude import _launch_detached_native_claude_channel
-
-    normalized_provider_session_id = str(provider_session_id or "").strip()
-    if not normalized_provider_session_id and resume:
-        typer.echo(
-            json.dumps(
-                {
-                    "ok": False,
-                    "error": {
-                        "code": "provider_launch_failed",
-                        "message": "--provider-session-id is required with --resume",
-                    },
-                }
-            ),
-            err=True,
-        )
-        raise typer.Exit(code=1)
-    if not normalized_provider_session_id:
-        normalized_provider_session_id = str(uuid4())
-    try:
-        result = _launch_detached_native_claude_channel(
-            session_id=session_id,
-            run_id=run_id,
-            provider_session_id=normalized_provider_session_id,
-            cwd=cwd,
-            base_url=api_url,
-            token=api_token,
-            config_dir=claude_dir,
-            wait_ready_secs=wait_ready_secs,
-            resume=resume,
-            permission_mode=permission_mode,
-            hook_token=hook_token,
-        )
-    except Exception as exc:
-        typer.echo(
-            json.dumps(
-                {
-                    "ok": False,
-                    "error": {
-                        "code": "provider_launch_failed",
-                        "message": str(exc),
-                    },
-                }
-            ),
-            err=True,
-        )
-        raise typer.Exit(code=1) from exc
-
-    typer.echo(json.dumps(result, default=str))
 
 
 @app.command("send")

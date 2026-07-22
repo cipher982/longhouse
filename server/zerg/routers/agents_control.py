@@ -23,7 +23,6 @@ from zerg.services.catalogd_supervisor import get_catalogd_client
 from zerg.services.machine_control_channel import get_machine_control_channel_registry
 from zerg.services.machine_control_operations import reconcile_live_machine_control_operation_from_command_result
 from zerg.services.machine_control_operations import reconcile_machine_control_operation_from_command_result
-from zerg.services.remote_session_launch import reconcile_launch_from_command_result
 from zerg.services.write_serializer import get_live_write_serializer
 from zerg.services.write_serializer import get_write_serializer
 
@@ -70,7 +69,7 @@ async def _reconcile_machine_control_operation_result(
         )
         if (
             type(result.get("matched")) is not bool
-            or result.get("match_kind") not in {None, "operation", "launch"}
+            or result.get("match_kind") not in {None, "operation"}
             or not isinstance(result.get("commit_seq"), str)
             or not result["commit_seq"].isdecimal()
         ):
@@ -104,18 +103,6 @@ async def _reconcile_machine_control_operation_result(
         db,
         auto_commit=False,
         label="machine-control-result",
-    )
-
-
-async def _reconcile_late_launch_result(db: Session | None, message: dict[str, Any]) -> bool:
-    if database_module.live_catalog_enabled():
-        return False
-    assert db is not None
-    return await get_write_serializer().execute_or_direct(
-        lambda write_db: reconcile_launch_from_command_result(write_db, message),
-        db,
-        auto_commit=False,
-        label="remote-launch-result",
     )
 
 
@@ -221,18 +208,6 @@ async def machine_control_websocket(websocket: WebSocket) -> None:
                             db.rollback()
                         logger.exception(
                             "Failed to reconcile machine operation result command_id=%s",
-                            message.get("command_id"),
-                        )
-                if not matched:
-                    # The original launcher call may have timed out; persist the
-                    # late outcome on the sessions row so the client can see it.
-                    try:
-                        await _reconcile_late_launch_result(db, message)
-                    except Exception:  # noqa: BLE001
-                        if db is not None:
-                            db.rollback()
-                        logger.exception(
-                            "Failed to reconcile late launch result command_id=%s",
                             message.get("command_id"),
                         )
             else:

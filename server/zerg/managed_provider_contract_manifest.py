@@ -14,7 +14,6 @@ _REQUIRED_STRING_FIELDS = (
 _REQUIRED_BOOL_FIELDS = (
     "requires_longhouse_cli",
     "launch_local",
-    "launch_remote",
     "run_once",
     "reattach",
     "send_input",
@@ -32,7 +31,6 @@ _REQUIRED_BOOL_FIELDS = (
 _STRING_LIST_FIELDS = ("control_plane_aliases", "machine_control_supports")
 _OPERATION_EVIDENCE_FIELDS = (
     "launch_local",
-    "launch_remote",
     "run_once",
     "reattach",
     "send_input",
@@ -51,10 +49,6 @@ MACHINE_CONTROL_SUPPORT_OPERATION_BY_SUFFIX = {
     "steer": "steer_active_turn",
     "answer_pause": "answer_pause",
     "terminate": "terminate",
-    # Machine-control launch/continue are remote-channel operations; local
-    # launch is a separate CLI path and never appears in machine supports[].
-    "launch": "launch_remote",
-    "continue": "can_resume",
     "run_once": "run_once",
     "resume_run_once": "run_once",
     "turn_start": "turn_start",

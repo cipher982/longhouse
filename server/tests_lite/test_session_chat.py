@@ -88,6 +88,15 @@ def _make_machine_client(session_local, device_token):
     return TestClient(app, backend="asyncio"), api_app
 
 
+def test_remote_helm_continue_routes_are_not_registered():
+    from zerg.main import api_app
+
+    routes = {(route.path, method) for route in api_app.routes for method in getattr(route, "methods", set())}
+
+    assert ("/api/sessions/{session_id}/continue", "POST") not in routes
+    assert ("/api/agents/sessions/{session_id}/continue", "POST") not in routes
+
+
 def _mark_session_live(db, session, *, owner_id: int, phase: str = "idle") -> None:
     from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
 

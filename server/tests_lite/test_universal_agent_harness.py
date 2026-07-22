@@ -964,7 +964,6 @@ def test_action_matrix_marks_provider_specific_unsupported_actions(tmp_path: Pat
     assert by_provider["opencode"]["steer_active_turn"]["status"] == "unsupported_gap"
     assert by_provider["opencode"]["answer_pause_request"]["status"] == "unsupported_gap"
     assert by_provider["opencode"]["external_event_channel"]["status"] == "unsupported_gap"
-    assert by_provider["antigravity"]["launch_remote"]["status"] == "unsupported_gap"
     assert by_provider["antigravity"]["interrupt_cancel"]["status"] == "unsupported_gap"
     assert by_provider["antigravity"]["external_event_channel"]["status"] == "pass"
     assert by_provider["antigravity"]["send_message"]["status"] == "pass"
@@ -1166,32 +1165,6 @@ def test_old_new_release_diff_fails_on_proof_artifact_drift(tmp_path: Path) -> N
     assert operation["failure_code"] == "provider_release_proof_drift"
 
 
-def test_launch_remote_projection_runs_for_supported_providers(tmp_path: Path) -> None:
-    payload = uah.run_harness(
-        uah.HarnessOptions(
-            providers=uah.SUPPORTED_PROVIDERS,
-            scenarios=("launch_remote_projection",),
-            evidence_root=tmp_path / "evidence",
-            provider_bins=_fake_bins(tmp_path),
-        )
-    )
-
-    assert payload["verdict"] == "yellow"
-    by_provider = {result["provider"]: result for result in payload["results"]}
-    for provider in ("claude", "codex", "opencode"):
-        result = by_provider[provider]
-        assert result["status"] == "pass"
-        assert result["data"]["operation_evidence"]["launch_remote"]["status"] == "pass"
-        assert result["data"]["projections"]["dispatched"]["state"] == "launching_unknown"
-        assert result["data"]["projections"]["adopted"]["state"] == "live"
-        assert result["data"]["projections"]["failed"]["error_code"] == "provider_launch_failed"
-        assert Path(result["evidence_root"], "longhouse", "remote-launch-projection.json").is_file()
-    antigravity = by_provider["antigravity"]
-    assert antigravity["status"] == "unsupported_gap"
-    assert antigravity["failure_code"] == "launch_remote_unsupported"
-    assert antigravity["data"]["operation_evidence"]["launch_remote"]["status"] == "unsupported_gap"
-
-
 def test_control_surface_emits_same_control_actions_for_all_providers(tmp_path: Path) -> None:
     payload = uah.run_harness(
         uah.HarnessOptions(
@@ -1323,14 +1296,6 @@ def test_full_action_suite_runs_same_abstract_surface_for_all_providers(tmp_path
     assert execution_rows["send_message"]["providers"]["antigravity"]["coverage_status"] == "pass"
     assert execution_rows["resume_reattach"]["providers"]["claude"]["coverage_status"] == "pass"
     assert execution_rows["resume_reattach"]["providers"]["codex"]["coverage_status"] == "pass"
-    assert execution_rows["launch_remote"]["providers"]["claude"]["coverage_kind"] == "executable_scenario"
-    assert execution_rows["launch_remote"]["providers"]["claude"]["coverage_status"] == "pass"
-    assert execution_rows["launch_remote"]["providers"]["claude"]["scenario_ids"] == ["launch_remote_projection"]
-    assert execution_rows["launch_remote"]["providers"]["antigravity"]["coverage_status"] == "unsupported_gap"
-    assert (
-        execution_rows["launch_remote"]["providers"]["antigravity"]["coverage_gap_kind"]
-        == "provider_contract_unsupported"
-    )
     assert execution_rows["run_once"]["coverage_gap_kind_counts"] == {
         "no_token_safety_gate": 3,
         "passed": 1,
@@ -1366,7 +1331,6 @@ def test_full_action_suite_runs_same_abstract_surface_for_all_providers(tmp_path
         assert result["data"]["missing_actions"] == []
         assert "action_matrix" in result["data"]["scenario_ids"]
         assert "adapter_conformance" in result["data"]["scenario_ids"]
-        assert "launch_remote_projection" in result["data"]["scenario_ids"]
         assert "interrupt_cancel" in result["data"]["scenario_ids"]
         assert "tool_call_result_projection" in result["data"]["scenario_ids"]
         assert "answer_pause_request" in result["data"]["scenario_ids"]
@@ -1410,8 +1374,6 @@ def test_full_action_suite_runs_same_abstract_surface_for_all_providers(tmp_path
         if result["provider"] == "antigravity":
             assert coverage["send_message"]["coverage_status"] == "pass"
             assert coverage["session_identity"]["coverage_status"] == "pass"
-        assert coverage["launch_remote"]["coverage_kind"] == "executable_scenario"
-        assert coverage["launch_remote"]["scenario_ids"] == ["launch_remote_projection"]
         assert coverage["pause_request_detect"]["coverage_status"] == "pass"
         if result["provider"] in {"codex", "opencode", "claude"}:
             assert coverage["permission_prompt"]["coverage_status"] == "pass"
@@ -1822,22 +1784,12 @@ def test_codex_resume_reattach_uses_provider_release_canary(tmp_path: Path, monk
                     "thread_id": "thread_codex_resume_reattach",
                     "state_file": "/tmp/codex-state.json",
                 },
-                "detached_ui": {
-                    "status": "pass",
-                    "thread_id": "thread_codex_resume_reattach",
-                    "ipc_socket": "/tmp/codex-state.sock",
-                },
             },
             "operation_evidence": {
                 "launch_local": {
                     "status": "pass",
                     "level": "live_no_token",
                     "canary": "managed_tui_attach",
-                },
-                "launch_remote": {
-                    "status": "pass",
-                    "level": "live_no_token",
-                    "canary": "detached_ui",
                 },
                 "reattach": {
                     "status": "pass",
@@ -1861,7 +1813,6 @@ def test_codex_resume_reattach_uses_provider_release_canary(tmp_path: Path, monk
     assert calls
     assert calls[0]["codex_bin"] == str(fake_codex)
     assert calls[0]["run_managed_tui_attach"] is True
-    assert calls[0]["run_detached_ui"] is True
     result = payload["results"][0]
     assert payload["verdict"] == "green"
     assert result["status"] == "pass"
@@ -1896,11 +1847,6 @@ def test_codex_resume_reattach_falls_back_to_attach_command_when_credentials_mis
             "failure_code": "insufficient_coverage",
             "canaries": {
                 "managed_tui_attach": {
-                    "status": "not_run",
-                    "failure_code": "managed_bridge_credentials_missing",
-                    "missing": ["--api-url", "--agents-token"],
-                },
-                "detached_ui": {
                     "status": "not_run",
                     "failure_code": "managed_bridge_credentials_missing",
                     "missing": ["--api-url", "--agents-token"],
@@ -2087,22 +2033,12 @@ def test_codex_managed_session_e2e_uses_provider_release_canary(tmp_path: Path, 
                     "thread_id": "thread_codex_universal_e2e",
                     "state_file": "/tmp/codex-state.json",
                 },
-                "detached_ui": {
-                    "status": "pass",
-                    "thread_id": "thread_codex_universal_e2e",
-                    "ipc_socket": "/tmp/codex-state.sock",
-                },
             },
             "operation_evidence": {
                 "launch_local": {
                     "status": "pass",
                     "level": "live_no_token",
                     "canary": "managed_tui_attach",
-                },
-                "launch_remote": {
-                    "status": "pass",
-                    "level": "live_no_token",
-                    "canary": "detached_ui",
                 },
                 "reattach": {
                     "status": "pass",
@@ -2126,7 +2062,6 @@ def test_codex_managed_session_e2e_uses_provider_release_canary(tmp_path: Path, 
     assert calls
     assert calls[0]["codex_bin"] == str(fake_codex)
     assert calls[0]["run_managed_tui_attach"] is True
-    assert calls[0]["run_detached_ui"] is True
     result = payload["results"][0]
     assert payload["verdict"] == "green"
     assert result["status"] == "pass"
@@ -2134,7 +2069,6 @@ def test_codex_managed_session_e2e_uses_provider_release_canary(tmp_path: Path, 
     assert result["data"]["synthetic"] is False
     assert result["data"]["longhouse_ingest"]["status"] == "pass"
     assert result["data"]["operation_evidence"]["launch_local"]["canary"] == "managed_tui_attach"
-    assert result["data"]["operation_evidence"]["launch_remote"]["canary"] == "detached_ui"
     assert result["data"]["operation_evidence"]["db_ingest"]["status"] == "pass"
 
     evidence_root = Path(result["evidence_root"])
@@ -2145,7 +2079,7 @@ def test_codex_managed_session_e2e_uses_provider_release_canary(tmp_path: Path, 
     assert session["provider_session_id"] == "thread_codex_universal_e2e"
     assert session["operation_statuses"]["launch_local"]["level"] == "live_no_token"
     db_snapshot = json.loads((evidence_root / "longhouse" / "db-ingest-result.json").read_text(encoding="utf-8"))
-    assert db_snapshot["ingest_result"]["events_inserted"] == 2
+    assert db_snapshot["ingest_result"]["events_inserted"] == 1
     assert db_snapshot["timeline"]["matched"] is True
 
 
@@ -3266,23 +3200,12 @@ def test_codex_managed_session_e2e_reports_credentials_gap(tmp_path: Path, monke
                     "failure_code": "managed_bridge_credentials_missing",
                     "missing": ["--api-url", "--agents-token"],
                 },
-                "detached_ui": {
-                    "status": "not_run",
-                    "failure_code": "managed_bridge_credentials_missing",
-                    "missing": ["--api-url", "--agents-token"],
-                },
             },
             "operation_evidence": {
                 "launch_local": {
                     "status": "not_run",
                     "level": "none",
                     "canary": "managed_tui_attach",
-                    "failure_code": "managed_bridge_credentials_missing",
-                },
-                "launch_remote": {
-                    "status": "not_run",
-                    "level": "none",
-                    "canary": "detached_ui",
                     "failure_code": "managed_bridge_credentials_missing",
                 },
             },

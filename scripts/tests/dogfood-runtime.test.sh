@@ -17,14 +17,13 @@ cat >"$snapshot" <<'JSON'
   },
   "control_channel": {
     "status": "connected",
-    "can_launch_codex": false,
-    "launch_blocked_by": "no_launch_support",
-    "launchable_providers": ["claude"]
+    "console_blocked_by": null,
+    "console_ready_providers": ["claude"]
   }
 }
 JSON
 
-output="$(print_launch_readiness_summary "$snapshot")"
+output="$(print_runtime_readiness_summary "$snapshot")"
 
 require_line() {
   local expected="$1"
@@ -37,9 +36,8 @@ require_line() {
 
 require_line "launch_readiness.state: broken"
 require_line "control_channel_status: connected"
-require_line "can_launch_codex: false"
-require_line "launch_blocked_by: no_launch_support"
-require_line "launchable_providers: claude"
+require_line "console_blocked_by: -"
+require_line "console_ready_providers: claude"
 require_line "launch_readiness.reasons: machine_name_runner_name_mismatch"
 require_line "launch_readiness.warnings: service_generation_mismatch"
 

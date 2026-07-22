@@ -6,7 +6,6 @@ import re
 from datetime import timedelta
 
 from zerg.provider_cli_contract import PROVIDER_CLI_ENV_BY_PROVIDER
-from zerg.services.managed_provider_contracts import machine_control_launch_capability_by_provider
 
 SCHEMA_VERSION = 1
 ENGINE_FRESH_SECONDS = 30
@@ -43,7 +42,6 @@ LIVENESS_MODEL_CODEX_BRIDGE = "codex_bridge"
 LIVENESS_MODEL_PROCESS_SCAN = "process_scan"
 LIVENESS_MODEL_ENGINE_STATUS = "engine_status"
 LIVENESS_MODEL_TRANSCRIPT = "transcript"
-LAUNCH_CAPABILITY_BY_PROVIDER = machine_control_launch_capability_by_provider()
 CODEX_BIN_ENV = PROVIDER_CLI_ENV_BY_PROVIDER["codex"]
 OPENCODE_BIN_ENV = PROVIDER_CLI_ENV_BY_PROVIDER["opencode"]
 ANTIGRAVITY_BIN_ENV = PROVIDER_CLI_ENV_BY_PROVIDER["antigravity"]
@@ -114,7 +112,6 @@ __all__ = [
     "LIVENESS_MODEL_PROCESS_SCAN",
     "LIVENESS_MODEL_ENGINE_STATUS",
     "LIVENESS_MODEL_TRANSCRIPT",
-    "LAUNCH_CAPABILITY_BY_PROVIDER",
     "CODEX_BIN_ENV",
     "OPENCODE_BIN_ENV",
     "ANTIGRAVITY_BIN_ENV",
