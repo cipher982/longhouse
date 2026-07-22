@@ -483,6 +483,53 @@ pub fn replace_request_body_after_lineage_repair(
     Ok(())
 }
 
+/// Retire a quarantined request only after the Runtime Host proves that its
+/// source epoch was closed in favor of a locally durable replacement epoch.
+/// The exact frozen body and host proof remain durable in the supersession
+/// audit even though the obsolete retry itself is removed.
+pub fn retire_after_host_replacement(
+    conn: &mut Connection,
+    source_epoch: Uuid,
+    envelope_id: &str,
+    expected_request_body_zstd: &[u8],
+    reason: &str,
+    proof_json: &str,
+) -> Result<()> {
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let changed = tx.execute(
+        "DELETE FROM pending_source_envelope
+         WHERE source_epoch = ?1 AND envelope_id = ?2
+           AND request_body_zstd = ?3
+           AND blocked_at IS NOT NULL
+           AND block_kind = 'source_epoch_conflict'",
+        params![
+            source_epoch.to_string(),
+            envelope_id,
+            expected_request_body_zstd,
+        ],
+    )?;
+    if changed != 1 {
+        bail!("host replacement proof no longer matches the blocked pending envelope");
+    }
+    tx.execute(
+        "INSERT INTO pending_source_envelope_supersession (
+             source_epoch, envelope_id, old_request_body_zstd,
+             new_request_body_zstd, reason, proof_json, created_at
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![
+            source_epoch.to_string(),
+            envelope_id,
+            expected_request_body_zstd,
+            Vec::<u8>::new(),
+            reason,
+            proof_json,
+            Utc::now().to_rfc3339(),
+        ],
+    )?;
+    tx.commit()?;
+    Ok(())
+}
+
 /// Advance the durable cursor and forget the exact retry in one transaction.
 pub fn acknowledge_and_delete(
     conn: &mut Connection,
@@ -711,8 +758,8 @@ fn from_sql_u64(index: usize, value: i64) -> rusqlite::Result<u64> {
 mod tests {
     use super::{
         pending_outbox_has_capacity, persist_or_load, quarantine,
-        replace_request_body_after_lineage_repair, retry_paths, snapshot, PendingSourceEnvelope,
-        MAX_PENDING_OUTBOX_BYTES,
+        replace_request_body_after_lineage_repair, retire_after_host_replacement, retry_paths,
+        snapshot, PendingSourceEnvelope, MAX_PENDING_OUTBOX_BYTES,
     };
     use crate::state::db::open_db;
     use rusqlite::params;
@@ -801,6 +848,15 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
         let epoch = Uuid::new_v4();
+        conn.execute(
+            "INSERT INTO source_epoch_registry (
+                 source_epoch, provider, opaque_source_id, file_incarnation,
+                 start_reason, max_observed_len, created_at, updated_at
+             ) VALUES (?1, 'cursor', 'fixture-source', 'fixture',
+                       'initial', 1, ?2, ?2)",
+            params![epoch.to_string(), "2026-07-15T00:00:00Z"],
+        )
+        .unwrap();
         let pending = candidate(epoch, "/tmp/cursor.db");
         persist_or_load(&mut conn, &pending).unwrap();
         quarantine(
@@ -854,6 +910,53 @@ mod tests {
             )
             .unwrap();
         assert_eq!(audit_count, 1);
+    }
+
+    #[test]
+    fn host_replacement_proof_retires_exact_blocked_body_with_audit() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        let epoch = Uuid::new_v4();
+        conn.execute(
+            "INSERT INTO source_epoch_registry (
+                 source_epoch, provider, opaque_source_id, file_incarnation,
+                 start_reason, max_observed_len, created_at, updated_at
+             ) VALUES (?1, 'cursor', 'fixture-source', 'fixture',
+                       'initial', 1, ?2, ?2)",
+            params![epoch.to_string(), "2026-07-15T00:00:00Z"],
+        )
+        .unwrap();
+        let pending = candidate(epoch, "/tmp/cursor.db");
+        persist_or_load(&mut conn, &pending).unwrap();
+        quarantine(
+            &mut conn,
+            epoch,
+            "source_epoch_conflict",
+            "fixture replacement conflict",
+        )
+        .unwrap();
+
+        retire_after_host_replacement(
+            &mut conn,
+            epoch,
+            &pending.envelope_id,
+            &pending.request_body_zstd,
+            "fixture host replacement proof",
+            r#"{"v":1,"fixture":true}"#,
+        )
+        .unwrap();
+        assert!(super::load_for_epoch(&conn, epoch).unwrap().is_none());
+        let audit: (Vec<u8>, Vec<u8>, String) = conn
+            .query_row(
+                "SELECT old_request_body_zstd, new_request_body_zstd, reason
+                 FROM pending_source_envelope_supersession WHERE source_epoch = ?1",
+                [epoch.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(audit.0, pending.request_body_zstd);
+        assert!(audit.1.is_empty());
+        assert_eq!(audit.2, "fixture host replacement proof");
     }
 
     fn candidate(source_epoch: Uuid, source_path: &str) -> PendingSourceEnvelope {

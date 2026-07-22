@@ -778,6 +778,96 @@ async fn reconcile_blocked_cursor_lineage(
     Ok(true)
 }
 
+async fn reconcile_blocked_cursor_replacement(
+    conn: &mut Connection,
+    client: &ShipperClient,
+    prepared: &PreparedStorageV2Envelope,
+    request_timeout: Duration,
+) -> Result<bool> {
+    let Some(pending) = pending_source_envelope::load_for_epoch(conn, prepared.source_epoch)?
+    else {
+        return Ok(false);
+    };
+    if pending.block_kind.as_deref() != Some("source_epoch_conflict") {
+        return Ok(false);
+    }
+    let closed = client
+        .storage_v2_source_manifest(&prepared.source_epoch.to_string(), 0, Some(request_timeout))
+        .await?;
+    let epoch = &closed.source_epoch;
+    let Some(replacement_epoch) = epoch
+        .replaced_by_source_epoch
+        .as_deref()
+        .map(Uuid::parse_str)
+        .transpose()?
+    else {
+        return Ok(false);
+    };
+    if closed.v != 2
+        || epoch.source_epoch != prepared.source_epoch.to_string()
+        || epoch.tenant_id != prepared.envelope.tenant_id
+        || epoch.machine_id != prepared.envelope.machine_id
+        || epoch.provider != "cursor"
+        || epoch.opaque_source_id != prepared.envelope.opaque_source_id
+        || epoch.range_kind != "record_ordinal"
+        || epoch.state != "closed"
+    {
+        return Ok(false);
+    }
+
+    let replacement = client
+        .storage_v2_source_manifest(&replacement_epoch.to_string(), 0, Some(request_timeout))
+        .await?;
+    let replacement_durable =
+        source_epoch::lane_position(conn, replacement_epoch, SourceLane::Durable)?;
+    let replacement_accepted = replacement
+        .source_epoch
+        .accepted_through
+        .parse::<u64>()
+        .context("Runtime Host Cursor replacement accepted_through is invalid")?;
+    if replacement.v != 2
+        || replacement.source_epoch.source_epoch != replacement_epoch.to_string()
+        || replacement.source_epoch.tenant_id != prepared.envelope.tenant_id
+        || replacement.source_epoch.machine_id != prepared.envelope.machine_id
+        || replacement.source_epoch.provider != "cursor"
+        || replacement.source_epoch.opaque_source_id != prepared.envelope.opaque_source_id
+        || replacement.source_epoch.range_kind != "record_ordinal"
+        || replacement.source_epoch.predecessor_source_epoch.as_deref()
+            != Some(epoch.source_epoch.as_str())
+        || !matches!(replacement.source_epoch.state.as_str(), "open" | "closed")
+        || replacement_durable == 0
+        || replacement_accepted != replacement_durable
+    {
+        return Ok(false);
+    }
+
+    let proof_json = serde_json::json!({
+        "v": 1,
+        "retired_source_epoch": prepared.source_epoch.to_string(),
+        "host_state": epoch.state,
+        "host_replaced_by_source_epoch": replacement_epoch.to_string(),
+        "replacement_host_state": replacement.source_epoch.state,
+        "replacement_host_accepted_through": replacement_accepted.to_string(),
+        "replacement_local_durable_position": replacement_durable.to_string(),
+    })
+    .to_string();
+    pending_source_envelope::retire_after_host_replacement(
+        conn,
+        pending.source_epoch,
+        &pending.envelope_id,
+        &pending.request_body_zstd,
+        "Runtime Host proved the blocked Cursor epoch was superseded by a locally durable replacement",
+        &proof_json,
+    )?;
+    tracing::warn!(
+        source_epoch = %prepared.source_epoch,
+        replacement_epoch = %replacement_epoch,
+        replacement_accepted,
+        "Retired blocked Cursor envelope after Runtime Host replacement proof"
+    );
+    Ok(true)
+}
+
 fn proven_manifest_prefix(
     prepared: &PreparedStorageV2Envelope,
     manifest: &StorageV2SourceManifest,
@@ -2406,8 +2496,15 @@ pub(crate) async fn ship_next_cursor_envelope(
                 pending_source_envelope::load_for_epoch(conn, prepared.source_epoch)?
                     .is_some_and(|pending| pending.blocked_at.is_some());
             if source_is_blocked {
-                return if reconcile_blocked_cursor_lineage(conn, client, &prepared, request_timeout)
-                    .await?
+                return if reconcile_blocked_cursor_replacement(
+                    conn,
+                    client,
+                    &prepared,
+                    request_timeout,
+                )
+                .await?
+                    || reconcile_blocked_cursor_lineage(conn, client, &prepared, request_timeout)
+                        .await?
                 {
                     Ok(CursorStorageV2ShipResult::Continue)
                 } else {
