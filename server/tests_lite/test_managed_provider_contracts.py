@@ -13,6 +13,7 @@ from zerg.managed_provider_contract_manifest import _validate_operation_evidence
 from zerg.managed_provider_contract_manifest import normalize_contract_manifest
 from zerg.managed_provider_contract_manifest import managed_provider_contract_entry_digest
 from zerg.managed_provider_contract_manifest import render_contract_manifest_json
+from zerg.managed_provider_contract_manifest import validate_generated_contract_manifest
 from zerg.provider_cli_contract import PROVIDER_CLI_BINARY_BY_PROVIDER
 from zerg.provider_cli_contract import PROVIDER_CLI_ENV_BY_PROVIDER
 from zerg.services.managed_provider_contracts import _contracts_by_control_plane
@@ -81,6 +82,32 @@ def test_managed_provider_contract_manifest_is_generated_from_schema():
 
     assert normalize_contract_manifest(schema_payload) == normalize_contract_manifest(manifest_payload)
     assert render_contract_manifest_json(schema_payload) == manifest_path.read_text(encoding="utf-8")
+
+
+def test_generated_runtime_manifest_does_not_require_repository_sources(monkeypatch):
+    manifest_path = Path(__file__).resolve().parents[1] / "zerg" / "config" / "managed_provider_contracts.json"
+    payload = json.loads(manifest_path.read_text())
+    monkeypatch.setattr(
+        "zerg.managed_provider_contract_manifest._adapter_digest",
+        lambda _item: (_ for _ in ()).throw(AssertionError("runtime must not read adapter sources")),
+    )
+    monkeypatch.setattr(
+        "zerg.managed_provider_contract_manifest._source_digest",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("runtime must not read oracle sources")),
+    )
+
+    validated = validate_generated_contract_manifest(payload)
+
+    assert len(validated["providers"]) == 5
+
+
+def test_generated_runtime_manifest_rejects_invalid_embedded_digest():
+    manifest_path = Path(__file__).resolve().parents[1] / "zerg" / "config" / "managed_provider_contracts.json"
+    payload = json.loads(manifest_path.read_text())
+    payload["providers"][0]["adapter_digest"] = "z" * 64
+
+    with pytest.raises(ValueError, match="adapter_digest"):
+        validate_generated_contract_manifest(payload)
 
 
 def test_provider_cli_catalog_matches_managed_provider_contracts():

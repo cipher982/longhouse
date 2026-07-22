@@ -76,6 +76,10 @@ _CAPABILITY_REASON_CODES = frozenset(
 )
 
 
+def _is_sha256_digest(value: object) -> bool:
+    return isinstance(value, str) and len(value) == 64 and all(character in "0123456789abcdef" for character in value)
+
+
 def _validate_string_field(item: dict[str, Any], field: str) -> None:
     if not isinstance(item.get(field), str) or not str(item.get(field)).strip():
         provider = item.get("provider") or "<unknown>"
@@ -216,10 +220,10 @@ def _validate_capability_string(prefix: str, payload: dict[str, Any], field: str
 def managed_provider_contract_manifest() -> dict[str, Any]:
     contract_path = Path(__file__).resolve().parent / "config" / "managed_provider_contracts.json"
     payload = json.loads(contract_path.read_text(encoding="utf-8"))
-    return normalize_contract_manifest(payload)
+    return validate_generated_contract_manifest(payload)
 
 
-def normalize_contract_manifest(payload: dict[str, Any]) -> dict[str, Any]:
+def _validated_contract_items(payload: dict[str, Any]) -> list[dict[str, Any]]:
     if not isinstance(payload, dict):
         raise ValueError("managed provider contract manifest root must be an object")
     if payload.get("schema_version") != 1:
@@ -242,6 +246,13 @@ def normalize_contract_manifest(payload: dict[str, Any]) -> dict[str, Any]:
         _validate_operation_evidence(item)
         _validate_machine_control_supports(item)
         _validate_capabilities(item)
+        items.append(deepcopy(item))
+    return items
+
+
+def normalize_contract_manifest(payload: dict[str, Any]) -> dict[str, Any]:
+    items: list[dict[str, Any]] = []
+    for item in _validated_contract_items(payload):
         normalized_item = deepcopy(item)
         normalized_item["adapter_digest"] = _adapter_digest(item)
         for declaration in normalized_item.get("capabilities", {}).values():
@@ -256,6 +267,23 @@ def normalize_contract_manifest(payload: dict[str, Any]) -> dict[str, Any]:
         "schema_version": 1,
         "providers": items,
     }
+
+
+def validate_generated_contract_manifest(payload: dict[str, Any]) -> dict[str, Any]:
+    """Validate generated digests without requiring repository source files."""
+
+    items = _validated_contract_items(payload)
+    for item in items:
+        provider = str(item["provider"])
+        adapter_digest = item.get("adapter_digest")
+        if not _is_sha256_digest(adapter_digest):
+            raise ValueError(f"managed provider contract {provider}: adapter_digest must be a SHA-256 hex digest")
+        for declaration in item.get("capabilities", {}).values():
+            for assertion in declaration.get("required_assertions", []):
+                oracle_digest = assertion.get("oracle_digest")
+                if not _is_sha256_digest(oracle_digest):
+                    raise ValueError(f"managed provider contract {provider}: oracle_digest must be a SHA-256 hex digest")
+    return {"schema_version": 1, "providers": items}
 
 
 def render_contract_manifest_json(payload: dict[str, Any]) -> str:
