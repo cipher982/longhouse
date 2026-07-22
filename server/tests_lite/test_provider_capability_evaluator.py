@@ -10,6 +10,7 @@ from zerg.services.provider_capability_contract import VerificationState
 from zerg.services.provider_capability_evaluator import EvaluationContext
 from zerg.services.provider_capability_evaluator import ProviderProofIdentity
 from zerg.services.provider_capability_evaluator import evaluate_capability
+from zerg.services.provider_capability_evaluator import proof_identity_for_declaration
 from zerg.services.provider_capability_proof import AssertionOutcome
 from zerg.services.provider_capability_proof import EvidenceClass
 from zerg.services.provider_capability_proof import ProviderCapabilityProofRecord
@@ -82,6 +83,16 @@ def test_shadow_decision_is_inconclusive_without_identity_or_proof() -> None:
     assert decision.verification is VerificationState.INCONCLUSIVE
     assert decision.action is ProductAction.DISABLED
     assert decision.reason_codes == ("semantic_proof_missing",)
+
+
+def test_generated_declaration_supplies_scoped_adapter_and_oracle_identity() -> None:
+    contract, declaration = _contract_and_declaration()
+
+    identity = proof_identity_for_declaration(adapter_digest=contract.adapter_digest, declaration=declaration)
+
+    assert identity.adapter_digest == contract.adapter_digest
+    assert set(identity.oracle_digests) == {"codex_coordination_message"}
+    assert len(identity.oracle_digests["codex_coordination_message"]) == 64
 
 
 def test_provider_wide_context_cannot_enable_session_action() -> None:

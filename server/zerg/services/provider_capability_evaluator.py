@@ -65,6 +65,22 @@ class CapabilityDecision:
         return payload
 
 
+def proof_identity_for_declaration(
+    *,
+    adapter_digest: str,
+    declaration: Mapping[str, Any],
+) -> ProviderProofIdentity:
+    oracle_digests: dict[str, str] = {}
+    for assertion in declaration.get("required_assertions") or ():
+        scenario_id = str(assertion["scenario_id"])
+        oracle_digest = str(assertion["oracle_digest"])
+        existing = oracle_digests.get(scenario_id)
+        if existing is not None and existing != oracle_digest:
+            raise ValueError(f"scenario {scenario_id} declares conflicting oracle digests")
+        oracle_digests[scenario_id] = oracle_digest
+    return ProviderProofIdentity(adapter_digest=adapter_digest, oracle_digests=oracle_digests)
+
+
 def evaluate_capability(
     *,
     capability_id: str,

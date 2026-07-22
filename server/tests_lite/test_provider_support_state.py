@@ -3,6 +3,10 @@ from __future__ import annotations
 from zerg.services.managed_provider_contracts import all_managed_provider_contracts
 from zerg.services.provider_support_state import CONTRACT_OPERATIONS
 from zerg.services.provider_support_state import collect_provider_support_state
+from zerg.services.provider_capability_proof import AssertionOutcome
+from zerg.services.provider_capability_proof import EvidenceClass
+from zerg.services.provider_capability_proof import ProviderCapabilityProofRecord
+from datetime import UTC, datetime
 
 CLAUDE_LIVE_CONTROL_OPERATIONS = [
     "send",
@@ -77,6 +81,45 @@ def test_support_state_provider_capability_axes_match_manifest_contracts() -> No
         for decision in semantic_shadow.values():
             assert decision["runtime"] == "unknown"
             assert decision["action"] == "hidden"
+
+
+def test_support_state_consumes_matching_v2_proof_without_enabling_machine_wide_action() -> None:
+    contract = next(contract for contract in all_managed_provider_contracts() if contract.provider == "codex")
+    declaration = contract.capabilities["coordination.message.send"]
+    assertion = declaration["required_assertions"][0]
+    record = ProviderCapabilityProofRecord(
+        provider="codex",
+        provider_version="0.145.0",
+        provider_executable_identity="sha256:provider",
+        provider_contract_digest=contract.contract_entry_digest,
+        adapter_digest=contract.adapter_digest,
+        scenario_id=assertion["scenario_id"],
+        scenario_revision=assertion["minimum_scenario_revision"],
+        oracle_digest=assertion["oracle_digest"],
+        assertion_id=assertion["id"],
+        outcome=AssertionOutcome.PASS,
+        evidence_class=EvidenceClass.HERMETIC,
+        generated_at="2026-07-22T16:00:00Z",
+        producer_class="release_ci",
+        producer_version="2",
+        invocation_id="run-1",
+    )
+
+    support = collect_provider_support_state(
+        provider_clis={"codex": {"path": "/usr/local/bin/codex", "source": "PATH"}},
+        provider_release_status={"statuses": {"codex": {"current_version": "0.145.0"}}},
+        control_channel={"status": "connected", "control_operations_by_provider": {}},
+        observed_at=datetime(2026, 7, 22, 17, 0, tzinfo=UTC),
+        capability_proof_records={"codex": (record,)},
+        provider_executable_identities={"codex": "sha256:provider"},
+    )
+
+    decision = support["providers"]["codex"]["capabilities"]["semantic_capability_shadow"][
+        "coordination.message.send"
+    ]
+    assert decision["verification"] == "proven"
+    assert decision["action"] == "hidden"
+    assert support["providers"]["codex"]["capabilities"]["capability_proof_record_count"] == 1
 
 
 def test_support_state_separates_candidate_release_from_local_readiness() -> None:

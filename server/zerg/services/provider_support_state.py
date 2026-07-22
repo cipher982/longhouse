@@ -24,6 +24,8 @@ from zerg.services.provider_action_coverage import serialize_provider_action_cov
 from zerg.services.provider_capability_contract import RuntimeState
 from zerg.services.provider_capability_evaluator import EvaluationContext
 from zerg.services.provider_capability_evaluator import evaluate_capability
+from zerg.services.provider_capability_evaluator import proof_identity_for_declaration
+from zerg.services.provider_capability_proof import ProviderCapabilityProofRecord
 
 SCHEMA_VERSION = 1
 CONTRACT_OPERATIONS = (
@@ -58,6 +60,8 @@ def collect_provider_support_state(
     provider_live_proof: Mapping[str, Any] | None = None,
     control_channel: Mapping[str, Any] | None,
     observed_at: datetime | None = None,
+    capability_proof_records: Mapping[str, tuple[ProviderCapabilityProofRecord, ...]] | None = None,
+    provider_executable_identities: Mapping[str, str | None] | None = None,
 ) -> dict[str, Any]:
     provider_clis = dict(provider_clis or {})
     provider_release_status = dict(provider_release_status or {})
@@ -69,6 +73,8 @@ def collect_provider_support_state(
     raw_control_status = str(control_channel.get("status") or "").strip()
     control_connected = raw_control_status == "connected"
     observed_at = observed_at or datetime.now(UTC)
+    capability_proof_records = dict(capability_proof_records or {})
+    provider_executable_identities = dict(provider_executable_identities or {})
 
     providers: dict[str, Any] = {}
     for contract in all_managed_provider_contracts():
@@ -87,6 +93,8 @@ def collect_provider_support_state(
             contract,
             release_info=release_info,
             observed_at=observed_at,
+            records=capability_proof_records.get(provider, ()),
+            provider_executable_identity=provider_executable_identities.get(provider),
         )
         action_coverage = _action_coverage(provider, release_info=release_info)
         version_readiness = _version_readiness(release_info)
@@ -134,6 +142,7 @@ def collect_provider_support_state(
                 "available_capabilities": [
                     capability_id for capability_id, decision in semantic_capability_shadow.items() if decision.get("action") == "enabled"
                 ],
+                "capability_proof_record_count": len(capability_proof_records.get(provider, ())),
             },
             "proof": proof,
             "operations": operations,
@@ -154,11 +163,14 @@ def _semantic_capability_shadow(
     *,
     release_info: Mapping[str, Any],
     observed_at: datetime,
+    records: tuple[ProviderCapabilityProofRecord, ...],
+    provider_executable_identity: str | None,
 ) -> dict[str, dict[str, Any]]:
     context = EvaluationContext(
         machine_id="provider_support_state",
         provider=contract.provider,
         provider_version=str(release_info.get("current_version") or "") or None,
+        provider_executable_identity=provider_executable_identity,
         observed_at=observed_at,
         runtime=RuntimeState.UNKNOWN,
     )
@@ -168,6 +180,12 @@ def _semantic_capability_shadow(
             declaration=declaration,
             provider_contract_digest=contract.contract_entry_digest,
             context=context,
+            records=records,
+            proof_identity=proof_identity_for_declaration(
+                adapter_digest=contract.adapter_digest,
+                declaration=declaration,
+            ),
+            trusted_producer_classes=frozenset({"release_ci"}),
         ).serialize()
         for capability_id, declaration in contract.capabilities.items()
     }
