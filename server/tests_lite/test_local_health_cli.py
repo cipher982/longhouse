@@ -4033,6 +4033,47 @@ def test_collect_local_health_fast_prefers_resolved_engine_sessions(monkeypatch,
     assert unmanaged["liveness_model"] == "engine_status"
 
 
+def test_collect_local_health_fast_enriches_runtime_host_titles(monkeypatch, tmp_path: Path):
+    """Longhouse.app invokes --fast, so that path must not retain prompt fallbacks."""
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    monkeypatch.setattr(
+        local_health_service,
+        "_compute_process_snapshot",
+        lambda: (_ for _ in ()).throw(AssertionError("fast local-health must not scan processes")),
+    )
+    _write_engine_status(
+        tmp_path,
+        payload={
+            "sessions": [
+                {
+                    "session_id": "session-fast-title",
+                    "provider": "codex",
+                    "control_path": "managed",
+                    "state": "attached",
+                    "workspace": {},
+                    "process": {},
+                    "bridge": {},
+                    "evidence": {},
+                }
+            ]
+        },
+    )
+    observed: list[str] = []
+
+    def _enrich(_base_dir, rows, **_kwargs):
+        observed.extend(str(row["session_id"]) for row in rows)
+        rows[0].update(timeline_title="Fast AI Title", title_state="ready", title_source="ai")
+
+    monkeypatch.setattr(local_health_service, "_enrich_managed_session_titles", _enrich)
+
+    snapshot = local_health_service.collect_local_health(tmp_path, fast=True)
+
+    assert observed == ["session-fast-title"]
+    assert snapshot["managed_sessions"][0]["timeline_title"] == "Fast AI Title"
+    assert snapshot["managed_sessions"][0]["title_source"] == "ai"
+
+
 def test_collect_local_health_fast_projects_fresh_phase_ledger_onto_managed_session(monkeypatch, tmp_path: Path):
     """A separate activity ledger must not degrade an otherwise managed row."""
     _disable_real_runner_env(monkeypatch, tmp_path)

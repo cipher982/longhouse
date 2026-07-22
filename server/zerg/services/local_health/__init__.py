@@ -541,8 +541,11 @@ def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = F
         phase_overlay=phase_overlay,
         fast=fast,
     )
-    if not fast:
-        _enrich_managed_session_titles(resolved_base_dir, managed_sessions)
+    # The menu bar intentionally uses the fast snapshot path.  Title
+    # provenance is a small bounded Runtime Host read, not a process scan, so
+    # skipping it here left its rows permanently on the local prompt fallback
+    # while `longhouse local-health` (the deep path) showed AI titles.
+    _enrich_managed_session_titles(resolved_base_dir, managed_sessions)
     launch_readiness = _collect_launch_readiness(resolved_base_dir, service=service)
     transport_sample, transport_assessment = _collect_transport_health(engine_status)
     archive_repair = collect_archive_backlog(resolved_base_dir, engine_status_payload=engine_status.get("payload"))
