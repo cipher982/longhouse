@@ -18,6 +18,7 @@ from zerg.qa import provider_qualification
 def _stable_runner_checkout(monkeypatch) -> None:
     monkeypatch.setattr(codex_release_identity, "_git_sha", lambda _root: "test-sha")
     monkeypatch.setattr(codex_release_identity, "_git_dirty", lambda _root: False)
+    monkeypatch.delenv(profile.MANAGED_PACKAGE_ROOT_ENV, raising=False)
 
 
 def _fake_codex(tmp_path: Path, *, behavior: str = "pass") -> tuple[Path, str, Path]:
@@ -36,7 +37,11 @@ from pathlib import Path
 
 calls = Path({str(calls)!r})
 with calls.open("a", encoding="utf-8") as handle:
-    handle.write(json.dumps({{"argv": sys.argv[1:], "has_api_key": bool(os.environ.get("CODEX_API_KEY"))}}) + "\\n")
+    handle.write(json.dumps({{
+        "argv": sys.argv[1:],
+        "has_api_key": bool(os.environ.get("CODEX_API_KEY")),
+        "managed_package_root": os.environ.get("CODEX_MANAGED_PACKAGE_ROOT"),
+    }}) + "\\n")
 if sys.argv[1:] == ["--version"]:
     print("codex-cli 1.2.3")
     raise SystemExit(0)
@@ -68,6 +73,7 @@ print(json.dumps({{"type": "item.completed", "item": {{
     "text": output.rstrip("\\n") if behavior != "semantic_mismatch" else "DIFFERENT"
 }}}}))
 print(os.environ.get("CODEX_API_KEY", ""), file=sys.stderr)
+print(os.environ.get("CODEX_MANAGED_PACKAGE_ROOT", ""), file=sys.stderr)
 if behavior == "mutate":
     with Path(__file__).open("a", encoding="utf-8") as handle:
         handle.write("# mutation\\n")
@@ -121,8 +127,9 @@ def test_live_profile_emits_strict_v2_bundle_and_least_privilege_command(tmp_pat
     raw = (output / "raw-evidence.json").read_bytes()
     assert bundle["execution_metadata"]["raw_evidence_digest"] == f"sha256:{hashlib.sha256(raw).hexdigest()}"
     invocations = [json.loads(line) for line in calls.read_text().splitlines()]
-    assert invocations[0] == {"argv": ["--version"], "has_api_key": False}
+    assert invocations[0] == {"argv": ["--version"], "has_api_key": False, "managed_package_root": None}
     assert invocations[1]["has_api_key"] is True
+    assert invocations[1]["managed_package_root"] is None
     live = invocations[1]["argv"]
     assert "--sandbox" in live and live[live.index("--sandbox") + 1] == "workspace-write"
     assert 'approval_policy="never"' in live
@@ -216,6 +223,35 @@ def test_secret_is_never_serialized_even_when_provider_echoes_it(tmp_path: Path,
     retained = b"".join(path.read_bytes() for path in output.rglob("*") if path.is_file())
     assert secret.encode() not in retained
     assert b"[CODEX_API_KEY]" in retained
+
+
+def test_managed_package_root_is_validated_live_only_and_redacted(tmp_path: Path, monkeypatch) -> None:
+    package_root = tmp_path / "official-codex-package"
+    package_root.mkdir()
+    monkeypatch.setenv(profile.MANAGED_PACKAGE_ROOT_ENV, str(package_root))
+
+    _, output, calls = _run(tmp_path, monkeypatch)
+
+    invocations = [json.loads(line) for line in calls.read_text().splitlines()]
+    assert invocations[0]["managed_package_root"] is None
+    assert invocations[1]["managed_package_root"] == str(package_root)
+    retained = b"".join(path.read_bytes() for path in output.rglob("*") if path.is_file())
+    assert str(package_root).encode() not in retained
+    assert b"[CODEX_MANAGED_PACKAGE_ROOT]" in retained
+
+
+@pytest.mark.parametrize("package_root", ["", "relative/package", "/definitely/not/a/codex/package"])
+def test_managed_package_root_must_be_an_absolute_directory(tmp_path: Path, monkeypatch, package_root: str) -> None:
+    binary, identity, calls = _fake_codex(tmp_path)
+    monkeypatch.setenv(profile.API_KEY_ENV, "seeded-test-api-key-not-a-real-secret")
+    monkeypatch.setenv(profile.MANAGED_PACKAGE_ROOT_ENV, package_root)
+    output = tmp_path / "output"
+
+    with pytest.raises(codex_release_identity.RequestError, match="must be an absolute directory"):
+        provider_qualification.run(_request(tmp_path, binary, identity), output)
+
+    assert not calls.exists()
+    assert not output.exists()
 
 
 def test_router_and_profile_requests_are_strict(tmp_path: Path, monkeypatch) -> None:

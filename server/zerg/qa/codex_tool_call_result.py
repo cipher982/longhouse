@@ -27,6 +27,7 @@ SCENARIO_ID = "codex_tool_call_result"
 SCENARIO_REVISION = 1
 TIMEOUT_SECONDS = 180
 API_KEY_ENV = "CODEX_API_KEY"
+MANAGED_PACKAGE_ROOT_ENV = "CODEX_MANAGED_PACKAGE_ROOT"
 ASSERTIONS = (
     "exact_executable_identity_observed",
     "reported_version_matches_expected",
@@ -40,10 +41,22 @@ def _load_request(path: Path) -> dict[str, Any]:
     return request
 
 
-def _redact(value: str, secret: str) -> str:
+def _redact(value: str, secret: str, managed_package_root: str | None = None) -> str:
     if secret:
         value = value.replace(secret, "[CODEX_API_KEY]")
+    if managed_package_root:
+        value = value.replace(managed_package_root, "[CODEX_MANAGED_PACKAGE_ROOT]")
     return identity_bridge._redact_text(value)  # noqa: SLF001
+
+
+def _managed_package_root() -> str | None:
+    raw = os.environ.get(MANAGED_PACKAGE_ROOT_ENV)
+    if raw is None:
+        return None
+    path = Path(raw)
+    if not path.is_absolute() or not path.is_dir():
+        raise identity_bridge.RequestError(f"{MANAGED_PACKAGE_ROOT_ENV} must be an absolute directory")
+    return raw
 
 
 def _jsonl_events(stdout: str) -> tuple[list[dict[str, Any]], list[str]]:
@@ -218,6 +231,7 @@ def _run_process_group(
 def run(request_path: Path, output_root: Path) -> dict[str, Any]:
     request = _load_request(request_path)
     output_root = output_root.expanduser().resolve()
+    managed_package_root = _managed_package_root()
     repo_root = Path(__file__).resolve().parents[3]
     binary, actual_identity, runner_sha = identity_bridge._preflight(request, output_root, repo_root)  # noqa: SLF001
     generated_at = identity_bridge._now()  # noqa: SLF001
@@ -349,6 +363,8 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
                 "HOME": str(runtime_root),
                 "CODEX_HOME": str(codex_home),
             }
+            if managed_package_root is not None:
+                tool_env[MANAGED_PACKAGE_ROOT_ENV] = managed_package_root
             tool_result: subprocess.CompletedProcess[str] | None = None
             tool_stdout = ""
             tool_stderr = ""
@@ -411,15 +427,17 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
             "returncode": tool_result.returncode if tool_result else None,
             "timed_out": tool_timed_out,
             "error": tool_error,
-            "stdout": _redact(tool_stdout, api_key),
-            "stderr": _redact(tool_stderr, api_key),
-            "invalid_jsonl_lines": [_redact(line, api_key) for line in invalid_lines],
+            "stdout": _redact(tool_stdout, api_key, managed_package_root),
+            "stderr": _redact(tool_stderr, api_key, managed_package_root),
+            "invalid_jsonl_lines": [_redact(line, api_key, managed_package_root) for line in invalid_lines],
             "event_count": len(events),
             "command_event_count": len(command_items),
             "matching_command_count": len(matching_commands),
             "raw_command_output": raw_command_output,
             "observed_output": observed_output,
-            "final_agent_message": _redact(str(final_message[1].get("text") or ""), api_key) if final_message else None,
+            "final_agent_message": (
+                _redact(str(final_message[1].get("text") or ""), api_key, managed_package_root) if final_message else None
+            ),
         }
 
     try:
