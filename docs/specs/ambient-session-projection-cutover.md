@@ -110,8 +110,8 @@ observation times. Do not add a generic per-field timestamp map.
 Add `local_projection.schema_version: 2` and a separately monotonic
 `local_projection.sequence`, plus a versioned `local_projection.sessions[]`
 collection. Each row is already
-joined by the Machine Agent and contains: session id, provider, local launch mode, workspace
-label/path, local launch mode, launch/control-path evidence, local liveness,
+joined by the Machine Agent and contains: session id, provider, local launch
+mode, workspace label/path, launch/control-path evidence, local liveness,
 local phase and `phase_observed_at`, local activity time, and row generation
 time.
 `phase_ledger` may remain temporarily for diagnostics, but is not a required
