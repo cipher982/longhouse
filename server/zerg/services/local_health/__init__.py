@@ -59,6 +59,8 @@ from zerg.services.managed_session_contracts import REASON_BRIDGE_STATE_PATH_MIS
 from zerg.services.managed_session_contracts import REASON_PROVIDER_SESSION_CWD_MISSING
 from zerg.services.managed_session_contracts import REASON_PROVIDER_SESSION_CWD_REPLACED
 from zerg.services.managed_session_contracts import collect_managed_session_contract_diagnostics
+from zerg.services.provider_capability_local_proof import collect_local_capability_proofs
+from zerg.services.provider_capability_local_proof import executable_identity
 from zerg.services.provider_support_state import collect_provider_support_state
 from zerg.services.shipper.service import get_service_info
 from zerg.services.transport_health import TransportHealthAssessment
@@ -522,6 +524,11 @@ def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = F
         expected_providers=expected_route_providers_from_live_proof(provider_live_proof),
     )
     provider_release_status = collect_provider_release_status(provider_clis, fast=fast)
+    capability_proof_records, capability_proof_summary = collect_local_capability_proofs(resolved_base_dir)
+    provider_executable_identities = {
+        provider: executable_identity(info.get("path")) if capability_proof_records.get(provider) else None
+        for provider, info in provider_clis.items()
+    }
     activity_summary = _collect_activity_summary(resolved_base_dir, now=now)
     managed_summary, managed_sessions, orphan_bridges, unmanaged_processes = _collect_managed_session_sources(
         resolved_base_dir,
@@ -546,6 +553,9 @@ def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = F
         provider_release_status=provider_release_status,
         provider_live_proof=provider_live_proof,
         control_channel=control_channel,
+        observed_at=now,
+        capability_proof_records=capability_proof_records,
+        provider_executable_identities=provider_executable_identities,
     )
     managed_session_ids = {
         session_id
@@ -698,6 +708,7 @@ def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = F
         "provider_live_proof": provider_live_proof,
         "provider_live_route_e2e": provider_live_route_e2e,
         "provider_support_state": provider_support_state,
+        "provider_capability_proofs": capability_proof_summary,
         "managed_session_contracts": managed_session_contracts,
         "provider_hook_diagnostics": provider_hook_diagnostics,
         "provider_binding_diagnostics": provider_binding_diagnostics,

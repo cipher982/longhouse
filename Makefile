@@ -25,7 +25,8 @@ PERF_PROOF_OUTPUT ?= artifacts/perf-proof/perf-proof.json
 .PHONY: validate-native-device-entrypoints
 .PHONY: perf-proof validate-perf-proof cohort-journey validate-cohort-journey
 .PHONY: validate-legacy-nouns
-.PHONY: provider-release-proof-universal-live-smoke
+.PHONY: provider-release-proof-universal-live-smoke provider-capability-coordination-proof
+.PHONY: test-shipper-synthetic-live-bench
 
 # ---------------------------------------------------------------------------
 # Help
@@ -614,6 +615,20 @@ provider-release-proof-universal-live-smoke: ## Run all-provider real-bin univer
 	if [ -n "$(JSON)" ]; then set -- "$$@" --json; fi; \
 	if [ -n "$(UNIVERSAL_SCENARIO)" ]; then for scenario in $(UNIVERSAL_SCENARIO); do set -- "$$@" --scenario "$$scenario"; done; fi; \
 	uv run --project server python "$$@"
+
+provider-capability-coordination-proof: ## Emit local diagnostic Codex coordination bootstrap proof
+	@set -eu; \
+	set -- -m zerg.qa.provider_coordination_scenarios; \
+	if [ -n "$(PROVIDER)" ]; then set -- "$$@" --provider "$(PROVIDER)"; fi; \
+	if [ -n "$(STORE_ROOT)" ]; then set -- "$$@" --store-root "$(STORE_ROOT)"; fi; \
+	if [ -n "$(PRODUCER_CLASS)" ]; then set -- "$$@" --producer-class "$(PRODUCER_CLASS)"; fi; \
+	if [ -n "$(INVOCATION_ID)" ]; then set -- "$$@" --invocation-id "$(INVOCATION_ID)"; fi; \
+	if [ -n "$(RUN_REFERENCE)" ]; then set -- "$$@" --run-reference "$(RUN_REFERENCE)"; fi; \
+	if [ -n "$(LONGHOUSE_GIT_SHA)" ]; then set -- "$$@" --longhouse-git-sha "$(LONGHOUSE_GIT_SHA)"; fi; \
+	if [ -n "$(PROVIDER_VERSION)" ]; then set -- "$$@" --provider-version "$(PROVIDER_VERSION)"; fi; \
+	if [ -n "$(PROVIDER_EXECUTABLE_IDENTITY)" ]; then set -- "$$@" --provider-executable-identity "$(PROVIDER_EXECUTABLE_IDENTITY)"; fi; \
+	if [ -n "$(BUNDLE_OUTPUT)" ]; then set -- "$$@" --bundle-output "$(BUNDLE_OUTPUT)"; fi; \
+	cd server && uv run python "$$@"
 
 provider-release-proof-status: ## Inspect accepted proof baseline; set PROVIDER=... and SCENARIO_ID=...
 	@set -eu; \

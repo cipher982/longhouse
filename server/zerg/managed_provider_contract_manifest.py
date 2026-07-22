@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import json
+from copy import deepcopy
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -28,7 +30,7 @@ _REQUIRED_BOOL_FIELDS = (
     "can_resume",
     "turn_start",
 )
-_STRING_LIST_FIELDS = ("control_plane_aliases", "machine_control_supports")
+_STRING_LIST_FIELDS = ("control_plane_aliases", "machine_control_supports", "adapter_sources")
 _OPERATION_EVIDENCE_FIELDS = (
     "launch_local",
     "run_once",
@@ -66,6 +68,16 @@ _OPERATION_EVIDENCE_LEVELS = frozenset(
         "live_token",
     }
 )
+_CAPABILITY_DISPOSITIONS = frozenset({"implemented", "not_implemented", "upstream_absent", "policy_disabled"})
+_CAPABILITY_ACTION_GATES = frozenset({"ceiling", "warn", "strict"})
+_CAPABILITY_EVIDENCE_CLASSES = frozenset({"hermetic", "live_no_token", "live_token"})
+_CAPABILITY_REASON_CODES = frozenset(
+    {"semantic_proof_missing", "upstream_unavailable", "upstream_unknown", "longhouse_unimplemented", "policy_disabled"}
+)
+
+
+def _is_sha256_digest(value: object) -> bool:
+    return isinstance(value, str) and len(value) == 64 and all(character in "0123456789abcdef" for character in value)
 
 
 def _validate_string_field(item: dict[str, Any], field: str) -> None:
@@ -149,14 +161,69 @@ def _validate_machine_control_supports(item: dict[str, Any]) -> None:
                 )
 
 
+def _validate_capabilities(item: dict[str, Any]) -> None:
+    provider = str(item.get("provider") or "<unknown>")
+    capabilities = item.get("capabilities", {})
+    if not isinstance(capabilities, dict):
+        raise ValueError(f"managed provider contract {provider}: capabilities must be an object")
+    for capability_id, declaration in capabilities.items():
+        prefix = f"managed provider contract {provider}: capabilities.{capability_id}"
+        if not isinstance(capability_id, str) or "." not in capability_id:
+            raise ValueError(f"{prefix} must use a dotted semantic ID")
+        if not isinstance(declaration, dict):
+            raise ValueError(f"{prefix} must be an object")
+        if declaration.get("disposition") not in _CAPABILITY_DISPOSITIONS:
+            raise ValueError(f"{prefix}.disposition must be one of {sorted(_CAPABILITY_DISPOSITIONS)}")
+        if declaration.get("action_gate") not in _CAPABILITY_ACTION_GATES:
+            raise ValueError(f"{prefix}.action_gate must be one of {sorted(_CAPABILITY_ACTION_GATES)}")
+        _validate_capability_string(prefix, declaration, "reason_code")
+        if declaration["reason_code"] not in _CAPABILITY_REASON_CODES:
+            raise ValueError(f"{prefix}.reason_code is unknown")
+        _validate_capability_string(prefix, declaration, "policy_key")
+        contexts = declaration.get("contexts", {})
+        if not isinstance(contexts, dict):
+            raise ValueError(f"{prefix}.contexts must be an object")
+        modes = contexts.get("modes", [])
+        if not isinstance(modes, list) or not all(isinstance(mode, str) and mode for mode in modes):
+            raise ValueError(f"{prefix}.contexts.modes must be a string list")
+        runtime_prerequisites = declaration.get("runtime_prerequisites")
+        if not isinstance(runtime_prerequisites, list) or not all(
+            isinstance(prerequisite, str) and prerequisite for prerequisite in runtime_prerequisites
+        ):
+            raise ValueError(f"{prefix}.runtime_prerequisites must be a string list")
+        assertions = declaration.get("required_assertions")
+        if not isinstance(assertions, list) or not assertions:
+            raise ValueError(f"{prefix}.required_assertions must be a non-empty list")
+        for assertion in assertions:
+            if not isinstance(assertion, dict):
+                raise ValueError(f"{prefix}.required_assertions entries must be objects")
+            for field in ("id", "scenario_id"):
+                _validate_capability_string(f"{prefix}.required_assertions", assertion, field)
+            _validate_capability_string(f"{prefix}.required_assertions", assertion, "oracle_source")
+            revision = assertion.get("minimum_scenario_revision")
+            if not isinstance(revision, int) or isinstance(revision, bool) or revision < 1:
+                raise ValueError(f"{prefix}.required_assertions minimum_scenario_revision must be positive")
+            evidence = assertion.get("acceptable_evidence")
+            if not isinstance(evidence, list) or not evidence or not set(evidence) <= _CAPABILITY_EVIDENCE_CLASSES:
+                raise ValueError(f"{prefix}.required_assertions acceptable_evidence is invalid")
+            max_age = assertion.get("max_age_seconds")
+            if not isinstance(max_age, int) or isinstance(max_age, bool) or max_age < 1:
+                raise ValueError(f"{prefix}.required_assertions max_age_seconds must be positive")
+
+
+def _validate_capability_string(prefix: str, payload: dict[str, Any], field: str) -> None:
+    if not isinstance(payload.get(field), str) or not str(payload[field]).strip():
+        raise ValueError(f"{prefix}.{field} must be a non-empty string")
+
+
 @lru_cache(maxsize=1)
 def managed_provider_contract_manifest() -> dict[str, Any]:
     contract_path = Path(__file__).resolve().parent / "config" / "managed_provider_contracts.json"
     payload = json.loads(contract_path.read_text(encoding="utf-8"))
-    return normalize_contract_manifest(payload)
+    return validate_generated_contract_manifest(payload)
 
 
-def normalize_contract_manifest(payload: dict[str, Any]) -> dict[str, Any]:
+def _validated_contract_items(payload: dict[str, Any]) -> list[dict[str, Any]]:
     if not isinstance(payload, dict):
         raise ValueError("managed provider contract manifest root must be an object")
     if payload.get("schema_version") != 1:
@@ -178,11 +245,45 @@ def normalize_contract_manifest(payload: dict[str, Any]) -> dict[str, Any]:
             _validate_string_list_field(item, field)
         _validate_operation_evidence(item)
         _validate_machine_control_supports(item)
-        items.append(dict(item))
+        _validate_capabilities(item)
+        items.append(deepcopy(item))
+    return items
+
+
+def normalize_contract_manifest(payload: dict[str, Any]) -> dict[str, Any]:
+    items: list[dict[str, Any]] = []
+    for item in _validated_contract_items(payload):
+        normalized_item = deepcopy(item)
+        normalized_item["adapter_digest"] = _adapter_digest(item)
+        for declaration in normalized_item.get("capabilities", {}).values():
+            for assertion in declaration.get("required_assertions", []):
+                assertion["oracle_digest"] = _source_digest(
+                    provider=str(item["provider"]),
+                    raw_path=str(assertion["oracle_source"]),
+                    label="oracle source",
+                )
+        items.append(normalized_item)
     return {
         "schema_version": 1,
         "providers": items,
     }
+
+
+def validate_generated_contract_manifest(payload: dict[str, Any]) -> dict[str, Any]:
+    """Validate generated digests without requiring repository source files."""
+
+    items = _validated_contract_items(payload)
+    for item in items:
+        provider = str(item["provider"])
+        adapter_digest = item.get("adapter_digest")
+        if not _is_sha256_digest(adapter_digest):
+            raise ValueError(f"managed provider contract {provider}: adapter_digest must be a SHA-256 hex digest")
+        for declaration in item.get("capabilities", {}).values():
+            for assertion in declaration.get("required_assertions", []):
+                oracle_digest = assertion.get("oracle_digest")
+                if not _is_sha256_digest(oracle_digest):
+                    raise ValueError(f"managed provider contract {provider}: oracle_digest must be a SHA-256 hex digest")
+    return {"schema_version": 1, "providers": items}
 
 
 def render_contract_manifest_json(payload: dict[str, Any]) -> str:
@@ -200,3 +301,39 @@ def managed_provider_contract_items() -> tuple[dict[str, Any], ...]:
             raise ValueError("managed provider contract provider entries must be objects")
         items.append(dict(item))
     return tuple(items)
+
+
+def managed_provider_contract_entry_digest(provider: str) -> str:
+    item = next((item for item in managed_provider_contract_items() if item.get("provider") == provider), None)
+    if item is None:
+        raise ValueError(f"unknown managed provider: {provider}")
+    encoded = json.dumps(item, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _adapter_digest(item: dict[str, Any]) -> str:
+    provider = str(item.get("provider") or "<unknown>")
+    root = Path(__file__).resolve().parents[2]
+    digest = hashlib.sha256()
+    for raw_path in item.get("adapter_sources") or ():
+        relative = Path(str(raw_path))
+        if relative.is_absolute() or ".." in relative.parts:
+            raise ValueError(f"managed provider contract {provider}: unsafe adapter source {raw_path!r}")
+        path = root / relative
+        if not path.is_file():
+            raise ValueError(f"managed provider contract {provider}: adapter source not found: {raw_path}")
+        digest.update(str(relative).encode())
+        digest.update(b"\0")
+        digest.update(path.read_bytes())
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def _source_digest(*, provider: str, raw_path: str, label: str) -> str:
+    relative = Path(raw_path)
+    if relative.is_absolute() or ".." in relative.parts:
+        raise ValueError(f"managed provider contract {provider}: unsafe {label} {raw_path!r}")
+    path = Path(__file__).resolve().parents[2] / relative
+    if not path.is_file():
+        raise ValueError(f"managed provider contract {provider}: {label} not found: {raw_path}")
+    return hashlib.sha256(path.read_bytes()).hexdigest()

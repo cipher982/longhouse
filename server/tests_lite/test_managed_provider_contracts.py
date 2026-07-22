@@ -11,7 +11,9 @@ import yaml
 from zerg.managed_provider_contract_manifest import _validate_machine_control_supports
 from zerg.managed_provider_contract_manifest import _validate_operation_evidence
 from zerg.managed_provider_contract_manifest import normalize_contract_manifest
+from zerg.managed_provider_contract_manifest import managed_provider_contract_entry_digest
 from zerg.managed_provider_contract_manifest import render_contract_manifest_json
+from zerg.managed_provider_contract_manifest import validate_generated_contract_manifest
 from zerg.provider_cli_contract import PROVIDER_CLI_BINARY_BY_PROVIDER
 from zerg.provider_cli_contract import PROVIDER_CLI_ENV_BY_PROVIDER
 from zerg.services.managed_provider_contracts import _contracts_by_control_plane
@@ -34,6 +36,7 @@ from zerg.session_execution_home import ManagedSessionTransport
 def _manifest_item(provider: str = "test") -> dict:
     return {
         "provider": provider,
+        "adapter_sources": ["server/zerg/managed_provider_contract_manifest.py"],
         "launch_local": True,
         "reattach": True,
         "send_input": True,
@@ -81,6 +84,32 @@ def test_managed_provider_contract_manifest_is_generated_from_schema():
     assert render_contract_manifest_json(schema_payload) == manifest_path.read_text(encoding="utf-8")
 
 
+def test_generated_runtime_manifest_does_not_require_repository_sources(monkeypatch):
+    manifest_path = Path(__file__).resolve().parents[1] / "zerg" / "config" / "managed_provider_contracts.json"
+    payload = json.loads(manifest_path.read_text())
+    monkeypatch.setattr(
+        "zerg.managed_provider_contract_manifest._adapter_digest",
+        lambda _item: (_ for _ in ()).throw(AssertionError("runtime must not read adapter sources")),
+    )
+    monkeypatch.setattr(
+        "zerg.managed_provider_contract_manifest._source_digest",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("runtime must not read oracle sources")),
+    )
+
+    validated = validate_generated_contract_manifest(payload)
+
+    assert len(validated["providers"]) == 5
+
+
+def test_generated_runtime_manifest_rejects_invalid_embedded_digest():
+    manifest_path = Path(__file__).resolve().parents[1] / "zerg" / "config" / "managed_provider_contracts.json"
+    payload = json.loads(manifest_path.read_text())
+    payload["providers"][0]["adapter_digest"] = "z" * 64
+
+    with pytest.raises(ValueError, match="adapter_digest"):
+        validate_generated_contract_manifest(payload)
+
+
 def test_provider_cli_catalog_matches_managed_provider_contracts():
     assert set(PROVIDER_CLI_BINARY_BY_PROVIDER) == managed_provider_names()
     assert set(PROVIDER_CLI_ENV_BY_PROVIDER) == managed_provider_names()
@@ -121,6 +150,36 @@ def test_startup_coordination_context_support_is_explicit():
         "antigravity": False,
         "cursor": False,
     }
+
+
+def test_semantic_capabilities_include_exact_coordination_and_steer_limitations():
+    claude = contract_for_provider("claude")
+    codex = contract_for_provider("codex")
+    opencode = contract_for_provider("opencode")
+    assert claude is not None and codex is not None and opencode is not None
+    expected = {
+        "coordination.awareness.create",
+        "coordination.awareness.post_compaction",
+        "coordination.message.send",
+        "coordination.message.receive",
+    }
+    assert set(claude.capabilities) == expected
+    assert set(codex.capabilities) == expected
+    assert set(opencode.capabilities) == expected
+    cursor = contract_for_provider("cursor")
+    antigravity = contract_for_provider("antigravity")
+    assert cursor is not None and antigravity is not None
+    for contract in (cursor, antigravity):
+        assert set(contract.capabilities) == {"session.input.steer_active"}
+        declaration = contract.capabilities["session.input.steer_active"]
+        assert declaration["disposition"] == "upstream_absent"
+        assert declaration["reason_code"] == "upstream_unavailable"
+    assert opencode.capabilities["coordination.awareness.create"]["contexts"]["modes"] == ["helm"]
+    assert claude.contract_entry_digest == managed_provider_contract_entry_digest("claude")
+    assert claude.contract_entry_digest != codex.contract_entry_digest
+    assert len(claude.adapter_digest) == 64
+    assert "server/zerg/services/shipper/hooks.py" in claude.adapter_sources
+    assert claude.adapter_digest != codex.adapter_digest
 
 
 def test_control_plane_index_rejects_contract_collisions():

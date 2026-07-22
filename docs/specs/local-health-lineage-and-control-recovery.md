@@ -33,7 +33,8 @@ Host at commit `d078bcd9eca6ab3476e0859dae9c4a7afd6d6dba`.
 
 ### What is healthy
 
-- The hosted canary health and readiness endpoints report healthy and ready.
+- The dogfood Runtime Host reports healthy at `/api/health` and ready at
+  `/api/readyz`.
 - The Mac control WebSocket is connected and exposes the expected provider
   operations.
 - The live storage lane is succeeding; the ordinary spool and archive backlog

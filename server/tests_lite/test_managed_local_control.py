@@ -51,6 +51,10 @@ def _managed_transport_for_provider(provider: str) -> str:
         return ManagedSessionTransport.CODEX_APP_SERVER.value
     if provider == "opencode":
         return ManagedSessionTransport.OPENCODE_SERVER_BRIDGE.value
+    if provider == "antigravity":
+        return ManagedSessionTransport.ANTIGRAVITY_HOOK_INBOX.value
+    if provider == "cursor":
+        return ManagedSessionTransport.CURSOR_HELM.value
     return ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE.value
 
 
@@ -61,6 +65,8 @@ def _control_plane_for_provider(provider: str) -> str:
         return "opencode_server_bridge"
     if provider == "antigravity":
         return "antigravity_hook_inbox"
+    if provider == "cursor":
+        return "cursor_helm"
     return "claude_channel_bridge"
 
 
@@ -373,6 +379,29 @@ def test_steer_text_to_managed_local_session_passes_codex_attachments_to_engine(
             "intent": "steer",
             "attachments": refs,
         }
+
+
+def test_unsupported_steer_rejects_before_control_write(monkeypatch, tmp_path):
+    dispatcher = _install_fake_control_dispatch(monkeypatch)
+
+    for provider in ("cursor", "antigravity"):
+        provider_root = tmp_path / provider
+        provider_root.mkdir()
+        SessionLocal = _make_db(provider_root)
+        with SessionLocal() as db:
+            user, _runner, session = _seed_user_runner_and_session(db, provider=provider)
+            result = asyncio.run(
+                steer_text_to_managed_local_session(
+                    db=db,
+                    owner_id=user.id,
+                    session=session,
+                    text="redirect",
+                    request_id=f"{provider}-unsupported-steer",
+                )
+            )
+            assert result.ok is False
+            assert result.error == "Provider does not support active-turn steer"
+    assert dispatcher.calls == []
 
 
 def test_steer_text_turn_ended_maps_to_turn_ended_sentinel(monkeypatch, tmp_path):
