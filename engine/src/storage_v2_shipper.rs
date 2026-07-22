@@ -866,6 +866,8 @@ async fn reconcile_blocked_cursor_replacement(
         conn,
         pending.source_epoch,
         &pending.envelope_id,
+        pending.range_start,
+        pending.range_end,
         &pending.request_body_zstd,
         "Runtime Host proved the blocked Cursor epoch was superseded by a locally durable replacement",
         &proof_json,

@@ -491,11 +491,27 @@ pub fn retire_after_host_replacement(
     conn: &mut Connection,
     source_epoch: Uuid,
     envelope_id: &str,
+    expected_range_start: u64,
+    retired_through: u64,
     expected_request_body_zstd: &[u8],
     reason: &str,
     proof_json: &str,
 ) -> Result<()> {
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let advanced = tx.execute(
+        "UPDATE source_epoch_lane_state
+         SET last_position = ?1, updated_at = ?2
+         WHERE source_epoch = ?3 AND lane = 'durable' AND last_position = ?4",
+        params![
+            to_sql_u64(retired_through)?,
+            Utc::now().to_rfc3339(),
+            source_epoch.to_string(),
+            to_sql_u64(expected_range_start)?,
+        ],
+    )?;
+    if advanced != 1 {
+        bail!("host replacement proof no longer matches the source durable cursor");
+    }
     let changed = tx.execute(
         "DELETE FROM pending_source_envelope
          WHERE source_epoch = ?1 AND envelope_id = ?2
@@ -857,6 +873,13 @@ mod tests {
             params![epoch.to_string(), "2026-07-15T00:00:00Z"],
         )
         .unwrap();
+        conn.execute(
+            "INSERT INTO source_epoch_lane_state (
+                 source_epoch, lane, last_position, updated_at
+             ) VALUES (?1, 'durable', 0, ?2)",
+            params![epoch.to_string(), "2026-07-15T00:00:00Z"],
+        )
+        .unwrap();
         let pending = candidate(epoch, "/tmp/cursor.db");
         persist_or_load(&mut conn, &pending).unwrap();
         quarantine(
@@ -926,6 +949,13 @@ mod tests {
             params![epoch.to_string(), "2026-07-15T00:00:00Z"],
         )
         .unwrap();
+        conn.execute(
+            "INSERT INTO source_epoch_lane_state (
+                 source_epoch, lane, last_position, updated_at
+             ) VALUES (?1, 'durable', 0, ?2)",
+            params![epoch.to_string(), "2026-07-15T00:00:00Z"],
+        )
+        .unwrap();
         let pending = candidate(epoch, "/tmp/cursor.db");
         persist_or_load(&mut conn, &pending).unwrap();
         quarantine(
@@ -940,12 +970,24 @@ mod tests {
             &mut conn,
             epoch,
             &pending.envelope_id,
+            pending.range_start,
+            pending.range_end,
             &pending.request_body_zstd,
             "fixture host replacement proof",
             r#"{"v":1,"fixture":true}"#,
         )
         .unwrap();
         assert!(super::load_for_epoch(&conn, epoch).unwrap().is_none());
+        assert_eq!(
+            conn.query_row(
+                "SELECT last_position FROM source_epoch_lane_state
+                 WHERE source_epoch = ?1 AND lane = 'durable'",
+                [epoch.to_string()],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+            1
+        );
         let audit: (Vec<u8>, Vec<u8>, String) = conn
             .query_row(
                 "SELECT old_request_body_zstd, new_request_body_zstd, reason
