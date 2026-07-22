@@ -1,10 +1,11 @@
 # Backend-specific ruff configuration
-line-length = 120
+line-length = 140
 
 [lint]
 # Ignore module level imports not at top of file for test files
 # This is needed because some test files have docstrings before imports
 select = ["I", "E", "F", "Q000"]
+ignore = ["E501"]  # Match pyproject/pre-commit: line length is formatting guidance, not a lint failure.
 
 [lint.per-file-ignores]
 "tests/**/*.py" = ["E402", "E501"]

@@ -1177,7 +1177,7 @@ def run_managed_live_interrupt(args: argparse.Namespace, evidence_root: Path, co
         if not _terminal_turn_state(state):
             return _fail(
                 "managed_live_interrupt_timeout",
-                ("managed live-interrupt turn did not reach a terminal state within " f"{args.live_interrupt_timeout_secs}s"),
+                (f"managed live-interrupt turn did not reach a terminal state within {args.live_interrupt_timeout_secs}s"),
                 evidence_root=str(root),
                 state=state,
                 start_summary=summary,
