@@ -20,6 +20,7 @@ from zerg.services.provider_capability_proof import AssertionOutcome
 from zerg.services.provider_capability_proof import EvidenceClass
 from zerg.services.provider_capability_proof import ProviderCapabilityProofRecord
 from zerg.services.provider_capability_proof_store import ProviderCapabilityProofStore
+from zerg.services.session_processing.content import redact_secrets
 
 SCHEMA_VERSION = 1
 PROFILE = "codex_release_identity_v1"
@@ -228,6 +229,8 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
         stderr = ""
     else:
         stdout, stderr = result.stdout, result.stderr
+    retained_stdout = redact_secrets(stdout)
+    retained_stderr = redact_secrets(stderr)
     reported_version = None
     match = _VERSION_LINE.fullmatch(stdout.strip()) if not timed_out else None
     if match:
@@ -247,8 +250,8 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
         "expected_executable_identity": request["expected_executable_identity"],
         "expected_provider_version": request["expected_provider_version"],
         "reported_version": reported_version,
-        "stdout": stdout,
-        "stderr": stderr,
+        "stdout": retained_stdout,
+        "stderr": retained_stderr,
         "returncode": result.returncode if result else None,
         "timed_out": timed_out,
         "error": error,
@@ -313,7 +316,12 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
         "coverage_manifest": coverage,
     }
     _atomic_json(output_root / "proof-bundle.json", bundle)
-    return {"valid": True, "output_root": str(output_root), "proof_bundle": str(output_root / "proof-bundle.json"), "assertions": outcomes}
+    return {
+        "valid": True,
+        "output_root": str(output_root),
+        "proof_bundle": str(output_root / "proof-bundle.json"),
+        "assertions": outcomes,
+    }
 
 
 def main(argv: list[str] | None = None) -> int:

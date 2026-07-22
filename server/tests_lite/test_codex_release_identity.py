@@ -136,3 +136,17 @@ def test_malformed_success_output_is_semantic_failure(tmp_path: Path) -> None:
         "reported_version_matches_expected": "semantic_fail",
     }
     assert json.loads((output / "execution-summary.json").read_text())["status"] == "completed"
+
+
+def test_provider_output_secrets_are_absent_from_retained_artifacts(tmp_path: Path) -> None:
+    secret = "sk-proj-ThisIsASeededFakeToken1234567890"
+    binary, identity = _fake(
+        tmp_path,
+        f'printf "codex-cli 1.2.3\\n"\nprintf "{secret}\\n" >&2\n',
+    )
+    output = tmp_path / "output"
+
+    assert bridge.main(["--request", str(_request(tmp_path, binary, identity)), "--output-root", str(output)]) == 0
+    retained = b"".join(path.read_bytes() for path in output.rglob("*") if path.is_file())
+    assert secret.encode() not in retained
+    assert b"[OPENAI_KEY]" in retained
