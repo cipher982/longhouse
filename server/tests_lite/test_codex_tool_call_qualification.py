@@ -64,6 +64,10 @@ if behavior == "nonzero":
     print(os.environ.get("CODEX_API_KEY", ""), file=sys.stderr)
     raise SystemExit(7)
 output = "0123456789abcdef0123456789abcdef\\n"
+print(json.dumps({{"type": "item.started", "item": {{
+    "id": "tool-1", "type": "command_execution", "command": command,
+    "aggregated_output": "", "exit_code": None, "status": "in_progress"
+}}}}))
 print(json.dumps({{"type": "item.completed", "item": {{
     "id": "tool-1", "type": "command_execution", "command": command,
     "aggregated_output": output, "exit_code": 0, "status": "completed"
@@ -155,7 +159,8 @@ def test_live_profile_emits_strict_v2_bundle_and_least_privilege_command(tmp_pat
     assert "--dangerously-bypass-approvals-and-sandbox" not in live
     raw_evidence = json.loads(raw)
     tool_run = raw_evidence["tool_run"]
-    assert tool_run["command_event_count"] == 1
+    assert tool_run["command_event_count"] == 2
+    assert tool_run["command_item_count"] == 1
     assert tool_run["observed_output"] not in tool_run["argv"][-1]
     assert tool_run["final_agent_message"] == tool_run["observed_output"]
     assert {record["mode"] for record in bundle["records"]} == {None}
@@ -290,9 +295,7 @@ def test_managed_package_root_must_be_an_absolute_directory(tmp_path: Path, monk
 
 
 @pytest.mark.parametrize("resource_shape", ["missing", "not_executable", "system_symlink"])
-def test_managed_package_root_rejects_non_official_helper(
-    tmp_path: Path, monkeypatch, resource_shape: str
-) -> None:
+def test_managed_package_root_rejects_non_official_helper(tmp_path: Path, monkeypatch, resource_shape: str) -> None:
     binary, identity, calls = _fake_codex(tmp_path)
     package_root = tmp_path / "candidate-package"
     package_root.mkdir()
@@ -327,10 +330,6 @@ def test_router_and_profile_requests_are_strict(tmp_path: Path, monkeypatch) -> 
 
 def test_router_imports_without_optional_server_dependencies() -> None:
     server_root = Path(provider_qualification.__file__).resolve().parents[2]
-    command = (
-        "import sys; "
-        f"sys.path.insert(0, {str(server_root)!r}); "
-        "import zerg.qa.provider_qualification"
-    )
+    command = f"import sys; sys.path.insert(0, {str(server_root)!r}); import zerg.qa.provider_qualification"
     result = subprocess.run([sys.executable, "-S", "-c", command], capture_output=True, text=True, check=False)
     assert result.returncode == 0, result.stderr

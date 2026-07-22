@@ -424,17 +424,20 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
         events, invalid_lines = _jsonl_events(tool_stdout)
         indexed_items = [(index, _event_item(event)) for index, event in enumerate(events)]
         command_items = [(index, item) for index, item in indexed_items if item.get("type") == "command_execution"]
+        command_item_ids = {str(item.get("id")) for _, item in command_items if item.get("id") is not None}
         matching_commands = [
             (index, item)
-            for index, item in command_items
-            if item.get("status") == "completed"
+            for index, event in enumerate(events)
+            if event.get("type") == "item.completed"
+            and (item := _event_item(event)).get("type") == "command_execution"
+            and item.get("status") == "completed"
             and item.get("exit_code") == 0
             and command in str(item.get("command") or "")
             and re.fullmatch(r"[0-9a-f]{32}\n", str(item.get("aggregated_output") or "")) is not None
         ]
         agent_messages = [(index, item) for index, item in indexed_items if item.get("type") == "agent_message"]
         final_message = agent_messages[-1] if agent_messages else None
-        command_passed = len(command_items) == 1 and len(matching_commands) == 1
+        command_passed = len(command_item_ids) == 1 and len(matching_commands) == 1
         raw_command_output = str(matching_commands[0][1].get("aggregated_output") or "") if command_passed else None
         observed_output = raw_command_output.rstrip("\n") if raw_command_output is not None else None
         linked = bool(
@@ -472,6 +475,7 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
             "invalid_jsonl_lines": [_redact(line, api_key, managed_package_root) for line in invalid_lines],
             "event_count": len(events),
             "command_event_count": len(command_items),
+            "command_item_count": len(command_item_ids),
             "matching_command_count": len(matching_commands),
             "raw_command_output": raw_command_output,
             "observed_output": observed_output,
