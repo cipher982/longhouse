@@ -386,6 +386,17 @@ pub(crate) async fn ship_prepared_envelope(
     let pending = pending_source_envelope::load_for_epoch(conn, prepared.source_epoch)?
         .context("prepared storage-v2 envelope is not durable")?;
     validate_pending_matches_prepared(&pending, &prepared)?;
+    if pending.blocked_at.is_some()
+        && prepared.envelope.provider == "cursor"
+        && (reconcile_blocked_cursor_replacement(conn, client, &prepared, request_timeout).await?
+            || reconcile_blocked_cursor_lineage(conn, client, &prepared, request_timeout).await?)
+    {
+        return Ok(StorageV2ShipOutcome {
+            bytes_shipped: 0,
+            events_shipped: 0,
+            has_more: true,
+        });
+    }
     if let Some(blocked_at) = pending.blocked_at.as_deref() {
         return Err(StorageV2SourceBlocked {
             source_epoch: prepared.source_epoch,
