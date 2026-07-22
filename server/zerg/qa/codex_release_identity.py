@@ -211,6 +211,9 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
         raise RequestError("Codex managed-provider contract is missing")
     adapter_digest = contract.adapter_digest
     oracle_digest = _sha256(Path(__file__).read_bytes())
+    pre_execution_identity = _sha256_file(binary)
+    if pre_execution_identity != actual_identity:
+        raise RequestError("provider executable changed before execution")
     argv = [str(binary), "--version"]
     env = {"PATH": os.environ.get("PATH", ""), "LANG": "C", "LC_ALL": "C"}
     timed_out = False
@@ -229,6 +232,10 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
         stderr = ""
     else:
         stdout, stderr = result.stdout, result.stderr
+    try:
+        post_execution_identity = _sha256_file(binary)
+    except OSError:
+        post_execution_identity = None
     retained_stdout = redact_secrets(stdout)
     retained_stderr = redact_secrets(stderr)
     reported_version = None
@@ -236,7 +243,7 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
     if match:
         reported_version = match.group("version")
     process_returned = result is not None and not timed_out
-    identity_outcome = AssertionOutcome.PASS
+    identity_outcome = AssertionOutcome.PASS if post_execution_identity == pre_execution_identity else AssertionOutcome.INFRASTRUCTURE_ERROR
     if not process_returned or result.returncode != 0:
         version_outcome = AssertionOutcome.INFRASTRUCTURE_ERROR
     elif reported_version != request["expected_provider_version"]:
@@ -248,6 +255,8 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
         "provider_bin": str(binary),
         "executable_identity": actual_identity,
         "expected_executable_identity": request["expected_executable_identity"],
+        "pre_execution_identity": pre_execution_identity,
+        "post_execution_identity": post_execution_identity,
         "expected_provider_version": request["expected_provider_version"],
         "reported_version": reported_version,
         "stdout": retained_stdout,

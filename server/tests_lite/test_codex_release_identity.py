@@ -150,3 +150,18 @@ def test_provider_output_secrets_are_absent_from_retained_artifacts(tmp_path: Pa
     retained = b"".join(path.read_bytes() for path in output.rglob("*") if path.is_file())
     assert secret.encode() not in retained
     assert b"[OPENAI_KEY]" in retained
+
+
+def test_subject_mutation_during_execution_invalidates_identity_proof(tmp_path: Path) -> None:
+    binary, identity = _fake(
+        tmp_path,
+        'printf "codex-cli 1.2.3\\n"\nprintf "mutated" >> "$0"\n',
+    )
+    output = tmp_path / "output"
+
+    assert bridge.main(["--request", str(_request(tmp_path, binary, identity)), "--output-root", str(output)]) == 0
+    records = json.loads((output / "proof-bundle.json").read_text())["records"]
+    outcomes = {record["assertion_id"]: record["outcome"] for record in records}
+    assert outcomes["exact_executable_identity_observed"] == "infrastructure_error"
+    raw = json.loads((output / "raw-observation.json").read_text())
+    assert raw["pre_execution_identity"] != raw["post_execution_identity"]
