@@ -5,9 +5,13 @@ from __future__ import annotations
 import json
 import os
 import platform
+import re
+import shlex
+import signal
 import subprocess
+import sys
 import tempfile
-import uuid
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
@@ -78,6 +82,7 @@ def _record(
     outcome: AssertionOutcome,
     provider_version: str,
     assertion_id: str,
+    evidence_class: EvidenceClass,
 ) -> ProviderCapabilityProofRecord:
     return ProviderCapabilityProofRecord(
         provider="codex",
@@ -90,12 +95,12 @@ def _record(
         oracle_digest=oracle_digest,
         assertion_id=assertion_id,
         outcome=outcome,
-        evidence_class=EvidenceClass.LIVE_TOKEN,
+        evidence_class=evidence_class,
         generated_at=generated_at,
         producer_class=request["producer_class"],
         producer_version=request["producer_version"],
         invocation_id=request["invocation_id"],
-        mode="console",
+        mode=None,
         platform=platform.system(),
         architecture=platform.machine(),
         raw_reference_digests=(raw_digest,),
@@ -114,6 +119,7 @@ def _emit(
     outcomes: dict[str, AssertionOutcome],
     execution: dict[str, Any],
     observation: dict[str, Any],
+    evidence_class: EvidenceClass,
 ) -> dict[str, Any]:
     contract = contract_for_provider("codex")
     if contract is None:
@@ -146,6 +152,7 @@ def _emit(
             outcome=outcomes[assertion_id],
             provider_version=provider_version,
             assertion_id=assertion_id,
+            evidence_class=evidence_class,
         )
         store.write(record)
         records.append(record)
@@ -154,7 +161,7 @@ def _emit(
         "profile": PROFILE,
         "scenario_id": SCENARIO_ID,
         "scenario_revision": SCENARIO_REVISION,
-        "evidence_class": EvidenceClass.LIVE_TOKEN.value,
+        "evidence_class": evidence_class.value,
         "assertions": list(ASSERTIONS),
         "outcomes": serialized_outcomes,
         "complete": set(outcomes) == set(ASSERTIONS),
@@ -175,6 +182,37 @@ def _emit(
         "assertions": serialized_outcomes,
         "execution_status": execution["status"],
     }
+
+
+def _run_process_group(
+    argv: list[str],
+    *,
+    cwd: Path,
+    env: dict[str, str],
+    timeout: float,
+) -> subprocess.CompletedProcess[str]:
+    process = subprocess.Popen(  # noqa: S603
+        argv,
+        cwd=cwd,
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        with suppress(ProcessLookupError):
+            os.killpg(process.pid, signal.SIGTERM)
+        try:
+            stdout, stderr = process.communicate(timeout=2)
+        except subprocess.TimeoutExpired:
+            with suppress(ProcessLookupError):
+                os.killpg(process.pid, signal.SIGKILL)
+            stdout, stderr = process.communicate()
+        raise subprocess.TimeoutExpired(argv, timeout, output=stdout, stderr=stderr) from None
+    return subprocess.CompletedProcess(argv, process.returncode, stdout, stderr)
 
 
 def run(request_path: Path, output_root: Path) -> dict[str, Any]:
@@ -218,6 +256,7 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
             outcomes=outcomes,
             execution={"status": "blocked", "reason": "codex_api_key_missing", "processes_started": 0},
             observation={**base_observation, "blocked_reason": "codex_api_key_missing"},
+            evidence_class=EvidenceClass.LIVE_NO_TOKEN,
         )
 
     version_result: subprocess.CompletedProcess[str] | None = None
@@ -225,18 +264,17 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
     version_stderr = ""
     version_error: str | None = None
     version_timed_out = False
-    minimal_env = {
+    version_env = {
         "PATH": os.environ.get("PATH", ""),
         "LANG": "C",
         "LC_ALL": "C",
-        API_KEY_ENV: api_key,
     }
     try:
         version_result = subprocess.run(
             [str(binary), "--version"],
             text=True,
             capture_output=True,
-            env=minimal_env,
+            env=version_env,
             timeout=identity_bridge.TIMEOUT_SECONDS,
             check=False,
         )
@@ -276,10 +314,11 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
         tool_observation = {"status": "not_run", "reason": "provider_version_mismatch"}
     else:
         outcomes["reported_version_matches_expected"] = AssertionOutcome.PASS
-        marker = f"LONGHOUSE_CODEX_TOOL_{uuid.uuid4().hex}"
-        command = f"printf '%s\\n' '{marker}'"
-        final_text = f"DONE {marker}"
-        prompt = f"Use the shell tool once to run exactly: {command}. Then reply exactly: {final_text}"
+        command = f"{shlex.quote(sys.executable)} -c 'import secrets; print(secrets.token_hex(16))'"
+        prompt = (
+            "Use the shell tool exactly once to run exactly this one command: "
+            f"{command}\nThen reply with only the command output, copied exactly."
+        )
         with tempfile.TemporaryDirectory(prefix="longhouse-codex-qualification-") as raw_runtime:
             runtime_root = Path(raw_runtime)
             workspace = runtime_root / "workspace"
@@ -304,21 +343,23 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
                 str(workspace),
                 prompt,
             ]
-            tool_env = {**minimal_env, "HOME": str(runtime_root), "CODEX_HOME": str(codex_home)}
+            tool_env = {
+                **version_env,
+                API_KEY_ENV: api_key,
+                "HOME": str(runtime_root),
+                "CODEX_HOME": str(codex_home),
+            }
             tool_result: subprocess.CompletedProcess[str] | None = None
             tool_stdout = ""
             tool_stderr = ""
             tool_error: str | None = None
             tool_timed_out = False
             try:
-                tool_result = subprocess.run(
+                tool_result = _run_process_group(
                     argv,
                     cwd=workspace,
-                    text=True,
-                    capture_output=True,
                     env=tool_env,
                     timeout=TIMEOUT_SECONDS,
-                    check=False,
                 )
             except subprocess.TimeoutExpired as exc:
                 tool_timed_out = True
@@ -332,23 +373,27 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
                 tool_stderr = tool_result.stderr
         events, invalid_lines = _jsonl_events(tool_stdout)
         indexed_items = [(index, _event_item(event)) for index, event in enumerate(events)]
+        command_items = [(index, item) for index, item in indexed_items if item.get("type") == "command_execution"]
         matching_commands = [
             (index, item)
-            for index, item in indexed_items
-            if item.get("type") == "command_execution"
-            and item.get("status") == "completed"
+            for index, item in command_items
+            if item.get("status") == "completed"
             and item.get("exit_code") == 0
             and command in str(item.get("command") or "")
-            and str(item.get("aggregated_output") or "") == f"{marker}\n"
+            and re.fullmatch(r"[0-9a-f]{32}\n", str(item.get("aggregated_output") or "")) is not None
         ]
         agent_messages = [(index, item) for index, item in indexed_items if item.get("type") == "agent_message"]
         final_message = agent_messages[-1] if agent_messages else None
-        command_passed = bool(matching_commands)
+        command_passed = len(command_items) == 1 and len(matching_commands) == 1
+        raw_command_output = str(matching_commands[0][1].get("aggregated_output") or "") if command_passed else None
+        observed_output = raw_command_output.rstrip("\n") if raw_command_output is not None else None
         linked = bool(
-            matching_commands
+            command_passed
+            and observed_output
             and final_message
-            and final_message[0] > matching_commands[-1][0]
-            and str(final_message[1].get("text") or "").strip() == final_text
+            and final_message[0] > matching_commands[0][0]
+            and str(final_message[1].get("text") or "") == observed_output
+            and observed_output not in prompt
         )
         tool_infrastructure_error = tool_result is None or tool_result.returncode != 0
         if tool_infrastructure_error:
@@ -370,7 +415,10 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
             "stderr": _redact(tool_stderr, api_key),
             "invalid_jsonl_lines": [_redact(line, api_key) for line in invalid_lines],
             "event_count": len(events),
+            "command_event_count": len(command_items),
             "matching_command_count": len(matching_commands),
+            "raw_command_output": raw_command_output,
+            "observed_output": observed_output,
             "final_agent_message": _redact(str(final_message[1].get("text") or ""), api_key) if final_message else None,
         }
 
@@ -388,6 +436,7 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
         "version_probe": version_probe,
         "tool_run": tool_observation,
     }
+    semantic_process_attempted = bool(tool_observation is not None and tool_observation.get("status") != "not_run")
     return _emit(
         request=request,
         output_root=output_root,
@@ -401,4 +450,5 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
             "processes_started": 1 + int(tool_observation is not None and tool_observation.get("status") != "not_run"),
         },
         observation=observation,
+        evidence_class=(EvidenceClass.LIVE_TOKEN if semantic_process_attempted else EvidenceClass.LIVE_NO_TOKEN),
     )

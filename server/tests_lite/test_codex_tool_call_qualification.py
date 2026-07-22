@@ -4,6 +4,7 @@ import hashlib
 import json
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -22,37 +23,49 @@ def _stable_runner_checkout(monkeypatch) -> None:
 def _fake_codex(tmp_path: Path, *, behavior: str = "pass") -> tuple[Path, str, Path]:
     path = tmp_path / "codex"
     calls = tmp_path / "calls.jsonl"
+    descendant_marker = tmp_path / "timeout-descendant-survived"
     path.write_text(
         f"""#!{sys.executable}
 import json
 import os
 import re
+import subprocess
 import sys
 import time
 from pathlib import Path
 
 calls = Path({str(calls)!r})
 with calls.open("a", encoding="utf-8") as handle:
-    handle.write(json.dumps(sys.argv[1:]) + "\\n")
+    handle.write(json.dumps({{"argv": sys.argv[1:], "has_api_key": bool(os.environ.get("CODEX_API_KEY"))}}) + "\\n")
 if sys.argv[1:] == ["--version"]:
     print("codex-cli 1.2.3")
     raise SystemExit(0)
 prompt = sys.argv[-1]
-marker = re.search(r"LONGHOUSE_CODEX_TOOL_[0-9a-f]+", prompt).group(0)
-command = "printf '%s\\\\n' '" + marker + "'"
+command = prompt.split("exactly this one command: ", 1)[1].split("\\nThen", 1)[0]
 behavior = {behavior!r}
 if behavior == "timeout":
+    subprocess.Popen([
+        sys.executable,
+        "-c",
+        "import time; from pathlib import Path; time.sleep(0.2); Path({str(descendant_marker)!r}).write_text('alive')",
+    ])
     time.sleep(1)
 if behavior == "nonzero":
     print(os.environ.get("CODEX_API_KEY", ""), file=sys.stderr)
     raise SystemExit(7)
-output = marker + "\\n" if behavior != "semantic_mismatch" else "WRONG\\n"
+output = "0123456789abcdef0123456789abcdef\\n"
 print(json.dumps({{"type": "item.completed", "item": {{
     "id": "tool-1", "type": "command_execution", "command": command,
     "aggregated_output": output, "exit_code": 0, "status": "completed"
 }}}}))
+if behavior == "extra_command":
+    print(json.dumps({{"type": "item.completed", "item": {{
+        "id": "tool-2", "type": "command_execution", "command": "pwd",
+        "aggregated_output": "/tmp\\n", "exit_code": 0, "status": "completed"
+    }}}}))
 print(json.dumps({{"type": "item.completed", "item": {{
-    "id": "message-1", "type": "agent_message", "text": "DONE " + marker
+    "id": "message-1", "type": "agent_message",
+    "text": output.rstrip("\\n") if behavior != "semantic_mismatch" else "DIFFERENT"
 }}}}))
 print(os.environ.get("CODEX_API_KEY", ""), file=sys.stderr)
 if behavior == "mutate":
@@ -108,13 +121,20 @@ def test_live_profile_emits_strict_v2_bundle_and_least_privilege_command(tmp_pat
     raw = (output / "raw-evidence.json").read_bytes()
     assert bundle["execution_metadata"]["raw_evidence_digest"] == f"sha256:{hashlib.sha256(raw).hexdigest()}"
     invocations = [json.loads(line) for line in calls.read_text().splitlines()]
-    assert invocations[0] == ["--version"]
-    live = invocations[1]
+    assert invocations[0] == {"argv": ["--version"], "has_api_key": False}
+    assert invocations[1]["has_api_key"] is True
+    live = invocations[1]["argv"]
     assert "--sandbox" in live and live[live.index("--sandbox") + 1] == "workspace-write"
     assert 'approval_policy="never"' in live
     assert "--ephemeral" in live
     assert "--ignore-user-config" in live
     assert "--dangerously-bypass-approvals-and-sandbox" not in live
+    raw_evidence = json.loads(raw)
+    tool_run = raw_evidence["tool_run"]
+    assert tool_run["command_event_count"] == 1
+    assert tool_run["observed_output"] not in tool_run["argv"][-1]
+    assert tool_run["final_agent_message"] == tool_run["observed_output"]
+    assert {record["mode"] for record in bundle["records"]} == {None}
 
 
 def test_missing_credential_is_blocked_without_process_execution(tmp_path: Path, monkeypatch) -> None:
@@ -131,15 +151,40 @@ def test_missing_credential_is_blocked_without_process_execution(tmp_path: Path,
     outcomes = result["assertions"]
     assert outcomes["exact_executable_identity_observed"] == "pass"
     assert set(outcomes.values()) == {"pass", "blocked"}
+    records = json.loads((output / "proof-bundle.json").read_text())["records"]
+    assert {record["evidence_class"] for record in records} == {"live_no_token"}
+    coverage = json.loads((output / "coverage-manifest.json").read_text())
+    assert coverage["evidence_class"] == "live_no_token"
 
 
 def test_semantic_mismatch_does_not_change_execution_state(tmp_path: Path, monkeypatch) -> None:
     result, output, _ = _run(tmp_path, monkeypatch, behavior="semantic_mismatch")
 
     assert result["execution_status"] == "completed"
-    assert result["assertions"]["command_execution_completed_with_exact_output"] == "semantic_fail"
+    assert result["assertions"]["command_execution_completed_with_exact_output"] == "pass"
     assert result["assertions"]["tool_result_linked_to_final_agent_message"] == "semantic_fail"
     assert json.loads((output / "execution-summary.json").read_text())["status"] == "completed"
+
+
+def test_version_mismatch_never_claims_live_token_evidence(tmp_path: Path, monkeypatch) -> None:
+    binary, identity, _ = _fake_codex(tmp_path)
+    request = _request(tmp_path, binary, identity, expected_provider_version="9.9.9")
+    output = tmp_path / "output"
+    monkeypatch.setenv(profile.API_KEY_ENV, "seeded-test-api-key-not-a-real-secret")
+
+    result = provider_qualification.run(request, output)
+
+    assert result["execution_status"] == "completed"
+    records = json.loads((output / "proof-bundle.json").read_text())["records"]
+    assert {record["evidence_class"] for record in records} == {"live_no_token"}
+
+
+def test_more_than_one_command_is_a_semantic_failure(tmp_path: Path, monkeypatch) -> None:
+    result, _, _ = _run(tmp_path, monkeypatch, behavior="extra_command")
+
+    assert result["execution_status"] == "completed"
+    assert result["assertions"]["command_execution_completed_with_exact_output"] == "semantic_fail"
+    assert result["assertions"]["tool_result_linked_to_final_agent_message"] == "semantic_fail"
 
 
 @pytest.mark.parametrize("behavior", ["nonzero", "timeout"])
@@ -152,6 +197,9 @@ def test_process_failure_is_infrastructure_error(tmp_path: Path, monkeypatch, be
     assert result["assertions"]["command_execution_completed_with_exact_output"] == "infrastructure_error"
     assert result["assertions"]["tool_result_linked_to_final_agent_message"] == "infrastructure_error"
     assert json.loads((output / "execution-summary.json").read_text())["status"] == result["execution_status"]
+    if behavior == "timeout":
+        time.sleep(0.3)
+        assert not (tmp_path / "timeout-descendant-survived").exists()
 
 
 def test_subject_mutation_invalidates_all_assertions(tmp_path: Path, monkeypatch) -> None:
