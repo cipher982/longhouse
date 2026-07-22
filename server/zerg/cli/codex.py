@@ -56,6 +56,7 @@ _ROLLOUT_TERMINAL_EVENT_TYPES = {"task_complete", "turn_aborted"}
 _ROLLOUT_TAIL_LINES = 256
 _CODEX_VERSION_TIMEOUT_SECONDS = 5
 _CODEX_STOP_REASON_BRIDGE_STOP = "bridge_stop"
+_CODEX_STOP_REASON_CLEAN_TUI_EXIT = "clean_tui_exit"
 _CODEX_STOP_SIGNAL_TIMEOUT_SECONDS = 3.0
 _CODEX_BRIDGE_TOKEN_ENV = "LONGHOUSE_CODEX_BRIDGE_TOKEN"
 _CODEX_BIN_OPTION_HELP = " ".join(
@@ -983,18 +984,35 @@ def codex(
             typer.echo(f"Recovery target: {attach_cmd}")
         return
 
-    # The TUI is a client of the managed app-server, not its execution owner.
-    # A clean client exit is not permission to terminate the provider process;
-    # only an explicit stop/terminate operation may do that.
-    typer.secho("🔥  The hearth still burns — terminal detached.", fg=typer.colors.YELLOW)
-    typer.echo(f"   Rejoin: {attach_cmd}")
-    typer.echo(f"   Stop: longhouse codex stop --session-id {result.session_id}")
+    # A zero exit is the user's explicit close action. The provider thread is
+    # durable, so keeping an idle bridge/app-server alive would make process
+    # lifetime grow with session history. Crashes and terminal-loss signals
+    # take the nonzero path above and remain available for recovery.
+    stop_error = _stop_native_codex_bridge(
+        session_id=result.session_id,
+        reason=_CODEX_STOP_REASON_CLEAN_TUI_EXIT,
+        timeout_secs=_CODEX_STOP_SIGNAL_TIMEOUT_SECONDS,
+    )
+    if stop_error is not None:
+        typer.secho(
+            f"Managed Codex closed, but its background bridge could not be stopped: {stop_error}",
+            fg=typer.colors.YELLOW,
+        )
+        typer.echo(f"   Stop: longhouse codex stop --session-id {result.session_id}")
+        raise typer.Exit(code=1)
+    remove_managed_provider_contract(
+        provider="codex",
+        session_id=result.session_id,
+        config_dir=resolved_config_dir,
+        config_dir_is_provider_home=True,
+    )
+    launch_ui.exit_bookend(exit_code=0, machine_name=machine_name)
     _emit_warp_cli_agent_event(
         event="status",
         session_id=result.session_id,
         cwd=cwd,
         project=project,
-        response="Managed Codex terminal detached; bridge left running for reattach.",
+        response="Managed Codex terminal closed; bridge stopped and durable thread retained.",
     )
 
 

@@ -113,7 +113,7 @@ struct LonghouseMenuBarCoreTests {
         let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0))
 
         #expect(presentation.promotion == .normal)
-        #expect(presentation.headline == "1 session active")
+        #expect(presentation.headline == "1 Helm session open")
         #expect(presentation.backgroundActivity == "Archive projection scanning 1.4 GB · 2 ranges")
         #expect(!presentation.needsStatusItemBadge)
     }
@@ -1856,6 +1856,9 @@ struct LonghouseMenuBarCoreTests {
         #expect(snapshot.foregroundManagedCount == 1)
         #expect(snapshot.backgroundManagedCount == 1)
         #expect(snapshot.managedSummaryLabel == "2 sessions")
+        let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 1_715_648_400))
+        #expect(presentation.headline == "1 Helm session open")
+        #expect(presentation.subheadline.contains("1 background"))
         #expect(terminal.launchMode == "tui")
         #expect(terminal.uiAttached == true)
         #expect(terminal.normalizedUIPresence == "foreground_tui")

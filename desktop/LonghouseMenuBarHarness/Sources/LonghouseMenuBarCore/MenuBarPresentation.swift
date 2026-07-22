@@ -63,6 +63,7 @@ public struct MenuBarPresentation: Equatable, Sendable {
 extension HealthSnapshot {
     public func menuBarPresentation(relativeTo referenceDate: Date) -> MenuBarPresentation {
         let sessions = currentManagedSessions
+        let openHelmCount = foregroundManagedCount + legacyAttachedManagedCount
         let needsUser = sessions.filter { $0.explicitlyNeedsUser }.count
         let working = sessions.filter { $0.menuBarAttentionKind == .working }.count
         let blocked = sessions.filter { $0.menuBarAttentionKind == .blocked && !$0.explicitlyNeedsUser }.count
@@ -121,8 +122,10 @@ extension HealthSnapshot {
             headline = "Historical archive needs review"
         case .unavailable:
             headline = "Current local status unavailable"
-        case .normal where !sessions.isEmpty:
-            headline = "\(sessions.count) session\(sessions.count == 1 ? "" : "s") active"
+        case .normal where openHelmCount > 0:
+            headline = "\(openHelmCount) Helm session\(openHelmCount == 1 ? "" : "s") open"
+        case .normal where backgroundManagedCount > 0:
+            headline = "\(backgroundManagedCount) background session\(backgroundManagedCount == 1 ? "" : "s")"
         case .normal:
             headline = "No sessions running"
         }
@@ -134,6 +137,7 @@ extension HealthSnapshot {
         if blocked > 0 { counts.append("\(blocked) blocked") }
         if degraded > 0 { counts.append("\(degraded) limited") }
         if unknown > 0 { counts.append("\(unknown) phase unavailable") }
+        if backgroundManagedCount > 0 { counts.append("\(backgroundManagedCount) background") }
         counts.append("updated \(snapshotAgeCompactLabel(relativeTo: referenceDate))")
 
         return MenuBarPresentation(

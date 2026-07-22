@@ -91,10 +91,9 @@ def test_opencode_command_launches_managed_session_and_passes_extra_args(monkeyp
     )
 
     assert result.exit_code == 0, result.output
-    # Exiting the TUI detaches; it is not permission to stop the server.
-    assert stop_calls == []
-    assert "still burns" in result.output
-    assert "Stop: longhouse opencode-channel stop" in result.output
+    # A clean TUI exit stops the server; the durable thread can be resumed.
+    assert stop_calls == [{"session_id": "session-123", "config_dir": None}]
+    assert "hearth banked" in result.output
     assert launch_calls[0]["cwd"] == tmp_path
     assert launch_calls[0]["machine_name"] == "work-laptop"
     assert bridge_calls == [
@@ -108,8 +107,8 @@ def test_opencode_command_launches_managed_session_and_passes_extra_args(monkeyp
             "opencode_bin": "/opt/homebrew/bin/opencode",
             "cwd": tmp_path,
             "config_dir": None,
-            "launch_mode": opencode_channel.LAUNCH_MODE_KEEP_SERVER,
-            "owner_wrapper_pid": None,
+            "launch_mode": opencode_channel.LAUNCH_MODE_ATTACHED_TUI,
+            "owner_wrapper_pid": os.getpid(),
             "model": None,
         }
     ]
@@ -180,7 +179,7 @@ def test_opencode_funnels_model_flag_to_server(monkeypatch, tmp_path):
     )
 
     assert result.exit_code == 0, result.output
-    assert stop_calls == []
+    assert stop_calls == [{"session_id": "session-123", "config_dir": None}]
     assert bridge_calls == [
         {
             "session_id": "session-123",
@@ -192,8 +191,8 @@ def test_opencode_funnels_model_flag_to_server(monkeypatch, tmp_path):
             "opencode_bin": "/opt/homebrew/bin/opencode",
             "cwd": tmp_path,
             "config_dir": None,
-            "launch_mode": opencode_channel.LAUNCH_MODE_KEEP_SERVER,
-            "owner_wrapper_pid": None,
+            "launch_mode": opencode_channel.LAUNCH_MODE_ATTACHED_TUI,
+            "owner_wrapper_pid": os.getpid(),
             "model": "openrouter/z-ai/glm-5.2",
         }
     ]
@@ -250,7 +249,7 @@ def test_opencode_model_flag_requires_value_before_launch(monkeypatch, tmp_path)
     assert launch_calls == []
 
 
-def test_opencode_attached_tui_always_leaves_server_for_reattach(monkeypatch, tmp_path):
+def test_opencode_attached_tui_stops_server_after_clean_exit(monkeypatch, tmp_path):
     runner = CliRunner()
     bridge_calls: list[dict] = []
     stop_calls: list[dict] = []
@@ -271,9 +270,9 @@ def test_opencode_attached_tui_always_leaves_server_for_reattach(monkeypatch, tm
     result = runner.invoke(app, ["opencode", "--cwd", str(tmp_path), "--", "serve"])
 
     assert result.exit_code == 0, result.output
-    assert bridge_calls[0]["launch_mode"] == opencode_channel.LAUNCH_MODE_KEEP_SERVER
-    assert bridge_calls[0]["owner_wrapper_pid"] is None
-    assert stop_calls == []
+    assert bridge_calls[0]["launch_mode"] == opencode_channel.LAUNCH_MODE_ATTACHED_TUI
+    assert bridge_calls[0]["owner_wrapper_pid"] == os.getpid()
+    assert stop_calls == [{"session_id": "session-123", "config_dir": None}]
 
 
 def test_opencode_no_attach_uses_detached_launch_mode(monkeypatch, tmp_path):

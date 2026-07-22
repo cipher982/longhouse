@@ -2133,6 +2133,10 @@ fn codex_ui_presence(
     let obs = obs?;
     match obs.launch_mode.as_deref().map(str::trim) {
         Some("tui") if obs.has_tui_attachment => Some("foreground_tui"),
+        // A TUI launch without a live terminal can only remain after a crash,
+        // signal, or failed clean-exit cleanup. Keep its control liveness, but
+        // never present it as an open Helm terminal.
+        Some("tui") => Some("background"),
         Some("detached_ui") if lease_state == "attached" => Some("background"),
         _ => None,
     }
@@ -3110,7 +3114,13 @@ mod tests {
         background.app_server_alive = true;
         background.thread_id = Some("thread-background".to_string());
 
-        let observations = vec![foreground, background];
+        let mut recovered = test_observation("recovered-codex", "ws://127.0.0.1:45683/session");
+        recovered.launch_mode = Some("tui".to_string());
+        recovered.has_tui_attachment = false;
+        recovered.app_server_alive = true;
+        recovered.thread_id = Some("thread-recovered".to_string());
+
+        let observations = vec![foreground, background, recovered];
         let leases = leases_from_observations("cinder", &observations, now);
         let sessions =
             resolved_sessions_from_observations(&leases, &[], &observations, &[], &[], &[]);
@@ -3146,6 +3156,17 @@ mod tests {
         assert_eq!(background_session.bridge.ui_attached, Some(false));
         assert_eq!(
             background_session.bridge.ui_presence.as_deref(),
+            Some("background")
+        );
+
+        let recovered_session = sessions
+            .iter()
+            .find(|session| session.session_id.as_deref() == Some("recovered-codex"))
+            .unwrap();
+        assert_eq!(recovered_session.state, "attached");
+        assert_eq!(recovered_session.bridge.ui_attached, Some(false));
+        assert_eq!(
+            recovered_session.bridge.ui_presence.as_deref(),
             Some("background")
         );
     }

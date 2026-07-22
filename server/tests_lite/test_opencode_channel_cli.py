@@ -338,6 +338,7 @@ def test_stop_bridge_kills_when_identity_matches(monkeypatch, tmp_path):
 
     assert killed == [4242]
     assert result["stopped"] is True
+    assert not opencode_channel._opencode_server_state_path(session_id, tmp_path / "config").exists()
 
 
 def test_stop_bridge_without_recorded_identity_rejects_reused_non_opencode_pid(monkeypatch, tmp_path):

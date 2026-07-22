@@ -677,6 +677,10 @@ def stop_opencode_server_bridge(
     matched = _pid_matches_recorded_identity(state)
     if matched:
         _terminate_pid(state.pid)
+    # A stopped bridge must disappear from future engine scans. Leaving the
+    # durable state file behind would project a detached managed session forever
+    # even though its provider process is gone.
+    _opencode_server_state_path(session_id, config_dir).unlink(missing_ok=True)
     return {
         "exit_code": 0,
         "stdout": "",
@@ -786,6 +790,15 @@ def attach_command(
     except (_OpenCodeLaunchError, OpenCodeServerBridgeError) as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from exc
+    if code == 0:
+        try:
+            stop_opencode_server_bridge(
+                session_id=session_id,
+                config_dir=Path(config_dir) if config_dir else None,
+            )
+        except OpenCodeServerBridgeError as exc:
+            typer.echo(f"OpenCode closed, but its background server could not be stopped: {exc}", err=True)
+            raise typer.Exit(code=1) from exc
     if code != 0:
         raise typer.Exit(code=code)
 

@@ -905,8 +905,8 @@ def opencode(
 
     is_interactive = _interactive_stdio()
 
+    from zerg.cli.opencode_channel import LAUNCH_MODE_ATTACHED_TUI
     from zerg.cli.opencode_channel import LAUNCH_MODE_DETACHED
-    from zerg.cli.opencode_channel import LAUNCH_MODE_KEEP_SERVER
     from zerg.cli.opencode_channel import OpenCodeServerBridgeError
     from zerg.cli.opencode_channel import _install_opencode_signal_cleanup
     from zerg.cli.opencode_channel import _restore_signal_handlers
@@ -915,7 +915,7 @@ def opencode(
 
     will_attach = attach and is_interactive
     if will_attach:
-        launch_mode = LAUNCH_MODE_KEEP_SERVER
+        launch_mode = LAUNCH_MODE_ATTACHED_TUI
     else:
         launch_mode = LAUNCH_MODE_DETACHED
 
@@ -932,7 +932,7 @@ def opencode(
             opencode_bin=resolved_opencode_bin,
             config_dir=resolved_config_dir,
             launch_mode=launch_mode,
-            owner_wrapper_pid=None,
+            owner_wrapper_pid=os.getpid() if will_attach else None,
             model=model,
         )
     except (_OpenCodeLaunchError, OpenCodeServerBridgeError) as exc:
@@ -971,8 +971,8 @@ def opencode(
         return
 
     launch_ui.progress("Attaching OpenCode…")
-    # The attach TUI is a client, not the execution owner. Its exit or failure
-    # must never terminate the managed provider server.
+    # A clean attach exit is the user's explicit close action. Nonzero exits and
+    # terminal-loss signals preserve the server for recovery.
     previous_handlers = _install_opencode_signal_cleanup()
     exit_code = 1
     try:
@@ -989,9 +989,19 @@ def opencode(
         _restore_signal_handlers(previous_handlers)
 
     if exit_code == 0:
-        typer.secho("🔥  The hearth still burns — terminal detached.", fg=typer.colors.YELLOW)
-        typer.echo(f"   Rejoin: {attach_command}")
-        typer.echo(f"   Stop: longhouse opencode-channel stop --session-id {result.session_id}")
+        try:
+            from zerg.cli.opencode_channel import stop_opencode_server_bridge
+
+            stop_opencode_server_bridge(session_id=result.session_id, config_dir=resolved_config_dir)
+        except OpenCodeServerBridgeError as exc:
+            typer.secho(
+                f"OpenCode closed, but its background server could not be stopped: {exc}",
+                fg=typer.colors.YELLOW,
+            )
+            typer.echo(f"   Stop: longhouse opencode-channel stop --session-id {result.session_id}")
+            raise typer.Exit(code=1) from exc
+        remove_managed_provider_contract(provider="opencode", session_id=result.session_id, config_dir=resolved_config_dir)
+        launch_ui.exit_bookend(exit_code=0, machine_name=machine_name)
     else:
         launch_ui.exit_bookend(
             exit_code=exit_code,

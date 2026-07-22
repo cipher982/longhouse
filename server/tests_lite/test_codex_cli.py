@@ -631,9 +631,8 @@ def test_codex_command_starts_native_bridge_and_attaches(monkeypatch, tmp_path):
     assert "Remote target: ws://127.0.0.1:4800" in result.output
     assert "Opening session in browser..." in result.output
     assert "Attaching…" in result.output
-    # A clean TUI exit detaches; it is not permission to kill the provider.
-    assert "still burns" in result.output
-    assert "terminal detached" in result.output
+    # A clean TUI exit closes the process control path; the thread is durable.
+    assert "hearth banked" in result.output
     assert open_calls == ["https://longhouse.test/timeline/session-123"]
     assert bridge_calls == [
         {
@@ -653,8 +652,14 @@ def test_codex_command_starts_native_bridge_and_attaches(monkeypatch, tmp_path):
         ("session-123", "/tmp/codex", "ws://127.0.0.1:4800", str(tmp_path), False, None, None, None)
     ]
     contracts = list_managed_session_contracts(tmp_path / ".longhouse")
-    assert contracts[0]["session_id"] == "session-123"
-    assert stop_calls == []
+    assert contracts == []
+    assert stop_calls == [
+        {
+            "session_id": "session-123",
+            "reason": codex_cli._CODEX_STOP_REASON_CLEAN_TUI_EXIT,
+            "timeout_secs": codex_cli._CODEX_STOP_SIGNAL_TIMEOUT_SECONDS,
+        }
+    ]
 
 
 def test_codex_command_no_attach_fails_when_prestart_lacks_thread(monkeypatch, tmp_path):
