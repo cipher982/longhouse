@@ -124,7 +124,7 @@ def test_provider_wide_context_cannot_enable_session_action() -> None:
         context=_context(session_id=None),
         records=(record,),
         proof_identity=_identity(),
-        trusted_producer_classes=frozenset({"release_ci"}),
+        trusted_artifact_ids=frozenset({record.artifact_id}),
     )
 
     assert decision.verification is VerificationState.PROVEN
@@ -144,7 +144,7 @@ def test_exact_proof_and_session_context_enable_strict_action() -> None:
         context=_context(),
         records=(record,),
         proof_identity=_identity(),
-        trusted_producer_classes=frozenset({"release_ci"}),
+        trusted_artifact_ids=frozenset({record.artifact_id}),
     )
 
     assert decision.verification is VerificationState.PROVEN
@@ -164,7 +164,7 @@ def test_resolved_policy_disables_proven_action() -> None:
         context=_context(resolved_policy={"provider.codex.coordination_message": False}),
         records=(record,),
         proof_identity=_identity(),
-        trusted_producer_classes=frozenset({"release_ci"}),
+        trusted_artifact_ids=frozenset({record.artifact_id}),
     )
 
     assert decision.action is ProductAction.DISABLED
@@ -210,7 +210,7 @@ def test_expired_proof_is_stale_and_cannot_enable_strict_action() -> None:
         context=_context(),
         records=(record,),
         proof_identity=_identity(),
-        trusted_producer_classes=frozenset({"release_ci"}),
+        trusted_artifact_ids=frozenset({record.artifact_id}),
     )
 
     assert decision.verification is VerificationState.STALE

@@ -62,7 +62,7 @@ def collect_provider_support_state(
     observed_at: datetime | None = None,
     capability_proof_records: Mapping[str, tuple[ProviderCapabilityProofRecord, ...]] | None = None,
     provider_executable_identities: Mapping[str, str | None] | None = None,
-    trusted_capability_producer_classes: frozenset[str] = frozenset(),
+    trusted_capability_artifact_ids: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
     provider_clis = dict(provider_clis or {})
     provider_release_status = dict(provider_release_status or {})
@@ -96,7 +96,7 @@ def collect_provider_support_state(
             observed_at=observed_at,
             records=capability_proof_records.get(provider, ()),
             provider_executable_identity=provider_executable_identities.get(provider),
-            trusted_producer_classes=trusted_capability_producer_classes,
+            trusted_artifact_ids=trusted_capability_artifact_ids,
         )
         available_operations = [
             capability_id for capability_id, decision in semantic_capability_shadow.items() if decision.get("action") == "enabled"
@@ -173,7 +173,7 @@ def _semantic_capability_shadow(
     observed_at: datetime,
     records: tuple[ProviderCapabilityProofRecord, ...],
     provider_executable_identity: str | None,
-    trusted_producer_classes: frozenset[str],
+    trusted_artifact_ids: frozenset[str],
 ) -> dict[str, dict[str, Any]]:
     context = EvaluationContext(
         machine_id="provider_support_state",
@@ -194,7 +194,7 @@ def _semantic_capability_shadow(
                 adapter_digest=contract.adapter_digest,
                 declaration=declaration,
             ),
-            trusted_producer_classes=trusted_producer_classes,
+            trusted_artifact_ids=trusted_artifact_ids,
         ).serialize()
         for capability_id, declaration in contract.capabilities.items()
     }

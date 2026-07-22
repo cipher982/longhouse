@@ -53,7 +53,7 @@ def _requirement(**changes) -> ProofRequirement:
         scenario_id="codex_active_steer",
         minimum_scenario_revision=2,
         acceptable_evidence=frozenset({EvidenceClass.LIVE_TOKEN}),
-        trusted_producer_classes=frozenset({"release_ci"}),
+        trusted_artifact_ids=frozenset({_record().artifact_id}),
         provider_contract_digest="sha256:contract",
         adapter_digest="sha256:adapter",
         oracle_digest="sha256:oracle",
@@ -120,7 +120,11 @@ def test_later_failure_does_not_erase_unexpired_applicable_pass() -> None:
         invocation_id="run-456",
     )
 
-    selection = select_proof([earlier_pass, latest_failure], _requirement(), observed_at=NOW)
+    selection = select_proof(
+        [earlier_pass, latest_failure],
+        _requirement(trusted_artifact_ids=frozenset({earlier_pass.artifact_id, latest_failure.artifact_id})),
+        observed_at=NOW,
+    )
 
     assert selection.qualifying_pass == earlier_pass
     assert selection.latest_run == latest_failure

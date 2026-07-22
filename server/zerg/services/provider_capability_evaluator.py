@@ -90,7 +90,7 @@ def evaluate_capability(
     context: EvaluationContext,
     records: tuple[ProviderCapabilityProofRecord, ...] = (),
     proof_identity: ProviderProofIdentity | None = None,
-    trusted_producer_classes: frozenset[str] = frozenset(),
+    trusted_artifact_ids: frozenset[str] = frozenset(),
 ) -> CapabilityDecision:
     disposition = CapabilityDisposition(str(declaration["disposition"]))
     policy_key = str(declaration["policy_key"])
@@ -134,7 +134,7 @@ def evaluate_capability(
                 scenario_id=scenario_id,
                 minimum_scenario_revision=int(assertion["minimum_scenario_revision"]),
                 acceptable_evidence=frozenset(EvidenceClass(value) for value in assertion["acceptable_evidence"]),
-                trusted_producer_classes=trusted_producer_classes,
+                trusted_artifact_ids=trusted_artifact_ids,
                 provider_contract_digest=provider_contract_digest,
                 adapter_digest=proof_identity.adapter_digest,
                 oracle_digest=oracle_digest,
@@ -194,7 +194,7 @@ def evaluate_capability(
         context=context,
         record_ids=tuple(record.artifact_id for record in records),
         proof_identity=proof_identity,
-        trusted_producer_classes=trusted_producer_classes,
+        trusted_artifact_ids=trusted_artifact_ids,
     )
     return CapabilityDecision(
         capability_id=capability_id,
@@ -217,7 +217,7 @@ def _input_bundle_digest(
     context: EvaluationContext,
     record_ids: tuple[str, ...],
     proof_identity: ProviderProofIdentity | None,
-    trusted_producer_classes: frozenset[str],
+    trusted_artifact_ids: frozenset[str],
 ) -> str:
     context_payload = asdict(context)
     context_payload["observed_at"] = context.observed_at.isoformat()
@@ -228,7 +228,7 @@ def _input_bundle_digest(
         "context": context_payload,
         "record_ids": sorted(record_ids),
         "proof_identity": asdict(proof_identity) if proof_identity else None,
-        "trusted_producer_classes": sorted(trusted_producer_classes),
+        "trusted_artifact_ids": sorted(trusted_artifact_ids),
     }
     encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode()
     return hashlib.sha256(encoded).hexdigest()

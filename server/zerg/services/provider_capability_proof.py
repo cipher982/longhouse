@@ -1,8 +1,8 @@
 """Pure executable provider-capability proof records and qualification.
 
-This module does not read files, invoke providers, or decide producer trust.
-Callers supply the trusted producer classes and expected scoped identities for
-the claim they are evaluating.
+This module does not read files, invoke providers, or establish producer trust.
+Callers supply exact artifact IDs authenticated out of band plus the expected
+scoped identities for the claim they are evaluating.
 """
 
 from __future__ import annotations
@@ -92,7 +92,7 @@ class ProofRequirement:
     scenario_id: str
     minimum_scenario_revision: int
     acceptable_evidence: frozenset[EvidenceClass]
-    trusted_producer_classes: frozenset[str]
+    trusted_artifact_ids: frozenset[str]
     provider_contract_digest: str
     adapter_digest: str
     oracle_digest: str
@@ -222,7 +222,7 @@ def evaluate_proof_applicability(
         reasons.append("proof_adapter_mismatch")
     if record.oracle_digest != requirement.oracle_digest:
         reasons.append("proof_oracle_mismatch")
-    if record.producer_class not in requirement.trusted_producer_classes:
+    if record.artifact_id not in requirement.trusted_artifact_ids:
         reasons.append("proof_untrusted_producer")
     if record.evidence_class not in requirement.acceptable_evidence:
         reasons.append("evidence_class_insufficient")

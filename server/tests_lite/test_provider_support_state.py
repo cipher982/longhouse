@@ -116,7 +116,7 @@ def test_support_state_consumes_matching_v2_proof_without_enabling_machine_wide_
         observed_at=datetime(2026, 7, 22, 17, 0, tzinfo=UTC),
         capability_proof_records={"codex": (record,)},
         provider_executable_identities={"codex": "sha256:provider"},
-        trusted_capability_producer_classes=frozenset({"release_ci"}),
+        trusted_capability_artifact_ids=frozenset({record.artifact_id}),
     )
 
     decision = support["providers"]["codex"]["capabilities"]["semantic_capability_shadow"][
