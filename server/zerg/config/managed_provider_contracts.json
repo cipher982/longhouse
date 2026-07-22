@@ -27,9 +27,15 @@
       "capabilities": {
         "coordination.awareness.create": {
           "disposition": "implemented",
-          "reason_code": "implementation_declared",
+          "reason_code": "semantic_proof_missing",
           "policy_key": "provider.codex.coordination_awareness",
           "action_gate": "ceiling",
+          "contexts": {
+            "modes": [
+              "helm",
+              "console"
+            ]
+          },
           "required_assertions": [
             {
               "id": "coordination_instructions_model_visible",
@@ -37,15 +43,22 @@
               "minimum_scenario_revision": 1,
               "acceptable_evidence": [
                 "live_token"
-              ]
+              ],
+              "max_age_seconds": 86400
             }
           ]
         },
         "coordination.awareness.post_compaction": {
           "disposition": "implemented",
-          "reason_code": "implementation_declared",
+          "reason_code": "semantic_proof_missing",
           "policy_key": "provider.codex.coordination_awareness",
           "action_gate": "ceiling",
+          "contexts": {
+            "modes": [
+              "helm",
+              "console"
+            ]
+          },
           "required_assertions": [
             {
               "id": "coordination_instructions_model_visible_after_compaction",
@@ -53,7 +66,8 @@
               "minimum_scenario_revision": 1,
               "acceptable_evidence": [
                 "live_token"
-              ]
+              ],
+              "max_age_seconds": 86400
             },
             {
               "id": "no_duplicate_visible_bootstrap",
@@ -62,15 +76,22 @@
               "acceptable_evidence": [
                 "hermetic",
                 "live_token"
-              ]
+              ],
+              "max_age_seconds": 604800
             }
           ]
         },
         "coordination.message.send": {
           "disposition": "implemented",
-          "reason_code": "implementation_declared",
+          "reason_code": "semantic_proof_missing",
           "policy_key": "provider.codex.coordination_message",
           "action_gate": "strict",
+          "contexts": {
+            "modes": [
+              "helm",
+              "console"
+            ]
+          },
           "required_assertions": [
             {
               "id": "directed_message_persisted_and_delivered",
@@ -79,15 +100,22 @@
               "acceptable_evidence": [
                 "hermetic",
                 "live_token"
-              ]
+              ],
+              "max_age_seconds": 604800
             }
           ]
         },
         "coordination.message.receive": {
           "disposition": "implemented",
-          "reason_code": "implementation_declared",
+          "reason_code": "semantic_proof_missing",
           "policy_key": "provider.codex.coordination_message",
           "action_gate": "ceiling",
+          "contexts": {
+            "modes": [
+              "helm",
+              "console"
+            ]
+          },
           "required_assertions": [
             {
               "id": "attributed_message_visible",
@@ -96,7 +124,8 @@
               "acceptable_evidence": [
                 "hermetic",
                 "live_token"
-              ]
+              ],
+              "max_age_seconds": 604800
             }
           ]
         }
@@ -196,9 +225,15 @@
       "capabilities": {
         "coordination.awareness.create": {
           "disposition": "implemented",
-          "reason_code": "implementation_declared",
+          "reason_code": "semantic_proof_missing",
           "policy_key": "provider.claude.coordination_awareness",
           "action_gate": "ceiling",
+          "contexts": {
+            "modes": [
+              "helm",
+              "console"
+            ]
+          },
           "required_assertions": [
             {
               "id": "coordination_instructions_model_visible",
@@ -206,15 +241,22 @@
               "minimum_scenario_revision": 1,
               "acceptable_evidence": [
                 "live_token"
-              ]
+              ],
+              "max_age_seconds": 86400
             }
           ]
         },
         "coordination.awareness.post_compaction": {
           "disposition": "implemented",
-          "reason_code": "implementation_declared",
+          "reason_code": "semantic_proof_missing",
           "policy_key": "provider.claude.coordination_awareness",
           "action_gate": "ceiling",
+          "contexts": {
+            "modes": [
+              "helm",
+              "console"
+            ]
+          },
           "required_assertions": [
             {
               "id": "coordination_instructions_model_visible_after_compaction",
@@ -222,7 +264,8 @@
               "minimum_scenario_revision": 1,
               "acceptable_evidence": [
                 "live_token"
-              ]
+              ],
+              "max_age_seconds": 86400
             },
             {
               "id": "no_duplicate_visible_bootstrap",
@@ -231,15 +274,22 @@
               "acceptable_evidence": [
                 "hermetic",
                 "live_token"
-              ]
+              ],
+              "max_age_seconds": 604800
             }
           ]
         },
         "coordination.message.send": {
           "disposition": "implemented",
-          "reason_code": "implementation_declared",
+          "reason_code": "semantic_proof_missing",
           "policy_key": "provider.claude.coordination_message",
           "action_gate": "strict",
+          "contexts": {
+            "modes": [
+              "helm",
+              "console"
+            ]
+          },
           "required_assertions": [
             {
               "id": "directed_message_persisted_and_delivered",
@@ -248,15 +298,22 @@
               "acceptable_evidence": [
                 "hermetic",
                 "live_token"
-              ]
+              ],
+              "max_age_seconds": 604800
             }
           ]
         },
         "coordination.message.receive": {
           "disposition": "implemented",
-          "reason_code": "implementation_declared",
+          "reason_code": "semantic_proof_missing",
           "policy_key": "provider.claude.coordination_message",
           "action_gate": "ceiling",
+          "contexts": {
+            "modes": [
+              "helm",
+              "console"
+            ]
+          },
           "required_assertions": [
             {
               "id": "attributed_message_visible",
@@ -265,7 +322,8 @@
               "acceptable_evidence": [
                 "hermetic",
                 "live_token"
-              ]
+              ],
+              "max_age_seconds": 604800
             }
           ]
         }

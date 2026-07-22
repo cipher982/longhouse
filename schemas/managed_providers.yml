@@ -30,48 +30,61 @@ providers:
   capabilities:
     coordination.awareness.create:
       disposition: implemented
-      reason_code: implementation_declared
+      reason_code: semantic_proof_missing
       policy_key: provider.codex.coordination_awareness
       action_gate: ceiling
+      contexts:
+        modes: [helm, console]
       required_assertions:
       - id: coordination_instructions_model_visible
         scenario_id: codex_coordination_awareness_create
         minimum_scenario_revision: 1
         acceptable_evidence: [live_token]
+        max_age_seconds: 86400
     coordination.awareness.post_compaction:
       disposition: implemented
-      reason_code: implementation_declared
+      reason_code: semantic_proof_missing
       policy_key: provider.codex.coordination_awareness
       action_gate: ceiling
+      contexts:
+        modes: [helm, console]
       required_assertions:
       - id: coordination_instructions_model_visible_after_compaction
         scenario_id: codex_coordination_awareness_post_compaction
         minimum_scenario_revision: 1
         acceptable_evidence: [live_token]
+        max_age_seconds: 86400
       - id: no_duplicate_visible_bootstrap
         scenario_id: codex_coordination_awareness_post_compaction
         minimum_scenario_revision: 1
         acceptable_evidence: [hermetic, live_token]
+        max_age_seconds: 604800
     coordination.message.send:
       disposition: implemented
-      reason_code: implementation_declared
+      reason_code: semantic_proof_missing
       policy_key: provider.codex.coordination_message
       action_gate: strict
+      contexts:
+        modes: [helm, console]
       required_assertions:
       - id: directed_message_persisted_and_delivered
         scenario_id: codex_coordination_message
         minimum_scenario_revision: 1
         acceptable_evidence: [hermetic, live_token]
+        max_age_seconds: 604800
     coordination.message.receive:
       disposition: implemented
-      reason_code: implementation_declared
+      reason_code: semantic_proof_missing
       policy_key: provider.codex.coordination_message
       action_gate: ceiling
+      contexts:
+        modes: [helm, console]
       required_assertions:
       - id: attributed_message_visible
         scenario_id: codex_coordination_message
         minimum_scenario_revision: 1
         acceptable_evidence: [hermetic, live_token]
+        max_age_seconds: 604800
 
   can_resume: true
   turn_start: true
@@ -153,48 +166,61 @@ providers:
   capabilities:
     coordination.awareness.create:
       disposition: implemented
-      reason_code: implementation_declared
+      reason_code: semantic_proof_missing
       policy_key: provider.claude.coordination_awareness
       action_gate: ceiling
+      contexts:
+        modes: [helm, console]
       required_assertions:
       - id: coordination_instructions_model_visible
         scenario_id: claude_coordination_awareness_create
         minimum_scenario_revision: 1
         acceptable_evidence: [live_token]
+        max_age_seconds: 86400
     coordination.awareness.post_compaction:
       disposition: implemented
-      reason_code: implementation_declared
+      reason_code: semantic_proof_missing
       policy_key: provider.claude.coordination_awareness
       action_gate: ceiling
+      contexts:
+        modes: [helm, console]
       required_assertions:
       - id: coordination_instructions_model_visible_after_compaction
         scenario_id: claude_coordination_awareness_post_compaction
         minimum_scenario_revision: 1
         acceptable_evidence: [live_token]
+        max_age_seconds: 86400
       - id: no_duplicate_visible_bootstrap
         scenario_id: claude_coordination_awareness_post_compaction
         minimum_scenario_revision: 1
         acceptable_evidence: [hermetic, live_token]
+        max_age_seconds: 604800
     coordination.message.send:
       disposition: implemented
-      reason_code: implementation_declared
+      reason_code: semantic_proof_missing
       policy_key: provider.claude.coordination_message
       action_gate: strict
+      contexts:
+        modes: [helm, console]
       required_assertions:
       - id: directed_message_persisted_and_delivered
         scenario_id: claude_coordination_message
         minimum_scenario_revision: 1
         acceptable_evidence: [hermetic, live_token]
+        max_age_seconds: 604800
     coordination.message.receive:
       disposition: implemented
-      reason_code: implementation_declared
+      reason_code: semantic_proof_missing
       policy_key: provider.claude.coordination_message
       action_gate: ceiling
+      contexts:
+        modes: [helm, console]
       required_assertions:
       - id: attributed_message_visible
         scenario_id: claude_coordination_message
         minimum_scenario_revision: 1
         acceptable_evidence: [hermetic, live_token]
+        max_age_seconds: 604800
 
   can_resume: true
   turn_start: true

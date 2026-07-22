@@ -96,7 +96,8 @@ class ProofRequirement:
     provider_contract_digest: str
     adapter_digest: str
     oracle_digest: str
-    provider_version: str | None = None
+    provider_version: str
+    provider_executable_identity: str
     mode: str | None = None
     permission_mode: str | None = None
     platform: str | None = None
@@ -207,8 +208,10 @@ def evaluate_proof_applicability(
     reasons: list[str] = []
     if record.provider != requirement.provider:
         reasons.append("proof_provider_mismatch")
-    if requirement.provider_version is not None and record.provider_version != requirement.provider_version:
+    if record.provider_version != requirement.provider_version:
         reasons.append("proof_provider_version_mismatch")
+    if record.provider_executable_identity != requirement.provider_executable_identity:
+        reasons.append("proof_executable_mismatch")
     if record.assertion_id != requirement.assertion_id or record.scenario_id != requirement.scenario_id:
         reasons.append("semantic_proof_missing")
     if record.scenario_revision < requirement.minimum_scenario_revision:
@@ -218,7 +221,7 @@ def evaluate_proof_applicability(
     if record.adapter_digest != requirement.adapter_digest:
         reasons.append("proof_adapter_mismatch")
     if record.oracle_digest != requirement.oracle_digest:
-        reasons.append("proof_scenario_revision_mismatch")
+        reasons.append("proof_oracle_mismatch")
     if record.producer_class not in requirement.trusted_producer_classes:
         reasons.append("proof_untrusted_producer")
     if record.evidence_class not in requirement.acceptable_evidence:
@@ -246,7 +249,14 @@ def select_proof(
     *,
     observed_at: datetime,
 ) -> ProofSelection:
-    ordered = sorted(records, key=lambda record: (_parse_timestamp(record.generated_at), record.artifact_id), reverse=True)
+    relevant = (
+        record
+        for record in records
+        if record.provider == requirement.provider
+        and record.assertion_id == requirement.assertion_id
+        and record.scenario_id == requirement.scenario_id
+    )
+    ordered = sorted(relevant, key=lambda record: (_parse_timestamp(record.generated_at), record.artifact_id), reverse=True)
     latest_run = ordered[0] if ordered else None
     qualifying_pass: ProviderCapabilityProofRecord | None = None
     rejected: list[tuple[str, tuple[str, ...]]] = []

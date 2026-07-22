@@ -48,6 +48,7 @@ def _requirement(**changes) -> ProofRequirement:
     requirement = ProofRequirement(
         provider="codex",
         provider_version="0.145.0",
+        provider_executable_identity="sha256:provider",
         assertion_id="nonce_observed_before_turn_end",
         scenario_id="codex_active_steer",
         minimum_scenario_revision=2,
@@ -86,6 +87,7 @@ def test_record_rejects_tampered_artifact_identity() -> None:
     ("record", "requirement", "reason"),
     [
         (_record(provider_version="0.146.0"), _requirement(), "proof_provider_version_mismatch"),
+        (_record(provider_executable_identity="other"), _requirement(), "proof_executable_mismatch"),
         (_record(provider_contract_digest="other"), _requirement(), "proof_manifest_mismatch"),
         (_record(adapter_digest="other"), _requirement(), "proof_adapter_mismatch"),
         (_record(scenario_revision=1), _requirement(), "proof_scenario_revision_mismatch"),
@@ -124,6 +126,22 @@ def test_later_failure_does_not_erase_unexpired_applicable_pass() -> None:
     assert selection.latest_run == latest_failure
     assert selection.latest_run_failed is True
     assert selection.rejected[0][0] == latest_failure.artifact_id
+
+
+def test_other_assertion_failure_does_not_contaminate_selection() -> None:
+    relevant = _record(outcome=AssertionOutcome.INFRASTRUCTURE_ERROR)
+    unrelated = _record(
+        assertion_id="different_assertion",
+        scenario_id="different_scenario",
+        outcome=AssertionOutcome.SEMANTIC_FAIL,
+        generated_at="2026-07-22T15:30:00Z",
+    )
+
+    selection = select_proof([relevant, unrelated], _requirement(), observed_at=NOW)
+
+    assert selection.latest_run == relevant
+    assert selection.latest_run_failed is True
+    assert all(artifact_id != unrelated.artifact_id for artifact_id, _ in selection.rejected)
 
 
 def test_untrusted_records_remain_visible_but_never_qualify() -> None:

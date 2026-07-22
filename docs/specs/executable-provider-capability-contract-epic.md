@@ -249,6 +249,7 @@ proof_provider_version_mismatch
 proof_manifest_mismatch
 proof_adapter_mismatch
 proof_scenario_revision_mismatch
+proof_oracle_mismatch
 proof_platform_mismatch
 proof_untrusted_producer
 cli_unavailable

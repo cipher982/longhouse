@@ -34,6 +34,7 @@ class EvaluationContext:
     platform: str | None = None
     architecture: str | None = None
     provider_version: str | None = None
+    provider_executable_identity: str | None = None
     runtime: RuntimeState = RuntimeState.UNKNOWN
     resolved_policy: Mapping[str, bool] | None = None
 
@@ -86,9 +87,13 @@ def evaluate_capability(
     latest_run_failed = False
     missing_states: list[VerificationState] = []
 
-    if proof_identity is None:
+    contexts = declaration.get("contexts") or {}
+    allowed_modes = set(contexts.get("modes") or ())
+    applicable = not allowed_modes or context.mode in allowed_modes
+
+    if proof_identity is None or not context.provider_version or not context.provider_executable_identity:
         verification = VerificationState.INCONCLUSIVE
-        reason_codes.append("semantic_proof_missing")
+        reason_codes.append("cli_unavailable" if not context.provider_executable_identity else "semantic_proof_missing")
     else:
         for assertion in declaration.get("required_assertions") or ():
             scenario_id = str(assertion["scenario_id"])
@@ -100,6 +105,7 @@ def evaluate_capability(
             requirement = ProofRequirement(
                 provider=context.provider,
                 provider_version=context.provider_version,
+                provider_executable_identity=context.provider_executable_identity,
                 assertion_id=str(assertion["id"]),
                 scenario_id=scenario_id,
                 minimum_scenario_revision=int(assertion["minimum_scenario_revision"]),
@@ -112,6 +118,7 @@ def evaluate_capability(
                 permission_mode=context.permission_mode,
                 platform=context.platform,
                 architecture=context.architecture,
+                max_age_seconds=int(assertion["max_age_seconds"]),
             )
             selection = select_proof(records, requirement, observed_at=context.observed_at)
             latest_run_failed = latest_run_failed or selection.latest_run_failed
@@ -153,6 +160,7 @@ def evaluate_capability(
         verification=verification,
         runtime=runtime,
         gate=ActionGate(str(declaration["action_gate"])),
+        applicable=applicable,
     )
     input_bundle_digest = _input_bundle_digest(
         capability_id=capability_id,

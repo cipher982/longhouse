@@ -30,6 +30,7 @@ def _context(**changes) -> EvaluationContext:
         "session_id": "session-1",
         "provider": "codex",
         "provider_version": "0.145.0",
+        "provider_executable_identity": "sha256:provider",
         "mode": "helm",
         "observed_at": NOW,
         "runtime": RuntimeState.READY,
@@ -139,3 +140,34 @@ def test_resolved_policy_disables_proven_action() -> None:
 
     assert decision.action is ProductAction.DISABLED
     assert "policy_disabled" in decision.reason_codes
+
+
+def test_context_outside_authored_modes_is_hidden() -> None:
+    contract, declaration = _contract_and_declaration()
+
+    decision = evaluate_capability(
+        capability_id="coordination.message.send",
+        declaration=declaration,
+        provider_contract_digest=contract.contract_entry_digest,
+        context=_context(mode="shadow"),
+    )
+
+    assert decision.action is ProductAction.HIDDEN
+
+
+def test_expired_proof_is_stale_and_cannot_enable_strict_action() -> None:
+    contract, declaration = _contract_and_declaration()
+    record = _record(contract.contract_entry_digest, generated_at="2026-07-01T16:00:00Z")
+
+    decision = evaluate_capability(
+        capability_id="coordination.message.send",
+        declaration=declaration,
+        provider_contract_digest=contract.contract_entry_digest,
+        context=_context(),
+        records=(record,),
+        proof_identity=_identity(),
+        trusted_producer_classes=frozenset({"release_ci"}),
+    )
+
+    assert decision.verification is VerificationState.STALE
+    assert decision.action is ProductAction.DISABLED

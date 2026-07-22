@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
 
@@ -62,6 +63,17 @@ def test_store_reads_records_without_trusting_index(tmp_path: Path) -> None:
     store.rebuild_index("claude")
     index = json.loads((tmp_path / "claude" / "index.json").read_text())
     assert index["artifact_ids"] == [record.artifact_id]
+
+
+def test_concurrent_identical_writers_are_idempotent(tmp_path: Path) -> None:
+    store = ProviderCapabilityProofStore(tmp_path)
+    record = _record()
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        paths = list(pool.map(lambda _: store.write(record), range(16)))
+
+    assert len(set(paths)) == 1
+    assert store.records("claude") == (record,)
 
 
 def test_store_rejects_tampered_record(tmp_path: Path) -> None:

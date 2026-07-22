@@ -76,7 +76,7 @@ def test_support_state_provider_capability_axes_match_manifest_contracts() -> No
         assert capabilities["available_capabilities"] == []
         for decision in semantic_shadow.values():
             assert decision["runtime"] == "unknown"
-            assert decision["action"] == "disabled"
+            assert decision["action"] == "hidden"
 
 
 def test_support_state_separates_candidate_release_from_local_readiness() -> None:

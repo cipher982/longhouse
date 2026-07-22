@@ -70,6 +70,9 @@ _OPERATION_EVIDENCE_LEVELS = frozenset(
 _CAPABILITY_DISPOSITIONS = frozenset({"implemented", "not_implemented", "upstream_absent", "policy_disabled"})
 _CAPABILITY_ACTION_GATES = frozenset({"ceiling", "warn", "strict"})
 _CAPABILITY_EVIDENCE_CLASSES = frozenset({"hermetic", "live_no_token", "live_token"})
+_CAPABILITY_REASON_CODES = frozenset(
+    {"semantic_proof_missing", "upstream_unavailable", "upstream_unknown", "longhouse_unimplemented", "policy_disabled"}
+)
 
 
 def _validate_string_field(item: dict[str, Any], field: str) -> None:
@@ -169,7 +172,15 @@ def _validate_capabilities(item: dict[str, Any]) -> None:
         if declaration.get("action_gate") not in _CAPABILITY_ACTION_GATES:
             raise ValueError(f"{prefix}.action_gate must be one of {sorted(_CAPABILITY_ACTION_GATES)}")
         _validate_capability_string(prefix, declaration, "reason_code")
+        if declaration["reason_code"] not in _CAPABILITY_REASON_CODES:
+            raise ValueError(f"{prefix}.reason_code is unknown")
         _validate_capability_string(prefix, declaration, "policy_key")
+        contexts = declaration.get("contexts", {})
+        if not isinstance(contexts, dict):
+            raise ValueError(f"{prefix}.contexts must be an object")
+        modes = contexts.get("modes", [])
+        if not isinstance(modes, list) or not all(isinstance(mode, str) and mode for mode in modes):
+            raise ValueError(f"{prefix}.contexts.modes must be a string list")
         assertions = declaration.get("required_assertions")
         if not isinstance(assertions, list) or not assertions:
             raise ValueError(f"{prefix}.required_assertions must be a non-empty list")
@@ -184,6 +195,9 @@ def _validate_capabilities(item: dict[str, Any]) -> None:
             evidence = assertion.get("acceptable_evidence")
             if not isinstance(evidence, list) or not evidence or not set(evidence) <= _CAPABILITY_EVIDENCE_CLASSES:
                 raise ValueError(f"{prefix}.required_assertions acceptable_evidence is invalid")
+            max_age = assertion.get("max_age_seconds")
+            if not isinstance(max_age, int) or isinstance(max_age, bool) or max_age < 1:
+                raise ValueError(f"{prefix}.required_assertions max_age_seconds must be positive")
 
 
 def _validate_capability_string(prefix: str, payload: dict[str, Any], field: str) -> None:

@@ -49,6 +49,7 @@ class ProviderCapabilityProofStore:
                 existing = self.read_path(destination)
                 if existing != record:
                     raise ValueError(f"proof artifact identity collision at {destination}")
+            _fsync_directory(provider_root)
             self.rebuild_index(record.provider)
             return destination
         finally:
@@ -88,6 +89,15 @@ class ProviderCapabilityProofStore:
                 handle.flush()
                 os.fsync(handle.fileno())
             os.replace(temp_path, destination)
+            _fsync_directory(provider_root)
             return destination
         finally:
             temp_path.unlink(missing_ok=True)
+
+
+def _fsync_directory(path: Path) -> None:
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
