@@ -692,11 +692,16 @@ def stop_opencode_server_bridge(
     }
 
 
-def _install_opencode_signal_cleanup() -> dict:
-    """Preserve the server when the wrapper loses its terminal or is signaled."""
+def _install_opencode_signal_cleanup(
+    *,
+    session_id: str,
+    config_dir: Path | None,
+) -> dict:
+    """Stop the owned server when the terminal wrapper is signaled."""
     previous_handlers: dict = {}
 
     def cleanup_and_exit(signum: int, _frame: object) -> None:
+        stop_opencode_server_bridge(session_id=session_id, config_dir=config_dir)
         raise SystemExit(128 + signum)
 
     for signame in ("SIGHUP", "SIGTERM"):
@@ -780,25 +785,28 @@ def attach_command(
     config_dir: str | None = typer.Option(None, "--config-dir", "--claude-dir"),
     opencode_bin: str | None = typer.Option(None, "--opencode-bin"),
 ) -> None:
+    resolved_config_dir = Path(config_dir) if config_dir else None
+    previous_handlers = _install_opencode_signal_cleanup(
+        session_id=session_id,
+        config_dir=resolved_config_dir,
+    )
     try:
         code = run_opencode_attach(
             session_id=session_id,
             opencode_bin=opencode_bin,
-            config_dir=Path(config_dir) if config_dir else None,
+            config_dir=resolved_config_dir,
             extra_args=tuple(str(arg) for arg in (ctx.args or ())),
         )
     except (_OpenCodeLaunchError, OpenCodeServerBridgeError) as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from exc
-    if code == 0:
-        try:
-            stop_opencode_server_bridge(
-                session_id=session_id,
-                config_dir=Path(config_dir) if config_dir else None,
-            )
-        except OpenCodeServerBridgeError as exc:
-            typer.echo(f"OpenCode closed, but its background server could not be stopped: {exc}", err=True)
-            raise typer.Exit(code=1) from exc
+    finally:
+        _restore_signal_handlers(previous_handlers)
+    try:
+        stop_opencode_server_bridge(session_id=session_id, config_dir=resolved_config_dir)
+    except OpenCodeServerBridgeError as exc:
+        typer.echo(f"OpenCode closed, but its background server could not be stopped: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
     if code != 0:
         raise typer.Exit(code=code)
 

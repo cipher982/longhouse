@@ -546,7 +546,11 @@ def test_signal_cleanup_install_and_restore(monkeypatch):
     original_sighup = signal_module.getsignal(signal_module.SIGHUP)
     original_sigterm = signal_module.getsignal(signal_module.SIGTERM)
 
-    previous = opencode_channel._install_opencode_signal_cleanup()
+    monkeypatch.setattr(opencode_channel, "stop_opencode_server_bridge", lambda **_kwargs: {})
+    previous = opencode_channel._install_opencode_signal_cleanup(
+        session_id=str(uuid4()),
+        config_dir=None,
+    )
     # Handlers were replaced.
     assert signal_module.getsignal(signal_module.SIGHUP) is not original_sighup
     assert signal_module.getsignal(signal_module.SIGTERM) is not original_sigterm

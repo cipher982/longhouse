@@ -774,16 +774,17 @@ def test_codex_command_preserves_bridge_when_auto_attach_exits_nonzero(monkeypat
 
     result = runner.invoke(app, ["codex", "--cwd", str(tmp_path)])
 
-    assert result.exit_code == 0, result.output
-    # Codex leaves the bridge running on nonzero exit — must not claim the fire scattered.
-    assert "still burns" in result.output
-    assert "(exit 7)" in result.output
-    assert "scattered" not in result.output
-    assert "Rejoin: longhouse codex attach --session-id session-123" in result.output
-    assert stop_calls == []
+    assert result.exit_code == 7, result.output
+    assert "fire scattered" in result.output
+    assert stop_calls == [
+        {
+            "session_id": "session-123",
+            "reason": codex_cli._CODEX_STOP_REASON_CLEAN_TUI_EXIT,
+            "timeout_secs": codex_cli._CODEX_STOP_SIGNAL_TIMEOUT_SECONDS,
+        }
+    ]
     contracts = list_managed_session_contracts(tmp_path / ".longhouse")
-    assert contracts[0]["provider"] == "codex"
-    assert contracts[0]["session_id"] == "session-123"
+    assert contracts == []
 
 
 def test_codex_command_preserves_provider_when_auto_attach_exits_nonzero_and_readyz_is_dead(
@@ -823,14 +824,17 @@ def test_codex_command_preserves_provider_when_auto_attach_exits_nonzero_and_rea
 
     result = runner.invoke(app, ["codex", "--cwd", str(tmp_path)])
 
-    assert result.exit_code == 0, result.output
-    assert "left the provider process running" in result.output
-    assert "Recovery target:" in result.output
-    assert "fire scattered" not in result.output
-    assert stop_calls == []
+    assert result.exit_code == 1, result.output
+    assert "fire scattered" in result.output
+    assert stop_calls == [
+        {
+            "session_id": "session-123",
+            "reason": codex_cli._CODEX_STOP_REASON_CLEAN_TUI_EXIT,
+            "timeout_secs": codex_cli._CODEX_STOP_SIGNAL_TIMEOUT_SECONDS,
+        }
+    ]
     contracts = list_managed_session_contracts(tmp_path / ".longhouse")
-    assert contracts[0]["provider"] == "codex"
-    assert contracts[0]["session_id"] == "session-123"
+    assert contracts == []
 
 
 def test_codex_command_signal_cleanup_preserves_provider(monkeypatch, tmp_path):
@@ -878,7 +882,13 @@ def test_codex_command_signal_cleanup_preserves_provider(monkeypatch, tmp_path):
     result = runner.invoke(app, ["codex", "--cwd", str(tmp_path)])
 
     assert result.exit_code == 128 + codex_cli.signal.SIGHUP
-    assert stop_calls == []
+    assert stop_calls == [
+        {
+            "session_id": "session-123",
+            "reason": codex_cli._CODEX_STOP_REASON_CLEAN_TUI_EXIT,
+            "timeout_secs": codex_cli._CODEX_STOP_SIGNAL_TIMEOUT_SECONDS,
+        }
+    ]
 
 
 def test_stop_native_codex_bridge_passes_reason_and_timeout(monkeypatch):
@@ -918,7 +928,7 @@ def test_stop_native_codex_bridge_passes_reason_and_timeout(monkeypatch):
     ]
 
 
-def test_signal_cleanup_preserves_bridge(monkeypatch):
+def test_signal_cleanup_stops_bridge(monkeypatch):
     stop_calls: list[dict[str, object]] = []
     signal_calls: list[tuple[object, object]] = []
 
@@ -929,7 +939,7 @@ def test_signal_cleanup_preserves_bridge(monkeypatch):
         lambda sig, handler: signal_calls.append((sig, handler)) or "old-handler",
     )
 
-    previous = codex_cli._install_codex_signal_cleanup()
+    previous = codex_cli._install_codex_signal_cleanup(session_id="session-123", config_dir=None)
     handler = signal_calls[0][1]
 
     try:
@@ -939,13 +949,13 @@ def test_signal_cleanup_preserves_bridge(monkeypatch):
     else:
         raise AssertionError("expected SystemExit")
 
-    assert stop_calls == []
+    assert len(stop_calls) == 1
 
     try:
         handler(codex_cli.signal.SIGHUP, None)
     except SystemExit:
         pass
-    assert stop_calls == []
+    assert len(stop_calls) == 2
 
     codex_cli._restore_signal_handlers(previous)
     restored = signal_calls[-len(previous) :]
@@ -1076,12 +1086,12 @@ def test_codex_attach_clean_exit_stops_bridge(monkeypatch, tmp_path):
         "_run_native_codex_tui_with_recovery",
         lambda **kwargs: tui_calls.append(kwargs) or 0,
     )
-    monkeypatch.setattr(codex_cli, "_install_codex_signal_cleanup", lambda: {})
+    monkeypatch.setattr(codex_cli, "_install_codex_signal_cleanup", lambda **_kwargs: {})
     monkeypatch.setattr(codex_cli, "_restore_signal_handlers", lambda _handlers: None)
     monkeypatch.setattr(codex_cli, "get_machine_name_label", lambda: "work-laptop")
     monkeypatch.setattr(
         codex_cli,
-        "_close_native_codex_after_clean_tui_exit",
+        "_close_native_codex_after_tui_exit",
         lambda **kwargs: close_calls.append(kwargs),
     )
 
@@ -1090,7 +1100,9 @@ def test_codex_attach_clean_exit_stops_bridge(monkeypatch, tmp_path):
     assert result.exit_code == 0, result.output
     assert tui_calls[0]["session_id"] == session_id
     assert tui_calls[0]["ws_url"] == "ws://127.0.0.1:4800"
-    assert close_calls == [{"session_id": session_id, "config_dir": None, "machine_name": "work-laptop"}]
+    assert close_calls == [
+        {"session_id": session_id, "config_dir": None, "machine_name": "work-laptop"}
+    ]
 
 
 def test_codex_stop_is_explicit_and_removes_contract_after_success(monkeypatch):

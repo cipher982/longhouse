@@ -55,17 +55,17 @@ Codex execution paths:
   state in a later invocation.
 - `launch_mode=detached_ui` is an internal bridge posture shared with local
   no-attach operation. It is not a product mode or a remote Helm launch grant.
-- A nonzero `codex --remote` auto-attach exit is a foreground TUI/client-link failure, not proof the managed session ended. Preserve the bridge and print a reattach command; only explicit stop paths should terminate the bridge/app-server.
+- Any wrapper-observed `codex --remote` exit or terminal signal ends Helm process ownership and stops the bridge/app-server. Durable provider state remains resumable in a fresh invocation. Only an explicit no-attach launch may intentionally retain a background bridge.
 
 Bridge state:
 
 - Supported Helm writers persist TUI sessions as `launch_mode=tui`.
 - Existing `launch_mode=detached_ui` state may come from local no-attach
   operation. Do not infer Helm provenance or remote launch authority from it.
-- Do not automatically reap managed provider bridges or their app-server/server
-  children. A missing TUI, wrapper signal, nonzero attach exit, or dead control
-  bridge is degradation evidence, not permission to terminate user execution.
-  Only a clean user exit or an explicit terminate/stop action may kill it.
+- A wrapper-observed TUI exit or terminal signal is permission to stop the
+  wrapper-owned bridge/app-server. A missing TUI without wrapper evidence (for
+  example after uncatchable `SIGKILL`) remains degradation evidence rather than
+  permission to guess about provider execution.
 
 Hard Codex contract:
 
@@ -90,6 +90,9 @@ Hard Codex contract:
   hook tokens must not be written to the bridge state or server log.
 - OpenCode launch is idempotent per Longhouse session id. A retry must reuse a
   live state file instead of spawning a second `opencode serve`.
+- An attached OpenCode Helm wrapper stops its owned `opencode serve` process on
+  every observed TUI exit or terminal signal. Explicit no-attach launches remain
+  background servers until an explicit stop.
 - Machine Agent should only advertise `opencode.*` control support when the
   stock `opencode` binary is present on PATH.
 

@@ -122,7 +122,7 @@ def test_opencode_command_launches_managed_session_and_passes_extra_args(monkeyp
     ]
 
 
-def test_opencode_nonzero_attach_preserves_provider_server(monkeypatch, tmp_path):
+def test_opencode_nonzero_attach_stops_provider_server(monkeypatch, tmp_path):
     runner = CliRunner()
     stop_calls: list[dict] = []
     _stub_managed_launch(monkeypatch)
@@ -138,9 +138,8 @@ def test_opencode_nonzero_attach_preserves_provider_server(monkeypatch, tmp_path
     result = runner.invoke(app, ["opencode", "--cwd", str(tmp_path)])
 
     assert result.exit_code == 7
-    assert "still burns" in result.output
-    assert "Rejoin:" in result.output
-    assert stop_calls == []
+    assert "fire scattered" in result.output
+    assert stop_calls == [{"session_id": "session-123", "config_dir": None}]
 
 
 def test_opencode_funnels_model_flag_to_server(monkeypatch, tmp_path):

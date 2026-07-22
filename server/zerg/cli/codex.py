@@ -592,13 +592,20 @@ def _stop_native_codex_bridge(
     return stderr or stdout or f"codex-bridge stop exited with code {completed.returncode}"
 
 
-def _install_codex_signal_cleanup() -> dict[signal.Signals, object]:
+def _install_codex_signal_cleanup(
+    *,
+    session_id: str,
+    config_dir: str | Path | None,
+) -> dict[signal.Signals, object]:
     previous_handlers: dict[signal.Signals, object] = {}
 
     def cleanup_and_exit(signum: int, _frame: object) -> None:
-        # A wrapper signal only proves the terminal/control client vanished.
-        # Preserve the provider execution for reattach after an SSH drop,
-        # terminal crash, or Longhouse transport failure.
+        _close_native_codex_after_tui_exit(
+            session_id=session_id,
+            config_dir=config_dir,
+            machine_name=get_machine_name_label(),
+            show_bookend=False,
+        )
         raise SystemExit(128 + signum)
 
     for signame in ("SIGHUP", "SIGTERM"):
@@ -614,11 +621,12 @@ def _restore_signal_handlers(previous_handlers: dict[signal.Signals, object]) ->
         signal.signal(sig, handler)
 
 
-def _close_native_codex_after_clean_tui_exit(
+def _close_native_codex_after_tui_exit(
     *,
     session_id: str,
     config_dir: str | Path | None,
     machine_name: str,
+    show_bookend: bool = True,
 ) -> None:
     stop_error = _stop_native_codex_bridge(
         session_id=session_id,
@@ -638,7 +646,8 @@ def _close_native_codex_after_clean_tui_exit(
         config_dir=config_dir,
         config_dir_is_provider_home=True,
     )
-    launch_ui.exit_bookend(exit_code=0, machine_name=machine_name)
+    if show_bookend:
+        launch_ui.exit_bookend(exit_code=0, machine_name=machine_name)
 
 
 def _run_native_codex_tui(
@@ -950,7 +959,10 @@ def codex(
         return
 
     launch_ui.progress("Attaching…")
-    previous_handlers = _install_codex_signal_cleanup()
+    previous_handlers = _install_codex_signal_cleanup(
+        session_id=result.session_id,
+        config_dir=resolved_config_dir,
+    )
     try:
         exit_code = _run_native_codex_tui_with_recovery(
             state_file=state_file,
@@ -966,65 +978,26 @@ def codex(
     finally:
         _restore_signal_handlers(previous_handlers)
     if exit_code != 0:
-        attach_thread_id = ""
-        state = _load_native_codex_bridge_state(state_file)
-        if state is not None:
-            attach_thread_id = str(state.get("thread_id") or "").strip()
-        attach_cmd = _build_codex_attach_command(
-            codex_bin=resolved_codex_bin,
-            ws_url=ws_url,
-            bypass_approvals=bypass_approvals,
-            model=model,
-            model_reasoning_effort=model_reasoning_effort,
+        _close_native_codex_after_tui_exit(
             session_id=result.session_id,
-            thread_id=attach_thread_id or None,
+            config_dir=resolved_config_dir,
+            machine_name=machine_name,
+            show_bookend=False,
         )
-        if _native_codex_bridge_reattachable(state_file):
-            reattach_status = " ".join(
-                (
-                    f"Managed Codex auto-attach exited with code {exit_code};",
-                    "bridge left running for reattach.",
-                )
-            )
-            _emit_warp_cli_agent_event(
-                event="status",
-                session_id=result.session_id,
-                cwd=cwd,
-                project=project,
-                response=reattach_status,
-            )
-            launch_ui.exit_bookend(
-                exit_code=exit_code,
-                machine_name=machine_name,
-                reattach_command=attach_cmd,
-                reattachable_on_nonzero_exit=True,
-            )
-        else:
-            degraded_status = " ".join(
-                (
-                    f"Managed Codex auto-attach exited with code {exit_code};",
-                    "provider execution was preserved for recovery.",
-                )
-            )
-            _emit_warp_cli_agent_event(
-                event="status",
-                session_id=result.session_id,
-                cwd=cwd,
-                project=project,
-                response=degraded_status,
-            )
-            typer.secho(
-                "Codex control is degraded; Longhouse left the provider process running.",
-                fg=typer.colors.YELLOW,
-            )
-            typer.echo(f"Recovery target: {attach_cmd}")
-        return
+        _emit_warp_cli_agent_event(
+            event="status",
+            session_id=result.session_id,
+            cwd=cwd,
+            project=project,
+            response=f"Managed Codex terminal exited with code {exit_code}; bridge stopped.",
+        )
+        launch_ui.exit_bookend(exit_code=exit_code, machine_name=machine_name)
+        raise typer.Exit(code=exit_code)
 
     # A zero exit is the user's explicit close action. The provider thread is
     # durable, so keeping an idle bridge/app-server alive would make process
-    # lifetime grow with session history. Crashes and terminal-loss signals
-    # take the nonzero path above and remain available for recovery.
-    _close_native_codex_after_clean_tui_exit(
+    # lifetime grow with session history.
+    _close_native_codex_after_tui_exit(
         session_id=result.session_id,
         config_dir=resolved_config_dir,
         machine_name=machine_name,
@@ -1072,7 +1045,10 @@ def codex_attach(
         typer.secho("Codex executable not found.", fg=typer.colors.RED)
         raise typer.Exit(code=1)
 
-    previous_handlers = _install_codex_signal_cleanup()
+    previous_handlers = _install_codex_signal_cleanup(
+        session_id=normalized_session_id,
+        config_dir=config_dir,
+    )
     try:
         exit_code = _run_native_codex_tui_with_recovery(
             state_file=str(state_file),
@@ -1088,22 +1064,18 @@ def codex_attach(
     finally:
         _restore_signal_handlers(previous_handlers)
     if exit_code != 0:
-        reattach_command = _build_codex_attach_command(
-            codex_bin=resolved_codex_bin,
-            ws_url=ws_url,
-            bypass_approvals=bypass_approvals,
-            model=model,
-            model_reasoning_effort=model_reasoning_effort,
+        _close_native_codex_after_tui_exit(
             session_id=normalized_session_id,
+            config_dir=config_dir,
+            machine_name=get_machine_name_label(),
+            show_bookend=False,
         )
         launch_ui.exit_bookend(
             exit_code=exit_code,
             machine_name=get_machine_name_label(),
-            reattach_command=reattach_command,
-            reattachable_on_nonzero_exit=True,
         )
         raise typer.Exit(code=exit_code)
-    _close_native_codex_after_clean_tui_exit(
+    _close_native_codex_after_tui_exit(
         session_id=normalized_session_id,
         config_dir=config_dir,
         machine_name=get_machine_name_label(),
