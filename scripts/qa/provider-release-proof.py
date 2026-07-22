@@ -2286,6 +2286,101 @@ def run_provider_release_proof(args: argparse.Namespace) -> dict[str, Any]:
     return artifact
 
 
+def _args_from_config(config_path: Path) -> argparse.Namespace:
+    """Build an argparse Namespace from a JSON config file.
+
+    The config schema mirrors the CLI flags, with provider-specific flags
+    nested under the provider key (e.g. ``codex.run_managed_live_interrupt``).
+    Unknown top-level and nested keys are silently ignored so the config can
+    carry extra metadata without breaking older proof scripts.
+    """
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+
+    args = argparse.Namespace()
+    args.repo_root = _repo_root_from_script()
+    args.provider = config.get("provider", "")
+    args.provider_bin = (
+        Path(config["provider_bin"]) if config.get("provider_bin") else None
+    )
+    args.provider_version = config.get("provider_version")
+    args.artifact = (
+        Path(config["artifact"]) if config.get("artifact") else None
+    )
+    args.evidence_root = (
+        Path(config["evidence_root"])
+        if config.get("evidence_root")
+        else None
+    )
+    args.scenario_id = config.get("scenario_id")
+    args.preflight_only = bool(config.get("preflight_only"))
+    args.timeout_secs = int(config.get("timeout_secs", 180))
+    args.source_review_status = config.get("source_review_status", "not_run")
+    args.source_review_note = config.get(
+        "source_review_note",
+        "Provider release proof did not include external source-review evidence.",
+    )
+    args.json = bool(config.get("json"))
+    args.run_universal_harness = bool(config.get("run_universal_harness"))
+    args.universal_scenario = config.get("universal_scenario")
+    args.universal_fixture_path = (
+        Path(config["universal_fixture_path"])
+        if config.get("universal_fixture_path")
+        else None
+    )
+    args.universal_old_proof_artifact = (
+        Path(config["universal_old_proof_artifact"])
+        if config.get("universal_old_proof_artifact")
+        else None
+    )
+    args.universal_new_proof_artifact = (
+        Path(config["universal_new_proof_artifact"])
+        if config.get("universal_new_proof_artifact")
+        else None
+    )
+    args.universal_baseline_root = (
+        Path(config["universal_baseline_root"])
+        if config.get("universal_baseline_root")
+        else None
+    )
+    args.universal_prompt = config.get("universal_prompt")
+
+    codex = config.get("codex") or {}
+    args.codex_run_fake_app_server = bool(codex.get("run_fake_app_server"))
+    args.codex_run_raw_fresh_remote = bool(codex.get("run_raw_fresh_remote"))
+    args.codex_run_managed_tui_attach = bool(codex.get("run_managed_tui_attach"))
+    args.codex_run_managed_live_send = bool(codex.get("run_managed_live_send"))
+    args.codex_run_managed_live_interrupt = bool(codex.get("run_managed_live_interrupt"))
+    args.codex_run_real_tool = bool(codex.get("run_real_tool"))
+    args.codex_live_interrupt_timeout_secs = int(
+        codex.get("live_interrupt_timeout_secs", 45)
+    )
+    args.codex_real_tool_timeout_secs = int(
+        codex.get("real_tool_timeout_secs", 180)
+    )
+    args.codex_api_url = codex.get("api_url")
+    args.codex_agents_token = codex.get("agents_token")
+
+    claude = config.get("claude") or {}
+    args.claude_run_machine_live_proof = bool(claude.get("run_machine_live_proof"))
+    args.claude_run_real_print = bool(claude.get("run_real_print"))
+    args.claude_api_url = claude.get("api_url")
+    args.claude_agents_token = claude.get("agents_token")
+    args.claude_device_id = claude.get("device_id")
+    args.claude_print_timeout_secs = int(claude.get("print_timeout_secs", 180))
+
+    opencode = config.get("opencode") or {}
+    args.opencode_run_real_tool = bool(opencode.get("run_real_tool"))
+    args.opencode_run_timeout_secs = int(opencode.get("run_timeout_secs", 180))
+
+    antigravity = config.get("antigravity") or {}
+    args.antigravity_run_real_agy_send = bool(antigravity.get("run_real_agy_send"))
+    args.antigravity_print_timeout_secs = int(
+        antigravity.get("print_timeout_secs", 45)
+    )
+
+    return args
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo-root", type=Path, default=_repo_root_from_script())
@@ -2373,7 +2468,19 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
-    args = parser.parse_args(argv)
+    raw_argv = argv if argv is not None else sys.argv[1:]
+    config_path: Path | None = None
+    for i, arg in enumerate(raw_argv):
+        if arg == "--config" and i + 1 < len(raw_argv):
+            config_path = Path(raw_argv[i + 1])
+            break
+        if arg.startswith("--config="):
+            config_path = Path(arg.split("=", 1)[1])
+            break
+    if config_path:
+        args = _args_from_config(config_path)
+    else:
+        args = parser.parse_args(raw_argv)
     artifact = run_provider_release_proof(args)
     if args.json:
         print(json.dumps(artifact, indent=2, sort_keys=True))
