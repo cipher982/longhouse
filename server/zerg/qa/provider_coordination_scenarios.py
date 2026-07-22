@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
@@ -77,13 +78,17 @@ def publish_codex_bootstrap_noise_proof(
     producer_version: str,
     invocation_id: str,
     generated_at: str,
+    observations: dict[str, object] | None = None,
+    run_reference: str | None = None,
+    raw_reference_digests: tuple[str, ...] = (),
+    longhouse_git_sha: str | None = None,
 ) -> str:
     contract = contract_for_provider("codex")
     if contract is None:
         raise RuntimeError("Codex managed-provider contract is missing")
     declaration = contract.capabilities["coordination.awareness.post_compaction"]
     assertion = next(item for item in declaration["required_assertions"] if item["id"] == "no_duplicate_visible_bootstrap")
-    observations = observe_codex_post_compaction_bootstrap()
+    observations = observations or observe_codex_post_compaction_bootstrap()
     assertions = awareness_post_compaction_assertions(observations)
     records = publish_scenario_assertions(
         identity=ScenarioProofIdentity(
@@ -101,6 +106,9 @@ def publish_codex_bootstrap_noise_proof(
             producer_version=producer_version,
             invocation_id=invocation_id,
             mode="helm",
+            run_reference=run_reference,
+            raw_reference_digests=raw_reference_digests,
+            longhouse_git_sha=longhouse_git_sha,
         ),
         assertions={"no_duplicate_visible_bootstrap": assertions["no_duplicate_visible_bootstrap"]},
         store=store,
@@ -114,24 +122,57 @@ def main() -> int:
     parser.add_argument("--provider-bin")
     parser.add_argument("--store-root")
     parser.add_argument("--producer-class", default="local_diagnostic")
+    parser.add_argument("--producer-version", default="2")
+    parser.add_argument("--invocation-id")
+    parser.add_argument("--run-reference")
+    parser.add_argument("--longhouse-git-sha")
+    parser.add_argument("--provider-version")
+    parser.add_argument("--provider-executable-identity")
+    parser.add_argument("--bundle-output")
     args = parser.parse_args()
-    binary = Path(args.provider_bin or shutil.which(PROVIDER_CLI_BINARY_BY_PROVIDER[args.provider]) or "")
-    identity = executable_identity(str(binary))
-    if not identity:
-        raise SystemExit(f"provider binary not found: {binary}")
-    version_result = subprocess.run([str(binary), "--version"], text=True, capture_output=True, check=False)
-    if version_result.returncode != 0 or not version_result.stdout.strip():
-        raise SystemExit(version_result.stderr or "provider version probe failed")
+    provider_version = str(args.provider_version or "").strip()
+    identity = str(args.provider_executable_identity or "").strip()
+    if not provider_version or not identity:
+        binary = Path(args.provider_bin or shutil.which(PROVIDER_CLI_BINARY_BY_PROVIDER[args.provider]) or "")
+        identity = executable_identity(str(binary)) or ""
+        if not identity:
+            raise SystemExit(f"provider binary not found: {binary}")
+        version_result = subprocess.run([str(binary), "--version"], text=True, capture_output=True, check=False)
+        if version_result.returncode != 0 or not version_result.stdout.strip():
+            raise SystemExit(version_result.stderr or "provider version probe failed")
+        provider_version = version_result.stdout.strip()
     root = Path(args.store_root) if args.store_root else resolve_longhouse_home() / "provider-capability-proofs"
+    observations = observe_codex_post_compaction_bootstrap()
+    raw_payload = json.dumps(observations, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode()
     artifact_id = publish_codex_bootstrap_noise_proof(
-        provider_version=version_result.stdout.strip(),
+        provider_version=provider_version,
         provider_executable_identity=identity,
         store=ProviderCapabilityProofStore(root),
         producer_class=args.producer_class,
-        producer_version="2",
-        invocation_id=str(uuid4()),
+        producer_version=args.producer_version,
+        invocation_id=args.invocation_id or str(uuid4()),
         generated_at=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        observations=observations,
+        run_reference=args.run_reference,
+        raw_reference_digests=(f"sha256:{hashlib.sha256(raw_payload).hexdigest()}",),
+        longhouse_git_sha=args.longhouse_git_sha,
     )
+    if args.bundle_output:
+        store = ProviderCapabilityProofStore(root)
+        record = next(record for record in store.records(args.provider) if record.artifact_id == artifact_id)
+        bundle_path = Path(args.bundle_output)
+        bundle_path.parent.mkdir(parents=True, exist_ok=True)
+        bundle_path.write_text(
+            json.dumps(
+                {"artifact_kind": "provider_capability_proof_bundle", "records": [record.serialize()]},
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
+        raw_path = bundle_path.with_suffix(".raw.json")
+        raw_path.write_bytes(raw_payload)
     print(json.dumps({"provider": args.provider, "artifact_id": artifact_id, "store_root": str(root)}))
     return 0
 

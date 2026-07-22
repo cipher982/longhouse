@@ -123,6 +123,27 @@ jobs:
       timeout-minutes: 8
       run: make validate-provider-cli-canaries
 
+    - name: Produce executable provider capability proof bundle
+      timeout-minutes: 3
+      run: |
+        make provider-capability-coordination-proof \
+          STORE_ROOT="$GITHUB_WORKSPACE/.build/canaries/provider-capability-proof/store" \
+          BUNDLE_OUTPUT="$GITHUB_WORKSPACE/.build/canaries/provider-capability-proof/bundle.json" \
+          PRODUCER_CLASS=release_ci \
+          INVOCATION_ID="${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}" \
+          RUN_REFERENCE="github-actions://${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT}" \
+          LONGHOUSE_GIT_SHA="$GITHUB_SHA" \
+          PROVIDER_VERSION=hermetic-fixture \
+          PROVIDER_EXECUTABLE_IDENTITY=sha256:hermetic-fixture
+
+    - name: Upload provider capability proof bundle
+      uses: actions/upload-artifact@v7
+      with:
+        name: provider-capability-proof-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .build/canaries/provider-capability-proof/**
+        if-no-files-found: error
+        retention-days: 14
+
     - name: Upload provider release proof artifacts
       if: always()
       uses: actions/upload-artifact@v7

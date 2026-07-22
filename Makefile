@@ -616,7 +616,17 @@ provider-release-proof-universal-live-smoke: ## Run all-provider real-bin univer
 	uv run --project server python "$$@"
 
 provider-capability-coordination-proof: ## Emit local diagnostic Codex coordination bootstrap proof
-	@cd server && uv run python -m zerg.qa.provider_coordination_scenarios
+	@set -eu; \
+	set -- -m zerg.qa.provider_coordination_scenarios; \
+	if [ -n "$(STORE_ROOT)" ]; then set -- "$$@" --store-root "$(STORE_ROOT)"; fi; \
+	if [ -n "$(PRODUCER_CLASS)" ]; then set -- "$$@" --producer-class "$(PRODUCER_CLASS)"; fi; \
+	if [ -n "$(INVOCATION_ID)" ]; then set -- "$$@" --invocation-id "$(INVOCATION_ID)"; fi; \
+	if [ -n "$(RUN_REFERENCE)" ]; then set -- "$$@" --run-reference "$(RUN_REFERENCE)"; fi; \
+	if [ -n "$(LONGHOUSE_GIT_SHA)" ]; then set -- "$$@" --longhouse-git-sha "$(LONGHOUSE_GIT_SHA)"; fi; \
+	if [ -n "$(PROVIDER_VERSION)" ]; then set -- "$$@" --provider-version "$(PROVIDER_VERSION)"; fi; \
+	if [ -n "$(PROVIDER_EXECUTABLE_IDENTITY)" ]; then set -- "$$@" --provider-executable-identity "$(PROVIDER_EXECUTABLE_IDENTITY)"; fi; \
+	if [ -n "$(BUNDLE_OUTPUT)" ]; then set -- "$$@" --bundle-output "$(BUNDLE_OUTPUT)"; fi; \
+	cd server && uv run python "$$@"
 
 provider-release-proof-status: ## Inspect accepted proof baseline; set PROVIDER=... and SCENARIO_ID=...
 	@set -eu; \
