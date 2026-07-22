@@ -4033,6 +4033,57 @@ def test_collect_local_health_fast_prefers_resolved_engine_sessions(monkeypatch,
     assert unmanaged["liveness_model"] == "engine_status"
 
 
+def test_collect_local_health_fast_projects_fresh_phase_ledger_onto_managed_session(monkeypatch, tmp_path: Path):
+    """A separate activity ledger must not degrade an otherwise managed row."""
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    monkeypatch.setattr(
+        local_health_service,
+        "_compute_process_snapshot",
+        lambda: (_ for _ in ()).throw(AssertionError("fast local-health must not scan processes")),
+    )
+    now = datetime(2026, 5, 5, 12, 0, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(local_health_service, "_utc_now", lambda: now)
+    _write_engine_status(
+        tmp_path,
+        age_seconds=1,
+        payload={
+            "sessions": [
+                {
+                    "session_id": "sess-ledger",
+                    "provider": "codex",
+                    "control_path": "managed",
+                    "state": "attached",
+                    "last_activity_at": "2026-05-05T11:59:40Z",
+                    "workspace": {},
+                    "process": {},
+                    "bridge": {"status": "ready"},
+                    "evidence": {},
+                }
+            ],
+            "phase_ledger": [
+                {
+                    "session_id": "sess-ledger",
+                    "provider": "codex",
+                    "phase": "running",
+                    "tool_name": "shell",
+                    "source": "codex_bridge",
+                    "observed_at": "2026-05-05T11:59:59Z",
+                    "valid_until": "2026-05-05T12:09:59Z",
+                }
+            ],
+        },
+    )
+
+    snapshot = local_health_service.collect_local_health(tmp_path, fast=True)
+
+    session = snapshot["managed_sessions"][0]
+    assert session["raw_phase"] == "running"
+    assert session["phase"] == "running shell"
+    assert session["phase_observed_at"] == "2026-05-05T11:59:59Z"
+    assert session["last_activity_at"] == "2026-05-05T11:59:59Z"
+
+
 def test_collect_local_health_deep_prefers_resolved_engine_sessions(monkeypatch, tmp_path: Path):
     _disable_real_runner_env(monkeypatch, tmp_path)
     monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
@@ -5882,6 +5933,40 @@ def test_remote_ai_title_replaces_local_prompt_fallback(monkeypatch, tmp_path: P
     assert rows[0]["timeline_title"] == "Repair OpenCode Session Naming"
     assert rows[0]["title_state"] == "ready"
     assert rows[0]["title_source"] == "ai"
+
+
+def test_remote_title_enrichment_covers_managed_sessions_beyond_old_eight_row_cap(monkeypatch, tmp_path: Path):
+    rows = [
+        {
+            "session_id": f"session-{index}",
+            "timeline_title": f"prompt {index}",
+            "title_state": "pending",
+            "title_source": "prompt",
+        }
+        for index in range(9)
+    ]
+    fetched: list[str] = []
+
+    def _fetch(_runtime_url, _token, session_id):
+        fetched.append(session_id)
+        return {
+            "timeline_title": f"AI title {session_id}",
+            "summary_title": f"AI title {session_id}",
+            "title_state": "ready",
+            "title_source": "ai",
+        }
+
+    monkeypatch.setattr(local_health_service, "_fetch_managed_session_title", _fetch)
+
+    local_health_service._enrich_managed_session_titles(
+        tmp_path,
+        rows,
+        runtime_url="https://demo.longhouse.test",
+        token="test-token",
+    )
+
+    assert set(fetched) == {f"session-{index}" for index in range(9)}
+    assert all(row["title_source"] == "ai" for row in rows)
 
 
 def test_remote_empty_title_replaces_ambiguous_local_fallback(monkeypatch, tmp_path: Path):

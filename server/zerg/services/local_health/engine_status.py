@@ -10,6 +10,7 @@ from typing import Any
 from zerg.services.longhouse_paths import get_agent_outbox_dir
 from zerg.services.longhouse_paths import get_agent_status_path
 
+from ._shared import _max_rfc3339
 from ._shared import _normalize_optional_int
 from ._shared import _normalize_optional_string
 from ._shared import _parse_rfc3339
@@ -17,6 +18,7 @@ from .constants import CONTROL_PATH_MANAGED
 from .constants import CONTROL_PATH_UNMANAGED
 from .constants import ENGINE_FRESH_SECONDS
 from .constants import LIVENESS_MODEL_ENGINE_STATUS
+from .phase import _phase_display_label
 from .process import _process_row_by_pid
 from .process import _process_row_is_zombie
 
@@ -345,6 +347,26 @@ def _collect_resolved_sessions_from_engine_status(
     if raw_rows is None:
         return None
 
+    # Phase evidence deliberately lives in the separate engine ledger: a
+    # control lease is not an activity claim.  The resolved-session rows are
+    # still the right local join surface, though.  Previously this reader
+    # discarded the ledger and turned every managed row into an activity-free
+    # preview, even while the same status file contained fresh `thinking` /
+    # `running` evidence.  Merge only the current ledger row for the matching
+    # managed session; freshness is enforced by the engine before emission.
+    phase_by_session: dict[str, Mapping[str, Any]] = {}
+    payload = _engine_status_payload(engine_status)
+    raw_ledger = payload.get("phase_ledger")
+    if isinstance(raw_ledger, list):
+        for item in raw_ledger:
+            if not isinstance(item, Mapping):
+                continue
+            session_id = _normalize_optional_string(item.get("session_id"))
+            phase = _normalize_optional_string(item.get("phase"))
+            observed_at = _normalize_optional_string(item.get("observed_at"))
+            if session_id and phase and observed_at:
+                phase_by_session[session_id] = item
+
     managed_sessions: list[dict[str, Any]] = []
     unmanaged_processes: list[dict[str, Any]] = []
     for raw_row in raw_rows:
@@ -352,7 +374,18 @@ def _collect_resolved_sessions_from_engine_status(
             continue
         control_path = _normalize_optional_string(raw_row.get("control_path"))
         if control_path == CONTROL_PATH_MANAGED:
-            managed_sessions.append(_resolved_engine_managed_session_row(raw_row=raw_row))
+            row = _resolved_engine_managed_session_row(raw_row=raw_row)
+            phase_row = phase_by_session.get(str(row.get("session_id") or ""))
+            if phase_row is not None:
+                raw_phase = _normalize_optional_string(phase_row.get("phase"))
+                tool_name = _normalize_optional_string(phase_row.get("tool_name"))
+                observed_at = _normalize_optional_string(phase_row.get("observed_at"))
+                if raw_phase and observed_at:
+                    row["raw_phase"] = raw_phase
+                    row["phase"] = _phase_display_label(raw_phase, tool_name)
+                    row["phase_observed_at"] = observed_at
+                    row["last_activity_at"] = _max_rfc3339(row.get("last_activity_at"), observed_at)
+            managed_sessions.append(row)
         elif control_path == CONTROL_PATH_UNMANAGED:
             unmanaged_processes.append(_resolved_engine_unmanaged_process_row(raw_row))
 

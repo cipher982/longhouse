@@ -388,7 +388,12 @@ def _mark_machine_preview_sessions(managed_sessions: list[dict[str, Any]]) -> No
         )
 
 
-_MANAGED_SESSION_TITLE_FETCH_LIMIT = 8
+# A managed session must not silently miss its Runtime Host title merely
+# because it sorts after eight older attached sessions.  The request fan-out is
+# bounded below, but coverage is intentionally complete: this is the cold
+# snapshot that establishes the menu bar's title provenance before its stream
+# takes over.
+_MANAGED_SESSION_TITLE_FETCH_CONCURRENCY = 8
 _MANAGED_SESSION_TITLE_FETCH_TIMEOUT_SECONDS = 0.8
 
 
@@ -440,11 +445,11 @@ def _enrich_managed_session_titles(
         return
     by_id = {
         session_id: row
-        for row in managed_sessions[:_MANAGED_SESSION_TITLE_FETCH_LIMIT]
+        for row in managed_sessions
         for session_id in [_normalize_optional_string(row.get("session_id"))]
         if session_id is not None
     }
-    with ThreadPoolExecutor(max_workers=max(1, len(by_id))) as executor:
+    with ThreadPoolExecutor(max_workers=min(_MANAGED_SESSION_TITLE_FETCH_CONCURRENCY, max(1, len(by_id)))) as executor:
         futures = {executor.submit(_fetch_managed_session_title, runtime_url, token, session_id): session_id for session_id in by_id}
         for future in as_completed(futures):
             try:
