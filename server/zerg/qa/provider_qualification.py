@@ -8,11 +8,13 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from zerg.qa import codex_helm_interrupt
 from zerg.qa import codex_release_identity
 from zerg.qa import codex_tool_call_result
 
 _PROFILES = {
     ("codex", codex_release_identity.PROFILE): codex_release_identity.run,
+    ("codex", codex_helm_interrupt.PROFILE): codex_helm_interrupt.run,
     ("codex", codex_tool_call_result.PROFILE): codex_tool_call_result.run,
 }
 
