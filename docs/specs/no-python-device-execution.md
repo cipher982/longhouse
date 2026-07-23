@@ -1,6 +1,6 @@
 # No-Python Device Cutover Execution
 
-Status: Active
+Status: Branch complete; release/dogfood pending merge
 
 This is the execution companion to [Rust Edge Provider Parity](rust-edge-provider-parity.md). “Done” means a normal installed-device command uses compiled Longhouse binaries and stock user-installed providers; Runtime Host Python is explicitly out of scope.
 
@@ -8,10 +8,10 @@ This is the execution companion to [Rust Edge Provider Parity](rust-edge-provide
 
 | Surface | State | Cutover gap |
 |---|---|---|
-| paired native installer | implemented | fresh-device install/repair proof |
-| Codex Helm | native launch/attach/stop implemented | hermetic provider proof; doctor/provenance is not cutover-critical |
-| Claude Helm | native launch/configure implemented | native resume/contract parity and reviewed hook fixes; prove installed lifecycle |
-| OpenCode Helm | native facade and localhost bridge implemented | independent lifecycle review, installed-provider proof; runtime plugin remains deliberately absent until native permission reply exists |
+| paired native installer | implemented and hermetically proven | published release-artifact smoke after merge |
+| Codex Helm | native launch/attach/stop implemented and fake-app-server proven | published release-artifact smoke after merge |
+| Claude Helm | native launch/configure implemented and channel/control proven | published release-artifact smoke after merge |
+| OpenCode Helm | native facade and localhost bridge implemented and control/lifecycle proven | runtime plugin remains deliberately absent until native permission reply exists |
 | Cursor Helm | excluded from native normal-device release | reintroduce only as one native PTY/control/permission/transcript runtime |
 | Antigravity | excluded from native normal-device release | reintroduce only with a native hook inbox and real `agy` canary |
 | public device CLI | native facade owns auth, `local-health`, and Machine Agent setup/repair | complete the public-command matrix; `connect`, status, and server-only compatibility still need an explicit disposition |
@@ -38,18 +38,19 @@ This is the execution companion to [Rust Edge Provider Parity](rust-edge-provide
 
 ## Release evidence
 
-The evolving hermetic test installs the paired artifacts into a fresh home with trap executables for `python`, `python3`, `uv`, `pip`, and `longhouse-python`. It first proves install/repair and the Desktop-facing `longhouse local-health --fast --json` contract, then adds each supported provider’s launch, attach/reattach, send, interrupt, stop, clean exit, and explicit detached behavior. It also proves installers no longer re-stamp Python hooks. Runtime Host may run outside the trapped device environment.
+`scripts/ci/native-installer-smoke.sh` installs the paired artifacts into a fresh home with trap executables for `python`, `python3`, `uv`, `pip`, and `longhouse-python`, then proves native local health, auth against a local Runtime Host fixture, and native Machine Agent service installation. Native fake-upstream suites prove Codex app-server, Claude channel/control, and OpenCode control/lifecycle behavior. It also proves installers no longer re-stamp Python hooks. Runtime Host may run outside the trapped device environment.
 
 ## Completion checklist
 
-- [ ] Public command matrix complete; `native_device_entrypoints.json` matches shipped ownership.
-- [ ] Native auth/setup/repair and Desktop-facing local-health contract complete; `connect` is explicitly excluded.
-- [ ] Claude reviewed blockers resolved and provider proof complete.
-- [ ] OpenCode native Helm complete and proof complete.
+- [x] Public command matrix complete; `native_device_entrypoints.json` matches shipped ownership.
+- [x] Native auth/setup/repair and Desktop-facing local-health contract complete; `connect` is explicitly excluded.
+- [x] Claude reviewed blockers resolved and native provider proof complete.
+- [x] OpenCode native Helm complete and native provider proof complete.
 - [x] Cursor Helm explicitly excluded from the native normal-device release.
 - [x] Antigravity explicitly excluded from the native normal-device release.
-- [ ] No normal device CLI route requires Python.
-- [ ] Default device install/PATH never selects Python; server compatibility, if retained, is only `longhouse-python`.
-- [ ] Hermetic installed-artifact gate passes.
-- [ ] Fresh Hatch Sol and Cursor reviews dispositioned.
-- [ ] Branch rebased, pushed, released, and dogfood-refreshed.
+- [x] No normal device CLI route requires Python.
+- [x] Default device install/PATH never selects Python; server compatibility, if retained, is only `longhouse-python`.
+- [x] Hermetic installed-artifact gate passes.
+- [x] Fresh Hatch Sol and Cursor reviews dispositioned.
+- [x] Branch rebased and pushed.
+- [ ] After merge: publish the paired release artifact and run release/dogfood refresh.
