@@ -735,7 +735,7 @@ jobs:
         run: |
           set -euo pipefail
           expected="${RELEASE_TAG#v}"
-          version_line="$(longhouse --version 2>&1 | tail -1)"
+          version_line="$(longhouse-server --version 2>&1 | tail -1)"
           actual="$(awk '{print $2}' <<< "$version_line")"
           echo "expected=$expected actual=$actual line=$version_line"
           if [[ "$actual" != "$expected" ]]; then
@@ -749,7 +749,8 @@ jobs:
           expected_commit="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${RELEASE_TAG}" --jq .sha)"
           python3 scripts/ci/assert-installed-build-identity.py \
             --expected-commit "$expected_commit" \
-            --expected-version "${RELEASE_TAG#v}"
+            --expected-version "${RELEASE_TAG#v}" \
+            --longhouse-bin longhouse-server
 
       - name: Fetch engine binary from the same release via the installed wheel
         env:
