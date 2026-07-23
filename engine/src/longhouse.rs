@@ -127,6 +127,7 @@ struct ManagedLaunchResponse {
 #[derive(Deserialize)]
 struct BridgeStartResponse {
     ws_url: String,
+    thread_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -352,6 +353,15 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
     }
     let bridge: BridgeStartResponse =
         serde_json::from_slice(&output.stdout).context("parse native Codex bridge response")?;
+    if !attach
+        && bridge
+            .thread_id
+            .as_deref()
+            .is_none_or(|thread| thread.trim().is_empty())
+    {
+        let _ = stop_codex_bridge(&response.session_id, "bridge_start_failed");
+        anyhow::bail!("Native Codex bridge did not return thread_id for detached launch");
+    }
     println!(
         "Managed Codex ready\n→ {}/s/{}",
         url.trim_end_matches('/'),
