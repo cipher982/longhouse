@@ -104,7 +104,7 @@ sessions. Refine:
 
 ## Running list (add as David spots things)
 
-- [ ] Horizontal ping-pong at wide viewports (Change A)
+- [x] Horizontal ping-pong at wide viewports (Change A — shipped web CSS, 723dc9416)
 - [ ] Bash exploration spam crowding prose (Changes B+C)
 - [x] Draft reply row + review copy removed (web) — backend/iOS removal pending
 - [x] Stop shown while idle (web: now working-only)
