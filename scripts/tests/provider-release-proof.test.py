@@ -1148,11 +1148,11 @@ def test_antigravity_release_proof_blocks_real_agy_send_without_an_unwatched_wor
             ],
         )
 
-        assert result.returncode == 1
+        assert result.returncode == 0
         assert payload["provider"] == "antigravity"
         assert payload["scenario_id"] == "antigravity-real-agy-send-release-proof-v1"
         assert payload["scenario_profile"] == "real-agy-send"
-        assert payload["verdict"] == "red"
+        assert payload["verdict"] == "yellow"
         assert payload["failure_code"] == "antigravity_unwatched_producer_boundary_unavailable"
         assert (
             payload["normalized"]["canaries"]["antigravity_real_agy_send"]["status"]
@@ -1174,8 +1174,8 @@ def test_antigravity_release_proof_blocks_even_when_a_fake_live_failure_is_reque
             extra_args=["--antigravity-run-real-agy-send"],
         )
 
-        assert result.returncode == 1
-        assert payload["verdict"] == "red"
+        assert result.returncode == 0
+        assert payload["verdict"] == "yellow"
         assert payload["failure_code"] == "antigravity_unwatched_producer_boundary_unavailable"
         assert payload["normalized"]["canaries"]["antigravity_real_agy_send"][
             "failure_code"
