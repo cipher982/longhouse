@@ -4214,6 +4214,39 @@ class CatalogStore:
                 .first()
             )
             if current is None:
+                storage_current = (
+                    connection.execute(
+                        select(
+                            StorageSession.__table__.c.user_state,
+                            StorageSession.__table__.c.loop_mode,
+                            StorageSession.__table__.c.notification_muted,
+                            StorageSession.__table__.c.user_hidden_from_timeline,
+                        ).where(StorageSession.__table__.c.session_id == session_id)
+                    )
+                    .mappings()
+                    .first()
+                )
+                if storage_current is not None and user_hidden_from_timeline is not None:
+                    storage_values = {
+                        "user_hidden_from_timeline": int(user_hidden_from_timeline),
+                        "user_hidden_at": observed_at if user_hidden_from_timeline else None,
+                        "updated_at": observed_at,
+                    }
+                    connection.execute(
+                        update(StorageSession.__table__).where(StorageSession.__table__.c.session_id == session_id).values(**storage_values)
+                    )
+                    commit_seq = _advance_commit_seq(connection, observed_at)
+                    return {
+                        "found": True,
+                        "preferences": {
+                            "user_state": str(storage_current["user_state"] or "active"),
+                            "loop_mode": str(storage_current["loop_mode"] or "assist"),
+                            "notification_muted": bool(storage_current["notification_muted"]),
+                            "user_hidden_from_timeline": user_hidden_from_timeline,
+                        },
+                        "updated": bool(user_hidden_from_timeline != bool(storage_current["user_hidden_from_timeline"])),
+                        "commit_seq": str(commit_seq),
+                    }
                 return {
                     "found": False,
                     "preferences": None,
