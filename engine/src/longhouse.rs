@@ -231,7 +231,13 @@ fn configure_claude_hooks(claude_dir: Option<PathBuf>) -> anyhow::Result<()> {
                 PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".into())).join(".claude")
             })
     });
-    let settings_path = claude_dir.with_extension("json");
+    let settings_path = claude_dir.parent().unwrap_or(Path::new(".")).join(format!(
+        "{}.json",
+        claude_dir
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or(".claude")
+    ));
     let mut settings: serde_json::Map<String, serde_json::Value> =
         match std::fs::read(&settings_path) {
             Ok(raw) => serde_json::from_slice(&raw)
