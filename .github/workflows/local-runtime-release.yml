@@ -667,8 +667,17 @@ jobs:
       - name: List arm64 artifacts
         run: ls -la binaries
 
+      - name: Add arm64 checksums to the release manifest
+        run: |
+          gh release download "$RELEASE_TAG" \
+            --pattern local-runtime-checksums.txt \
+            --dir binaries \
+            --repo "${{ github.repository }}"
+          cd binaries
+          sha256sum longhouse-linux-arm64 longhouse-engine-linux-arm64 >> local-runtime-checksums.txt
+
       - name: Upload arm64 assets to release
-        run: gh release upload "$RELEASE_TAG" binaries/longhouse-linux-arm64 binaries/longhouse-engine-linux-arm64 --clobber --repo "${{ github.repository }}"
+        run: gh release upload "$RELEASE_TAG" binaries/longhouse-linux-arm64 binaries/longhouse-engine-linux-arm64 binaries/local-runtime-checksums.txt --clobber --repo "${{ github.repository }}"
 
       - name: Attest arm64 release artifacts
         uses: actions/attest-build-provenance@v3
@@ -676,6 +685,7 @@ jobs:
           subject-path: |
             binaries/longhouse-engine-linux-arm64
             binaries/longhouse-linux-arm64
+            binaries/local-runtime-checksums.txt
 
   verify-install-from-release:
     name: "verify-install-from-release--${{ matrix.os }}"

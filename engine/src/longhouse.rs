@@ -42,7 +42,8 @@ fn paired_engine_path() -> anyhow::Result<PathBuf> {
     if let Some(override_path) = std::env::var_os("LONGHOUSE_ENGINE_BIN") {
         return Ok(PathBuf::from(override_path));
     }
-    let exe = std::env::current_exe().context("resolve native longhouse executable")?;
+    let exe = std::fs::canonicalize(std::env::current_exe().context("resolve native longhouse executable")?)
+        .context("resolve native longhouse executable path")?;
     let dir = exe.parent().context("native longhouse executable has no parent")?;
     Ok(dir.join(if cfg!(windows) { "longhouse-engine.exe" } else { "longhouse-engine" }))
 }
