@@ -78,14 +78,9 @@ export default function IntegrationsPage() {
 
       <h2>Antigravity CLI</h2>
       <p>
-        Antigravity is Google's new CLI path. Longhouse launches it with{" "}
-        <code>longhouse agy</code>, installs a small Antigravity plugin
-        for hook-backed phase signals, and binds its transcript to the managed
-        Longhouse session when hooks expose the transcript path.
+        Antigravity sessions are observed as Shadow sessions. Native Helm is
+        explicitly excluded until one native runtime owns the hook and control contract.
       </p>
-      <CodeBlock title="terminal">
-        {`longhouse agy                  # start Antigravity CLI with Longhouse session ownership`}
-      </CodeBlock>
       <table>
         <thead>
           <tr>
@@ -96,9 +91,9 @@ export default function IntegrationsPage() {
         <tbody>
           <tr><td>Session import</td><td>Full</td></tr>
           <tr><td>Search & detail</td><td>Full</td></tr>
-          <tr><td>Launch through Longhouse</td><td>Supported</td></tr>
-          <tr><td>Phase hooks</td><td>Supported</td></tr>
-          <tr><td>Live control</td><td>Observe-only today</td></tr>
+          <tr><td>Launch through Longhouse</td><td>Excluded from native Helm</td></tr>
+          <tr><td>Phase hooks</td><td>Excluded from native Helm</td></tr>
+          <tr><td>Live control</td><td>Unavailable</td></tr>
           <tr><td>Continue / branch</td><td>Not yet</td></tr>
         </tbody>
       </table>
@@ -132,18 +127,10 @@ export default function IntegrationsPage() {
 
       <h2>Cursor Agent</h2>
       <p>
-        Launching through Longhouse with <code>longhouse cursor</code> starts a{" "}
-        <strong>Helm</strong> session: the same interactive{" "}
-        <code>cursor-agent</code> TUI in your terminal, with a background control
-        channel. From the web or iOS you can send, interrupt, and terminate.
-        Cursor transcript archive is temporarily unavailable while Longhouse
-        moves it to a native, source-faithful storage-v2 adapter; Console mode
-        is unavailable during that migration.
+        Cursor sessions are observed as Shadow sessions. Native Helm is
+        explicitly excluded until one native runtime owns PTY, control,
+        permission, and transcript lifecycle.
       </p>
-      <CodeBlock title="terminal">
-        {`longhouse cursor              # start Cursor Agent (steerable TUI)
-longhouse cursor decode <store.db>  # inspect a local Cursor source without uploading it`}
-      </CodeBlock>
       <table>
         <thead>
           <tr>
@@ -154,9 +141,9 @@ longhouse cursor decode <store.db>  # inspect a local Cursor source without uplo
         <tbody>
           <tr><td>Session import / archive</td><td>Native storage-v2 migration in progress</td></tr>
           <tr><td>Search & detail</td><td>Available after native archive ships</td></tr>
-          <tr><td>Launch through Longhouse (Helm)</td><td>Supported</td></tr>
+          <tr><td>Launch through Longhouse (Helm)</td><td>Excluded from native Helm</td></tr>
           <tr><td>Headless launch (Console / ACP)</td><td>Unavailable during archive migration</td></tr>
-          <tr><td>Live control</td><td>Send, interrupt, and terminate</td></tr>
+          <tr><td>Live control</td><td>Unavailable</td></tr>
           <tr><td>Live transcript</td><td>Unavailable until receipt-backed source proof</td></tr>
           <tr><td>Continue / branch</td><td>Not yet</td></tr>
         </tbody>
@@ -169,19 +156,17 @@ longhouse cursor decode <store.db>  # inspect a local Cursor source without uplo
         re-importing is safe and idempotent.
       </p>
       <p>
-        The background shipping service is installed with <code>longhouse connect --install</code>.
-        Once a machine is already linked, use <code>longhouse machine repair</code> to
-        repair the local hook path and shipping runtime. You can also trigger a
-        one-time import with:
+        The native Machine Agent service is installed with <code>longhouse machine repair --repair-service</code> after <code>longhouse auth</code>.
+        The Runtime Host can trigger a one-time import with:
       </p>
-      <CodeBlock title="terminal">{`longhouse ship`}</CodeBlock>
+      <CodeBlock title="terminal">{`longhouse-server ship`}</CodeBlock>
 
       <h2>MCP Server</h2>
       <p>
         Longhouse includes a built-in MCP server that exposes session search,
         recall, and coordination to any MCP-compatible host:
       </p>
-      <CodeBlock title="terminal">{`longhouse mcp-server`}</CodeBlock>
+      <CodeBlock title="terminal">{`longhouse-server mcp-server`}</CodeBlock>
       <p>
         This is the same <Link to="/docs/api">Machine API</Link> surface
         exposed over the MCP protocol. Add it to your Claude Code or Codex

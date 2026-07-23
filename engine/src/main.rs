@@ -2,6 +2,8 @@ mod bench;
 mod build_identity;
 mod claude_channel_control;
 mod claude_channel_server;
+mod claude_lifecycle_hook;
+mod claude_permission_gate;
 mod claude_print;
 mod codex_app_server_canary;
 mod codex_attachments;
@@ -33,6 +35,7 @@ mod managed_opencode_scan;
 mod media_redaction;
 mod media_upload;
 mod observability;
+mod opencode_bridge;
 mod opencode_control;
 mod opencode_db;
 mod opencode_run;
@@ -57,6 +60,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use clap::{Parser, Subcommand};
+use serde_json::json;
 use tracing_subscriber::fmt::MakeWriter;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -565,16 +569,65 @@ enum Commands {
         command: ClaudeChannelCommands,
     },
 
+    /// Native Claude PreToolUse permission hook (installed by the device facade).
+    ClaudePermissionGate,
+
+    /// Native Claude lifecycle hook (installed by the device facade).
+    ClaudeLifecycleHook,
+
     /// Native managed Cursor Helm control utilities
     CursorHelm {
         #[command(subcommand)]
         command: CursorHelmCommands,
     },
 
+    /// Start or stop the native OpenCode localhost server bridge.
+    OpencodeBridge {
+        #[command(subcommand)]
+        command: OpencodeBridgeCommands,
+    },
+
     /// Native device command surface scaffold
     Device {
         #[command(subcommand)]
         command: DeviceCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum OpencodeBridgeCommands {
+    /// Start a stock OpenCode server and create its managed provider session.
+    Start {
+        #[arg(long)]
+        session_id: String,
+        #[arg(long)]
+        run_id: String,
+        #[arg(long, default_value = ".")]
+        cwd: PathBuf,
+        #[arg(long)]
+        display_name: Option<String>,
+        #[arg(long)]
+        opencode_bin: Option<String>,
+        #[arg(long)]
+        claude_dir: Option<PathBuf>,
+        #[arg(long, default_value = "detached")]
+        launch_mode: String,
+    },
+    /// Stop a native OpenCode bridge only when its recorded process identity matches.
+    Stop {
+        #[arg(long)]
+        session_id: String,
+        #[arg(long)]
+        claude_dir: Option<PathBuf>,
+    },
+    /// Attach the stock OpenCode TUI without exposing bridge credentials.
+    Attach {
+        #[arg(long)]
+        session_id: String,
+        #[arg(long)]
+        opencode_bin: Option<String>,
+        #[arg(long)]
+        claude_dir: Option<PathBuf>,
     },
 }
 
@@ -1087,12 +1140,19 @@ fn command_name(command: &Commands) -> &'static str {
             CodexBridgeCommands::PauseResponse { .. } => "codex-bridge-pause-response",
             CodexBridgeCommands::Stop { .. } => "codex-bridge-stop",
         },
+        Commands::OpencodeBridge { command } => match command {
+            OpencodeBridgeCommands::Start { .. } => "opencode-bridge-start",
+            OpencodeBridgeCommands::Stop { .. } => "opencode-bridge-stop",
+            OpencodeBridgeCommands::Attach { .. } => "opencode-bridge-attach",
+        },
         Commands::ClaudeChannel { command } => match command {
             ClaudeChannelCommands::Serve { .. } => "claude-channel-serve",
             ClaudeChannelCommands::Send { .. } => "claude-channel-send",
             ClaudeChannelCommands::Interrupt { .. } => "claude-channel-interrupt",
             ClaudeChannelCommands::Inspect { .. } => "claude-channel-inspect",
         },
+        Commands::ClaudePermissionGate => "claude-permission-gate",
+        Commands::ClaudeLifecycleHook => "claude-lifecycle-hook",
         Commands::CursorHelm { command } => match command {
             CursorHelmCommands::Stop { .. } => "cursor-helm-stop",
             CursorHelmCommands::Send { .. } => "cursor-helm-send",
@@ -1497,6 +1557,48 @@ fn main() -> anyhow::Result<()> {
                 device::cmd_device_repair(json, dry_run, repair_service, state_root.as_deref())?;
             }
         },
+        Commands::OpencodeBridge { command } => match command {
+            OpencodeBridgeCommands::Start {
+                session_id,
+                run_id,
+                cwd,
+                display_name,
+                opencode_bin,
+                claude_dir,
+                launch_mode,
+            } => {
+                let result = opencode_bridge::start(opencode_bridge::StartConfig {
+                    session_id,
+                    run_id,
+                    cwd,
+                    display_name,
+                    opencode_bin,
+                    claude_dir,
+                    launch_mode,
+                })?;
+                println!("{}", serde_json::to_string(&result)?);
+            }
+            OpencodeBridgeCommands::Stop {
+                session_id,
+                claude_dir,
+            } => {
+                let result = opencode_bridge::stop(&session_id, claude_dir)?;
+                println!(
+                    "{}",
+                    serde_json::to_string(&json!({"pid": result.pid, "stopped": result.stopped}))?
+                );
+            }
+            OpencodeBridgeCommands::Attach {
+                session_id,
+                opencode_bin,
+                claude_dir,
+            } => {
+                let exit = opencode_bridge::attach(&session_id, opencode_bin, claude_dir)?;
+                if exit != 0 {
+                    std::process::exit(exit);
+                }
+            }
+        },
         Commands::ClaudeChannel { command } => match command {
             ClaudeChannelCommands::Serve {
                 session_id,
@@ -1585,6 +1687,12 @@ fn main() -> anyhow::Result<()> {
                 println!("{}", serde_json::to_string_pretty(&state)?);
             }
         },
+        Commands::ClaudePermissionGate => {
+            claude_permission_gate::run()?;
+        }
+        Commands::ClaudeLifecycleHook => {
+            claude_lifecycle_hook::run()?;
+        }
         Commands::CursorHelm { command } => {
             let rt = tokio::runtime::Runtime::new()?;
             match command {

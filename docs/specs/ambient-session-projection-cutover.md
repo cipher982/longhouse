@@ -277,13 +277,3 @@ which fixes the observed false unknown activity. `91d07ab46` makes the current
 menu fast snapshot fetch AI titles for all rows, fixing immediate visibility.
 They are containment fixes, not the target architecture: phase merging moves
 to the writer and the title HTTP fan-out is removed in migration steps 1–3.
-
-## Review record
-
-Hatch SOL and Hatch Fable independently reviewed the initial draft on
-2026-07-22 and both returned **REFINE**. This revision incorporates their
-cutover blockers: a fixed schema version separate from sequence; native session
-and connection decoding; typed local/remote fragments and ordered removals;
-targeted stream replay with branch parity; dynamic local-id filtering; and
-scope reduction to prove the existing title reconciler rather than replace it.
-Approval requires the acceptance and regression gates above.

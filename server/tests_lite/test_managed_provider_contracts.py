@@ -118,9 +118,9 @@ def test_provider_cli_catalog_matches_managed_provider_contracts():
 def test_provider_identity_contracts_are_manifest_backed():
     assert {contract.provider: contract.requires_longhouse_cli for contract in all_managed_provider_contracts()} == {
         "codex": False,
-        "claude": True,
+        "claude": False,
         "opencode": False,
-        "antigravity": True,
+        "antigravity": False,
         "cursor": False,
     }
     assert sorted(control_plane for contract in all_managed_provider_contracts() for control_plane in contract.control_planes) == sorted(

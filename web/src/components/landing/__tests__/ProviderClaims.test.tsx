@@ -44,9 +44,9 @@ describe("landing provider claims", () => {
 
     // sync, launch & send, interrupt, steer, resume
     expect(cellsFor("Claude Code")).toEqual(["yes", "yes", "yes", "yes", "yes"]);
-    expect(cellsFor("Cursor Agent")).toEqual(["yes", "yes", "yes", "no", "yes"]);
+    expect(cellsFor("Cursor Agent")).toEqual(["yes", "no", "no", "no", "no"]);
     expect(cellsFor("OpenCode")).toEqual(["yes", "yes", "yes", "no", "no"]);
-    expect(cellsFor("Antigravity CLI")).toEqual(["yes", "yes", "no", "no", "no"]);
+    expect(cellsFor("Antigravity CLI")).toEqual(["yes", "no", "no", "no", "no"]);
   });
 
   it("renders FAQ provider answer consistent with the capability matrix", async () => {
@@ -56,7 +56,7 @@ describe("landing provider claims", () => {
     await user.click(screen.getByRole("button", { name: /Which providers are strongest today\?/i }));
 
     expect(
-      screen.getByText(/Claude Code and Codex have the deepest control paths/i),
+      screen.getByText(/Claude Code, Codex, and OpenCode have native managed control paths/i),
     ).toBeInTheDocument();
   });
 });

@@ -37,9 +37,9 @@ Three tag families, each independent:
 ## Verify install
 
 ```bash
-uv tool upgrade longhouse   # pulls the new wheel from PyPI
-longhouse connect --install # automatically invoked by upgrade, but safe to re-run
-longhouse doctor
+curl -fsSL https://get.longhouse.ai/install.sh | bash
+longhouse verify-pair
+longhouse local-health --fast --json
 ```
 
 For the desktop app, download the DMG from the release and drag-install.

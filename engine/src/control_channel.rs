@@ -489,7 +489,7 @@ fn control_supports_for_path_with_env(
 }
 
 fn provider_live_proof_supported_provider(provider: &str) -> bool {
-    matches!(provider, "claude" | "opencode" | "antigravity")
+    matches!(provider, "claude" | "opencode")
 }
 
 fn control_supports_for_path(path_value: Option<&OsStr>) -> Vec<String> {
@@ -855,6 +855,8 @@ async fn execute_command(
 ) -> std::result::Result<Value, CommandError> {
     let command_type = required_string(frame, "command_type")?;
     let payload = frame.get("payload").cloned().unwrap_or_else(|| json!({}));
+
+    reject_excluded_provider(&payload)?;
 
     if command_type == COMMAND_PROVIDER_LIVE_PROOF {
         return run_provider_live_proof_command(&payload).await;
@@ -1289,6 +1291,21 @@ async fn execute_command(
             message: format!("Unsupported command_type={other}"),
         }),
     }
+}
+
+fn reject_excluded_provider(payload: &Value) -> std::result::Result<(), CommandError> {
+    let Some(provider) = payload.get("provider").and_then(Value::as_str) else {
+        return Ok(());
+    };
+    if matches!(provider, "cursor" | "antigravity") {
+        return Err(CommandError {
+            code: "provider_shadow_only".to_string(),
+            message: format!(
+                "{provider} is Shadow-only in this release; Longhouse can archive it but cannot launch or control it"
+            ),
+        });
+    }
+    Ok(())
 }
 
 async fn execute_turn_start(
@@ -2401,13 +2418,8 @@ mod tests {
         ("codex", "run_once", COMMAND_RUN_ONCE),
         ("codex", "resume_run_once", COMMAND_RUN_ONCE),
         ("codex", "turn_start", COMMAND_TURN_START),
-        ("cursor", "turn_start", COMMAND_TURN_START),
-        ("cursor", "turn_interrupt", COMMAND_TURN_INTERRUPT),
         ("opencode", "turn_start", COMMAND_TURN_START),
         ("opencode", "turn_interrupt", COMMAND_TURN_INTERRUPT),
-        ("cursor", "send", COMMAND_SEND_TEXT),
-        ("cursor", "interrupt", COMMAND_INTERRUPT),
-        ("cursor", "terminate", COMMAND_TERMINATE),
         ("claude", "send", COMMAND_SEND_TEXT),
         ("claude", "interrupt", COMMAND_INTERRUPT),
         ("claude", "steer", COMMAND_STEER_TEXT),
@@ -2417,7 +2429,6 @@ mod tests {
         ("opencode", "send", COMMAND_SEND_TEXT),
         ("opencode", "interrupt", COMMAND_INTERRUPT),
         ("opencode", "terminate", COMMAND_TERMINATE),
-        ("antigravity", "send", COMMAND_SEND_TEXT),
     ];
 
     fn support_dispatch_command(provider: &str, operation: &str) -> Option<&'static str> {
@@ -2872,18 +2883,8 @@ mod tests {
 
     #[test]
     fn reducer_control_grants_follow_dispatch_manifest_and_connection_state() {
-        assert_eq!(
-            granted_control_operations("cursor", true),
-            vec![
-                "interrupt".to_string(),
-                "send_input".to_string(),
-                "terminate".to_string()
-            ]
-        );
-        assert_eq!(
-            granted_control_operations("antigravity", true),
-            vec!["send_input".to_string()]
-        );
+        assert!(granted_control_operations("cursor", true).is_empty());
+        assert!(granted_control_operations("antigravity", true).is_empty());
         assert!(granted_control_operations("cursor", false).is_empty());
         assert!(granted_control_operations("unknown", true).is_empty());
     }
@@ -3308,21 +3309,9 @@ mod tests {
             std::env::remove_var("LONGHOUSE_ARGS_OUT");
         }
 
-        assert_eq!(result["ok"], true);
-        assert_eq!(result["result"]["provider"], "antigravity");
-        assert_eq!(result["result"]["transport"], "antigravity_hook_inbox");
-        let args = std::fs::read_to_string(&args_path).unwrap();
-        assert_eq!(
-            args.lines().collect::<Vec<_>>(),
-            vec![
-                "antigravity-channel",
-                "send",
-                "--session-id",
-                "session-1",
-                "--text",
-                "hello",
-            ]
-        );
+        assert_eq!(result["ok"], false);
+        assert_eq!(result["error"]["code"], "provider_shadow_only");
+        assert!(!args_path.exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -3754,7 +3743,7 @@ exit 1
         assert_eq!(opencode["ok"], false);
         assert_eq!(opencode["error"]["code"], "unsupported_command");
         assert_eq!(antigravity["ok"], false);
-        assert_eq!(antigravity["error"]["code"], "unsupported_command");
+        assert_eq!(antigravity["error"]["code"], "provider_shadow_only");
     }
 
     #[test]
@@ -4236,7 +4225,7 @@ printf '{{"type":"result","subtype":"success","is_error":false}}\n'
 
             assert_eq!(response["ok"], false, "{permission_mode}: {response}");
             assert_eq!(
-                response["error"]["code"], "permission_policy_unsupported",
+                response["error"]["code"], "provider_shadow_only",
                 "{permission_mode}: {response}"
             );
         }
@@ -4295,5 +4284,15 @@ printf '{{"type":"result","subtype":"success","is_error":false}}\n'
             .code,
             "unsupported_command"
         );
+    }
+
+    #[test]
+    fn excluded_providers_are_rejected_before_dispatch() {
+        for provider in ["cursor", "antigravity"] {
+            let error = reject_excluded_provider(&json!({"provider": provider})).unwrap_err();
+            assert_eq!(error.code, "provider_shadow_only");
+            assert!(error.message.contains("Shadow-only"));
+        }
+        assert!(reject_excluded_provider(&json!({"provider": "codex"})).is_ok());
     }
 }

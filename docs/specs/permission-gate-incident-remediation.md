@@ -3,9 +3,6 @@
 Status: implementation-ready plan
 Owner: managed-provider / session-state surfaces
 Date: 2026-07-22
-Review: Hatch Codex Sol — revise-before-implementation findings incorporated;
-Hatch Cursor/Grok — conditional approval findings incorporated
-
 ## Decision
 
 Fix the proven Cursor permission-gate residue first. Do not make a broad

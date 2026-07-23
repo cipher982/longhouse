@@ -619,8 +619,8 @@ describe("SessionsPage", () => {
     expect(screen.getByText(/Run one command on the machine where you use Claude Code/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "See setup steps" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Machines" })).toBeInTheDocument();
-    expect(screen.getByText("longhouse connect --install")).toBeInTheDocument();
-    expect(screen.getByText("longhouse ship")).toBeInTheDocument();
+    expect(screen.getByText("LONGHOUSE_DEVICE_TOKEN=... longhouse auth --url https://your-runtime.example")).toBeInTheDocument();
+    expect(screen.getByText("longhouse machine repair --repair-service")).toBeInTheDocument();
     expect(screen.queryByText("Welcome to Longhouse")).not.toBeInTheDocument();
   });
 
@@ -653,8 +653,7 @@ describe("SessionsPage", () => {
     renderSessionsPage("/timeline");
 
     expect(await screen.findByText("These are demo sessions.")).toBeInTheDocument();
-    expect(screen.getByText("longhouse connect --install")).toBeInTheDocument();
-    expect(screen.getByText("longhouse ship")).toBeInTheDocument();
+    expect(screen.getByText(/Link this machine with native auth/i)).toBeInTheDocument();
     expect(screen.getByText(/launch managed sessions with Longhouse when you want control after launch/i)).toBeInTheDocument();
   });
 

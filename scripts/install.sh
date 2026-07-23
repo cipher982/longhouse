@@ -7,8 +7,9 @@
 #
 # Environment:
 #   http_proxy/https_proxy Proxy settings (honored automatically)
-#   LONGHOUSE_INSTALL_VERSION Pin the PyPI version to install (for release gates/debugging)
-#   LONGHOUSE_PKG_SOURCE      Override package source for local/dev installs
+#   LONGHOUSE_INSTALL_VERSION Pin the native release version (for release gates/debugging)
+#   LONGHOUSE_NATIVE_BIN_DIR  Explicit directory containing paired longhouse
+#                             and longhouse-engine binaries (local/dev only)
 #
 set -euo pipefail
 
@@ -18,6 +19,7 @@ INSTALL_COMPLETED=0
 CURRENT_INSTALL_STAGE="startup"
 INSTALL_TELEMETRY_SOURCE=""
 INSTALL_TELEMETRY_PACKAGE_REF=""
+INSTALL_RELEASE_VERSION=""
 
 # Colors for output
 RED='\033[0;31m'
@@ -90,9 +92,9 @@ telemetry_libc() {
 telemetry_package_ref_kind() {
     local package_ref="${1:-}"
     if [[ -z "$package_ref" ]]; then
-        printf 'unpinned_pypi'
-    elif [[ "$package_ref" == longhouse==* ]]; then
-        printf 'pypi_version'
+        printf 'unversioned'
+    elif [[ "$package_ref" == v* ]]; then
+        printf 'release_version'
     elif [[ "$package_ref" == http://* || "$package_ref" == https://* || "$package_ref" == git+* ]]; then
         printf 'url'
     elif [[ "$package_ref" == /* || "$package_ref" == ./* || "$package_ref" == ../* ]]; then
@@ -103,11 +105,7 @@ telemetry_package_ref_kind() {
 }
 
 telemetry_prior_installer() {
-    if has_command uv && uv tool list 2>/dev/null | grep -q "^longhouse"; then
-        printf 'uv_tool'
-    elif has_command pipx && pipx list 2>/dev/null | grep -qi "longhouse"; then
-        printf 'pipx'
-    elif has_command longhouse; then
+    if has_command longhouse; then
         printf 'path'
     else
         printf 'none'
@@ -176,7 +174,7 @@ emit_installer_telemetry() {
 
     props="\"stage\":\"$stage\",\"shell\":\"$shell_name\",\"libc\":\"$libc\",\"package_ref_kind\":\"$package_ref_kind\",\"prior_installer\":\"$prior_installer\"$exit_prop"
     local payload
-    payload="{\"event_name\":\"$event_name\",\"install_id\":\"$install_id\",\"source\":\"installer\",\"version\":null,\"os_name\":\"$os_name\",\"arch\":\"$arch\",\"command\":\"install_sh\",\"install_method\":\"uv\",\"install_source\":\"$install_source\",\"channel\":\"stable\",\"topology\":null,\"ci\":false,\"props\":{$props}}"
+    payload="{\"event_name\":\"$event_name\",\"install_id\":\"$install_id\",\"source\":\"installer\",\"version\":null,\"os_name\":\"$os_name\",\"arch\":\"$arch\",\"command\":\"install_sh\",\"install_method\":\"native_binary\",\"install_source\":\"$install_source\",\"channel\":\"stable\",\"topology\":null,\"ci\":false,\"props\":{$props}}"
 
     curl -fsS --max-time 1.5 \
         -H "Content-Type: application/json" \
@@ -220,7 +218,7 @@ detect_platform() {
     if [[ -f /proc/version ]] && grep -qi microsoft /proc/version; then
         warn "Running in WSL (Windows Subsystem for Linux)"
         warn "  - systemd may not be available for background services"
-        warn "  - You can still run 'longhouse connect' manually"
+        warn "  - Native service setup requires systemd: longhouse machine repair --repair-service"
         echo ""
     fi
 
@@ -232,172 +230,81 @@ has_command() {
     command -v "$1" &>/dev/null
 }
 
-# Install uv (Python package manager)
-install_uv() {
-    CURRENT_INSTALL_STAGE="uv_install"
-    if has_command uv; then
-        info "uv already installed: $(uv --version)"
-        return 0
-    fi
+sha256_file() {
+    if has_command shasum; then shasum -a 256 "$1" | awk '{print $1}'; else sha256sum "$1" | awk '{print $1}'; fi
+}
 
-    step "Installing uv (Python package manager)"
-    curl -LsSf https://astral.sh/uv/install.sh | sh
+native_target() {
+    case "$(detect_platform)" in
+        darwin-arm64) printf 'darwin-arm64' ;;
+        linux-x86_64) printf 'linux-x64' ;;
+        linux-arm64) printf 'linux-arm64' ;;
+        *) error "No native Longhouse release is available for $(detect_platform)"; return 1 ;;
+    esac
+}
 
-    # Source the path update
-    export PATH="$HOME/.local/bin:$PATH"
+resolve_release_version() {
+    if [[ -n "${LONGHOUSE_INSTALL_VERSION:-}" ]]; then printf '%s\n' "${LONGHOUSE_INSTALL_VERSION#v}"; return 0; fi
+    local latest_url
+    latest_url="$(curl -fsSIL -o /dev/null -w '%{url_effective}' https://github.com/cipher982/longhouse/releases/latest)"
+    case "$latest_url" in */releases/tag/v*) printf '%s\n' "${latest_url##*/releases/tag/v}" ;; *) error "Could not resolve the latest Longhouse native release"; return 1 ;; esac
+}
 
-    if has_command uv; then
-        success "uv installed: $(uv --version)"
+verify_release_checksum() {
+    local checksums="$1" asset="$2" downloaded="$3" expected actual
+    expected="$(awk -v asset="$asset" '$2 == asset || $2 == "*" asset { print $1; exit }' "$checksums")"
+    actual="$(sha256_file "$downloaded")"
+    [[ -n "$expected" && "$expected" == "$actual" ]]
+}
+
+install_native_pair() {
+    step "Installing Longhouse"
+    CURRENT_INSTALL_STAGE="native_binary_install"
+    local target source_dir="${LONGHOUSE_NATIVE_BIN_DIR:-}" version base_url tmp_dir checksums facade_asset engine_asset
+    local native_bin_dir="$HOME/.local/bin" native_root="$HOME/.local/share/longhouse" release_id release_dir
+    local current_link="$native_root/current" next_current existing_facade
+    target="$(native_target)"; facade_asset="longhouse-${target}"; engine_asset="longhouse-engine-${target}"; tmp_dir="$(mktemp -d)"
+    if [[ -n "$source_dir" ]]; then
+        INSTALL_TELEMETRY_SOURCE="local"; INSTALL_TELEMETRY_PACKAGE_REF="$source_dir"; INSTALL_RELEASE_VERSION=""
+        [[ -x "$source_dir/longhouse" && -x "$source_dir/longhouse-engine" ]] || { error "LONGHOUSE_NATIVE_BIN_DIR must contain executable longhouse and longhouse-engine binaries"; rm -rf "$tmp_dir"; return 1; }
+        cp "$source_dir/longhouse" "$tmp_dir/longhouse"; cp "$source_dir/longhouse-engine" "$tmp_dir/longhouse-engine"
     else
-        error "uv installation failed"
-        record_install_failure 1
-        exit 1
+        INSTALL_TELEMETRY_SOURCE="release"; version="$(resolve_release_version)"; INSTALL_RELEASE_VERSION="$version"; INSTALL_TELEMETRY_PACKAGE_REF="v$version"; base_url="https://github.com/cipher982/longhouse/releases/download/v${version}"; checksums="$tmp_dir/local-runtime-checksums.txt"
+        info "Downloading Longhouse v$version for $target"
+        curl -fsSL "$base_url/local-runtime-checksums.txt" -o "$checksums" && curl -fsSL "$base_url/$facade_asset" -o "$tmp_dir/longhouse" && curl -fsSL "$base_url/$engine_asset" -o "$tmp_dir/longhouse-engine" || { rm -rf "$tmp_dir"; return 1; }
+        verify_release_checksum "$checksums" "$facade_asset" "$tmp_dir/longhouse" || { error "Checksum mismatch for $facade_asset"; rm -rf "$tmp_dir"; return 1; }
+        verify_release_checksum "$checksums" "$engine_asset" "$tmp_dir/longhouse-engine" || { error "Checksum mismatch for $engine_asset"; rm -rf "$tmp_dir"; return 1; }
     fi
-}
-
-# Install Python via uv
-install_python() {
-    CURRENT_INSTALL_STAGE="python_install"
-    step "Ensuring Python 3.12+ is available"
-
-    # Check if uv can already find Python
-    if uv python find 3.12 &>/dev/null 2>&1; then
-        local py_path
-        py_path=$(uv python find 3.12 2>/dev/null)
-        info "Python found: $py_path"
-        return 0
-    fi
-
-    info "Installing Python 3.12 via uv..."
-    uv python install 3.12
-
-    success "Python 3.12 installed"
-}
-
-resolve_latest_longhouse_pypi_version() {
-    local py_path
-    py_path="$(uv python find 3.12 2>/dev/null || command -v python3 2>/dev/null || true)"
-    if [[ -z "$py_path" ]]; then
+    chmod 755 "$tmp_dir/longhouse" "$tmp_dir/longhouse-engine"
+    "$tmp_dir/longhouse" verify-pair >/dev/null || { rm -rf "$tmp_dir"; return 1; }
+    release_id="${version:-local}-${tmp_dir##*/}"
+    release_dir="$native_root/releases/$release_id"
+    mkdir -p "$native_bin_dir" "$release_dir"
+    mv "$tmp_dir/longhouse" "$release_dir/longhouse"
+    mv "$tmp_dir/longhouse-engine" "$release_dir/longhouse-engine"
+    "$release_dir/longhouse" verify-pair >/dev/null || { rm -rf "$tmp_dir"; return 1; }
+    existing_facade="$native_bin_dir/longhouse"
+    next_current="$native_root/.current-${tmp_dir##*/}"
+    ln -s "releases/$release_id" "$next_current"
+    ln -s "../share/longhouse/current/longhouse" "$native_bin_dir/.longhouse-native"
+    ln -s "../share/longhouse/current/longhouse-engine" "$native_bin_dir/.longhouse-engine-native"
+    # `mv next current` follows `current` when it is an existing directory
+    # symlink. Remove only that link first so upgrades cannot nest a new
+    # release inside the previous release directory.
+    [[ ! -e "$current_link" || -L "$current_link" ]] || { error "Refusing to replace non-link native current path: $current_link"; rm -rf "$tmp_dir"; return 1; }
+    rm -f "$current_link"
+    mv "$next_current" "$current_link"
+    if [[ -e "$existing_facade" || -L "$existing_facade" ]] && ! "$existing_facade" verify-pair >/dev/null 2>&1; then
+        error "Refusing to overwrite a non-native $existing_facade; remove it before installing Longhouse"
+        rm -rf "$tmp_dir"
         return 1
     fi
-
-    curl -fsSL https://pypi.org/pypi/longhouse/json | "$py_path" -c '
-import json
-import sys
-
-payload = json.load(sys.stdin)
-version = str(payload.get("info", {}).get("version") or "").strip()
-files = payload.get("releases", {}).get(version) or []
-if not version or not files:
-    raise SystemExit(1)
-print(version)
-'
-}
-
-# Install Longhouse CLI
-install_longhouse() {
-    step "Installing Longhouse CLI"
-
-    # Package source defaults to the stable PyPI package and can be overridden
-    # for local/dev installs and isolated release validation.
-    local pkg_source="${LONGHOUSE_PKG_SOURCE:-longhouse}"
-    local custom_source=0
-    local install_source="pypi"
-    local package_ref=""
-    local install_version="${LONGHOUSE_INSTALL_VERSION:-}"
-
-    if [[ "$pkg_source" == "longhouse" ]]; then
-        if [[ -n "$install_version" ]]; then
-            install_version="${install_version#v}"
-            info "Using requested Longhouse version: $install_version"
-        elif install_version="$(resolve_latest_longhouse_pypi_version)"; then
-            info "Resolved latest Longhouse version: $install_version"
-        else
-            warn "Could not resolve latest Longhouse version; falling back to unpinned PyPI install"
-            install_version=""
-        fi
-
-        if [[ -n "$install_version" ]]; then
-            pkg_source="longhouse==$install_version"
-            package_ref="$pkg_source"
-        fi
-    elif [[ "$pkg_source" == longhouse==* ]]; then
-        package_ref="$pkg_source"
-    else
-        custom_source=1
-        install_source="custom"
-        package_ref="$pkg_source"
-    fi
-
-    CURRENT_INSTALL_STAGE="uv_tool_install"
-    INSTALL_TELEMETRY_SOURCE="$install_source"
-    INSTALL_TELEMETRY_PACKAGE_REF="$package_ref"
-    emit_installer_telemetry "uv_tool_install_attempt" "$CURRENT_INSTALL_STAGE" "$install_source" "$package_ref" "0"
-
-    # Install the longhouse package as a tool
-    if [[ "$custom_source" -eq 1 ]]; then
-        info "Installing longhouse from configured source..."
-        # Non-PyPI sources can otherwise reuse a stale cached wheel and miss
-        # recent code changes during disposable installer validation.
-        uv tool uninstall longhouse 2>/dev/null || true
-        uv tool install --force --no-cache "$pkg_source"
-    elif [[ "$pkg_source" == longhouse==* ]]; then
-        info "Installing longhouse from PyPI: $pkg_source"
-        uv tool install --force --no-cache "$pkg_source"
-    elif uv tool list 2>/dev/null | grep -q "^longhouse"; then
-        info "Upgrading existing longhouse installation..."
-        uv tool upgrade longhouse || {
-            # If upgrade fails (e.g., installed from different source), reinstall
-            info "Reinstalling longhouse..."
-            uv tool uninstall longhouse 2>/dev/null || true
-            uv tool install "$pkg_source"
-        }
-    else
-        info "Installing longhouse..."
-        uv tool install "$pkg_source"
-    fi
-
-    # Ensure uv tools bin is in PATH
-    export PATH="$HOME/.local/bin:$PATH"
-
-    if has_command longhouse; then
-        local -a record_install_args
-        record_install_args=(
-            record-install
-            --install-method uv
-            --install-source "$install_source"
-            --package-name longhouse
-            --channel stable
-        )
-        if [[ -n "$package_ref" ]]; then
-            record_install_args+=(--package-ref "$package_ref")
-        fi
-        success "longhouse installed: $(longhouse --version 2>/dev/null || echo 'installed')"
-        if ! longhouse "${record_install_args[@]}" >/dev/null 2>&1; then
-            warn "Could not write Longhouse install metadata"
-        fi
-    else
-        CURRENT_INSTALL_STAGE="path_verification"
-        error "longhouse installation failed"
-        error "Try adding ~/.local/bin to your PATH:"
-        error "  export PATH=\"\$HOME/.local/bin:\$PATH\""
-        record_install_failure 1
-        exit 1
-    fi
-}
-
-resolve_longhouse_cli_version() {
-    if ! has_command longhouse; then
-        return 1
-    fi
-
-    local version_line version
-    version_line="$(longhouse --version 2>/dev/null || true)"
-    version="$(printf '%s\n' "$version_line" | awk '{print $2}' | tr -d '\r')"
-    if [[ -z "$version" ]]; then
-        return 1
-    fi
-    printf '%s\n' "${version#v}"
+    mv "$native_bin_dir/.longhouse-native" "$existing_facade"
+    mv "$native_bin_dir/.longhouse-engine-native" "$native_bin_dir/longhouse-engine"
+    rm -rf "$tmp_dir"; "$native_bin_dir/longhouse" verify-pair >/dev/null
+    export PATH="$native_bin_dir:$PATH"
+    emit_installer_telemetry "native_binary_install" "$CURRENT_INSTALL_STAGE" "$INSTALL_TELEMETRY_SOURCE" "$INSTALL_TELEMETRY_PACKAGE_REF" "0"
+    success "Longhouse installed: $($native_bin_dir/longhouse build-identity)"
 }
 
 download_and_install_macos_app_release_asset() {
@@ -495,40 +402,16 @@ install_macos_app() {
         exit 1
     fi
 
-    if longhouse runtime-artifact-install desktop-app --help >/dev/null 2>&1; then
-        local install_output=""
-        if install_output=$(longhouse runtime-artifact-install desktop-app 2>&1); then
-            success "Longhouse.app installed in /Applications"
-            if [[ -n "$install_output" ]]; then
-                printf '%s\n' "$install_output"
-            fi
-            return 0
-        fi
-
-        printf '%s\n' "$install_output" >&2
-        error "Could not install Longhouse.app into /Applications"
-        record_install_failure 1
-        exit 1
-    fi
-
-    local cli_version=""
-    if ! cli_version="$(resolve_longhouse_cli_version)"; then
-        error "Could not determine installed Longhouse CLI version for app fallback"
-        record_install_failure 1
-        exit 1
-    fi
-
-    CURRENT_INSTALL_STAGE="desktop_app_release_fallback"
-    if download_and_install_macos_app_release_asset "$cli_version"; then
+    if [[ -z "$INSTALL_RELEASE_VERSION" ]]; then
+        info "Skipping Longhouse.app for an explicit local native binary pair"
         return 0
     fi
 
-    local install_output=""
-    install_output="$(longhouse --version 2>&1 || true)"
-    printf '%s\n' "$install_output" >&2
-    error "Could not install Longhouse.app into /Applications via CLI or release fallback"
-    record_install_failure 1
-    exit 1
+    if ! download_and_install_macos_app_release_asset "$INSTALL_RELEASE_VERSION"; then
+        error "Could not install Longhouse.app from the matching native release"
+        record_install_failure 1
+        exit 1
+    fi
 }
 
 # Update shell profile for PATH
@@ -616,25 +499,14 @@ verify_installation() {
 
     local all_ok=true
 
-    # Check uv
-    if has_command uv; then
-        success "uv: $(uv --version)"
-    else
-        error "uv not found"
-        all_ok=false
-    fi
-
-    # Check Python
-    if uv python find 3.12 &>/dev/null 2>&1; then
-        success "Python: $(uv python find 3.12)"
-    else
-        error "Python 3.12 not found"
-        all_ok=false
-    fi
-
     # Check longhouse
     if has_command longhouse; then
-        success "longhouse: installed"
+        if longhouse verify-pair >/dev/null 2>&1; then
+            success "longhouse: native pair verified"
+        else
+            error "longhouse native pair is invalid"
+            all_ok=false
+        fi
     else
         error "longhouse not found in PATH"
         all_ok=false
@@ -647,7 +519,7 @@ verify_installation() {
         info "claude: not installed (optional)"
     fi
 
-    if [[ "$(uname -s)" == "Darwin" ]]; then
+    if [[ "$(uname -s)" == "Darwin" && -n "$INSTALL_RELEASE_VERSION" ]]; then
         if [[ -d "/Applications/Longhouse.app" ]]; then
             success "Longhouse.app: /Applications/Longhouse.app"
         else
@@ -794,9 +666,9 @@ print_success() {
         echo "  Longhouse.app owns first-run setup, repair, and local status."
     else
         echo "Next:"
-        echo "  1. Run longhouse onboard"
-        echo "  2. Open http://localhost:8080"
-        echo "  3. Find one prior session in the timeline"
+        echo "  1. Export LONGHOUSE_DEVICE_TOKEN from your Runtime Host"
+        echo "  2. Run longhouse auth --url <runtime-url>"
+        echo "  3. Run longhouse machine repair --repair-service"
     fi
     if has_command claude; then
       echo ""
@@ -808,18 +680,10 @@ print_success() {
         echo "  longhouse codex"
     fi
     echo ""
-    echo "Repair tools (only if you need them later):"
-    echo "  longhouse doctor            Diagnose local setup issues"
-    echo "  longhouse connect --install Repair the machine agent, desktop app, and automatic imports"
-    echo ""
-    echo "Advanced:"
-    echo "  longhouse ship              Import existing sessions once"
-    echo ""
-    echo "Machine surface:"
-    echo "  longhouse wall --json       Read active and recent sessions"
-    echo "  longhouse status            Show configuration"
-    echo "  longhouse version --check   Check whether a CLI update is available"
-    echo "  longhouse upgrade           Upgrade the installed CLI"
+    echo "Native device commands:"
+    echo "  longhouse auth --url <url>  Store a device token from LONGHOUSE_DEVICE_TOKEN"
+    echo "  longhouse local-health --fast --json"
+    echo "  longhouse machine repair --dry-run"
     echo ""
     echo "For help: longhouse --help"
     echo "Docs: https://longhouse.ai/docs"
@@ -856,10 +720,7 @@ main() {
     info "Platform: $platform"
     emit_installer_telemetry "install_attempt" "installer_start" "" "" "0"
 
-    # Install dependencies
-    install_uv
-    install_python
-    install_longhouse
+    install_native_pair
     install_macos_app
 
     # Update PATH in shell profile

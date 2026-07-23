@@ -1,10 +1,4 @@
-//! Native device command surface scaffold.
-//!
-//! This module owns the first compiled `longhouse-engine device ...` surface.
-//! Phase 2A reports the native-entrypoint contract. Phase 2B adds a native
-//! fast local-health snapshot from the engine-owned status file, without
-//! porting repair, provider proof, or provider launch behavior yet. Phase 2C
-//! adds a read-only repair-plan projection over the same native status inputs.
+//! Native device command surface.
 
 use crate::config;
 use anyhow::Context;
@@ -51,8 +45,6 @@ pub struct NativeDeviceContract {
     pub schema_version: u64,
     pub native_owner: NativeOwner,
     #[serde(default)]
-    pub compatibility_shims: Vec<CompatibilityShim>,
-    #[serde(default)]
     pub commands: Vec<DeviceCommandPlan>,
 }
 
@@ -64,26 +56,10 @@ pub struct NativeOwner {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct CompatibilityShim {
-    pub script: String,
-    pub target: String,
-    pub status: String,
-    pub delegates_to: String,
-    #[serde(default)]
-    pub phase1_inventory_ids: Vec<String>,
-    pub removal_phase: String,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct DeviceCommandPlan {
     pub id: String,
     pub status: String,
-    pub implementation_phase: String,
-    #[serde(default)]
-    pub legacy_commands: Vec<String>,
     pub native_target_command: String,
-    #[serde(default)]
-    pub phase1_inventory_ids: Vec<String>,
     pub providers: Value,
     pub provider_binary_ownership: String,
     pub token_policy: String,
@@ -95,25 +71,14 @@ pub struct DeviceCommandPlan {
 struct DeviceStatus<'a> {
     schema_version: u64,
     native_owner: &'a NativeOwner,
-    compatibility_shims: Vec<CompatibilityShimStatus<'a>>,
     commands: Vec<DeviceCommandStatus<'a>>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct CompatibilityShimStatus<'a> {
-    script: &'a str,
-    delegates_to: &'a str,
-    status: &'a str,
-    removal_phase: &'a str,
 }
 
 #[derive(Debug, Clone, Serialize)]
 struct DeviceCommandStatus<'a> {
     id: &'a str,
     status: &'a str,
-    implementation_phase: &'a str,
     native_target_command: &'a str,
-    legacy_commands: &'a [String],
     providers: &'a Value,
 }
 
@@ -248,6 +213,8 @@ struct NativeRepairServiceStatus {
     #[serde(skip_serializing_if = "Option::is_none")]
     longhouse_home_matches: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    native_engine_matches: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
 }
 
@@ -379,14 +346,14 @@ pub fn embedded_contract() -> anyhow::Result<NativeDeviceContract> {
 pub fn contract_from_str(raw: &str) -> anyhow::Result<NativeDeviceContract> {
     let contract: NativeDeviceContract =
         serde_json::from_str(raw).context("parsing native device entrypoint contract")?;
-    if contract.schema_version != 1 {
+    if contract.schema_version != 2 {
         anyhow::bail!(
-            "native device entrypoint contract schema_version must be 1, got {}",
+            "native device command contract schema_version must be 2, got {}",
             contract.schema_version
         );
     }
-    if contract.native_owner.binary != "longhouse-engine" {
-        anyhow::bail!("native device owner binary must be longhouse-engine");
+    if contract.native_owner.binary != "longhouse" {
+        anyhow::bail!("native device owner binary must be longhouse");
     }
     if contract.native_owner.namespace != "device" {
         anyhow::bail!("native device owner namespace must be device");
@@ -398,25 +365,13 @@ fn status_from_contract(contract: &NativeDeviceContract) -> DeviceStatus<'_> {
     DeviceStatus {
         schema_version: contract.schema_version,
         native_owner: &contract.native_owner,
-        compatibility_shims: contract
-            .compatibility_shims
-            .iter()
-            .map(|shim| CompatibilityShimStatus {
-                script: &shim.script,
-                delegates_to: &shim.delegates_to,
-                status: &shim.status,
-                removal_phase: &shim.removal_phase,
-            })
-            .collect(),
         commands: contract
             .commands
             .iter()
             .map(|command| DeviceCommandStatus {
                 id: &command.id,
                 status: &command.status,
-                implementation_phase: &command.implementation_phase,
                 native_target_command: &command.native_target_command,
-                legacy_commands: &command.legacy_commands,
                 providers: &command.providers,
             })
             .collect(),
@@ -424,36 +379,28 @@ fn status_from_contract(contract: &NativeDeviceContract) -> DeviceStatus<'_> {
 }
 
 fn print_contract_plan(contract: &NativeDeviceContract) {
-    println!("native device entrypoint plan");
+    println!("native device commands");
     println!();
     print_owner(contract);
-    println!("- compatibility shims:");
-    for shim in &contract.compatibility_shims {
-        println!(
-            "  - {} -> {} ({}, removal {})",
-            shim.script, shim.delegates_to, shim.status, shim.removal_phase
-        );
-    }
     println!("- command groups:");
     for command in &contract.commands {
         println!(
-            "  - {}: {} ({}, {})",
-            command.id, command.native_target_command, command.status, command.implementation_phase
+            "  - {}: {} ({})",
+            command.id, command.native_target_command, command.status
         );
-        println!("    legacy: {}", command.legacy_commands.join(", "));
         println!("    notes: {}", command.notes);
     }
 }
 
 fn print_contract_status(contract: &NativeDeviceContract) {
-    println!("native device entrypoint status");
+    println!("native device status");
     println!();
     print_owner(contract);
     println!("- command groups:");
     for command in &contract.commands {
         println!(
-            "  - {}: {} -> {} ({})",
-            command.id, command.status, command.native_target_command, command.implementation_phase
+            "  - {}: {} -> {}",
+            command.id, command.status, command.native_target_command
         );
     }
 }
@@ -749,7 +696,7 @@ where
     if !machine_state.configured {
         return Ok(native_repair_execution_result(
             dry_run,
-            "rejected_connect_install",
+            "rejected_native_setup",
             "Longhouse needs machine setup before native repair can run",
             Vec::new(),
             machine_state,
@@ -757,8 +704,8 @@ where
             before_health,
             None,
             vec![
-                "Native repair only restarts an existing configured Machine Agent service.",
-                "Run longhouse connect --install to create or reconnect this machine.",
+                "Authenticate first with LONGHOUSE_DEVICE_TOKEN=... longhouse auth --url <runtime-url>.",
+                "Then run longhouse machine repair --repair-service to install the native Machine Agent service.",
             ],
         ));
     }
@@ -774,7 +721,7 @@ where
             Some(service),
             before_health,
             None,
-            vec!["Phase 2D supports existing launchd and systemd user services only."],
+            vec!["Repair supports existing launchd and systemd user services only."],
         ));
     }
 
@@ -789,8 +736,7 @@ where
             before_health,
             None,
             vec![
-                "Native repair does not create launchd plists, systemd units, hooks, or desktop artifacts yet.",
-                "Run longhouse connect --install to install the service.",
+                "Run longhouse machine repair --repair-service to create the native Machine Agent service.",
             ],
         ));
     }
@@ -826,6 +772,20 @@ where
         ));
     }
 
+    if service.native_engine_matches != Some(true) {
+        return Ok(native_repair_execution_result(
+            dry_run,
+            "rejected_service_mismatch",
+            "Longhouse refused to restart an unrecognized Machine Agent service",
+            Vec::new(),
+            machine_state,
+            Some(service),
+            before_health,
+            None,
+            vec!["The service must use the paired longhouse-engine executable."],
+        ));
+    }
+
     let Some(command) = restart_command(platform) else {
         return Ok(native_repair_execution_result(
             dry_run,
@@ -836,7 +796,7 @@ where
             Some(service),
             before_health,
             None,
-            vec!["Phase 2D supports existing launchd and systemd user services only."],
+            vec!["Repair supports existing launchd and systemd user services only."],
         ));
     };
 
@@ -859,7 +819,7 @@ where
             None,
             vec![
                 "Dry run only; no service restart was attempted.",
-                "Native repair does not regenerate service files, hooks, desktop artifacts, or tokens in Phase 2D.",
+                "Native repair does not regenerate service files, hooks, desktop artifacts, or tokens.",
             ],
         ));
     }
@@ -965,7 +925,7 @@ where
             None,
             before_health,
             None,
-            vec!["Phase 2E supports launchd and systemd user services only."],
+            vec!["Service repair supports launchd and systemd user services only."],
         ));
     }
 
@@ -1159,7 +1119,7 @@ where
                     Some(service),
                     before_health,
                     None,
-                    vec!["Native service repair did not attempt fallback process killing or legacy service cleanup."],
+                    vec!["Native service repair does not kill fallback processes."],
                 ));
             }
         }
@@ -1266,7 +1226,7 @@ fn collect_native_machine_state_detail(
         return Err((
             "rejected_machine_state_incomplete",
             status,
-            "Run longhouse connect --install once to create canonical machine state.",
+            "Authenticate with LONGHOUSE_DEVICE_TOKEN=... longhouse auth --url <runtime-url> to create canonical machine state.",
         ));
     }
 
@@ -1457,14 +1417,24 @@ fn native_repair_plan_from_parts(
 
     let (recommendation, headline, suggested_actions) = if !machine_state.configured {
         (
-            "connect_install",
+            "native_setup",
             "Longhouse needs machine setup",
-            vec![NativeRepairAction {
-                id: "connect_install",
-                label: "Install or reconnect this machine",
-                command: Some("longhouse connect --install".to_string()),
-                status: "compatibility_shim",
-            }],
+            vec![
+                NativeRepairAction {
+                    id: "native_auth",
+                    label: "Authenticate this machine",
+                    command: Some(
+                        "LONGHOUSE_DEVICE_TOKEN=... longhouse auth --url <runtime-url>".to_string(),
+                    ),
+                    status: "native",
+                },
+                NativeRepairAction {
+                    id: "native_service_install",
+                    label: "Install the native Machine Agent service",
+                    command: Some("longhouse machine repair --repair-service".to_string()),
+                    status: "native",
+                },
+            ],
         )
     } else if engine_health.health_state == "healthy" {
         ("healthy", "Longhouse is healthy and configured", Vec::new())
@@ -1493,8 +1463,8 @@ fn native_repair_plan_from_parts(
         engine_health,
         suggested_actions,
         notes: vec![
-            "device repair remains planned; this command only reports native repair recommendations.",
-            "compatibility commands may still route through the Python CLI during the transition.",
+            "This command only reports native repair recommendations; use the listed native commands to act.",
+            "Normal installed-device commands use the paired native binaries.",
         ],
     }
 }
@@ -1516,7 +1486,7 @@ fn repair_actions_with_inspection(
         id: "machine_repair",
         label: "Repair the configured Longhouse machine",
         command: Some("longhouse machine repair".to_string()),
-        status: "compatibility_shim",
+        status: "available",
     }];
     if !health.reasons.is_empty() {
         actions.push(NativeRepairAction {
@@ -1660,6 +1630,7 @@ fn collect_native_repair_service_status(
             platform: platform.as_str(),
             longhouse_home_present: false,
             longhouse_home_matches: None,
+            native_engine_matches: None,
             error: Some("unsupported service manager platform".to_string()),
         };
     };
@@ -1676,12 +1647,19 @@ fn collect_native_repair_service_status(
                 (Some(_), None) => None,
                 (None, _) => None,
             };
+            let native_engine_matches =
+                extract_service_engine_executable(platform, &raw).map(|actual| {
+                    resolve_native_service_engine_executable(home, None)
+                        .map(|expected| paths_match(Path::new(&actual), &expected.path))
+                        .unwrap_or(false)
+                });
             NativeRepairServiceStatus {
                 path: path.display().to_string(),
                 exists: true,
                 platform: platform.as_str(),
                 longhouse_home_present: service_home.is_some(),
                 longhouse_home_matches,
+                native_engine_matches,
                 error: None,
             }
         }
@@ -1691,6 +1669,7 @@ fn collect_native_repair_service_status(
             platform: platform.as_str(),
             longhouse_home_present: false,
             longhouse_home_matches: None,
+            native_engine_matches: None,
             error: None,
         },
         Err(err) => NativeRepairServiceStatus {
@@ -1699,6 +1678,7 @@ fn collect_native_repair_service_status(
             platform: platform.as_str(),
             longhouse_home_present: false,
             longhouse_home_matches: None,
+            native_engine_matches: None,
             error: Some(format!("reading service file: {err}")),
         },
     }
@@ -2040,6 +2020,28 @@ fn extract_service_longhouse_home(platform: NativeServicePlatform, raw: &str) ->
     }
 }
 
+fn extract_service_engine_executable(platform: NativeServicePlatform, raw: &str) -> Option<String> {
+    match platform {
+        NativeServicePlatform::Macos => {
+            let rest = raw.split_once("<key>ProgramArguments</key>")?.1;
+            let array = rest.split_once("<array>")?.1.split_once("</array>")?.0;
+            array
+                .split_once("<string>")?
+                .1
+                .split_once("</string>")
+                .map(|(value, _)| xml_unescape(value))
+        }
+        NativeServicePlatform::Linux => raw.lines().find_map(|line| {
+            line.trim()
+                .strip_prefix("ExecStart=")?
+                .split_whitespace()
+                .next()
+                .map(str::to_string)
+        }),
+        NativeServicePlatform::Unsupported => None,
+    }
+}
+
 fn extract_plist_key_value(raw: &str, key: &str) -> Option<String> {
     let key_tag = format!("<key>{key}</key>");
     let rest = raw.split_once(&key_tag)?.1;
@@ -2165,14 +2167,15 @@ fn existing_service_rewrite_rejection(
 fn looks_like_longhouse_service(platform: NativeServicePlatform, raw: &str) -> bool {
     match platform {
         NativeServicePlatform::Macos => {
-            raw.contains(&format!("<string>{LAUNCHD_LABEL}</string>"))
-                && raw.contains("longhouse-engine")
-                && raw.contains("<string>connect</string>")
+            let has_label = raw.contains(&format!("<string>{LAUNCHD_LABEL}</string>"));
+            let native_engine =
+                raw.contains("longhouse-engine") && raw.contains("<string>connect</string>");
+            has_label && native_engine
         }
         NativeServicePlatform::Linux => {
-            raw.contains("Description=Longhouse Engine - Session Sync")
-                && raw.contains("longhouse-engine")
-                && raw.contains(" connect")
+            let has_description = raw.contains("Description=Longhouse Engine - Session Sync");
+            let native_engine = raw.contains("longhouse-engine") && raw.contains(" connect");
+            has_description && native_engine
         }
         NativeServicePlatform::Unsupported => false,
     }
@@ -2750,18 +2753,20 @@ fn print_native_fast_local_health(health: &NativeFastLocalHealth) {
 mod tests {
     use super::*;
     use serde_json::json;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
 
     #[test]
-    fn embedded_contract_marks_native_owner_but_not_command_groups() {
+    fn embedded_contract_describes_available_native_commands() {
         let contract = embedded_contract().unwrap();
-        assert_eq!(contract.native_owner.binary, "longhouse-engine");
+        assert_eq!(contract.native_owner.binary, "longhouse");
         assert_eq!(contract.native_owner.namespace, "device");
-        assert_eq!(contract.native_owner.status, "native");
-        assert!(contract.commands.len() >= 8);
+        assert_eq!(contract.native_owner.status, "available");
+        assert!(contract.commands.len() >= 6);
         assert!(contract
             .commands
             .iter()
-            .all(|command| command.status == "planned"));
+            .all(|command| matches!(command.status.as_str(), "available" | "excluded")));
     }
 
     #[test]
@@ -2769,29 +2774,29 @@ mod tests {
         let contract = embedded_contract().unwrap();
         let status = status_from_contract(&contract);
         let value = serde_json::to_value(status).unwrap();
-        assert_eq!(value["schema_version"].as_u64(), Some(1));
-        assert_eq!(value["native_owner"]["status"].as_str(), Some("native"));
+        assert_eq!(value["schema_version"].as_u64(), Some(2));
+        assert_eq!(value["native_owner"]["status"].as_str(), Some("available"));
         assert!(value["commands"]
             .as_array()
             .unwrap()
             .iter()
-            .any(|command| command["id"] == "device-root"
-                && command["native_target_command"] == "longhouse-engine device"));
+            .any(|command| command["id"] == "codex-managed"
+                && command["native_target_command"] == "longhouse codex"));
     }
 
     #[test]
     fn contract_rejects_wrong_schema_version() {
         let err = contract_from_str(
             r#"{
-                "schema_version": 2,
-                "native_owner": {"binary": "longhouse-engine", "namespace": "device", "status": "native"},
+                "schema_version": 1,
+                "native_owner": {"binary": "longhouse", "namespace": "device", "status": "available"},
                 "commands": []
             }"#,
         )
         .unwrap_err()
         .to_string();
 
-        assert!(err.contains("schema_version must be 1"));
+        assert!(err.contains("schema_version must be 2"));
     }
 
     #[test]
@@ -3246,7 +3251,7 @@ mod tests {
     }
 
     #[test]
-    fn native_repair_plan_prefers_connect_install_when_machine_state_missing() {
+    fn native_repair_plan_prefers_native_setup_when_machine_state_missing() {
         let dir = tempfile::tempdir().unwrap();
         let status_path = dir.path().join("agent").join("engine-status.json");
         let machine_path = dir.path().join("machine").join("state.json");
@@ -3266,16 +3271,16 @@ mod tests {
             None,
         );
 
-        assert_eq!(plan.recommendation, "connect_install");
+        assert_eq!(plan.recommendation, "native_setup");
         assert!(plan.reasons.contains(&"machine_state_missing".to_string()));
         assert_eq!(
             plan.suggested_actions[0].command.as_deref(),
-            Some("longhouse connect --install")
+            Some("LONGHOUSE_DEVICE_TOKEN=... longhouse auth --url <runtime-url>")
         );
     }
 
     #[test]
-    fn native_repair_plan_prefers_connect_install_when_machine_state_incomplete() {
+    fn native_repair_plan_prefers_native_setup_when_machine_state_incomplete() {
         let dir = tempfile::tempdir().unwrap();
         let machine_path = dir.path().join("machine").join("state.json");
         std::fs::create_dir_all(machine_path.parent().unwrap()).unwrap();
@@ -3310,14 +3315,14 @@ mod tests {
             None,
         );
 
-        assert_eq!(plan.recommendation, "connect_install");
+        assert_eq!(plan.recommendation, "native_setup");
         assert!(plan
             .reasons
             .contains(&"machine_state_missing_machine_name".to_string()));
     }
 
     #[test]
-    fn native_repair_plan_prefers_connect_install_when_machine_state_unreadable() {
+    fn native_repair_plan_prefers_native_setup_when_machine_state_unreadable() {
         let dir = tempfile::tempdir().unwrap();
         let machine_path = dir.path().join("machine").join("state.json");
         std::fs::create_dir_all(machine_path.parent().unwrap()).unwrap();
@@ -3351,7 +3356,7 @@ mod tests {
             None,
         );
 
-        assert_eq!(plan.recommendation, "connect_install");
+        assert_eq!(plan.recommendation, "native_setup");
         assert!(plan
             .reasons
             .contains(&"machine_state_unreadable".to_string()));
@@ -3586,12 +3591,19 @@ mod tests {
     fn write_macos_service(home: &Path, longhouse_home: &Path) {
         let path = service_path(NativeServicePlatform::Macos, home).unwrap();
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let engine = home.join(".local/bin/longhouse-engine");
+        std::fs::create_dir_all(engine.parent().unwrap()).unwrap();
+        std::fs::write(&engine, "#!/bin/sh\nexit 0\n").unwrap();
+        #[cfg(unix)]
+        std::fs::set_permissions(&engine, std::fs::Permissions::from_mode(0o755)).unwrap();
         std::fs::write(
             path,
             format!(
                 r#"<?xml version="1.0" encoding="UTF-8"?>
 <plist version="1.0">
 <dict>
+  <key>ProgramArguments</key>
+  <array><string>{}</string><string>connect</string></array>
   <key>EnvironmentVariables</key>
   <dict>
     <key>LONGHOUSE_HOME</key>
@@ -3599,6 +3611,7 @@ mod tests {
   </dict>
 </dict>
 </plist>"#,
+                engine.display(),
                 longhouse_home.display()
             ),
         )
@@ -3608,13 +3621,19 @@ mod tests {
     fn write_linux_service(home: &Path, longhouse_home: &Path) {
         let path = service_path(NativeServicePlatform::Linux, home).unwrap();
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let engine = home.join(".local/bin/longhouse-engine");
+        std::fs::create_dir_all(engine.parent().unwrap()).unwrap();
+        std::fs::write(&engine, "#!/bin/sh\nexit 0\n").unwrap();
+        #[cfg(unix)]
+        std::fs::set_permissions(&engine, std::fs::Permissions::from_mode(0o755)).unwrap();
         std::fs::write(
             path,
             format!(
                 r#"[Service]
-ExecStart=/opt/longhouse/longhouse-engine connect
+ExecStart={} connect
 Environment="CLAUDE_CONFIG_DIR=/tmp/claude" "LONGHOUSE_HOME={}" "PATH=/bin"
 "#,
+                engine.display(),
                 longhouse_home.display()
             ),
         )
@@ -3635,7 +3654,7 @@ Environment="CLAUDE_CONFIG_DIR=/tmp/claude" "LONGHOUSE_HOME={}" "PATH=/bin"
         )
         .unwrap();
 
-        assert_eq!(execution.state, "rejected_connect_install");
+        assert_eq!(execution.state, "rejected_native_setup");
         assert!(execution.service.is_none());
         assert!(execution.actions.is_empty());
         assert!(execution.after_health.is_none());
@@ -3771,6 +3790,38 @@ Environment="CLAUDE_CONFIG_DIR=/tmp/claude" "LONGHOUSE_HOME={}" "PATH=/bin"
             Some(false)
         );
         assert!(execution.actions.is_empty());
+    }
+
+    #[test]
+    fn native_repair_refuses_to_restart_an_unrecognized_service() {
+        let state = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        write_configured_machine_state(state.path());
+        let path = service_path(NativeServicePlatform::Macos, home.path()).unwrap();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            path,
+            format!(
+                r#"<plist><dict><key>ProgramArguments</key><array><string>/usr/bin/python3</string><string>-m</string><string>zerg</string></array><key>EnvironmentVariables</key><dict><key>LONGHOUSE_HOME</key><string>{}</string></dict></dict></plist>"#,
+                state.path().display()
+            ),
+        )
+        .unwrap();
+
+        let execution = collect_native_repair_execution_with_runner(
+            Some(state.path()),
+            false,
+            NativeServicePlatform::Macos,
+            home.path(),
+            |_| panic!("unrecognized service must not be restarted"),
+        )
+        .unwrap();
+
+        assert_eq!(execution.state, "rejected_service_mismatch");
+        assert_eq!(
+            execution.service.unwrap().native_engine_matches,
+            Some(false)
+        );
     }
 
     #[test]
@@ -4216,7 +4267,6 @@ Environment="CLAUDE_CONFIG_DIR=/tmp/claude" "LONGHOUSE_HOME={}" "PATH=/bin"
             }),
         );
         let mut commands = Vec::new();
-
         let execution = collect_native_service_artifact_repair_execution_with_runner(
             Some(state.path()),
             false,
@@ -4258,7 +4308,6 @@ Environment="CLAUDE_CONFIG_DIR=/tmp/claude" "LONGHOUSE_HOME={}" "PATH=/bin"
             }),
         );
         let mut commands = Vec::new();
-
         let execution = collect_native_service_artifact_repair_execution_with_runner(
             Some(state.path()),
             false,
@@ -4309,7 +4358,6 @@ Environment="CLAUDE_CONFIG_DIR=/tmp/claude" "LONGHOUSE_HOME={}" "PATH=/bin"
         .unwrap();
         write_service_artifact(&plan).unwrap();
         let mut commands = Vec::new();
-
         let execution = collect_native_service_artifact_repair_execution_with_runner(
             Some(state.path()),
             false,
@@ -4328,6 +4376,36 @@ Environment="CLAUDE_CONFIG_DIR=/tmp/claude" "LONGHOUSE_HOME={}" "PATH=/bin"
             commands,
             vec!["unload_launchd_service", "load_launchd_service"]
         );
+    }
+
+    #[test]
+    fn native_service_repair_rejects_an_unrecognized_service() {
+        let state = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let engine = write_fake_engine(home.path());
+        write_configured_machine_state(state.path());
+        let path = service_path(NativeServicePlatform::Macos, home.path()).unwrap();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            format!(
+                r#"<plist><dict><key>Label</key><string>{LAUNCHD_LABEL}</string><key>ProgramArguments</key><array><string>/usr/bin/python3</string><string>-m</string><string>zerg</string></array><key>EnvironmentVariables</key><dict><key>LONGHOUSE_HOME</key><string>{}</string></dict></dict></plist>"#,
+                state.path().display()
+            ),
+        )
+        .unwrap();
+
+        let execution = collect_native_service_artifact_repair_execution_with_runner(
+            Some(state.path()),
+            false,
+            NativeServicePlatform::Macos,
+            home.path(),
+            service_repair_options(&engine),
+            |_| panic!("unrecognized service must not be rewritten"),
+        )
+        .unwrap();
+
+        assert_eq!(execution.state, "rejected_existing_service_ambiguous");
     }
 
     #[test]

@@ -19,22 +19,7 @@ function getManagedLaunchSuggestion(provider: string, providerLabel: string): Ma
       command: "longhouse codex",
     };
   }
-  if (provider === "antigravity") {
-    return {
-      title: "Start the next Antigravity session through Longhouse",
-      body: "This session stays searchable here. Use this command when you want the next Antigravity session to have Longhouse ownership and phase signals.",
-      command: "longhouse agy",
-    };
-  }
   return null;
-}
-
-function getManagedLaunchHint(provider: string, providerLabel: string): string {
-  provider = canonicalProvider(provider);
-  if (provider === "antigravity") {
-    return "Launch new Antigravity sessions through Longhouse when you want Longhouse ownership and phase signals.";
-  }
-  return `Launch new ${providerLabel} sessions through Longhouse when you want to steer them from Longhouse.`;
 }
 
 export function getSessionInteractionCapabilities({
@@ -61,7 +46,6 @@ export function getSessionInteractionCapabilities({
   const isManagedLocalCodex = session.provider === "codex" && isManagedLocalSession;
   const sourceOriginLabel = getSessionOriginLabel(session);
   const headOriginLabel = headThreadSession ? getSessionOriginLabel(headThreadSession) : null;
-  const genericLaunchHint = getManagedLaunchHint(session.provider, providerLabel);
 
   const mode: SessionInteractionMode =
     liveControlAvailable
@@ -79,15 +63,15 @@ export function getSessionInteractionCapabilities({
     ? `Longhouse can search this unmanaged ${providerLabel} session here, but it cannot steer it.`
     : isUnsupportedManagedSession
       ? `This managed ${providerLabel} session is read-only because no current control action is available.`
-      : `Longhouse can search this unmanaged ${providerLabel} session here, but it cannot steer it. ${genericLaunchHint}`;
+      : `Longhouse can search this unmanaged ${providerLabel} session here, but it cannot steer it.`;
   const unsupportedDescription = managedLaunchSuggestion
     ? `This unmanaged ${providerLabel} session is searchable here, but Longhouse cannot send prompts into it.`
     : isUnsupportedManagedSession
       ? `This managed ${providerLabel} session is read-only because no current control action is available.`
-      : `This unmanaged ${providerLabel} session is searchable here, but Longhouse cannot send prompts into it. ${genericLaunchHint}`;
+      : `This unmanaged ${providerLabel} session is searchable here, but Longhouse cannot send prompts into it.`;
   const unsupportedManagementDescription = managedLaunchSuggestion
     ? `Longhouse imported this ${providerLabel} session.`
-    : `Longhouse imported this ${providerLabel} session. ${genericLaunchHint}`;
+    : `Longhouse imported this ${providerLabel} session.`;
 
   const managementLabel = isManagedLocalSession ? "Managed" : "Unmanaged";
   const managementDescription = isManagedLocalSession

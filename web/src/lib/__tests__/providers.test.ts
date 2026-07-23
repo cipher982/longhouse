@@ -15,8 +15,8 @@ describe("providers launch support", () => {
       "antigravity",
     ]);
     expect(providers.every((provider) => provider.archiveVisibility === "live")).toBe(true);
-    expect(providers.every((provider) => provider.cloudSessionStart === "live")).toBe(true);
-    expect(providers.every((provider) => provider.launchAndSend)).toBe(true);
+    expect(providers.filter((provider) => ["cursor", "antigravity"].includes(provider.id)).every((provider) => provider.cloudSessionStart === "none")).toBe(true);
+    expect(providers.filter((provider) => ["claude", "codex", "opencode"].includes(provider.id)).every((provider) => provider.launchAndSend)).toBe(true);
   });
 
   it("mirrors the managed provider contract capability matrix", () => {
@@ -31,9 +31,10 @@ describe("providers launch support", () => {
       resume: true,
     });
     expect(getLaunchProviderSupport("cursor")).toMatchObject({
-      interrupt: true,
+      launchAndSend: false,
+      interrupt: false,
       steerMidTurn: false,
-      resume: true,
+      resume: false,
     });
     expect(getLaunchProviderSupport("opencode")).toMatchObject({
       interrupt: true,
@@ -41,6 +42,7 @@ describe("providers launch support", () => {
       resume: false,
     });
     expect(getLaunchProviderSupport("antigravity")).toMatchObject({
+      launchAndSend: false,
       interrupt: false,
       steerMidTurn: false,
       resume: false,
@@ -57,7 +59,7 @@ describe("providers launch support", () => {
       telemetryQuality: "structured",
     });
     expect(getLaunchProviderSupport("antigravity")).toMatchObject({
-      hooksSupport: "live",
+      hooksSupport: "none",
       telemetryQuality: "structured",
     });
   });

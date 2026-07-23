@@ -1,6 +1,6 @@
 # Timeline Reading Experience
 
-Status: workshopping (living spec — David is collecting issues as he sees them)
+Status: workshopping (living spec)
 Surfaces: web timeline (`web/src/components/session-workspace/TimelinePane.tsx`,
 `web/src/styles/session-workspace.css`), shared tier config
 (`config/tool-tiers.json` → generated TS/Swift), iOS transcript.
@@ -8,7 +8,7 @@ Surfaces: web timeline (`web/src/components/session-workspace/TimelinePane.tsx`,
 ## Problem
 
 The timeline reads like a log dump, not a conversation. Two concrete failures
-observed on hosted david010 at wide viewports:
+observed on a hosted instance at wide viewports:
 
 1. **Horizontal ping-pong.** The conversation column has no overall max-width —
    only viewport padding. User messages pin `flex-end`, assistant `flex-start`,

@@ -363,7 +363,7 @@ test-full: ## Full suite — all tiers (~8min)
 # CI-referenced test helpers (keep for workflow compatibility)
 test-install: ## Installer syntax + first-run smoke
 	@bash -n scripts/install.sh
-	@$(MAKE) test-install-first-run
+	@bash scripts/ci/native-installer-smoke.sh
 
 test-install-first-run: ## @internal Disposable first-run installer smoke
 	@./scripts/ci/installer-first-run.sh

@@ -39,6 +39,30 @@ struct OpenCodeControlState {
     process_command: String,
 }
 
+pub(crate) struct OpenCodeAttachState {
+    pub provider_session_id: String,
+    pub server_url: String,
+    pub cwd: String,
+    pub username: String,
+    pub password: String,
+}
+
+pub(crate) fn read_for_bridge(
+    session_id: &str,
+    state_dir: Option<&Path>,
+) -> Result<OpenCodeAttachState> {
+    let state = read_bridge_state(session_id, state_dir)?;
+    Ok(OpenCodeAttachState {
+        provider_session_id: state.provider_session_id,
+        server_url: state.server_url,
+        cwd: state
+            .cwd
+            .context("OpenCode bridge state has no working directory")?,
+        username: state.username,
+        password: state.password,
+    })
+}
+
 #[derive(Debug, Deserialize)]
 #[allow(dead_code)]
 struct OpenCodeServerStateFile {
@@ -76,9 +100,28 @@ pub async fn interrupt(session_id: &str) -> Result<OpenCodeControlResult> {
 }
 
 pub fn stop_server_bridge(session_id: &str) -> Result<OpenCodeStopResult> {
-    let state = read_bridge_state(session_id, None)?;
+    stop_server_bridge_at(session_id, None)
+}
+
+pub fn stop_server_bridge_at(
+    session_id: &str,
+    state_dir: Option<&Path>,
+) -> Result<OpenCodeStopResult> {
+    let state = read_bridge_state(session_id, state_dir)?;
     let pid = state.pid;
     let stopped = terminate_recorded_opencode_server(&state)?;
+    if stopped || pid.is_none_or(|pid| !pid_is_running(pid)) {
+        let directory = state_dir
+            .map(Path::to_path_buf)
+            .or_else(crate::managed_opencode_scan::default_opencode_server_state_dir)
+            .context("OpenCode server bridge state directory could not be resolved")?;
+        let path = directory.join(format!("{}.json", normalize_session_id(session_id)?));
+        let _ = fs::remove_file(path);
+    } else if !stopped {
+        bail!(
+            "refusing to remove OpenCode bridge state for a live process with unverified identity"
+        );
+    }
     Ok(OpenCodeStopResult { pid, stopped })
 }
 
@@ -179,7 +222,15 @@ fn pid_is_running(pid: u32) -> bool {
     }
     let rc = unsafe { libc::kill(pid as i32, 0) };
     if rc == 0 {
-        return true;
+        // A terminated child can remain a zombie until its owner reaps it.
+        // `kill(pid, 0)` still succeeds for that state, but a zombie server
+        // cannot accept control traffic and must not block bridge cleanup.
+        let state = std::process::Command::new("ps")
+            .args(["-o", "stat=", "-p", &pid.to_string()])
+            .output()
+            .ok()
+            .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned());
+        return !state.is_some_and(|state| state.starts_with('Z'));
     }
     let err = std::io::Error::last_os_error();
     matches!(err.raw_os_error(), Some(code) if code == libc::EPERM)

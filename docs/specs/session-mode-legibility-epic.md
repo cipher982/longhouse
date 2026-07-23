@@ -6,7 +6,7 @@ deleted and Claude Console was added. Schema-v2 cleanup remains deferred.
 **Owner:** Longhouse core
 **Created:** 2026-07-21
 **Related:** `ARCHITECTURE.md`, `docs/specs/managed-session-state-normalization-epic.md`,
-`docs/specs/turn-scoped-console-execution.md`, `docs/specs/rust-edge-provider-parity.md`,
+`docs/specs/turn-scoped-console-execution.md`, `docs/specs/native-device-runtime.md`,
 `docs/specs/cursor-opencode-console-parity.md`, `docs/specs/cursor-console-native-turns.md`,
 `schemas/managed_providers.yml`
 
@@ -79,7 +79,7 @@ real behavioral work it can't honestly be separated from.
    already drifted.** (Substantially revised — this was the single biggest
    correction from review.) The original draft proposed *adding* a
    behavioral contract test as new work. Sol found that one already exists:
-   `docs/specs/rust-edge-provider-parity.md` specified it,
+   `docs/specs/native-device-runtime.md` specifies it,
    `engine/src/control_channel.rs:3111-3184` implements a bidirectional
    parity test, and `docs/specs/cursor-opencode-console-parity.md` marks it
    complete. **It doesn't actually catch the problem** because it compares
@@ -156,7 +156,7 @@ agents. That changes what "done" means for this phase specifically:
   good faith, quietly drifted from the standard" — proven three times over in
   this investigation alone (the stale `ARCHITECTURE.md` glossary, the
   `opencode.run_once` false claim, and the already-drifted
-  `rust-edge-provider-parity` shadow table that was itself supposed to
+  `native-device-runtime` command contract that was supposed to
   prevent drift). A human reviewer would have caught some of these on sight;
   this repo doesn't have one, so the tests have to.
 - **Every deliverable in Phase A that can be a CI check must be a CI check,**
@@ -241,7 +241,7 @@ work on those files is ordinary git, resolved at merge time.
    verified: `managed_engine_dispatch_paths_are_manifest_backed` was actually
    failing on `main` before this fix, confirming the drift was live, not
    theoretical; it passes after.
-3. Make the existing `rust-edge-provider-parity` test compare against the
+3. Make the existing native-device-runtime test compare against the
    real production dispatch registry instead of the second hand-maintained
    `ENGINE_DISPATCH_SUPPORTS` table — one authoritative registry, not a
    parallel one that can drift again. **Partially shipped, honestly short of
@@ -287,7 +287,7 @@ repeat it next time a spec changes:
   second prose definition of the mode vocabulary outside the allowlisted
   canonical location. Both checks must run on every PR, not just at phase
   completion, so this can't silently re-drift the way the original
-  `rust-edge-provider-parity` guardrail did.
+  native-device-runtime guardrail did.
 
 ## Phase B — behavioral slice shipped; schema cleanup deferred
 

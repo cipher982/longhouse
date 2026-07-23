@@ -39,7 +39,7 @@ export function CodeBlock({ children, title }: CodeBlockProps) {
     if (!copiedCommand) {
       return;
     }
-    if (command.includes("get.longhouse.ai/install.sh") || command.includes("longhouse connect --install")) {
+    if (command.includes("get.longhouse.ai/install.sh") || command.includes("longhouse machine repair --repair-service")) {
       trackAcquisitionEvent("docs_command_copy", {
         surface: "docs",
         command: command.includes("get.longhouse.ai/install.sh") ? "install_sh" : "connect_install",

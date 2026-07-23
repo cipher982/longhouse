@@ -235,7 +235,7 @@
       "provider": "claude",
       "provider_cli_binary": "claude",
       "provider_cli_env": null,
-      "requires_longhouse_cli": true,
+      "requires_longhouse_cli": false,
       "managed_transport": "claude_channel_bridge",
       "console_adapter": "claude_print",
       "control_plane": "claude_channel_bridge",
@@ -504,7 +504,7 @@
         "claude.turn_start",
         "claude.turn_interrupt"
       ],
-      "adapter_digest": "51f77f0adf6e4ca8e1039c4a3de04b0f1056e3288caeaee01283a423ee98e2eb"
+      "adapter_digest": "95f6f92bb4d58960052da37c2408cca143356da222cfecb0d39ee9b4645c06b4"
     },
     {
       "provider": "opencode",
@@ -787,13 +787,13 @@
         "opencode.turn_start",
         "opencode.turn_interrupt"
       ],
-      "adapter_digest": "059befb4632dde171db4105f4203c5871724ca5e45ee44a8560ade3473d0c4d4"
+      "adapter_digest": "8195ac886a2297bc22972e348fb7ba007a6040d76e31f8a658ff7ff2a4054274"
     },
     {
       "provider": "antigravity",
       "provider_cli_binary": "agy",
       "provider_cli_env": "LONGHOUSE_ANTIGRAVITY_BIN",
-      "requires_longhouse_cli": true,
+      "requires_longhouse_cli": false,
       "managed_transport": "antigravity_hook_inbox",
       "console_adapter": null,
       "control_plane": "antigravity_hook_inbox",

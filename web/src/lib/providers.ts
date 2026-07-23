@@ -21,7 +21,7 @@ export type LaunchProviderSupport = {
   steerMidTurn: boolean;
   resume: boolean;
   archiveVisibility: "live";
-  cloudSessionStart: "live";
+  cloudSessionStart: "live" | "none";
   hooksSupport: "live" | "none";
   telemetryQuality: "rich" | "structured" | "basic";
 };
@@ -66,24 +66,24 @@ const LAUNCH_PROVIDER_SUPPORT: Record<LaunchProviderId, LaunchProviderSupport> =
   antigravity: {
     id: "antigravity",
     marketingName: "Antigravity CLI",
-    launchAndSend: true,
+    launchAndSend: false,
     interrupt: false,
     steerMidTurn: false,
     resume: false,
     archiveVisibility: "live",
-    cloudSessionStart: "live",
-    hooksSupport: "live",
+    cloudSessionStart: "none",
+    hooksSupport: "none",
     telemetryQuality: "structured",
   },
   cursor: {
     id: "cursor",
     marketingName: "Cursor Agent",
-    launchAndSend: true,
-    interrupt: true,
+    launchAndSend: false,
+    interrupt: false,
     steerMidTurn: false,
-    resume: true,
+    resume: false,
     archiveVisibility: "live",
-    cloudSessionStart: "live",
+    cloudSessionStart: "none",
     hooksSupport: "none",
     telemetryQuality: "structured",
   },
