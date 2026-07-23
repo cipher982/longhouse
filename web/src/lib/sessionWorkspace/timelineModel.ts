@@ -394,7 +394,7 @@ export function getToolSummary(interaction: ToolInteraction): string {
     if (!input) return (formatToolInput(projectedInput) ?? "").slice(0, 120).replace(/\n/g, " ");
     if ("description" in input && "prompt" in input) return String(input.description).slice(0, 120);
     if ("patch" in input && typeof input.patch === "string") {
-      const paths = [...input.patch.matchAll(/^\*\*\* (?:Update|Add|Delete) File: (.+)$/gm)].map((match) => match[1]);
+      const paths = [...input.patch.matchAll(/^\*\*\* (?:Update|Add|Delete) File: (.+)$/gm)].map((match) => match[1].trim());
       if (paths.length > 0) {
         const first = paths[0].split(/[\\/]/).pop() || paths[0];
         const extra = paths.length - 1;

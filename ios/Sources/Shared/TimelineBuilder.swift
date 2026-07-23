@@ -333,7 +333,7 @@ enum TimelineBuilder {
             let prefixes = ["*** Update File: ", "*** Add File: ", "*** Delete File: "]
             let paths = patch.split(separator: "\n").compactMap { line -> String? in
                 for prefix in prefixes where line.hasPrefix(prefix) {
-                    return String(line.dropFirst(prefix.count))
+                    return String(line.dropFirst(prefix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
                 }
                 return nil
             }

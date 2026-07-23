@@ -249,6 +249,16 @@ def _resolve_local_literal(source: str, identifier: str, before: int) -> tuple[A
                 return identifier, False
             index = end + 2
             continue
+        identifier_match = _IDENTIFIER.match(source, index)
+        if identifier_match is not None and identifier_match.group(0) == identifier:
+            previous = source[index - 1] if index > 0 else ""
+            if not (previous.isalnum() or previous in "_$."):
+                operator_start = _skip_space(source, identifier_match.end())
+                operator_match = re.match(r"(?:\?\?=|&&=|\|\|=|[+\-*/%&|^]?=)", source[operator_start:before])
+                if operator_match and not source.startswith(("==", "=>"), operator_start):
+                    resolved = (identifier, False)
+                    index = operator_start + len(operator_match.group(0))
+                    continue
         keyword = next((value for value in ("const", "let", "var") if source.startswith(value, index)), None)
         if keyword is None or (index > 0 and (source[index - 1].isalnum() or source[index - 1] in "_$")):
             index += 1
