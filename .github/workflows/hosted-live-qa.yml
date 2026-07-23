@@ -118,6 +118,7 @@ jobs:
         env:
           HOME: ${{ env.QA_HOME }}
           CARGO_PROFILE: ci
+          GITHUB_SHA: ${{ github.event.inputs.source_sha || github.sha }}
         run: make hosted-shipper-mixed-bench
 
       - name: Run render-canary SLA check
