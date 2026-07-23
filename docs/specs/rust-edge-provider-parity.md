@@ -1,8 +1,25 @@
 # No-Python Device Provider Parity
 
-Status: Active corrective plan
-Branch: `main`
+Status: Active implementation
+Branch: `codex/no-python-device-transition`
 Base: `3dcb66129 Update Helm exit UI expectations`
+
+## Implementation Checkpoint — 2026-07-23
+
+The paired Rust device artifact and native installer are committed. The first
+provider slice, Codex Helm, is also implemented on the transition branch:
+native launch/attach/stop, stock binary resolution, token-safe bridge startup,
+foreground process-group ownership, signal cleanup, guarded one-shot recovery,
+managed-contract lifecycle, and the banked terminal receipt. It is not yet
+declared cut over: the hermetic installed-artifact launch/attach/stop proof and
+the remaining provider paths are still required.
+
+Claude is the next cutover. Its Rust channel server and control operations
+already exist; its remaining device-Python surface is specifically the native
+launcher plus the installed Claude lifecycle and remote-permission hook
+artifacts. That hook migration must be native before Claude can be called a
+no-Python provider. Do not replace it with a shell script that invokes
+`python3`.
 
 ## Executive Summary
 
