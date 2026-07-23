@@ -93,7 +93,7 @@ def test_opencode_command_launches_managed_session_and_passes_extra_args(monkeyp
     assert result.exit_code == 0, result.output
     # A clean TUI exit stops the server; the durable thread can be resumed.
     assert stop_calls == [{"session_id": "session-123", "config_dir": None}]
-    assert "hearth banked" in result.output
+    assert "hearth is banked" in result.output
     assert launch_calls[0]["cwd"] == tmp_path
     assert launch_calls[0]["machine_name"] == "work-laptop"
     assert bridge_calls == [

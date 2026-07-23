@@ -469,7 +469,7 @@ def test_claude_command_starts_native_channel_bridge_when_api_returns_native_tra
     assert "Opening session in browser..." in result.output
     assert "Launching Claude" in result.output
     # Clean exit (mocked TUI returns 0) prints the honest closing bookend.
-    assert "The hearth banked" in result.output
+    assert "The hearth is banked" in result.output
     assert prepare_calls == [("https://longhouse.test", "zdt_test_token", str(tmp_path), str(provider_home))]
     assert native_launch_calls == [
         (

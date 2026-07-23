@@ -629,7 +629,7 @@ def test_codex_command_starts_native_bridge_and_attaches(monkeypatch, tmp_path):
     assert "Opening session in browser..." in result.output
     assert "Attaching…" in result.output
     # A clean TUI exit closes the process control path; the thread is durable.
-    assert "hearth banked" in result.output
+    assert "hearth is banked" in result.output
     assert open_calls == ["https://longhouse.test/timeline/session-123"]
     assert bridge_calls == [
         {
