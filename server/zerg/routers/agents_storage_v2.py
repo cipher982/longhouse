@@ -1472,6 +1472,13 @@ async def read_storage_v2_session_events_page(
                     or (anchor == "tail" and _manifest_last_key(objects[next_object_index]) < cutoff)
                 ):
                     break
+    except RenderObjectWorkerBusy as exc:
+        raise _http_error(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "render_read_busy",
+            "Session history is temporarily busy; retry shortly.",
+            headers={"Retry-After": "1"},
+        ) from exc
     except (KeyError, TypeError, ValueError, RenderObjectCorruptError, RenderObjectWorkerError) as exc:
         raise _http_error(
             status.HTTP_503_SERVICE_UNAVAILABLE,

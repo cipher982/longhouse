@@ -195,6 +195,40 @@ export function useSessionWorkspace(
       return;
     }
 
+    const refreshQueryKeys = [
+      ["agent-session-workspace", sessionId],
+      ["agent-session", sessionId],
+      ["agent-session-thread", sessionId],
+      ["agent-session-turns", sessionId],
+      ["agent-session-projection-infinite", sessionId],
+      ["agent-session-events", sessionId],
+      ["agent-session-events-infinite", sessionId],
+      ["agent-sessions"],
+    ] as const;
+    let refreshInFlight: Promise<void> | null = null;
+    let refreshQueued = false;
+    let disposed = false;
+
+    const refreshWorkspaceQueries = () => {
+      if (refreshInFlight) {
+        refreshQueued = true;
+        return;
+      }
+      refreshInFlight = Promise.all(
+        refreshQueryKeys.map((queryKey) =>
+          queryClient.invalidateQueries({ queryKey }, { cancelRefetch: false }),
+        ),
+      )
+        .then(() => undefined)
+        .finally(() => {
+          refreshInFlight = null;
+          if (refreshQueued && !disposed) {
+            refreshQueued = false;
+            refreshWorkspaceQueries();
+          }
+        });
+    };
+
     const cleanup = connectSessionWorkspaceStream(
       sessionId,
       {
@@ -237,17 +271,6 @@ export function useSessionWorkspace(
           };
           setPendingRenderBeaconVersion((version) => version + 1);
 
-          const refreshWorkspaceQueries = () => {
-            void queryClient.invalidateQueries({ queryKey: ["agent-session-workspace", sessionId] });
-            void queryClient.invalidateQueries({ queryKey: ["agent-session", sessionId] });
-            void queryClient.invalidateQueries({ queryKey: ["agent-session-thread", sessionId] });
-            void queryClient.invalidateQueries({ queryKey: ["agent-session-turns", sessionId] });
-            void queryClient.invalidateQueries({ queryKey: ["agent-session-projection-infinite", sessionId] });
-            void queryClient.invalidateQueries({ queryKey: ["agent-session-events", sessionId] });
-            void queryClient.invalidateQueries({ queryKey: ["agent-session-events-infinite", sessionId] });
-            void queryClient.invalidateQueries({ queryKey: ["agent-sessions"] });
-          };
-
           if (shouldDeferRefetchForPreview && typeof window !== "undefined" && window.requestAnimationFrame) {
             window.requestAnimationFrame(() => {
               window.setTimeout(refreshWorkspaceQueries, 0);
@@ -261,7 +284,10 @@ export function useSessionWorkspace(
       { skipInitial: true, knownWorkspaceFingerprint },
     );
 
-    return cleanup;
+    return () => {
+      disposed = true;
+      cleanup();
+    };
   }, [sessionId, documentVisible, workspaceReady, knownWorkspaceFingerprint, queryClient, onlineEpoch]);
   const rawSession = workspaceData?.session ?? null;
   const session = useMemo(

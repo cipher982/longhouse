@@ -375,11 +375,60 @@ describe("useSessionWorkspace", () => {
       });
     });
 
-    expect(queryClientMocks.invalidateQueries).toHaveBeenCalledWith({
-      queryKey: ["agent-session-workspace", baseSession.id],
+    expect(queryClientMocks.invalidateQueries).toHaveBeenCalledWith(
+      { queryKey: ["agent-session-workspace", baseSession.id] },
+      { cancelRefetch: false },
+    );
+    expect(queryClientMocks.invalidateQueries).toHaveBeenCalledWith(
+      { queryKey: ["agent-session-turns", baseSession.id] },
+      { cancelRefetch: false },
+    );
+  });
+
+  it("coalesces rapid SSE changes behind the active workspace refresh", async () => {
+    let handlers:
+      | {
+          onWorkspaceChanged?: (data: {
+            session_id: string;
+            latest_event_id: number;
+            thread_session_count: number;
+          }) => void;
+        }
+      | undefined;
+    let finishRefresh: (() => void) | undefined;
+    const pendingRefresh = new Promise<void>((resolve) => {
+      finishRefresh = resolve;
     });
-    expect(queryClientMocks.invalidateQueries).toHaveBeenCalledWith({
-      queryKey: ["agent-session-turns", baseSession.id],
+    queryClientMocks.invalidateQueries.mockReturnValue(pendingRefresh);
+    streamMocks.connectSessionWorkspaceStream.mockImplementation((_sessionId, nextHandlers) => {
+      handlers = nextHandlers;
+      return vi.fn();
+    });
+
+    renderHook(() => useSessionWorkspace(baseSession.id));
+
+    act(() => {
+      handlers?.onWorkspaceChanged?.({
+        session_id: baseSession.id,
+        latest_event_id: 99,
+        thread_session_count: 1,
+      });
+      handlers?.onWorkspaceChanged?.({
+        session_id: baseSession.id,
+        latest_event_id: 100,
+        thread_session_count: 1,
+      });
+    });
+
+    expect(queryClientMocks.invalidateQueries).toHaveBeenCalledTimes(8);
+
+    await act(async () => {
+      finishRefresh?.();
+      await pendingRefresh;
+    });
+
+    await waitFor(() => {
+      expect(queryClientMocks.invalidateQueries).toHaveBeenCalledTimes(16);
     });
   });
 
@@ -555,9 +604,10 @@ describe("useSessionWorkspace", () => {
     });
 
     expect(queryClientMocks.setQueriesData).toHaveBeenCalled();
-    expect(queryClientMocks.invalidateQueries).toHaveBeenCalledWith({
-      queryKey: ["agent-session-workspace", baseSession.id],
-    });
+    expect(queryClientMocks.invalidateQueries).toHaveBeenCalledWith(
+      { queryKey: ["agent-session-workspace", baseSession.id] },
+      { cancelRefetch: false },
+    );
   });
 
   it("keeps SSE transcript previews visible when query data is still stale", async () => {

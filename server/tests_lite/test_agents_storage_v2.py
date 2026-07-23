@@ -71,6 +71,11 @@ class _InlineRenderPool:
         return read_render_object(self.root, object_path, expected_object_hash=expected_object_hash)
 
 
+class _BusyRenderReadPool:
+    async def read(self, *_args, **_kwargs):
+        raise storage_router.RenderObjectWorkerBusy("user read queue is full")
+
+
 def _payload(*, tenant_id: str, machine_id: str, epoch: UUID, data: bytes = b"hello\n") -> dict:
     identity = EnvelopeIdentity(
         tenant_id=tenant_id,
@@ -151,6 +156,46 @@ def _payload(*, tenant_id: str, machine_id: str, epoch: UUID, data: bytes = b"he
         "records": [{"source_position": 0, "data_b64": base64.b64encode(data).decode("ascii")}],
         "expected_envelope_id": envelope_id(identity),
     }
+
+
+@pytest.mark.asyncio
+async def test_storage_v2_render_reader_saturation_is_not_reported_as_corruption(monkeypatch):
+    session_id = uuid4()
+    generation_id = uuid4()
+
+    class _Catalog:
+        async def call(self, *_args, **_kwargs):
+            return {
+                "found": True,
+                "current_generation_id": str(generation_id),
+                "generation": {
+                    "generation_id": str(generation_id),
+                    "event_count": 1,
+                },
+                "objects": [
+                    {
+                        "object_path": f"render/v2/{'a' * 2}/{'a' * 64}.zst",
+                        "object_hash": "a" * 64,
+                        "source_envelope_id": "b" * 64,
+                    }
+                ],
+            }
+
+    monkeypatch.setattr(storage_router, "get_catalogd_client", lambda: _Catalog())
+    monkeypatch.setattr(storage_router, "get_render_object_worker_pool", lambda: _BusyRenderReadPool())
+
+    with pytest.raises(storage_router.HTTPException) as raised:
+        await storage_router.read_storage_v2_session_events_page(
+            session_id=session_id,
+            owner_id="1",
+            cursor=None,
+            anchor="tail",
+            limit=20,
+        )
+
+    assert raised.value.status_code == 503
+    assert raised.value.detail["code"] == "render_read_busy"
+    assert raised.value.headers == {"Retry-After": "1"}
 
 
 @pytest.mark.asyncio
