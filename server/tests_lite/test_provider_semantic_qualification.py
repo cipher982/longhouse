@@ -243,10 +243,23 @@ def test_semantic_failure_is_published_instead_of_rejected(tmp_path: Path, monke
 
 def test_antigravity_no_token_hook_pass_and_live_blocked_are_both_published(tmp_path: Path, monkeypatch) -> None:
     binary, executable_identity = _fake_binary(tmp_path, "antigravity")
+    ambient_home = tmp_path / "ambient-home"
+    ambient_home.mkdir()
+    (ambient_home / ".gemini").mkdir()
+    monkeypatch.setenv("HOME", str(ambient_home))
+
+    def no_token_canary(_args):
+        qualification_home = Path(os.environ["HOME"])
+        assert qualification_home != ambient_home
+        assert qualification_home.name == "home"
+        assert qualification_home.parent.name == "no-token"
+        assert not (qualification_home / ".gemini").exists()
+        return _antigravity_no_token_artifact()
+
     monkeypatch.setattr(
         antigravity,
         "run_provider_live_canary",
-        lambda _args: _antigravity_no_token_artifact(),
+        no_token_canary,
     )
     monkeypatch.setattr(
         antigravity.semantic,
@@ -262,6 +275,7 @@ def test_antigravity_no_token_hook_pass_and_live_blocked_are_both_published(tmp_
     assert records[antigravity.ASSERTIONS[1]]["outcome"] == "blocked"
     assert records[antigravity.ASSERTIONS[1]]["evidence_class"] == "live_no_token"
     assert {record["scenario_id"] for record in records.values()} == {antigravity.SCENARIO_ID}
+    assert os.environ["HOME"] == str(ambient_home)
 
 
 def test_antigravity_explicit_home_runs_real_agy_canary(tmp_path: Path, monkeypatch) -> None:

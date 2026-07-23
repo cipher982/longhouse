@@ -40,17 +40,20 @@ def _group_outcome(canaries: dict[str, Any], required: tuple[str, ...]) -> Asser
 
 def _execute(binary: Path, evidence_root: Path):
     no_token_root = evidence_root / "no-token"
-    no_token = run_provider_live_canary(
-        {
-            "provider": "antigravity",
-            "provider_bin": str(binary),
-            "artifact": no_token_root / "provider-live-canary.json",
-            "evidence_root": no_token_root,
-            "wait_ready_secs": 15.0,
-            "strict_provider_binary": True,
-            "json": False,
-        }
-    )
+    no_token_home = no_token_root / "home"
+    no_token_home.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with semantic.temporary_environment({"HOME": str(no_token_home)}):
+        no_token = run_provider_live_canary(
+            {
+                "provider": "antigravity",
+                "provider_bin": str(binary),
+                "artifact": no_token_root / "provider-live-canary.json",
+                "evidence_root": no_token_root,
+                "wait_ready_secs": 15.0,
+                "strict_provider_binary": True,
+                "json": False,
+            }
+        )
     no_token_outcome = _group_outcome(
         dict(no_token.get("canaries") or {}),
         (
