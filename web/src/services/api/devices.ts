@@ -1,7 +1,7 @@
 /**
  * API functions for device token management.
  *
- * Device tokens authenticate CLI tools (like `longhouse ship`)
+ * Device tokens authenticate native Longhouse device setup.
  * to this Longhouse instance.
  */
 

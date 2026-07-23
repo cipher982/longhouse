@@ -26,17 +26,15 @@ Longhouse does not replace a provider with its own agent runtime or terminal UI.
 
 ```bash
 curl -fsSL https://get.longhouse.ai/install.sh | bash
-longhouse onboard            # Linux/WSL. On macOS, open Longhouse.app instead — it owns first-run setup.
+export LONGHOUSE_DEVICE_TOKEN="..."
+longhouse auth --url https://your-runtime.example
+longhouse machine repair --repair-service
 ```
 
-**Power users / agents:**
-
-```bash
-uv tool install longhouse
-longhouse onboard
-```
-
-All three install the same product. On macOS the shell installer also drops `Longhouse.app` into `/Applications` — open it to finish setup rather than running `longhouse onboard`.
+The shell installer installs the native pair. On macOS it also drops
+`Longhouse.app` into `/Applications`; open it to finish setup. Runtime Host
+operators who deliberately need the Python server compatibility CLI install
+`longhouse-python` separately in that server environment.
 
 ## First Session
 
@@ -80,7 +78,7 @@ longhouse auth --url https://longhouse.example.com
 longhouse machine repair --repair-service
 ```
 
-Binding beyond localhost without auth is refused by default — `longhouse serve` exits and tells you what to set. The three exports above are the whole requirement: a password hash plus two random secrets. (If a trusted reverse proxy already authenticates requests, pass `--allow-public-no-auth` to accept the risk.) For TLS, put Caddy in front — `reverse_proxy 127.0.0.1:8080` is the whole config.
+Binding beyond localhost without auth is refused by default — `longhouse-python serve` exits and tells you what to set. The three exports above are the whole requirement: a password hash plus two random secrets. (If a trusted reverse proxy already authenticates requests, pass `--allow-public-no-auth` to accept the risk.) For TLS, put Caddy in front — `reverse_proxy 127.0.0.1:8080` is the whole config.
 
 Or skip running the box — hosted (we run the Runtime Host for you) is available at <https://control.longhouse.ai/signup>.
 

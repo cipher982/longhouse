@@ -508,8 +508,8 @@ export default function SessionsPage() {
             <p className="sessions-guided-steps-label">Run this on your machine:</p>
             <ol className="sessions-guided-steps-list">
               <li><code>curl -fsSL https://get.longhouse.ai/install.sh | bash</code> &mdash; install the CLI</li>
-              <li><code>longhouse connect --install</code> &mdash; link this machine and start background import</li>
-              <li><code>longhouse ship</code> &mdash; pull your existing sessions in now</li>
+              <li><code>LONGHOUSE_DEVICE_TOKEN=... longhouse auth --url https://your-runtime.example</code> &mdash; link this machine</li>
+              <li><code>longhouse machine repair --repair-service</code> &mdash; start the native Machine Agent</li>
             </ol>
             <p className="sessions-guided-cli-hint">
               Works with{" "}
@@ -548,8 +548,7 @@ export default function SessionsPage() {
           <div className="sessions-demo-banner">
             <span>These are demo sessions.</span>{" "}
             <span>
-              Import real sessions with <code>longhouse connect --install</code> and <code>longhouse ship</code>,
-              then launch managed sessions with Longhouse when you want control after launch.
+              Link this machine with native auth and start its Machine Agent, then launch managed sessions with Longhouse when you want control after launch.
             </span>
           </div>
         )}

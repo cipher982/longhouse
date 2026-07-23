@@ -1598,6 +1598,10 @@ struct LonghouseMenuBarCoreTests {
 
         #expect(script.contains("https://get.longhouse.ai/install.sh"))
         #expect(script.contains("longhouse verify-pair"))
+        #expect(script.contains("LONGHOUSE_DEVICE_TOKEN"))
+        #expect(script.contains("LONGHOUSE_RUNTIME_URL"))
+        #expect(script.contains("longhouse auth --url"))
+        #expect(script.contains("longhouse machine repair --repair-service"))
         #expect(!script.contains("uv tool"))
         #expect(!script.contains("uv python"))
     }

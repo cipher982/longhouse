@@ -7,7 +7,7 @@
   },
   "compatibility_shims": [
     {
-      "script": "longhouse",
+      "script": "longhouse-python",
       "target": "zerg.cli.main:main",
       "status": "legacy_server_compatibility",
       "delegates_to": "longhouse-python (server compatibility only)",
@@ -17,10 +17,10 @@
       "removal_phase": "device cutover"
     },
     {
-      "script": "longhouse-local-health",
+      "script": "longhouse-python-local-health",
       "target": "zerg.cli.local_health_fast:main",
-      "status": "removed_from_device_path",
-      "delegates_to": "longhouse local-health --fast --json",
+      "status": "legacy_server_compatibility",
+      "delegates_to": "longhouse-python (server compatibility only)",
       "phase1_inventory_ids": [
         "local-health-fast-cli-python"
       ],

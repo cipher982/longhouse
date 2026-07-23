@@ -135,7 +135,7 @@ public struct SpyHealthActionSink: HealthActionSink {
 
         switch action {
         case .runDoctor:
-            if openTerminal(command: "longhouse doctor") {
+            if openTerminal(command: "longhouse local-health --fast --json") {
                 return feedback(
                     for: action,
                     style: .success,
@@ -147,7 +147,7 @@ public struct SpyHealthActionSink: HealthActionSink {
                 for: action,
                 style: .failure,
                 title: "Doctor could not open",
-                detail: "Longhouse could not open Terminal to run `longhouse doctor`."
+                detail: "Longhouse could not open Terminal to run native local health."
             )
         case .repairInstall:
             return startRepair(snapshot: snapshot)
@@ -753,7 +753,7 @@ public struct SpyHealthActionSink: HealthActionSink {
                 for: action,
                 style: .info,
                 title: "Doctor dry run recorded",
-                detail: "The harness logged `longhouse doctor` without opening Terminal."
+                detail: "The harness logged native local health without opening Terminal."
             )
         case .repairInstall:
             if snapshot.isInstallLocationBlocked {

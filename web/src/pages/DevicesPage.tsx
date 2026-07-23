@@ -2,7 +2,7 @@
  * Device Tokens Settings Page.
  *
  * Allows users to create and manage device tokens for CLI authentication.
- * Tokens are used by `longhouse auth` / `longhouse ship` to authenticate
+ * Tokens are used by native `longhouse auth` to authenticate
  * with this Longhouse instance.
  */
 
@@ -182,7 +182,7 @@ export default function DevicesPage() {
         ) : (
           <EmptyState
             title="No device tokens"
-            description="Create a token to connect CLI tools like `longhouse ship` to this instance."
+            description="Create a token to authenticate a native Longhouse device to this instance."
           />
         )}
       </div>

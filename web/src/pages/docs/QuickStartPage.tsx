@@ -32,16 +32,19 @@ export default function QuickStartPage() {
         installer itself.
       </p>
       <p>
-        Requires Python 3.12+. No sudo needed.
+        No Python runtime is required on the device. No sudo needed.
       </p>
 
       <h2>2. Open Longhouse</h2>
       <p>
         On macOS, open <code>Longhouse.app</code> to finish setup. On Linux or
-        WSL, run <code>longhouse onboard</code>, then open{" "}
-        <code>http://localhost:8080</code>. Your data stays in a SQLite
-        database on your machine at <code>~/.longhouse/longhouse.db</code>.
+        WSL, authenticate the native pair and install its Machine Agent service:
       </p>
+      <CodeBlock title="terminal">
+        {`export LONGHOUSE_DEVICE_TOKEN="..."
+longhouse auth --url https://your-runtime.example
+longhouse machine repair --repair-service`}
+      </CodeBlock>
       <p>
         This laptop setup is the fast proof path. When you want Longhouse to
         stay reachable while the laptop sleeps, move the Runtime Host to a
@@ -57,9 +60,8 @@ export default function QuickStartPage() {
       </p>
       <div className="docs-callout">
         <p>
-          <strong>No sessions yet?</strong> Run{" "}
-          <code>longhouse serve --demo</code> for a safe preview with synthetic
-          data. Then import your real sessions when you are ready.
+          <strong>No sessions yet?</strong> Use the hosted Runtime Host or run
+          its explicit server compatibility command, <code>longhouse-python serve --demo</code>, for a safe preview.
         </p>
       </div>
       <div className="docs-callout">
@@ -81,7 +83,6 @@ export default function QuickStartPage() {
       <CodeBlock title="terminal">
         {`longhouse claude       # Claude Code with control channel
 longhouse codex        # Codex CLI with control channel
-longhouse agy          # Antigravity CLI, managed observe-only
 longhouse opencode     # OpenCode, managed live control`}
       </CodeBlock>
       <p>
@@ -89,8 +90,8 @@ longhouse opencode     # OpenCode, managed live control`}
         local observation path. Claude is the strongest managed path today, and{" "}
         <code>longhouse codex</code> also keeps a Codex session steerable.
         OpenCode Helm supports managed send, interrupt, and terminate but
-        not active-turn steer. Antigravity starts as managed observe-only:
-        archive, transcript, and phase signals without remote send controls yet.
+        not active-turn steer. Cursor and Antigravity remain Shadow-only in the
+        native device release.
       </p>
       <div className="docs-callout">
         <p>
@@ -98,8 +99,7 @@ longhouse opencode     # OpenCode, managed live control`}
           but managed sessions keep Longhouse ownership of the launch and
           observation path. Use <code>longhouse claude</code> or{" "}
           <code>longhouse codex</code> for steerable sessions,{" "}
-          <code>longhouse opencode</code> for managed OpenCode control, and{" "}
-          <code>longhouse agy</code> for managed observe-only archive and signals.
+          <code>longhouse opencode</code> for managed OpenCode control.
         </p>
       </div>
 
@@ -109,9 +109,9 @@ longhouse opencode     # OpenCode, managed live control`}
         menu bar says something is wrong:
       </p>
       <CodeBlock title="terminal">
-        {`longhouse doctor            # diagnose issues
-longhouse machine repair    # repair an already-linked machine
-longhouse connect --install # first install or force reinstall`}
+        {`longhouse local-health --fast --json
+longhouse machine repair
+longhouse machine repair --repair-service`}
       </CodeBlock>
       <p>
         On macOS, <code>Longhouse.app</code> and the menu bar show the same

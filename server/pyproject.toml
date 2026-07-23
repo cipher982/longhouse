@@ -68,8 +68,8 @@ dev = [
 ]
 
 [project.scripts]
-longhouse = "zerg.cli.main:main"
-longhouse-local-health = "zerg.cli.local_health_fast:main"
+longhouse-python = "zerg.cli.main:main"
+longhouse-python-local-health = "zerg.cli.local_health_fast:main"
 
 [build-system]
 requires = ["hatchling"]

@@ -218,7 +218,7 @@ detect_platform() {
     if [[ -f /proc/version ]] && grep -qi microsoft /proc/version; then
         warn "Running in WSL (Windows Subsystem for Linux)"
         warn "  - systemd may not be available for background services"
-        warn "  - You can still run 'longhouse connect' manually"
+        warn "  - Native service setup requires systemd: longhouse machine repair --repair-service"
         echo ""
     fi
 
@@ -663,9 +663,9 @@ print_success() {
         echo "  Longhouse.app owns first-run setup, repair, and local status."
     else
         echo "Next:"
-        echo "  1. Run longhouse onboard"
-        echo "  2. Open http://localhost:8080"
-        echo "  3. Find one prior session in the timeline"
+        echo "  1. Export LONGHOUSE_DEVICE_TOKEN from your Runtime Host"
+        echo "  2. Run longhouse auth --url <runtime-url>"
+        echo "  3. Run longhouse machine repair --repair-service"
     fi
     if has_command claude; then
       echo ""

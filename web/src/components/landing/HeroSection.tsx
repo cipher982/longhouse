@@ -122,7 +122,7 @@ export function HeroSection() {
             Both macOS paths install the same <code>Longhouse.app</code>.
           </span>
           <span className="hero-install-extra">
-            Or: <code>uv tool install longhouse</code>
+            Or: <code>curl -fsSL https://get.longhouse.ai/install.sh | bash</code>
           </span>
           {config.demoMode && (
             <Button
