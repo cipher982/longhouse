@@ -441,7 +441,7 @@ struct WebTranscriptView: UIViewRepresentable {
             collapsed: false,
             status: status,
             duration: duration,
-            input: prettyJSON(call.toolInputJSON) ?? TimelineBuilder.inputSummary(for: call),
+            input: prettyJSONValue(call.toolInputValue) ?? TimelineBuilder.inputSummary(for: call),
             output: truncatedOutput(result?.toolOutputText),
             calls: [],
             origin: nil,
@@ -508,7 +508,7 @@ struct WebTranscriptView: UIViewRepresentable {
                 title: ToolTiers.resolve(passive.call.toolName ?? "Tool").label,
                 subtitle: TimelineBuilder.inputSummary(for: passive.call),
                 status: status,
-                input: prettyJSON(passive.call.toolInputJSON) ?? TimelineBuilder.inputSummary(for: passive.call),
+                input: prettyJSONValue(passive.call.toolInputValue) ?? TimelineBuilder.inputSummary(for: passive.call),
                 output: truncatedOutput(passive.result?.toolOutputText),
                 media: payloadMediaRefs(passive.call.mediaRefs + (passive.result?.mediaRefs ?? []), serverURL: serverURL)
             )
@@ -585,6 +585,19 @@ struct WebTranscriptView: UIViewRepresentable {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         guard let data = try? encoder.encode(value) else { return nil }
         return String(data: data, encoding: .utf8)
+    }
+
+    private nonisolated static func prettyJSONValue(_ value: JSONValue?) -> String? {
+        guard let value else { return nil }
+        if case .object(let object) = value {
+            return prettyJSON(object)
+        }
+        if case .string(let string) = value {
+            return string
+        }
+        guard let data = try? JSONEncoder().encode(value),
+              let rendered = String(data: data, encoding: .utf8) else { return nil }
+        return rendered
     }
 
     private nonisolated static func truncatedOutput(_ text: String?) -> String? {

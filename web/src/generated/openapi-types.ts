@@ -5366,11 +5366,9 @@ export interface components {
             tool_name?: string | null;
             /**
              * Tool Input Json
-             * @description Tool input
+             * @description Lossless JSON tool input; may be an object, string, or scalar
              */
-            tool_input_json?: {
-                [key: string]: unknown;
-            } | null;
+            tool_input_json?: unknown;
             /**
              * Tool Output Text
              * @description Tool output
@@ -10157,9 +10155,7 @@ export interface components {
             /** Tool Name */
             tool_name?: string | null;
             /** Tool Input Json */
-            tool_input_json?: {
-                [key: string]: unknown;
-            } | null;
+            tool_input_json?: unknown;
             /** Tool Output Text */
             tool_output_text?: string | null;
             /** Tool Call Id */

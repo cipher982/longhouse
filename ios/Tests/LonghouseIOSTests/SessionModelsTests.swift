@@ -536,6 +536,16 @@ struct SessionModelsTests {
     }
 
     @Test
+    func sessionEventPreservesStringToolInput() throws {
+        let json = Data(#"{"id":"codex-exec","role":"assistant","tool_name":"exec","tool_input_json":"const r = await tools.exec_command({cmd:\"pwd\"})","tool_call_id":"call-1","timestamp":"2026-07-23T12:00:00Z"}"#.utf8)
+
+        let event = try JSONDecoder.snakeCase.decodeSessionFixture(SessionEvent.self, from: json)
+
+        #expect(event.toolInputJSON == nil)
+        #expect(event.toolInputValue == .string(#"const r = await tools.exec_command({cmd:"pwd"})"#))
+    }
+
+    @Test
     func sessionEventIdentitySupportsStorageV2AndLegacyJSON() throws {
         let legacy = Data(#"{"id":42,"role":"user","timestamp":"2026-07-12T00:00:00Z","in_active_context":true,"is_head_branch":true}"#.utf8)
         let storage = Data(#"{"event_id":"evt_sha256_abc","cursor":"opaque-generation-cursor","timestamp":"2026-07-12T00:00:01Z","role":"assistant","content_text":"done","tool_name":null,"tool_input_json":null,"tool_output_text":null,"tool_call_id":null,"thread_id":"thread-1","branch_kind":"head"}"#.utf8)
@@ -652,8 +662,18 @@ struct SessionModelsTests {
 
         let event = try JSONDecoder.snakeCase.decodeSessionFixture(APIEventResponse.self, from: json)
 
-        #expect(event.toolInputJson?["file_path"] == .string("/tmp/generated.swift"))
-        #expect(event.toolInputJson?["filePath"] == nil)
+        #expect(event.toolInputJson?.objectValue?["file_path"] == .string("/tmp/generated.swift"))
+        #expect(event.toolInputJson?.objectValue?["filePath"] == nil)
+    }
+
+    @Test
+    func generatedAPIEventPreservesStringToolInput() throws {
+        let json = Data(#"{"id":"codex-exec","role":"assistant","tool_name":"exec","tool_input_json":"fixture wrapper","timestamp":"2026-07-23T12:00:00Z"}"#.utf8)
+
+        let event = try JSONDecoder.snakeCase.decodeSessionFixture(APIEventResponse.self, from: json)
+
+        #expect(event.toolInputJson == .string("fixture wrapper"))
+        #expect(event.sessionEvent.toolInputValue == .string("fixture wrapper"))
     }
 
     @Test

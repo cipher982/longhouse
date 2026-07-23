@@ -872,7 +872,7 @@ class SessionTranscriptPreviewResponse(UTCBaseModel):
     text: str = Field(..., description="Transcript preview text from the event ledger")
     role: str = Field("assistant", description="Transcript role for the provisional item")
     tool_name: Optional[str] = None
-    tool_input_json: Optional[dict[str, Any]] = None
+    tool_input_json: Any = None
     tool_output_text: Optional[str] = None
     tool_call_id: Optional[str] = None
     tool_call_state: Optional[Literal["running", "completed", "dropped"]] = None
@@ -1270,7 +1270,7 @@ class EventResponse(UTCBaseModel):
         description="Semantic origin for user-authored input events",
     )
     tool_name: Optional[str] = Field(None, description="Tool name")
-    tool_input_json: Optional[Dict[str, Any]] = Field(None, description="Tool input")
+    tool_input_json: Any = Field(None, description="Lossless JSON tool input; may be an object, string, or scalar")
     tool_output_text: Optional[str] = Field(None, description="Tool output")
     tool_output_truncated: bool = Field(False, description="True when tool_output_text was shortened for this response")
     tool_output_original_chars: Optional[int] = Field(None, description="Original tool output length when truncated")

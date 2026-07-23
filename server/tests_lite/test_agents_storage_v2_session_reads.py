@@ -18,8 +18,8 @@ def _workspace(session_id):
         "content_text": "migration complete",
         "raw_content_text": None,
         "input_origin": None,
-        "tool_name": None,
-        "tool_input_json": None,
+        "tool_name": "exec",
+        "tool_input_json": "const r = await tools.exec_command({cmd: 'pwd'}); text(r.output);",
         "tool_output_text": None,
         "tool_output_truncated": False,
         "tool_output_original_chars": None,
@@ -202,6 +202,7 @@ async def test_machine_session_reads_use_storage_v2_without_legacy_db(monkeypatc
 
     assert thread["head_session_id"] == str(session_id)
     assert events.events[0].id == "legacy:41"
+    assert events.events[0].tool_input_json == "const r = await tools.exec_command({cmd: 'pwd'}); text(r.output);"
     assert events.next_cursor == "cursor-41"
     assert projection["items"][0]["event"]["content_text"] == "migration complete"
     assert tail["events"] == [
@@ -209,7 +210,7 @@ async def test_machine_session_reads_use_storage_v2_without_legacy_db(monkeypatc
             "id": "legacy:41",
             "role": "assistant",
             "content": "migration complete",
-            "tool_name": None,
+            "tool_name": "exec",
             "timestamp": "2026-07-12T12:00:00+00:00",
         }
     ]

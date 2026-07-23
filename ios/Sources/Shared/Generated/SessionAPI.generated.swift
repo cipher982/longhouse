@@ -288,7 +288,7 @@ struct APISessionTranscriptPreviewResponse: Codable, Hashable, Sendable {
     let text: String
     let role: String?
     let toolName: String?
-    let toolInputJson: [String: JSONValue]?
+    let toolInputJson: JSONValue?
     let toolOutputText: String?
     let toolCallId: String?
     let toolCallState: String?
@@ -443,7 +443,7 @@ struct APIEventResponse: Codable, Hashable, Sendable {
     let rawContentText: String?
     let inputOrigin: APIInputOriginResponse?
     let toolName: String?
-    let toolInputJson: [String: JSONValue]?
+    let toolInputJson: JSONValue?
     let toolOutputText: String?
     let toolOutputTruncated: Bool?
     let toolOutputOriginalChars: Int?

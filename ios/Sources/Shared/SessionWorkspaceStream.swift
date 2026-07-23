@@ -25,7 +25,7 @@ actor SessionWorkspaceStream {
             let text: String
             let role: String?
             let tool_name: String?
-            let tool_input_json: [String: JSONValue]?
+            let tool_input_json: JSONValue?
             let tool_output_text: String?
             let tool_call_id: String?
             let tool_call_state: String?
@@ -43,7 +43,7 @@ actor SessionWorkspaceStream {
                     text: text,
                     role: role,
                     toolName: tool_name,
-                    toolInputJSON: tool_input_json,
+                    toolInputJSON: tool_input_json?.objectValue,
                     toolOutputText: tool_output_text,
                     toolCallId: tool_call_id,
                     toolCallState: tool_call_state.flatMap(ToolCallState.init(rawValue:)),

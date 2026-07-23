@@ -1243,6 +1243,8 @@ struct SessionEvent: Codable, Identifiable, Sendable {
     let contentText: String?
     let toolName: String?
     let toolInputJSON: [String: JSONValue]?
+    /// Lossless provider value. Most tools use an object; Codex custom tools may use a string.
+    let toolInputValue: JSONValue?
     let toolOutputText: String?
     let toolCallId: String?
     let toolCallState: ToolCallState?
@@ -1259,6 +1261,7 @@ struct SessionEvent: Codable, Identifiable, Sendable {
         contentText: String?,
         toolName: String?,
         toolInputJSON: [String: JSONValue]?,
+        toolInputValue: JSONValue? = nil,
         toolOutputText: String?,
         toolCallId: String?,
         toolCallState: ToolCallState?,
@@ -1282,6 +1285,7 @@ struct SessionEvent: Codable, Identifiable, Sendable {
         self.contentText = contentText
         self.toolName = toolName
         self.toolInputJSON = toolInputJSON
+        self.toolInputValue = toolInputValue ?? toolInputJSON.map(JSONValue.object)
         self.toolOutputText = toolOutputText
         self.toolCallId = toolCallId
         self.toolCallState = toolCallState
@@ -1301,6 +1305,7 @@ struct SessionEvent: Codable, Identifiable, Sendable {
         contentText: String?,
         toolName: String?,
         toolInputJSON: [String: JSONValue]?,
+        toolInputValue: JSONValue? = nil,
         toolOutputText: String?,
         toolCallId: String?,
         toolCallState: ToolCallState?,
@@ -1321,6 +1326,7 @@ struct SessionEvent: Codable, Identifiable, Sendable {
             contentText: contentText,
             toolName: toolName,
             toolInputJSON: toolInputJSON,
+            toolInputValue: toolInputValue,
             toolOutputText: toolOutputText,
             toolCallId: toolCallId,
             toolCallState: toolCallState,
@@ -1358,7 +1364,8 @@ struct SessionEvent: Codable, Identifiable, Sendable {
         role = try container.decode(String.self, forKey: .role)
         contentText = try container.decodeIfPresent(String.self, forKey: .contentText)
         toolName = try container.decodeIfPresent(String.self, forKey: .toolName)
-        toolInputJSON = try container.decodeIfPresent([String: JSONValue].self, forKey: .toolInputJSON)
+        toolInputValue = try container.decodeIfPresent(JSONValue.self, forKey: .toolInputJSON)
+        toolInputJSON = toolInputValue?.objectValue
         toolOutputText = try container.decodeIfPresent(String.self, forKey: .toolOutputText)
         toolCallId = try container.decodeIfPresent(String.self, forKey: .toolCallId)
         toolCallState = try container.decodeIfPresent(ToolCallState.self, forKey: .toolCallState)
@@ -1382,7 +1389,7 @@ struct SessionEvent: Codable, Identifiable, Sendable {
         try container.encode(role, forKey: .role)
         try container.encodeIfPresent(contentText, forKey: .contentText)
         try container.encodeIfPresent(toolName, forKey: .toolName)
-        try container.encodeIfPresent(toolInputJSON, forKey: .toolInputJSON)
+        try container.encodeIfPresent(toolInputValue, forKey: .toolInputJSON)
         try container.encodeIfPresent(toolOutputText, forKey: .toolOutputText)
         try container.encodeIfPresent(toolCallId, forKey: .toolCallId)
         try container.encodeIfPresent(toolCallState, forKey: .toolCallState)
@@ -1461,6 +1468,11 @@ enum JSONValue: Codable, Sendable, Hashable {
     case array([JSONValue])
     case object([String: JSONValue])
     case null
+
+    var objectValue: [String: JSONValue]? {
+        guard case .object(let value) = self else { return nil }
+        return value
+    }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.singleValueContainer()
