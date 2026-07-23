@@ -211,6 +211,31 @@ final class TimelineBuilderTests: XCTestCase {
         XCTAssertEqual(TimelineBuilder.inputSummary(for: ev), "oauth.ts")
     }
 
+    func testInputSummaryForProjectedPatchReturnsFiles() {
+        let presentation = ToolPresentation(
+            version: 1,
+            disposition: "parsed",
+            toolName: "apply_patch",
+            sourceToolName: "exec",
+            executionMethod: "exec",
+            label: "Edited",
+            icon: "E",
+            color: "brand",
+            tier: "action",
+            aggregate: nil,
+            mcpNamespace: nil,
+            toolInputValue: .object([
+                "patch": .string("*** Begin Patch\n*** Update File: app.py\n*** Add File: test_app.py\n*** End Patch")
+            ]),
+            ruleId: "codex:exec:single-child:v1",
+            wrapperRecedes: true,
+            children: []
+        )
+        let ev = event(id: 1, role: "assistant", tool: "exec", callId: "t1", toolPresentation: presentation)
+
+        XCTAssertEqual(TimelineBuilder.inputSummary(for: ev), "app.py + 1 file")
+    }
+
     func testDurationFormatting() {
         XCTAssertEqual(TimelineBuilder.formatDuration(0.042), "42ms")
         XCTAssertEqual(TimelineBuilder.formatDuration(2.12), "2.1s")

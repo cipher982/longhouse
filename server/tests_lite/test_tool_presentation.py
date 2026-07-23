@@ -53,6 +53,21 @@ def test_single_child_wrapper_recedes_only_with_forwarded_result():
     assert presentation["children"][0]["tool_input_json"]["session_id"] == 87859
 
 
+def test_direct_forwarded_patch_resolves_local_literal_and_recedes():
+    source = '''const patch = "*** Begin Patch\\n*** Update File: app.py\\n*** End Patch";
+text(await tools.apply_patch(patch));'''
+
+    presentation = project_tool_presentation("exec", source, provider="codex")
+
+    assert presentation is not None
+    assert presentation["tool_name"] == "apply_patch"
+    assert presentation["label"] == "Edited"
+    assert presentation["wrapper_recedes"] is True
+    assert presentation["tool_input_json"] == {
+        "patch": "*** Begin Patch\n*** Update File: app.py\n*** End Patch"
+    }
+
+
 def test_single_child_without_forwarded_result_keeps_wrapper_prominent():
     source = 'await tools.exec_command({cmd:"dangerous"}); text("done");'
 

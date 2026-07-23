@@ -226,6 +226,22 @@ def _parse_js_literal(value: str, *, depth: int = 0) -> tuple[Any, bool]:
     return value, False
 
 
+def _resolve_local_literal(source: str, identifier: str, before: int) -> tuple[Any, bool]:
+    """Resolve a simple preceding literal used as a tool argument."""
+
+    pattern = re.compile(rf"(?:const|let|var)\s+{re.escape(identifier)}\s*=\s*")
+    matches = list(pattern.finditer(source, 0, before))
+    if not matches:
+        return identifier, False
+    start = matches[-1].end()
+    if start >= before or source[start] not in {'"', "'", "`"}:
+        return identifier, False
+    end = _scan_quoted(source, start)
+    if end is None or end > before:
+        return identifier, False
+    return _parse_js_literal(source[start:end])
+
+
 def extract_codex_wrapper_calls(source: str) -> tuple[list[dict[str, Any]], bool]:
     """Return bounded ``tools.<method>(...)`` calls without executing source."""
 
@@ -273,6 +289,10 @@ def extract_codex_wrapper_calls(source: str) -> tuple[list[dict[str, Any]], bool
         arguments = source[paren + 1 : end - 1]
         first_arg = (_split_top_level(arguments) or [arguments])[0]
         tool_input, input_complete = _parse_js_literal(first_arg)
+        if not input_complete and _IDENTIFIER.fullmatch(first_arg.strip()):
+            tool_input, input_complete = _resolve_local_literal(source, first_arg.strip(), index)
+        if method.lower() == "apply_patch" and input_complete and isinstance(tool_input, str):
+            tool_input = {"patch": tool_input}
         calls.append(
             {
                 "tool_name": method,
@@ -298,6 +318,8 @@ def _wrapper_result_is_forwarded(source: str, call_start: int, call_end: int) ->
     """
 
     prefix = source[max(0, call_start - 96) : call_start]
+    if re.search(r"(?:text|image|generatedImage)\s*\(\s*await\s*$", prefix):
+        return bool(re.match(r"\s*\)\s*;?", source[call_end:]))
     assignment = re.search(r"(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*await\s*$", prefix)
     if assignment is None:
         return False

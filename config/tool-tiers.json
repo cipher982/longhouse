@@ -43,7 +43,7 @@
     "exec_command":     { "tier": "action",  "aggregate": null,     "icon": "$", "label": "Shell",     "color": "warning" },
     "run_shell_command":{ "tier": "action",  "aggregate": null,     "icon": "$", "label": "shell",     "color": "warning" },
     "write_stdin":      { "tier": "action",  "aggregate": null,     "icon": "$", "label": "stdin",     "color": "warning" },
-    "apply_patch":      { "tier": "action",  "aggregate": null,     "icon": "E", "label": "patch",     "color": "brand" },
+    "apply_patch":      { "tier": "action",  "aggregate": null,     "icon": "E", "label": "Edited",    "color": "brand" },
     "create_file":      { "tier": "action",  "aggregate": null,     "icon": "W", "label": "create",    "color": "success" },
     "str_replace_editor":{ "tier": "action", "aggregate": null,     "icon": "E", "label": "edit",      "color": "brand" },
     "update_plan":      { "tier": "action",  "aggregate": null,     "icon": "+", "label": "plan",      "color": "accent" },

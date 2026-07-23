@@ -6,6 +6,7 @@ import {
   buildTimelineModel,
   EXPLORATION_OVERFLOW_VISIBLE,
   formatExplorationSummary,
+  getToolSummary,
   isExplorationEligible,
   splitExplorationOverflow,
   type ToolInteraction,
@@ -45,6 +46,31 @@ function interaction(partial: Partial<ToolInteraction> & Pick<ToolInteraction, "
 }
 
 describe("exploration run helpers", () => {
+  it("summarizes projected patches by files instead of wrapper syntax", () => {
+    expect(getToolSummary(interaction({
+      toolName: "apply_patch",
+      key: "patch",
+      anchorId: 1,
+      presentation: {
+        version: 1,
+        disposition: "parsed",
+        tool_name: "apply_patch",
+        source_tool_name: "exec",
+        execution_method: "exec",
+        label: "Edited",
+        icon: "E",
+        color: "brand",
+        tier: "action",
+        aggregate: null,
+        mcp_namespace: null,
+        tool_input_json: { patch: "*** Begin Patch\n*** Update File: app.py\n*** Add File: test_app.py\n*** End Patch" },
+        rule_id: "codex:exec:single-child:v1",
+        wrapper_recedes: true,
+        children: [],
+      },
+    }))).toBe("app.py + 1 file");
+  });
+
   it("formats semantic verb counts in fixed order", () => {
     expect(
       formatExplorationSummary([

@@ -26,10 +26,7 @@ public enum ShellSalienceClassifier {
         if hasOpaqueStructure(command) { return nil }
         if !hasBalancedQuotes(command) { return nil }
 
-        let normalized = command
-            .replacingOccurrences(of: "&&", with: ";")
-            .replacingOccurrences(of: "||", with: ";")
-        let segments = normalized.split(separator: ";").flatMap { $0.split(separator: "|") }
+        let segments = splitCommandSegments(command)
         var firstReadHead: String? = nil
 
         for rawSegment in segments {
@@ -140,6 +137,44 @@ public enum ShellSalienceClassifier {
             if ch == "'", !double { single.toggle() } else if ch == "\"", !single { double.toggle() }
         }
         return !single && !double
+    }
+
+    /// Split command chains only at operators outside quotes. Regex patterns
+    /// and jq expressions commonly contain literal `|`/`;` characters.
+    static func splitCommandSegments(_ command: String) -> [String] {
+        let chars = Array(command)
+        var segments: [String] = []
+        var start = 0
+        var single = false
+        var double = false
+        var i = 0
+        while i < chars.count {
+            let ch = chars[i]
+            if ch == "\\", !single {
+                i += 2
+                continue
+            }
+            if ch == "'", !double {
+                single.toggle()
+                i += 1
+                continue
+            }
+            if ch == "\"", !single {
+                double.toggle()
+                i += 1
+                continue
+            }
+            if !single && !double && (ch == ";" || ch == "|" || ch == "&") {
+                if ch != "&" || i + 1 < chars.count && chars[i + 1] == "&" {
+                    segments.append(String(chars[start ..< i]).trimmingCharacters(in: .whitespaces))
+                    if i + 1 < chars.count, chars[i + 1] == ch { i += 1 }
+                    start = i + 1
+                }
+            }
+            i += 1
+        }
+        segments.append(String(chars[start ..< chars.count]).trimmingCharacters(in: .whitespaces))
+        return segments
     }
 
     /// Strip leading VAR=value assignments from a segment.

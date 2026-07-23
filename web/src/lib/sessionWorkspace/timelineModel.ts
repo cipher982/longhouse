@@ -379,6 +379,10 @@ export function getToolDuration(callEvent: AgentEvent | null, resultEvent: Agent
 export function getToolSummary(interaction: ToolInteraction): string {
   const { callEvent, resultEvent } = interaction;
 
+  if ((getShellSalience(interaction)?.aggregate ?? interactionAggregate(interaction)) === "wait") {
+    return "";
+  }
+
   const children = interaction.presentation?.children ?? [];
   if (children.length > 0 && !interaction.presentation?.wrapper_recedes) {
     return `contains ${children.map((child) => child.label).join(" · ")}`;
@@ -389,6 +393,15 @@ export function getToolSummary(interaction: ToolInteraction): string {
     const input = getToolInputRecord(projectedInput);
     if (!input) return (formatToolInput(projectedInput) ?? "").slice(0, 120).replace(/\n/g, " ");
     if ("description" in input && "prompt" in input) return String(input.description).slice(0, 120);
+    if ("patch" in input && typeof input.patch === "string") {
+      const paths = [...input.patch.matchAll(/^\*\*\* (?:Update|Add|Delete) File: (.+)$/gm)].map((match) => match[1]);
+      if (paths.length > 0) {
+        const first = truncatePath(paths[0]);
+        const extra = paths.length - 1;
+        return extra === 0 ? first : `${first} + ${extra} ${extra === 1 ? "file" : "files"}`;
+      }
+      return "Applied patch";
+    }
     if ("file_path" in input) return truncatePath(String(input.file_path));
     if ("command" in input) return String(input.command).slice(0, 120);
     if ("cmd" in input) return String(input.cmd).slice(0, 120);

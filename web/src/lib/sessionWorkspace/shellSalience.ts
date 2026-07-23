@@ -57,6 +57,37 @@ function hasBalancedQuotes(command: string): boolean {
   return !single && !double;
 }
 
+/** Split command chains only at operators outside quotes. Regex patterns and
+ * jq expressions commonly contain literal `|`/`;` characters. */
+function splitCommandSegments(command: string): string[] {
+  const segments: string[] = [];
+  let start = 0;
+  let single = false;
+  let double = false;
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i];
+    if (ch === "\\" && !single) {
+      i += 1;
+      continue;
+    }
+    if (ch === "'" && !double) {
+      single = !single;
+      continue;
+    }
+    if (ch === '"' && !single) {
+      double = !double;
+      continue;
+    }
+    if (single || double || (ch !== ";" && ch !== "|" && ch !== "&")) continue;
+    if (ch === "&" && command[i + 1] !== "&") continue;
+    segments.push(command.slice(start, i).trim());
+    if ((ch === "&" || ch === "|") && command[i + 1] === ch) i += 1;
+    start = i + 1;
+  }
+  segments.push(command.slice(start).trim());
+  return segments;
+}
+
 /** Strip leading VAR=value assignments from a segment. */
 function stripAssignments(segment: string): string {
   let s = segment;
@@ -111,7 +142,7 @@ export function classifyShellCommand(command: unknown): ShellSalience | null {
   if (OPAQUE_STRUCTURE.test(command)) return null;
   if (!hasBalancedQuotes(command)) return null;
 
-  const segments = command.trim().split(/&&|\|\||;|\|/);
+  const segments = splitCommandSegments(command.trim());
   let firstReadHead: string | null = null;
 
   for (const rawSegment of segments) {

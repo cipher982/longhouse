@@ -328,6 +328,19 @@ enum TimelineBuilder {
                 return (path as NSString).lastPathComponent
             }
             return ""
+        case "apply_patch":
+            guard let patch = presentedToolInputString(event, "patch") else { return "Applied patch" }
+            let prefixes = ["*** Update File: ", "*** Add File: ", "*** Delete File: "]
+            let paths = patch.split(separator: "\n").compactMap { line -> String? in
+                for prefix in prefixes where line.hasPrefix(prefix) {
+                    return String(line.dropFirst(prefix.count))
+                }
+                return nil
+            }
+            guard let first = paths.first else { return "Applied patch" }
+            let extra = paths.count - 1
+            let suffix = extra > 0 ? " + \(extra) \(extra == 1 ? "file" : "files")" : ""
+            return (first as NSString).lastPathComponent + suffix
         case "Task":
             if let prompt = presentedToolInputString(event, "prompt") {
                 return prompt.split(whereSeparator: \.isNewline).first.map(String.init) ?? prompt
