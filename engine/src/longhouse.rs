@@ -37,6 +37,8 @@ enum Commands {
     },
     /// Verify the paired engine is present and built from the same commit.
     VerifyPair,
+    /// Store or clear the device credentials used by native Longhouse commands.
+    Auth(AuthArgs),
     /// Print the native fast local-health snapshot used by Longhouse.app.
     LocalHealth(LocalHealthArgs),
     /// Configure native Longhouse hooks for Claude.
@@ -126,6 +128,22 @@ struct LocalHealthArgs {
     /// Longhouse state root override for diagnostics and tests.
     #[arg(long)]
     state_root: Option<PathBuf>,
+}
+
+#[derive(Args)]
+struct AuthArgs {
+    /// Runtime Host URL. Required when no URL is already configured.
+    #[arg(long)]
+    url: Option<String>,
+    /// Environment variable containing the device token (default: LONGHOUSE_DEVICE_TOKEN).
+    #[arg(long, default_value = "LONGHOUSE_DEVICE_TOKEN")]
+    token_env: String,
+    /// Remove stored native device credentials.
+    #[arg(long)]
+    clear: bool,
+    /// Override the stored machine name.
+    #[arg(long)]
+    device: Option<String>,
 }
 
 #[derive(Args)]
@@ -464,6 +482,115 @@ fn native_local_health(args: LocalHealthArgs) -> anyhow::Result<()> {
     if !status.success() {
         std::process::exit(status.code().unwrap_or(1));
     }
+    Ok(())
+}
+
+fn native_auth(args: AuthArgs) -> anyhow::Result<()> {
+    let machine_dir = longhouse_home()?.join("machine");
+    let state_path = machine_dir.join("state.json");
+    if args.clear {
+        let _ = std::fs::remove_file(machine_dir.join("device-token"));
+        if let Ok(raw) = std::fs::read(&state_path) {
+            let mut state: serde_json::Value =
+                serde_json::from_slice(&raw).unwrap_or_else(|_| json!({}));
+            state["runtime_url"] = serde_json::Value::Null;
+            write_private_json(&state_path, &state)?;
+        }
+        println!("Cleared stored Longhouse device credentials");
+        return Ok(());
+    }
+    let existing: serde_json::Value = std::fs::read(&state_path)
+        .ok()
+        .and_then(|raw| serde_json::from_slice(&raw).ok())
+        .unwrap_or_else(|| json!({}));
+    let url = args
+        .url
+        .or_else(|| {
+            existing
+                .get("runtime_url")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        })
+        .filter(|value| value.starts_with("http://") || value.starts_with("https://"))
+        .context("No Longhouse URL configured. Pass --url.")?;
+    let token = std::env::var(&args.token_env).with_context(|| {
+        format!(
+            "{} is not set; tokens are accepted only through an environment variable",
+            args.token_env
+        )
+    })?;
+    if token.trim().is_empty() {
+        anyhow::bail!("{} is empty", args.token_env);
+    }
+    let runtime = tokio::runtime::Runtime::new()?;
+    let valid = runtime.block_on(async {
+        let response = reqwest::Client::new()
+            .get(format!(
+                "{}/api/agents/sessions?limit=1",
+                url.trim_end_matches('/')
+            ))
+            .header("X-Agents-Token", &token)
+            .send()
+            .await?;
+        Ok::<_, anyhow::Error>(
+            response.status().as_u16() == 200 || response.status().as_u16() == 501,
+        )
+    })?;
+    if !valid {
+        anyhow::bail!("device token was rejected by the Runtime Host");
+    }
+    let mut state = existing;
+    state["schema_version"] = json!(1);
+    state["runtime_url"] = json!(url.trim_end_matches('/'));
+    state["machine_name"] = json!(args.device.unwrap_or_else(native_machine_name));
+    state["written_by"] = json!("native-auth");
+    state["written_at"] = json!(chrono::Utc::now().to_rfc3339());
+    std::fs::create_dir_all(&machine_dir)?;
+    write_private_json(&state_path, &state)?;
+    write_private_text(&machine_dir.join("device-token"), token.trim())?;
+    println!(
+        "Stored native Longhouse credentials for {}",
+        state["machine_name"].as_str().unwrap_or("this machine")
+    );
+    Ok(())
+}
+
+fn native_machine_name() -> String {
+    Command::new("hostname")
+        .output()
+        .ok()
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "unknown".into())
+}
+
+fn write_private_json(path: &Path, value: &serde_json::Value) -> anyhow::Result<()> {
+    write_private_text(path, &format!("{}\n", serde_json::to_string_pretty(value)?))
+}
+
+fn write_private_text(path: &Path, value: &str) -> anyhow::Result<()> {
+    let parent = path.parent().context("credential path has no parent")?;
+    std::fs::create_dir_all(parent)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))?;
+    }
+    let temporary = path.with_extension(format!("tmp.{}", std::process::id()));
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)?;
+    file.write_all(value.as_bytes())?;
+    file.sync_all()?;
+    drop(file);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&temporary, std::fs::Permissions::from_mode(0o600))?;
+    }
+    std::fs::rename(temporary, path)?;
     Ok(())
 }
 
@@ -1533,6 +1660,7 @@ fn main() -> anyhow::Result<()> {
                 pair.engine_path, pair.facade.commit_short
             );
         }
+        Commands::Auth(args) => native_auth(args)?,
         Commands::LocalHealth(args) => native_local_health(args)?,
         Commands::Claude { command, launch } => match command {
             Some(ClaudeCommand::Configure { claude_dir }) => configure_claude_hooks(claude_dir)?,
@@ -1583,6 +1711,17 @@ mod tests {
         };
         assert!(args.fast);
         assert!(args.json);
+    }
+
+    #[test]
+    fn auth_parser_keeps_tokens_out_of_argv() {
+        let cli =
+            Cli::try_parse_from(["longhouse", "auth", "--url", "https://example.test"]).unwrap();
+        let Commands::Auth(args) = cli.command.unwrap() else {
+            panic!("expected auth command");
+        };
+        assert_eq!(args.token_env, "LONGHOUSE_DEVICE_TOKEN");
+        assert_eq!(args.url.as_deref(), Some("https://example.test"));
     }
 
     #[test]
