@@ -35,20 +35,13 @@
   },
   {
     "calls" : [
-
-    ],
-    "collapsed" : false,
-    "duration" : "1.0s",
-    "id" : "tool:5",
-    "input" : "{\n  \"command\" : \"git log --oneline\"\n}",
-    "kind" : "tool",
-    "output" : "line 01 of changelog parsing output\nline 02 of changelog parsing output\nline 03 of changelog parsing output\nline 04 of changelog parsing output\nline 05 of changelog parsing output\nline 06 of changelog parsing output\nline 07 of changelog parsing output\nline 08 of changelog parsing output\nline 09 of changelog parsing output\nline 10 of changelog parsing output",
-    "status" : "done",
-    "subtitle" : "git log --oneline",
-    "title" : "Bash"
-  },
-  {
-    "calls" : [
+      {
+        "input" : "{\n  \"command\" : \"git log --oneline\"\n}",
+        "output" : "line 01 of changelog parsing output\nline 02 of changelog parsing output\nline 03 of changelog parsing output\nline 04 of changelog parsing output\nline 05 of changelog parsing output\nline 06 of changelog parsing output\nline 07 of changelog parsing output\nline 08 of changelog parsing output\nline 09 of changelog parsing output\nline 10 of changelog parsing output",
+        "status" : "done",
+        "subtitle" : "git log --oneline",
+        "title" : "Bash"
+      },
       {
         "input" : "{\n  \"pattern\" : \"\\\/repo\\\/a.txt\"\n}",
         "output" : "contents of a.txt",
@@ -65,10 +58,10 @@
       }
     ],
     "collapsed" : false,
-    "id" : "passive:7",
+    "id" : "passive:5",
     "kind" : "passiveGroup",
-    "subtitle" : "2",
-    "title" : "Searched 2"
+    "subtitle" : "3",
+    "title" : "Searched 2 · Read 1"
   },
   {
     "calls" : [

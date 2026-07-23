@@ -55,5 +55,23 @@
     "web":        { "icon": "S", "color": "secondary" },
     "gdrive":     { "icon": "G", "color": "success" }
   },
-  "mcp_default_tier": "noise"
+  "mcp_default_tier": "noise",
+  "_shell_classifier": "Content-aware salience for shell tools (docs/specs/timeline-reading-experience.md, Change B). The generator emits these as constants; the grammar lives handwritten in web/src/lib/sessionWorkspace/shellSalience.ts and ios/Sources/Shared/ShellSalience.swift, kept in lockstep by config/shell-salience-fixtures.json.",
+  "shell_classifier": {
+    "shell_tools": ["Bash", "shell", "shell_command", "exec_command", "run_shell_command"],
+    "read_only_commands": [
+      "grep", "rg", "ls", "cat", "head", "tail", "nl", "wc", "stat", "which",
+      "echo", "pwd", "du", "df", "ps", "printenv", "whoami", "tree", "diff",
+      "column", "uniq", "jq", "basename", "dirname", "type", "true", "man"
+    ],
+    "git_read_subcommands": [
+      "status", "log", "diff", "show", "rev-parse", "ls-files", "blame",
+      "describe", "shortlog"
+    ],
+    "aggregate_by_head": {
+      "grep": "search", "rg": "search",
+      "ls": "list", "tree": "list", "du": "list", "df": "list"
+    },
+    "default_read_aggregate": "read"
+  }
 }

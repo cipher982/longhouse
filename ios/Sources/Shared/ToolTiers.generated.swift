@@ -133,3 +133,14 @@ public enum ToolTiers {
         return (parts[1], parts[2])
     }
 }
+
+// --- Shell classifier constants (grammar is handwritten in ShellSalience.swift;
+// parity with TS is enforced by config/shell-salience-fixtures.json). ---
+
+public enum ShellClassifierConstants {
+    public static let shellTools: Set<String> = ["Bash", "shell", "shell_command", "exec_command", "run_shell_command"]
+    public static let readOnlyCommands: Set<String> = ["grep", "rg", "ls", "cat", "head", "tail", "nl", "wc", "stat", "which", "echo", "pwd", "du", "df", "ps", "printenv", "whoami", "tree", "diff", "column", "uniq", "jq", "basename", "dirname", "type", "true", "man"]
+    public static let gitReadSubcommands: Set<String> = ["status", "log", "diff", "show", "rev-parse", "ls-files", "blame", "describe", "shortlog"]
+    public static let aggregateByHead: [String: ToolAggregate] = ["grep": .search, "rg": .search, "ls": .list, "tree": .list, "du": .list, "df": .list]
+    public static let defaultReadAggregate: ToolAggregate = .read
+}

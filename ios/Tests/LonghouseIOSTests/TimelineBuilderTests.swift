@@ -278,15 +278,15 @@ final class TimelineBuilderTests: XCTestCase {
         XCTAssertEqual(calls.map(\.result?.id), ["3", "5", "7"])
     }
 
-    func testActiveToolInMiddleSplitsIntoTwoGroups() {
+    func testOpaqueShellToolInMiddleSplitsIntoTwoGroups() {
         let events = [
             event(id: 1, role: "user", text: "go"),
             event(id: 2, role: "assistant", tool: "Grep", callId: "t1"),
             event(id: 3, role: "tool", output: "ok", callId: "t1"),
             event(id: 4, role: "assistant", tool: "Glob", callId: "t2"),
             event(id: 5, role: "tool", output: "ok", callId: "t2"),
-            event(id: 6, role: "assistant", tool: "Bash", input: ["command": .string("ls")], callId: "t3"),
-            event(id: 7, role: "tool", output: "files", callId: "t3"),
+            event(id: 6, role: "assistant", tool: "Bash", input: ["command": .string("rm -rf build")], callId: "t3"),
+            event(id: 7, role: "tool", output: "removed", callId: "t3"),
             event(id: 8, role: "assistant", tool: "Grep", callId: "t4"),
             event(id: 9, role: "tool", output: "ok", callId: "t4"),
             event(id: 10, role: "assistant", tool: "Glob", callId: "t5"),
@@ -304,18 +304,18 @@ final class TimelineBuilderTests: XCTestCase {
         XCTAssertEqual(second.map(\.call.id), ["8", "10"])
     }
 
-    func testBashDoesNotCollapse() {
+    func testOpaqueBashDoesNotCollapse() {
         let events = [
             event(id: 1, role: "user", text: "go"),
-            event(id: 2, role: "assistant", tool: "Bash", input: ["command": .string("ls")], callId: "t1"),
-            event(id: 3, role: "tool", output: "a", callId: "t1"),
-            event(id: 4, role: "assistant", tool: "Bash", input: ["command": .string("pwd")], callId: "t2"),
-            event(id: 5, role: "tool", output: "/", callId: "t2"),
+            event(id: 2, role: "assistant", tool: "Bash", input: ["command": .string("make test")], callId: "t1"),
+            event(id: 3, role: "tool", output: "passed", callId: "t1"),
+            event(id: 4, role: "assistant", tool: "Bash", input: ["command": .string("touch marker")], callId: "t2"),
+            event(id: 5, role: "tool", output: "", callId: "t2"),
         ]
         let items = TimelineBuilder.build(events: events)
         XCTAssertEqual(items.count, 3)
         guard case .tool = items[1], case .tool = items[2] else {
-            return XCTFail("Bash calls should remain as individual .tool rows")
+            return XCTFail("Opaque Bash calls should remain as individual .tool rows")
         }
     }
 

@@ -69,54 +69,97 @@ are simply not on the list. Salience is not safety: a demoted row is still
 visible, expandable, and grouped, so the classifier only needs to be
 roughly right, forever. No pressure to chase freak cases.
 
-### Classifier contract
+### Classifier contract (v1, hardened per Sol + Grok review)
 
-Input: raw command string from the tool call (`command`/`cmd` field).
-Output: `read` (demote) or `opaque` (keep action tier). Rules:
+Input: raw command string from the tool call (`command` then `cmd` field;
+missing or non-string → `opaque`). Output: `read` (demote) or `opaque`
+(keep action tier). **Fail closed at every rule** — anything the grammar
+does not affirmatively recognize is `opaque`.
 
-1. **Per-segment strictness.** Split on `&&`, `||`, `;`, `|`. Every segment
-   must pass or the whole command is `opaque`. `cd` segments are neutral.
+1. **Opaque-on-sight structures.** Any of: newline in the command, `&`
+   (backgrounding), `|&`, write redirections in all spellings (`>`, `>>`,
+   `>|`, `&>`, `&>>`, `n>`, `n>>`, `n>&m`), heredoc `<<`/herestring `<<<`,
+   process substitution `<(…)`/`>(…)`, command substitution `$(…)` or
+   backticks, `for`/`while`/`if`/function definitions, subshell `(…)`,
+   unbalanced quotes.
+2. **Per-segment strictness.** Split on `&&`, `||`, `;`, `|`. Every
+   segment must pass or the whole command is `opaque`. `cd` segments are
+   neutral, but a command that is *only* `cd`/empty segments is `opaque`.
    Leading `VAR=value` assignments are stripped per segment.
-2. **Any redirect (`>`, `>>`) anywhere → `opaque`.** Catches file writes
-   via bash categorically. (Heredoc `<<` also → `opaque`.)
-3. **Allowlist first words** (basename of segment head): `grep rg ls find
-   cat head tail nl wc stat which file echo pwd du df ps env printenv
-   whoami hostname date awk jq sqlite3 tree diff column sort uniq xxd
-   basename dirname type true man`.
-4. **Special cases:** `sed` is read unless `-i` present. `git` requires a
-   read subcommand (`status log diff show branch remote rev-parse ls-files
-   blame describe shortlog`). `ssh [flags] host "cmd"` unwraps one level
-   and classifies the inner command recursively; unparseable ssh →
-   `opaque`.
-5. Command substitution `$(…)`, backticks, `for`/`while`, functions,
-   subshells → `opaque` (no shell parsing heroics).
+3. **Allowlist first words — bare names only, no paths** (`/tmp/ls` is not
+   `ls`): `grep rg ls cat head tail nl wc stat which echo pwd du df ps
+   printenv whoami pwd tree diff column uniq jq basename dirname type
+   true man`. Dropped from the draft after review: `awk` (system()),
+   `env` (runs argv), `sqlite3` (writes), `find` (-delete/-exec), `sort`
+   (-o), `date` (-s), `hostname` (sets), `xxd` (-r writes), `file` (-C).
+4. **Special cases:**
+   - `sed`: read only in explicit print shape — `-n` present, no
+     `-i`/`--in-place` in any spelling, script matches print-only
+     (`p`/`=`-terminated address script, no `w`/`W`/`e`/`s///w`).
+   - `git`: skip global options (`-C x`, `-c k=v`, `--git-dir=…`), then
+     require subcommand in `status log diff show rev-parse ls-files blame
+     describe shortlog`. `branch`/`remote` are NOT read (mutate via
+     flags).
+   - `ssh`: **postponed to v2.** ssh is always `opaque` in v1 — ssh
+     options (`-o ProxyCommand=…`, `-F`) can execute local commands, and
+     safe unwrapping needs its own review. The host chip UI defers with
+     it.
+5. Aggregate for demoted reads by head word: `grep|rg` → search,
+   `ls|tree|du|df` → list, everything else → read.
+
+Additional demotion gates (beyond command text):
+
+- Only completed interactions demote; pending/running/orphan stay action.
+- Nonzero exit (when parseable from output) → stays action. Errors must
+  never disappear into an "Explored" chip.
 
 ### Wiring
 
-- Rules live in `config/tool-tiers.json` under a new `shell_classifier`
-  block (allowlist, git subcommands, shell tool names). Structural rules
-  (redirects, segmenting, ssh unwrap) are code in the generator templates —
-  they are grammar, not data.
-- `scripts/generate/tool_tiers.py` emits `classifyShellCommand()` in both
-  `toolTiers.generated.ts` and `ToolTiers.generated.swift` so web and iOS
-  stay byte-identical in behavior.
-- Web call sites: `getToolTier` / `isExplorationEligible` /
-  `formatExplorationSummary` in `timelineModel.ts` gain command awareness
-  for tools listed as shell tools (`Bash`, `shell`, `exec_command`, …).
-  Demoted shell reads get aggregate by head word: `grep|rg|find` → search,
-  `ls|tree|du|df` → list, everything else → read.
-- iOS call site: `TimelineBuilder` aggregate checks (lines ~82/97) pass the
-  command string through the same generated Swift function.
-- **Host chip:** an `ssh <host>` read does not change tier but surfaces the
-  host in the row one-liner and in the exploration-chip summary (visibility
-  badge, not salience escalation).
-- MCP/unknown `default_tier` stays `action` for now — separate decision,
-  not bundled into this change.
+- `config/tool-tiers.json` gains a `shell_classifier` block: shell tool
+  names (`Bash`, `shell`, `shell_command`, `exec_command`,
+  `run_shell_command` — explicitly excluding `write_stdin`), the
+  read-only allowlist, git read subcommands, and aggregate head-word
+  mapping. **The generator emits constants only.** The grammar is
+  handwritten twice — `web/src/lib/sessionWorkspace/shellSalience.ts` and
+  `ios/Sources/Shared/ShellSalience.swift` — because a shell grammar in
+  Python f-string templates would be untestable and drift-prone.
+- **Parity is enforced by a shared conformance corpus**,
+  `config/shell-salience-fixtures.json`: read cases from the real corpus
+  plus an adversarial must-stay-opaque set (find -delete, sed -i.bak,
+  git branch -D, env rm, sqlite3 writes, sort -o, every redirect
+  spelling, multiline, lone `&`, process substitution, spoofed paths).
+  Web vitest and iOS XCTest both run the full corpus; any false demotion
+  fails CI.
+- One resolver, `resolveShellSalience(toolName, command) → {tier,
+  aggregate} | null`, layered over the untouched name-based tables (JSON
+  keeps Bash as `action` so unrecognized commands need no fallback
+  logic). Web call sites are exactly the three grouping/render gates:
+  `getToolTier`, `isExplorationEligible`, `formatExplorationSummary`.
+  iOS call site: `TimelineBuilder`'s aggregate checks.
+- MCP tools already default to `noise` tier without aggregation
+  (`mcp_default_tier: noise`); only unknown non-MCP tools default to
+  `action`. Unchanged here.
+
+### Expected impact (re-measured with hardened v1 rules)
+
+Re-run on the 5,570-command corpus with the hardened v1 rules: **32.7%
+demote** (1,823 commands), 856 of them in adjacent runs of 2+ (313 runs,
+avg 2.7, max 10). The review-driven tightening cost ~8 points versus the
+draft — mostly `ssh`, `find`, and non-print `sed` — while keeping the
+g55-style `grep`/`ls`/`cat` runs fully covered.
+
+### Rejected alternatives (do not revisit casually)
+
+- Collapse-all-Bash: hides mutations; breaks the salience principle.
+- Danger denylist: unbounded long tail; the design detects boring, never
+  danger.
+- Output-length or duration heuristics: unstable, provider-dependent.
+- Generating the parser from config templates: untestable, drifts.
 
 ### Validation
 
 - TS unit tests: classifier table tests (corpus-derived fixtures incl.
-  ssh-wrapped reads, pipes, redirects, `sed -i`, git subcommands) plus a
+  ssh-wrapped commands, pipes, redirects, `sed -i`, git subcommands) plus a
   `timelineModel` grouping test proving consecutive shell reads collapse
   and a mutation breaks the run.
 - Visual: `make ui-capture` fixture pass showing a Bash-heavy transcript
@@ -162,7 +205,9 @@ sessions. Refine:
 ## Running list (add as David spots things)
 
 - [x] Horizontal ping-pong at wide viewports (Change A — shipped web CSS, 723dc9416)
-- [ ] Bash exploration spam crowding prose (Changes B+C)
+- [x] Bash exploration spam crowding prose (Change B v1 implemented: classifier
+      + fixtures + web/iOS wiring; Sol+Grok review synthesized — ssh unwrap
+      and host chip deferred to v2, summary refinement remains under C)
 - [x] Draft reply row + review copy removed (web) — backend/iOS removal pending
 - [x] Stop shown while idle (web: now working-only)
 - [x] Jammed meta separators in runtime strip (web CSS)

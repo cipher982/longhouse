@@ -19,6 +19,7 @@ import {
   type ToolAggregate,
   type ToolTier,
 } from "./toolTiers.generated";
+import { classifyShellCommand, isShellTool, type ShellSalience } from "./shellSalience";
 
 /** Latest completed exploration calls shown when a run is expanded. */
 export const EXPLORATION_OVERFLOW_VISIBLE = 8;
@@ -38,13 +39,48 @@ export function isAgentToolInteraction(interaction: ToolInteraction): boolean {
   return interaction.toolName.toLowerCase() === "agent";
 }
 
+/**
+ * Content-aware demotion for shell tools (Change B). A completed, successful
+ * shell call whose command classifies as read-only demotes to noise and may
+ * join exploration runs. Pending/running/orphan/dropped calls and nonzero
+ * exits never demote — errors and in-flight work must stay full-size.
+ * Cached per interaction: this is consulted from render paths.
+ */
+const shellSalienceCache = new WeakMap<ToolInteraction, ShellSalience | null>();
+export function getShellSalience(interaction: ToolInteraction): ShellSalience | null {
+  if (!isShellTool(interaction.toolName)) return null;
+  const cached = shellSalienceCache.get(interaction);
+  if (cached !== undefined) return cached;
+  let result: ShellSalience | null = null;
+  if (
+    interaction.resultEvent &&
+    interaction.pairing !== "orphan" &&
+    interaction.pairing !== "pending" &&
+    !isToolInteractionDropped(interaction) &&
+    !isToolInteractionRunning(interaction)
+  ) {
+    const exitCode = getToolExitCode(interaction);
+    if (exitCode == null || exitCode === 0) {
+      const input = interaction.callEvent?.tool_input_json
+        ? getToolInputRecord(interaction.callEvent.tool_input_json)
+        : null;
+      const command = input ? (input.command ?? input.cmd) : null;
+      result = classifyShellCommand(command);
+    }
+  }
+  shellSalienceCache.set(interaction, result);
+  return result;
+}
+
 export function getToolTier(interaction: ToolInteraction): ToolTier {
-  return toolTier(interaction.toolName);
+  return getShellSalience(interaction)?.tier ?? toolTier(interaction.toolName);
 }
 
 /** Completed calls with an explicit aggregate category may join exploration runs. */
 export function isExplorationEligible(interaction: ToolInteraction): boolean {
-  if (toolAggregate(interaction.toolName) == null) return false;
+  if (toolAggregate(interaction.toolName) == null && getShellSalience(interaction) == null) {
+    return false;
+  }
   if (interaction.pairing === "orphan" || interaction.pairing === "pending") return false;
   if (!interaction.resultEvent) return false;
   if (isToolInteractionDropped(interaction) || isToolInteractionRunning(interaction)) return false;
@@ -55,7 +91,8 @@ export function isExplorationEligible(interaction: ToolInteraction): boolean {
 export function formatExplorationSummary(interactions: ToolInteraction[]): string {
   const counts: Record<ToolAggregate, number> = { search: 0, read: 0, list: 0 };
   for (const interaction of interactions) {
-    const category = toolAggregate(interaction.toolName);
+    const category =
+      getShellSalience(interaction)?.aggregate ?? toolAggregate(interaction.toolName);
     if (category) counts[category] += 1;
   }
   return AGGREGATE_SUMMARY_ORDER.filter((category) => counts[category] > 0)

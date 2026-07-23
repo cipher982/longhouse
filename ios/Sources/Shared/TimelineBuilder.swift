@@ -79,7 +79,9 @@ enum TimelineBuilder {
     /// completed Reads can join Greps while singleton Reads stay individual.
     static func isExplorationEligible(call: SessionEvent, result: SessionEvent?, pairing: ToolPairing) -> Bool {
         guard let toolName = call.toolName, !toolName.isEmpty else { return false }
-        guard ToolTiers.aggregate(toolName) != nil else { return false }
+        guard ToolTiers.aggregate(toolName) != nil || shellSalience(call: call, result: result) != nil else {
+            return false
+        }
         guard pairing == .id || pairing == .fifo else { return false }
         guard result != nil else { return false }
         if call.toolCallState == .dropped || call.toolCallState == .running {
@@ -88,13 +90,28 @@ enum TimelineBuilder {
         return true
     }
 
+    /// Content-aware demotion for shell tools (Change B). A completed,
+    /// successful shell call whose command classifies as read-only may join
+    /// exploration runs. Nonzero exits never demote — errors stay full-size.
+    /// Mirrors web `getShellSalience` in timelineModel.ts.
+    static func shellSalience(call: SessionEvent, result: SessionEvent?) -> ShellSalience? {
+        guard let toolName = call.toolName, ShellSalienceClassifier.isShellTool(toolName) else { return nil }
+        guard let result else { return nil }
+        if call.toolCallState == .dropped || call.toolCallState == .running { return nil }
+        if let exit = ShellSalienceClassifier.parseExitCode(result.toolOutputText), exit != 0 { return nil }
+        let command = call.toolInputString("command") ?? call.toolInputString("cmd")
+        return ShellSalienceClassifier.classify(command)
+    }
+
     /// Semantic exploration header: `Searched 5 · Read 14 · Listed 1`.
     static func explorationSummary(for calls: [PassiveCall]) -> String {
         var searched = 0
         var read = 0
         var listed = 0
         for call in calls {
-            switch ToolTiers.aggregate(call.call.toolName ?? "") {
+            let aggregate = shellSalience(call: call.call, result: call.result)?.aggregate
+                ?? ToolTiers.aggregate(call.call.toolName ?? "")
+            switch aggregate {
             case .search: searched += 1
             case .read: read += 1
             case .list: listed += 1

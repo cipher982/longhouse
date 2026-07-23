@@ -153,3 +153,12 @@ export function toolTier(toolName: string): ToolTier {
 export function toolAggregate(toolName: string): ToolAggregate | null {
   return resolveToolInfo(toolName).aggregate;
 }
+
+// --- Shell classifier constants (grammar is handwritten in shellSalience.ts;
+// parity with Swift is enforced by config/shell-salience-fixtures.json). ---
+
+export const SHELL_TOOLS: ReadonlySet<string> = new Set(["Bash", "shell", "shell_command", "exec_command", "run_shell_command"]);
+export const SHELL_READ_ONLY_COMMANDS: ReadonlySet<string> = new Set(["grep", "rg", "ls", "cat", "head", "tail", "nl", "wc", "stat", "which", "echo", "pwd", "du", "df", "ps", "printenv", "whoami", "tree", "diff", "column", "uniq", "jq", "basename", "dirname", "type", "true", "man"]);
+export const SHELL_GIT_READ_SUBCOMMANDS: ReadonlySet<string> = new Set(["status", "log", "diff", "show", "rev-parse", "ls-files", "blame", "describe", "shortlog"]);
+export const SHELL_AGGREGATE_BY_HEAD: Record<string, ToolAggregate> = {"grep": "search", "rg": "search", "ls": "list", "tree": "list", "du": "list", "df": "list"};
+export const SHELL_DEFAULT_READ_AGGREGATE: ToolAggregate = "read";

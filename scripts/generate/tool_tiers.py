@@ -31,6 +31,7 @@ def _aggregate_literal(value: object) -> str:
 
 def render_ts(data: dict) -> str:
     tools = data["tools"]
+    shell = data["shell_classifier"]
     mcp_ns = data["mcp_namespaces"]
     default_tier = data["default_tier"]
     mcp_default_tier = data["mcp_default_tier"]
@@ -175,11 +176,21 @@ export function toolTier(toolName: string): ToolTier {{
 export function toolAggregate(toolName: string): ToolAggregate | null {{
   return resolveToolInfo(toolName).aggregate;
 }}
+
+// --- Shell classifier constants (grammar is handwritten in shellSalience.ts;
+// parity with Swift is enforced by config/shell-salience-fixtures.json). ---
+
+export const SHELL_TOOLS: ReadonlySet<string> = new Set({json.dumps(shell["shell_tools"])});
+export const SHELL_READ_ONLY_COMMANDS: ReadonlySet<string> = new Set({json.dumps(shell["read_only_commands"])});
+export const SHELL_GIT_READ_SUBCOMMANDS: ReadonlySet<string> = new Set({json.dumps(shell["git_read_subcommands"])});
+export const SHELL_AGGREGATE_BY_HEAD: Record<string, ToolAggregate> = {json.dumps(shell["aggregate_by_head"])};
+export const SHELL_DEFAULT_READ_AGGREGATE: ToolAggregate = {json.dumps(shell["default_read_aggregate"])};
 """
 
 
 def render_swift(data: dict) -> str:
     tools = data["tools"]
+    shell = data["shell_classifier"]
     mcp_ns = data["mcp_namespaces"]
     default_aggregate = data.get("default_aggregate", None)
     mcp_default_aggregate = data.get("mcp_default_aggregate", None)
@@ -304,6 +315,17 @@ public enum ToolTiers {{
         guard parts.count == 3, parts[0] == "mcp" else {{ return nil }}
         return (parts[1], parts[2])
     }}
+}}
+
+// --- Shell classifier constants (grammar is handwritten in ShellSalience.swift;
+// parity with TS is enforced by config/shell-salience-fixtures.json). ---
+
+public enum ShellClassifierConstants {{
+    public static let shellTools: Set<String> = [{", ".join(f'"{t}"' for t in shell["shell_tools"])}]
+    public static let readOnlyCommands: Set<String> = [{", ".join(f'"{t}"' for t in shell["read_only_commands"])}]
+    public static let gitReadSubcommands: Set<String> = [{", ".join(f'"{t}"' for t in shell["git_read_subcommands"])}]
+    public static let aggregateByHead: [String: ToolAggregate] = [{", ".join(f'"{k}": .{v}' for k, v in shell["aggregate_by_head"].items())}]
+    public static let defaultReadAggregate: ToolAggregate = .{shell["default_read_aggregate"]}
 }}
 """
 
