@@ -43,20 +43,24 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential pkg-config libssl-dev libcap-dev
 
-      - name: Build engine binary
-        run: cargo build --manifest-path engine/Cargo.toml --release --bin longhouse-engine
+      - name: Build native device binaries
+        run: cargo build --manifest-path engine/Cargo.toml --release --bin longhouse --bin longhouse-engine
 
       - name: Collect engine binary
         run: |
           mkdir -p binaries
+          cp engine/target/release/longhouse binaries/longhouse-linux-x64
           cp engine/target/release/longhouse-engine binaries/longhouse-engine-linux-x64
+          chmod +x binaries/longhouse-linux-x64
           chmod +x binaries/longhouse-engine-linux-x64
 
       - name: Upload runtime artifacts
         uses: actions/upload-artifact@v6
         with:
           name: runtime-longhouse-engine-linux-x64
-          path: binaries/longhouse-engine-linux-x64
+          path: |
+            binaries/longhouse-linux-x64
+            binaries/longhouse-engine-linux-x64
           retention-days: 7
 
   build-engine-linux-arm64:
@@ -81,20 +85,24 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential pkg-config libssl-dev libcap-dev
 
-      - name: Build engine binary
-        run: cargo build --manifest-path engine/Cargo.toml --release --bin longhouse-engine
+      - name: Build native device binaries
+        run: cargo build --manifest-path engine/Cargo.toml --release --bin longhouse --bin longhouse-engine
 
       - name: Collect engine binary
         run: |
           mkdir -p binaries
+          cp engine/target/release/longhouse binaries/longhouse-linux-arm64
           cp engine/target/release/longhouse-engine binaries/longhouse-engine-linux-arm64
+          chmod +x binaries/longhouse-linux-arm64
           chmod +x binaries/longhouse-engine-linux-arm64
 
       - name: Upload runtime artifacts
         uses: actions/upload-artifact@v6
         with:
           name: runtime-longhouse-engine-linux-arm64
-          path: binaries/longhouse-engine-linux-arm64
+          path: |
+            binaries/longhouse-linux-arm64
+            binaries/longhouse-engine-linux-arm64
           retention-days: 7
 
   build-macos:
@@ -127,13 +135,15 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Build engine binary
-        run: cargo build --manifest-path engine/Cargo.toml --release --bin longhouse-engine
+      - name: Build native device binaries
+        run: cargo build --manifest-path engine/Cargo.toml --release --bin longhouse --bin longhouse-engine
 
       - name: Collect engine binary
         run: |
           mkdir -p binaries
+          cp engine/target/release/longhouse binaries/longhouse-darwin-arm64
           cp engine/target/release/longhouse-engine binaries/longhouse-engine-darwin-arm64
+          chmod +x binaries/longhouse-darwin-arm64
           chmod +x binaries/longhouse-engine-darwin-arm64
 
       - name: Build macOS ambient app payload
@@ -248,7 +258,14 @@ jobs:
             --options runtime \
             --timestamp \
             --sign "$CODESIGN_IDENTITY" \
+            binaries/longhouse-darwin-arm64
+          codesign \
+            --force \
+            --options runtime \
+            --timestamp \
+            --sign "$CODESIGN_IDENTITY" \
             binaries/longhouse-engine-darwin-arm64
+          codesign --verify --strict --verbose=2 binaries/longhouse-darwin-arm64
           codesign --verify --strict --verbose=2 binaries/longhouse-engine-darwin-arm64
 
       - name: Package macOS desktop app bundle
@@ -622,7 +639,9 @@ jobs:
         with:
           subject-path: |
             binaries/longhouse-engine-darwin-arm64
+            binaries/longhouse-darwin-arm64
             binaries/longhouse-engine-linux-x64
+            binaries/longhouse-linux-x64
             binaries/Longhouse-macos-arm64.dmg
             binaries/Longhouse-macos-arm64.zip
             binaries/local-runtime-macos-packaging.json
@@ -649,13 +668,14 @@ jobs:
         run: ls -la binaries
 
       - name: Upload arm64 assets to release
-        run: gh release upload "$RELEASE_TAG" binaries/longhouse-engine-linux-arm64 --clobber --repo "${{ github.repository }}"
+        run: gh release upload "$RELEASE_TAG" binaries/longhouse-linux-arm64 binaries/longhouse-engine-linux-arm64 --clobber --repo "${{ github.repository }}"
 
       - name: Attest arm64 release artifacts
         uses: actions/attest-build-provenance@v3
         with:
           subject-path: |
             binaries/longhouse-engine-linux-arm64
+            binaries/longhouse-linux-arm64
 
   verify-install-from-release:
     name: "verify-install-from-release--${{ matrix.os }}"
