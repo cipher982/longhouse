@@ -1,8 +1,8 @@
 # No-Python Device Provider Parity
 
-Status: Phase 0 spec draft
-Branch: `epic/rust-edge-provider-parity`
-Base: `ea8c141a2 Cover opencode managed contract wording`
+Status: Active corrective plan
+Branch: `main`
+Base: `3dcb66129 Update Helm exit UI expectations`
 
 ## Executive Summary
 
@@ -29,6 +29,119 @@ Antigravity should remain narrow, but its hook-inbox adapter is also Python and
 must be either replaced, embedded as provider-owned hook text without a Python
 runtime, or explicitly excluded from the no-Python launch promise until `agy`
 offers a better surface.
+
+## Why This Is Being Reopened
+
+The product decision was made, but not executed to its finish line. The
+resulting failure mode is easy to miss: Rust owns a provider's long-lived
+bridge, so individual control-path work appears native, while every human
+launch still enters through a Python virtualenv and Python owns the terminal
+life cycle and copy. A polished Python exit receipt in July made that mismatch
+visible again.
+
+### Timeline
+
+| Date | Change | What it achieved | What it left behind |
+|---|---|---|---|
+| 2026-06-28 | `8dbb36912` Phase-0 parity spec | Named Rust edge/provider parity. | Treated Python wrappers too generously. |
+| 2026-06-28 | `23ab43133` corrected the north star | Explicitly declared no Python on the normal device path. | No executable owner, package, or cutover gate followed. |
+| 2026-06-29 | `39c3d41d3` hook inventory | Made installed-hook debt visible. | Did not reject Python from normal launch. |
+| 2026-07-01 | `605fda095` shared Python managed-launch core | Reduced wrapper duplication. | Consolidated the transitional layer instead of deleting it. |
+| 2026-07-18–22 | Codex lifecycle hardening | Rust bridge ownership and cleanup became more correct. | Python still owned foreground TUI launch and its exit UX. |
+| 2026-07-22 | Python exit-receipt polish | Improved the current UI. | Confirmed the public Helm path is still Python. |
+
+This was missed because completion was measured as **native bridge/control
+coverage**, rather than the user-visible install → launch → exit path. The
+missing release gate was simple: a clean Mac must be able to install, launch,
+attach, stop, repair, and inspect a managed provider session without `uv`, a
+virtualenv, or `python3`. Until that command proves green, provider work is
+transitional regardless of which daemon owns the socket.
+
+## Current Device-Path Python Inventory (2026-07-22)
+
+The Runtime Host remains intentionally Python for this epic. Everything below
+is device-product debt because a Mac/dev box must execute it for normal setup,
+Helm use, control, or repair.
+
+| Surface | Current owner | Classification | Required destination |
+|---|---|---|---|
+| `longhouse` executable and command router | `server/zerg/cli/main.py` / Typer | Root dependency: every normal CLI invocation starts Python. | Native `longhouse` device launcher; retain a separate server-admin entrypoint only where needed. |
+| Install, onboarding, update, doctor, machine repair, local health | Python CLI plus macOS setup shell script | Device packaging debt; the app setup script installs `uv` and Python. | Rust device/install library surfaced by `Longhouse.app` and native CLI. |
+| Codex `launch`, `attach`, `doctor`, foreground TUI, exit receipt | `server/zerg/cli/codex.py` | Transitional; bridge/control loop is already Rust. | Native `longhouse codex` facade in the engine package. |
+| Claude Helm launch, config install, and hook migration | `server/zerg/cli/claude.py`, compatibility `claude_channel.py` | The Rust channel server exists, but the normal human path and Python hooks remain. | Native launcher/config migration over the existing Rust bridge. |
+| OpenCode Helm launch, attach/stop compatibility | `opencode.py`, `opencode_channel.py`, `opencode_bridge.py` | Python owns normal launch despite native remote controls. | Native Rust launcher/state owner. |
+| Cursor Helm PTY launch | `cursor_helm.py` | Native send/interrupt/stop exist, but the foreground launch remains Python; omitted by the earlier provider map. | Native Rust launcher over the existing control adapter. |
+| Antigravity wrapper and installed hook | `antigravity.py`, hook text invoking `python3` | Device Python and unstable provider semantics. | Native hook adapter, or explicitly exclude managed send from the device promise. |
+| Provider proof and local diagnostics | `provider_live.py`, `local_health.py` | Python is still needed to verify/repair a device. | Native `longhouse provider-live` and `longhouse device …` commands. |
+
+## Target Architecture and Cutover Contract
+
+The device artifact ships two compiled executables from one Rust workspace,
+packaged, signed, and versioned together by the app/installer:
+
+1. **`longhouse`** — a Rust human-facing facade. It owns onboarding,
+   repair, local health, provider launch/attach/stop, and the terminal UI.
+2. **`longhouse-engine`** — the Rust long-lived agent and provider bridge
+   implementation. The facade links shared Rust crates rather than spawning
+   ad-hoc shell/Python helpers.
+
+The Runtime Host remains a separately packaged Python server command; it must
+not be installed as a dependency of the normal device artifact. Compatibility
+is explicit and temporary: `longhouse-python` is a separately installed server
+and legacy-operator command, never a flag or hidden fallback inside native
+`longhouse`.
+
+### Cutover Rules
+
+- The installed `longhouse` on a device is compiled Rust. It never invokes
+  Python, `uv`, or a virtualenv for a normal command.
+- Provider executables remain user-owned and resolve from `PATH`; existing
+  debug overrides stay explicit.
+- The native facade owns foreground PTY/TUI process groups and terminal exit
+  receipts. A clean exit stops the managed bridge; durable history is retained
+  separately.
+- Machine-facing Runtime Host calls use a shared Rust client and existing API
+  contracts. No browser/client behavior changes are implied.
+- Native `longhouse` never discovers, invokes, or falls back to
+  `longhouse-python`. A user selects that separately installed command
+  explicitly, and it emits a deprecation notice.
+- Cutovers use two releases: release N makes the native command default and
+  keeps the separately installed legacy command available; N+1 removes that
+  provider's Python compatibility path only after upgrade and live-provider
+  gates pass. Do not add new user-facing behavior to a Python wrapper during
+  the soak.
+
+### Foreground Helm Lifecycle Contract
+
+| Event | Native facade action | Bridge/provider result |
+|---|---|---|
+| User cleanly exits TUI | Render banked receipt after acknowledged cleanup. | Stop bridge and provider app-server; retain durable thread/archive only. |
+| Terminal closes, `SIGHUP`, `SIGTERM`, or `SIGINT` | Forward/handle signal, attempt bounded acknowledged cleanup, then restore terminal state. | No intentional detached provider remains. Failure is explicit and repairable. |
+| `SIGTSTP`/`SIGCONT`/`SIGWINCH` | Preserve foreground process-group and terminal resize semantics. | Provider remains attached; no lifecycle claim changes. |
+| Provider/bridge/facade crash | Classify from persisted state plus process start identity; show recovery without claiming liveness. | Fail closed for cleanup; never invent a live or stopped state. |
+| Upgrade or Machine Agent restart | Pairing/version check and state-schema gate before attach or reap. | Read compatible state, otherwise preserve it and surface repair. |
+
+The Python Codex launcher’s process-group handoff and one-shot recovery behavior
+are behavior fixtures for the native implementation, not incidental details.
+
+### Release Gate
+
+Before declaring this complete, CI must prove a fresh macOS device artifact can
+perform the following with no `python3`, `uv`, or Python site-packages on PATH:
+
+1. install/repair and start the Machine Agent;
+2. launch, cleanly exit, and inspect a Codex Helm session;
+3. attach, send, interrupt, and stop a live Codex Helm session;
+4. run local health and provider-live proof;
+5. perform the equivalent supported operations for Claude, OpenCode, Cursor,
+   and the explicit Antigravity decision.
+
+The gate is hermetic: the device-under-test receives a restricted PATH with
+trap executables for `python`, `python3`, `uv`, `pip`, and
+`longhouse-python`; child-process execution is recorded and any trap invocation
+fails the test. The Runtime Host runs outside that device environment. The gate
+also exercises DMG install, shell install, upgrade from a uv-installed release,
+repair, and uninstall.
 
 ## Definitions
 
@@ -78,18 +191,70 @@ strategy, not just an implementation preference.
 single-file embedded runtime as the shipping artifact. That would be a packaging
 decision, not permission to leave ambient Python dependencies.
 
-### Decision: Claude is the next real port candidate
+### Decision: paired native facade and engine, one Rust workspace
 
-**Context:** `engine/src/control_channel.rs` handles Claude launch, send,
-interrupt, steer, and answer-pause by spawning `longhouse claude-channel`. The
-Python command owns the MCP stdio bridge, HTTP inject endpoint, state file, and
-SIGINT interrupt.
+**Context:** `longhouse-engine device …` already owns native health/repair
+work, while `longhouse-engine codex-bridge …` owns daemon/bridge internals. A
+human-facing CLI must take over the existing `longhouse` name without exposing
+daemon internals as its permanent public surface.
 
-**Choice:** Plan a Claude-native Rust channel bridge and launcher stage after
-the no-Python device inventory and guardrails.
+**Choice:** Build a public Rust `longhouse` facade and internal
+`longhouse-engine` from one workspace and shared library crates. They are
+signed, installed, upgraded, and build-identity checked as an atomic pair.
+`longhouse-engine` remains the explicit executable for daemon and bridge child
+processes; facade-launched bridges resolve that paired engine path rather than
+using `current_exe()`.
 
-**Rationale:** Claude is advertised as first-class managed live control, but the
-Machine Agent is still a subprocess proxy for the important operations.
+**Rationale:** One binary would make foreground terminal UX and long-lived
+daemon internals one public contract. Two unrelated binaries would duplicate
+logic and create version skew. A paired facade/engine split keeps the user
+surface small while preserving explicit bridge ownership.
+
+**Revisit if:** A single binary can preserve separate public/internal command
+surfaces and safe child-process identity without expanding the user contract.
+
+### Decision: explicit server and legacy Python ownership
+
+**Context:** Today one Python package owns both Runtime Host/server commands and
+the device CLI. Reusing the `longhouse` name for native device commands without
+splitting this ownership would break operators and make the no-Python claim
+ambiguous.
+
+**Choice:** Publish the remaining Python surface as `longhouse-python` for
+Runtime Host and explicit legacy-operation use. Native install/repair removes
+or quarantines the uv-installed `longhouse` shim after a successful paired
+native install; it never silently selects between the two. The command matrix
+below is the authoritative migration map.
+
+**Rationale:** A separate executable makes authority and dependency visible.
+It prevents a native command from depending on a Python environment that the
+device artifact intentionally does not ship.
+
+**Revisit if:** Runtime Host is independently moved to a compiled or bundled
+server artifact.
+
+### Command Ownership Matrix
+
+| Command family | Release-N owner | Final owner | Compatibility policy |
+|---|---|---|---|
+| `longhouse <provider>`, attach/stop, device health/repair, provider proof | Native facade | Native facade | Python equivalent is `longhouse-python` only during release-N soak. |
+| `longhouse-engine` daemon and bridge subcommands | Paired engine | Paired engine | Internal/operator surface; facade resolves its exact paired path. |
+| Runtime Host `serve`, DB/storage migration, server administration | `longhouse-python` | Server package until a separate server decision | Never part of normal device install. |
+| Development generators and test tools | source checkout tooling | source checkout tooling | Not shipped in device artifacts. |
+
+### Decision: Claude native completion follows Codex cutover
+
+**Context:** Rust now owns the Claude channel server and core control commands,
+but Python still owns the normal Helm launcher, configuration installation, and
+already-installed Python hook migration.
+
+**Choice:** Finish the native Claude launcher/config path after the Codex
+facade cutover; retain the existing Rust channel server rather than rewriting
+it.
+
+**Rationale:** Claude is advertised as first-class managed live control, but
+the human install/launch path still needs Python. Codex is first because its
+foreground migration is smaller and proves the facade boundary first.
 
 **Revisit if:** Claude removes or materially changes the development channel/MCP
 surface before implementation.
@@ -135,8 +300,9 @@ control API.
 | Provider | Current device Python exposure | Recommendation | Why |
 |---|---|---|---|
 | OpenCode | Remote live-control is Rust, but local `longhouse opencode`/attach surfaces still pass through Python CLI code. | Finish no-Python local launch/attach wrappers. | Remote control is good; packaging is not done until the user path avoids Python. |
-| Codex | Bridge/control loop is Rust, but `longhouse codex` launch/attach/doctor glue is Python. | Port launcher/attach UX to a compiled Longhouse entrypoint; keep Rust bridge. | The bridge is not the problem; the shipped user entrypoint is. |
-| Claude | Python owns `claude-channel` bridge, launch, send, interrupt, steer, answer-pause, MCP config install, and PTY detached launch. | Highest priority provider-control port. | Claude has both live-control and packaging debt. |
+| Codex | Bridge/control loop is Rust, but `longhouse codex` launch/attach/doctor glue is Python. | First provider cutover: port launcher/attach UX to the native facade; keep Rust bridge. | The bridge is not the problem; the shipped user entrypoint is. |
+| Claude | Channel server and core control are Rust; Python still owns Helm launch, config install, and hook migration. | Finish native launcher/config after Codex. | Native bridge alone does not remove device packaging debt. |
+| Cursor | Send/interrupt/stop controls are Rust; the foreground Helm PTY launcher is Python. | Port the launcher after OpenCode. | Cursor was omitted from the prior inventory. |
 | Antigravity | Python wrapper and hook-inbox adapter own managed launch/send. | Keep capabilities narrow; replace adapter or exclude from no-Python launch promise. | The provider surface is unstable, but Python cannot be treated as a permanent device dependency. |
 
 ## Cross-Provider Invariants
@@ -162,6 +328,30 @@ control API.
    green inventory must not hide Python inside hook templates or installer code.
 
 ## Phase Plan
+
+### Corrected Delivery Sequence
+
+The original sequence put Claude before Codex because Claude has the most
+Python-owned live control. That is not the fastest way to remove the device
+runtime dependency: Codex already has the native bridge and is the smallest
+complete vertical slice. Deliver in this order:
+
+1. Establish the compiled `longhouse` facade and a hermetic no-Python device
+   test harness.
+2. Move Codex launch/attach/exit/stop to that facade, including the terminal
+   receipt; make it native-default in release N and remove Python in N+1.
+3. Move device diagnostics, repair, and provider-live proof so a Codex device
+   does not need Python after exit.
+4. Move Claude's launcher/config migration, then OpenCode, then Cursor.
+5. Make and enforce the Antigravity include/exclude decision.
+6. Delete the Python device package/install path and make the macOS setup
+   script install only compiled artifacts.
+
+The delivery sequence above is canonical. The workstreams below define their
+dependencies and acceptance criteria; their document order is not execution
+order. Every phase is a vertical cutover: artifact, command, behavior fixtures,
+packaging, and a release-N compatibility gate. A Rust helper beside a Python
+launcher does not count as progress toward the release gate.
 
 ### Phase 0: Inventory and Spec
 
@@ -231,28 +421,40 @@ Suggested checks:
 - `make test-engine`
 - Existing script tests that validate provider release proof coverage.
 
-### Phase 2: No-Python Device Entrypoint Design
+### Phase 2: Native Device Facade and Packaging
 
 Goal: Replace the Python CLI as the normal provider-control entrypoint without
 changing the managed-session UX.
 
 Steps:
 
-1. Decide which compiled binary owns `longhouse <provider>` equivalents:
-   `longhouse-engine`, a small native launcher, or `Longhouse.app` helper.
-2. Define compatibility shims for existing `longhouse` commands while the
-   package transition is in progress.
-3. Specify provider binary resolution, env handling, cwd validation, and token
+1. Add the compiled `longhouse` facade from the Target Architecture section,
+   sharing Rust crates with `longhouse-engine` rather than duplicating bridge
+   logic.
+2. Define a deterministic artifact resolver so `Longhouse.app`, shell install,
+   and PATH select the same facade/engine build identity.
+3. Define compatibility shims for existing `longhouse` commands while the
+   package transition is in progress; shims are opt-in and visibly legacy.
+4. Specify provider binary resolution, env handling, cwd validation, and token
    secrecy once Python is gone.
-4. Specify how local health, doctor, repair, provider-live proof, and managed
+5. Specify how local health, doctor, repair, provider-live proof, and managed
    launch share the same native support library.
-5. Specify what remains in the Python Runtime Host lane and how it is isolated
+6. Build the native DMG/shell artifact, nested signing/notarization, launchd and
+   systemd paths, atomic upgrade/rollback, uv-shim quarantine, and uninstall.
+7. Specify what remains in the Python Runtime Host lane and how it is isolated
    from the normal device install.
 
 Success criteria:
 
 - The normal Mac/dev-machine install can start provider sessions without
   invoking Python.
+- `longhouse --version` identifies the compiled device artifact and its paired
+  engine build identity.
+- A facade refuses a mismatched engine build identity before launching or
+  reaping a managed provider session.
+- The native installer takes over PATH from an existing uv-installed
+  `longhouse` without deleting it until the paired artifact has passed a smoke
+  test; uninstall restores or reports the previous explicit state.
 - Any remaining Python command is labeled server-only, test-only, or legacy
   compatibility with a removal phase.
 - The design preserves existing CLI UX and machine-control APIs.
@@ -264,7 +466,7 @@ Suggested checks:
 - Existing provider CLI tests used as behavior fixtures for the native
   replacement.
 
-### Phase 3: Claude Native Channel Bridge and Launcher
+### Claude Native Channel and Launcher Workstream
 
 Goal: Move Claude provider-control operations from Python subprocess proxy to
 Rust-owned Machine Agent/native launcher behavior.
@@ -312,15 +514,16 @@ Suggested checks:
 - `make test-engine`
 - `make managed-claude-poc` when local provider credentials are available.
 
-### Phase 4: Codex Native Entrypoint and Hardening
+### Codex Native Entrypoint Workstream
 
 Goal: Preserve the good Rust bridge boundary while removing Python from the
 normal Codex launch/attach path.
 
 Steps:
 
-1. Port or replace `longhouse codex` launch/attach UX with the native entrypoint
-   from Phase 2.
+1. Port `longhouse codex`, `longhouse codex attach`, and `longhouse codex stop`
+   to the native facade. The foreground TUI launcher owns PTY process-group
+   transfer, signal forwarding, bridge cleanup, and terminal receipts.
 2. Preserve stock upstream `codex` resolution from PATH plus explicit
    `--codex-bin` / `LONGHOUSE_CODEX_BIN` debug overrides.
 3. Add or confirm tests for token absence in bridge state, logs, and local
@@ -334,6 +537,8 @@ Steps:
 Success criteria:
 
 - Codex launch/attach from the normal device product no longer invokes Python.
+- The banked-hearth receipt is emitted by the native foreground launcher, not
+  by a Python compatibility wrapper.
 - Reapers skip unknown/future state rather than performing destructive cleanup.
 - Detached-ui sessions surface failures rather than silently appearing live.
 - Codex remains the model for Rust-owned live control plus native human CLI
@@ -344,7 +549,7 @@ Suggested checks:
 - `make test-engine`
 - `cd server && uv run pytest tests_lite/test_codex_cli.py tests_lite/test_local_runtime_installer.py`
 
-### Phase 5: OpenCode Native Entrypoint Completion
+### OpenCode Native Entrypoint Workstream
 
 Goal: Finish the OpenCode no-Python story now that managed control is native.
 
@@ -367,7 +572,7 @@ Suggested checks:
 - `make test-engine`
 - Focused OpenCode CLI/bridge tests for launch/attach behavior.
 
-### Phase 6: Antigravity Proof and No-Python Decision
+### Antigravity Inclusion Decision Workstream
 
 Goal: Decide whether Antigravity ships in the no-Python device path or remains
 excluded/narrow until provider mechanics justify a native adapter.
@@ -397,7 +602,26 @@ Suggested checks:
 - `python scripts/tests/provider-control-e2e-canary.test.py` if the repo test
   runner supports it directly.
 
-### Phase 7: Product, Packaging, and Evidence Cleanup
+### Cursor Native Entrypoint Workstream
+
+Goal: Either move the managed Cursor Helm PTY/control-socket path to Rust or
+remove it from the normal device product until it can be native.
+
+Steps:
+
+1. Port foreground PTY launch, state ownership, send, interrupt, and stop from
+   `cursor_helm.py` to the native facade/engine.
+2. Preserve the current provider-owned `cursor-agent` binary and its explicit
+   capability limits.
+3. Add fake-provider tests covering process-group cleanup and control-socket
+   identity checks.
+
+Success criteria:
+
+- Normal managed Cursor Helm launch and recovery do not invoke Python.
+- The provider map and installer no longer omit Cursor from no-Python evidence.
+
+### Product, Packaging, and Evidence Cleanup Workstream
 
 Goal: Make product wording, docs, packaging, and proof levels match the new
 ownership.
@@ -419,6 +643,8 @@ Success criteria:
 - Evidence levels do not get promoted by implementation alone.
 - A clean machine can install the device product and launch managed provider
   sessions without Python.
+- The macOS setup script contains no `uv tool install`, `uv python install`, or
+  Python CLI bootstrap for the device product.
 
 ## Testing Strategy
 

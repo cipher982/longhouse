@@ -202,6 +202,26 @@
       "token_policy": "env_or_state_file",
       "cwd_policy": "strict_absolute_or_existing",
       "notes": "Phase 6 either replaces the hook-inbox adapter natively or explicitly excludes Antigravity from the no-Python launch promise."
+    },
+    {
+      "id": "cursor-managed",
+      "status": "planned",
+      "implementation_phase": "phase7",
+      "legacy_commands": [
+        "longhouse cursor"
+      ],
+      "native_target_command": "longhouse-engine device cursor",
+      "phase1_inventory_ids": [
+        "cursor-command-wrapper",
+        "cursor-helm-launch-wrapper"
+      ],
+      "providers": [
+        "cursor"
+      ],
+      "provider_binary_ownership": "user_owned",
+      "token_policy": "env_or_state_file",
+      "cwd_policy": "strict_absolute_or_existing",
+      "notes": "Cursor already has native send, interrupt, and stop controls; Phase 7 replaces the Python foreground Helm PTY launcher."
     }
   ]
 }

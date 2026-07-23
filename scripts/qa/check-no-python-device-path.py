@@ -255,6 +255,31 @@ DEFAULT_INVENTORY: tuple[dict[str, Any], ...] = (
         "device_command": False,
     },
     {
+        "id": "cursor-command-wrapper",
+        "category": "transitional_device",
+        "provider": "cursor",
+        "path": "server/zerg/cli/cursor.py",
+        "owner_area": "cursor-native",
+        "replacement_phase": "phase7",
+        "reason": "Python still registers and dispatches the public longhouse cursor command.",
+        "device_command": True,
+        "python_dependency_kind": "entrypoint",
+    },
+    {
+        "id": "cursor-helm-launch-wrapper",
+        "category": "transitional_device",
+        "provider": "cursor",
+        "path": "server/zerg/cli/cursor_helm.py",
+        "owner_area": "cursor-native",
+        "replacement_phase": "phase7",
+        "reason": (
+            "Rust owns Cursor send, interrupt, and stop, but Python still owns the foreground Helm PTY launch "
+            "and its terminal lifecycle."
+        ),
+        "device_command": True,
+        "python_dependency_kind": "entrypoint",
+    },
+    {
         "id": "antigravity-launch-wrapper",
         "category": "transitional_device",
         "provider": "antigravity",
@@ -424,6 +449,7 @@ PROVIDER_CONTROL_PYTHON_GLOBS = (
     "server/zerg/cli/*claude*.py",
     "server/zerg/cli/*codex*.py",
     "server/zerg/cli/*opencode*.py",
+    "server/zerg/cli/*cursor*.py",
     "server/zerg/cli/*antigravity*.py",
     "server/zerg/services/local_health/__init__.py",
     "server/zerg/services/desktop_app.py",
