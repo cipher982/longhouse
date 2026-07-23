@@ -1229,6 +1229,42 @@ struct SessionEventMediaRef: Codable, Hashable, Sendable {
     let originalKind: String
 }
 
+struct ToolPresentationChild: Codable, Hashable, Sendable {
+    let version: Int
+    let childId: String
+    let disposition: String
+    let toolName: String
+    let label: String
+    let icon: String
+    let color: String
+    let tier: String
+    let aggregate: String?
+    let mcpNamespace: String?
+    let toolInputValue: JSONValue?
+    let ruleId: String
+    let sourceSpan: [Int]
+    let inputComplete: Bool
+    let resultForwarded: Bool
+}
+
+struct ToolPresentation: Codable, Hashable, Sendable {
+    let version: Int
+    let disposition: String
+    let toolName: String
+    let sourceToolName: String
+    let executionMethod: String?
+    let label: String
+    let icon: String
+    let color: String
+    let tier: String
+    let aggregate: String?
+    let mcpNamespace: String?
+    let toolInputValue: JSONValue?
+    let ruleId: String
+    let wrapperRecedes: Bool
+    let children: [ToolPresentationChild]
+}
+
 struct SessionEvent: Codable, Identifiable, Sendable {
     /// Durable identity, not chronology. Storage-v2 IDs are opaque strings;
     /// legacy integer IDs decode to their decimal representation.
@@ -1248,6 +1284,7 @@ struct SessionEvent: Codable, Identifiable, Sendable {
     let toolOutputText: String?
     let toolCallId: String?
     let toolCallState: ToolCallState?
+    let toolPresentation: ToolPresentation?
     let timestamp: String
     let inActiveContext: Bool
     let isHeadBranch: Bool
@@ -1265,6 +1302,7 @@ struct SessionEvent: Codable, Identifiable, Sendable {
         toolOutputText: String?,
         toolCallId: String?,
         toolCallState: ToolCallState?,
+        toolPresentation: ToolPresentation? = nil,
         timestamp: String,
         inActiveContext: Bool,
         isHeadBranch: Bool,
@@ -1289,6 +1327,7 @@ struct SessionEvent: Codable, Identifiable, Sendable {
         self.toolOutputText = toolOutputText
         self.toolCallId = toolCallId
         self.toolCallState = toolCallState
+        self.toolPresentation = toolPresentation
         self.timestamp = timestamp
         self.inActiveContext = inActiveContext
         self.isHeadBranch = isHeadBranch
@@ -1309,6 +1348,7 @@ struct SessionEvent: Codable, Identifiable, Sendable {
         toolOutputText: String?,
         toolCallId: String?,
         toolCallState: ToolCallState?,
+        toolPresentation: ToolPresentation? = nil,
         timestamp: String,
         inActiveContext: Bool,
         isHeadBranch: Bool,
@@ -1330,6 +1370,7 @@ struct SessionEvent: Codable, Identifiable, Sendable {
             toolOutputText: toolOutputText,
             toolCallId: toolCallId,
             toolCallState: toolCallState,
+            toolPresentation: toolPresentation,
             timestamp: timestamp,
             inActiveContext: inActiveContext,
             isHeadBranch: isHeadBranch,
@@ -1369,6 +1410,7 @@ struct SessionEvent: Codable, Identifiable, Sendable {
         toolOutputText = try container.decodeIfPresent(String.self, forKey: .toolOutputText)
         toolCallId = try container.decodeIfPresent(String.self, forKey: .toolCallId)
         toolCallState = try container.decodeIfPresent(ToolCallState.self, forKey: .toolCallState)
+        toolPresentation = try container.decodeIfPresent(ToolPresentation.self, forKey: .toolPresentation)
         timestamp = try container.decode(String.self, forKey: .timestamp)
         inActiveContext = try container.decodeIfPresent(Bool.self, forKey: .inActiveContext)
             ?? (branchKind == nil || branchKind == "head")
@@ -1393,6 +1435,7 @@ struct SessionEvent: Codable, Identifiable, Sendable {
         try container.encodeIfPresent(toolOutputText, forKey: .toolOutputText)
         try container.encodeIfPresent(toolCallId, forKey: .toolCallId)
         try container.encodeIfPresent(toolCallState, forKey: .toolCallState)
+        try container.encodeIfPresent(toolPresentation, forKey: .toolPresentation)
         try container.encode(timestamp, forKey: .timestamp)
         try container.encode(inActiveContext, forKey: .inActiveContext)
         try container.encode(isHeadBranch, forKey: .isHeadBranch)
@@ -1415,6 +1458,7 @@ struct SessionEvent: Codable, Identifiable, Sendable {
         case toolOutputText
         case toolCallId
         case toolCallState
+        case toolPresentation
         case timestamp
         case inActiveContext
         case isHeadBranch

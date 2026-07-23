@@ -73,6 +73,7 @@ from zerg.services.session_state_contract import build_session_state_facts
 from zerg.services.session_title import resolve_timeline_title
 from zerg.services.session_title import resolve_title_provenance
 from zerg.services.session_turns import hash_user_text
+from zerg.services.tool_presentation import project_tool_presentation
 from zerg.session_loop_mode import SessionLoopMode
 from zerg.session_loop_mode import coerce_session_loop_mode
 from zerg.utils.time import UTCBaseModel
@@ -1255,6 +1256,46 @@ class EventMediaRefResponse(UTCBaseModel):
     original_kind: str = Field(..., description="Original media source kind")
 
 
+class ToolPresentationChildResponse(UTCBaseModel):
+    """One structurally recovered operation inside a provider wrapper."""
+
+    version: int
+    child_id: str
+    disposition: Literal["exact", "parsed", "generic", "unknown", "invalid"]
+    tool_name: str
+    label: str
+    icon: str
+    color: str
+    tier: Literal["noise", "context", "action"]
+    aggregate: Optional[Literal["search", "read", "list", "wait"]] = None
+    mcp_namespace: Optional[str] = None
+    tool_input_json: Any = None
+    rule_id: str
+    source_span: List[int] = Field(default_factory=list)
+    input_complete: bool = False
+    result_forwarded: bool = False
+
+
+class ToolPresentationResponse(UTCBaseModel):
+    """Disposable read-time lens over an immutable provider tool event."""
+
+    version: int
+    disposition: Literal["exact", "parsed", "generic", "unknown", "invalid"]
+    tool_name: str
+    source_tool_name: str
+    execution_method: Optional[str] = None
+    label: str
+    icon: str
+    color: str
+    tier: Literal["noise", "context", "action"]
+    aggregate: Optional[Literal["search", "read", "list", "wait"]] = None
+    mcp_namespace: Optional[str] = None
+    tool_input_json: Any = None
+    rule_id: str
+    wrapper_recedes: bool = False
+    children: List[ToolPresentationChildResponse] = Field(default_factory=list)
+
+
 class EventResponse(UTCBaseModel):
     """Response for a single event."""
 
@@ -1275,6 +1316,10 @@ class EventResponse(UTCBaseModel):
     tool_output_truncated: bool = Field(False, description="True when tool_output_text was shortened for this response")
     tool_output_original_chars: Optional[int] = Field(None, description="Original tool output length when truncated")
     tool_call_id: Optional[str] = Field(None, description="Cross-provider call/result linkage ID")
+    tool_presentation: Optional[ToolPresentationResponse] = Field(
+        None,
+        description="Versioned read-time tool presentation with raw-provider provenance",
+    )
     timestamp: datetime = Field(..., description="Event timestamp")
     in_active_context: bool = Field(
         True,
@@ -2299,6 +2344,7 @@ def build_event_response(
     tool_call_state_map: dict[int, ToolCallState] | None = None,
     media_ref_map: dict[int, list[EventMediaRefResponse]] | None = None,
     mobile_payload: bool = False,
+    provider: str | None = None,
 ) -> EventResponse:
     content_text = event.content_text
     raw_content_text = None
@@ -2330,6 +2376,11 @@ def build_event_response(
         tool_output_truncated=tool_output_truncated,
         tool_output_original_chars=tool_output_original_chars,
         tool_call_id=event.tool_call_id,
+        tool_presentation=project_tool_presentation(
+            event.tool_name,
+            event.tool_input_json,
+            provider=provider,
+        ),
         timestamp=event.timestamp,
         in_active_context=store.is_event_in_active_context(event, boundary) if boundary is not None else True,
         branch_id=event.branch_id,

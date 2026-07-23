@@ -2,7 +2,7 @@
 // Run: python3 scripts/generate/tool_tiers.py
 
 export type ToolTier = "noise" | "context" | "action";
-export type ToolAggregate = "search" | "read" | "list";
+export type ToolAggregate = "search" | "read" | "list" | "wait";
 export type ToolColorToken =
   | "brand" | "cyan" | "success" | "warning" | "secondary"
   | "tertiary" | "accent" | "muted";
@@ -58,7 +58,7 @@ export const TOOL_TIERS: Record<string, ToolTierMeta> = {
   "str_replace_editor": { tier: "action", aggregate: null, icon: "E", label: "edit", color: "brand" },
   "update_plan": { tier: "action", aggregate: null, icon: "+", label: "plan", color: "accent" },
   "exec": { tier: "action", aggregate: null, icon: "$", label: "exec", color: "warning" },
-  "wait": { tier: "action", aggregate: null, icon: "\u2026", label: "Wait", color: "tertiary" },
+  "wait": { tier: "noise", aggregate: "wait", icon: "\u2026", label: "Wait", color: "tertiary" },
   "request_user_input": { tier: "action", aggregate: null, icon: "?", label: "Question", color: "accent" },
   "ReadFile": { tier: "context", aggregate: "read", icon: "R", label: "Read", color: "cyan" },
   "StrReplace": { tier: "action", aggregate: null, icon: "E", label: "Edit", color: "brand" },

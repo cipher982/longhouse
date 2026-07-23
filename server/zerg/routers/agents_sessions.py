@@ -1867,6 +1867,7 @@ async def get_session_events(
                 input_origin_map=input_origin_map,
                 tool_call_state_map=tool_call_state_map,
                 media_ref_map=media_ref_map,
+                provider=session.provider,
             )
             for e in events
         ],
@@ -2025,6 +2026,7 @@ async def get_session_projection(
                             input_origin_map=input_origin_map,
                             tool_call_state_map=tool_call_state_map,
                             media_ref_map=media_ref_map,
+                            provider=item.session.provider,
                         ),
                     )
                 )

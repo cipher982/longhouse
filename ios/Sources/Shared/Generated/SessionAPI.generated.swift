@@ -436,6 +436,42 @@ enum APIToolCallState: String, Codable, Hashable, Sendable, CaseIterable {
     case dropped = "dropped"
 }
 
+struct APIToolPresentationChildResponse: Codable, Hashable, Sendable {
+    let version: Int
+    let childId: String
+    let disposition: String
+    let toolName: String
+    let label: String
+    let icon: String
+    let color: String
+    let tier: String
+    let aggregate: String?
+    let mcpNamespace: String?
+    let toolInputJson: JSONValue?
+    let ruleId: String
+    let sourceSpan: [Int]?
+    let inputComplete: Bool?
+    let resultForwarded: Bool?
+}
+
+struct APIToolPresentationResponse: Codable, Hashable, Sendable {
+    let version: Int
+    let disposition: String
+    let toolName: String
+    let sourceToolName: String
+    let executionMethod: String?
+    let label: String
+    let icon: String
+    let color: String
+    let tier: String
+    let aggregate: String?
+    let mcpNamespace: String?
+    let toolInputJson: JSONValue?
+    let ruleId: String
+    let wrapperRecedes: Bool?
+    let children: [APIToolPresentationChildResponse]?
+}
+
 struct APIEventResponse: Codable, Hashable, Sendable {
     let id: JSONValue
     let role: String
@@ -448,6 +484,7 @@ struct APIEventResponse: Codable, Hashable, Sendable {
     let toolOutputTruncated: Bool?
     let toolOutputOriginalChars: Int?
     let toolCallId: String?
+    let toolPresentation: APIToolPresentationResponse?
     let timestamp: String
     let inActiveContext: Bool?
     let branchId: Int?

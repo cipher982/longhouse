@@ -1,6 +1,6 @@
 # Provider Automation Factory Epic
 
-**Status:** Proposed direction; implementation gated by the Phase 0 entry proof
+**Status:** Phases 0–2 implemented; Phase 3 remains conditional on measured churn
 **Owner:** Longhouse
 **Updated:** 2026-07-23
 **Scope:** Continuous provider discovery, control proof, transcript normalization,
@@ -64,6 +64,26 @@ Heavy machinery is earned separately:
 - automatic fixture minimization requires fixture volume that makes assisted
   extraction a material burden; and
 - candidate auto-promotion remains restricted to mechanically exact aliases.
+
+### Implementation result
+
+Phases 0–2 now run through one read-time presentation projector and one proof
+pipeline. Raw events remain unchanged; the API adds a disposable semantic
+projection consumed directly by web and iOS. Successful repetitive waits group,
+failed waits remain prominent, and receded Codex wrappers retain child
+provenance plus raw disclosure.
+
+The hermetic corpus covers all five declared providers. Native Codex archive
+discovery separately scans authorized history, fingerprints shapes without
+retaining values, accounts for call/result pairing, and reports incomplete or
+stale windows as Unknown. Hermetic evidence is explicitly synthetic and cannot
+mark discovery current. The universal harness now requires executable,
+per-action oracles for shape inventory, drift, conservation, projection,
+grouping, disclosure, and cross-surface parity.
+
+Phase 3 has not activated: the measured native Codex unknown rate is small
+enough that automatic rule mutation is not yet justified. Novel shapes are
+already emitted as privacy-safe fixture candidates for review.
 
 ## Product outcome
 

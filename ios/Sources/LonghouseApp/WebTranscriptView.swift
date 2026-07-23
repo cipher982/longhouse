@@ -417,7 +417,9 @@ struct WebTranscriptView: UIViewRepresentable {
         if toolName == "AskUserQuestion" {
             return askUserQuestionPayload(id: id, call: call, result: result)
         }
-        let resolved = ToolTiers.resolve(toolName)
+        let presentedToolName = TimelineBuilder.presentedToolName(call)
+        let resolved = ToolTiers.resolve(presentedToolName)
+        let presentation = call.toolPresentation
         let duration = result.flatMap { TimelineBuilder.durationSeconds(call: call, result: $0) }
             .map(TimelineBuilder.formatDuration)
         let status: String? = {
@@ -429,22 +431,52 @@ struct WebTranscriptView: UIViewRepresentable {
             case .none: return nil
             }
         }()
+        var presentationCalls = presentation?.children.map { child in
+            WebTranscriptToolCall(
+                title: child.label,
+                subtitle: child.toolName,
+                status: "parsed",
+                input: prettyJSONValue(child.toolInputValue),
+                rawInput: nil,
+                output: presentation?.wrapperRecedes == true ? truncatedOutput(result?.toolOutputText) : nil,
+                media: nil
+            )
+        } ?? []
+        if presentation?.wrapperRecedes == true {
+            presentationCalls.append(
+                WebTranscriptToolCall(
+                    title: "Raw enclosing \(presentation?.sourceToolName ?? toolName)",
+                    subtitle: "Provider evidence",
+                    status: "raw",
+                    input: nil,
+                    rawInput: prettyJSONValue(call.toolInputValue),
+                    output: nil,
+                    media: nil
+                )
+            )
+        }
 
         return WebTranscriptPayloadItem(
             id: id,
             kind: "tool",
             role: nil,
-            title: resolved.label,
+            title: presentation?.label ?? resolved.label,
             subtitle: TimelineBuilder.inputSummary(for: call),
             body: nil,
             fullBody: nil,
             collapsed: false,
             status: status,
             duration: duration,
-            input: prettyJSONValue(call.toolInputValue) ?? TimelineBuilder.inputSummary(for: call),
+            input: prettyJSONValue(
+                presentation?.wrapperRecedes == true
+                    ? presentation?.toolInputValue
+                    : call.toolInputValue
+            ) ?? TimelineBuilder.inputSummary(for: call),
             output: truncatedOutput(result?.toolOutputText),
-            calls: [],
-            origin: nil,
+            calls: presentationCalls,
+            origin: presentation?.disposition == "parsed"
+                ? "Parsed via \(presentation?.executionMethod ?? presentation?.sourceToolName ?? toolName)"
+                : nil,
             media: payloadMediaRefs(call.mediaRefs + (result?.mediaRefs ?? []), serverURL: serverURL)
         )
     }
@@ -463,6 +495,7 @@ struct WebTranscriptView: UIViewRepresentable {
                 subtitle: option.description ?? "",
                 status: "option",
                 input: nil,
+                rawInput: nil,
                 output: nil,
                 media: nil
             )
@@ -505,10 +538,18 @@ struct WebTranscriptView: UIViewRepresentable {
                 }
             }()
             return WebTranscriptToolCall(
-                title: ToolTiers.resolve(passive.call.toolName ?? "Tool").label,
+                title: passive.call.toolPresentation?.label
+                    ?? ToolTiers.resolve(TimelineBuilder.presentedToolName(passive.call)).label,
                 subtitle: TimelineBuilder.inputSummary(for: passive.call),
                 status: status,
-                input: prettyJSONValue(passive.call.toolInputValue) ?? TimelineBuilder.inputSummary(for: passive.call),
+                input: prettyJSONValue(
+                    passive.call.toolPresentation?.wrapperRecedes == true
+                        ? passive.call.toolPresentation?.toolInputValue
+                        : passive.call.toolInputValue
+                ) ?? TimelineBuilder.inputSummary(for: passive.call),
+                rawInput: passive.call.toolPresentation?.wrapperRecedes == true
+                    ? prettyJSONValue(passive.call.toolInputValue)
+                    : nil,
                 output: truncatedOutput(passive.result?.toolOutputText),
                 media: payloadMediaRefs(passive.call.mediaRefs + (passive.result?.mediaRefs ?? []), serverURL: serverURL)
             )
@@ -1193,6 +1234,7 @@ struct WebTranscriptToolCall: Encodable {
     let subtitle: String
     let status: String
     let input: String?
+    let rawInput: String?
     let output: String?
     let media: [WebTranscriptMediaRef]?
 }
@@ -1985,6 +2027,11 @@ private extension WebTranscriptView {
       const status = item.duration || item.status || '';
       const input = item.input ? '<div class="section-label">Input</div><pre><code>' + escapeHtml(item.input) + '</code></pre>' : '';
       const media = mediaStrip(item.media || []);
+      const provenance = (item.calls || []).map(call => {
+        const childInput = call.input ? '<pre><code>' + escapeHtml(call.input) + '</code></pre>' : '';
+        const rawInput = call.rawInput ? '<pre><code>' + escapeHtml(call.rawInput) + '</code></pre>' : '';
+        return '<details class="raw-disclosure"><summary>' + escapeHtml(call.title || 'Provider evidence') + '</summary>' + childInput + rawInput + '</details>';
+      }).join('');
       let output = '';
       if (item.output) {
         output = '<div class="section-label">Output</div><pre><code>' + escapeHtml(item.output) + '</code></pre>';
@@ -2000,7 +2047,7 @@ private extension WebTranscriptView {
             <span class="tool-subtitle">${escapeHtml(item.subtitle || '')}</span>
             <span class="tool-meta ${meta}">${escapeHtml(status)}</span>
           </summary>
-          <div class="details-body">${input}${output}${media}</div>
+          <div class="details-body">${input}${provenance}${output}${media}</div>
         </details>
       `;
     }
@@ -2011,13 +2058,14 @@ private extension WebTranscriptView {
       const earlierCount = Math.max(0, all.length - visibleLimit);
       const renderCall = (call) => {
         const input = call.input ? '<div class="section-label">Input</div><pre><code>' + escapeHtml(call.input) + '</code></pre>' : '';
+        const rawInput = call.rawInput ? '<details class="raw-disclosure"><summary>Raw enclosing wrapper</summary><pre><code>' + escapeHtml(call.rawInput) + '</code></pre></details>' : '';
         const output = call.output ? '<div class="section-label">Output</div><pre><code>' + escapeHtml(call.output) + '</code></pre>' : '';
         const media = mediaStrip(call.media || []);
         return `
           <div class="passive-call">
             <div class="passive-call-title">${escapeHtml(call.title || 'Tool')}</div>
             <div class="passive-call-subtitle">${escapeHtml(call.subtitle || '')}</div>
-            ${input}${output}${media}
+            ${input}${rawInput}${output}${media}
           </div>
         `;
       };

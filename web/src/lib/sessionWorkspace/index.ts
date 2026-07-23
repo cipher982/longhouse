@@ -33,6 +33,7 @@ export {
   formatExplorationSummary,
   formatToolInput,
   getPreferredSelectionKey,
+  getInteractionDisplayInfo,
   getToolDisplayInfo,
   getToolDuration,
   getToolExitCode,

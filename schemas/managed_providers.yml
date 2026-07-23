@@ -19,6 +19,14 @@ providers:
   - engine/src/codex_bridge.rs
   - engine/src/codex_exec.rs
   - engine/src/codex_ws_relay.rs
+  wire_families: [codex_jsonl, codex_app_server]
+  observation_sources: [native_archive, managed_bridge]
+  normalization_ruleset: codex
+  presentation_ruleset: shared_tool_presentation
+  proof_profiles: &factory_proof_profiles
+    pull_request: hermetic
+    release_candidate: staged_release
+    continuous: privacy_safe_live_replay
   launch_local: true
   run_once: true
   reattach: true
@@ -169,6 +177,11 @@ providers:
   adapter_sources:
   - server/zerg/services/shipper/hooks.py
   - engine/src/claude_print.rs
+  wire_families: [claude_jsonl, claude_hooks, claude_channel]
+  observation_sources: [native_archive, hooks, managed_bridge]
+  normalization_ruleset: claude
+  presentation_ruleset: shared_tool_presentation
+  proof_profiles: *factory_proof_profiles
   launch_local: true
   run_once: false
   reattach: true
@@ -353,6 +366,11 @@ providers:
   - server/zerg/mcp_server/server.py
   - engine/src/opencode_control.rs
   - engine/src/opencode_run.rs
+  wire_families: [opencode_storage, opencode_server_events]
+  observation_sources: [native_archive, managed_bridge]
+  normalization_ruleset: opencode
+  presentation_ruleset: shared_tool_presentation
+  proof_profiles: *factory_proof_profiles
   launch_local: true
   run_once: false
   reattach: true
@@ -540,6 +558,11 @@ providers:
   - server/zerg/cli/antigravity_channel.py
   - server/zerg/services/managed_local_control.py
   - engine/src/managed_antigravity_scan.rs
+  wire_families: [antigravity_conversations, antigravity_hooks]
+  observation_sources: [native_archive, hooks]
+  normalization_ruleset: antigravity
+  presentation_ruleset: shared_tool_presentation
+  proof_profiles: *factory_proof_profiles
   launch_local: true
   run_once: false
   reattach: false
@@ -670,6 +693,11 @@ providers:
   - server/zerg/services/managed_local_control.py
   - engine/src/cursor_helm_control.rs
   - engine/src/cursor_print.rs
+  wire_families: [cursor_agent_jsonl, cursor_helm]
+  observation_sources: [native_archive, managed_bridge]
+  normalization_ruleset: cursor
+  presentation_ruleset: shared_tool_presentation
+  proof_profiles: *factory_proof_profiles
   launch_local: true
   # Console launch is represented by turn_start.
   run_once: false

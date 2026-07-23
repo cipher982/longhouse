@@ -5390,6 +5390,8 @@ export interface components {
              * @description Cross-provider call/result linkage ID
              */
             tool_call_id?: string | null;
+            /** @description Versioned read-time tool presentation with raw-provider provenance */
+            tool_presentation?: components["schemas"]["ToolPresentationResponse"] | null;
             /**
              * Timestamp
              * Format: date-time
@@ -11120,6 +11122,99 @@ export interface components {
          * @enum {string}
          */
         ToolCallState: "running" | "completed" | "dropped";
+        /**
+         * ToolPresentationChildResponse
+         * @description One structurally recovered operation inside a provider wrapper.
+         */
+        ToolPresentationChildResponse: {
+            /** Version */
+            version: number;
+            /** Child Id */
+            child_id: string;
+            /**
+             * Disposition
+             * @enum {string}
+             */
+            disposition: "exact" | "parsed" | "generic" | "unknown" | "invalid";
+            /** Tool Name */
+            tool_name: string;
+            /** Label */
+            label: string;
+            /** Icon */
+            icon: string;
+            /** Color */
+            color: string;
+            /**
+             * Tier
+             * @enum {string}
+             */
+            tier: "noise" | "context" | "action";
+            /** Aggregate */
+            aggregate?: ("search" | "read" | "list" | "wait") | null;
+            /** Mcp Namespace */
+            mcp_namespace?: string | null;
+            /** Tool Input Json */
+            tool_input_json?: unknown;
+            /** Rule Id */
+            rule_id: string;
+            /** Source Span */
+            source_span?: number[];
+            /**
+             * Input Complete
+             * @default false
+             */
+            input_complete: boolean;
+            /**
+             * Result Forwarded
+             * @default false
+             */
+            result_forwarded: boolean;
+        };
+        /**
+         * ToolPresentationResponse
+         * @description Disposable read-time lens over an immutable provider tool event.
+         */
+        ToolPresentationResponse: {
+            /** Version */
+            version: number;
+            /**
+             * Disposition
+             * @enum {string}
+             */
+            disposition: "exact" | "parsed" | "generic" | "unknown" | "invalid";
+            /** Tool Name */
+            tool_name: string;
+            /** Source Tool Name */
+            source_tool_name: string;
+            /** Execution Method */
+            execution_method?: string | null;
+            /** Label */
+            label: string;
+            /** Icon */
+            icon: string;
+            /** Color */
+            color: string;
+            /**
+             * Tier
+             * @enum {string}
+             */
+            tier: "noise" | "context" | "action";
+            /** Aggregate */
+            aggregate?: ("search" | "read" | "list" | "wait") | null;
+            /** Mcp Namespace */
+            mcp_namespace?: string | null;
+            /** Tool Input Json */
+            tool_input_json?: unknown;
+            /** Rule Id */
+            rule_id: string;
+            /**
+             * Wrapper Recedes
+             * @default false
+             */
+            wrapper_recedes: boolean;
+            /** Children */
+            children?: components["schemas"]["ToolPresentationChildResponse"][];
+        };
         /**
          * TopAutomationUsage
          * @description Automation usage stats for user detail view.

@@ -3,11 +3,11 @@
   "id": "tool-translation-golden-v1",
   "description": "Synthetic, privacy-safe provider-shape evidence. Values are intentionally non-production.",
   "sources": [
-    { "id": "claude-golden", "provider": "claude", "wire_family": "claude-jsonl-v2", "path": "claude.jsonl" },
-    { "id": "codex-golden", "provider": "codex", "wire_family": "codex-response-item-v1", "path": "codex.jsonl" },
-    { "id": "cursor-golden", "provider": "cursor", "wire_family": "cursor-agent-stream-v1", "path": "cursor.jsonl" },
-    { "id": "opencode-golden", "provider": "opencode", "wire_family": "opencode-part-v1", "path": "opencode.jsonl" },
-    { "id": "antigravity-golden", "provider": "antigravity", "wire_family": "antigravity-message-v1", "path": "antigravity.jsonl" }
+    { "id": "claude-golden", "provider": "claude", "wire_family": "claude_jsonl", "path": "claude.jsonl" },
+    { "id": "codex-golden", "provider": "codex", "wire_family": "codex_jsonl", "path": "codex.jsonl" },
+    { "id": "cursor-golden", "provider": "cursor", "wire_family": "cursor_agent_jsonl", "path": "cursor.jsonl" },
+    { "id": "opencode-golden", "provider": "opencode", "wire_family": "opencode_storage", "path": "opencode.jsonl" },
+    { "id": "antigravity-golden", "provider": "antigravity", "wire_family": "antigravity_conversations", "path": "antigravity.jsonl" }
   ],
   "expected": {
     "source_events": 18,
@@ -16,7 +16,10 @@
     "results": 9,
     "logical_operations": 9,
     "paired": 9,
-    "exact": 8,
-    "unknown": 1
+    "exact": 7,
+    "parsed": 1,
+    "unknown": 1,
+    "inferred_children": 1,
+    "wrappers_retained": 0
   }
 }

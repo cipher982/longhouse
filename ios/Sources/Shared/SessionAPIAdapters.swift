@@ -279,12 +279,57 @@ extension APIEventResponse {
             toolOutputText: toolOutputText,
             toolCallId: toolCallId,
             toolCallState: toolCallState.flatMap { ToolCallState(rawValue: $0.rawValue) },
+            toolPresentation: toolPresentation?.sessionToolPresentation,
             timestamp: timestamp,
             inActiveContext: inActiveContext ?? true,
             isHeadBranch: isHeadBranch ?? true,
             inputOrigin: inputOrigin?.sessionInputOrigin,
             eventOrigin: eventOrigin,
             mediaRefs: mediaRefs?.map(\.sessionEventMediaRef) ?? []
+        )
+    }
+}
+
+private extension APIToolPresentationChildResponse {
+    var sessionToolPresentationChild: ToolPresentationChild {
+        ToolPresentationChild(
+            version: version,
+            childId: childId,
+            disposition: disposition,
+            toolName: toolName,
+            label: label,
+            icon: icon,
+            color: color,
+            tier: tier,
+            aggregate: aggregate,
+            mcpNamespace: mcpNamespace,
+            toolInputValue: toolInputJson,
+            ruleId: ruleId,
+            sourceSpan: sourceSpan ?? [],
+            inputComplete: inputComplete ?? false,
+            resultForwarded: resultForwarded ?? false
+        )
+    }
+}
+
+private extension APIToolPresentationResponse {
+    var sessionToolPresentation: ToolPresentation {
+        ToolPresentation(
+            version: version,
+            disposition: disposition,
+            toolName: toolName,
+            sourceToolName: sourceToolName,
+            executionMethod: executionMethod,
+            label: label,
+            icon: icon,
+            color: color,
+            tier: tier,
+            aggregate: aggregate,
+            mcpNamespace: mcpNamespace,
+            toolInputValue: toolInputJson,
+            ruleId: ruleId,
+            wrapperRecedes: wrapperRecedes ?? false,
+            children: children?.map(\.sessionToolPresentationChild) ?? []
         )
     }
 }

@@ -16,6 +16,7 @@ final class TimelineBuilderTests: XCTestCase {
         output: String? = nil,
         callId: String? = nil,
         toolCallState: ToolCallState? = nil,
+        toolPresentation: ToolPresentation? = nil,
         ts: String = "2026-04-18T18:00:00Z"
     ) -> SessionEvent {
         SessionEvent(
@@ -27,11 +28,52 @@ final class TimelineBuilderTests: XCTestCase {
             toolOutputText: output,
             toolCallId: callId,
             toolCallState: toolCallState,
+            toolPresentation: toolPresentation,
             timestamp: ts,
             inActiveContext: true,
             isHeadBranch: true,
             inputOrigin: nil
         )
+    }
+
+    func testCodexPollingWrappersBecomeOneWaitGroup() {
+        let presentation = ToolPresentation(
+            version: 1,
+            disposition: "parsed",
+            toolName: "write_stdin",
+            sourceToolName: "exec",
+            executionMethod: "exec",
+            label: "Wait",
+            icon: "…",
+            color: "tertiary",
+            tier: "noise",
+            aggregate: "wait",
+            mcpNamespace: nil,
+            toolInputValue: .object(["session_id": .int(42), "chars": .string("")]),
+            ruleId: "codex:exec:single-child:v1",
+            wrapperRecedes: true,
+            children: []
+        )
+        var events: [SessionEvent] = []
+        for index in 0..<6 {
+            let callId = "wait-\(index)"
+            events.append(event(id: index * 2 + 1, role: "assistant", tool: "exec", callId: callId, toolPresentation: presentation))
+            events.append(event(id: index * 2 + 2, role: "tool", output: "still running", callId: callId))
+        }
+
+        let items = TimelineBuilder.build(events: events)
+
+        XCTAssertEqual(items.count, 1)
+        guard case .passiveGroup(let calls) = items[0] else { return XCTFail("expected wait group") }
+        XCTAssertEqual(calls.count, 6)
+        XCTAssertEqual(TimelineBuilder.explorationSummary(for: calls), "Waited 6")
+        let failed = event(
+            id: 99,
+            role: "tool",
+            output: "Process exited with code 1\nOutput:\nfailed",
+            callId: "wait-0"
+        )
+        XCTAssertFalse(TimelineBuilder.isExplorationEligible(call: events[0], result: failed, pairing: .id))
     }
 
     func testPairsAssistantToolWithResultByCallId() {

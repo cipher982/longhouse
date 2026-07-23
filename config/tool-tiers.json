@@ -9,6 +9,7 @@
     "search": "Grep/find/codebase search-style calls. Join consecutive exploration runs.",
     "read": "File reads. Singleton stays context one-liner; 2+ with other eligible calls join a run.",
     "list": "Directory/glob listing. Join consecutive exploration runs.",
+    "wait": "Successful polling/wait calls. Join consecutive wait runs.",
     "null": "Never joins an exploration run (web provenance, mutations, MCP default, unknown)."
   },
   "default_tier": "action",
@@ -47,7 +48,7 @@
     "str_replace_editor":{ "tier": "action", "aggregate": null,     "icon": "E", "label": "edit",      "color": "brand" },
     "update_plan":      { "tier": "action",  "aggregate": null,     "icon": "+", "label": "plan",      "color": "accent" },
     "exec":             { "tier": "action",  "aggregate": null,     "icon": "$", "label": "exec",      "color": "warning" },
-    "wait":             { "tier": "action",  "aggregate": null,     "icon": "…", "label": "Wait",      "color": "tertiary" },
+    "wait":             { "tier": "noise",   "aggregate": "wait", "icon": "…", "label": "Wait",      "color": "tertiary" },
     "request_user_input": { "tier": "action", "aggregate": null,    "icon": "?", "label": "Question",  "color": "accent" },
     "ReadFile":         { "tier": "context", "aggregate": "read",   "icon": "R", "label": "Read",      "color": "cyan" },
     "StrReplace":       { "tier": "action",  "aggregate": null,     "icon": "E", "label": "Edit",      "color": "brand" },

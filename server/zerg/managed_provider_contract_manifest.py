@@ -30,7 +30,16 @@ _REQUIRED_BOOL_FIELDS = (
     "can_resume",
     "turn_start",
 )
-_STRING_LIST_FIELDS = ("control_plane_aliases", "machine_control_supports", "adapter_sources")
+_STRING_LIST_FIELDS = (
+    "control_plane_aliases",
+    "machine_control_supports",
+    "adapter_sources",
+    "wire_families",
+    "observation_sources",
+)
+_FACTORY_STRING_FIELDS = ("normalization_ruleset", "presentation_ruleset")
+_PROOF_PROFILE_NAMES = frozenset({"pull_request", "release_candidate", "continuous"})
+_PROOF_PROFILE_VALUES = frozenset({"hermetic", "staged_release", "privacy_safe_live_replay"})
 _OPERATION_EVIDENCE_FIELDS = (
     "launch_local",
     "run_once",
@@ -211,6 +220,22 @@ def _validate_capabilities(item: dict[str, Any]) -> None:
                 raise ValueError(f"{prefix}.required_assertions max_age_seconds must be positive")
 
 
+def _validate_factory_contract(item: dict[str, Any]) -> None:
+    provider = str(item.get("provider") or "<unknown>")
+    for field in _FACTORY_STRING_FIELDS:
+        _validate_string_field(item, field)
+    proof_profiles = item.get("proof_profiles")
+    if not isinstance(proof_profiles, dict):
+        raise ValueError(f"managed provider contract {provider}: proof_profiles must be an object")
+    if set(proof_profiles) != _PROOF_PROFILE_NAMES:
+        raise ValueError(f"managed provider contract {provider}: proof_profiles must contain exactly " f"{sorted(_PROOF_PROFILE_NAMES)}")
+    for name, value in proof_profiles.items():
+        if value not in _PROOF_PROFILE_VALUES:
+            raise ValueError(
+                f"managed provider contract {provider}: proof_profiles.{name} must be one of " f"{sorted(_PROOF_PROFILE_VALUES)}"
+            )
+
+
 def _validate_capability_string(prefix: str, payload: dict[str, Any], field: str) -> None:
     if not isinstance(payload.get(field), str) or not str(payload[field]).strip():
         raise ValueError(f"{prefix}.{field} must be a non-empty string")
@@ -246,6 +271,7 @@ def _validated_contract_items(payload: dict[str, Any]) -> list[dict[str, Any]]:
         _validate_operation_evidence(item)
         _validate_machine_control_supports(item)
         _validate_capabilities(item)
+        _validate_factory_contract(item)
         items.append(deepcopy(item))
     return items
 

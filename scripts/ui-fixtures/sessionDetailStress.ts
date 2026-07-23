@@ -30,9 +30,10 @@ type AgentEvent = {
   role: string;
   content_text: string | null;
   tool_name: string | null;
-  tool_input_json: JsonObject | null;
+  tool_input_json: unknown;
   tool_output_text: string | null;
   tool_call_id: string | null;
+  tool_presentation?: JsonObject | null;
   timestamp: string;
   in_active_context?: boolean;
   branch_id?: number | null;
@@ -239,6 +240,26 @@ function toolOutput(exitCode: number, wallTime: string, output: string): string 
     "Output:",
     output,
   ].join("\n");
+}
+
+function codexWaitPresentation(sessionId: number): JsonObject {
+  return {
+    version: 1,
+    disposition: "parsed",
+    tool_name: "write_stdin",
+    source_tool_name: "exec",
+    execution_method: "exec",
+    label: "Wait",
+    icon: "…",
+    color: "tertiary",
+    tier: "noise",
+    aggregate: "wait",
+    mcp_namespace: null,
+    tool_input_json: { session_id: sessionId, chars: "", yield_time_ms: 30000 },
+    rule_id: "codex:exec:single-child:v1",
+    wrapper_recedes: true,
+    children: [],
+  };
 }
 
 const MEDIA_REF_FIXTURE_IMAGE =
@@ -605,6 +626,19 @@ export function buildSessionDetailStressFixture(): {
       },
       tool_call_id: "head-tool-5",
     }),
+    ...Array.from({ length: 6 }, (_, index) => [
+      makeEvent(220 + index * 2, "assistant", `2026-04-15T16:12:${String(index * 2).padStart(2, "0")}Z`, {
+        tool_name: "exec",
+        tool_input_json: `const r=await tools.write_stdin({session_id:87859,chars:"",yield_time_ms:30000}); text(r);`,
+        tool_call_id: `head-wait-${index}`,
+        tool_presentation: codexWaitPresentation(87859),
+      }),
+      makeEvent(221 + index * 2, "tool", `2026-04-15T16:12:${String(index * 2 + 1).padStart(2, "0")}Z`, {
+        tool_name: "exec",
+        tool_output_text: "Script still running",
+        tool_call_id: `head-wait-${index}`,
+      }),
+    ]).flat(),
   ];
 
   const items: AgentSessionProjectionItem[] = [

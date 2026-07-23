@@ -60,6 +60,7 @@ final class SharedProjectionFixtureTests: XCTestCase {
             "session-action-interrupt.json",
             "exploration-run-web-breaks.json",
             "parallel-tool-id-pairing.json",
+            "codex-wrapper-presentation.json",
         ] {
             let fixture = try loadFixture(fixtureName)
             let items = TimelineBuilder.build(items: fixture.projection.items)

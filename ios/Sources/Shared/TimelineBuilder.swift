@@ -74,17 +74,45 @@ enum LonghouseDateParser {
 }
 
 enum TimelineBuilder {
+    static func presentedToolName(_ event: SessionEvent) -> String {
+        event.toolPresentation?.toolName ?? event.toolName ?? "Tool"
+    }
+
+    static func presentationAggregate(_ event: SessionEvent) -> ToolAggregate? {
+        if let raw = event.toolPresentation?.aggregate, let aggregate = ToolAggregate(rawValue: raw) {
+            return aggregate
+        }
+        return ToolTiers.aggregate(presentedToolName(event))
+    }
+
+    static func presentedToolInputString(_ event: SessionEvent, _ key: String) -> String? {
+        if let toolInput = event.toolPresentation?.toolInputValue,
+           case .object(let value) = toolInput {
+            switch value[key] {
+            case .string(let text): return text
+            case .int(let number): return String(number)
+            case .double(let number): return String(number)
+            case .bool(let value): return String(value)
+            case .array, .object, .null, .none: break
+            }
+        }
+        return event.toolInputString(key)
+    }
+
     /// Exploration-eligible tools may join consecutive `.passiveGroup` rows.
     /// Eligibility comes from `ToolTiers.aggregate`, not display tier — so
     /// completed Reads can join Greps while singleton Reads stay individual.
     static func isExplorationEligible(call: SessionEvent, result: SessionEvent?, pairing: ToolPairing) -> Bool {
-        guard let toolName = call.toolName, !toolName.isEmpty else { return false }
-        guard ToolTiers.aggregate(toolName) != nil || shellSalience(call: call, result: result) != nil else {
+        guard !(presentedToolName(call)).isEmpty else { return false }
+        guard presentationAggregate(call) != nil || shellSalience(call: call, result: result) != nil else {
             return false
         }
         guard pairing == .id || pairing == .fifo else { return false }
         guard result != nil else { return false }
         if call.toolCallState == .dropped || call.toolCallState == .running {
+            return false
+        }
+        if let exit = ShellSalienceClassifier.parseExitCode(result?.toolOutputText), exit != 0 {
             return false
         }
         return true
@@ -95,11 +123,12 @@ enum TimelineBuilder {
     /// exploration runs. Nonzero exits never demote — errors stay full-size.
     /// Mirrors web `getShellSalience` in timelineModel.ts.
     static func shellSalience(call: SessionEvent, result: SessionEvent?) -> ShellSalience? {
-        guard let toolName = call.toolName, ShellSalienceClassifier.isShellTool(toolName) else { return nil }
+        let toolName = presentedToolName(call)
+        guard ShellSalienceClassifier.isShellTool(toolName) else { return nil }
         guard let result else { return nil }
         if call.toolCallState == .dropped || call.toolCallState == .running { return nil }
         if let exit = ShellSalienceClassifier.parseExitCode(result.toolOutputText), exit != 0 { return nil }
-        let command = call.toolInputString("command") ?? call.toolInputString("cmd")
+        let command = presentedToolInputString(call, "command") ?? presentedToolInputString(call, "cmd")
         return ShellSalienceClassifier.classify(command)
     }
 
@@ -108,13 +137,15 @@ enum TimelineBuilder {
         var searched = 0
         var read = 0
         var listed = 0
+        var waited = 0
         for call in calls {
             let aggregate = shellSalience(call: call.call, result: call.result)?.aggregate
-                ?? ToolTiers.aggregate(call.call.toolName ?? "")
+                ?? presentationAggregate(call.call)
             switch aggregate {
             case .search: searched += 1
             case .read: read += 1
             case .list: listed += 1
+            case .wait: waited += 1
             case .none: break
             }
         }
@@ -122,6 +153,7 @@ enum TimelineBuilder {
         if searched > 0 { parts.append("Searched \(searched)") }
         if read > 0 { parts.append("Read \(read)") }
         if listed > 0 { parts.append("Listed \(listed)") }
+        if waited > 0 { parts.append("Waited \(waited)") }
         return parts.joined(separator: " · ")
     }
 
@@ -276,29 +308,33 @@ enum TimelineBuilder {
 
     /// Extract a one-line human summary from a tool call's input JSON.
     static func inputSummary(for event: SessionEvent) -> String {
-        guard let tool = event.toolName else { return "" }
+        let tool = presentedToolName(event)
+        if let children = event.toolPresentation?.children, !children.isEmpty,
+           event.toolPresentation?.wrapperRecedes != true {
+            return "contains " + children.map(\.label).joined(separator: " · ")
+        }
         switch tool {
-        case "Bash":
-            if let cmd = event.toolInputString("command") {
+        case "Bash", "shell", "shell_command", "exec_command", "run_shell_command":
+            if let cmd = presentedToolInputString(event, "command") ?? presentedToolInputString(event, "cmd") {
                 return cmd.split(whereSeparator: \.isNewline).first.map(String.init) ?? cmd
             }
             return ""
         case "Grep":
-            return event.toolInputString("pattern") ?? ""
+            return presentedToolInputString(event, "pattern") ?? ""
         case "Glob":
-            return event.toolInputString("pattern") ?? ""
+            return presentedToolInputString(event, "pattern") ?? ""
         case "Read", "Edit", "Write", "NotebookEdit":
-            if let path = event.toolInputString("file_path") {
+            if let path = presentedToolInputString(event, "file_path") ?? presentedToolInputString(event, "path") {
                 return (path as NSString).lastPathComponent
             }
             return ""
         case "Task":
-            if let prompt = event.toolInputString("prompt") {
+            if let prompt = presentedToolInputString(event, "prompt") {
                 return prompt.split(whereSeparator: \.isNewline).first.map(String.init) ?? prompt
             }
-            return event.toolInputString("description") ?? ""
+            return presentedToolInputString(event, "description") ?? ""
         case "WebFetch", "WebSearch":
-            return event.toolInputString("url") ?? event.toolInputString("query") ?? ""
+            return presentedToolInputString(event, "url") ?? presentedToolInputString(event, "query") ?? ""
         default:
             return ""
         }

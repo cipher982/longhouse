@@ -662,6 +662,7 @@ def _build_projection_response(
                         tool_call_state_map=tool_call_state_map,
                         media_ref_map=media_ref_map,
                         mobile_payload=mobile_payload,
+                        provider=item.session.provider,
                     ),
                 )
             )

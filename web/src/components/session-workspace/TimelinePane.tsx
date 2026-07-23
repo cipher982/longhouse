@@ -16,7 +16,7 @@ import {
   formatToolInput,
   formatTime,
   getTimelineMessagePreview,
-  getToolDisplayInfo,
+  getInteractionDisplayInfo,
   getToolDuration,
   getToolExitCode,
   getToolInputRecord,
@@ -455,8 +455,10 @@ function ToolDetail({
   renderMedia: boolean;
 }) {
   const rawInput = interaction.callEvent?.tool_input_json;
-  const inputRecord = getToolInputRecord(rawInput);
-  const inputText = formatToolInput(rawInput);
+  const presentation = interaction.presentation;
+  const presentedInput = presentation?.wrapper_recedes ? presentation.tool_input_json : rawInput;
+  const inputRecord = getToolInputRecord(presentedInput);
+  const inputText = formatToolInput(presentedInput);
   const editPatch = editPatchFromInput(inputRecord);
   const hasInput = inputRecord
     ? Object.keys(inputRecord).length > 0
@@ -473,6 +475,21 @@ function ToolDetail({
 
   return (
     <div className="tl-detail">
+      {presentation?.disposition === "parsed" ? (
+        <section className="tl-detail__block" data-testid="tool-presentation-provenance">
+          <div className="tl-detail__label">
+            Parsed structure · via {presentation.execution_method || presentation.source_tool_name}
+          </div>
+          {(presentation.children ?? []).map((child, index) => (
+            <div className="tl-detail__empty" key={`${child.rule_id}:${index}`}>
+              <strong>{child.label}</strong>
+              {child.tool_name !== child.label ? ` · ${child.tool_name}` : ""}
+              {child.tool_input_json != null ? ` · ${(formatToolInput(child.tool_input_json) || "").replace(/\n/g, " ").slice(0, 180)}` : ""}
+              {presentation.wrapper_recedes ? "" : " · result remains attributed to the enclosing wrapper"}
+            </div>
+          ))}
+        </section>
+      ) : null}
       {editPatch ? (
         <EditDiffView patch={editPatch} />
       ) : hasInput ? (
@@ -507,6 +524,12 @@ function ToolDetail({
         )}
         <MediaStrip mediaRefs={mediaRefs} variant="tool" />
       </section>
+      {presentation?.wrapper_recedes && rawInput != null ? (
+        <section className="tl-detail__block">
+          <div className="tl-detail__label">raw enclosing {presentation.source_tool_name}</div>
+          <CodeBlock text={formatToolInput(rawInput) || ""} language="javascript" variant="input" />
+        </section>
+      ) : null}
     </div>
   );
 }
@@ -528,7 +551,7 @@ function ActionCard({
   onToggleExpand: () => void;
   renderMedia: boolean;
 }) {
-  const info = getToolDisplayInfo(interaction.toolName);
+  const info = getInteractionDisplayInfo(interaction);
   const summary = getToolSummary(interaction);
   const exitCode = getToolExitCode(interaction);
   const duration = getToolDuration(interaction.callEvent, interaction.resultEvent);
@@ -617,7 +640,7 @@ function ContextLine({
   onToggleExpand: () => void;
   renderMedia: boolean;
 }) {
-  const info = getToolDisplayInfo(interaction.toolName);
+  const info = getInteractionDisplayInfo(interaction);
   const summary = getToolSummary(interaction);
   const duration = getToolDuration(interaction.callEvent, interaction.resultEvent);
   const dropped = isToolInteractionDropped(interaction);
@@ -748,7 +771,7 @@ function NoiseChip({
             </button>
           ) : null}
           {visibleInteractions.map((interaction) => {
-            const info = getToolDisplayInfo(interaction.toolName);
+            const info = getInteractionDisplayInfo(interaction);
             const sum = getToolSummary(interaction);
             const isOpen = expandedInteractionKey === interaction.key;
             return (

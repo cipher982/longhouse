@@ -17,6 +17,7 @@ import {
   toolTier,
   type ResolvedToolInfo,
   type ToolAggregate,
+  type ToolColorToken,
   type ToolTier,
 } from "./toolTiers.generated";
 import { classifyShellCommand, isShellTool, type ShellSalience } from "./shellSalience";
@@ -24,11 +25,12 @@ import { classifyShellCommand, isShellTool, type ShellSalience } from "./shellSa
 /** Latest completed exploration calls shown when a run is expanded. */
 export const EXPLORATION_OVERFLOW_VISIBLE = 8;
 
-const AGGREGATE_SUMMARY_ORDER: ToolAggregate[] = ["search", "read", "list"];
+const AGGREGATE_SUMMARY_ORDER: ToolAggregate[] = ["search", "read", "list", "wait"];
 const AGGREGATE_SUMMARY_LABEL: Record<ToolAggregate, string> = {
   search: "Searched",
   read: "Read",
   list: "Listed",
+  wait: "Waited",
 };
 
 export function isOutsideActiveContext(event: AgentEvent | null | undefined): boolean {
@@ -37,6 +39,14 @@ export function isOutsideActiveContext(event: AgentEvent | null | undefined): bo
 
 export function isAgentToolInteraction(interaction: ToolInteraction): boolean {
   return interaction.toolName.toLowerCase() === "agent";
+}
+
+function interactionInput(interaction: ToolInteraction): unknown {
+  return interaction.presentation?.tool_input_json ?? interaction.callEvent?.tool_input_json;
+}
+
+function interactionAggregate(interaction: ToolInteraction): ToolAggregate | null {
+  return interaction.presentation?.aggregate ?? toolAggregate(interaction.toolName);
 }
 
 /**
@@ -48,7 +58,8 @@ export function isAgentToolInteraction(interaction: ToolInteraction): boolean {
  */
 const shellSalienceCache = new WeakMap<ToolInteraction, ShellSalience | null>();
 export function getShellSalience(interaction: ToolInteraction): ShellSalience | null {
-  if (!isShellTool(interaction.toolName)) return null;
+  const presentedToolName = interaction.presentation?.tool_name ?? interaction.toolName;
+  if (!isShellTool(presentedToolName)) return null;
   const cached = shellSalienceCache.get(interaction);
   if (cached !== undefined) return cached;
   let result: ShellSalience | null = null;
@@ -61,8 +72,9 @@ export function getShellSalience(interaction: ToolInteraction): ShellSalience | 
   ) {
     const exitCode = getToolExitCode(interaction);
     if (exitCode == null || exitCode === 0) {
-      const input = interaction.callEvent?.tool_input_json
-        ? getToolInputRecord(interaction.callEvent.tool_input_json)
+      const projectedInput = interactionInput(interaction);
+      const input = projectedInput
+        ? getToolInputRecord(projectedInput)
         : null;
       const command = input ? (input.command ?? input.cmd) : null;
       result = classifyShellCommand(command);
@@ -73,26 +85,28 @@ export function getShellSalience(interaction: ToolInteraction): ShellSalience | 
 }
 
 export function getToolTier(interaction: ToolInteraction): ToolTier {
-  return getShellSalience(interaction)?.tier ?? toolTier(interaction.toolName);
+  return getShellSalience(interaction)?.tier ?? interaction.presentation?.tier ?? toolTier(interaction.toolName);
 }
 
 /** Completed calls with an explicit aggregate category may join exploration runs. */
 export function isExplorationEligible(interaction: ToolInteraction): boolean {
-  if (toolAggregate(interaction.toolName) == null && getShellSalience(interaction) == null) {
+  if (interactionAggregate(interaction) == null && getShellSalience(interaction) == null) {
     return false;
   }
   if (interaction.pairing === "orphan" || interaction.pairing === "pending") return false;
   if (!interaction.resultEvent) return false;
   if (isToolInteractionDropped(interaction) || isToolInteractionRunning(interaction)) return false;
+  const exitCode = getToolExitCode(interaction);
+  if (exitCode != null && exitCode !== 0) return false;
   return true;
 }
 
 /** Header copy: `Searched 5 · Read 14 · Listed 1` (omit zero categories). */
 export function formatExplorationSummary(interactions: ToolInteraction[]): string {
-  const counts: Record<ToolAggregate, number> = { search: 0, read: 0, list: 0 };
+  const counts: Record<ToolAggregate, number> = { search: 0, read: 0, list: 0, wait: 0 };
   for (const interaction of interactions) {
     const category =
-      getShellSalience(interaction)?.aggregate ?? toolAggregate(interaction.toolName);
+      getShellSalience(interaction)?.aggregate ?? interactionAggregate(interaction);
     if (category) counts[category] += 1;
   }
   return AGGREGATE_SUMMARY_ORDER.filter((category) => counts[category] > 0)
@@ -128,6 +142,24 @@ export function getToolDisplayInfo(toolName: string): {
     displayName: info.label,
     mcpNamespace: info.mcpNamespace,
     tier: info.tier,
+  };
+}
+
+export function getInteractionDisplayInfo(interaction: ToolInteraction): {
+  icon: string;
+  color: string;
+  displayName: string;
+  mcpNamespace?: string;
+  tier: ToolTier;
+} {
+  const presentation = interaction.presentation;
+  if (!presentation) return getToolDisplayInfo(interaction.toolName);
+  return {
+    icon: presentation.icon,
+    color: colorTokenToCss(presentation.color as ToolColorToken),
+    displayName: presentation.label,
+    mcpNamespace: presentation.mcp_namespace ?? undefined,
+    tier: presentation.tier,
   };
 }
 
@@ -347,9 +379,15 @@ export function getToolDuration(callEvent: AgentEvent | null, resultEvent: Agent
 export function getToolSummary(interaction: ToolInteraction): string {
   const { callEvent, resultEvent } = interaction;
 
-  if (callEvent?.tool_input_json) {
-    const input = getToolInputRecord(callEvent.tool_input_json);
-    if (!input) return (formatToolInput(callEvent.tool_input_json) ?? "").slice(0, 120).replace(/\n/g, " ");
+  const children = interaction.presentation?.children ?? [];
+  if (children.length > 0 && !interaction.presentation?.wrapper_recedes) {
+    return `contains ${children.map((child) => child.label).join(" · ")}`;
+  }
+
+  const projectedInput = interactionInput(interaction);
+  if (projectedInput) {
+    const input = getToolInputRecord(projectedInput);
+    if (!input) return (formatToolInput(projectedInput) ?? "").slice(0, 120).replace(/\n/g, " ");
     if ("description" in input && "prompt" in input) return String(input.description).slice(0, 120);
     if ("file_path" in input) return truncatePath(String(input.file_path));
     if ("command" in input) return String(input.command).slice(0, 120);
@@ -400,6 +438,7 @@ export function buildTimelineModel(projectionItems: AgentSessionProjectionItem[]
         pairing: event.tool_call_id ? "id" : "pending",
         anchorId: event.id,
         timestamp: event.timestamp,
+        presentation: event.tool_presentation ?? null,
       };
 
       byCallEventId.set(event.id, interaction);
@@ -482,6 +521,7 @@ export function buildTimelineModel(projectionItems: AgentSessionProjectionItem[]
         pairing: "orphan",
         anchorId: event.id,
         timestamp: event.timestamp,
+        presentation: null,
       };
       items.push({ kind: "tool", interaction });
       toolItems.push(interaction);

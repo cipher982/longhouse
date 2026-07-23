@@ -90,6 +90,63 @@ describe("exploration run helpers", () => {
 });
 
 describe("exploration run integration", () => {
+  it("replaces Codex polling wrappers with one concise wait group", () => {
+    const waitPresentation = {
+      version: 1,
+      disposition: "parsed" as const,
+      tool_name: "write_stdin",
+      source_tool_name: "exec",
+      execution_method: "exec",
+      label: "Wait",
+      icon: "…",
+      color: "tertiary",
+      tier: "noise" as const,
+      aggregate: "wait" as const,
+      mcp_namespace: null,
+      tool_input_json: { session_id: 42, chars: "" },
+      rule_id: "codex:exec:single-child:v1",
+      wrapper_recedes: true,
+      children: [],
+    };
+    const events: AgentEvent[] = [];
+    for (let index = 0; index < 6; index += 1) {
+      const callId = `wait-${index}`;
+      events.push(
+        event({
+          id: index * 2 + 1,
+          role: "assistant",
+          tool_name: "exec",
+          tool_call_id: callId,
+          tool_input_json: "const r=await tools.write_stdin(...); text(r);",
+          tool_presentation: waitPresentation,
+          timestamp: `2026-01-01T00:00:${String(index * 2).padStart(2, "0")}Z`,
+        }),
+        event({
+          id: index * 2 + 2,
+          role: "tool",
+          tool_call_id: callId,
+          tool_output_text: "still running",
+          timestamp: `2026-01-01T00:00:${String(index * 2 + 1).padStart(2, "0")}Z`,
+        }),
+      );
+    }
+
+    const model = buildTimelineModel(projection(events));
+
+    expect(model.items).toHaveLength(1);
+    expect(model.items[0].kind).toBe("noise_group");
+    expect(formatExplorationSummary(model.noiseGroups[0].interactions)).toBe("Waited 6");
+
+    const failed = model.noiseGroups[0].interactions[0];
+    failed.resultEvent = event({
+      id: 99,
+      role: "tool",
+      tool_output_text: "Process exited with code 1\nOutput:\nfailed",
+      timestamp: "2026-01-01T00:01:00Z",
+    });
+    expect(isExplorationEligible(failed)).toBe(false);
+  });
+
   it("collapses Read+Grep bursts and keeps Edit primary", () => {
     const model = buildTimelineModel(
       projection([

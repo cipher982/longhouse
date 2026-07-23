@@ -11,11 +11,18 @@ import hashlib
 import json
 from collections import Counter
 from collections import defaultdict
+from datetime import datetime
+from datetime import timezone
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
+
+from zerg.services.managed_provider_contracts import contract_for_provider
+from zerg.services.tool_presentation import project_tool_presentation
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_RULES_PATH = REPO_ROOT / "config" / "tool-tiers.json"
+PROOF_PROFILES = frozenset({"hermetic", "staged_release", "privacy_safe_live_replay"})
 
 
 class TranslationEvaluationError(ValueError):
@@ -83,17 +90,16 @@ def _load_records(path: Path) -> list[dict[str, Any]]:
     return records
 
 
-def _rule_lookup(rules: dict[str, Any]) -> set[str]:
-    return {str(name).lower() for name in (rules.get("tools") or {})}
-
-
-def _is_exact(tool_name: str, native: set[str]) -> bool:
-    return tool_name.lower() in native or tool_name.startswith("mcp__")
-
-
-def evaluate_manifest(manifest_path: Path, *, rules_path: Path = DEFAULT_RULES_PATH) -> dict[str, Any]:
+def evaluate_manifest(
+    manifest_path: Path,
+    *,
+    rules_path: Path = DEFAULT_RULES_PATH,
+    profile: str = "hermetic",
+) -> dict[str, Any]:
     """Evaluate one manifest without mutating its sources or repository state."""
 
+    if profile not in PROOF_PROFILES:
+        raise TranslationEvaluationError(f"unknown proof profile: {profile}")
     manifest_path = manifest_path.resolve()
     manifest = _load_json(manifest_path)
     if manifest.get("version") != 1:
@@ -102,8 +108,7 @@ def evaluate_manifest(manifest_path: Path, *, rules_path: Path = DEFAULT_RULES_P
     if not isinstance(sources, list) or not sources:
         raise TranslationEvaluationError("manifest must contain at least one source")
 
-    rules = _load_json(rules_path.resolve())
-    native_tools = _rule_lookup(rules)
+    _load_json(rules_path.resolve())
     rules_hash = hashlib.sha256(rules_path.resolve().read_bytes()).hexdigest()[:16]
 
     totals: Counter[str] = Counter()
@@ -126,6 +131,15 @@ def evaluate_manifest(manifest_path: Path, *, rules_path: Path = DEFAULT_RULES_P
         relative_path = str(source.get("path") or "").strip()
         if not source_id or not provider or not wire_family or not relative_path:
             raise TranslationEvaluationError("source id, provider, wire_family, and path are required")
+        contract = contract_for_provider(provider)
+        if contract is None:
+            raise TranslationEvaluationError(f"{source_id}: provider has no managed contract: {provider}")
+        if wire_family not in contract.wire_families:
+            raise TranslationEvaluationError(f"{source_id}: wire family {wire_family!r} is not declared for {provider}")
+        if contract.presentation_ruleset != "shared_tool_presentation":
+            raise TranslationEvaluationError(f"{source_id}: unsupported presentation ruleset {contract.presentation_ruleset!r}")
+        if profile not in contract.proof_profiles.values():
+            raise TranslationEvaluationError(f"{source_id}: proof profile {profile!r} is not declared for {provider}")
         records = _load_records((manifest_path.parent / relative_path).resolve())
         for record_index, record in enumerate(records):
             totals["source_events"] += 1
@@ -178,7 +192,6 @@ def evaluate_manifest(manifest_path: Path, *, rules_path: Path = DEFAULT_RULES_P
                     continue
                 if tool_name:
                     totals["outer_calls"] += 1
-                    totals["logical_operations"] += 1
                     by_provider[provider]["outer_calls"] += 1
                     consequence = str(event.get("consequence") or "unknown")
                     consequence_slices[consequence] += 1
@@ -186,12 +199,35 @@ def evaluate_manifest(manifest_path: Path, *, rules_path: Path = DEFAULT_RULES_P
                         call_slots[(provider, session_id, call_id)].append(event_id)
                     else:
                         totals["orphan_calls"] += 1
-                    if _is_exact(tool_name, native_tools):
-                        totals["exact"] += 1
-                        by_provider[provider]["exact"] += 1
+                    presentation = project_tool_presentation(
+                        tool_name,
+                        event.get("tool_input_json"),
+                        provider=provider,
+                        rules_path=rules_path.resolve(),
+                    )
+                    disposition = str((presentation or {}).get("disposition") or "unknown")
+                    children = list((presentation or {}).get("children") or [])
+                    totals[disposition] += 1
+                    by_provider[provider][disposition] += 1
+                    if children:
+                        totals["logical_operations"] += len(children)
+                        totals["inferred_children"] += len(children)
+                        by_provider[provider]["inferred_children"] += len(children)
+                        if not bool((presentation or {}).get("wrapper_recedes")):
+                            totals["wrappers_retained"] += 1
+                            by_provider[provider]["wrappers_retained"] += 1
+                        for child in children:
+                            child_disposition = str(child.get("disposition") or "unknown")
+                            totals[f"child_{child_disposition}"] += 1
+                            by_provider[provider][f"child_{child_disposition}"] += 1
+                            if child_disposition == "unknown":
+                                signature = _shape_token(child.get("tool_input_json"))
+                                unknown = unknowns[(provider, str(child.get("tool_name") or "unknown"), signature)]
+                                unknown["count"] += 1
+                                unknown["with_result_id"] += 0
                     else:
-                        totals["unknown"] += 1
-                        by_provider[provider]["unknown"] += 1
+                        totals["logical_operations"] += 1
+                    if disposition == "unknown":
                         signature = _shape_token(event.get("tool_input_json"))
                         unknown = unknowns[(provider, tool_name, signature)]
                         unknown["count"] += 1
@@ -226,6 +262,8 @@ def evaluate_manifest(manifest_path: Path, *, rules_path: Path = DEFAULT_RULES_P
         "logical_operations",
         "paired",
         "exact",
+        "parsed",
+        "generic",
         "unknown",
         "lost",
         "duplicated",
@@ -235,7 +273,7 @@ def evaluate_manifest(manifest_path: Path, *, rules_path: Path = DEFAULT_RULES_P
         "duplicate_call_ids",
         "duplicate_result_ids",
         "inferred_children",
-        "blocked_recession",
+        "wrappers_retained",
         "visible_rows",
     ):
         totals[metric] += 0
@@ -255,16 +293,335 @@ def evaluate_manifest(manifest_path: Path, *, rules_path: Path = DEFAULT_RULES_P
         }
         for (provider, tool_name, signature), counts in sorted(unknowns.items(), key=lambda item: (-item[1]["count"], item[0]))
     ]
+    has_orphans = bool(totals["orphan_calls"] or totals["orphan_results"])
+    transcript_verdict = "red" if errors else ("yellow" if totals["unknown"] or has_orphans else "green")
     return {
         "schema_version": 1,
+        "profile": profile,
+        "evaluated_at": datetime.now(timezone.utc).isoformat(),
         "manifest_id": str(manifest.get("id") or manifest_path.stem),
         "rules_fingerprint": rules_hash,
         "stable_identity_digest": identity_digest,
         "passed": not errors,
+        "verdicts": {
+            "control": {"verdict": "not_evaluated", "reason": "translation corpus has no live control scenario"},
+            "transcript": {
+                "verdict": transcript_verdict,
+                "reasons": [
+                    *(["conservation_or_attribution_failure"] if errors else []),
+                    *(["unknown_shapes_present"] if totals["unknown"] else []),
+                    *(["orphan_call_or_result"] if has_orphans else []),
+                ],
+            },
+        },
         "totals": dict(sorted(totals.items())),
         "providers": {provider: dict(sorted(counts.items())) for provider, counts in sorted(by_provider.items())},
         "schema_fingerprints": {family: dict(sorted(counts.items())) for family, counts in sorted(schema_fingerprints.items())},
         "consequence_slices": dict(sorted(consequence_slices.items())),
         "unknowns": unknown_report,
+        "reports": {
+            "shape_unknown": {
+                "schema_fingerprints": {family: dict(sorted(counts.items())) for family, counts in sorted(schema_fingerprints.items())},
+                "unknowns": unknown_report,
+            },
+            "conservation": {
+                key: totals[key]
+                for key in (
+                    "source_events",
+                    "canonical_events",
+                    "lost",
+                    "duplicated",
+                    "unattributed",
+                    "paired",
+                    "orphan_calls",
+                    "orphan_results",
+                    "duplicate_call_ids",
+                    "duplicate_result_ids",
+                )
+            },
+            "presentation": {
+                "outer_calls": totals["outer_calls"],
+                "logical_operations": totals["logical_operations"],
+                "exact": totals["exact"],
+                "parsed": totals["parsed"],
+                "generic": totals["generic"],
+                "unknown": totals["unknown"],
+                "inferred_children": totals["inferred_children"],
+                "wrappers_retained": totals["wrappers_retained"],
+                "visible_rows": totals["visible_rows"],
+            },
+        },
+        "factory_health": {
+            "state": "synthetic",
+            "reason": "hermetic_replay_not_discovery",
+            "complete_window": False,
+        },
         "errors": errors,
     }
+
+
+def evaluate_codex_archive(
+    archive_root: Path,
+    *,
+    rules_path: Path = DEFAULT_RULES_PATH,
+    max_files: int = 500,
+) -> dict[str, Any]:
+    """Privacy-safe structural replay over native Codex JSONL archives."""
+
+    archive_root = archive_root.expanduser().resolve()
+    if not archive_root.is_dir():
+        raise TranslationEvaluationError(f"Codex archive root is not a directory: {archive_root}")
+    discovered_files = sorted(archive_root.rglob("*.jsonl"), key=lambda path: path.stat().st_mtime, reverse=True)
+    files = discovered_files[:max_files]
+    selection_truncated = len(discovered_files) > len(files)
+    totals: Counter[str] = Counter()
+    fingerprints: Counter[str] = Counter()
+    tool_names: Counter[str] = Counter()
+    unknown_tool_names: Counter[str] = Counter()
+    releases: Counter[str] = Counter()
+    calls: dict[tuple[str, str], dict[str, Any]] = {}
+    results: Counter[tuple[str, str]] = Counter()
+    errors: list[str] = []
+    affected_sessions: set[str] = set()
+
+    for path in files:
+        totals["archive_files"] += 1
+        session_ref = hashlib.sha256(str(path.relative_to(archive_root)).encode()).hexdigest()[:16]
+        try:
+            lines = path.open(encoding="utf-8")
+        except OSError:
+            totals["unreadable_files"] += 1
+            continue
+        with lines:
+            for line_number, line in enumerate(lines, 1):
+                if not any(token in line for token in ("custom_tool_call", "function_call", "session_meta")):
+                    continue
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    totals["malformed_records"] += 1
+                    continue
+                payload = record.get("payload") if isinstance(record, dict) else None
+                if not isinstance(payload, dict):
+                    totals["malformed_records"] += 1
+                    continue
+                if record.get("type") == "session_meta":
+                    releases[str(payload.get("cli_version") or "unknown")] += 1
+                    continue
+                payload_type = payload.get("type")
+                call_id = str(payload.get("call_id") or "")
+                if payload_type in {"custom_tool_call_output", "function_call_output"}:
+                    totals["results"] += 1
+                    if call_id:
+                        results[(session_ref, call_id)] += 1
+                    else:
+                        totals["orphan_results"] += 1
+                    continue
+                if payload_type not in {"custom_tool_call", "function_call"}:
+                    continue
+                totals["outer_calls"] += 1
+                affected_sessions.add(session_ref)
+                fingerprints[_fingerprint(payload)] += 1
+                tool_name = str(payload.get("name") or "unknown")
+                tool_names[tool_name] += 1
+                if call_id:
+                    call_key = (session_ref, call_id)
+                    if call_key in calls:
+                        totals["duplicate_call_ids"] += 1
+                    calls[call_key] = {"session": session_ref, "line": line_number}
+                else:
+                    totals["orphan_calls"] += 1
+                presentation = project_tool_presentation(
+                    tool_name,
+                    payload.get("input") if payload_type == "custom_tool_call" else payload.get("arguments"),
+                    provider="codex",
+                    rules_path=rules_path,
+                )
+                disposition = str((presentation or {}).get("disposition") or "unknown")
+                totals[disposition] += 1
+                if disposition == "unknown":
+                    unknown_tool_names[tool_name] += 1
+                children = list((presentation or {}).get("children") or [])
+                totals["logical_operations"] += len(children) or 1
+                if children:
+                    totals["inferred_children"] += len(children)
+                if (presentation or {}).get("wrapper_recedes"):
+                    totals["wrappers_receded"] += 1
+                elif children:
+                    totals["wrappers_retained"] += 1
+
+    for call_key in set(calls) | set(results):
+        call_count = int(call_key in calls)
+        result_count = results[call_key]
+        if call_count and result_count == 1:
+            totals["paired"] += 1
+        elif call_count and not result_count:
+            totals["orphan_calls"] += 1
+        elif not call_count:
+            totals["orphan_results"] += result_count
+        elif result_count > 1:
+            totals["duplicate_result_ids"] += result_count - 1
+
+    for metric in (
+        "archive_files",
+        "outer_calls",
+        "results",
+        "paired",
+        "exact",
+        "parsed",
+        "generic",
+        "unknown",
+        "logical_operations",
+        "inferred_children",
+        "wrappers_receded",
+        "wrappers_retained",
+        "orphan_calls",
+        "orphan_results",
+        "duplicate_call_ids",
+        "duplicate_result_ids",
+        "malformed_records",
+        "unreadable_files",
+    ):
+        totals[metric] += 0
+    red = bool(totals["duplicate_call_ids"] or totals["duplicate_result_ids"] or totals["malformed_records"] or totals["unreadable_files"])
+    yellow = bool(totals["unknown"] or totals["orphan_calls"] or totals["orphan_results"])
+    verdict = "red" if red else ("yellow" if yellow else "green")
+    transcript_reasons = [
+        *(["duplicate_or_malformed_evidence"] if red else []),
+        *(["unknown_shapes_present"] if totals["unknown"] else []),
+        *(["orphan_call_or_result"] if totals["orphan_calls"] or totals["orphan_results"] else []),
+    ]
+    return {
+        "schema_version": 1,
+        "profile": "privacy_safe_live_replay",
+        "evaluated_at": datetime.now(timezone.utc).isoformat(),
+        "manifest_id": f"codex-native-{hashlib.sha256(str(archive_root).encode()).hexdigest()[:12]}",
+        "passed": not red,
+        "verdicts": {
+            "control": {"verdict": "not_evaluated", "reason": "archive replay has no control scenario"},
+            "transcript": {"verdict": verdict, "reasons": transcript_reasons},
+        },
+        "totals": dict(sorted(totals.items())),
+        "selection": {
+            "strategy": "newest_file_window",
+            "files_discovered": len(discovered_files),
+            "files_scanned": len(files),
+            "selection_truncated": selection_truncated,
+        },
+        "providers": {"codex": dict(sorted(totals.items()))},
+        "reports": {
+            "shape_unknown": {
+                "schema_fingerprints": dict(sorted(fingerprints.items())),
+                "tool_names": dict(tool_names.most_common()),
+                "unknown_tool_names": dict(unknown_tool_names.most_common()),
+                "provider_releases": dict(releases.most_common()),
+                "affected_sessions": len(affected_sessions),
+            },
+            "conservation": {
+                key: totals[key]
+                for key in (
+                    "outer_calls",
+                    "results",
+                    "paired",
+                    "orphan_calls",
+                    "orphan_results",
+                    "duplicate_call_ids",
+                    "duplicate_result_ids",
+                    "malformed_records",
+                    "unreadable_files",
+                )
+            },
+            "presentation": {
+                key: totals[key]
+                for key in (
+                    "outer_calls",
+                    "logical_operations",
+                    "exact",
+                    "parsed",
+                    "generic",
+                    "unknown",
+                    "inferred_children",
+                    "wrappers_receded",
+                    "wrappers_retained",
+                )
+            },
+        },
+        "factory_health": {
+            "state": "unknown" if selection_truncated else "current",
+            "reason": "selection_truncated" if selection_truncated else None,
+            "complete_window": not selection_truncated,
+        },
+        "errors": errors,
+    }
+
+
+def write_evidence_package(report: dict[str, Any], output_root: Path) -> Path:
+    """Write the shared immutable report layout without copying raw payloads."""
+
+    run_id = f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{report['manifest_id']}"
+    root = output_root.expanduser().resolve() / run_id
+    root.mkdir(parents=True, exist_ok=False)
+    (root / "candidate-patches").mkdir()
+    (root / "fixture-candidates").mkdir()
+    (root / "screenshots").mkdir()
+    files = {
+        "run.json": {
+            "schema_version": report["schema_version"],
+            "run_id": run_id,
+            "manifest_id": report["manifest_id"],
+            "profile": report.get("profile"),
+            "evaluated_at": report.get("evaluated_at"),
+        },
+        "action-matrix.json": {
+            "capture_and_conserve": report["reports"]["conservation"],
+            "normalize_and_project": report["reports"]["shape_unknown"],
+            "present_and_disclose": report["reports"]["presentation"],
+            "control_surface": report["verdicts"]["control"],
+        },
+        "shape-inventory.json": report["reports"]["shape_unknown"],
+        "conservation-report.json": report["reports"]["conservation"],
+        "control-report.json": report["verdicts"]["control"],
+        "presentation-report.json": report["reports"]["presentation"],
+        "baseline-diff.json": {"status": "not_compared"},
+        "verdict.json": {"verdicts": report["verdicts"], "factory_health": report["factory_health"]},
+    }
+    for name, payload in files.items():
+        (root / name).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    unknown_candidates = report["reports"]["shape_unknown"].get("unknowns")
+    if unknown_candidates is None:
+        unknown_candidates = [
+            {"tool_name": name, "count": count, "status": "review_required"}
+            for name, count in report["reports"]["shape_unknown"].get("unknown_tool_names", {}).items()
+        ]
+    (root / "fixture-candidates" / "unknown-shapes.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "privacy": "structural_only",
+                "candidates": unknown_candidates,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n"
+    )
+    latest_path = output_root.expanduser().resolve() / "latest.json"
+    latest_temp = latest_path.with_name(f".{latest_path.name}.{uuid4().hex}.tmp")
+    latest_temp.write_text(
+        json.dumps(
+            {
+                "run_id": run_id,
+                "path": str(root),
+                "evaluated_at": report.get("evaluated_at"),
+                "profile": report.get("profile"),
+                "providers": sorted(report.get("providers", {})),
+                "totals": report.get("totals", {}),
+                "verdicts": report["verdicts"],
+                "factory_health": report.get("factory_health", {}),
+            },
+            indent=2,
+        )
+        + "\n"
+    )
+    latest_temp.replace(latest_path)
+    return root

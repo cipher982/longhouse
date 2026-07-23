@@ -46,6 +46,11 @@ class ManagedProviderContract:
     control_plane_aliases: tuple[str, ...] = ()
     adapter_digest: str = ""
     adapter_sources: tuple[str, ...] = ()
+    wire_families: tuple[str, ...] = ()
+    observation_sources: tuple[str, ...] = ()
+    normalization_ruleset: str = ""
+    presentation_ruleset: str = ""
+    proof_profiles: Mapping[str, str] = field(default_factory=dict)
     requires_longhouse_cli: bool = True
     launch_local: bool = True
     run_once: bool = False
@@ -131,6 +136,11 @@ def _contract_from_manifest_item(item: dict[str, object]) -> ManagedProviderCont
         control_plane_aliases=tuple(str(value) for value in item.get("control_plane_aliases") or ()),
         adapter_digest=str(item.get("adapter_digest") or ""),
         adapter_sources=tuple(str(value) for value in item.get("adapter_sources") or ()),
+        wire_families=tuple(str(value) for value in item.get("wire_families") or ()),
+        observation_sources=tuple(str(value) for value in item.get("observation_sources") or ()),
+        normalization_ruleset=str(item.get("normalization_ruleset") or ""),
+        presentation_ruleset=str(item.get("presentation_ruleset") or ""),
+        proof_profiles={str(name): str(profile) for name, profile in dict(item.get("proof_profiles") or {}).items()},
         requires_longhouse_cli=bool(item.get("requires_longhouse_cli", True)),
         launch_local=bool(item.get("launch_local", True)),
         run_once=bool(item.get("run_once", False)),

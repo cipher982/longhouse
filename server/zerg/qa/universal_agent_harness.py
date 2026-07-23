@@ -9,9 +9,11 @@ from __future__ import annotations
 import argparse
 import asyncio
 import base64
+import hashlib
 import http.server
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -36,6 +38,8 @@ from zerg.services.managed_provider_contracts import contract_for_provider
 from zerg.services.managed_provider_contracts import managed_provider_names
 from zerg.services.provider_action_coverage import derive_provider_action_coverage
 from zerg.services.provider_action_coverage import serialize_provider_action_coverage
+from zerg.services.tool_presentation import project_tool_presentation
+from zerg.services.tool_translation_evaluator import evaluate_manifest
 
 _SUBPROCESS_RUNTIME_ENV_KEYS = {
     "DYLD_LIBRARY_PATH",
@@ -106,6 +110,7 @@ SCENARIOS = (
     "orchestration_capability_matrix",
     "session_projection",
     "timeline_projection",
+    "tool_presentation_projection",
     "run_prompt_once",
     "launch_managed_session",
     "managed_session_e2e",
@@ -204,6 +209,13 @@ MVP_CAPABILITIES = (
     "cleanup",
 )
 PROFILES = ("fixture_replay", "live_no_token")
+COMPOSITE_PROFILES = {
+    "capture_and_conserve": ("collect_raw_evidence", "tool_call_result_projection", "tool_presentation_projection"),
+    "normalize_and_project": ("parse_ingest_project", "db_ingest_project", "session_projection", "timeline_projection"),
+    "present_and_disclose": ("tool_presentation_projection",),
+    "control_surface": ("control_surface",),
+    "drift_compare": ("baseline_compare", "old_new_release_diff"),
+}
 SAFE_MANAGED_SESSION_SCENARIOS = ("launch_managed_session", "send_receive")
 FULL_ACTION_SUITE_SCENARIOS = (
     "probe_identity",
@@ -213,6 +225,7 @@ FULL_ACTION_SUITE_SCENARIOS = (
     "db_ingest_project",
     "session_projection",
     "timeline_projection",
+    "tool_presentation_projection",
     "run_prompt_once",
     "launch_managed_session",
     "managed_session_e2e",
@@ -259,6 +272,13 @@ ACTION_EXECUTION_SCENARIO_BY_ID = {
     "db_ingest": ("db_ingest_project",),
     "session_projection": ("session_projection",),
     "timeline_projection": ("timeline_projection",),
+    "provider_shape_inventory": ("tool_presentation_projection",),
+    "schema_drift_detect": ("tool_presentation_projection",),
+    "call_result_conservation": ("tool_presentation_projection",),
+    "presentation_projection": ("tool_presentation_projection",),
+    "presentation_grouping": ("tool_presentation_projection",),
+    "raw_disclosure_reachability": ("tool_presentation_projection",),
+    "cross_surface_parity": ("tool_presentation_projection",),
     "baseline_compare": ("baseline_compare",),
     "old_new_release_diff": ("old_new_release_diff",),
 }
@@ -491,6 +511,69 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         "harness",
         "hermetic",
         "Build the timeline/card projection from canonical events and managed-control state.",
+    ),
+    ActionDefinition(
+        "provider_shape_inventory",
+        "Provider Shape Inventory",
+        "presentation",
+        None,
+        "harness",
+        "hermetic",
+        "Fingerprint provider envelopes, tools, arguments, and results without recording values.",
+    ),
+    ActionDefinition(
+        "schema_drift_detect",
+        "Schema Drift Detection",
+        "presentation",
+        None,
+        "harness",
+        "hermetic",
+        "Detect new preserved wire shapes and Unknown presentation outcomes.",
+    ),
+    ActionDefinition(
+        "call_result_conservation",
+        "Call/Result Conservation",
+        "presentation",
+        None,
+        "harness",
+        "hermetic",
+        "Prove calls, results, identifiers, failures, and ambiguity remain accounted for.",
+    ),
+    ActionDefinition(
+        "presentation_projection",
+        "Presentation Projection",
+        "presentation",
+        None,
+        "harness",
+        "hermetic",
+        "Project one deterministic semantic reading lens from preserved provider evidence.",
+    ),
+    ActionDefinition(
+        "presentation_grouping",
+        "Presentation Grouping",
+        "presentation",
+        None,
+        "harness",
+        "hermetic",
+        "Group repetitive low-salience work without hiding consequential events.",
+    ),
+    ActionDefinition(
+        "raw_disclosure_reachability",
+        "Raw Disclosure",
+        "presentation",
+        None,
+        "harness",
+        "hermetic",
+        "Keep canonical and raw enclosing evidence reachable from every summary.",
+    ),
+    ActionDefinition(
+        "cross_surface_parity",
+        "Cross-surface Parity",
+        "presentation",
+        None,
+        "harness",
+        "hermetic",
+        "Prove web and iOS consume the same generated presentation contract.",
     ),
     ActionDefinition(
         "baseline_compare",
@@ -5296,6 +5379,13 @@ def _action_implementation_kind(
         "parse_normalize",
         "session_projection",
         "timeline_projection",
+        "provider_shape_inventory",
+        "schema_drift_detect",
+        "call_result_conservation",
+        "presentation_projection",
+        "presentation_grouping",
+        "raw_disclosure_reachability",
+        "cross_surface_parity",
         "multi_turn_continuity",
         "crash_timeout_cleanup",
     }:
@@ -5358,9 +5448,47 @@ def _action_status(
         "parse_normalize": ("hermetic", "universal_parse_ingest_project", "universal_harness_parser_projection"),
         "session_projection": ("hermetic", "universal_session_projection", "universal_harness_projection"),
         "timeline_projection": ("hermetic", "universal_timeline_projection", "universal_harness_projection"),
+        "provider_shape_inventory": ("hermetic", "universal_tool_presentation", "factory_shape_inventory"),
+        "schema_drift_detect": ("hermetic", "universal_tool_presentation", "factory_shape_inventory"),
+        "call_result_conservation": ("hermetic", "universal_tool_presentation", "factory_conservation"),
+        "presentation_projection": ("hermetic", "universal_tool_presentation", "factory_presentation"),
+        "presentation_grouping": ("hermetic", "universal_tool_presentation", "factory_presentation"),
+        "raw_disclosure_reachability": ("hermetic", "universal_tool_presentation", "factory_presentation"),
+        "cross_surface_parity": ("hermetic", "universal_tool_presentation", "factory_presentation"),
         "multi_turn_continuity": ("hermetic", "universal_multi_turn_continuity", "universal_harness_projection"),
         "crash_timeout_cleanup": ("hermetic", "universal_crash_timeout_cleanup", "universal_harness_projection"),
     }
+    factory_actions = {
+        "provider_shape_inventory",
+        "schema_drift_detect",
+        "call_result_conservation",
+        "presentation_projection",
+        "presentation_grouping",
+        "raw_disclosure_reachability",
+        "cross_surface_parity",
+    }
+    if action.action_id in factory_actions:
+        assertion_path = package.path("assertions", "tool-presentation-projection.json")
+        try:
+            assertion = json.loads(assertion_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            assertion = {}
+        proven = assertion.get("action_proofs", {}).get(action.action_id) is True
+        if not proven:
+            return {
+                "status": STATUS_BLOCKED,
+                "failure_code": f"{action.action_id}_proof_pending",
+                "message": f"{action.action_id} requires the executable tool-presentation scenario.",
+                "proof_scope": "factory_action_oracle",
+                "raw_artifacts": [str(assertion_path)],
+            }
+        return {
+            "status": STATUS_PASS,
+            "evidence_level": "hermetic",
+            "proof_scope": "factory_action_oracle",
+            "canary": f"factory_{action.action_id}",
+            "raw_artifacts": [str(assertion_path)],
+        }
     if action.action_id in harness_pass_actions:
         level, canary, scope = harness_pass_actions[action.action_id]
         return {
@@ -7900,14 +8028,11 @@ def run_parse_ingest_project(
 ) -> ScenarioResult:
     adapter.prepare(package)
     if fixture_path is None:
-        payload = {
-            "status": STATUS_BLOCKED,
-            "failure_code": "fixture_required",
-            "message": "parse_ingest_project requires --fixture-path.",
-        }
-        package.write_json("assertions/parse_ingest_project.json", payload)
-    else:
-        payload = adapter.decode_normalize(package, fixture_path)
+        fixture_path = package.write_text(
+            "input/default-parse-fixture.jsonl",
+            "\n".join(json.dumps(row, sort_keys=True) for row in default_db_ingest_rows()) + "\n",
+        )
+    payload = adapter.decode_normalize(package, fixture_path)
     adapter.cleanup(package)
     return scenario_result(
         provider=adapter.config.provider,
@@ -8036,6 +8161,134 @@ def run_timeline_projection(adapter: AgentHarnessAdapter, package: EvidencePacka
     return scenario_result(
         provider=adapter.config.provider,
         scenario="timeline_projection",
+        package=package,
+        payload=payload,
+    )
+
+
+def run_tool_presentation_projection(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
+    """Run the shared transcript factory corpus inside the universal harness."""
+
+    adapter.prepare(package)
+    corpus = default_repo_root() / "tests" / "fixtures" / "tool-translation" / "manifest.json"
+    report = evaluate_manifest(corpus, profile="hermetic")
+    provider_report = report.get("providers", {}).get(adapter.config.provider)
+    generated_surfaces = (
+        default_repo_root() / "web" / "src" / "lib" / "sessionWorkspace" / "toolTiers.generated.ts",
+        default_repo_root() / "ios" / "Sources" / "Shared" / "ToolTiers.generated.swift",
+    )
+    parity_fixture = default_repo_root() / "tests" / "fixtures" / "session-projection" / "codex-wrapper-presentation.json"
+    parity_payload = json.loads(parity_fixture.read_text(encoding="utf-8")) if parity_fixture.is_file() else {}
+    parity_expectations = parity_payload.get("expectations") if isinstance(parity_payload, dict) else None
+    expected_tool_count = parity_expectations.get("tool_count") if isinstance(parity_expectations, dict) else None
+    projection_items = parity_payload.get("projection", {}).get("items", []) if isinstance(parity_payload, dict) else []
+    result_by_call_id = {
+        item.get("event", {}).get("tool_call_id"): item.get("event", {}).get("tool_output_text")
+        for item in projection_items
+        if item.get("event", {}).get("role") == "tool"
+    }
+    projected_calls: list[dict[str, Any]] = []
+    fixture_projection_matches = True
+    for item in projection_items:
+        event = item.get("event", {})
+        if event.get("role") != "assistant" or not event.get("tool_name"):
+            continue
+        projected = project_tool_presentation(
+            event.get("tool_name"),
+            event.get("tool_input_json"),
+            provider="codex",
+        )
+        fixture_projection_matches = fixture_projection_matches and projected == event.get("tool_presentation")
+        output = str(result_by_call_id.get(event.get("tool_call_id")) or "")
+        failed = bool(re.search(r"(?:exit(?:ed)?|code)[^\n]*\b[1-9]\d*\b", output, re.IGNORECASE))
+        projected_calls.append({"presentation": projected or {}, "failed": failed})
+    rendered_tool_rows = 0
+    active_aggregate: str | None = None
+    for call in projected_calls:
+        presentation = call["presentation"]
+        aggregate = presentation.get("aggregate")
+        groupable = bool(aggregate and presentation.get("tier") in {"noise", "context"} and not call["failed"])
+        if groupable and aggregate == active_aggregate:
+            continue
+        rendered_tool_rows += 1
+        active_aggregate = str(aggregate) if groupable else None
+    concision_proof = {
+        "source_tool_calls": expected_tool_count,
+        "rendered_tool_rows": rendered_tool_rows,
+        "rows_removed": (expected_tool_count - rendered_tool_rows if isinstance(expected_tool_count, int) else None),
+        "failed_calls_remain_prominent": any(call["failed"] for call in projected_calls),
+        "fixture_projection_matches_server": fixture_projection_matches,
+    }
+    web_parity_test = default_repo_root() / "web" / "src" / "lib" / "__tests__" / "sharedProjectionFixtures.test.ts"
+    ios_parity_test = default_repo_root() / "ios" / "Tests" / "LonghouseIOSTests" / "SharedProjectionFixtureTests.swift"
+    parity_consumed_by_clients = all(
+        path.is_file() and parity_fixture.name in path.read_text(encoding="utf-8") for path in (web_parity_test, ios_parity_test)
+    )
+    shape_report = report["reports"]["shape_unknown"]
+    provider_has_fingerprint = any(
+        key.startswith(f"{adapter.config.provider}/") and bool(counts)
+        for key, counts in shape_report.get("schema_fingerprints", {}).items()
+    )
+    drift_canary_detected = any(
+        row.get("provider") == "cursor" and row.get("tool_name") == "CallDynamicTool" for row in shape_report.get("unknowns", [])
+    )
+    action_proofs = {
+        "provider_shape_inventory": bool(provider_report and provider_report.get("source_events") and provider_has_fingerprint),
+        "schema_drift_detect": bool(
+            drift_canary_detected
+            and report["verdicts"]["transcript"]["verdict"] == "yellow"
+            and "unknown_shapes_present" in report["verdicts"]["transcript"]["reasons"]
+        ),
+        "call_result_conservation": not bool(report["errors"]),
+        "presentation_projection": fixture_projection_matches and bool(projected_calls),
+        "presentation_grouping": expected_tool_count == 4 and rendered_tool_rows == 2,
+        "raw_disclosure_reachability": all(
+            not call["presentation"].get("wrapper_recedes") or bool(call["presentation"].get("children")) for call in projected_calls
+        ),
+        "cross_surface_parity": parity_consumed_by_clients and fixture_projection_matches,
+    }
+    surface_hashes = {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in generated_surfaces if path.is_file()}
+    passed = bool(
+        report["passed"]
+        and provider_report
+        and len(surface_hashes) == len(generated_surfaces)
+        and parity_fixture.is_file()
+        and all(action_proofs.values())
+        and concision_proof["failed_calls_remain_prominent"]
+    )
+    payload = {
+        "status": STATUS_PASS if passed else STATUS_FAIL,
+        "failure_code": None if passed else "tool_presentation_projection_failed",
+        "message": None if passed else "Golden translation replay or generated surface contract failed.",
+        "provider_report": provider_report,
+        "verdicts": report["verdicts"],
+        "surface_contract_hashes": surface_hashes,
+        "cross_surface_fixture": {
+            "path": str(parity_fixture.relative_to(default_repo_root())),
+            "sha256": hashlib.sha256(parity_fixture.read_bytes()).hexdigest() if parity_fixture.is_file() else None,
+            "web_test": "web/src/lib/__tests__/sharedProjectionFixtures.test.ts",
+            "ios_test": "ios/Tests/LonghouseIOSTests/SharedProjectionFixtureTests.swift",
+        },
+        "concision_proof": concision_proof,
+        "action_proofs": action_proofs,
+        "operation_evidence": {
+            "tool_presentation_projection": {
+                "status": STATUS_PASS if passed else STATUS_FAIL,
+                "level": "hermetic",
+                "canary": "universal_tool_presentation_projection",
+                "failure_code": None if passed else "tool_presentation_projection_failed",
+            }
+        },
+    }
+    package.write_json("shape-inventory.json", report["reports"]["shape_unknown"])
+    package.write_json("conservation-report.json", report["reports"]["conservation"])
+    package.write_json("presentation-report.json", report["reports"]["presentation"])
+    package.write_json("verdict.json", report["verdicts"])
+    package.write_json("assertions/tool-presentation-projection.json", payload)
+    adapter.cleanup(package)
+    return scenario_result(
+        provider=adapter.config.provider,
+        scenario="tool_presentation_projection",
         package=package,
         payload=payload,
     )
@@ -8394,6 +8647,7 @@ SCENARIO_RUNNERS = {
     "orchestration_capability_matrix": run_orchestration_capability_matrix,
     "session_projection": run_session_projection,
     "timeline_projection": run_timeline_projection,
+    "tool_presentation_projection": run_tool_presentation_projection,
     "run_prompt_once": run_prompt_once,
     "launch_managed_session": run_launch_managed_session,
     "send_receive": run_send_receive,
@@ -8800,6 +9054,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Scenario to run. Repeatable; defaults to probe_identity.",
     )
     parser.add_argument(
+        "--profile",
+        choices=tuple(COMPOSITE_PROFILES),
+        help="Run a composite factory proof profile instead of selecting scenarios individually.",
+    )
+    parser.add_argument(
         "--provider-bin",
         action="append",
         help="Provider binary override: PATH for one provider or provider=PATH.",
@@ -8835,7 +9094,9 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     providers = tuple(args.provider or SUPPORTED_PROVIDERS)
-    scenarios = tuple(args.scenario or ("probe_identity",))
+    if args.profile and args.scenario:
+        parser.error("--profile and --scenario are mutually exclusive")
+    scenarios = COMPOSITE_PROFILES[args.profile] if args.profile else tuple(args.scenario or ("probe_identity",))
     try:
         provider_bins = parse_provider_bins(args.provider_bin, providers)
     except ValueError as exc:
@@ -8866,6 +9127,7 @@ __all__ = [
     "ACTIONS",
     "ACTION_DEFINITIONS",
     "CONTROL_SURFACE_ACTION_IDS",
+    "COMPOSITE_PROFILES",
     "SCENARIOS",
     "STATUSES",
     "SUPPORTED_PROVIDERS",

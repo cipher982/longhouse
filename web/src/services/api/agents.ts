@@ -439,6 +439,46 @@ export interface AgentEventInputOrigin {
 
 export type AgentEventId = string | number;
 
+export type ToolPresentationDisposition = "exact" | "parsed" | "generic" | "unknown" | "invalid";
+export type ToolPresentationTier = "noise" | "context" | "action";
+export type ToolPresentationAggregate = "search" | "read" | "list" | "wait";
+
+export interface AgentToolPresentationChild {
+  version: number;
+  child_id: string;
+  disposition: ToolPresentationDisposition;
+  tool_name: string;
+  label: string;
+  icon: string;
+  color: string;
+  tier: ToolPresentationTier;
+  aggregate?: ToolPresentationAggregate | null;
+  mcp_namespace?: string | null;
+  tool_input_json?: unknown;
+  rule_id: string;
+  source_span?: number[];
+  input_complete?: boolean;
+  result_forwarded?: boolean;
+}
+
+export interface AgentToolPresentation {
+  version: number;
+  disposition: ToolPresentationDisposition;
+  tool_name: string;
+  source_tool_name: string;
+  execution_method?: string | null;
+  label: string;
+  icon: string;
+  color: string;
+  tier: ToolPresentationTier;
+  aggregate?: ToolPresentationAggregate | null;
+  mcp_namespace?: string | null;
+  tool_input_json?: unknown;
+  rule_id: string;
+  wrapper_recedes: boolean;
+  children?: AgentToolPresentationChild[];
+}
+
 export interface AgentEvent {
   id: AgentEventId;
   cursor?: string | null;
@@ -451,6 +491,7 @@ export interface AgentEvent {
   tool_input_json: unknown;
   tool_output_text: string | null;
   tool_call_id: string | null;
+  tool_presentation?: AgentToolPresentation | null;
   tool_call_state?: "running" | "completed" | "dropped" | null;
   timestamp: string;
   in_active_context?: boolean;

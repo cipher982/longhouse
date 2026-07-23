@@ -535,6 +535,7 @@ def test_timeline_session_workspace_projects_claude_channel_display_text(tmp_pat
                 "tool_output_truncated": False,
                 "tool_output_original_chars": None,
                 "tool_call_id": None,
+                "tool_presentation": None,
                 "timestamp": events[0]["timestamp"],
                 "in_active_context": True,
                 "branch_id": None,

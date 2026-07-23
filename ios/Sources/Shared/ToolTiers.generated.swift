@@ -13,6 +13,7 @@ public enum ToolAggregate: String, Sendable {
     case search
     case read
     case list
+    case wait
 }
 
 public enum ToolColorToken: String, Sendable {
@@ -70,7 +71,7 @@ public enum ToolTiers {
         "str_replace_editor": ToolTierMeta(tier: .action, aggregate: nil, icon: "E", label: "edit", color: .brand),
         "update_plan": ToolTierMeta(tier: .action, aggregate: nil, icon: "+", label: "plan", color: .accent),
         "exec": ToolTierMeta(tier: .action, aggregate: nil, icon: "$", label: "exec", color: .warning),
-        "wait": ToolTierMeta(tier: .action, aggregate: nil, icon: "…", label: "Wait", color: .tertiary),
+        "wait": ToolTierMeta(tier: .noise, aggregate: .wait, icon: "…", label: "Wait", color: .tertiary),
         "request_user_input": ToolTierMeta(tier: .action, aggregate: nil, icon: "?", label: "Question", color: .accent),
         "ReadFile": ToolTierMeta(tier: .context, aggregate: .read, icon: "R", label: "Read", color: .cyan),
         "StrReplace": ToolTierMeta(tier: .action, aggregate: nil, icon: "E", label: "Edit", color: .brand),

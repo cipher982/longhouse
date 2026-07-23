@@ -1,4 +1,4 @@
-import type { AgentEvent, AgentEventId, AgentSessionTranscriptAction } from "../../services/api/agents";
+import type { AgentEvent, AgentEventId, AgentSessionTranscriptAction, AgentToolPresentation } from "../../services/api/agents";
 
 export type EventFilter = "all" | "messages" | "tools";
 
@@ -10,6 +10,7 @@ export type ToolInteraction = {
   pairing: "id" | "fifo" | "orphan" | "pending";
   anchorId: AgentEventId;
   timestamp: string;
+  presentation?: AgentToolPresentation | null;
 };
 
 /**

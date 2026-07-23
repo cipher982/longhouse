@@ -1,0 +1,377 @@
+{
+  "name": "codex-wrapper-presentation",
+  "description": "Both clients collapse successful Codex wait wrappers while keeping a failed wait prominent.",
+  "projection": {
+    "root_session_id": "fixture-codex-wrapper",
+    "focus_session_id": "fixture-codex-wrapper",
+    "head_session_id": "fixture-codex-wrapper",
+    "path_session_ids": [
+      "fixture-codex-wrapper"
+    ],
+    "total": 9,
+    "page_offset": 0,
+    "branch_mode": "head",
+    "abandoned_events": 0,
+    "items": [
+      {
+        "kind": "event",
+        "session_id": "fixture-codex-wrapper",
+        "timestamp": "2026-07-23T12:00:00Z",
+        "event": {
+          "id": 1,
+          "role": "user",
+          "content_text": "Wait for it.",
+          "tool_name": null,
+          "tool_input_json": null,
+          "tool_output_text": null,
+          "tool_call_id": null,
+          "timestamp": "2026-07-23T12:00:00Z",
+          "in_active_context": true,
+          "is_head_branch": true
+        }
+      },
+      {
+        "kind": "event",
+        "session_id": "fixture-codex-wrapper",
+        "timestamp": "2026-07-23T12:00:01Z",
+        "event": {
+          "id": 2,
+          "role": "assistant",
+          "content_text": null,
+          "tool_name": "exec",
+          "tool_input_json": "const r=await tools.write_stdin({session_id:42,chars:\"\"}); text(r);",
+          "tool_output_text": null,
+          "tool_call_id": "w1",
+          "tool_presentation": {
+            "version": 1,
+            "disposition": "parsed",
+            "tool_name": "write_stdin",
+            "source_tool_name": "exec",
+            "execution_method": "exec",
+            "label": "Wait",
+            "icon": "…",
+            "color": "tertiary",
+            "tier": "noise",
+            "aggregate": "wait",
+            "mcp_namespace": null,
+            "tool_input_json": {
+              "session_id": 42,
+              "chars": ""
+            },
+            "rule_id": "codex:exec:single-child:v1",
+            "wrapper_recedes": true,
+            "children": [
+              {
+                "version": 1,
+                "disposition": "exact",
+                "tool_name": "write_stdin",
+                "label": "Wait",
+                "icon": "…",
+                "color": "tertiary",
+                "tier": "noise",
+                "aggregate": "wait",
+                "mcp_namespace": null,
+                "tool_input_json": {
+                  "session_id": 42,
+                  "chars": ""
+                },
+                "rule_id": "tool:write_stdin",
+                "child_id": "36d4119054a1a6b0:14:57",
+                "source_span": [14, 57],
+                "input_complete": true,
+                "result_forwarded": true
+              }
+            ]
+          },
+          "timestamp": "2026-07-23T12:00:01Z",
+          "in_active_context": true,
+          "is_head_branch": true
+        }
+      },
+      {
+        "kind": "event",
+        "session_id": "fixture-codex-wrapper",
+        "timestamp": "2026-07-23T12:00:02Z",
+        "event": {
+          "id": 3,
+          "role": "tool",
+          "content_text": null,
+          "tool_name": "exec",
+          "tool_input_json": null,
+          "tool_output_text": "Script still running",
+          "tool_call_id": "w1",
+          "timestamp": "2026-07-23T12:00:02Z",
+          "in_active_context": true,
+          "is_head_branch": true
+        }
+      },
+      {
+        "kind": "event",
+        "session_id": "fixture-codex-wrapper",
+        "timestamp": "2026-07-23T12:00:03Z",
+        "event": {
+          "id": 4,
+          "role": "assistant",
+          "content_text": null,
+          "tool_name": "exec",
+          "tool_input_json": "const r=await tools.write_stdin({session_id:42,chars:\"\"}); text(r);",
+          "tool_output_text": null,
+          "tool_call_id": "w2",
+          "tool_presentation": {
+            "version": 1,
+            "disposition": "parsed",
+            "tool_name": "write_stdin",
+            "source_tool_name": "exec",
+            "execution_method": "exec",
+            "label": "Wait",
+            "icon": "…",
+            "color": "tertiary",
+            "tier": "noise",
+            "aggregate": "wait",
+            "mcp_namespace": null,
+            "tool_input_json": {
+              "session_id": 42,
+              "chars": ""
+            },
+            "rule_id": "codex:exec:single-child:v1",
+            "wrapper_recedes": true,
+            "children": [
+              {
+                "version": 1,
+                "disposition": "exact",
+                "tool_name": "write_stdin",
+                "label": "Wait",
+                "icon": "…",
+                "color": "tertiary",
+                "tier": "noise",
+                "aggregate": "wait",
+                "mcp_namespace": null,
+                "tool_input_json": {
+                  "session_id": 42,
+                  "chars": ""
+                },
+                "rule_id": "tool:write_stdin",
+                "child_id": "36d4119054a1a6b0:14:57",
+                "source_span": [14, 57],
+                "input_complete": true,
+                "result_forwarded": true
+              }
+            ]
+          },
+          "timestamp": "2026-07-23T12:00:03Z",
+          "in_active_context": true,
+          "is_head_branch": true
+        }
+      },
+      {
+        "kind": "event",
+        "session_id": "fixture-codex-wrapper",
+        "timestamp": "2026-07-23T12:00:04Z",
+        "event": {
+          "id": 5,
+          "role": "tool",
+          "content_text": null,
+          "tool_name": "exec",
+          "tool_input_json": null,
+          "tool_output_text": "Script still running",
+          "tool_call_id": "w2",
+          "timestamp": "2026-07-23T12:00:04Z",
+          "in_active_context": true,
+          "is_head_branch": true
+        }
+      },
+      {
+        "kind": "event",
+        "session_id": "fixture-codex-wrapper",
+        "timestamp": "2026-07-23T12:00:05Z",
+        "event": {
+          "id": 6,
+          "role": "assistant",
+          "content_text": null,
+          "tool_name": "exec",
+          "tool_input_json": "const r=await tools.write_stdin({session_id:42,chars:\"\"}); text(r);",
+          "tool_output_text": null,
+          "tool_call_id": "w3",
+          "tool_presentation": {
+            "version": 1,
+            "disposition": "parsed",
+            "tool_name": "write_stdin",
+            "source_tool_name": "exec",
+            "execution_method": "exec",
+            "label": "Wait",
+            "icon": "…",
+            "color": "tertiary",
+            "tier": "noise",
+            "aggregate": "wait",
+            "mcp_namespace": null,
+            "tool_input_json": {
+              "session_id": 42,
+              "chars": ""
+            },
+            "rule_id": "codex:exec:single-child:v1",
+            "wrapper_recedes": true,
+            "children": [
+              {
+                "version": 1,
+                "disposition": "exact",
+                "tool_name": "write_stdin",
+                "label": "Wait",
+                "icon": "…",
+                "color": "tertiary",
+                "tier": "noise",
+                "aggregate": "wait",
+                "mcp_namespace": null,
+                "tool_input_json": {
+                  "session_id": 42,
+                  "chars": ""
+                },
+                "rule_id": "tool:write_stdin",
+                "child_id": "36d4119054a1a6b0:14:57",
+                "source_span": [14, 57],
+                "input_complete": true,
+                "result_forwarded": true
+              }
+            ]
+          },
+          "timestamp": "2026-07-23T12:00:05Z",
+          "in_active_context": true,
+          "is_head_branch": true
+        }
+      },
+      {
+        "kind": "event",
+        "session_id": "fixture-codex-wrapper",
+        "timestamp": "2026-07-23T12:00:06Z",
+        "event": {
+          "id": 7,
+          "role": "tool",
+          "content_text": null,
+          "tool_name": "exec",
+          "tool_input_json": null,
+          "tool_output_text": "Script still running",
+          "tool_call_id": "w3",
+          "timestamp": "2026-07-23T12:00:06Z",
+          "in_active_context": true,
+          "is_head_branch": true
+        }
+      },
+      {
+        "kind": "event",
+        "session_id": "fixture-codex-wrapper",
+        "timestamp": "2026-07-23T12:00:07Z",
+        "event": {
+          "id": 8,
+          "role": "assistant",
+          "content_text": null,
+          "tool_name": "exec",
+          "tool_input_json": "const r=await tools.write_stdin({session_id:42,chars:\"\"}); text(r);",
+          "tool_output_text": null,
+          "tool_call_id": "w4",
+          "tool_presentation": {
+            "version": 1,
+            "disposition": "parsed",
+            "tool_name": "write_stdin",
+            "source_tool_name": "exec",
+            "execution_method": "exec",
+            "label": "Wait",
+            "icon": "…",
+            "color": "tertiary",
+            "tier": "noise",
+            "aggregate": "wait",
+            "mcp_namespace": null,
+            "tool_input_json": {
+              "session_id": 42,
+              "chars": ""
+            },
+            "rule_id": "codex:exec:single-child:v1",
+            "wrapper_recedes": true,
+            "children": [
+              {
+                "version": 1,
+                "disposition": "exact",
+                "tool_name": "write_stdin",
+                "label": "Wait",
+                "icon": "…",
+                "color": "tertiary",
+                "tier": "noise",
+                "aggregate": "wait",
+                "mcp_namespace": null,
+                "tool_input_json": {
+                  "session_id": 42,
+                  "chars": ""
+                },
+                "rule_id": "tool:write_stdin",
+                "child_id": "36d4119054a1a6b0:14:57",
+                "source_span": [14, 57],
+                "input_complete": true,
+                "result_forwarded": true
+              }
+            ]
+          },
+          "timestamp": "2026-07-23T12:00:07Z",
+          "in_active_context": true,
+          "is_head_branch": true
+        }
+      },
+      {
+        "kind": "event",
+        "session_id": "fixture-codex-wrapper",
+        "timestamp": "2026-07-23T12:00:08Z",
+        "event": {
+          "id": 9,
+          "role": "tool",
+          "content_text": null,
+          "tool_name": "exec",
+          "tool_input_json": null,
+          "tool_output_text": "Process exited with code 1\nOutput:\nprovider failed",
+          "tool_call_id": "w4",
+          "timestamp": "2026-07-23T12:00:08Z",
+          "in_active_context": true,
+          "is_head_branch": true
+        }
+      }
+    ]
+  },
+  "expectations": {
+    "rows": [
+      {
+        "kind": "message",
+        "role": "user",
+        "event_id": 1
+      },
+      {
+        "kind": "noise_group",
+        "tool_names": [
+          "exec",
+          "exec",
+          "exec"
+        ],
+        "call_event_ids": [
+          2,
+          4,
+          6
+        ],
+        "result_event_ids": [
+          3,
+          5,
+          7
+        ],
+        "pairings": [
+          "id",
+          "id",
+          "id"
+        ]
+      },
+      {
+        "kind": "tool",
+        "tool_name": "exec",
+        "call_event_id": 8,
+        "result_event_id": 9,
+        "pairing": "id"
+      }
+    ],
+    "tool_count": 4,
+    "noise_group_count": 1,
+    "orphan_tool_ids": []
+  }
+}

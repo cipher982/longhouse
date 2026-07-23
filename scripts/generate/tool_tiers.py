@@ -24,7 +24,7 @@ def load() -> dict:
 def _aggregate_literal(value: object) -> str:
     if value is None:
         return "null"
-    if value not in {"search", "read", "list"}:
+    if value not in {"search", "read", "list", "wait"}:
         raise ValueError(f"unsupported aggregate category: {value!r}")
     return json.dumps(value)
 
@@ -59,7 +59,7 @@ def render_ts(data: dict) -> str:
 // Run: python3 scripts/generate/tool_tiers.py
 
 export type ToolTier = "noise" | "context" | "action";
-export type ToolAggregate = "search" | "read" | "list";
+export type ToolAggregate = "search" | "read" | "list" | "wait";
 export type ToolColorToken =
   | "brand" | "cyan" | "success" | "warning" | "secondary"
   | "tertiary" | "accent" | "muted";
@@ -230,6 +230,7 @@ public enum ToolAggregate: String, Sendable {{
     case search
     case read
     case list
+    case wait
 }}
 
 public enum ToolColorToken: String, Sendable {{
