@@ -399,7 +399,9 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
     if let Err(error) = remove_codex_contract(&response.session_id) {
         eprintln!("Longhouse warning: could not remove managed-session contract: {error}");
     }
-    print_helm_closed(&machine_name);
+    if exit == 0 {
+        print_helm_closed(&machine_name);
+    }
     if exit != 0 {
         std::process::exit(exit);
     }
@@ -624,7 +626,7 @@ fn run_foreground_command(command: &mut Command) -> anyhow::Result<i32> {
 
 fn stop_codex_bridge(session_id: &str, reason: &str) -> anyhow::Result<()> {
     validate_session_id(session_id)?;
-    let status = Command::new(paired_engine_path()?)
+    let mut child = Command::new(paired_engine_path()?)
         .args([
             "codex-bridge",
             "stop",
@@ -634,7 +636,20 @@ fn stop_codex_bridge(session_id: &str, reason: &str) -> anyhow::Result<()> {
             reason,
             "--force",
         ])
-        .status()?;
+        .spawn()
+        .context("start managed Codex bridge cleanup")?;
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            anyhow::bail!("managed Codex bridge cleanup timed out after 2 seconds");
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    };
     if !status.success() {
         anyhow::bail!("failed to stop managed Codex bridge");
     }
@@ -751,7 +766,9 @@ fn attach_managed_codex(args: CodexAttachArgs) -> anyhow::Result<()> {
     if let Err(error) = remove_codex_contract(&args.session_id) {
         eprintln!("Longhouse warning: could not remove managed-session contract: {error}");
     }
-    print_helm_closed("this machine");
+    if exit == 0 {
+        print_helm_closed("this machine");
+    }
     if exit != 0 {
         std::process::exit(exit);
     }
