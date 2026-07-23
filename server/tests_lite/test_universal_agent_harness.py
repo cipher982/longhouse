@@ -1213,6 +1213,7 @@ def test_control_surface_keeps_unsupported_and_live_token_rows_explicit(tmp_path
 
 
 @pytest.mark.timeout(60)
+@pytest.mark.skip(reason="Python device-control canaries were retired by the native-device cutover")
 def test_full_action_suite_runs_same_abstract_surface_for_all_providers(tmp_path: Path, monkeypatch) -> None:
     from zerg.qa import codex_provider_release_canary
 
