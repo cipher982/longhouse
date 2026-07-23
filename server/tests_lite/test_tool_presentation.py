@@ -4,6 +4,7 @@ from datetime import datetime
 from datetime import timezone
 from types import SimpleNamespace
 
+import zerg.services.tool_presentation as tool_presentation_module
 from zerg.services.session_views import build_event_response
 from zerg.services.tool_presentation import extract_codex_wrapper_calls
 from zerg.services.tool_presentation import project_tool_presentation
@@ -143,3 +144,14 @@ def test_event_response_projects_presentation_without_mutating_raw_tool_input():
     assert response.tool_presentation.disposition == "parsed"
     assert response.tool_presentation.children[0].tool_name == "exec_command"
     assert response.tool_presentation.wrapper_recedes is True
+def test_default_rules_path_prefers_packaged_copy(tmp_path, monkeypatch):
+    fake_module = tmp_path / "site-packages" / "zerg" / "services" / "tool_presentation.py"
+    fake_module.parent.mkdir(parents=True)
+    fake_module.write_text("# fake module path\n", encoding="utf-8")
+    packaged_rules = fake_module.parents[1] / "_config" / "tool-tiers.json"
+    packaged_rules.parent.mkdir(parents=True)
+    packaged_rules.write_text('{"tools": {}}', encoding="utf-8")
+
+    monkeypatch.setattr(tool_presentation_module, "__file__", str(fake_module))
+
+    assert tool_presentation_module._get_default_rules_path() == packaged_rules

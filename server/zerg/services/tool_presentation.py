@@ -15,8 +15,6 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
-DEFAULT_RULES_PATH = REPO_ROOT / "config" / "tool-tiers.json"
 PRESENTATION_VERSION = 1
 MAX_WRAPPER_CHARS = 200_000
 MAX_WRAPPER_CALLS = 32
@@ -24,6 +22,16 @@ MAX_LITERAL_DEPTH = 8
 
 _IDENTIFIER = re.compile(r"[A-Za-z_$][A-Za-z0-9_$]*")
 _NUMBER = re.compile(r"-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?$")
+
+
+def _get_default_rules_path() -> Path:
+    packaged_path = Path(__file__).resolve().parents[1] / "_config" / "tool-tiers.json"
+    if packaged_path.exists():
+        return packaged_path
+    return Path(__file__).resolve().parents[3] / "config" / "tool-tiers.json"
+
+
+DEFAULT_RULES_PATH = _get_default_rules_path()
 
 
 @lru_cache(maxsize=4)
