@@ -215,7 +215,7 @@ def _validate_contract(root: Path, contract: dict[str, Any]) -> list[str]:
         provider_ownership = str(command.get("provider_binary_ownership") or "").strip()
         if provider_ownership not in VALID_PROVIDER_OWNERSHIP:
             errors.append(f"{command_id}: provider_binary_ownership must be one of {sorted(VALID_PROVIDER_OWNERSHIP)}")
-        if provider_values != ["all"] and provider_ownership != "user_owned":
+        if provider_values != ["all"] and status != "excluded" and provider_ownership != "user_owned":
             errors.append(f"{command_id}: provider command plans must keep provider binaries user_owned")
 
         token_policy = str(command.get("token_policy") or "").strip()
@@ -227,7 +227,7 @@ def _validate_contract(root: Path, contract: dict[str, Any]) -> list[str]:
         cwd_policy = str(command.get("cwd_policy") or "").strip()
         if cwd_policy not in VALID_CWD_POLICIES:
             errors.append(f"{command_id}: cwd_policy must be one of {sorted(VALID_CWD_POLICIES)}")
-        if provider_values != ["all"] and cwd_policy == "not_applicable":
+        if provider_values != ["all"] and status != "excluded" and cwd_policy == "not_applicable":
             errors.append(f"{command_id}: provider command plans must declare a concrete cwd_policy")
 
     missing = sorted(transitional_inventory_ids - covered_inventory_ids)

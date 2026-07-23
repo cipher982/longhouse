@@ -45,7 +45,6 @@ longhouse claude       # managed channel session: send, interrupt, steer, resume
 longhouse codex        # managed app-server session: send, interrupt, steer, resume
 longhouse cursor       # managed terminal session: send, interrupt, resume (not active-turn steer)
 longhouse opencode     # managed server session: send, interrupt, reattach (not active-turn steer)
-longhouse agy          # managed safe-boundary input injection (not steerable or interruptible)
 ```
 
 Bare provider CLI sessions still get ingested into the timeline — they stay unmanaged: searchable and observable, but without Longhouse-owned remote control.

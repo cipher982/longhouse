@@ -198,8 +198,8 @@
     },
     {
       "id": "antigravity-managed",
-      "status": "planned",
-      "implementation_phase": "phase6",
+      "status": "excluded",
+      "implementation_phase": "device cutover",
       "legacy_commands": [
         "longhouse agy",
         "longhouse antigravity",
@@ -216,10 +216,10 @@
       "providers": [
         "antigravity"
       ],
-      "provider_binary_ownership": "user_owned",
-      "token_policy": "env_or_state_file",
-      "cwd_policy": "strict_absolute_or_existing",
-      "notes": "Phase 6 either replaces the hook-inbox adapter natively or explicitly excludes Antigravity from the no-Python launch promise."
+      "provider_binary_ownership": "excluded_until_provider_surface",
+      "token_policy": "not_applicable",
+      "cwd_policy": "not_applicable",
+      "notes": "Excluded from the native normal-device release. The prior Python hook inbox is not installed or advertised; a future reintroduction requires a native hook inbox plus a real agy canary."
     },
     {
       "id": "cursor-managed",
