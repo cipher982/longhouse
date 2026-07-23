@@ -12,9 +12,12 @@ from zerg.services.tool_presentation import project_tool_presentation
 
 
 def test_runtime_image_copies_tool_presentation_rules():
-    dockerfile = Path(__file__).resolve().parents[2] / "docker" / "runtime.dockerfile"
+    root = Path(__file__).resolve().parents[2]
+    dockerfile = root / "docker" / "runtime.dockerfile"
+    dockerignore = root / ".dockerignore"
 
     assert "COPY config/tool-tiers.json /config/tool-tiers.json" in dockerfile.read_text(encoding="utf-8")
+    assert "!config/tool-tiers.json" in dockerignore.read_text(encoding="utf-8")
 
 
 def test_extracts_single_codex_exec_command_without_executing_wrapper():
@@ -162,3 +165,9 @@ def test_default_rules_path_prefers_packaged_copy(tmp_path, monkeypatch):
     monkeypatch.setattr(tool_presentation_module, "__file__", str(fake_module))
 
     assert tool_presentation_module._get_default_rules_path() == packaged_rules
+
+
+def test_runtime_docker_context_includes_tool_rules():
+    dockerignore = Path(__file__).resolve().parents[2] / ".dockerignore"
+
+    assert "!config/tool-tiers.json" in dockerignore.read_text(encoding="utf-8").splitlines()
