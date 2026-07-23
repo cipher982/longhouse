@@ -39,10 +39,12 @@ fn run_inner() -> anyhow::Result<()> {
     let cwd = string(&input, "cwd");
     let transcript_path = string(&input, "transcript_path");
     if let (Some(managed), Some(transcript)) = (&managed_session_id, &transcript_path) {
-        let conn = crate::state::db::open_db(None)?;
-        let binding = crate::state::session_binding::SessionBinding::new(&conn);
-        let path = std::fs::canonicalize(&transcript).unwrap_or_else(|_| PathBuf::from(transcript));
-        binding.bind(&path.to_string_lossy(), managed, "claude")?;
+        if let Ok(conn) = crate::state::db::open_db(None) {
+            let binding = crate::state::session_binding::SessionBinding::new(&conn);
+            let path =
+                std::fs::canonicalize(transcript).unwrap_or_else(|_| PathBuf::from(transcript));
+            let _ = binding.bind(&path.to_string_lossy(), managed, "claude");
+        }
     }
     let payload = json!({
         "session_id": session_id,
