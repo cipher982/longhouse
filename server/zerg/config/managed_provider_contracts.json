@@ -818,8 +818,8 @@
       "startup_coordination_context": false,
       "capabilities": {
         "session.launch.helm": {
-          "disposition": "policy_disabled",
-          "reason_code": "policy_disabled",
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
           "policy_key": "provider.antigravity.launch_local",
           "action_gate": "ceiling",
           "contexts": {
@@ -843,8 +843,8 @@
           ]
         },
         "session.input.send": {
-          "disposition": "policy_disabled",
-          "reason_code": "policy_disabled",
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
           "policy_key": "provider.antigravity.send_input",
           "action_gate": "strict",
           "contexts": {
@@ -1017,27 +1017,27 @@
         }
       },
       "can_resume": false,
-      "turn_start": false,
+      "turn_start": true,
       "operation_evidence": {
         "launch_local": {
-          "level": "none",
-          "source": "excluded from the native normal-device release"
+          "level": "hermetic",
+          "source": "Cursor product-path canary must pass post-deploy before live-token promotion"
         },
         "run_once": {
           "level": "none",
           "source": "unavailable until stock Cursor exposes a durable headless conversation source"
         },
         "reattach": {
-          "level": "none",
-          "source": "excluded from the native normal-device release"
+          "level": "hermetic",
+          "source": "Cursor Helm Gate 0 native_resume_continuity: a new stock TUI resumes the same provider conversation and Longhouse session identity"
         },
         "send_input": {
-          "level": "none",
-          "source": "excluded from the native normal-device release"
+          "level": "hermetic",
+          "source": "Cursor Helm Gate 0 idle send: exact prompt digest, native response/stop hooks, and store continuity; active phase is rejected before PTY write"
         },
         "interrupt": {
-          "level": "none",
-          "source": "excluded from the native normal-device release"
+          "level": "hermetic",
+          "source": "Cursor Helm Gate 0 ctrl_c_cancel: Ctrl-C stops the active generation, emits aborted/error, preserves the TUI process, and the next turn completes"
         },
         "steer_active_turn": {
           "level": "none",
@@ -1048,27 +1048,34 @@
           "source": "Cursor permission hooks use the separate pull-based Longhouse pause-request surface; session.answer_pause machine dispatch is intentionally not advertised"
         },
         "terminate": {
-          "level": "none",
-          "source": "excluded from the native normal-device release"
+          "level": "hermetic",
+          "source": "cursor_helm: engine forwards session.terminate; launcher sends SIGKILL to the cursor-agent child pid, unlinks socket/state, and exits.",
+          "next": "promote with live terminate canary"
         },
         "tail_output": {
-          "level": "none",
-          "source": "excluded from the native normal-device release"
+          "level": "hermetic",
+          "source": "cursor_store exact raw storage-v2 source emits cursor-store-render-v2 text, reasoning, tool-call, and tool-result projections"
         },
         "runtime_phase": {
-          "level": "none",
-          "source": "excluded from the native normal-device release"
+          "level": "hermetic",
+          "source": "Cursor user hook adapter records native lifecycle/tool events and atomic active/idle/ended phase"
         },
         "transcript_binding": {
-          "level": "none",
-          "source": "excluded from the native normal-device release"
+          "level": "hermetic",
+          "source": "Cursor hook conversation_id plus launcher-owned Longhouse session ID binds the matching native store without recency heuristics"
         },
         "turn_start": {
-          "level": "none",
-          "source": "excluded from the native normal-device release"
+          "level": "hermetic",
+          "source": "cursor_print structured stream, native create-chat/resume, hooks, and process-group cancellation tests"
         }
       },
-      "machine_control_supports": [],
+      "machine_control_supports": [
+        "cursor.send",
+        "cursor.interrupt",
+        "cursor.terminate",
+        "cursor.turn_start",
+        "cursor.turn_interrupt"
+      ],
       "adapter_digest": "239926d5929a1304093dcae629721ede1170a23579e66bebc96cb6fd8e631f93"
     }
   ]
