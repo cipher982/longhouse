@@ -299,6 +299,45 @@ def test_readyz_catalog_probe_has_bounded_budget(tmp_path, monkeypatch):
     assert observed["timeout_seconds"] == health_router.CATALOG_HEALTH_TIMEOUT_SECONDS
 
 
+def test_readyz_requires_searchd_in_live_catalog_production(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from zerg.catalogd.schema import CATALOG_SCHEMA_GENERATION
+    from zerg.catalogd.schema import CATALOG_SCHEMA_VERSION
+
+    engine = make_engine(f"sqlite:///{tmp_path}/readyz_searchd.db")
+    import zerg.database as database_module
+
+    monkeypatch.setattr(health_router, "get_settings", lambda: SimpleNamespace(testing=False))
+    monkeypatch.setattr(database_module, "get_live_engine", lambda: engine)
+    monkeypatch.setattr(database_module, "live_catalog_enabled", lambda: True)
+    monkeypatch.setattr(database_module, "live_store_configured", lambda: True)
+    monkeypatch.setattr(
+        "zerg.services.catalogd_supervisor.catalogd_paths",
+        lambda: (tmp_path / "live.db", tmp_path / "catalogd.sock"),
+    )
+    monkeypatch.setattr(
+        "zerg.services.searchd_supervisor.searchd_paths",
+        lambda: (tmp_path / "search.db", tmp_path / "searchd.sock"),
+    )
+
+    def ping(_socket, method, **_kwargs):
+        if method == "ping.v2":
+            return {
+                "ready": True,
+                "schema_version": CATALOG_SCHEMA_VERSION,
+                "schema_generation": CATALOG_SCHEMA_GENERATION,
+            }
+        raise ConnectionError("searchd down")
+
+    monkeypatch.setattr("zerg.catalogd.client.call_catalogd_sync", ping)
+
+    response = health_router.readyz_check()
+
+    assert response.status_code == 503
+    assert b"search_unavailable" in response.body
+
+
 def test_readyz_does_not_require_catalogd_for_archive_route_process(tmp_path, monkeypatch):
     from types import SimpleNamespace
 

@@ -19,6 +19,7 @@ router = APIRouter(tags=["health"])
 
 EVENTS_FTS_EXISTS_SQL = "SELECT 1 FROM sqlite_master WHERE type='table' AND name='events_fts' LIMIT 1"
 CATALOG_HEALTH_TIMEOUT_SECONDS = 0.25
+SEARCHD_HEALTH_TIMEOUT_SECONDS = 0.25
 _ARCHIVE_DEGRADABLE_WRITER_LABELS = {
     "archive-primary-manifest",
     "heartbeat-bookkeeping",
@@ -318,6 +319,35 @@ def readyz_check():
             return JSONResponse(
                 status_code=503,
                 content={"status": "unhealthy", "reason": "catalog_unavailable"},
+            )
+
+        # The live catalog can be healthy while the disposable derived search
+        # sidecar is dead. Worklog and search routes depend on searchd, and the
+        # container healthcheck probes /readyz, so include that dependency here
+        # to make a sidecar outage self-healing instead of silently serving 503s.
+        searchd_ready = False
+        try:
+            from zerg.searchd.store import SCHEMA_GENERATION as SEARCHD_SCHEMA_GENERATION
+            from zerg.searchd.store import SCHEMA_VERSION as SEARCHD_SCHEMA_VERSION
+            from zerg.services.searchd_supervisor import searchd_paths
+
+            _database_path, search_socket = searchd_paths()
+            search_ping = call_catalogd_sync(
+                search_socket,
+                "search.ping.v2",
+                timeout_seconds=SEARCHD_HEALTH_TIMEOUT_SECONDS,
+            )
+            searchd_ready = (
+                search_ping.get("ready") is True
+                and search_ping.get("schema_version") == SEARCHD_SCHEMA_VERSION
+                and search_ping.get("schema_generation") == SEARCHD_SCHEMA_GENERATION
+            )
+        except Exception:
+            searchd_ready = False
+        if not searchd_ready:
+            return JSONResponse(
+                status_code=503,
+                content={"status": "unhealthy", "reason": "search_unavailable"},
             )
 
     db_url = str(readiness_engine.url) if readiness_engine is not None else ""
