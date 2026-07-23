@@ -5,6 +5,7 @@
 
 use std::io::Read;
 use std::path::PathBuf;
+use std::process::Command;
 
 use serde_json::{json, Value};
 
@@ -46,7 +47,7 @@ fn run_inner() -> anyhow::Result<()> {
             let _ = binding.bind(&path.to_string_lossy(), managed, "claude");
         }
     }
-    let payload = json!({
+    let mut payload = json!({
         "session_id": session_id,
         "state": state,
         "tool_name": string(&input, "tool_name"),
@@ -55,6 +56,11 @@ fn run_inner() -> anyhow::Result<()> {
         "transcript_path": transcript_path,
         "control_path": if managed_session_id.is_some() { "managed" } else { "unmanaged" },
     });
+    if managed_session_id.is_none() {
+        if let Some(provider_pid) = unmanaged_provider_pid() {
+            payload["provider_pid"] = json!(provider_pid);
+        }
+    }
     enqueue_presence(&longhouse_home()?.join("agent/outbox"), &payload)?;
     if event == "SessionStart" && managed_session_id.is_some() && coordination_bootstrap_enabled() {
         println!(
@@ -63,6 +69,43 @@ fn run_inner() -> anyhow::Result<()> {
         );
     }
     Ok(())
+}
+
+/// Claude executes hooks through a shell, so its direct parent is not reliably
+/// the provider. Walk a short parent chain and report only an actual `claude`
+/// process; this preserves the engine's PID-reuse protection for Shadow runs.
+fn unmanaged_provider_pid() -> Option<u32> {
+    let mut pid = unsafe { libc::getppid() } as u32;
+    for _ in 0..16 {
+        if pid == 0 {
+            return None;
+        }
+        let output = Command::new("ps")
+            .args(["-o", "comm=,ppid=", "-p", &pid.to_string()])
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let row = String::from_utf8_lossy(&output.stdout);
+        let (command, parent) = parse_process_row(&row)?;
+        if std::path::Path::new(command)
+            .file_name()
+            .and_then(|name| name.to_str())
+            == Some("claude")
+        {
+            return Some(pid);
+        }
+        pid = parent;
+    }
+    None
+}
+
+fn parse_process_row(row: &str) -> Option<(&str, u32)> {
+    let mut fields = row.split_whitespace();
+    let command = fields.next()?;
+    let parent = fields.last()?.parse().ok()?;
+    Some((command, parent))
 }
 
 fn string(input: &Value, key: &str) -> Option<String> {
@@ -132,6 +175,14 @@ mod tests {
         assert_eq!(
             state_for_event("Notification", &json!({"notification_type":"other"})),
             None
+        );
+    }
+
+    #[test]
+    fn parses_process_row() {
+        assert_eq!(
+            parse_process_row("/opt/homebrew/bin/claude 123\n"),
+            Some(("/opt/homebrew/bin/claude", 123))
         );
     }
 }

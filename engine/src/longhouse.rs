@@ -90,6 +90,9 @@ struct ClaudeLaunchArgs {
     token: Option<String>,
     #[arg(long)]
     remote_approve: bool,
+    /// Resume an existing Longhouse Claude Helm session.
+    #[arg(long)]
+    resume: Option<String>,
     #[arg(long)]
     claude_bin: Option<String>,
     #[arg(long, alias = "config-dir")]
@@ -287,9 +290,15 @@ fn configure_claude_hooks(claude_dir: Option<PathBuf>) -> anyhow::Result<()> {
         .or_insert_with(|| json!([]))
         .as_array_mut()
         .context("Claude PreToolUse hooks must be an array")?;
-    pre_tool.retain(|entry| !entry.to_string().contains("longhouse-permission-gate.py"));
-    pre_tool.push(json!({"hooks": [{"type": "command", "command": format!("{} claude-permission-gate", paired_engine_path()?.display()), "async": false, "timeout": 30}]}));
-    let lifecycle_command = format!("{} claude-lifecycle-hook", paired_engine_path()?.display());
+    // Replace both the old Python hook and any prior native hook.  This is
+    // deliberately idempotent: Claude runs every configured PreToolUse hook.
+    pre_tool.retain(|entry| {
+        let entry = entry.to_string();
+        !entry.contains("longhouse-permission-gate.py") && !entry.contains("claude-permission-gate")
+    });
+    let engine = shell_quote_path(&paired_engine_path()?);
+    pre_tool.push(json!({"hooks": [{"type": "command", "command": format!("{engine} claude-permission-gate"), "async": false, "timeout": 30}]}));
+    let lifecycle_command = format!("{engine} claude-lifecycle-hook");
     for event in [
         "SessionStart",
         "Stop",
@@ -305,13 +314,11 @@ fn configure_claude_hooks(claude_dir: Option<PathBuf>) -> anyhow::Result<()> {
             .or_insert_with(|| json!([]))
             .as_array_mut()
             .with_context(|| format!("Claude {event} hooks must be an array"))?;
-        entries.retain(|entry| !entry.to_string().contains("longhouse-hook.sh"));
-        if !entries
-            .iter()
-            .any(|entry| entry.to_string().contains("claude-lifecycle-hook"))
-        {
-            entries.push(json!({"hooks": [{"type": "command", "command": lifecycle_command, "async": false, "timeout": 5}]}));
-        }
+        entries.retain(|entry| {
+            let entry = entry.to_string();
+            !entry.contains("longhouse-hook.sh") && !entry.contains("claude-lifecycle-hook")
+        });
+        entries.push(json!({"hooks": [{"type": "command", "command": lifecycle_command, "async": false, "timeout": 5}]}));
     }
     let mut user_config: serde_json::Map<String, serde_json::Value> =
         match std::fs::read(&user_config_path) {
@@ -368,8 +375,17 @@ fn configure_claude_hooks(claude_dir: Option<PathBuf>) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Quote a path for Claude's shell-invoked command hook without changing the
+/// command's argument boundary when the install location contains whitespace.
+fn shell_quote_path(path: &Path) -> String {
+    format!(
+        "'{}'",
+        path.display().to_string().replace('\'', "'\\\"'\\\"'")
+    )
+}
+
 fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
-    let cwd = std::fs::canonicalize(&args.cwd)?;
+    let mut cwd = std::fs::canonicalize(&args.cwd)?;
     configure_claude_hooks(args.claude_dir.clone())?;
     let (url, token, machine_name) = resolve_codex_config(args.url, args.token)?;
     let binary = resolve_provider_binary(
@@ -393,44 +409,55 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
             .filter(|value| !value.is_empty())
     };
     let (launch_actor, launch_surface) = interactive_human_shell_provenance();
-    let mut payload = json!({"cwd":cwd,"provider":"claude","project":args.project,"git_repo":git(&["rev-parse", "--show-toplevel"]),"git_branch":git(&["rev-parse", "--abbrev-ref", "HEAD"]),"display_name":args.name,"loop_mode":args.loop_mode,"machine_name":machine_name,"permission_mode":if args.remote_approve {"remote_approve"} else {"bypass"},"native_claude_channels_available":true});
-    if let Some(actor) = launch_actor {
-        payload["launch_actor"] = json!(actor);
-    }
-    if let Some(surface) = launch_surface {
-        payload["launch_surface"] = json!(surface);
-    }
-    let endpoint = format!(
-        "{}/api/sessions/managed-local/this-device",
-        url.trim_end_matches('/')
-    );
     let runtime = tokio::runtime::Runtime::new()?;
-    let response: ManagedLaunchResponse = runtime.block_on(async {
-        let r = reqwest::Client::new()
-            .post(endpoint)
-            .header("X-Agents-Token", &token)
-            .json(&payload)
-            .send()
-            .await?;
-        if !r.status().is_success() {
-            anyhow::bail!("managed Claude launch failed ({})", r.status());
+    let resuming = args.resume.is_some();
+    let response: ManagedLaunchResponse = if let Some(session_id) = &args.resume {
+        let (response, session_cwd) =
+            resolve_managed_claude_resume(&runtime, &url, &token, session_id)?;
+        cwd = session_cwd;
+        response
+    } else {
+        let mut payload = json!({"cwd":cwd,"provider":"claude","project":args.project,"git_repo":git(&["rev-parse", "--show-toplevel"]),"git_branch":git(&["rev-parse", "--abbrev-ref", "HEAD"]),"display_name":args.name,"loop_mode":args.loop_mode,"machine_name":machine_name,"permission_mode":if args.remote_approve {"remote_approve"} else {"bypass"},"native_claude_channels_available":true});
+        if let Some(actor) = launch_actor {
+            payload["launch_actor"] = json!(actor);
         }
-        Ok::<_, anyhow::Error>(r.json().await?)
-    })?;
+        if let Some(surface) = launch_surface {
+            payload["launch_surface"] = json!(surface);
+        }
+        let endpoint = format!(
+            "{}/api/sessions/managed-local/this-device",
+            url.trim_end_matches('/')
+        );
+        runtime.block_on(async {
+            let r = reqwest::Client::new()
+                .post(endpoint)
+                .header("X-Agents-Token", &token)
+                .json(&payload)
+                .send()
+                .await?;
+            if !r.status().is_success() {
+                anyhow::bail!("managed Claude launch failed ({})", r.status());
+            }
+            Ok::<_, anyhow::Error>(r.json().await?)
+        })?
+    };
     let provider_session_id = response
         .provider_session_id
         .context("Longhouse did not return a Claude provider session")?;
     if response.managed_transport.as_deref() != Some("claude_channel_bridge") {
         anyhow::bail!("Longhouse returned an unsupported managed-local transport for Claude");
     }
-    let mut command = Command::new(binary);
+    let mut command = Command::new(&binary);
     if response.permission_mode.as_deref() != Some("remote_approve") {
         command.arg("--dangerously-skip-permissions");
     }
+    if resuming {
+        command.args(["--resume", &provider_session_id]);
+    } else {
+        command.args(["--session-id", &provider_session_id]);
+    }
     command
         .args([
-            "--session-id",
-            &provider_session_id,
             "--dangerously-load-development-channels",
             "server:longhouse-channel",
         ])
@@ -450,7 +477,14 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
                 "0"
             },
         );
-    let exit = run_foreground_command(&mut command)?;
+    if let Err(error) = record_claude_contract(&response.session_id, &cwd, &binary) {
+        eprintln!("Longhouse warning: could not record managed-session contract: {error}");
+    }
+    let run_result = run_foreground_command(&mut command);
+    if let Err(error) = remove_claude_contract(&response.session_id) {
+        eprintln!("Longhouse warning: could not remove managed-session contract: {error}");
+    }
+    let exit = run_result?;
     if let Err(error) = record_claude_terminal_event(
         &response.session_id,
         &provider_session_id,
@@ -498,6 +532,114 @@ fn record_claude_terminal_event(
         &longhouse_home()?.join("agent/runtime-events-outbox"),
         &event,
     )
+}
+
+fn resolve_managed_claude_resume(
+    runtime: &tokio::runtime::Runtime,
+    url: &str,
+    token: &str,
+    session_id: &str,
+) -> anyhow::Result<(ManagedLaunchResponse, PathBuf)> {
+    validate_session_id(session_id).context("--resume must be a Longhouse session UUID")?;
+    let endpoint = format!(
+        "{}/api/agents/sessions/{session_id}",
+        url.trim_end_matches('/')
+    );
+    runtime.block_on(async {
+        let response = reqwest::Client::new()
+            .get(endpoint)
+            .header("X-Agents-Token", token)
+            .send()
+            .await?;
+        match response.status().as_u16() {
+            200 => {}
+            401 => anyhow::bail!("Authentication failed. Run 'longhouse auth' to re-authenticate."),
+            404 => anyhow::bail!("Session not found: {session_id}"),
+            status => anyhow::bail!("Could not load Claude session {session_id}: HTTP {status}"),
+        }
+        let provider_session_id = response
+            .headers()
+            .get("X-Provider-Session-ID")
+            .and_then(|value| value.to_str().ok())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .context("Claude session has no provider resume identity yet")?
+            .to_owned();
+        Uuid::parse_str(&provider_session_id)
+            .context("Claude session has an invalid provider resume identity")?;
+        let payload: serde_json::Value = response.json().await?;
+        if payload.get("provider").and_then(serde_json::Value::as_str) != Some("claude") {
+            anyhow::bail!("--resume requires an existing Claude session");
+        }
+        let cwd = payload
+            .get("cwd")
+            .and_then(serde_json::Value::as_str)
+            .map(PathBuf::from)
+            .filter(|path| path.is_absolute() && path.is_dir())
+            .context("Claude session workspace is unavailable")?;
+        Ok((
+            ManagedLaunchResponse {
+                session_id: session_id.to_owned(),
+                run_id: payload
+                    .get("run_id")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned(),
+                provider_session_id: Some(provider_session_id),
+                permission_mode: payload
+                    .get("permission_mode")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned),
+                hook_token: None,
+                managed_transport: Some("claude_channel_bridge".into()),
+            },
+            cwd,
+        ))
+    })
+}
+
+fn claude_contract_path(session_id: &str) -> anyhow::Result<PathBuf> {
+    validate_session_id(session_id)?;
+    Ok(longhouse_home()?
+        .join("managed-local/contracts/claude")
+        .join(format!("{session_id}.json")))
+}
+
+fn record_claude_contract(session_id: &str, cwd: &Path, claude_bin: &str) -> anyhow::Result<()> {
+    let path = claude_contract_path(session_id)?;
+    let payload = json!({
+        "schema_version": 1,
+        "session_id": session_id,
+        "provider": "claude",
+        "launch_mode": "tui",
+        "created_at": chrono::Utc::now().to_rfc3339(),
+        "longhouse_build": build_identity::BuildIdentity::current().qualified(),
+        "provider_binary": {"path": claude_bin, "source": "path", "version": serde_json::Value::Null},
+        "workspace": {"cwd": cwd, "canonical_cwd": std::fs::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf()), "file_identity": serde_json::Value::Null},
+        "control": {"kind": "claude_channel_bridge"},
+    });
+    let parent = path
+        .parent()
+        .context("managed Claude contract has no parent")?;
+    std::fs::create_dir_all(parent)?;
+    let temporary = path.with_extension(format!("json.tmp.{}", std::process::id()));
+    std::fs::write(
+        &temporary,
+        format!("{}\n", serde_json::to_string_pretty(&payload)?),
+    )?;
+    std::fs::rename(temporary, path)?;
+    Ok(())
+}
+
+fn remove_claude_contract(session_id: &str) -> anyhow::Result<()> {
+    let path = claude_contract_path(session_id)?;
+    match std::fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => {
+            Err(error).with_context(|| format!("remove managed Claude contract {}", path.display()))
+        }
+    }
 }
 
 fn enqueue_runtime_event(dir: &Path, event: &serde_json::Value) -> anyhow::Result<()> {
@@ -1236,7 +1378,7 @@ mod tests {
     fn claude_configure_places_hooks_and_mcp_at_the_provider_paths() {
         let temp = tempfile::tempdir().unwrap();
         let claude_dir = temp.path().join(".claude");
-        let engine = temp.path().join("longhouse-engine");
+        let engine = temp.path().join("longhouse engine");
         std::fs::write(&engine, "").unwrap();
         std::fs::create_dir_all(claude_dir.join("hooks")).unwrap();
         std::fs::write(
@@ -1250,6 +1392,7 @@ mod tests {
             Some(engine.display().to_string()),
             || {
                 configure_claude_hooks(Some(claude_dir.clone())).unwrap();
+                configure_claude_hooks(Some(claude_dir.clone())).unwrap();
             },
         );
         let settings: serde_json::Value =
@@ -1258,6 +1401,18 @@ mod tests {
         assert!(settings["hooks"]["PreToolUse"]
             .to_string()
             .contains("claude-permission-gate"));
+        assert_eq!(
+            settings["hooks"]["PreToolUse"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|entry| entry.to_string().contains("claude-permission-gate"))
+                .count(),
+            1
+        );
+        assert!(settings["hooks"]["PreToolUse"]
+            .to_string()
+            .contains("longhouse engine"));
         assert!(settings["hooks"]["SessionStart"]
             .to_string()
             .contains("claude-lifecycle-hook"));
@@ -1305,5 +1460,35 @@ mod tests {
             serde_json::from_slice(&std::fs::read(event_path).unwrap()).unwrap();
         assert_eq!(event["kind"], "terminal_signal");
         assert_eq!(event["payload"]["terminal_state"], "session_ended");
+    }
+
+    #[test]
+    fn claude_contract_is_written_and_removed_at_the_native_path() {
+        let temp = tempfile::tempdir().unwrap();
+        let cwd = temp.path().join("workspace");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let session_id = "11111111-1111-4111-8111-111111111111";
+        temp_env::with_var(
+            "LONGHOUSE_HOME",
+            Some(temp.path().display().to_string()),
+            || {
+                record_claude_contract(session_id, &cwd, "/usr/bin/claude").unwrap();
+                let path = claude_contract_path(session_id).unwrap();
+                let payload: serde_json::Value =
+                    serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+                assert_eq!(payload["provider"], "claude");
+                assert_eq!(payload["control"]["kind"], "claude_channel_bridge");
+                remove_claude_contract(session_id).unwrap();
+                assert!(!path.exists());
+            },
+        );
+    }
+
+    #[test]
+    fn shell_quotes_hook_paths() {
+        assert_eq!(
+            shell_quote_path(Path::new("/Applications/Longhouse Engine/bin")),
+            "'/Applications/Longhouse Engine/bin'"
+        );
     }
 }
