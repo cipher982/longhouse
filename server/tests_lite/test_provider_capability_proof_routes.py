@@ -105,6 +105,8 @@ def test_factory_publish_is_authenticated_idempotent_and_machine_read_is_server_
     assert fetched.json()["trusted_artifact_ids"] == [record.artifact_id]
     assert fetched.json()["records"] == [record.serialize()]
     assert fetched.json()["records"][0]["run_reference"] == record.run_reference
+    assert fetched.json()["total_records"] == 1
+    assert fetched.json()["truncated"] is False
 
 
 def test_factory_publish_is_absent_when_token_is_unconfigured(monkeypatch, tmp_path: Path) -> None:
@@ -228,3 +230,32 @@ def test_factory_rejects_oversized_body(monkeypatch, tmp_path: Path) -> None:
         api_app.dependency_overrides.clear()
 
     assert response.status_code == 413
+
+
+def test_machine_read_is_bounded_and_provider_fair(monkeypatch, tmp_path: Path) -> None:
+    store = ProviderCapabilityProofStore(tmp_path / "proofs")
+    monkeypatch.setattr(routes, "_proof_store", lambda: store)
+    monkeypatch.setattr(routes, "managed_provider_names", lambda: frozenset({"codex", "claude"}))
+    monkeypatch.setattr(routes, "_MAX_RECORDS", 4)
+    for provider in ("codex", "claude"):
+        for number in range(3):
+            store.write(
+                _record(
+                    provider=provider,
+                    invocation_id=f"{provider}-{number}",
+                    generated_at=f"2026-07-22T18:00:0{number}Z",
+                )
+            )
+    client = _client(monkeypatch, tmp_path)
+    monkeypatch.setattr(routes, "_proof_store", lambda: store)
+    try:
+        response = client.get("/api/agents/provider-capability-proofs")
+    finally:
+        api_app.dependency_overrides.clear()
+
+    payload = response.json()
+    assert response.status_code == 200
+    assert len(payload["records"]) == 4
+    assert [record["provider"] for record in payload["records"]] == ["claude", "codex", "claude", "codex"]
+    assert payload["total_records"] == 6
+    assert payload["truncated"] is True

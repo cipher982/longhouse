@@ -344,6 +344,31 @@ def test_antigravity_explicit_home_runs_real_agy_canary(tmp_path: Path, monkeypa
     assert record["evidence_class"] == "live_token"
 
 
+def test_antigravity_live_flag_without_explicit_home_never_uses_ambient_authority(tmp_path: Path, monkeypatch) -> None:
+    binary, executable_identity = _fake_binary(tmp_path, "antigravity")
+    ambient_home = tmp_path / "ambient-home"
+    ambient_home.mkdir()
+    monkeypatch.setenv("HOME", str(ambient_home))
+    monkeypatch.setenv(antigravity.LIVE_ENABLE_ENV, "1")
+    monkeypatch.setattr(
+        antigravity,
+        "run_provider_live_canary",
+        lambda _args: _antigravity_no_token_artifact(),
+    )
+    monkeypatch.setattr(
+        antigravity.semantic,
+        "load_control_canary_module",
+        lambda _root: pytest.fail("real agy must require an explicit qualification home"),
+    )
+
+    output = tmp_path / "output"
+    provider_qualification.run(_request(tmp_path, "antigravity", binary, executable_identity), output)
+
+    record = _records_by_assertion(output)[antigravity.ASSERTIONS[1]]
+    assert record["outcome"] == "blocked"
+    assert os.environ["HOME"] == str(ambient_home)
+
+
 def test_binary_mutation_during_canary_invalidates_semantic_records(tmp_path: Path, monkeypatch) -> None:
     binary, executable_identity = _fake_binary(tmp_path, "opencode")
 

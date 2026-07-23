@@ -65,19 +65,19 @@ def _execute(binary: Path, evidence_root: Path):
         ),
     )
     raw_home = str(os.environ.get(QUALIFICATION_HOME_ENV) or "").strip()
-    live_enabled = no_token_outcome is AssertionOutcome.PASS and (os.environ.get(LIVE_ENABLE_ENV) == "1" or bool(raw_home))
+    live_requested = os.environ.get(LIVE_ENABLE_ENV) == "1" or bool(raw_home)
     if raw_home and not Path(raw_home).is_absolute():
         raise identity.RequestError(f"{QUALIFICATION_HOME_ENV} must be an absolute path")
+    live_enabled = no_token_outcome is AssertionOutcome.PASS and live_requested and bool(raw_home)
     live: dict[str, Any]
     if live_enabled:
         module = semantic.load_control_canary_module(Path(__file__).resolve().parents[3])
         live_root = evidence_root / "live"
         live_root.mkdir(parents=True, exist_ok=True)
         env = {"LONGHOUSE_ANTIGRAVITY_BIN": str(binary)}
-        if raw_home:
-            home = Path(raw_home)
-            home.mkdir(mode=0o700, parents=True, exist_ok=True)
-            env["HOME"] = str(home)
+        home = Path(raw_home)
+        home.mkdir(mode=0o700, parents=True, exist_ok=True)
+        env["HOME"] = str(home)
         with semantic.temporary_environment(env):
             live = module.run_antigravity_real_agy_send_canary(
                 argparse.Namespace(

@@ -103,6 +103,22 @@ def _validated_records(payload: dict[str, Any]) -> tuple[ProviderCapabilityProof
     return tuple(records)
 
 
+def _bounded_records(store: ProviderCapabilityProofStore) -> tuple[tuple[ProviderCapabilityProofRecord, ...], int]:
+    """Return a provider-fair newest-first window that always fits the machine contract."""
+    queues = {provider: list(reversed(store.records(provider))) for provider in sorted(managed_provider_names())}
+    total = sum(len(records) for records in queues.values())
+    selected: list[ProviderCapabilityProofRecord] = []
+    while len(selected) < _MAX_RECORDS:
+        advanced = False
+        for provider in queues:
+            if queues[provider] and len(selected) < _MAX_RECORDS:
+                selected.append(queues[provider].pop(0))
+                advanced = True
+        if not advanced:
+            break
+    return tuple(selected), total
+
+
 @router.post("/internal/provider-capability-proofs", status_code=status.HTTP_201_CREATED)
 async def publish_provider_capability_proofs(
     request: Request,
@@ -131,10 +147,12 @@ def list_provider_capability_proofs(
     _single: None = Depends(require_single_tenant),
 ) -> dict[str, Any]:
     store = _proof_store()
-    records = tuple(record for provider in sorted(managed_provider_names()) for record in store.records(provider))
+    records, total = _bounded_records(store)
     return {
         "schema_version": 1,
         "artifact_kind": _TRUSTED_BUNDLE_KIND,
         "records": [record.serialize() for record in records],
         "trusted_artifact_ids": [record.artifact_id for record in records],
+        "total_records": total,
+        "truncated": total > len(records),
     }
