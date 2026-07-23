@@ -43,7 +43,6 @@ All three install the same product. On macOS the shell installer also drops `Lon
 ```bash
 longhouse claude       # managed channel session: send, interrupt, steer, resume
 longhouse codex        # managed app-server session: send, interrupt, steer, resume
-longhouse cursor       # managed terminal session: send, interrupt, resume (not active-turn steer)
 longhouse opencode     # managed server session: send, interrupt, reattach (not active-turn steer)
 ```
 

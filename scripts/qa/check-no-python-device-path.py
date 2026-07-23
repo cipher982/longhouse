@@ -255,8 +255,8 @@ DEFAULT_INVENTORY: tuple[dict[str, Any], ...] = (
         "device_command": False,
     },
     {
-        "id": "cursor-command-wrapper",
-        "category": "transitional_device",
+      "id": "cursor-command-wrapper",
+        "category": "excluded_device",
         "provider": "cursor",
         "path": "server/zerg/cli/cursor.py",
         "owner_area": "cursor-native",
@@ -266,8 +266,8 @@ DEFAULT_INVENTORY: tuple[dict[str, Any], ...] = (
         "python_dependency_kind": "entrypoint",
     },
     {
-        "id": "cursor-helm-launch-wrapper",
-        "category": "transitional_device",
+      "id": "cursor-helm-launch-wrapper",
+        "category": "excluded_device",
         "provider": "cursor",
         "path": "server/zerg/cli/cursor_helm.py",
         "owner_area": "cursor-native",
@@ -280,8 +280,8 @@ DEFAULT_INVENTORY: tuple[dict[str, Any], ...] = (
         "python_dependency_kind": "entrypoint",
     },
     {
-        "id": "antigravity-launch-wrapper",
-        "category": "transitional_device",
+      "id": "antigravity-launch-wrapper",
+        "category": "excluded_device",
         "provider": "antigravity",
         "path": "server/zerg/cli/antigravity.py",
         "owner_area": "antigravity-decision",
@@ -291,8 +291,8 @@ DEFAULT_INVENTORY: tuple[dict[str, Any], ...] = (
         "python_dependency_kind": "entrypoint",
     },
     {
-        "id": "antigravity-channel",
-        "category": "transitional_device",
+      "id": "antigravity-channel",
+        "category": "excluded_device",
         "provider": "antigravity",
         "path": "server/zerg/cli/antigravity_channel.py",
         "owner_area": "antigravity-decision",
@@ -302,8 +302,8 @@ DEFAULT_INVENTORY: tuple[dict[str, Any], ...] = (
         "python_dependency_kind": "control_shellout",
     },
     {
-        "id": "antigravity-hook-inbox",
-        "category": "transitional_device",
+      "id": "antigravity-hook-inbox",
+        "category": "excluded_device",
         "provider": "antigravity",
         "path": "server/zerg/services/antigravity_hook_inbox.py",
         "owner_area": "antigravity-decision",
@@ -313,8 +313,8 @@ DEFAULT_INVENTORY: tuple[dict[str, Any], ...] = (
         "python_dependency_kind": "control_shellout",
     },
     {
-        "id": "antigravity-hook-script-python",
-        "category": "transitional_device",
+      "id": "antigravity-hook-script-python",
+        "category": "excluded_device",
         "provider": "antigravity",
         "path": "server/zerg/services/antigravity_hook_inbox.py",
         "symbol": "_ANTIGRAVITY_HOOK_SCRIPT",
@@ -425,8 +425,8 @@ DEFAULT_INVENTORY: tuple[dict[str, Any], ...] = (
         "device_command": True,
     },
     {
-        "id": "control-channel-antigravity-shellout",
-        "category": "transitional_device",
+      "id": "control-channel-antigravity-shellout",
+        "category": "excluded_device",
         "provider": "antigravity",
         "path": "engine/src/control_channel.rs",
         "symbol": "run_antigravity_channel_command",
@@ -497,11 +497,12 @@ VALID_CATEGORIES = {
     "legacy_compat",
     "native_device",
     "native_exempt",
+    "excluded_device",
     "server_only",
     "test_only",
     "transitional_device",
 }
-DEVICE_CATEGORIES = {"blocker", "native_device", "native_exempt", "transitional_device", "legacy_compat"}
+DEVICE_CATEGORIES = {"blocker", "native_device", "native_exempt", "excluded_device", "transitional_device", "legacy_compat"}
 TRANSITIONAL_CATEGORIES = {"transitional_device", "legacy_compat"}
 PYTHON_DEPENDENCY_KINDS = {
     "adapter",

@@ -223,8 +223,8 @@
     },
     {
       "id": "cursor-managed",
-      "status": "planned",
-      "implementation_phase": "phase7",
+      "status": "excluded",
+      "implementation_phase": "device cutover",
       "legacy_commands": [
         "longhouse cursor"
       ],
@@ -236,10 +236,10 @@
       "providers": [
         "cursor"
       ],
-      "provider_binary_ownership": "user_owned",
-      "token_policy": "env_or_state_file",
-      "cwd_policy": "strict_absolute_or_existing",
-      "notes": "Cursor already has native send, interrupt, and stop controls; Phase 7 replaces the Python foreground Helm PTY launcher."
+      "provider_binary_ownership": "excluded_until_provider_surface",
+      "token_policy": "not_applicable",
+      "cwd_policy": "not_applicable",
+      "notes": "Excluded from the native normal-device release. Its Python PTY launcher, remote-control socket, permission lifecycle, and transcript binding remain legacy-only until one native runtime owns the entire contract."
     }
   ]
 }

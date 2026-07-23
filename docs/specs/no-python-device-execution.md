@@ -12,7 +12,7 @@ This is the execution companion to [Rust Edge Provider Parity](rust-edge-provide
 | Codex Helm | native launch/attach/stop implemented | hermetic provider proof; doctor/provenance is not cutover-critical |
 | Claude Helm | native launch/configure implemented | native resume/contract parity and reviewed hook fixes; prove installed lifecycle |
 | OpenCode Helm | native facade and localhost bridge implemented | independent lifecycle review, installed-provider proof; runtime plugin remains deliberately absent until native permission reply exists |
-| Cursor Helm | control native; launch Python | native PTY launcher and recovery |
+| Cursor Helm | excluded from native normal-device release | reintroduce only as one native PTY/control/permission/transcript runtime |
 | Antigravity | excluded from native normal-device release | reintroduce only with a native hook inbox and real `agy` canary |
 | public device CLI | tiny native facade; Python owns auth/connect/repair/status | explicit public-command matrix and native ownership |
 | desktop/menu bar | invokes `longhouse local-health --fast --json` | preserve that native public contract |
@@ -22,7 +22,7 @@ This is the execution companion to [Rust Edge Provider Parity](rust-edge-provide
 1. Publish the public `longhouse` command matrix: each current Python device command is either ported, explicitly retained only under `longhouse-python`, or removed. Auth, `connect --install`, repair, and `local-health --fast --json` are critical-path commands because provider Helm and the Desktop depend on them. Update `config/native_device_entrypoints.json` to reflect real facade/engine targets.
 2. Grow the hermetic installed-artifact test now, beginning with install/repair and native `local-health --fast --json`; trap `python`, `python3`, `uv`, `pip`, and `longhouse-python`. Each later provider cutover extends this same gate.
 3. Prove the new `longhouse-engine opencode-bridge` plus public native OpenCode launch/attach/stop on installed artifacts. Preserve schema-v1 state, localhost-only health, process identity, bounded attached cleanup, and explicit detached survival. Do not emit coordination MCP or answerable permission pauses until their native counterparts exist.
-4. Port Cursor Helm’s foreground process-group/control-socket owner to the facade, or explicitly remove Cursor Helm from the supported normal-device surface before the cutover.
+4. Cursor Helm is excluded from the native normal-device release. Reintroduce it only as one native PTY/control/permission/transcript runtime; do not leave a Python launch path advertised as supported.
 5. Close Claude’s reviewed gaps and prove its installed lifecycle. This is important parity work, but does not block the other provider ports.
 6. Antigravity is excluded from the native normal-device release. Remove its capability advertising; an affirmative future inclusion requires a no-Python hook inbox and real `agy` canary.
 7. Remove default-PATH/installer `uv` device ownership, retain any server-only compatibility surface behind explicit `longhouse-python`, then rebase, review, push, release, and dogfood-refresh.
@@ -46,7 +46,7 @@ The evolving hermetic test installs the paired artifacts into a fresh home with 
 - [ ] Native auth/connect/repair and Desktop-facing local-health contract complete.
 - [ ] Claude reviewed blockers resolved and provider proof complete.
 - [ ] OpenCode native Helm complete and proof complete.
-- [ ] Cursor native Helm complete and proof complete.
+- [x] Cursor Helm explicitly excluded from the native normal-device release.
 - [x] Antigravity explicitly excluded from the native normal-device release.
 - [ ] No normal device CLI route requires Python.
 - [ ] Default device install/PATH never selects Python; server compatibility, if retained, is only `longhouse-python`.
