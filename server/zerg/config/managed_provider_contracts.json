@@ -258,8 +258,8 @@
       "startup_coordination_context": true,
       "capabilities": {
         "session.launch.helm": {
-          "disposition": "policy_disabled",
-          "reason_code": "policy_disabled",
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
           "policy_key": "provider.claude.launch_local",
           "action_gate": "ceiling",
           "contexts": {

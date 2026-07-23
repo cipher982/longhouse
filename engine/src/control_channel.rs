@@ -489,7 +489,7 @@ fn control_supports_for_path_with_env(
 }
 
 fn provider_live_proof_supported_provider(provider: &str) -> bool {
-    matches!(provider, "claude" | "opencode" | "antigravity")
+    matches!(provider, "claude" | "opencode")
 }
 
 fn control_supports_for_path(path_value: Option<&OsStr>) -> Vec<String> {
@@ -2883,18 +2883,8 @@ mod tests {
 
     #[test]
     fn reducer_control_grants_follow_dispatch_manifest_and_connection_state() {
-        assert_eq!(
-            granted_control_operations("cursor", true),
-            vec![
-                "interrupt".to_string(),
-                "send_input".to_string(),
-                "terminate".to_string()
-            ]
-        );
-        assert_eq!(
-            granted_control_operations("antigravity", true),
-            vec!["send_input".to_string()]
-        );
+        assert!(granted_control_operations("cursor", true).is_empty());
+        assert!(granted_control_operations("antigravity", true).is_empty());
         assert!(granted_control_operations("cursor", false).is_empty());
         assert!(granted_control_operations("unknown", true).is_empty());
     }
@@ -3319,21 +3309,9 @@ mod tests {
             std::env::remove_var("LONGHOUSE_ARGS_OUT");
         }
 
-        assert_eq!(result["ok"], true);
-        assert_eq!(result["result"]["provider"], "antigravity");
-        assert_eq!(result["result"]["transport"], "antigravity_hook_inbox");
-        let args = std::fs::read_to_string(&args_path).unwrap();
-        assert_eq!(
-            args.lines().collect::<Vec<_>>(),
-            vec![
-                "antigravity-channel",
-                "send",
-                "--session-id",
-                "session-1",
-                "--text",
-                "hello",
-            ]
-        );
+        assert_eq!(result["ok"], false);
+        assert_eq!(result["error"]["code"], "provider_shadow_only");
+        assert!(!args_path.exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -3765,7 +3743,7 @@ exit 1
         assert_eq!(opencode["ok"], false);
         assert_eq!(opencode["error"]["code"], "unsupported_command");
         assert_eq!(antigravity["ok"], false);
-        assert_eq!(antigravity["error"]["code"], "unsupported_command");
+        assert_eq!(antigravity["error"]["code"], "provider_shadow_only");
     }
 
     #[test]
@@ -4247,7 +4225,7 @@ printf '{{"type":"result","subtype":"success","is_error":false}}\n'
 
             assert_eq!(response["ok"], false, "{permission_mode}: {response}");
             assert_eq!(
-                response["error"]["code"], "permission_policy_unsupported",
+                response["error"]["code"], "provider_shadow_only",
                 "{permission_mode}: {response}"
             );
         }

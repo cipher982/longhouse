@@ -164,10 +164,7 @@ export default function DevicesPage() {
             </Button>
           </div>
           <p className="token-reveal-hint">
-            Copy this token now — it won't be shown again. Use it with:
-          </p>
-          <p className="token-reveal-hint">
-            <code>longhouse auth --url {window.location.origin}</code>
+            Copy this token now — it won't be shown again. It is for headless automation only; normal device setup uses browser approval with <code>longhouse auth --url {window.location.origin}</code>.
           </p>
         </div>
       )}

@@ -4,6 +4,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(git rev-parse --show-toplevel)"
+NODE_BIN="$(command -v node)"
 TEST_ROOT="$(mktemp -d)"
 PAIR_DIR="$TEST_ROOT/pair"
 HOME_DIR="$TEST_ROOT/home"
@@ -72,6 +73,23 @@ RUNTIME_PID=$!
 for _ in $(seq 1 50); do [[ -s "$RUNTIME_PORT_FILE" ]] && break; sleep 0.1; done
 [[ -s "$RUNTIME_PORT_FILE" ]]
 RUNTIME_PORT="$(head -n 1 "$RUNTIME_PORT_FILE")"
+
+cat > "$HOME_DIR/traps/open" <<'EOF'
+#!/usr/bin/env sh
+"$LONGHOUSE_SMOKE_NODE" -e '
+const target = new URL(process.argv[1]);
+const callback = new URL(target.searchParams.get("callback"));
+callback.searchParams.set("state", target.searchParams.get("state"));
+callback.searchParams.set("token", "zdt_browser_fixture_token");
+require("http").get(callback, (response) => process.exit(response.statusCode === 200 ? 0 : 1));
+' "$1"
+EOF
+chmod 755 "$HOME_DIR/traps/open"
+ln -s open "$HOME_DIR/traps/xdg-open"
+HOME="$HOME_DIR" PATH="$HOME_DIR/.local/bin:$HOME_DIR/traps:/usr/bin:/bin:/usr/sbin:/sbin" \
+LONGHOUSE_SMOKE_NODE="$NODE_BIN" \
+"$installed" auth --url "http://127.0.0.1:$RUNTIME_PORT" --browser >/dev/null
+[[ "$(cat "$HOME_DIR/.longhouse/machine/device-token")" == "zdt_browser_fixture_token" ]]
 
 HOME="$HOME_DIR" PATH="$HOME_DIR/.local/bin:$HOME_DIR/traps:/usr/bin:/bin:/usr/sbin:/sbin" \
 LONGHOUSE_DEVICE_TOKEN="native-installer-smoke-token" \

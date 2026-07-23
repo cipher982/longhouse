@@ -38,7 +38,7 @@ This is the execution companion to [Rust Edge Provider Parity](rust-edge-provide
 
 ## Release evidence
 
-`scripts/ci/native-installer-smoke.sh` installs the paired artifacts into a fresh home with trap executables for `python`, `python3`, `uv`, `pip`, and `longhouse-python`, then proves native local health, auth against a local Runtime Host fixture, and native Machine Agent service installation. Native fake-upstream suites prove Codex app-server, Claude channel/control, and OpenCode control/lifecycle behavior. It also proves installers no longer re-stamp Python hooks. Runtime Host may run outside the trapped device environment.
+`scripts/ci/native-installer-smoke.sh` installs the paired artifacts into a fresh home with trap executables for `python`, `python3`, `uv`, `pip`, and `longhouse-python`, then proves native local health, browser-approved and headless auth against a local Runtime Host fixture, native Machine Agent service installation, and reinstall replacement. Native fake-upstream suites separately prove Codex app-server, Claude channel/control, and OpenCode control/lifecycle behavior from the workspace. The provider-release universal smoke adds fake-provider transcript projection and Runtime Host fixture ingestion. Runtime Host may run outside the trapped device environment.
 
 ## Completion checklist
 
