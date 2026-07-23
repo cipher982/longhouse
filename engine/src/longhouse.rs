@@ -938,4 +938,34 @@ mod tests {
             },
         );
     }
+
+    #[test]
+    fn claude_configure_uses_user_config_and_removes_python_gate() {
+        let temp = tempfile::tempdir().unwrap();
+        let claude_dir = temp.path().join(".claude");
+        let engine = temp.path().join("longhouse-engine");
+        std::fs::write(&engine, "").unwrap();
+        std::fs::create_dir_all(claude_dir.join("hooks")).unwrap();
+        std::fs::write(
+            claude_dir.join("hooks/longhouse-permission-gate.py"),
+            "legacy",
+        )
+        .unwrap();
+        temp_env::with_var(
+            "LONGHOUSE_ENGINE_BIN",
+            Some(engine.display().to_string()),
+            || {
+                configure_claude_hooks(Some(claude_dir.clone())).unwrap();
+            },
+        );
+        let settings: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(temp.path().join(".claude.json")).unwrap())
+                .unwrap();
+        assert!(settings["hooks"]["PreToolUse"]
+            .to_string()
+            .contains("claude-permission-gate"));
+        assert!(!claude_dir
+            .join("hooks/longhouse-permission-gate.py")
+            .exists());
+    }
 }
