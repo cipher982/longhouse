@@ -43,4 +43,7 @@ installed="$HOME_DIR/.local/bin/longhouse"
 [[ -x "$HOME_DIR/.local/bin/longhouse-python" ]]
 HOME="$HOME_DIR" PATH="$HOME_DIR/.local/bin:$HOME_DIR/traps:/usr/bin:/bin:/usr/sbin:/sbin" "$installed" verify-pair >/dev/null
 HOME="$HOME_DIR" PATH="$HOME_DIR/.local/bin:$HOME_DIR/traps:/usr/bin:/bin:/usr/sbin:/sbin" "$installed" local-health --fast --json >/dev/null
+HOME="$HOME_DIR" PATH="$HOME_DIR/.local/bin:$HOME_DIR/traps:/usr/bin:/bin:/usr/sbin:/sbin" "$installed" auth --clear >/dev/null
+HOME="$HOME_DIR" PATH="$HOME_DIR/.local/bin:$HOME_DIR/traps:/usr/bin:/bin:/usr/sbin:/sbin" "$installed" machine repair --dry-run --json >/dev/null
+[[ ! -e "$HOME_DIR/.claude/hooks/longhouse-permission-gate.py" ]]
 echo "native installer smoke passed"
