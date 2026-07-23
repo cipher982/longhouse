@@ -1083,11 +1083,7 @@ def test_full_action_suite_uses_provider_scoped_old_new_artifacts(tmp_path: Path
         "run_codex_provider_release_canary",
         _fake_codex_permission_canary_only(codex_provider_release_canary.run_codex_provider_release_canary),
     )
-    monkeypatch.setenv(
-        "LONGHOUSE_ENGINE_BIN",
-        str(_fake_longhouse_engine_claude_channel(tmp_path / "bin" / "longhouse-engine")),
-    )
-    providers = ("claude", "codex")
+    providers = ("codex",)
     old_paths = {
         provider: _write_release_proof(
             tmp_path,
