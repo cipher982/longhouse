@@ -234,7 +234,7 @@ def check_public_package(tag: str, sha: str) -> Check:
             "--isolated",
             "--with",
             f"longhouse=={version}",
-            "longhouse",
+            "longhouse-server",
             "version",
             "--json",
         ],

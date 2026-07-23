@@ -631,15 +631,28 @@ pub fn run_benchmark_ship(
                 tokio::spawn(async move {
                     let _permit = sem.acquire_owned().await.unwrap();
                     let started = Instant::now();
-                    let result = client
-                        .ship_storage_v2_body(
-                            &ingest_path,
-                            item.lane,
-                            item.body,
-                            &item.expected_envelope_id,
-                            None,
-                        )
-                        .await;
+                    let mut attempts = 0;
+                    let result = loop {
+                        let result = client
+                            .ship_storage_v2_body(
+                                &ingest_path,
+                                item.lane,
+                                item.body.clone(),
+                                &item.expected_envelope_id,
+                                None,
+                            )
+                            .await;
+                        let Some(backpressure) = result.as_ref().err().and_then(|error| {
+                            error.downcast_ref::<crate::shipping::client::StorageV2Backpressure>()
+                        }) else {
+                            break result;
+                        };
+                        if attempts >= 2 {
+                            break result;
+                        }
+                        attempts += 1;
+                        sleep(backpressure.retry_after).await;
+                    };
                     let latency_ms = started.elapsed().as_secs_f64() * 1000.0;
                     ship_latencies.lock().unwrap().push(latency_ms);
                     match result {

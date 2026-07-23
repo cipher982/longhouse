@@ -122,19 +122,14 @@ jobs:
 
       - name: Run public installer smoke
         run: |
-          chmod +x scripts/ci/installer-first-run.sh
+          chmod +x scripts/ci/native-installer-smoke.sh
           chmod +x scripts/ci/check-public-installer-sync.sh
           release_json="$(gh release view --json tagName)"
           release_tag="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["tagName"])' <<< "$release_json")"
-          expected_commit="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${release_tag}" --jq .sha)"
-          expected_version="${release_tag#v}"
-          ./scripts/ci/installer-first-run.sh \
-            --installer remote \
-            --shell "${{ matrix.shell_path }}" \
-            --installer-onboard \
-            --runtime-artifact-smoke \
-            --expected-build-commit "$expected_commit" \
-            --expected-build-version "$expected_version"
+          export LONGHOUSE_NATIVE_SMOKE_REMOTE=1
+          export LONGHOUSE_NATIVE_SMOKE_EXPECTED_COMMIT="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${release_tag}" --jq .sha)"
+          export LONGHOUSE_NATIVE_SMOKE_EXPECTED_VERSION="${release_tag#v}"
+          ./scripts/ci/native-installer-smoke.sh
 
   installer-upgrade-local:
     if: ${{ github.event_name != 'schedule' }}

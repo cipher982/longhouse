@@ -184,17 +184,20 @@ def test_public_package_requires_version_and_commit(monkeypatch):
     mod = _load_module()
     sha = "3b40315871558fe77984c90423851d0194337923"
     payload = {"build": {"version": "0.1.17", "commit": sha}}
+    commands = []
 
-    monkeypatch.setattr(
-        mod,
-        "run",
-        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=json.dumps(payload), stderr=""),
-    )
+    def fake_run(command, **_kwargs):
+        commands.append(command)
+        return SimpleNamespace(returncode=0, stdout=json.dumps(payload), stderr="")
+
+    monkeypatch.setattr(mod, "run", fake_run)
 
     check = mod.check_public_package("v0.1.17", sha)
 
     assert check.ok is True
     assert "version=0.1.17" in check.detail
+    assert "longhouse-server" in commands[0]
+    assert "longhouse" not in commands[0]
 
 
 def test_public_package_fails_on_stale_commit(monkeypatch):

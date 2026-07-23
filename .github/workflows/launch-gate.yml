@@ -166,24 +166,14 @@ jobs:
 
       - name: Run disposable installer smoke
         run: |
-          chmod +x scripts/ci/installer-first-run.sh
-          args=(
-            --shell "${{ matrix.shell_path }}"
-            --installer-onboard
-            --e2e-browser
-          )
+          chmod +x scripts/ci/native-installer-smoke.sh
           if [[ "${{ github.event_name }}" == "release" ]]; then
-            expected_commit="$(git rev-parse HEAD)"
-            expected_version="${{ github.event.release.tag_name }}"
-            expected_version="${expected_version#v}"
-            args+=(--installer remote)
-            args+=(--runtime-artifact-smoke)
-            args+=(--expected-build-commit "$expected_commit")
-            args+=(--expected-build-version "$expected_version")
-          else
-            args+=(--wheel)
+            export LONGHOUSE_NATIVE_SMOKE_REMOTE=1
+            export LONGHOUSE_NATIVE_SMOKE_EXPECTED_COMMIT="$(git rev-parse HEAD)"
+            release_version="${{ github.event.release.tag_name }}"
+            export LONGHOUSE_NATIVE_SMOKE_EXPECTED_VERSION="${release_version#v}"
           fi
-          ./scripts/ci/installer-first-run.sh "${args[@]}"
+          ./scripts/ci/native-installer-smoke.sh
 
       - name: Upload browser verification artifacts
         if: failure()

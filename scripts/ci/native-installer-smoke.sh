@@ -10,6 +10,9 @@ PAIR_DIR="$TEST_ROOT/pair"
 HOME_DIR="$TEST_ROOT/home"
 RUNTIME_PORT_FILE="$TEST_ROOT/runtime-port"
 RUNTIME_PID=""
+REMOTE_RELEASE="${LONGHOUSE_NATIVE_SMOKE_REMOTE:-0}"
+EXPECTED_COMMIT="${LONGHOUSE_NATIVE_SMOKE_EXPECTED_COMMIT:-}"
+EXPECTED_VERSION="${LONGHOUSE_NATIVE_SMOKE_EXPECTED_VERSION:-}"
 
 cleanup() {
   if [[ -n "$RUNTIME_PID" ]]; then
@@ -22,11 +25,15 @@ cleanup() {
 }
 trap cleanup EXIT
 
-python3 "$ROOT_DIR/scripts/build/generate_build_identity.py" >/dev/null
-cargo build --manifest-path "$ROOT_DIR/engine/Cargo.toml" --profile ci --bin longhouse --bin longhouse-engine >/dev/null
 mkdir -p "$PAIR_DIR" "$HOME_DIR/traps"
-cp "$ROOT_DIR/engine/target/ci/longhouse" "$PAIR_DIR/longhouse"
-cp "$ROOT_DIR/engine/target/ci/longhouse-engine" "$PAIR_DIR/longhouse-engine"
+if [[ "$REMOTE_RELEASE" == "1" ]]; then
+  [[ -n "$EXPECTED_COMMIT" && -n "$EXPECTED_VERSION" ]]
+else
+  python3 "$ROOT_DIR/scripts/build/generate_build_identity.py" >/dev/null
+  cargo build --manifest-path "$ROOT_DIR/engine/Cargo.toml" --profile ci --bin longhouse --bin longhouse-engine >/dev/null
+  cp "$ROOT_DIR/engine/target/ci/longhouse" "$PAIR_DIR/longhouse"
+  cp "$ROOT_DIR/engine/target/ci/longhouse-engine" "$PAIR_DIR/longhouse-engine"
+fi
 
 for command in python python3 uv pip; do
   cat > "$HOME_DIR/traps/$command" <<'EOF'
@@ -37,20 +44,23 @@ EOF
   chmod 755 "$HOME_DIR/traps/$command"
 done
 
-HOME="$HOME_DIR" \
-PATH="$HOME_DIR/traps:/usr/bin:/bin:/usr/sbin:/sbin" \
-SHELL=/bin/bash \
-LONGHOUSE_NATIVE_BIN_DIR="$PAIR_DIR" \
-LONGHOUSE_TELEMETRY=0 \
-bash "$ROOT_DIR/scripts/install.sh" >/dev/null
+install_pair() {
+  local -a env_args=(
+    "HOME=$HOME_DIR"
+    "PATH=$HOME_DIR/traps:/usr/bin:/bin:/usr/sbin:/sbin"
+    "SHELL=/bin/bash"
+    "LONGHOUSE_TELEMETRY=0"
+  )
+  if [[ "$REMOTE_RELEASE" != "1" ]]; then
+    env_args+=("LONGHOUSE_NATIVE_BIN_DIR=$PAIR_DIR")
+  fi
+  env "${env_args[@]}" bash "$ROOT_DIR/scripts/install.sh" >/dev/null
+}
+
+install_pair
 
 first_release="$(readlink "$HOME_DIR/.local/share/longhouse/current")"
-HOME="$HOME_DIR" \
-PATH="$HOME_DIR/traps:/usr/bin:/bin:/usr/sbin:/sbin" \
-SHELL=/bin/bash \
-LONGHOUSE_NATIVE_BIN_DIR="$PAIR_DIR" \
-LONGHOUSE_TELEMETRY=0 \
-bash "$ROOT_DIR/scripts/install.sh" >/dev/null
+install_pair
 second_release="$(readlink "$HOME_DIR/.local/share/longhouse/current")"
 [[ "$first_release" != "$second_release" ]]
 
@@ -58,6 +68,15 @@ installed="$HOME_DIR/.local/bin/longhouse"
 [[ -x "$installed" ]]
 HOME="$HOME_DIR" PATH="$HOME_DIR/.local/bin:$HOME_DIR/traps:/usr/bin:/bin:/usr/sbin:/sbin" "$installed" verify-pair >/dev/null
 HOME="$HOME_DIR" PATH="$HOME_DIR/.local/bin:$HOME_DIR/traps:/usr/bin:/bin:/usr/sbin:/sbin" "$installed" local-health --fast --json >/dev/null
+if [[ "$REMOTE_RELEASE" == "1" ]]; then
+  identity="$(HOME="$HOME_DIR" PATH="$HOME_DIR/.local/bin:$HOME_DIR/traps:/usr/bin:/bin:/usr/sbin:/sbin" "$installed" build-identity --json)"
+  LONGHOUSE_SMOKE_IDENTITY="$identity" LONGHOUSE_SMOKE_EXPECTED_COMMIT="$EXPECTED_COMMIT" LONGHOUSE_SMOKE_EXPECTED_VERSION="$EXPECTED_VERSION" \
+    "$NODE_BIN" -e '
+const payload = JSON.parse(process.env.LONGHOUSE_SMOKE_IDENTITY);
+if (payload.facade?.commit !== process.env.LONGHOUSE_SMOKE_EXPECTED_COMMIT) throw new Error(`commit mismatch: ${payload.facade?.commit}`);
+if (payload.facade?.version !== process.env.LONGHOUSE_SMOKE_EXPECTED_VERSION) throw new Error(`version mismatch: ${payload.facade?.version}`);
+'
+fi
 
 node -e 'const http=require("http"); http.createServer((_,res)=>{res.writeHead(200,{"content-type":"application/json"});res.end("{\"items\":[]}")}).listen(0,"127.0.0.1",function(){console.log(this.address().port)})' >"$RUNTIME_PORT_FILE" &
 RUNTIME_PID=$!
@@ -95,7 +114,9 @@ HOME="$HOME_DIR" PATH="$HOME_DIR/.local/bin:$HOME_DIR/traps:/usr/bin:/bin:/usr/s
 # The managed-provider seams have hermetic upstream fixtures. Keep those
 # canaries in the installer lane so a fresh native install cannot regress a
 # provider bridge without exercising its transcript/control contract.
-cargo test --manifest-path "$ROOT_DIR/engine/Cargo.toml" --profile ci --bin longhouse-engine codex_app_server_canary -- --nocapture
-cargo test --manifest-path "$ROOT_DIR/engine/Cargo.toml" --profile ci --bin longhouse-engine claude_channel -- --nocapture
-cargo test --manifest-path "$ROOT_DIR/engine/Cargo.toml" --profile ci --bin longhouse-engine opencode_control -- --nocapture
+if [[ "$REMOTE_RELEASE" != "1" ]]; then
+  cargo test --manifest-path "$ROOT_DIR/engine/Cargo.toml" --profile ci --bin longhouse-engine codex_app_server_canary -- --nocapture
+  cargo test --manifest-path "$ROOT_DIR/engine/Cargo.toml" --profile ci --bin longhouse-engine claude_channel -- --nocapture
+  cargo test --manifest-path "$ROOT_DIR/engine/Cargo.toml" --profile ci --bin longhouse-engine opencode_control -- --nocapture
+fi
 echo "native installer smoke passed"
