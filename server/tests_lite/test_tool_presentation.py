@@ -2,12 +2,19 @@ from __future__ import annotations
 
 from datetime import datetime
 from datetime import timezone
+from pathlib import Path
 from types import SimpleNamespace
 
 import zerg.services.tool_presentation as tool_presentation_module
 from zerg.services.session_views import build_event_response
 from zerg.services.tool_presentation import extract_codex_wrapper_calls
 from zerg.services.tool_presentation import project_tool_presentation
+
+
+def test_runtime_image_copies_tool_presentation_rules():
+    dockerfile = Path(__file__).resolve().parents[2] / "docker" / "runtime.dockerfile"
+
+    assert "COPY config/tool-tiers.json /config/tool-tiers.json" in dockerfile.read_text(encoding="utf-8")
 
 
 def test_extracts_single_codex_exec_command_without_executing_wrapper():

@@ -94,6 +94,7 @@ COPY server/ ./
 
 # Copy shared config
 COPY config/models.json /config/models.json
+COPY config/tool-tiers.json /config/tool-tiers.json
 
 # Copy REAL frontend dist from frontend-builder (not placeholder)
 COPY --from=frontend-builder /app/dist /repo/web/dist
