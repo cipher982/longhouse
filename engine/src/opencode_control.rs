@@ -39,6 +39,27 @@ struct OpenCodeControlState {
     process_command: String,
 }
 
+pub(crate) struct OpenCodeAttachState {
+    pub provider_session_id: String,
+    pub server_url: String,
+    pub cwd: String,
+    pub username: String,
+    pub password: String,
+}
+
+pub(crate) fn read_for_bridge(session_id: &str) -> Result<OpenCodeAttachState> {
+    let state = read_bridge_state(session_id, None)?;
+    Ok(OpenCodeAttachState {
+        provider_session_id: state.provider_session_id,
+        server_url: state.server_url,
+        cwd: state
+            .cwd
+            .context("OpenCode bridge state has no working directory")?,
+        username: state.username,
+        password: state.password,
+    })
+}
+
 #[derive(Debug, Deserialize)]
 #[allow(dead_code)]
 struct OpenCodeServerStateFile {
