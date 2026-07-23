@@ -221,19 +221,6 @@ The change is done when:
 4. Queued evidence reconciles into the original bound session without duplicate
    turns.
 
-## Independent review disposition
-
-Hatch Fable and Cursor Grok independently reviewed this document, the related
-specs, and the implementation. Both accepted the incident interpretation and
-rejected a network conclusion or Longhouse retry system. Both reduced P0 to a
-copy/mapping correction, P1 to wiring existing failure evidence into existing
-projection, P2 to one cheap reconciliation test, and kept PTY capture deferred.
-
-They differed only on the exact P1 helper. Fable suggested the existing failed
-turn service; Grok noted that its request-ID contract may not fit native Helm
-turns. This recommendation therefore preserves the existing state model but
-leaves the adapter choice to implementation evidence.
-
 ## Related material
 
 - `docs/specs/cursor-output-visibility-contract.md`

@@ -1137,31 +1137,23 @@ def test_await_managed_local_turn_terminal_accepts_runtime_terminal_without_acti
     with SessionLocal() as db:
         _user, _runner, session = _seed_user_runner_and_session(db, provider="claude")
 
-        async def _insert_later():
-            await asyncio.sleep(0.05)
-            with SessionLocal() as event_db:
-                _materialize_hook_runtime_state(
-                    event_db,
-                    session=session,
-                    phase="idle",
-                    occurred_at=datetime.now(timezone.utc),
-                )
-                event_db.commit()
+        _materialize_hook_runtime_state(
+            db,
+            session=session,
+            phase="idle",
+            occurred_at=datetime.now(timezone.utc),
+        )
+        db.commit()
 
-        async def _run_wait():
-            writer = asyncio.create_task(_insert_later())
-            try:
-                return await await_managed_local_turn_terminal(
-                    db_bind=db.get_bind(),
-                    session_id=session.id,
-                    after_observation_id=0,
-                    timeout_secs=1.0,
-                    poll_interval_secs=0.02,
-                )
-            finally:
-                await writer
-
-        result = asyncio.run(_run_wait())
+        result = asyncio.run(
+            await_managed_local_turn_terminal(
+                db_bind=db.get_bind(),
+                session_id=session.id,
+                after_observation_id=0,
+                timeout_secs=1.0,
+                poll_interval_secs=0.02,
+            )
+        )
 
         assert result is not None
         assert result.phase == "idle"
