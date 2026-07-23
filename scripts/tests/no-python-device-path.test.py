@@ -308,7 +308,7 @@ def test_transitional_python_entries_require_dependency_kind() -> None:
 
         _assert_fails(
             _run(root, inventory),
-            "claude-wrapper: transitional entries must include python_dependency_kind",
+            "claude-wrapper: compatibility entries must include python_dependency_kind",
         )
 
 

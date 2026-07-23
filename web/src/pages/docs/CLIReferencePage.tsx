@@ -42,8 +42,8 @@ longhouse opencode             # start OpenCode (managed live control)`}
         <code>claude</code>, <code>codex</code>, <code>antigravity</code>,{" "}
         <code>opencode</code>, and <code>cursor-agent</code> runs still import
         into the timeline, but they remain unmanaged history. Claude and Codex
-        support the strongest live control. OpenCode Helm supports managed
-        send, interrupt, and terminate but not active-turn steer. Cursor and
+        support the strongest live control. OpenCode Helm supports managed send, interrupt, and terminate but
+        not active-turn steer. Cursor and
         Antigravity are Shadow-only in the native device release.
       </p>
 

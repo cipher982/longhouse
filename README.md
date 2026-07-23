@@ -43,6 +43,8 @@ longhouse codex        # managed app-server session: send, interrupt, steer, res
 longhouse opencode     # managed server session: send, interrupt, reattach (not active-turn steer)
 ```
 
+OpenCode Helm supports send, interrupt, and terminate but not active-turn steer or pause-answer.
+
 Bare provider CLI sessions still get ingested into the timeline — they stay unmanaged: searchable and observable, but without Longhouse-owned remote control.
 
 The web UI lives at `http://localhost:8080`. Runtime Host administration is a

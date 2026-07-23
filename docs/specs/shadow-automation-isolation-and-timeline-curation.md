@@ -48,7 +48,7 @@ admission.
 
 1. **Native transcript existence is sufficient for Shadow import.** It is not
    evidence of who initiated a process, and Longhouse must not pretend it is.
-2. **The initiator owns automation classification.** A harness, CI job, Hatch
+2. **The initiator owns automation classification.** A harness, CI job, agent
    task, or provider factory knows it is automation before spawning a provider;
    an archive reader usually cannot know later.
 3. **Provider behavior is tested honestly.** Isolation may change a provider's
@@ -124,8 +124,8 @@ source identity cannot always be known before a provider creates it.
 
 - `provider-control-e2e-canary.py` declares and records its producer-boundary
   mode for every real-provider branch.
-- `provider-release-proof.py`, Sauron release automation, provider-factory
-  work, CI, and Hatch-run provider proofs pass a generated run id and reject an
+- `provider-release-proof.py`, release automation, provider-factory work, CI,
+  and agent-run provider proofs pass a generated run id and reject an
   adapter that lacks a mode declaration.
 - The launch environment explicitly carries `LONGHOUSE_ORIGIN_KIND=test_or_canary`,
   `LONGHOUSE_LAUNCH_ACTOR=automation`, and a surface (`test`, `ci`, or `hatch`)
@@ -162,7 +162,7 @@ sessions.user_hidden_by_owner_id   owner identifier nullable
 
 Mirror the effective field needed for hot catalog reads on the canonical
 catalog/session-card projection. `hidden_from_default_timeline` remains the
-producer/origin-driven classification (`test_or_canary`, Hatch automation).
+producer/origin-driven classification (`test_or_canary`, agent automation).
 Do not overload it for an interactive user action.
 
 Effective default visibility is:

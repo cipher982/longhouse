@@ -504,7 +504,7 @@
         "claude.turn_start",
         "claude.turn_interrupt"
       ],
-      "adapter_digest": "51f77f0adf6e4ca8e1039c4a3de04b0f1056e3288caeaee01283a423ee98e2eb"
+      "adapter_digest": "95f6f92bb4d58960052da37c2408cca143356da222cfecb0d39ee9b4645c06b4"
     },
     {
       "provider": "opencode",
@@ -787,7 +787,7 @@
         "opencode.turn_start",
         "opencode.turn_interrupt"
       ],
-      "adapter_digest": "059befb4632dde171db4105f4203c5871724ca5e45ee44a8560ade3473d0c4d4"
+      "adapter_digest": "8195ac886a2297bc22972e348fb7ba007a6040d76e31f8a658ff7ff2a4054274"
     },
     {
       "provider": "antigravity",
@@ -804,17 +804,17 @@
         "server/zerg/services/managed_local_control.py",
         "engine/src/managed_antigravity_scan.rs"
       ],
-      "launch_local": false,
+      "launch_local": true,
       "run_once": false,
       "reattach": false,
-      "send_input": false,
+      "send_input": true,
       "interrupt": false,
       "steer_active_turn": false,
       "answer_pause": false,
       "terminate": false,
-      "tail_output": false,
-      "runtime_phase": false,
-      "transcript_binding": false,
+      "tail_output": true,
+      "runtime_phase": true,
+      "transcript_binding": true,
       "startup_coordination_context": false,
       "capabilities": {
         "session.launch.helm": {
@@ -897,10 +897,11 @@
       },
       "can_resume": false,
       "turn_start": false,
-    "operation_evidence": {
-      "launch_local": {
-      "level": "none",
-      "source": "excluded from the native normal-device release"
+      "operation_evidence": {
+        "launch_local": {
+          "level": "live_no_token",
+          "source": "longhouse provider-live canary --provider antigravity version/help/plugin checks",
+          "next": "prove real agy loop invocation"
         },
         "run_once": {
           "level": "none",
@@ -910,9 +911,10 @@
           "level": "none",
           "source": "unsupported until Antigravity exposes stable reattach"
         },
-      "send_input": {
-      "level": "none",
-      "source": "excluded from the native normal-device release"
+        "send_input": {
+          "level": "live_token",
+          "source": "scripts/qa/provider-control-e2e-canary.py --provider antigravity --antigravity-real-agy-send proves real agy PreInvocation hook-inbox injection changes the model-visible turn",
+          "next": "keep interrupt, active-turn steer, and continuation gated on separate bounded-behavior canaries"
         },
         "interrupt": {
           "level": "none",
@@ -930,24 +932,29 @@
           "level": "none",
           "source": "unsupported until process termination policy is designed"
         },
-      "tail_output": {
-      "level": "none",
-      "source": "excluded from the native normal-device release"
+        "tail_output": {
+          "level": "hermetic",
+          "source": "Antigravity hook transcript binding tests",
+          "next": "promote with real agy transcript canary"
         },
-      "runtime_phase": {
-      "level": "none",
-      "source": "excluded from the native normal-device release"
+        "runtime_phase": {
+          "level": "hermetic",
+          "source": "Antigravity hook runtime outbox tests",
+          "next": "promote with real agy phase canary"
         },
-      "transcript_binding": {
-      "level": "none",
-      "source": "excluded from the native normal-device release"
+        "transcript_binding": {
+          "level": "hermetic",
+          "source": "Antigravity hook binding tests",
+          "next": "promote with real agy transcript assertion"
         },
         "turn_start": {
           "level": "none",
           "source": "Antigravity has no turn-scoped Console adapter"
         }
       },
-  "machine_control_supports": [],
+      "machine_control_supports": [
+        "antigravity.send"
+      ],
       "adapter_digest": "86ff5db6a902cf3cce2097c650e72a0a5f673ed0d9083df90f387aec66574a80"
     },
     {
@@ -969,17 +976,17 @@
         "engine/src/cursor_helm_control.rs",
         "engine/src/cursor_print.rs"
       ],
-      "launch_local": false,
+      "launch_local": true,
       "run_once": false,
-      "reattach": false,
-      "send_input": false,
-      "interrupt": false,
+      "reattach": true,
+      "send_input": true,
+      "interrupt": true,
       "steer_active_turn": false,
       "answer_pause": false,
-      "terminate": false,
-      "tail_output": false,
-      "runtime_phase": false,
-      "transcript_binding": false,
+      "terminate": true,
+      "tail_output": true,
+      "runtime_phase": true,
+      "transcript_binding": true,
       "startup_coordination_context": false,
       "capabilities": {
         "session.input.steer_active": {

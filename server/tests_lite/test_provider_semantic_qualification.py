@@ -337,7 +337,8 @@ def test_antigravity_explicit_home_still_blocks_without_an_unwatched_worker(tmp_
     record = _records_by_assertion(output)[antigravity.ASSERTIONS[1]]
     assert record["outcome"] == "blocked"
     assert record["evidence_class"] == "live_no_token"
-    assert record["evidence"]["failure_code"] == "antigravity_unwatched_producer_boundary_unavailable"
+    observation = json.loads((output / "semantic-evidence" / "semantic-observation.json").read_text())
+    assert observation["real_print_canary"]["failure_code"] == "antigravity_unwatched_producer_boundary_unavailable"
 
 
 def test_antigravity_watched_interactive_home_still_blocks_before_real_agy(tmp_path: Path, monkeypatch) -> None:
@@ -352,7 +353,8 @@ def test_antigravity_watched_interactive_home_still_blocks_before_real_agy(tmp_p
     provider_qualification.run(_request(tmp_path, "antigravity", binary, executable_identity), output)
     record = _records_by_assertion(output)[antigravity.ASSERTIONS[1]]
     assert record["outcome"] == "blocked"
-    assert record["evidence"]["failure_code"] == "antigravity_unwatched_producer_boundary_unavailable"
+    observation = json.loads((output / "semantic-evidence" / "semantic-observation.json").read_text())
+    assert observation["real_print_canary"]["failure_code"] == "antigravity_unwatched_producer_boundary_unavailable"
 
 
 def test_antigravity_live_flag_without_explicit_home_never_uses_ambient_authority(tmp_path: Path, monkeypatch) -> None:
