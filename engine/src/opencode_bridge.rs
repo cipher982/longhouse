@@ -93,6 +93,12 @@ pub fn start(config: StartConfig) -> Result<StartResult> {
         .append(true)
         .open(&log_path)?;
     let mut command = Command::new(&binary);
+    let engine = std::env::current_exe().context("resolve native engine for OpenCode MCP")?;
+    // This process is the paired engine binary, so the registered command is
+    // absolute and remains valid even when the facade is not on PATH.
+    let mcp_config = serde_json::json!({
+        "mcp": {"longhouse": {"type": "local", "command": [engine, "claude-channel", "serve"], "enabled": true}}
+    });
     command
         .args([
             "serve",
@@ -108,7 +114,11 @@ pub fn start(config: StartConfig) -> Result<StartResult> {
         .stderr(Stdio::from(log))
         .env("LONGHOUSE_MANAGED_SESSION_ID", &session_id)
         .env("OPENCODE_SERVER_USERNAME", USERNAME)
-        .env("OPENCODE_SERVER_PASSWORD", &password);
+        .env("OPENCODE_SERVER_PASSWORD", &password)
+        .env(
+            "OPENCODE_CONFIG_CONTENT",
+            serde_json::to_string(&mcp_config)?,
+        );
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;

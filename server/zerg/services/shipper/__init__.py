@@ -16,7 +16,6 @@ Usage:
 
 from zerg.services.shipper.hooks import install_codex_hooks
 from zerg.services.shipper.hooks import install_hooks
-from zerg.services.shipper.hooks import upsert_codex_mcp_toml
 from zerg.services.shipper.parser import ParsedEvent
 from zerg.services.shipper.parser import parse_session_file
 from zerg.services.shipper.parser import parse_session_file_full
@@ -55,5 +54,4 @@ __all__ = [
     "save_token",
     "save_zerg_url",
     "uninstall_service",
-    "upsert_codex_mcp_toml",
 ]
