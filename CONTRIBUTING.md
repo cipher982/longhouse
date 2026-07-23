@@ -26,11 +26,14 @@ touch the engine.
 ```bash
 git clone https://github.com/cipher982/longhouse.git
 cd longhouse
-make dev        # backend + bundled web UI with hot reload
+make dev        # local web UI with hot reload against your linked Runtime Host
+make dev-demo   # isolated local backend + seeded demo UI
 ```
 
-`make dev` is interactive and runs the Runtime Host plus the web UI. Auth is
-disabled in dev by default. The web UI lives at `http://localhost:8080`.
+`make dev` is interactive and serves the local web source at
+`http://localhost:47200`, using the Runtime Host and device identity already
+configured by `longhouse auth`. `make dev-demo` runs a disposable local Runtime
+Host with authentication disabled.
 
 ## Project layout
 

@@ -39,8 +39,8 @@ help: ## Show this help message
 # ---------------------------------------------------------------------------
 # Development
 # ---------------------------------------------------------------------------
-dev: ## Start dev environment (SQLite, no Docker)
-	@env -u DATABASE_URL ./scripts/dev.sh
+dev: ## Start local UI against this machine's linked Runtime Host
+	@env -u DATABASE_URL -u VITE_PROXY_TARGET ./scripts/dev.sh
 
 dev-demo: ## Start demo environment (seeded SQLite DB)
 	@env -u DATABASE_URL ./scripts/dev-demo.sh

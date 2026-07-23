@@ -9,22 +9,24 @@ description: Zerg local dev workflow (make dev, logs, debug, stop). Use when run
 ```bash
 make dev
 ```
-Ctrl+C stops everything cleanly.
+This serves the local frontend at `http://localhost:47200` and proxies its API
+requests to the Runtime Host already recorded in
+`~/.longhouse/machine/target-url`, authenticated with the existing device token.
+It should show the same account and sessions as the hosted UI. Ctrl+C stops it.
+
+Use `make dev-demo` only when an isolated seeded local runtime is intentional.
 
 ## Common Commands
 ```bash
-make stop      # stop all services
-make logs      # tail all logs
-make logs-app  # app logs only
-make doctor    # quick diagnostics
-make debug-trace TRACE=<uuid>
+make stop      # stop local development processes
+make dev-demo  # isolated local backend + seeded demo UI
 ```
 
-## Ports (dev)
-- http://localhost:30080 (nginx entrypoint)
-- http://localhost:47300 (backend direct)
-- http://localhost:47200 (frontend direct)
+## URL
+- http://localhost:47200/timeline
 
 ## Gotchas
 - Don’t assume `make dev` is already running.
-- Prefer the nginx entrypoint at `http://localhost:30080`.
+- `make dev` requires an existing `longhouse auth` machine link.
+- The normal local UI must never silently fall back to an empty local database.
+- Use `make dev-demo` for disposable local data and `make dev` for real account data.

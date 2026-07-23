@@ -124,7 +124,7 @@ Every artifact carries its identity **inside itself**. No home-directory or othe
 - Each package reads its own copy via `importlib.resources` — no cross-package imports.
 - Runtime reader: `zerg.build_info.load()` reads the staged resource. Missing resource → raise `BuildIdentityMissing`; the CLI surfaces that as "build identity missing — rebuild."
 - No editable-install fallback. `make dogfood-refresh` builds a wheel and installs it, not `uv pip install -e`. Wheel build adds ~25s per refresh; correctness is worth it.
-- **`make dev` (source-run backend):** `scripts/dev.sh` runs `generate_build_identity.py` first, which stages the resource into `server/zerg/build_identity.json`. Source runs read via `importlib.resources` like installed wheels — one read path, no env-var fallback. If the resource is missing → `BuildIdentityMissing`. Always explicit, never inferred.
+- **`make dev-demo` (source-run backend):** the local demo path runs `generate_build_identity.py` first, which stages the resource into `server/zerg/build_identity.json`. Source runs read via `importlib.resources` like installed wheels — one read path, no env-var fallback. If the resource is missing → `BuildIdentityMissing`. Always explicit, never inferred. Normal `make dev` serves only local frontend source against the machine's linked Runtime Host.
 
 ### Rust (engine)
 

@@ -56,6 +56,9 @@ if [ ! -d "node_modules" ]; then
     bun install
 fi
 
+echo "Generating source build identity..."
+python3 scripts/build/generate_build_identity.py
+
 # Build demo DB (always rebuild for fresh data)
 echo "Building demo database..."
 rm -f "$DEMO_DB_PATH"

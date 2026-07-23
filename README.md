@@ -113,7 +113,8 @@ Hosted (<https://control.longhouse.ai/signup>) exists for people who don't want 
 ```bash
 git clone https://github.com/cipher982/longhouse.git
 cd longhouse
-make dev        # backend + frontend with hot reload
+make dev        # local UI with hot reload against your linked Runtime Host
+make dev-demo   # isolated local backend + seeded demo UI
 make test       # unit tests
 make test-e2e   # end-to-end
 ```
