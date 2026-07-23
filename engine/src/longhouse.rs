@@ -11,7 +11,7 @@ use anyhow::Context;
 use clap::{Args, Parser, Subcommand};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::io::IsTerminal;
+use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{
@@ -451,9 +451,67 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
             },
         );
     let exit = run_foreground_command(&mut command)?;
+    if let Err(error) = record_claude_terminal_event(
+        &response.session_id,
+        &provider_session_id,
+        &machine_name,
+        exit,
+    ) {
+        eprintln!("Longhouse warning: could not queue Claude terminal lifecycle event: {error}");
+    }
     if exit != 0 {
         std::process::exit(exit);
     }
+    Ok(())
+}
+
+fn record_claude_terminal_event(
+    session_id: &str,
+    provider_session_id: &str,
+    machine_name: &str,
+    exit_code: i32,
+) -> anyhow::Result<()> {
+    let occurred_at = chrono::Utc::now().to_rfc3339();
+    let terminal_state = if exit_code == 0 {
+        "session_ended"
+    } else {
+        "process_gone"
+    };
+    let event = json!({
+        "runtime_key": format!("claude:{provider_session_id}"),
+        "session_id": session_id,
+        "provider": "claude",
+        "device_id": machine_name,
+        "source": "claude_channel_wrapper",
+        "kind": "terminal_signal",
+        "occurred_at": occurred_at,
+        "dedupe_key": format!("claude-terminal:{provider_session_id}:{exit_code}:{occurred_at}"),
+        "payload": {
+            "terminal_state": terminal_state,
+            "terminal_reason": "provider_exit",
+            "terminal_source": "claude_channel_wrapper",
+            "provider_session_id": provider_session_id,
+            "exit_code": exit_code,
+        },
+    });
+    enqueue_runtime_event(
+        &longhouse_home()?.join("agent/runtime-events-outbox"),
+        &event,
+    )
+}
+
+fn enqueue_runtime_event(dir: &Path, event: &serde_json::Value) -> anyhow::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    let temporary = dir.join(format!(".{}.tmp", Uuid::new_v4()));
+    let ready = dir.join(format!("{}.json", Uuid::new_v4()));
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)?;
+    file.write_all(&serde_json::to_vec(event)?)?;
+    file.sync_all()?;
+    drop(file);
+    std::fs::rename(temporary, ready)?;
     Ok(())
 }
 
@@ -1225,5 +1283,27 @@ mod tests {
         };
         assert!(command.is_none());
         assert_eq!(launch.claude_dir.unwrap(), PathBuf::from("/tmp/claude"));
+    }
+
+    #[test]
+    fn claude_exit_is_queued_as_a_terminal_runtime_event() {
+        let temp = tempfile::tempdir().unwrap();
+        temp_env::with_var(
+            "LONGHOUSE_HOME",
+            Some(temp.path().display().to_string()),
+            || {
+                record_claude_terminal_event("session", "provider", "device", 0).unwrap();
+            },
+        );
+        let event_path = std::fs::read_dir(temp.path().join("agent/runtime-events-outbox"))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        let event: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(event_path).unwrap()).unwrap();
+        assert_eq!(event["kind"], "terminal_signal");
+        assert_eq!(event["payload"]["terminal_state"], "session_ended");
     }
 }
