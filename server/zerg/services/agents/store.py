@@ -3804,6 +3804,13 @@ class AgentsStore:
                 )
             )
 
+        stmt = stmt.where(
+            or_(
+                AgentSession.user_hidden_from_timeline.is_(None),
+                AgentSession.user_hidden_from_timeline == 0,
+            )
+        )
+
         if hide_autonomous:
             # Session-identity-kernel cleanup: ``execution_home`` and
             # ``is_sidechain`` were dropped from ``AgentSession``. Approximate
@@ -3820,8 +3827,9 @@ class AgentsStore:
             )
             stmt = stmt.where(~unresolved_child_primary)
 
-        if exclude_user_states:
-            excluded_state = AgentSession.user_state.notin_(exclude_user_states)
+        visible_user_states = exclude_user_states if exclude_user_states is not None else ["archived", "snoozed"]
+        if visible_user_states:
+            excluded_state = AgentSession.user_state.notin_(visible_user_states)
             missing_state = AgentSession.user_state.is_(None)
             stmt = stmt.where(excluded_state | missing_state)
 
@@ -3878,6 +3886,13 @@ class AgentsStore:
                 )
             )
 
+        stmt = stmt.where(
+            or_(
+                TimelineCard.user_hidden_from_timeline.is_(None),
+                TimelineCard.user_hidden_from_timeline == 0,
+            )
+        )
+
         if hide_autonomous:
             stmt = stmt.where(or_(TimelineCard.user_messages > 0, AgentSession.ended_at.is_(None)))
             unresolved_child_primary = (
@@ -3890,8 +3905,9 @@ class AgentsStore:
             )
             stmt = stmt.where(~unresolved_child_primary)
 
-        if exclude_user_states:
-            excluded_state = AgentSession.user_state.notin_(exclude_user_states)
+        visible_user_states = exclude_user_states if exclude_user_states is not None else ["archived", "snoozed"]
+        if visible_user_states:
+            excluded_state = AgentSession.user_state.notin_(visible_user_states)
             missing_state = AgentSession.user_state.is_(None)
             stmt = stmt.where(excluded_state | missing_state)
 

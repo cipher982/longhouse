@@ -3487,12 +3487,15 @@ class CatalogStore:
             legacy_where = [
                 func.coalesce(card.c.last_activity_at, card.c.started_at) >= since,
                 card.c.hidden_from_default_timeline == 0,
+                card.c.user_hidden_from_timeline == 0,
+                catalog.c.user_state.notin_(("archived", "snoozed", "deleted")),
                 ~select(storage.c.session_id).where(storage.c.session_id == card.c.session_id).exists(),
             ]
             storage_where = [
                 storage.c.last_activity_at >= since,
                 storage.c.hidden_from_default_timeline == 0,
-                storage.c.user_state != "deleted",
+                storage.c.user_hidden_from_timeline == 0,
+                storage.c.user_state.notin_(("archived", "snoozed", "deleted")),
                 ~select(tombstones.c.session_id).where(tombstones.c.session_id == storage.c.session_id).exists(),
             ]
             if project is not None:
@@ -4171,6 +4174,7 @@ class CatalogStore:
                 .where(
                     live.c.state.notin_(("missing", "ended")),
                     catalog.c.user_state.notin_(("archived", "snoozed")),
+                    catalog.c.user_hidden_from_timeline == 0,
                     live.c.last_seen_at >= cutoff,
                 )
                 .order_by(live.c.last_seen_at.desc(), live.c.updated_at.desc(), live.c.session_id.desc())
@@ -4188,6 +4192,7 @@ class CatalogStore:
         user_state: str | None,
         loop_mode: str | None,
         notification_muted: bool | None,
+        user_hidden_from_timeline: bool | None,
         observed_at: datetime,
     ) -> dict[str, Any]:
         """Update bounded user-owned session state in one catalog transaction."""
@@ -4201,6 +4206,8 @@ class CatalogStore:
                         table.c.user_state_at,
                         table.c.loop_mode,
                         table.c.notification_muted,
+                        table.c.user_hidden_from_timeline,
+                        table.c.user_hidden_at,
                     ).where(table.c.session_id == session_id)
                 )
                 .mappings()
@@ -4220,9 +4227,24 @@ class CatalogStore:
                 values["loop_mode"] = loop_mode
             if notification_muted is not None and notification_muted != bool(current["notification_muted"]):
                 values["notification_muted"] = int(notification_muted)
+            if user_hidden_from_timeline is not None and user_hidden_from_timeline != bool(current["user_hidden_from_timeline"]):
+                values["user_hidden_from_timeline"] = int(user_hidden_from_timeline)
+                values["user_hidden_at"] = observed_at if user_hidden_from_timeline else None
             if values:
                 values["updated_at"] = observed_at
                 connection.execute(update(table).where(table.c.session_id == session_id).values(**values))
+                storage_values = {
+                    key: value for key, value in values.items() if key in {"user_hidden_from_timeline", "user_hidden_at", "updated_at"}
+                }
+                if storage_values:
+                    connection.execute(
+                        update(StorageSession.__table__).where(StorageSession.__table__.c.session_id == session_id).values(**storage_values)
+                    )
+                    connection.execute(
+                        update(LiveTimelineCard.__table__)
+                        .where(LiveTimelineCard.__table__.c.session_id == session_id)
+                        .values(**storage_values)
+                    )
                 commit_seq = _advance_commit_seq(connection, observed_at)
             else:
                 commit_seq = _current_commit_seq(connection)
@@ -4233,6 +4255,9 @@ class CatalogStore:
                     "user_state_at": _encode_datetime(observed_at if "user_state" in values else current["user_state_at"]),
                     "loop_mode": loop_mode if loop_mode is not None else str(current["loop_mode"] or "assist"),
                     "notification_muted": (notification_muted if notification_muted is not None else bool(current["notification_muted"])),
+                    "user_hidden_from_timeline": (
+                        user_hidden_from_timeline if user_hidden_from_timeline is not None else bool(current["user_hidden_from_timeline"])
+                    ),
                 },
                 "updated": bool(values),
                 "commit_seq": str(commit_seq),
@@ -5793,7 +5818,8 @@ class CatalogStore:
         statement = select(table).where(
             table.c.owner_id == owner_id,
             table.c.hidden_from_default_timeline == 0,
-            table.c.user_state != "deleted",
+            table.c.user_hidden_from_timeline == 0,
+            table.c.user_state.notin_(("archived", "snoozed", "deleted")),
             ~select(tombstone.c.session_id).where(tombstone.c.session_id == table.c.session_id).exists(),
         )
         if project is not None:
@@ -7521,6 +7547,8 @@ def _storage_catalog_compat_row(row) -> dict[str, Any]:
         "notification_muted": bool(row["notification_muted"]),
         "origin_kind": row["origin_kind"],
         "hidden_from_default_timeline": int(row["hidden_from_default_timeline"]),
+        "user_hidden_from_timeline": int(row["user_hidden_from_timeline"] or 0),
+        "user_hidden_at": row["user_hidden_at"],
         "launch_actor": row["launch_actor"],
         "launch_surface": row["launch_surface"],
         "permission_mode": "bypass",
@@ -8128,6 +8156,8 @@ _CATALOG_FIELDS = frozenset(
         "notification_muted",
         "origin_kind",
         "hidden_from_default_timeline",
+        "user_hidden_from_timeline",
+        "user_hidden_at",
         "launch_actor",
         "launch_surface",
         "permission_mode",
@@ -8767,6 +8797,8 @@ def _storage_session_dto(row) -> dict[str, Any]:
         "notification_muted": bool(row["notification_muted"]),
         "origin_kind": row["origin_kind"],
         "hidden_from_default_timeline": bool(row["hidden_from_default_timeline"]),
+        "user_hidden_from_timeline": bool(row["user_hidden_from_timeline"]),
+        "user_hidden_at": _encode_datetime(row["user_hidden_at"]),
         "launch_actor": row["launch_actor"],
         "launch_surface": row["launch_surface"],
         "commit_seq": str(row["commit_seq"]),

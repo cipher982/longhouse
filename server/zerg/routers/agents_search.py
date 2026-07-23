@@ -237,6 +237,8 @@ async def search_storage_v2_sessions(
     for (session, _provider_alias, _commit_seq), row in zip(projected, best_rows.values(), strict=True):
         if session is None:
             continue
+        if session.user_hidden_from_timeline:
+            continue
         if not include_test and session.environment in {"test", "e2e"}:
             continue
         if not include_automation and session.environment == "automation":

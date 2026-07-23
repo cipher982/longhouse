@@ -75,6 +75,7 @@ from zerg.services.session_coordination import project_storage_v2_wall
 from zerg.services.session_coordination import query_wall_sessions
 from zerg.services.session_coordination import serialize_session_message
 from zerg.services.session_graph_projection import build_session_graph_projection
+from zerg.services.session_hot_cards import upsert_timeline_card_from_session
 from zerg.services.session_kernel_projection import project_provider_session_id
 from zerg.services.session_kernel_projection import project_session_lineage_fields
 from zerg.services.session_listing import SessionListingError
@@ -108,6 +109,8 @@ from zerg.services.session_views import SessionsListResponse
 from zerg.services.session_views import SessionsSummaryResponse
 from zerg.services.session_views import SessionSummaryResponse
 from zerg.services.session_views import SessionThreadResponse
+from zerg.services.session_views import SessionTimelineVisibilityRequest
+from zerg.services.session_views import SessionTimelineVisibilityResponse
 from zerg.services.session_views import SessionTurnEnvelopeResponse
 from zerg.services.session_views import SessionTurnsListResponse
 from zerg.services.session_views import SessionWorkspaceResponse
@@ -1294,6 +1297,8 @@ def list_active_sessions(
             for session in hydrated_live_sessions:
                 if not include_automation and int(session.hidden_from_default_timeline or 0) == 1:
                     continue
+                if int(session.user_hidden_from_timeline or 0) == 1:
+                    continue
                 if project and session.project != project:
                     continue
                 sessions.append(session)
@@ -1504,6 +1509,34 @@ async def set_session_notification_watch(
         session_id=str(session_id),
         notification_muted=bool(session.notification_muted),
     )
+
+
+@router.patch("/sessions/{session_id}/timeline-visibility", response_model=SessionTimelineVisibilityResponse)
+async def set_session_timeline_visibility(
+    session_id: UUID,
+    body: SessionTimelineVisibilityRequest,
+    db: Session | None = Depends(session_preferences_db_dependency),
+    _auth: None = Depends(verify_agents_token),
+    _single: None = Depends(require_single_tenant),
+) -> SessionTimelineVisibilityResponse:
+    """Hide or restore one session in the owner's default timeline."""
+    if database_module.live_catalog_enabled():
+        from zerg.services.session_preferences import update_session_preferences
+
+        preferences = await update_session_preferences(session_id, user_hidden_from_timeline=bool(body.hidden))
+        if preferences is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+        return SessionTimelineVisibilityResponse(session_id=str(session_id), hidden=preferences.user_hidden_from_timeline)
+
+    assert db is not None
+    session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+    session.user_hidden_from_timeline = int(body.hidden)
+    session.user_hidden_at = datetime.now(timezone.utc) if body.hidden else None
+    upsert_timeline_card_from_session(db, session)
+    db.commit()
+    return SessionTimelineVisibilityResponse(session_id=str(session_id), hidden=bool(session.user_hidden_from_timeline))
 
 
 @router.get("/sessions/{session_id}", response_model=SessionResponse)

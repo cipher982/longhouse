@@ -145,6 +145,11 @@ class AgentSession(AgentsBase):
     # one-shots archived but hidden from default human timelines.
     origin_kind = Column(String(64), nullable=True, index=True)
     hidden_from_default_timeline = Column(Integer, nullable=False, server_default=text("0"))
+    # Explicit user curation. Keep this separate from origin-driven hiding so
+    # a user can hide an otherwise legitimate Shadow transcript without
+    # rewriting its provenance or archive history.
+    user_hidden_from_timeline = Column(Integer, nullable=False, server_default=text("0"))
+    user_hidden_at = Column(DateTime(timezone=True), nullable=True)
     launch_actor = Column(String(32), nullable=True, index=True)
     launch_surface = Column(String(32), nullable=True, index=True)
     # Managed permission policy: "bypass" (default, autonomous/skip-permissions) or
@@ -505,6 +510,8 @@ class TimelineCard(AgentsBase):
     archive_last_source_offset = Column(BigInteger, nullable=True)
     origin_kind = Column(String(64), nullable=True, index=True)
     hidden_from_default_timeline = Column(Integer, nullable=False, server_default=text("0"))
+    user_hidden_from_timeline = Column(Integer, nullable=False, server_default=text("0"))
+    user_hidden_at = Column(DateTime(timezone=True), nullable=True)
     launch_actor = Column(String(32), nullable=True, index=True)
     launch_surface = Column(String(32), nullable=True, index=True)
     derived_state = Column(String(32), nullable=False, server_default=text("'unknown'"))

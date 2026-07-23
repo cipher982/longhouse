@@ -1132,17 +1132,15 @@ def test_explicit_scenario_id_overrides_profile_default() -> None:
         assert payload["scenario_profile"] == "managed-live-send"
 
 
-def test_antigravity_release_proof_can_attach_real_agy_send_evidence() -> None:
+def test_antigravity_release_proof_blocks_real_agy_send_without_an_unwatched_worker() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
-        args_path = root / "control-args.json"
         _write_fake_repo(root / "repo")
         (root / "fake-provider").write_text("#!/bin/sh\n", encoding="utf-8")
 
         result, payload = _run_proof(
             root,
             "antigravity",
-            env={"FAKE_CONTROL_ARGS_PATH": str(args_path)},
             extra_args=[
                 "--antigravity-run-real-agy-send",
                 "--antigravity-print-timeout-secs",
@@ -1150,27 +1148,20 @@ def test_antigravity_release_proof_can_attach_real_agy_send_evidence() -> None:
             ],
         )
 
-        assert result.returncode == 0, result.stderr + result.stdout
-        control_args = json.loads(args_path.read_text(encoding="utf-8"))
-        assert "--antigravity-real-agy-send" in control_args
+        assert result.returncode == 1
         assert payload["provider"] == "antigravity"
         assert payload["scenario_id"] == "antigravity-real-agy-send-release-proof-v1"
         assert payload["scenario_profile"] == "real-agy-send"
-        assert payload["verdict"] == "green"
-        assert payload["operation_evidence"]["send_input"]["status"] == "pass"
-        assert payload["operation_evidence"]["send_input"]["level"] == "live_token"
-        assert (
-            payload["normalized"]["operation_evidence"]["send_input"]["level"]
-            == "live_token"
-        )
+        assert payload["verdict"] == "red"
+        assert payload["failure_code"] == "antigravity_unwatched_producer_boundary_unavailable"
         assert (
             payload["normalized"]["canaries"]["antigravity_real_agy_send"]["status"]
-            == "pass"
+            == "blocked"
         )
         assert Path(payload["artifacts"]["antigravity_control_artifact"]).exists()
 
 
-def test_antigravity_release_proof_blocks_failed_real_agy_send_evidence() -> None:
+def test_antigravity_release_proof_blocks_even_when_a_fake_live_failure_is_requested() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
         _write_fake_repo(root / "repo")
@@ -1185,11 +1176,10 @@ def test_antigravity_release_proof_blocks_failed_real_agy_send_evidence() -> Non
 
         assert result.returncode == 1
         assert payload["verdict"] == "red"
-        assert payload["failure_code"] == "fake_antigravity_send_failed"
-        assert payload["operation_evidence"]["send_input"]["status"] == "fail"
+        assert payload["failure_code"] == "antigravity_unwatched_producer_boundary_unavailable"
         assert payload["normalized"]["canaries"]["antigravity_real_agy_send"][
             "failure_code"
-        ] == ("fake_antigravity_send_failed")
+        ] == ("antigravity_unwatched_producer_boundary_unavailable")
 
 
 def test_opencode_release_proof_can_attach_real_tool_evidence() -> None:
@@ -1706,8 +1696,8 @@ def main() -> int:
         test_codex_managed_live_send_preflight_redacts_credentials,
         test_preflight_reports_missing_provider_binary_as_red,
         test_explicit_scenario_id_overrides_profile_default,
-        test_antigravity_release_proof_can_attach_real_agy_send_evidence,
-        test_antigravity_release_proof_blocks_failed_real_agy_send_evidence,
+        test_antigravity_release_proof_blocks_real_agy_send_without_an_unwatched_worker,
+        test_antigravity_release_proof_blocks_even_when_a_fake_live_failure_is_requested,
         test_opencode_release_proof_can_attach_real_tool_evidence,
         test_opencode_release_proof_blocks_failed_real_tool_evidence,
         test_claude_release_proof_can_attach_real_print_evidence,

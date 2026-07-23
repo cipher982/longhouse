@@ -85,6 +85,8 @@ from zerg.services.session_views import SessionResponse
 from zerg.services.session_views import SessionsSummaryResponse
 from zerg.services.session_views import SessionSummaryResponse
 from zerg.services.session_views import SessionThreadResponse
+from zerg.services.session_views import SessionTimelineVisibilityRequest
+from zerg.services.session_views import SessionTimelineVisibilityResponse
 from zerg.services.session_views import SessionTurnEnvelopeResponse
 from zerg.services.session_views import SessionTurnsListResponse
 from zerg.services.session_views import SessionWorkspaceResponse
@@ -199,6 +201,8 @@ async def _search_storage_v2_timeline(
     cards: list[TimelineSessionCardResponse] = []
     for session, _provider_alias, _commit_seq in projected:
         if session is None:
+            continue
+        if session.user_hidden_from_timeline:
             continue
         if not params.include_test and session.environment in {"test", "e2e"}:
             continue
@@ -851,6 +855,21 @@ async def set_timeline_session_notification_watch(
     db: Session | None = Depends(_sessions_router.session_preferences_db_dependency),
 ):
     return await _sessions_router.set_session_notification_watch(
+        session_id=session_id,
+        body=body,
+        db=db,
+        _auth=None,
+        _single=None,
+    )
+
+
+@router.patch("/sessions/{session_id}/timeline-visibility", response_model=SessionTimelineVisibilityResponse)
+async def set_timeline_session_visibility(
+    session_id: UUID,
+    body: SessionTimelineVisibilityRequest,
+    db: Session | None = Depends(_sessions_router.session_preferences_db_dependency),
+):
+    return await _sessions_router.set_session_timeline_visibility(
         session_id=session_id,
         body=body,
         db=db,

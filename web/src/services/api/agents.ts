@@ -75,6 +75,7 @@ export interface AgentSession {
   capabilities?: SessionCapabilities | null;
   loop_mode: SessionLoopMode;
   user_state?: string;
+  user_hidden_from_timeline?: boolean;
   /** Remote-launch lifecycle state; null for sessions created before remote-launch. */
   launch_state?: "launching" | "live" | "launching_unknown" | "launch_failed" | "launch_orphaned" | null;
   execution_lifetime?: "one_shot" | "live_control" | null;
@@ -1231,6 +1232,16 @@ export async function setSessionAction(
   return request(`${TIMELINE_SESSIONS_PREFIX}/${sessionId}/action`, {
     method: "POST",
     body: JSON.stringify({ action }),
+  });
+}
+
+export async function setSessionTimelineVisibility(
+  sessionId: string,
+  hidden: boolean,
+): Promise<{ session_id: string; hidden: boolean }> {
+  return request(`${TIMELINE_SESSIONS_PREFIX}/${sessionId}/timeline-visibility`, {
+    method: "PATCH",
+    body: JSON.stringify({ hidden }),
   });
 }
 

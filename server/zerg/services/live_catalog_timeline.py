@@ -577,6 +577,7 @@ def _response_from_catalog(
         ),
         loop_mode=session.loop_mode or "assist",
         user_state=session.user_state or "active",
+        user_hidden_from_timeline=bool(session.user_hidden_from_timeline),
         launch_state=readiness.launch_state if readiness is not None else None,
         execution_lifetime=readiness.execution_lifetime if readiness is not None else None,
         launch_error_code=readiness.launch_error_code if readiness is not None else None,

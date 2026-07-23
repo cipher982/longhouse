@@ -109,6 +109,40 @@ def test_patch_session_loop_mode_updates_value(tmp_path):
         api_app.dependency_overrides.clear()
 
 
+def test_patch_session_timeline_visibility_hides_and_restores(tmp_path):
+    factory = _make_db(tmp_path, "timeline_visibility.db")
+    session_id = _seed_session(factory)
+    client = _client(factory)
+
+    try:
+        hidden = client.patch(
+            f"/agents/sessions/{session_id}/timeline-visibility",
+            json={"hidden": True},
+            headers={"X-Agents-Token": "dev"},
+        )
+        assert hidden.status_code == 200
+        assert hidden.json() == {"session_id": session_id, "hidden": True}
+
+        listing = client.get("/agents/sessions", headers={"X-Agents-Token": "dev"})
+        assert listing.status_code == 200
+        assert session_id not in {item["id"] for item in listing.json()["sessions"]}
+
+        restored = client.patch(
+            f"/agents/sessions/{session_id}/timeline-visibility",
+            json={"hidden": False},
+            headers={"X-Agents-Token": "dev"},
+        )
+        assert restored.status_code == 200
+        assert restored.json() == {"session_id": session_id, "hidden": False}
+
+        listing = client.get("/agents/sessions", headers={"X-Agents-Token": "dev"})
+        assert session_id in {item["id"] for item in listing.json()["sessions"]}
+    finally:
+        from zerg.main import api_app
+
+        api_app.dependency_overrides.clear()
+
+
 def test_active_sessions_exposes_loop_mode(tmp_path):
     factory = _make_db(tmp_path, "active_sessions_loop_mode.db")
     _seed_session(factory, loop_mode="autopilot")

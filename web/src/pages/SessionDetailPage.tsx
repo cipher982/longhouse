@@ -43,6 +43,7 @@ import {
   createSessionShare,
   respondToPauseRequest,
   setSessionAction,
+  setSessionTimelineVisibility,
   type AgentEventId,
   type PauseRequestResponseRequest,
 } from "../services/api/agents";
@@ -120,6 +121,7 @@ function SessionDetailWorkspaceRoute({
     useLoopModeChange(session);
   const queryClient = useQueryClient();
   const [confirmingArchive, setConfirmingArchive] = useState(false);
+  const [hidingSession, setHidingSession] = useState(false);
   const [copyingShareLink, setCopyingShareLink] = useState(false);
 
   const handleArchiveConfirm = useCallback(async () => {
@@ -140,6 +142,27 @@ function SessionDetailWorkspaceRoute({
       toast.error("Failed to archive session");
     }
   }, [session, queryClient, handleBack]);
+
+  const handleTimelineVisibility = useCallback(async () => {
+    if (!session || hidingSession) return;
+    if (config.demoMode) {
+      toast(DEMO_READ_ONLY_MESSAGE);
+      return;
+    }
+    setHidingSession(true);
+    try {
+      const hidden = !session.user_hidden_from_timeline;
+      await setSessionTimelineVisibility(session.id, hidden);
+      queryClient.invalidateQueries({ queryKey: ["agent-sessions"] });
+      queryClient.invalidateQueries({ queryKey: ["agent-session", session.id] });
+      toast.success(hidden ? "Session hidden from timeline" : "Session restored to timeline");
+      if (hidden) handleBack();
+    } catch {
+      toast.error("Failed to update timeline visibility");
+    } finally {
+      setHidingSession(false);
+    }
+  }, [session, hidingSession, queryClient, handleBack]);
 
   const handleCopyShareLink = useCallback(async () => {
     if (!session) return;
@@ -361,6 +384,16 @@ function SessionDetailWorkspaceRoute({
         data-testid="session-info-button"
       >
         Info
+      </Button>
+      <Button
+        variant="ghost"
+        size="sm"
+        onClick={() => void handleTimelineVisibility()}
+        disabled={hidingSession}
+        title={session.user_hidden_from_timeline ? "Restore to timeline" : "Hide from timeline"}
+        aria-label={session.user_hidden_from_timeline ? "Restore to timeline" : "Hide from timeline"}
+      >
+        {hidingSession ? "Saving" : session.user_hidden_from_timeline ? "Restore" : "Hide"}
       </Button>
       {confirmingArchive ? (
         <div className="session-detail-archive-confirm">

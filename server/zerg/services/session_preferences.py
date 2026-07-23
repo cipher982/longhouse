@@ -15,6 +15,7 @@ class SessionPreferences:
     user_state: str = "active"
     loop_mode: str = "assist"
     notification_muted: bool = False
+    user_hidden_from_timeline: bool = False
 
 
 def load_session_preferences(session_id: UUID | str, *, standalone_session=None) -> SessionPreferences:
@@ -27,6 +28,7 @@ def load_session_preferences(session_id: UUID | str, *, standalone_session=None)
             user_state=str(getattr(standalone_session, "user_state", None) or "active"),
             loop_mode=str(getattr(standalone_session, "loop_mode", None) or "assist"),
             notification_muted=bool(getattr(standalone_session, "notification_muted", False)),
+            user_hidden_from_timeline=bool(getattr(standalone_session, "user_hidden_from_timeline", False)),
         )
 
     if database_module.live_catalog_enabled():
@@ -37,6 +39,7 @@ def load_session_preferences(session_id: UUID | str, *, standalone_session=None)
                 user_state=str(catalog.get("user_state") or "active"),
                 loop_mode=str(catalog.get("loop_mode") or "assist"),
                 notification_muted=catalog.get("notification_muted") is True,
+                user_hidden_from_timeline=catalog.get("user_hidden_from_timeline") is True,
             )
         from zerg.services.catalog_read_gateway import session_snapshot
 
@@ -49,6 +52,7 @@ def load_session_preferences(session_id: UUID | str, *, standalone_session=None)
             user_state=str(catalog.get("user_state") or "active"),
             loop_mode=str(catalog.get("loop_mode") or "assist"),
             notification_muted=catalog.get("notification_muted") is True,
+            user_hidden_from_timeline=catalog.get("user_hidden_from_timeline") is True,
         )
 
     factory = database_module.get_live_session_factory()
@@ -62,6 +66,7 @@ def load_session_preferences(session_id: UUID | str, *, standalone_session=None)
             user_state=str(row.user_state or "active"),
             loop_mode=str(row.loop_mode or "assist"),
             notification_muted=bool(row.notification_muted),
+            user_hidden_from_timeline=bool(row.user_hidden_from_timeline),
         )
 
 
@@ -71,6 +76,7 @@ async def update_session_preferences(
     user_state: str | None = None,
     loop_mode: str | None = None,
     notification_muted: bool | None = None,
+    user_hidden_from_timeline: bool | None = None,
 ) -> SessionPreferences | None:
     """Update session preferences through catalogd without opening SQLite here."""
 
@@ -86,6 +92,7 @@ async def update_session_preferences(
             "user_state": user_state,
             "loop_mode": loop_mode,
             "notification_muted": notification_muted,
+            "user_hidden_from_timeline": user_hidden_from_timeline,
             "observed_at": datetime.now(timezone.utc).isoformat(),
         },
         timeout_seconds=1.0,
@@ -99,4 +106,5 @@ async def update_session_preferences(
         user_state=str(preferences.get("user_state") or "active"),
         loop_mode=str(preferences.get("loop_mode") or "assist"),
         notification_muted=preferences.get("notification_muted") is True,
+        user_hidden_from_timeline=preferences.get("user_hidden_from_timeline") is True,
     )

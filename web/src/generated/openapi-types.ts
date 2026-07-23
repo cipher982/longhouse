@@ -1243,6 +1243,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/internal/provider-capability-proofs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Publish Provider Capability Proofs */
+        post: operations["publish_provider_capability_proofs_internal_provider_capability_proofs_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/provider-capability-proofs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Provider Capability Proofs */
+        get: operations["list_provider_capability_proofs_agents_provider_capability_proofs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/skills": {
         parameters: {
             query?: never;
@@ -2154,6 +2188,23 @@ export interface paths {
         head?: never;
         /** Set Timeline Session Notification Watch */
         patch: operations["set_timeline_session_notification_watch_timeline_sessions__session_id__notification_watch_patch"];
+        trace?: never;
+    };
+    "/api/timeline/sessions/{session_id}/timeline-visibility": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Set Timeline Session Visibility */
+        patch: operations["set_timeline_session_visibility_timeline_sessions__session_id__timeline_visibility_patch"];
         trace?: never;
     };
     "/api/timeline/sessions/{session_id}": {
@@ -3269,6 +3320,26 @@ export interface paths {
          * @description Mute or unmute session attention notifications.
          */
         patch: operations["set_session_notification_watch_agents_sessions__session_id__notification_watch_patch"];
+        trace?: never;
+    };
+    "/api/agents/sessions/{session_id}/timeline-visibility": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Set Session Timeline Visibility
+         * @description Hide or restore one session in the owner's default timeline.
+         */
+        patch: operations["set_session_timeline_visibility_agents_sessions__session_id__timeline_visibility_patch"];
         trace?: never;
     };
     "/api/agents/sessions/{session_id}": {
@@ -9442,6 +9513,12 @@ export interface components {
              */
             user_state: string;
             /**
+             * User Hidden From Timeline
+             * @description User has hidden this session from default timeline and search views
+             * @default false
+             */
+            user_hidden_from_timeline: boolean;
+            /**
              * Launch State
              * @description Remote-launch lifecycle: launching|live|launching_unknown|launch_failed|launch_orphaned; null when there is no launch attempt
              */
@@ -10020,6 +10097,18 @@ export interface components {
             head_session_id: string;
             /** Sessions */
             sessions: components["schemas"]["SessionResponse"][];
+        };
+        /** SessionTimelineVisibilityRequest */
+        SessionTimelineVisibilityRequest: {
+            /** Hidden */
+            hidden: boolean;
+        };
+        /** SessionTimelineVisibilityResponse */
+        SessionTimelineVisibilityResponse: {
+            /** Session Id */
+            session_id: string;
+            /** Hidden */
+            hidden: boolean;
         };
         /** SessionTranscriptFacts */
         SessionTranscriptFacts: {
@@ -13515,6 +13604,50 @@ export interface operations {
             };
         };
     };
+    publish_provider_capability_proofs_internal_provider_capability_proofs_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    list_provider_capability_proofs_agents_provider_capability_proofs_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
     list_skills_skills_get: {
         parameters: {
             query?: {
@@ -15296,6 +15429,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SessionNotificationWatchResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_timeline_session_visibility_timeline_sessions__session_id__timeline_visibility_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SessionTimelineVisibilityRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionTimelineVisibilityResponse"];
                 };
             };
             /** @description Validation Error */
@@ -17379,6 +17547,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SessionNotificationWatchResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_session_timeline_visibility_agents_sessions__session_id__timeline_visibility_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SessionTimelineVisibilityRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionTimelineVisibilityResponse"];
                 };
             };
             /** @description Validation Error */

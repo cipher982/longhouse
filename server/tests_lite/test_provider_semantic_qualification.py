@@ -315,7 +315,7 @@ def test_antigravity_no_token_hook_pass_and_live_blocked_are_both_published(tmp_
     assert os.environ["HOME"] == str(ambient_home)
 
 
-def test_antigravity_explicit_home_runs_real_agy_canary(tmp_path: Path, monkeypatch) -> None:
+def test_antigravity_explicit_home_still_blocks_without_an_unwatched_worker(tmp_path: Path, monkeypatch) -> None:
     binary, executable_identity = _fake_binary(tmp_path, "antigravity")
     qualification_home = tmp_path / "agy-home"
     monkeypatch.setenv(antigravity.QUALIFICATION_HOME_ENV, str(qualification_home))
@@ -325,23 +325,34 @@ def test_antigravity_explicit_home_runs_real_agy_canary(tmp_path: Path, monkeypa
         lambda _args: _antigravity_no_token_artifact(),
     )
 
-    def real_agy(_args, _root):
-        assert os.environ["LONGHOUSE_ANTIGRAVITY_BIN"] == str(binary)
-        assert os.environ["HOME"] == str(qualification_home)
-        return {"status": "pass", "canary": "antigravity_real_agy_send"}
-
     monkeypatch.setattr(
         antigravity.semantic,
         "load_control_canary_module",
-        lambda _root: SimpleNamespace(run_antigravity_real_agy_send_canary=real_agy),
+        lambda _root: pytest.fail("real agy must never run from the watched-machine qualification harness"),
     )
     output = tmp_path / "output"
 
     provider_qualification.run(_request(tmp_path, "antigravity", binary, executable_identity), output)
 
     record = _records_by_assertion(output)[antigravity.ASSERTIONS[1]]
-    assert record["outcome"] == "pass"
-    assert record["evidence_class"] == "live_token"
+    assert record["outcome"] == "blocked"
+    assert record["evidence_class"] == "live_no_token"
+    assert record["evidence"]["failure_code"] == "antigravity_unwatched_producer_boundary_unavailable"
+
+
+def test_antigravity_watched_interactive_home_still_blocks_before_real_agy(tmp_path: Path, monkeypatch) -> None:
+    binary, executable_identity = _fake_binary(tmp_path, "antigravity")
+    watched_home = tmp_path / "watched-home"
+    watched_home.mkdir()
+    monkeypatch.setenv("HOME", str(watched_home))
+    monkeypatch.setenv(antigravity.QUALIFICATION_HOME_ENV, str(watched_home))
+    monkeypatch.setattr(antigravity, "run_provider_live_canary", lambda _args: _antigravity_no_token_artifact())
+
+    output = tmp_path / "output"
+    provider_qualification.run(_request(tmp_path, "antigravity", binary, executable_identity), output)
+    record = _records_by_assertion(output)[antigravity.ASSERTIONS[1]]
+    assert record["outcome"] == "blocked"
+    assert record["evidence"]["failure_code"] == "antigravity_unwatched_producer_boundary_unavailable"
 
 
 def test_antigravity_live_flag_without_explicit_home_never_uses_ambient_authority(tmp_path: Path, monkeypatch) -> None:

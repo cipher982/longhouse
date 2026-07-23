@@ -2061,6 +2061,12 @@ def _claimed_antigravity_loop_messages(inbox_dir: Path) -> list[dict[str, Any]]:
 def run_antigravity_real_agy_send_canary(args: argparse.Namespace, root: Path) -> dict[str, Any]:
     """Prove real agy honors Longhouse PreInvocation hook-inbox injection."""
 
+    return {
+        "status": "blocked",
+        "failure_code": "antigravity_unwatched_producer_boundary_unavailable",
+        "producer_boundary": "unwatched_worker_required",
+    }
+
     binary = _resolve_antigravity_binary()
     if not binary:
         return _fail("provider_binary_not_found", "agy binary was not found on PATH")

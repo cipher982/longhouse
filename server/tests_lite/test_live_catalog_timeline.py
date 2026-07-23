@@ -471,6 +471,69 @@ def test_live_catalog_timeline_labels_zero_content_shell_as_empty(tmp_path):
     assert session.title_source == "project"
 
 
+def test_user_hide_updates_legacy_live_timeline_card_projection(tmp_path):
+    engine = make_live_engine(f"sqlite:///{tmp_path / 'user-hide-card.db'}")
+    initialize_catalog_schema(engine)
+    LiveSession = make_sessionmaker(engine)
+    now = datetime.now(timezone.utc)
+    session_id = uuid4()
+    with LiveSession() as db:
+        db.add(
+            LiveSessionCatalog(
+                session_id=str(session_id),
+                provider="codex",
+                environment="production",
+                project="longhouse",
+                started_at=now,
+                last_activity_at=now,
+                user_messages=1,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        db.add(
+            LiveTimelineCard(
+                session_id=str(session_id),
+                provider="codex",
+                environment="production",
+                project="longhouse",
+                started_at=now,
+                last_activity_at=now,
+                user_messages=1,
+                archive_state="legacy_hot",
+                derived_state="current",
+                parser_revision="test",
+                updated_at=now,
+            )
+        )
+        db.commit()
+
+    store = CatalogStore(engine)
+    hidden = store.update_session_preferences(
+        session_id=str(session_id),
+        user_state=None,
+        loop_mode=None,
+        notification_muted=None,
+        user_hidden_from_timeline=True,
+        observed_at=now,
+    )
+    assert hidden["preferences"]["user_hidden_from_timeline"] is True
+    with LiveSession() as db:
+        assert _snapshot(db, _params())["total"] == 0
+
+    restored = store.update_session_preferences(
+        session_id=str(session_id),
+        user_state=None,
+        loop_mode=None,
+        notification_muted=None,
+        user_hidden_from_timeline=False,
+        observed_at=now + timedelta(seconds=1),
+    )
+    assert restored["preferences"]["user_hidden_from_timeline"] is False
+    with LiveSession() as db:
+        assert _snapshot(db, _params())["total"] == 1
+
+
 def test_live_catalog_question_preserves_opened_at_and_needs_answer(tmp_path):
     engine = make_live_engine(f"sqlite:///{tmp_path / 'live-question.db'}")
     initialize_catalog_schema(engine)

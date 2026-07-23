@@ -1307,7 +1307,11 @@ def _merge_antigravity_real_send_proof(
             operation_evidence[operation] = evidence
     merged["canaries"] = canaries
     merged["operation_evidence"] = operation_evidence
-    if antigravity.get("status") == "fail":
+    if antigravity.get("status") == "blocked":
+        merged["verdict"] = "yellow"
+        merged["failure_code"] = str(antigravity.get("failure_code") or "antigravity_real_agy_send_blocked")
+        merged["recommendation"] = "provision_unwatched_worker"
+    elif antigravity.get("status") != "pass":
         merged["verdict"] = "red"
         merged["failure_code"] = str(
             antigravity.get("failure_code") or "antigravity_real_agy_send_failed"
@@ -1840,98 +1844,27 @@ def _run_antigravity_real_send_proof(
     evidence_root = raw_dir / "antigravity-control-evidence"
     stdout_path = raw_dir / "antigravity-control-stdout.log"
     stderr_path = raw_dir / "antigravity-control-stderr.log"
-    argv = [
-        sys.executable,
-        str(args.repo_root / "scripts" / "qa" / "provider-control-e2e-canary.py"),
-        "--repo-root",
-        str(args.repo_root),
-        "--provider",
-        "antigravity",
-        "--artifact",
-        str(artifact_path),
-        "--evidence-root",
-        str(evidence_root),
-        "--antigravity-real-agy-send",
-        "--antigravity-print-timeout-secs",
-        str(args.antigravity_print_timeout_secs),
-        "--json",
-    ]
     raw_artifacts = {
         "antigravity_control_artifact": str(artifact_path),
         "antigravity_control_stdout": str(stdout_path),
         "antigravity_control_stderr": str(stderr_path),
     }
-    if artifact_path.exists():
-        artifact_path.unlink()
-    run_env = os.environ.copy()
-    if args.provider_bin is not None:
-        run_env[ANTIGRAVITY_BIN_ENV] = str(args.provider_bin)
-    try:
-        result = subprocess.run(
-            argv,
-            cwd=str(args.repo_root),
-            env=run_env,
-            text=True,
-            capture_output=True,
-            check=False,
-            timeout=args.timeout_secs,
-        )
-    except subprocess.TimeoutExpired as exc:
-        stdout_path.write_text(str(exc.stdout or ""), encoding="utf-8")
-        stderr_path.write_text(str(exc.stderr or ""), encoding="utf-8")
-        artifact = {
-            "schema_version": 1,
-            "provider": "antigravity",
-            "verdict": "red",
-            "failure_code": "antigravity_real_agy_send_timeout",
-            "canaries": {
-                "antigravity": _fail_control_canary(
-                    "antigravity_real_agy_send_timeout",
-                    f"provider-control-e2e timed out after {args.timeout_secs}s",
-                )
-            },
-            "evidence_root": str(evidence_root),
-        }
-        _write_json(artifact_path, artifact)
-        return artifact, raw_artifacts, None
-    stdout_path.write_text(result.stdout, encoding="utf-8")
-    stderr_path.write_text(result.stderr, encoding="utf-8")
-    if artifact_path.exists():
-        try:
-            artifact = _read_json(artifact_path)
-        except (OSError, json.JSONDecodeError, ValueError) as exc:
-            artifact = {
-                "schema_version": 1,
-                "provider": "antigravity",
-                "verdict": "red",
-                "failure_code": "antigravity_real_agy_send_invalid_json",
-                "canaries": {
-                    "antigravity": _fail_control_canary(
-                        "antigravity_real_agy_send_invalid_json",
-                        f"{type(exc).__name__}: {exc}",
-                        command=_command_evidence(result),
-                    )
-                },
-                "evidence_root": str(evidence_root),
-            }
-            _write_json(artifact_path, artifact)
-    else:
-        artifact = {
-            "schema_version": 1,
-            "provider": "antigravity",
-            "verdict": "red",
-            "failure_code": "antigravity_real_agy_send_missing_artifact",
-            "canaries": {
-                "antigravity": _fail_control_canary(
-                    "antigravity_real_agy_send_missing_artifact",
-                    "provider-control-e2e exited without writing an artifact.",
-                    command=_command_evidence(result),
-                )
-            },
-            "evidence_root": str(evidence_root),
-        }
-        _write_json(artifact_path, artifact)
-    return artifact, raw_artifacts, result.returncode
+    # The release factory runs on a watched Machine Agent host. Do not launch
+    # stock agy --print here: its native transcript is indistinguishable from
+    # a real Shadow session. A real-send proof requires an unwatched worker.
+    artifact = {
+        "schema_version": 1,
+        "provider": "antigravity",
+        "verdict": "blocked",
+        "failure_code": "antigravity_unwatched_producer_boundary_unavailable",
+        "canaries": {"antigravity": {"status": "blocked", "failure_code": "antigravity_unwatched_producer_boundary_unavailable"}},
+        "evidence_root": str(evidence_root),
+        "producer_boundary": "unwatched_worker_required",
+    }
+    _write_json(artifact_path, artifact)
+    stdout_path.write_text("blocked: unwatched producer boundary required\n", encoding="utf-8")
+    stderr_path.write_text("", encoding="utf-8")
+    return artifact, raw_artifacts, 1
 
 
 def _run_opencode_real_tool_proof(

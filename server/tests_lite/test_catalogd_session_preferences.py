@@ -94,6 +94,7 @@ async def test_session_preference_routes_are_catalog_owned_without_db(daemon_pat
                 "user_state": None,
                 "loop_mode": None,
                 "notification_muted": True,
+                "user_hidden_from_timeline": None,
                 "observed_at": now.isoformat(),
             },
         )

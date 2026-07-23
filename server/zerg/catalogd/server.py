@@ -1751,7 +1751,7 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _update_session_preferences(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        expected = {"session_id", "user_state", "loop_mode", "notification_muted", "observed_at"}
+        expected = {"session_id", "user_state", "loop_mode", "notification_muted", "user_hidden_from_timeline", "observed_at"}
         if set(request.params) != expected:
             return self._error(request, "invalid_request", "session.preferences.update.v2 has invalid parameters")
         params = dict(request.params)
@@ -1768,7 +1768,9 @@ class CatalogDaemon:
             return self._error(request, "invalid_request", "loop_mode is not recognized")
         if params["notification_muted"] is not None and type(params["notification_muted"]) is not bool:
             return self._error(request, "invalid_request", "notification_muted must be a boolean or null")
-        if all(params[field] is None for field in ("user_state", "loop_mode", "notification_muted")):
+        if params["user_hidden_from_timeline"] is not None and type(params["user_hidden_from_timeline"]) is not bool:
+            return self._error(request, "invalid_request", "user_hidden_from_timeline must be a boolean or null")
+        if all(params[field] is None for field in ("user_state", "loop_mode", "notification_muted", "user_hidden_from_timeline")):
             return self._error(request, "invalid_request", "at least one preference must be provided")
         try:
             params["observed_at"] = _parse_datetime(params["observed_at"], "observed_at")

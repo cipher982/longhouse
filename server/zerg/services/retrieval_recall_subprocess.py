@@ -183,6 +183,12 @@ def _visible_recall_session_ids(database_url: str, session_ids: list[str]) -> se
                         AgentSession.hidden_from_default_timeline == 0,
                     )
                 )
+                .filter(
+                    or_(
+                        AgentSession.user_hidden_from_timeline.is_(None),
+                        AgentSession.user_hidden_from_timeline == 0,
+                    )
+                )
                 .all()
             )
             return {str(row[0]) for row in rows}

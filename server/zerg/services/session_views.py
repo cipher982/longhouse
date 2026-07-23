@@ -1011,6 +1011,7 @@ class SessionResponse(UTCBaseModel):
     )
     loop_mode: SessionLoopMode = Field(SessionLoopMode.ASSIST, description="Session loop mode: assist|autopilot")
     user_state: str = Field("active", description="User classification: active|parked|snoozed|archived")
+    user_hidden_from_timeline: bool = Field(False, description="User has hidden this session from default timeline and search views")
     launch_state: Optional[LaunchLifecycleState] = Field(
         None,
         description=(
@@ -1506,6 +1507,15 @@ class SessionNotificationWatchResponse(BaseModel):
     notification_muted: bool
 
 
+class SessionTimelineVisibilityRequest(BaseModel):
+    hidden: bool
+
+
+class SessionTimelineVisibilityResponse(BaseModel):
+    session_id: str
+    hidden: bool
+
+
 class BackfillSummariesResponse(BaseModel):
     """Response for summary backfill endpoint."""
 
@@ -1878,6 +1888,7 @@ def build_session_response(
         ),
         loop_mode=_coerce_session_loop_mode(preferences.loop_mode),
         user_state=preferences.user_state,
+        user_hidden_from_timeline=preferences.user_hidden_from_timeline,
         launch_state=launch_state,
         execution_lifetime=execution_lifetime,
         launch_error_code=launch_error_code,

@@ -373,7 +373,7 @@ def test_claude_real_print_canary_preserves_non_secret_launch_env() -> None:
         assert payload["canaries"]["claude"]["status"] == "pass"
 
 
-def test_antigravity_real_agy_send_canary_requires_model_visible_marker() -> None:
+def test_antigravity_real_agy_send_canary_blocks_without_an_unwatched_worker() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
         fake_home = root / "home"
@@ -394,18 +394,13 @@ def test_antigravity_real_agy_send_canary_requires_model_visible_marker() -> Non
             },
         )
 
-        assert result.returncode == 0, result.stderr + result.stdout
+        assert result.returncode == 1
         agy = payload["canaries"]["antigravity"]
-        assert agy["status"] == "pass"
-        assert agy["operation_evidence"]["send_input"]["status"] == "pass"
-        assert agy["operation_evidence"]["send_input"]["level"] == "live_token"
-        assert agy["marker_in_stdout"] is True
-        assert agy["baseline_in_stdout"] is False
-        assert agy["matching_claim"]["hook_event"] == "PreInvocation"
-        assert agy["pending_files_after"] == []
+        assert agy["status"] == "blocked"
+        assert agy["failure_code"] == "antigravity_unwatched_producer_boundary_unavailable"
 
 
-def test_antigravity_real_agy_send_canary_fails_without_injected_marker() -> None:
+def test_antigravity_real_agy_send_canary_blocks_before_marker_evaluation() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
         fake_home = root / "home"
@@ -428,10 +423,8 @@ def test_antigravity_real_agy_send_canary_fails_without_injected_marker() -> Non
 
         assert result.returncode == 1
         agy = payload["canaries"]["antigravity"]
-        assert agy["status"] == "fail"
-        assert agy["failure_code"] == "antigravity_real_agy_injection_not_observed"
-        assert agy["marker_in_stdout"] is False
-        assert agy["baseline_in_stdout"] is True
+        assert agy["status"] == "blocked"
+        assert agy["failure_code"] == "antigravity_unwatched_producer_boundary_unavailable"
 
 
 def test_opencode_real_tool_canary_requires_completed_tool_marker() -> None:
@@ -538,8 +531,8 @@ def main() -> int:
         test_claude_real_print_canary_requires_exact_marker_result,
         test_claude_real_print_canary_fails_on_api_error_result,
         test_claude_real_print_canary_preserves_non_secret_launch_env,
-        test_antigravity_real_agy_send_canary_requires_model_visible_marker,
-        test_antigravity_real_agy_send_canary_fails_without_injected_marker,
+        test_antigravity_real_agy_send_canary_blocks_without_an_unwatched_worker,
+        test_antigravity_real_agy_send_canary_blocks_before_marker_evaluation,
         test_opencode_real_tool_canary_requires_completed_tool_marker,
         test_opencode_real_tool_canary_fails_without_marker_output,
         test_opencode_real_tool_canary_fails_without_done_text,

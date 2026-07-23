@@ -73,9 +73,10 @@ def test_catalog_mode_reads_preferences_without_opening_sqlite(monkeypatch):
             "facts": {
                 "catalog": {
                     "session_id": value,
-                    "user_state": "snoozed",
-                    "loop_mode": "autopilot",
-                    "notification_muted": True,
+                "user_state": "snoozed",
+                "loop_mode": "autopilot",
+                "notification_muted": True,
+                "user_hidden_from_timeline": True,
                 }
             },
         },
@@ -90,3 +91,4 @@ def test_catalog_mode_reads_preferences_without_opening_sqlite(monkeypatch):
     assert preferences.user_state == "snoozed"
     assert preferences.loop_mode == "autopilot"
     assert preferences.notification_muted is True
+    assert preferences.user_hidden_from_timeline is True

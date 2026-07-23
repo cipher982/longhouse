@@ -134,6 +134,7 @@ def list_active_live_session_ids(
         .join(LiveSessionCatalog, LiveSessionCatalog.session_id == LiveSession.session_id)
         .filter(LiveSession.state.notin_(("missing", "ended")))
         .filter(LiveSessionCatalog.user_state.notin_(("archived", "snoozed")))
+        .filter(LiveSessionCatalog.user_hidden_from_timeline == 0)
         .filter(LiveSession.last_seen_at >= cutoff)
         .order_by(LiveSession.last_seen_at.desc(), LiveSession.updated_at.desc(), LiveSession.session_id.desc())
         .limit(limit)

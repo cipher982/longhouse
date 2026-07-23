@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import argparse
 import os
 from pathlib import Path
 from typing import Any
@@ -66,43 +65,28 @@ def _execute(binary: Path, evidence_root: Path):
     )
     raw_home = str(os.environ.get(QUALIFICATION_HOME_ENV) or "").strip()
     live_requested = os.environ.get(LIVE_ENABLE_ENV) == "1" or bool(raw_home)
-    if raw_home and not Path(raw_home).is_absolute():
-        raise identity.RequestError(f"{QUALIFICATION_HOME_ENV} must be an absolute path")
-    live_enabled = no_token_outcome is AssertionOutcome.PASS and live_requested and bool(raw_home)
-    live: dict[str, Any]
-    if live_enabled:
-        module = semantic.load_control_canary_module(Path(__file__).resolve().parents[3])
-        live_root = evidence_root / "live"
-        live_root.mkdir(parents=True, exist_ok=True)
-        env = {"LONGHOUSE_ANTIGRAVITY_BIN": str(binary)}
-        home = Path(raw_home)
-        home.mkdir(mode=0o700, parents=True, exist_ok=True)
-        env["HOME"] = str(home)
-        with semantic.temporary_environment(env):
-            live = module.run_antigravity_real_agy_send_canary(
-                argparse.Namespace(
-                    repo_root=Path(__file__).resolve().parents[3],
-                    python_bin=None,
-                    longhouse_bin=None,
-                    antigravity_print_timeout_secs=45,
-                ),
-                live_root,
-            )
-        live_outcome = AssertionOutcome.PASS if live.get("status") == "pass" else AssertionOutcome.SEMANTIC_FAIL
-        live_evidence_class = EvidenceClass.LIVE_TOKEN
-    else:
-        live = {
-            "status": "blocked",
-            "failure_code": (
-                "explicit_antigravity_qualification_authority_missing"
-                if no_token_outcome is AssertionOutcome.PASS
-                else "antigravity_no_token_contract_not_proven"
-            ),
-            "enable_env": LIVE_ENABLE_ENV,
-            "qualification_home_env": QUALIFICATION_HOME_ENV,
-        }
-        live_outcome = AssertionOutcome.BLOCKED
-        live_evidence_class = EvidenceClass.LIVE_NO_TOKEN
+    # This qualification runner executes on a Machine Agent host. Antigravity
+    # has no supported authenticated profile/data-root override, so any real
+    # ``agy --print`` here can create a Shadow transcript that is
+    # indistinguishable from a user's native session. Do not attempt to infer
+    # isolation from HOME or a path convention. A real proof belongs on a
+    # separately provisioned unwatched worker with its own producer boundary.
+    # Until that worker exists, block before invoking the print canary.
+    live: dict[str, Any] = {
+        "status": "blocked",
+        "failure_code": (
+            "antigravity_unwatched_producer_boundary_unavailable"
+            if no_token_outcome is AssertionOutcome.PASS and live_requested
+            else "explicit_antigravity_qualification_authority_missing"
+            if no_token_outcome is AssertionOutcome.PASS
+            else "antigravity_no_token_contract_not_proven"
+        ),
+        "enable_env": LIVE_ENABLE_ENV,
+        "qualification_home_env": QUALIFICATION_HOME_ENV,
+        "producer_boundary": "unwatched_worker_required",
+    }
+    live_outcome = AssertionOutcome.BLOCKED
+    live_evidence_class = EvidenceClass.LIVE_NO_TOKEN
     overall = "pass"
     if AssertionOutcome.SEMANTIC_FAIL in {no_token_outcome, live_outcome}:
         overall = "fail"

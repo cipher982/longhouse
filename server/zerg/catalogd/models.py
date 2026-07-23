@@ -193,6 +193,8 @@ class StorageSession(CatalogBase):
     notification_muted = Column(Integer, nullable=False, server_default=text("0"))
     origin_kind = Column(String(64), nullable=True, index=True)
     hidden_from_default_timeline = Column(Integer, nullable=False, server_default=text("0"))
+    user_hidden_from_timeline = Column(Integer, nullable=False, server_default=text("0"))
+    user_hidden_at = Column(DateTime(timezone=True), nullable=True)
     launch_actor = Column(String(32), nullable=True, index=True)
     launch_surface = Column(String(32), nullable=True, index=True)
     commit_seq = Column(BigInteger, nullable=False)

@@ -134,6 +134,7 @@ def _hybrid_semantic_candidate_ids(db: Session, params: SessionListParams) -> se
         filter_q = filter_q.filter(~provider_proof_session_clause(AgentSession))
     if not params.include_automation:
         filter_q = filter_q.filter((AgentSession.hidden_from_default_timeline.is_(None)) | (AgentSession.hidden_from_default_timeline == 0))
+    filter_q = filter_q.filter((AgentSession.user_hidden_from_timeline.is_(None)) | (AgentSession.user_hidden_from_timeline == 0))
     if params.hide_autonomous:
         # Session-identity-kernel cleanup: ``is_sidechain`` was dropped.
         filter_q = filter_q.filter(AgentSession.user_messages > 0)
