@@ -22,7 +22,7 @@ s.close()
 PY
 )"
 
-DATABASE_URL="sqlite:///$TMP_DIR/test.db" LLM_DISABLED=1 longhouse serve --port "$PORT" &
+DATABASE_URL="sqlite:///$TMP_DIR/test.db" LLM_DISABLED=1 longhouse-server serve --port "$PORT" &
 SERVER_PID="$!"
 
 for _ in $(seq 1 20); do

@@ -212,7 +212,7 @@ class SearchDaemon:
                     deadline_mono_ns=int(request.deadline_mono_ns),
                 )
                 timing = result.get("timing") if isinstance(result.get("timing"), dict) else {}
-                logger.info(
+                logger.debug(
                     "searchd query scope=%s query_tokens=%s compiled_tokens=%s results=%s admit_ms=%s sql_ms=%s",
                     result.get("search_scope"),
                     result.get("query_token_count"),

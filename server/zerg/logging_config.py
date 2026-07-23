@@ -5,13 +5,15 @@ Extracted from main.py to keep the app factory focused.
 """
 
 import logging
+from datetime import UTC
+from datetime import datetime
 
 
 class StructuredFormatter(logging.Formatter):
     """Formatter that renders structured fields for grep-able telemetry logs.
 
     For logs with 'extra' dict, formats as:
-        2025-12-15 03:19:33 INFO [LONGHOUSE] Starting session session_id=abc123
+        2025-12-15T03:19:33.123Z INFO [LONGHOUSE] Starting session session_id=abc123
     """
 
     BUILTIN_ATTRS = {
@@ -36,23 +38,25 @@ class StructuredFormatter(logging.Formatter):
         "exc_info",
         "exc_text",
         "stack_info",
+        "taskName",
         "event",
         "tag",
     }
 
     def format(self, record):
-        timestamp = self.formatTime(record, "%Y-%m-%d %H:%M:%S")
+        timestamp = datetime.fromtimestamp(record.created, tz=UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
         level = f"{record.levelname:7}"
 
         tag = getattr(record, "tag", None)
-        if tag:
-            prefix = f"{level} [{tag:7}]"
-        else:
-            prefix = f"{level}          "
+        component = str(tag or record.name or "root").upper()
+        prefix = f"{level} [{component}]"
 
         parts = [timestamp, prefix, record.getMessage()]
 
         extra_fields = []
+        event = getattr(record, "event", None)
+        if event:
+            extra_fields.append(f"event={event}")
         for key, value in record.__dict__.items():
             if key not in self.BUILTIN_ATTRS and not key.startswith("_"):
                 if isinstance(value, str) and len(value) > 50:
