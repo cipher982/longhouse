@@ -229,17 +229,51 @@ def _parse_js_literal(value: str, *, depth: int = 0) -> tuple[Any, bool]:
 def _resolve_local_literal(source: str, identifier: str, before: int) -> tuple[Any, bool]:
     """Resolve a simple preceding literal used as a tool argument."""
 
-    pattern = re.compile(rf"(?:const|let|var)\s+{re.escape(identifier)}\s*=\s*")
-    matches = list(pattern.finditer(source, 0, before))
-    if not matches:
-        return identifier, False
-    start = matches[-1].end()
-    if start >= before or source[start] not in {'"', "'", "`"}:
-        return identifier, False
-    end = _scan_quoted(source, start)
-    if end is None or end > before:
-        return identifier, False
-    return _parse_js_literal(source[start:end])
+    resolved: tuple[Any, bool] = (identifier, False)
+    index = 0
+    while index < before:
+        char = source[index]
+        if char in {'"', "'", "`"}:
+            end = _scan_quoted(source, index)
+            if end is None:
+                return identifier, False
+            index = end
+            continue
+        if source.startswith("//", index):
+            newline = source.find("\n", index + 2, before)
+            index = before if newline < 0 else newline + 1
+            continue
+        if source.startswith("/*", index):
+            end = source.find("*/", index + 2, before)
+            if end < 0:
+                return identifier, False
+            index = end + 2
+            continue
+        keyword = next((value for value in ("const", "let", "var") if source.startswith(value, index)), None)
+        if keyword is None or (index > 0 and (source[index - 1].isalnum() or source[index - 1] in "_$")):
+            index += 1
+            continue
+        name_start = _skip_space(source, index + len(keyword))
+        match = _IDENTIFIER.match(source, name_start)
+        if match is None or match.group(0) != identifier:
+            index += len(keyword)
+            continue
+        equals = _skip_space(source, match.end())
+        if equals >= before or source[equals] != "=":
+            resolved = (identifier, False)
+            index = match.end()
+            continue
+        value_start = _skip_space(source, equals + 1)
+        if value_start >= before or source[value_start] not in {'"', "'", "`"}:
+            resolved = (identifier, False)
+            index = value_start
+            continue
+        value_end = _scan_quoted(source, value_start)
+        if value_end is None or value_end > before:
+            return identifier, False
+        resolved = _parse_js_literal(source[value_start:value_end])
+        index = value_end
+    return resolved
 
 
 def extract_codex_wrapper_calls(source: str) -> tuple[list[dict[str, Any]], bool]:

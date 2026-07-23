@@ -68,6 +68,19 @@ text(await tools.apply_patch(patch));'''
     }
 
 
+def test_patch_literal_resolution_ignores_comment_and_string_decoys():
+    source = '''const patch = "*** Begin Patch\\n*** Update File: real.py\\n*** End Patch";
+const example = "const patch = \\\"wrong\\\"";
+// const patch = "also wrong";
+text(await tools.apply_patch(patch));'''
+
+    presentation = project_tool_presentation("exec", source, provider="codex")
+
+    assert presentation is not None
+    assert presentation["wrapper_recedes"] is True
+    assert "real.py" in presentation["tool_input_json"]["patch"]
+
+
 def test_single_child_without_forwarded_result_keeps_wrapper_prominent():
     source = 'await tools.exec_command({cmd:"dangerous"}); text("done");'
 

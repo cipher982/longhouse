@@ -396,7 +396,7 @@ export function getToolSummary(interaction: ToolInteraction): string {
     if ("patch" in input && typeof input.patch === "string") {
       const paths = [...input.patch.matchAll(/^\*\*\* (?:Update|Add|Delete) File: (.+)$/gm)].map((match) => match[1]);
       if (paths.length > 0) {
-        const first = truncatePath(paths[0]);
+        const first = paths[0].split(/[\\/]/).pop() || paths[0];
         const extra = paths.length - 1;
         return extra === 0 ? first : `${first} + ${extra} ${extra === 1 ? "file" : "files"}`;
       }

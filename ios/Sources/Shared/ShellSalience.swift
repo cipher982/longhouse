@@ -167,7 +167,7 @@ public enum ShellSalienceClassifier {
             if !single && !double && (ch == ";" || ch == "|" || ch == "&") {
                 if ch != "&" || i + 1 < chars.count && chars[i + 1] == "&" {
                     segments.append(String(chars[start ..< i]).trimmingCharacters(in: .whitespaces))
-                    if i + 1 < chars.count, chars[i + 1] == ch { i += 1 }
+                    if (ch == "&" || ch == "|"), i + 1 < chars.count, chars[i + 1] == ch { i += 1 }
                     start = i + 1
                 }
             }

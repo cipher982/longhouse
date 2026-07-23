@@ -63,7 +63,7 @@ describe("exploration run helpers", () => {
         tier: "action",
         aggregate: null,
         mcp_namespace: null,
-        tool_input_json: { patch: "*** Begin Patch\n*** Update File: app.py\n*** Add File: test_app.py\n*** End Patch" },
+        tool_input_json: { patch: "*** Begin Patch\n*** Update File: server/zerg/services/app.py\n*** Add File: server/tests/test_app.py\n*** End Patch" },
         rule_id: "codex:exec:single-child:v1",
         wrapper_recedes: true,
         children: [],
