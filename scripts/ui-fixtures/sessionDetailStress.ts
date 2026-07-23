@@ -93,9 +93,52 @@ type AgentSessionTurnsListResponse = {
   total: number;
 };
 
+// Canonical session_state facts (catalogd projection shape). The workspace
+// route reads these — a session without them crashes SessionDetailPage.
+function makeSessionState(overrides: JsonObject = {}): JsonObject {
+  const now = SESSION_DETAIL_STRESS_NOW;
+  const available = { state: "available" };
+  const notApplicable = { state: "unavailable", reason: "not_applicable" };
+  return {
+    state_contract_version: 1,
+    presentation_policy_version: 1,
+    mode: "helm",
+    disposition: { state: "open", closed_at: null, close_reason: null },
+    run: { lifecycle: "running", started_at: "2026-04-15T15:15:00Z", ended_at: null },
+    activity: {
+      state: "executing",
+      raw_kind: "running",
+      tool: "exec_command",
+      observed_at: now,
+      valid_until: null,
+    },
+    control: {
+      ownership: "owned",
+      connection: "connected",
+      actions: {
+        send_input: available,
+        interrupt: available,
+        terminate: available,
+        reattach: notApplicable,
+        resume: notApplicable,
+      },
+    },
+    pending_interaction: null,
+    transcript: { convergence: "current", searchable: true, live_observation: false },
+    host: { state: "online", observed_at: now },
+    presentation: {
+      primary: { key: "executing", label: "Running Shell", tone: "running", observed_at: now },
+      access: { key: "live_control", label: "Live control", tone: "live", observed_at: now },
+      transcript: null,
+    },
+    ...overrides,
+  };
+}
+
 function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
   const now = SESSION_DETAIL_STRESS_NOW;
   return {
+    session_state: makeSessionState(),
     id: "session-detail-base",
     provider: "codex",
     project: "zerg",
@@ -210,6 +253,27 @@ export function buildSessionDetailStressFixture(): {
 } {
   const rootSession = makeSession({
     id: ROOT_SESSION_ID,
+    session_state: makeSessionState({
+      disposition: { state: "closed", closed_at: "2026-04-15T15:14:30Z", close_reason: "user_closed" },
+      run: { lifecycle: "ended", started_at: "2026-04-15T14:42:00Z", ended_at: "2026-04-15T15:14:30Z" },
+      activity: { state: "quiescent", raw_kind: null, tool: null, observed_at: "2026-04-15T15:14:30Z", valid_until: null },
+      control: {
+        ownership: "unowned",
+        connection: "not_applicable",
+        actions: {
+          send_input: { state: "unavailable", reason: "closed" },
+          interrupt: { state: "unavailable", reason: "closed" },
+          terminate: { state: "unavailable", reason: "closed" },
+          reattach: { state: "unavailable", reason: "closed" },
+          resume: { state: "unavailable", reason: "closed" },
+        },
+      },
+      presentation: {
+        primary: { key: "closed", label: "Closed", tone: "closed", observed_at: "2026-04-15T15:14:30Z" },
+        access: { key: "observe_only", label: "Observe only", tone: "observe", observed_at: null },
+        transcript: null,
+      },
+    }),
     started_at: "2026-04-15T14:42:00Z",
     ended_at: "2026-04-15T15:14:30Z",
     last_activity_at: "2026-04-15T15:14:30Z",

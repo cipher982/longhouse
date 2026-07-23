@@ -1237,15 +1237,21 @@
   }
 
   /* --- Shared ---
-     Three width scopes:
-       - prose (tl-msg): 80ch max, centered — tuned for reading.
-       - tool rows (tl-action / tl-context / tl-noise): fill the column
-         up to a wider cap so bash commands and diffs don't wrap awkwardly.
-       - list container: takes the full available width minus modest
-         page padding. */
+     One centered conversation column. Everything — prose, tool rows,
+     seams — lives inside a single column clamped to the tool width, so
+     a user turn and the AI reply never sit at opposite edges of a wide
+     viewport. Within the column:
+       - assistant prose fills the reading width (tl-prose-max), left
+         edge shared with tool rows;
+       - user messages are compact right-aligned bubbles;
+       - tool rows may run wider than prose (up to the column width) so
+         bash commands and diffs don't wrap awkwardly. */
   .timeline-pane__list.timeline-events {
     gap: 2px;
     align-items: stretch;
+    width: 100%;
+    max-width: calc(var(--tl-tool-max) + 2 * var(--space-4));
+    margin-inline: auto;
     padding-inline: var(--space-4);
   }
 
@@ -1256,6 +1262,7 @@
        commands don't stretch across a 160ch viewport. */
     --tl-prose-max: 78ch;
     --tl-tool-max: 126ch;
+    --tl-message-max: var(--tl-prose-max);
   }
 
   .tl-chip {
@@ -1280,17 +1287,29 @@
   }
 
 
-  /* --- Prose messages: no card, no border, just text. --- */
+  /* --- Prose messages: no card, no border, just text. ---
+     Assistant turns are the document: full reading width, left edge
+     shared with tool rows. User turns are short prompts: compact
+     right-aligned bubbles with a faint tint so the offset reads as
+     intentional rather than ragged-right. */
   .tl-msg {
     display: flex;
     flex-direction: column;
     gap: 4px;
     padding: var(--space-3) 0;
-    max-width: min(var(--tl-prose-max), 76%);
+    max-width: var(--tl-prose-max);
     width: 100%;
   }
   .tl-msg--assistant { align-self: flex-start; }
-  .tl-msg--user { align-self: flex-end; }
+  .tl-msg--user {
+    align-self: flex-end;
+    width: auto;
+    max-width: min(var(--tl-prose-max), 82%);
+    padding: var(--space-2) var(--space-3);
+    border-radius: 14px;
+    background: rgba(233, 211, 163, 0.07);
+    border: 1px solid rgba(233, 211, 163, 0.1);
+  }
   .tl-msg__head {
     display: flex;
     align-items: center;
