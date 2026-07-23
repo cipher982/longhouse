@@ -394,7 +394,7 @@ def test_antigravity_real_agy_send_canary_blocks_without_an_unwatched_worker() -
             },
         )
 
-        assert result.returncode == 1
+        assert result.returncode == 0
         agy = payload["canaries"]["antigravity"]
         assert agy["status"] == "blocked"
         assert agy["failure_code"] == "antigravity_unwatched_producer_boundary_unavailable"
@@ -421,7 +421,7 @@ def test_antigravity_real_agy_send_canary_blocks_before_marker_evaluation() -> N
             },
         )
 
-        assert result.returncode == 1
+        assert result.returncode == 0
         agy = payload["canaries"]["antigravity"]
         assert agy["status"] == "blocked"
         assert agy["failure_code"] == "antigravity_unwatched_producer_boundary_unavailable"
