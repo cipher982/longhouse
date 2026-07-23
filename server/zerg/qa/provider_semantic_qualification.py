@@ -33,9 +33,13 @@ SemanticExecutor = Callable[[Path, Path], tuple[dict[str, Any], tuple[SemanticAs
 
 
 @contextmanager
-def temporary_environment(values: dict[str, str]):
+def temporary_environment(values: dict[str, str | None]):
     previous = {key: os.environ.get(key) for key in values}
-    os.environ.update(values)
+    for key, value in values.items():
+        if value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
     try:
         yield
     finally:
