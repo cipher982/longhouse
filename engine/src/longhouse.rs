@@ -456,6 +456,7 @@ fn interactive_stdio() -> bool {
 fn wait_for_child_or_signal(
     child: &mut std::process::Child,
     signal: &Arc<AtomicUsize>,
+    process_group: Option<libc::pid_t>,
 ) -> anyhow::Result<i32> {
     loop {
         if let Some(status) = child.try_wait()? {
@@ -463,12 +464,28 @@ fn wait_for_child_or_signal(
         }
         let received = signal.load(Ordering::Relaxed);
         if received != 0 {
-            let _ = child.kill();
+            terminate_child(child, process_group);
             let _ = child.wait();
             return Ok(128 + received as i32);
         }
         std::thread::sleep(Duration::from_millis(25));
     }
+}
+
+#[cfg(unix)]
+fn terminate_child(child: &mut std::process::Child, process_group: Option<libc::pid_t>) {
+    if let Some(group) = process_group {
+        unsafe {
+            libc::kill(-group, libc::SIGTERM);
+        }
+    } else {
+        let _ = child.kill();
+    }
+}
+
+#[cfg(not(unix))]
+fn terminate_child(child: &mut std::process::Child, _process_group: Option<libc::pid_t>) {
+    let _ = child.kill();
 }
 
 fn install_tui_signal_flag() -> anyhow::Result<Arc<AtomicUsize>> {
@@ -502,18 +519,6 @@ fn run_foreground_command(command: &mut Command) -> anyhow::Result<i32> {
             for signal in [libc::SIGHUP, libc::SIGTERM, libc::SIGINT] {
                 libc::signal(signal, libc::SIG_DFL);
             }
-            Ok(())
-        });
-    }
-    if !interactive_stdio() {
-        let mut child = command.spawn()?;
-        let signal = install_tui_signal_flag()?;
-        return wait_for_child_or_signal(&mut child, &signal);
-    }
-    let stdin_fd = std::io::stdin().as_raw_fd();
-    let parent_pgrp = unsafe { libc::getpgrp() };
-    unsafe {
-        command.pre_exec(|| {
             if libc::setpgid(0, 0) == 0 {
                 Ok(())
             } else {
@@ -527,9 +532,14 @@ fn run_foreground_command(command: &mut Command) -> anyhow::Result<i32> {
     unsafe {
         libc::setpgid(child_pgrp, child_pgrp);
     }
+    if !interactive_stdio() {
+        return wait_for_child_or_signal(&mut child, &signal, Some(child_pgrp));
+    }
+    let stdin_fd = std::io::stdin().as_raw_fd();
+    let parent_pgrp = unsafe { libc::getpgrp() };
     let old_sigttou = unsafe { libc::signal(libc::SIGTTOU, libc::SIG_IGN) };
     let handed_off = unsafe { libc::tcsetpgrp(stdin_fd, child_pgrp) == 0 };
-    let status = wait_for_child_or_signal(&mut child, &signal);
+    let status = wait_for_child_or_signal(&mut child, &signal, Some(child_pgrp));
     if handed_off {
         unsafe {
             libc::tcsetpgrp(stdin_fd, parent_pgrp);
@@ -545,7 +555,7 @@ fn run_foreground_command(command: &mut Command) -> anyhow::Result<i32> {
 fn run_foreground_command(command: &mut Command) -> anyhow::Result<i32> {
     let mut child = command.spawn()?;
     let signal = install_tui_signal_flag()?;
-    wait_for_child_or_signal(&mut child, &signal)
+    wait_for_child_or_signal(&mut child, &signal, None)
 }
 
 fn stop_codex_bridge(session_id: &str, reason: &str) -> anyhow::Result<()> {
