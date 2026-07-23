@@ -1,6 +1,6 @@
 # No-Python Device Provider Parity
 
-Status: Active implementation
+Status: Active implementation — execution companion: [`no-python-device-execution.md`](no-python-device-execution.md)
 Branch: `codex/no-python-device-transition`
 Base: `3dcb66129 Update Helm exit UI expectations`
 
@@ -14,12 +14,11 @@ managed-contract lifecycle, and the banked terminal receipt. It is not yet
 declared cut over: the hermetic installed-artifact launch/attach/stop proof and
 the remaining provider paths are still required.
 
-Claude is the next cutover. Its Rust channel server and control operations
-already exist; its remaining device-Python surface is specifically the native
-launcher plus the installed Claude lifecycle and remote-permission hook
-artifacts. That hook migration must be native before Claude can be called a
-no-Python provider. Do not replace it with a shell script that invokes
-`python3`.
+Codex and Claude now have native facade slices on this branch, but neither is
+declared cut over: fresh-device proof is still absent and Claude has reviewed
+parity gaps. OpenCode is the next implementation phase; Cursor, Antigravity,
+and normal-device diagnostics/repair remain Python debt. The execution
+companion is authoritative for remaining order and completion gates.
 
 ## Executive Summary
 
