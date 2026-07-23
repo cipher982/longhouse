@@ -37,6 +37,11 @@ enum Commands {
     },
     /// Verify the paired engine is present and built from the same commit.
     VerifyPair,
+    /// Configure native Longhouse hooks for Claude.
+    Claude {
+        #[command(subcommand)]
+        command: ClaudeCommand,
+    },
     /// Launch or manage a native Longhouse Codex Helm session.
     #[command(args_conflicts_with_subcommands = true)]
     Codex {
@@ -55,6 +60,15 @@ enum CodexCommand {
     Attach(CodexAttachArgs),
     /// Stop a managed Codex bridge and its provider execution.
     Stop(CodexStopArgs),
+}
+
+#[derive(Subcommand)]
+enum ClaudeCommand {
+    /// Replace the Python Claude permission hook with the paired native engine.
+    Configure {
+        #[arg(long)]
+        claude_dir: Option<PathBuf>,
+    },
 }
 
 #[derive(Args)]
@@ -207,6 +221,52 @@ fn longhouse_home() -> anyhow::Result<PathBuf> {
         }
     }
     Ok(PathBuf::from(std::env::var("HOME").context("HOME not set")?).join(".longhouse"))
+}
+
+fn configure_claude_hooks(claude_dir: Option<PathBuf>) -> anyhow::Result<()> {
+    let claude_dir = claude_dir.unwrap_or_else(|| {
+        std::env::var_os("CLAUDE_CONFIG_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".into())).join(".claude")
+            })
+    });
+    let settings_path = claude_dir.with_extension("json");
+    let mut settings: serde_json::Map<String, serde_json::Value> =
+        match std::fs::read(&settings_path) {
+            Ok(raw) => serde_json::from_slice(&raw)
+                .with_context(|| format!("parse {}", settings_path.display()))?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => serde_json::Map::new(),
+            Err(error) => {
+                return Err(error).with_context(|| format!("read {}", settings_path.display()))
+            }
+        };
+    let hooks = settings
+        .entry("hooks")
+        .or_insert_with(|| json!({}))
+        .as_object_mut()
+        .context("Claude settings hooks must be an object")?;
+    let pre_tool = hooks
+        .entry("PreToolUse")
+        .or_insert_with(|| json!([]))
+        .as_array_mut()
+        .context("Claude PreToolUse hooks must be an array")?;
+    pre_tool.retain(|entry| !entry.to_string().contains("longhouse-permission-gate.py"));
+    pre_tool.push(json!({"hooks": [{"type": "command", "command": format!("{} claude-permission-gate", paired_engine_path()?.display()), "async": false, "timeout": 30}]}));
+    std::fs::create_dir_all(&claude_dir)?;
+    std::fs::write(
+        &settings_path,
+        format!("{}\n", serde_json::to_string_pretty(&settings)?),
+    )?;
+    let legacy_gate = claude_dir.join("hooks/longhouse-permission-gate.py");
+    if legacy_gate.exists() {
+        std::fs::remove_file(&legacy_gate)?;
+    }
+    println!(
+        "Configured native Claude permission gate in {}",
+        settings_path.display()
+    );
+    Ok(())
 }
 
 fn resolve_codex_config(
@@ -796,6 +856,9 @@ fn main() -> anyhow::Result<()> {
                 pair.engine_path, pair.facade.commit_short
             );
         }
+        Commands::Claude { command } => match command {
+            ClaudeCommand::Configure { claude_dir } => configure_claude_hooks(claude_dir)?,
+        },
         Commands::Codex { command, launch } => match command {
             Some(CodexCommand::Launch(args)) => launch_managed_codex(args)?,
             Some(CodexCommand::Attach(args)) => attach_managed_codex(args)?,
