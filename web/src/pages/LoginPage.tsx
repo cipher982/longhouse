@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { Navigate, useSearchParams } from 'react-router-dom';
 import { sanitizeReturnTo } from '../lib/loginRedirect';
 import { useAuthMethods } from '../lib/auth';
+import config from '../lib/config';
 
 export default function LoginPage() {
   const [params] = useSearchParams();
@@ -23,6 +24,10 @@ export default function LoginPage() {
     // (Google + password). Don't navigate anywhere; the user
     // authenticates locally. This avoids a self-host redirect loop.
   }, [authMethods, methodsLoading, navigated, returnTo]);
+
+  if (!config.authEnabled) {
+    return <Navigate to="/timeline" replace />;
+  }
 
   return (
     <div
