@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 from pathlib import Path
 from uuid import uuid4
@@ -57,6 +58,24 @@ async def test_searchd_supervisor_owns_restarts_and_stops_child(supervisor_paths
     assert supervisor._process is None
     assert supervisor._task is None
     assert not socket_path.exists()
+
+
+def test_status_logs_only_meaningful_transitions(supervisor_paths, caplog):
+    database_path, socket_path = supervisor_paths
+    supervisor = SearchdSupervisor(database_path=database_path, socket_path=socket_path)
+
+    with caplog.at_level(logging.INFO, logger="zerg.services.searchd_supervisor"):
+        supervisor._write_status("starting", ownership="owned", pid=456)
+        supervisor._write_status("starting", ownership="owned", pid=456)
+        supervisor._write_status("degraded", log_transition=False, ownership="owned", error="transient ping")
+        supervisor._write_status("degraded", ownership="none", restart_count=1, last_exit_code=1)
+
+    transitions = [
+        record for record in caplog.records if getattr(record, "event", None) == "supervisor_state_changed"
+    ]
+    assert [record.status for record in transitions] == ["starting", "degraded"]
+    assert transitions[0].tag == "SEARCHD"
+    assert transitions[1].last_exit_code == 1
 
 
 @pytest.mark.asyncio

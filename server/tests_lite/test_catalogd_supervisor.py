@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import subprocess
 import sys
@@ -100,6 +101,25 @@ async def test_supervisor_owns_restarts_and_stops_child(supervisor_paths):
     assert status["restart_count"] == 1
     await supervisor.stop()
     assert not socket_path.exists()
+
+
+def test_status_logs_only_meaningful_transitions(supervisor_paths, caplog):
+    database_path, socket_path = supervisor_paths
+    supervisor = CatalogdSupervisor(database_path=database_path, socket_path=socket_path)
+
+    with caplog.at_level(logging.INFO, logger="zerg.services.catalogd_supervisor"):
+        supervisor._write_status("starting", ownership="owned", pid=123)
+        supervisor._write_status("starting", ownership="owned", pid=123)
+        supervisor._write_status("degraded", log_transition=False, ownership="owned", error="transient ping")
+        supervisor._write_status("running", ownership="owned", restart_count=0)
+
+    transitions = [
+        record for record in caplog.records if getattr(record, "event", None) == "supervisor_state_changed"
+    ]
+    assert [record.status for record in transitions] == ["starting", "running"]
+    assert transitions[0].tag == "CATALOGD"
+    assert transitions[0].pid == 123
+    assert not hasattr(transitions[0], "ping")
 
 
 @pytest.mark.asyncio

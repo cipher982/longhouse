@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import signal
 import sys
 from contextlib import suppress
@@ -102,6 +103,9 @@ def main() -> int:
         return 0
 
     args = _serve_parser().parse_args()
+    from zerg.logging_config import configure_logging
+
+    configure_logging(os.getenv("LOG_LEVEL", "INFO"))
     try:
         asyncio.run(_run(args.database, args.socket))
     except KeyboardInterrupt:
