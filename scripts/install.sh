@@ -288,6 +288,11 @@ install_native_pair() {
     ln -s "releases/$release_id" "$next_current"
     ln -s "../share/longhouse/current/longhouse" "$native_bin_dir/.longhouse-native"
     ln -s "../share/longhouse/current/longhouse-engine" "$native_bin_dir/.longhouse-engine-native"
+    # `mv next current` follows `current` when it is an existing directory
+    # symlink. Remove only that link first so upgrades cannot nest a new
+    # release inside the previous release directory.
+    [[ ! -e "$current_link" || -L "$current_link" ]] || { error "Refusing to replace non-link native current path: $current_link"; rm -rf "$tmp_dir"; return 1; }
+    rm -f "$current_link"
     mv "$next_current" "$current_link"
     if [[ -e "$existing_facade" || -L "$existing_facade" ]] && ! "$existing_facade" verify-pair >/dev/null 2>&1; then
         [[ ! -e "$legacy_facade" ]] || { error "Refusing to overwrite existing $legacy_facade; move it before installing the native CLI"; rm -rf "$tmp_dir"; return 1; }

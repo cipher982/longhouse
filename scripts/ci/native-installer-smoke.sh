@@ -51,6 +51,16 @@ LONGHOUSE_NATIVE_BIN_DIR="$PAIR_DIR" \
 LONGHOUSE_TELEMETRY=0 \
 bash "$ROOT_DIR/scripts/install.sh" >/dev/null
 
+first_release="$(readlink "$HOME_DIR/.local/share/longhouse/current")"
+HOME="$HOME_DIR" \
+PATH="$HOME_DIR/traps:/usr/bin:/bin:/usr/sbin:/sbin" \
+SHELL=/bin/bash \
+LONGHOUSE_NATIVE_BIN_DIR="$PAIR_DIR" \
+LONGHOUSE_TELEMETRY=0 \
+bash "$ROOT_DIR/scripts/install.sh" >/dev/null
+second_release="$(readlink "$HOME_DIR/.local/share/longhouse/current")"
+[[ "$first_release" != "$second_release" ]]
+
 installed="$HOME_DIR/.local/bin/longhouse"
 [[ -x "$installed" ]]
 [[ -x "$HOME_DIR/.local/bin/longhouse-python" ]]
@@ -72,4 +82,11 @@ HOME="$HOME_DIR" PATH="$HOME_DIR/.local/bin:$HOME_DIR/traps:/usr/bin:/bin:/usr/s
 [[ -f "$HOME_DIR/.longhouse/machine/device-token" ]]
 [[ -f "$HOME_DIR/Library/LaunchAgents/com.longhouse.shipper.plist" || "$(uname -s)" != "Darwin" ]]
 [[ ! -e "$HOME_DIR/.claude/hooks/longhouse-permission-gate.py" ]]
+
+# The managed-provider seams have hermetic upstream fixtures. Keep those
+# canaries in the installer lane so a fresh native install cannot regress a
+# provider bridge without exercising its transcript/control contract.
+cargo test --manifest-path "$ROOT_DIR/engine/Cargo.toml" --profile ci --bin longhouse-engine codex_app_server_canary -- --nocapture
+cargo test --manifest-path "$ROOT_DIR/engine/Cargo.toml" --profile ci --bin longhouse-engine claude_channel -- --nocapture
+cargo test --manifest-path "$ROOT_DIR/engine/Cargo.toml" --profile ci --bin longhouse-engine opencode_control -- --nocapture
 echo "native installer smoke passed"

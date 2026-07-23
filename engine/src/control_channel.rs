@@ -856,6 +856,8 @@ async fn execute_command(
     let command_type = required_string(frame, "command_type")?;
     let payload = frame.get("payload").cloned().unwrap_or_else(|| json!({}));
 
+    reject_excluded_provider(&payload)?;
+
     if command_type == COMMAND_PROVIDER_LIVE_PROOF {
         return run_provider_live_proof_command(&payload).await;
     }
@@ -1289,6 +1291,21 @@ async fn execute_command(
             message: format!("Unsupported command_type={other}"),
         }),
     }
+}
+
+fn reject_excluded_provider(payload: &Value) -> std::result::Result<(), CommandError> {
+    let Some(provider) = payload.get("provider").and_then(Value::as_str) else {
+        return Ok(());
+    };
+    if matches!(provider, "cursor" | "antigravity") {
+        return Err(CommandError {
+            code: "provider_shadow_only".to_string(),
+            message: format!(
+                "{provider} is Shadow-only in this release; Longhouse can archive it but cannot launch or control it"
+            ),
+        });
+    }
+    Ok(())
 }
 
 async fn execute_turn_start(
@@ -2401,13 +2418,8 @@ mod tests {
         ("codex", "run_once", COMMAND_RUN_ONCE),
         ("codex", "resume_run_once", COMMAND_RUN_ONCE),
         ("codex", "turn_start", COMMAND_TURN_START),
-        ("cursor", "turn_start", COMMAND_TURN_START),
-        ("cursor", "turn_interrupt", COMMAND_TURN_INTERRUPT),
         ("opencode", "turn_start", COMMAND_TURN_START),
         ("opencode", "turn_interrupt", COMMAND_TURN_INTERRUPT),
-        ("cursor", "send", COMMAND_SEND_TEXT),
-        ("cursor", "interrupt", COMMAND_INTERRUPT),
-        ("cursor", "terminate", COMMAND_TERMINATE),
         ("claude", "send", COMMAND_SEND_TEXT),
         ("claude", "interrupt", COMMAND_INTERRUPT),
         ("claude", "steer", COMMAND_STEER_TEXT),
@@ -2417,7 +2429,6 @@ mod tests {
         ("opencode", "send", COMMAND_SEND_TEXT),
         ("opencode", "interrupt", COMMAND_INTERRUPT),
         ("opencode", "terminate", COMMAND_TERMINATE),
-        ("antigravity", "send", COMMAND_SEND_TEXT),
     ];
 
     fn support_dispatch_command(provider: &str, operation: &str) -> Option<&'static str> {
@@ -4295,5 +4306,15 @@ printf '{{"type":"result","subtype":"success","is_error":false}}\n'
             .code,
             "unsupported_command"
         );
+    }
+
+    #[test]
+    fn excluded_providers_are_rejected_before_dispatch() {
+        for provider in ["cursor", "antigravity"] {
+            let error = reject_excluded_provider(&json!({"provider": provider})).unwrap_err();
+            assert_eq!(error.code, "provider_shadow_only");
+            assert!(error.message.contains("Shadow-only"));
+        }
+        assert!(reject_excluded_provider(&json!({"provider": "codex"})).is_ok());
     }
 }

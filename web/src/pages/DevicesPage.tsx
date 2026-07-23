@@ -44,6 +44,21 @@ export default function DevicesPage() {
   const createToken = useCreateDeviceToken();
   const revokeToken = useRevokeDeviceToken();
   const confirm = useConfirm();
+  const connectRequest = (() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("connect") !== "1") return null;
+    const callback = params.get("callback");
+    const state = params.get("state");
+    const device = params.get("device");
+    if (!callback || !state || !device) return null;
+    try {
+      const url = new URL(callback);
+      if (url.protocol !== "http:" || url.hostname !== "127.0.0.1" || url.pathname !== "/connected") return null;
+      return { callback: url, state, device };
+    } catch {
+      return null;
+    }
+  })();
 
   // Ready signal for tests
   useReadinessFlag({ ready: !isLoading });
@@ -56,9 +71,29 @@ export default function DevicesPage() {
       { device_id: deviceName.trim() },
       {
         onSuccess: (created) => {
+          if (connectRequest) {
+            connectRequest.callback.searchParams.set("state", connectRequest.state);
+            connectRequest.callback.searchParams.set("token", created.token);
+            window.location.assign(connectRequest.callback.toString());
+            return;
+          }
           setNewToken(created);
           setShowCreateModal(false);
           setDeviceName("");
+        },
+      }
+    );
+  };
+
+  const handleConnect = () => {
+    if (!connectRequest) return;
+    createToken.mutate(
+      { device_id: connectRequest.device },
+      {
+        onSuccess: (created) => {
+          connectRequest.callback.searchParams.set("state", connectRequest.state);
+          connectRequest.callback.searchParams.set("token", created.token);
+          window.location.assign(connectRequest.callback.toString());
         },
       }
     );
@@ -103,6 +138,16 @@ export default function DevicesPage() {
         description="Manage tokens that authenticate CLI tools with this Longhouse instance."
       />
 
+      {connectRequest && (
+        <div className="token-reveal">
+          <h4>Connect {connectRequest.device}</h4>
+          <p className="token-reveal-hint">Approve this browser request to authorize the native Longhouse client on that device.</p>
+          <Button variant="primary" onClick={handleConnect} disabled={createToken.isPending}>
+            {createToken.isPending ? "Connecting…" : "Connect this device"}
+          </Button>
+        </div>
+      )}
+
       {/* Newly created token — shown once */}
       {newToken && (
         <div className="token-reveal">
@@ -122,7 +167,7 @@ export default function DevicesPage() {
             Copy this token now — it won't be shown again. Use it with:
           </p>
           <p className="token-reveal-hint">
-            <code>longhouse auth --token {newToken.token}</code>
+            <code>longhouse auth --url {window.location.origin}</code>
           </p>
         </div>
       )}
@@ -190,7 +235,7 @@ export default function DevicesPage() {
       {/* CLI setup instructions */}
       <div className="cli-instructions">
         <h4>CLI Setup</h4>
-        <code>{`pip install longhouse\nlonghouse auth --url ${window.location.origin}`}</code>
+        <code>{`curl -fsSL https://get.longhouse.ai/install.sh | bash\nlonghouse auth --url ${window.location.origin}`}</code>
       </div>
 
       {/* Create modal */}

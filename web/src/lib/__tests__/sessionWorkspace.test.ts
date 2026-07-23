@@ -607,7 +607,7 @@ describe("getSessionInteractionCapabilities", () => {
     expect(capabilities.managedLaunchSuggestion?.command).toBe("longhouse claude");
   });
 
-  it("maps legacy gemini provider ids to Antigravity labels and launch guidance", () => {
+  it("maps legacy gemini provider ids to Shadow-only Antigravity labels", () => {
     const capabilities = getSessionInteractionCapabilities({
       session: makeSession({
         provider: "gemini",
@@ -620,12 +620,9 @@ describe("getSessionInteractionCapabilities", () => {
     expect(capabilities.managementLabel).toBe("Unmanaged");
     expect(capabilities.capabilityLabel).toBe("Search only");
     expect(capabilities.composerDisabledReason).toBe(
-      "This unmanaged Antigravity session is read-only in Longhouse.",
+      "Longhouse can search this unmanaged Antigravity session here, but it cannot steer it.",
     );
-    expect(capabilities.managedLaunchSuggestion?.command).toBe("longhouse agy");
-    expect(capabilities.managedLaunchSuggestion?.title).toBe(
-      "Start the next Antigravity session through Longhouse",
-    );
+    expect(capabilities.managedLaunchSuggestion).toBeNull();
     expect(capabilities.primaryActionLabel).toBe("Unavailable");
   });
 });

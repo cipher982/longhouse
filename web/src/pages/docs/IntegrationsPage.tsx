@@ -166,7 +166,7 @@ export default function IntegrationsPage() {
         Longhouse includes a built-in MCP server that exposes session search,
         recall, and coordination to any MCP-compatible host:
       </p>
-      <CodeBlock title="terminal">{`longhouse mcp-server`}</CodeBlock>
+      <CodeBlock title="terminal">{`longhouse-python mcp-server`}</CodeBlock>
       <p>
         This is the same <Link to="/docs/api">Machine API</Link> surface
         exposed over the MCP protocol. Add it to your Claude Code or Codex

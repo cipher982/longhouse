@@ -26,7 +26,6 @@ Longhouse does not replace a provider with its own agent runtime or terminal UI.
 
 ```bash
 curl -fsSL https://get.longhouse.ai/install.sh | bash
-export LONGHOUSE_DEVICE_TOKEN="..."
 longhouse auth --url https://your-runtime.example
 longhouse machine repair --repair-service
 ```
@@ -73,7 +72,6 @@ longhouse-python serve --host 0.0.0.0 --domain longhouse.example.com
 
 ```bash
 curl -fsSL https://get.longhouse.ai/install.sh | bash
-export LONGHOUSE_DEVICE_TOKEN="..." # device token issued by the Runtime Host
 longhouse auth --url https://longhouse.example.com
 longhouse machine repair --repair-service
 ```

@@ -11,7 +11,9 @@ use anyhow::Context;
 use clap::{Args, Parser, Subcommand};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::io::{BufRead, BufReader};
 use std::io::{IsTerminal, Write};
+use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{
@@ -143,6 +145,9 @@ struct AuthArgs {
     /// Environment variable containing the device token (default: LONGHOUSE_DEVICE_TOKEN).
     #[arg(long, default_value = "LONGHOUSE_DEVICE_TOKEN")]
     token_env: String,
+    /// Open the signed-in Runtime Host in a browser to connect this device.
+    #[arg(long)]
+    browser: bool,
     /// Remove stored native device credentials.
     #[arg(long)]
     clear: bool,
@@ -537,12 +542,13 @@ fn native_auth(args: AuthArgs) -> anyhow::Result<()> {
         })
         .filter(|value| value.starts_with("http://") || value.starts_with("https://"))
         .context("No Longhouse URL configured. Pass --url.")?;
-    let token = std::env::var(&args.token_env).with_context(|| {
-        format!(
-            "{} is not set; tokens are accepted only through an environment variable",
-            args.token_env
-        )
-    })?;
+    let token = match std::env::var(&args.token_env) {
+        Ok(token) => token,
+        Err(_) if args.browser || std::env::var(&args.token_env).is_err() => {
+            browser_device_token(&url, args.device.as_deref())?
+        }
+        Err(_) => unreachable!(),
+    };
     if token.trim().is_empty() {
         anyhow::bail!("{} is empty", args.token_env);
     }
@@ -577,6 +583,79 @@ fn native_auth(args: AuthArgs) -> anyhow::Result<()> {
         state["machine_name"].as_str().unwrap_or("this machine")
     );
     Ok(())
+}
+
+fn browser_device_token(runtime_url: &str, device: Option<&str>) -> anyhow::Result<String> {
+    let listener = TcpListener::bind("127.0.0.1:0").context("start local device-auth callback")?;
+    listener
+        .set_nonblocking(false)
+        .context("configure local device-auth callback")?;
+    let port = listener.local_addr()?.port();
+    let state = Uuid::new_v4().to_string();
+    let device = device.unwrap_or("this Mac");
+    let connect_url = format!(
+        "{}/settings/devices?connect=1&callback={}&state={}&device={}",
+        runtime_url.trim_end_matches('/'),
+        percent_encode(&format!("http://127.0.0.1:{port}/connected")),
+        state,
+        percent_encode(device),
+    );
+    let opener = if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    Command::new(opener)
+        .arg(&connect_url)
+        .spawn()
+        .with_context(|| format!("open {connect_url}"))?;
+    println!("Finish connecting this device in your browser…");
+    let (mut stream, _) = listener
+        .accept()
+        .context("wait for browser device authorization")?;
+    let mut request_line = String::new();
+    BufReader::new(stream.try_clone()?)
+        .read_line(&mut request_line)
+        .context("read device authorization callback")?;
+    let target = request_line.split_whitespace().nth(1).unwrap_or("");
+    let params = target
+        .split_once('?')
+        .map(|(_, query)| query_params(query))
+        .unwrap_or_default();
+    let received_state = params.get("state").map(String::as_str);
+    let token = params.get("token").map(String::as_str).unwrap_or("");
+    let response = if received_state == Some(state.as_str()) && token.starts_with("zdt_") {
+        "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n<h1>Longhouse connected</h1><p>You can return to the app.</p>"
+    } else {
+        "HTTP/1.1 400 Bad Request\r\nContent-Type: text/html\r\n\r\n<h1>Longhouse connection failed</h1><p>Return to the app and try again.</p>"
+    };
+    stream.write_all(response.as_bytes()).ok();
+    if received_state != Some(state.as_str()) || !token.starts_with("zdt_") {
+        anyhow::bail!("browser device authorization was rejected or expired");
+    }
+    Ok(token.to_string())
+}
+
+fn percent_encode(value: &str) -> String {
+    value.bytes().fold(String::new(), |mut encoded, byte| {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
+            encoded.push(byte as char);
+        } else {
+            use std::fmt::Write as _;
+            write!(&mut encoded, "%{byte:02X}").unwrap();
+        }
+        encoded
+    })
+}
+
+fn query_params(query: &str) -> std::collections::HashMap<String, String> {
+    query
+        .split('&')
+        .filter_map(|part| {
+            let (key, value) = part.split_once('=')?;
+            Some((key.to_string(), value.to_string()))
+        })
+        .collect()
 }
 
 fn native_machine_repair(args: MachineRepairArgs) -> anyhow::Result<()> {
@@ -1779,6 +1858,20 @@ mod tests {
         };
         assert_eq!(args.token_env, "LONGHOUSE_DEVICE_TOKEN");
         assert_eq!(args.url.as_deref(), Some("https://example.test"));
+    }
+
+    #[test]
+    fn browser_auth_callback_values_are_encoded_and_parsed_without_token_reformatting() {
+        assert_eq!(
+            percent_encode("http://127.0.0.1:1234/connected?x=1"),
+            "http%3A%2F%2F127.0.0.1%3A1234%2Fconnected%3Fx%3D1"
+        );
+        let values = query_params("state=abc-123&token=zdt_native_token");
+        assert_eq!(values.get("state").map(String::as_str), Some("abc-123"));
+        assert_eq!(
+            values.get("token").map(String::as_str),
+            Some("zdt_native_token")
+        );
     }
 
     #[test]

@@ -159,40 +159,20 @@ export default function ProviderIntegrationsPostPage() {
 
           <section>
             <h2>Antigravity</h2>
-            <p><code>longhouse agy</code> runs the user's <code>agy</code> CLI and installs a hook/plugin adapter. The adapter records phase and transcript-binding information and exposes a private input inbox.</p>
-            <p>
-              The hook adapter receives provider lifecycle events including invocation, tool, and stop boundaries. Input messages are written as private inbox records with bounded size and expiry. A hook atomically claims an eligible message and returns it as an injected user message. The sender waits for the claim record rather than assuming that writing the inbox changed model context.
-            </p>
-            <p>
-              The adapter can request continuation at a provider-defined boundary while pending input exists. That is still not a stable remote process-control channel. There is no supported reattach lease, interrupt operation, or remote execution mode.
-            </p>
+            <p>Antigravity sessions are currently Shadow-only: Longhouse can archive and search their native session data, but it does not launch or remotely control them.</p>
             <CapabilityList>
-              <li>Remote input is queued and claimed by the next provider-defined safe hook boundary before delivery is reported.</li>
-              <li>Supports safe-boundary input injection only.</li>
-              <li>Does not support remote launch, reattach, interrupt, terminate, active-turn steer, pause-answer, or Console execution.</li>
+              <li>Searchable and inspectable after import.</li>
+              <li>No Helm, Console, or remote-control claim until the native runtime is complete.</li>
             </CapabilityList>
           </section>
 
           <section>
             <h2>Cursor</h2>
-            <h3>Helm</h3>
-            <p><code>longhouse cursor</code> reserves a native Cursor chat identity and runs the stock <code>cursor-agent</code> TUI in a PTY. Hook evidence and the native <code>store.db</code> source must agree before the managed session is bound.</p>
-            <p>
-              Cursor's durable source is a content-addressed blob DAG. The root snapshot provides ordered message references; message blobs contain text, reasoning, tool calls, and tool results. The store does not provide reliable per-message timestamps, so archive ordering is source-first rather than timestamp-first.
-            </p>
-            <p>
-              Helm control uses a mode-0600 per-session Unix socket. Idle send is protected by native hook phase evidence. The provider's TUI has a specific submit sequence, but Longhouse does not write to the PTY unless the bound conversation is known idle. This prevents a remote send from cancelling active work or crossing into a different local chat.
-            </p>
+            <p>Cursor sessions are currently Shadow-only: Longhouse can archive and search their native session data, but it does not launch or remotely control them.</p>
             <CapabilityList>
-              <li>Input is accepted only when the exact Cursor conversation is idle.</li>
-              <li>Interrupt uses Ctrl-C only for a verified active generation. Termination is explicit.</li>
-              <li>Supports send while idle, interrupt, terminate, and reattach. It does not provide active-turn steer.</li>
+              <li>Searchable and inspectable after import.</li>
+              <li>No Helm, Console, or remote-control claim until the native runtime is complete.</li>
             </CapabilityList>
-            <h3>Console</h3>
-            <p>Cursor Console runs one stock <code>cursor-agent --print</code> invocation per turn against the same native chat identity. Structured output is written to durable files before it is projected into the timeline. The process may exit after a turn while the Longhouse thread and Cursor chat remain available for a later turn.</p>
-            <p>
-              Each Console turn is claimed before spawn and records process-group identity, process start time, provider chat identity, and output paths. On Machine Agent restart, a matching live process resumes monitoring from the durable output file. Missing or ambiguous terminal evidence fails the turn without replaying the prompt.
-            </p>
           </section>
 
           <section>

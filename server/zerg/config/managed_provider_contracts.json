@@ -258,8 +258,8 @@
       "startup_coordination_context": true,
       "capabilities": {
         "session.launch.helm": {
-          "disposition": "implemented",
-          "reason_code": "semantic_proof_missing",
+          "disposition": "policy_disabled",
+          "reason_code": "policy_disabled",
           "policy_key": "provider.claude.launch_local",
           "action_gate": "ceiling",
           "contexts": {
@@ -818,8 +818,8 @@
       "startup_coordination_context": false,
       "capabilities": {
         "session.launch.helm": {
-          "disposition": "implemented",
-          "reason_code": "semantic_proof_missing",
+          "disposition": "policy_disabled",
+          "reason_code": "policy_disabled",
           "policy_key": "provider.antigravity.launch_local",
           "action_gate": "ceiling",
           "contexts": {
@@ -843,8 +843,8 @@
           ]
         },
         "session.input.send": {
-          "disposition": "implemented",
-          "reason_code": "semantic_proof_missing",
+          "disposition": "policy_disabled",
+          "reason_code": "policy_disabled",
           "policy_key": "provider.antigravity.send_input",
           "action_gate": "strict",
           "contexts": {
@@ -1010,27 +1010,27 @@
         }
       },
       "can_resume": false,
-      "turn_start": true,
+      "turn_start": false,
       "operation_evidence": {
         "launch_local": {
-          "level": "hermetic",
-          "source": "Cursor product-path canary must pass post-deploy before live-token promotion"
+          "level": "none",
+          "source": "excluded from the native normal-device release"
         },
         "run_once": {
           "level": "none",
           "source": "unavailable until stock Cursor exposes a durable headless conversation source"
         },
         "reattach": {
-          "level": "hermetic",
-          "source": "Cursor Helm Gate 0 native_resume_continuity: a new stock TUI resumes the same provider conversation and Longhouse session identity"
+          "level": "none",
+          "source": "excluded from the native normal-device release"
         },
         "send_input": {
-          "level": "hermetic",
-          "source": "Cursor Helm Gate 0 idle send: exact prompt digest, native response/stop hooks, and store continuity; active phase is rejected before PTY write"
+          "level": "none",
+          "source": "excluded from the native normal-device release"
         },
         "interrupt": {
-          "level": "hermetic",
-          "source": "Cursor Helm Gate 0 ctrl_c_cancel: Ctrl-C stops the active generation, emits aborted/error, preserves the TUI process, and the next turn completes"
+          "level": "none",
+          "source": "excluded from the native normal-device release"
         },
         "steer_active_turn": {
           "level": "none",
@@ -1041,34 +1041,27 @@
           "source": "Cursor permission hooks use the separate pull-based Longhouse pause-request surface; session.answer_pause machine dispatch is intentionally not advertised"
         },
         "terminate": {
-          "level": "hermetic",
-          "source": "cursor_helm: engine forwards session.terminate; launcher sends SIGKILL to the cursor-agent child pid, unlinks socket/state, and exits.",
-          "next": "promote with live terminate canary"
+          "level": "none",
+          "source": "excluded from the native normal-device release"
         },
         "tail_output": {
-          "level": "hermetic",
-          "source": "cursor_store exact raw storage-v2 source emits cursor-store-render-v2 text, reasoning, tool-call, and tool-result projections"
+          "level": "none",
+          "source": "excluded from the native normal-device release"
         },
         "runtime_phase": {
-          "level": "hermetic",
-          "source": "Cursor user hook adapter records native lifecycle/tool events and atomic active/idle/ended phase"
+          "level": "none",
+          "source": "excluded from the native normal-device release"
         },
         "transcript_binding": {
-          "level": "hermetic",
-          "source": "Cursor hook conversation_id plus launcher-owned Longhouse session ID binds the matching native store without recency heuristics"
+          "level": "none",
+          "source": "excluded from the native normal-device release"
         },
         "turn_start": {
-          "level": "hermetic",
-          "source": "cursor_print structured stream, native create-chat/resume, hooks, and process-group cancellation tests"
+          "level": "none",
+          "source": "excluded from the native normal-device release"
         }
       },
-      "machine_control_supports": [
-        "cursor.send",
-        "cursor.interrupt",
-        "cursor.terminate",
-        "cursor.turn_start",
-        "cursor.turn_interrupt"
-      ],
+      "machine_control_supports": [],
       "adapter_digest": "239926d5929a1304093dcae629721ede1170a23579e66bebc96cb6fd8e631f93"
     }
   ]

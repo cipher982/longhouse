@@ -19,7 +19,7 @@ This is the execution companion to [Rust Edge Provider Parity](rust-edge-provide
 
 ## Delivery order
 
-1. Publish the public `longhouse` command matrix: each current Python device command is either ported, explicitly retained only under `longhouse-python`, or removed. Native first install is `LONGHOUSE_DEVICE_TOKEN=... longhouse auth --url <runtime-url>` then `longhouse machine repair --repair-service`; repair and `local-health --fast --json` are critical-path commands because provider Helm and the Desktop depend on them. Update `config/native_device_entrypoints.json` to reflect real facade/engine targets.
+1. Publish the public `longhouse` command matrix: each current Python device command is either ported, explicitly retained only under `longhouse-python`, or removed. Native first install is `longhouse auth --url <runtime-url>` (browser-approved; the environment token is headless automation only) then `longhouse machine repair --repair-service`; repair and `local-health --fast --json` are critical-path commands because provider Helm and the Desktop depend on them. Update `config/native_device_entrypoints.json` to reflect real facade/engine targets.
 2. Grow the hermetic installed-artifact test now, beginning with install/repair and native `local-health --fast --json`; trap `python`, `python3`, `uv`, `pip`, and `longhouse-python`. Each later provider cutover extends this same gate.
 3. Prove the new `longhouse-engine opencode-bridge` plus public native OpenCode launch/attach/stop on installed artifacts. Preserve schema-v1 state, localhost-only health, process identity, bounded attached cleanup, and explicit detached survival. Do not emit coordination MCP or answerable permission pauses until their native counterparts exist.
 4. Cursor Helm is excluded from the native normal-device release. Reintroduce it only as one native PTY/control/permission/transcript runtime; do not leave a Python launch path advertised as supported.
@@ -43,7 +43,7 @@ This is the execution companion to [Rust Edge Provider Parity](rust-edge-provide
 ## Completion checklist
 
 - [x] Public command matrix complete; `native_device_entrypoints.json` matches shipped ownership.
-- [x] Native auth/setup/repair and Desktop-facing local-health contract complete; `connect` is explicitly excluded.
+- [x] Native auth/setup/repair and Desktop-facing local-health contract complete, including browser-approved device pairing.
 - [x] Claude reviewed blockers resolved and native provider proof complete.
 - [x] OpenCode native Helm complete and native provider proof complete.
 - [x] Cursor Helm explicitly excluded from the native normal-device release.
@@ -51,6 +51,5 @@ This is the execution companion to [Rust Edge Provider Parity](rust-edge-provide
 - [x] No normal device CLI route requires Python.
 - [x] Default device install/PATH never selects Python; server compatibility, if retained, is only `longhouse-python`.
 - [x] Hermetic installed-artifact gate passes.
-- [x] Fresh Hatch Sol and Cursor reviews dispositioned.
 - [x] Branch rebased and pushed.
 - [ ] After merge: publish the paired release artifact and run release/dogfood refresh.
