@@ -163,13 +163,13 @@ Built and maintained by [David W. Rose](https://drose.io/)
     "cd {{WORKDIR}}/web && bun install --silent && bun run build",
     "cd {{WORKDIR}} && python3 scripts/build/generate_build_identity.py",
     "cd {{WORKDIR}}/server && uv sync",
-    "cd {{WORKDIR}}/server && HOME={{WORKDIR}}/.qa-home LLM_DISABLED=1 uv run longhouse serve --host 127.0.0.1 --port 8080 --daemon",
+    "cd {{WORKDIR}}/server && HOME={{WORKDIR}}/.qa-home LLM_DISABLED=1 uv run longhouse-python serve --host 127.0.0.1 --port 8080 --daemon",
     "sleep 5",
     "python3 -c 'import json,urllib.request; p=json.load(urllib.request.urlopen(\"http://127.0.0.1:8080/api/health\")); assert p.get(\"status\") == \"healthy\", p'",
     "cd {{WORKDIR}}/e2e && bun install --silent && PLAYWRIGHT_BASE_URL=http://127.0.0.1:8080 bunx playwright test --config playwright.onboarding.config.js --project onboarding-chromium"
   ],
   "cleanup": [
-    "cd {{WORKDIR}}/server && HOME={{WORKDIR}}/.qa-home uv run longhouse serve --stop || true",
+    "cd {{WORKDIR}}/server && HOME={{WORKDIR}}/.qa-home uv run longhouse-python serve --stop || true",
     "rm -rf {{WORKDIR}}/.qa-home"
   ],
   "primary_route": "/timeline",
