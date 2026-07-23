@@ -128,7 +128,7 @@ resolve_url() {
     return
   fi
 
-  fail "No canonical machine state found at $LONGHOUSE_HOME/machine/state.json. Pass --url or run longhouse connect --install once."
+  fail "No canonical machine state found at $LONGHOUSE_HOME/machine/state.json. Pass --url or run longhouse auth --url <runtime-url> once."
 }
 
 resolve_machine_name() {
@@ -157,6 +157,7 @@ install_engine_from_source() {
   esac
 
   local engine_binary="$ENGINE_DIR/target/$ENGINE_PROFILE/longhouse-engine"
+  local facade_binary="$ENGINE_DIR/target/$ENGINE_PROFILE/longhouse"
 
   log "==> Building Rust engine ($ENGINE_PROFILE profile)"
   # build-identity.json must be regenerated for the current HEAD before
@@ -164,42 +165,18 @@ install_engine_from_source() {
   # resulting binary reports the previous commit's SHA. See "BUILD DRIFT"
   # in the menu bar if this is wrong.
   python3 "$ROOT_DIR/scripts/build/generate_build_identity.py"
-  (cd "$ENGINE_DIR" && cargo build --profile "$ENGINE_PROFILE")
+  (cd "$ENGINE_DIR" && cargo build --profile "$ENGINE_PROFILE" --bin longhouse --bin longhouse-engine)
 
   if [[ "$(uname -s)" == "Darwin" ]] && command -v codesign >/dev/null 2>&1; then
     log "==> Ad-hoc signing engine"
-    codesign -s - "$engine_binary" >/dev/null
+    codesign -s - "$facade_binary" "$engine_binary" >/dev/null
   fi
 
-  rm -f "$HOME/.local/bin/longhouse-engine"
+  rm -f "$HOME/.local/bin/longhouse" "$HOME/.local/bin/longhouse-engine"
+  install -m 755 "$facade_binary" "$HOME/.local/bin/longhouse"
   install -m 755 "$engine_binary" "$HOME/.local/bin/longhouse-engine"
-  log "Engine ready at $HOME/.local/bin/longhouse-engine"
-}
-
-install_cli_from_source() {
-  require_cmd uv
-  require_cmd python3
-
-  log "==> Generating build identity"
-  python3 "$ROOT_DIR/scripts/build/generate_build_identity.py"
-
-  ensure_frontend_dist
-
-  log "==> Building Longhouse CLI wheel from current repo source"
-  local wheel_dir="$ROOT_DIR/.build/wheel"
-  rm -rf "$wheel_dir"
-  mkdir -p "$wheel_dir"
-  (cd "$SERVER_PROJECT" && uv build --wheel --out-dir "$wheel_dir" >/dev/null)
-
-  local wheel_path
-  wheel_path="$(ls -1 "$wheel_dir"/longhouse-*.whl 2>/dev/null | head -n1)"
-  [[ -n "$wheel_path" ]] || fail "wheel build produced no artifact under $wheel_dir"
-
-  log "==> Installing CLI from wheel ($(basename "$wheel_path"))"
-  uv tool install --force "$wheel_path" >/dev/null
-
-  log "CLI ready at $(command -v longhouse)"
-  log "CLI version: $(longhouse --version)"
+  "$HOME/.local/bin/longhouse" verify-pair >/dev/null
+  log "Native pair ready: $($HOME/.local/bin/longhouse build-identity)"
 }
 
 ensure_frontend_dist() {
@@ -271,13 +248,7 @@ build_desktop_app_bundle() {
 }
 
 run_repo_longhouse() {
-  local -a cmd
-  if [[ -x "$SERVER_PROJECT/.venv/bin/python" ]]; then
-    cmd=("$SERVER_PROJECT/.venv/bin/python" -m zerg.cli.main "$@")
-  else
-    cmd=(uv run --project "$SERVER_PROJECT" python -m zerg.cli.main "$@")
-  fi
-  "${cmd[@]}"
+  "$HOME/.local/bin/longhouse" "$@"
 }
 
 print_runtime_readiness_summary() {
@@ -309,12 +280,10 @@ run_check() {
   local snapshot_file=""
   log "==> Installed runtime status"
   if command -v longhouse >/dev/null 2>&1; then
-    log "CLI: $(command -v longhouse) ($(longhouse --version))"
+    log "CLI: $(command -v longhouse) ($(longhouse build-identity))"
   else
     log "CLI: not found on PATH"
   fi
-  run_repo_longhouse connect --status
-  log ""
   snapshot_file="$(mktemp -t longhouse-dogfood-health.XXXXXX.json)"
   if run_repo_longhouse local-health --json >"$snapshot_file"; then
     print_runtime_readiness_summary "$snapshot_file"
@@ -389,8 +358,6 @@ run_refresh() {
     log "==> Skipping engine rebuild"
   fi
 
-  install_cli_from_source
-
   if [[ "$(uname -s)" == "Darwin" ]] && (( MENUBAR == 1 )); then
     app_bundle="$(build_desktop_app_bundle)"
   fi
@@ -407,11 +374,15 @@ run_refresh() {
   fi
 
   if [[ -n "$app_bundle" ]]; then
-    LONGHOUSE_DESKTOP_APP_SOURCE="$app_bundle" \
-      run_repo_longhouse connect --install --url "$url" --machine-name "$machine_name" --menubar --claude-dir "$CLAUDE_DIR"
-  else
-    run_repo_longhouse connect --install --url "$url" --machine-name "$machine_name" --no-menubar --claude-dir "$CLAUDE_DIR"
+    log "==> Installing Longhouse.app"
+    rm -rf /Applications/Longhouse.app
+    ditto "$app_bundle" /Applications/Longhouse.app
   fi
+  local device_token
+  device_token="$(read_trimmed_file "$LONGHOUSE_HOME/machine/device-token")"
+  [[ -n "$device_token" ]] || fail "No device token found at $LONGHOUSE_HOME/machine/device-token"
+  LONGHOUSE_DEVICE_TOKEN="$device_token" run_repo_longhouse auth --url "$url" --device "$machine_name"
+  run_repo_longhouse machine repair --repair-service --json >/dev/null
 
   log ""
   publish_provider_live_proof
