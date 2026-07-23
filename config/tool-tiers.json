@@ -47,6 +47,25 @@
     "str_replace_editor":{ "tier": "action", "aggregate": null,     "icon": "E", "label": "edit",      "color": "brand" },
     "update_plan":      { "tier": "action",  "aggregate": null,     "icon": "+", "label": "plan",      "color": "accent" }
   },
+  "_exact_aliases": "Dogfood-only explicit native names. Providers record observed provenance, not match scope: these exact operation names are semantically safe across providers. Raw identity remains in detail/export.",
+  "exact_aliases": {
+    "exec":                       { "canonical": "shell",     "providers": ["codex"],       "tier": "action",  "aggregate": null,     "icon": "$", "label": "exec",   "color": "warning" },
+    "wait":                       { "canonical": "wait",      "providers": ["codex"],       "tier": "action",  "aggregate": null,     "icon": "…", "label": "Wait",   "color": "tertiary" },
+    "request_user_input":         { "canonical": "approval",  "providers": ["codex"],       "tier": "action",  "aggregate": null,     "icon": "?", "label": "Question", "color": "accent" },
+    "ReadFile":                   { "canonical": "read",      "providers": ["cursor"],      "tier": "context", "aggregate": "read",   "icon": "R", "label": "Read",   "color": "cyan" },
+    "StrReplace":                 { "canonical": "edit",      "providers": ["cursor"],      "tier": "action",  "aggregate": null,     "icon": "E", "label": "Edit",   "color": "brand" },
+    "AwaitShell":                 { "canonical": "wait",      "providers": ["cursor"],      "tier": "action",  "aggregate": null,     "icon": "…", "label": "Wait",   "color": "tertiary" },
+    "view_file":                  { "canonical": "read",      "providers": ["antigravity"], "tier": "context", "aggregate": "read",   "icon": "R", "label": "Read",   "color": "cyan" },
+    "grep_search":                { "canonical": "search",    "providers": ["antigravity"], "tier": "noise",   "aggregate": "search", "icon": "~", "label": "Search", "color": "muted" },
+    "run_command":                { "canonical": "shell",     "providers": ["antigravity"], "tier": "action",  "aggregate": null,     "icon": "$", "label": "Shell",  "color": "warning" },
+    "list_dir":                   { "canonical": "list",      "providers": ["antigravity"], "tier": "noise",   "aggregate": "list",   "icon": "/", "label": "List",   "color": "muted" },
+    "search_web":                 { "canonical": "web_search","providers": ["antigravity"], "tier": "context", "aggregate": null,     "icon": "S", "label": "Search", "color": "secondary" },
+    "replace_file_content":       { "canonical": "edit",      "providers": ["antigravity"], "tier": "action",  "aggregate": null,     "icon": "E", "label": "Edit",   "color": "brand" },
+    "multi_replace_file_content": { "canonical": "edit",      "providers": ["antigravity"], "tier": "action",  "aggregate": null,     "icon": "E", "label": "Edit",   "color": "brand" },
+    "write_to_file":              { "canonical": "write",     "providers": ["antigravity"], "tier": "action",  "aggregate": null,     "icon": "W", "label": "Write",  "color": "success" },
+    "read_url_content":           { "canonical": "web_fetch", "providers": ["antigravity"], "tier": "context", "aggregate": null,     "icon": "W", "label": "Fetch",  "color": "cyan" },
+    "invoke_subagent":            { "canonical": "agent",     "providers": ["antigravity"], "tier": "action",  "aggregate": null,     "icon": "A", "label": "Agent",  "color": "tertiary" }
+  },
   "mcp_namespaces": {
     "longhouse":  { "icon": "O", "color": "brand" },
     "life-hub":   { "icon": "O", "color": "brand" },

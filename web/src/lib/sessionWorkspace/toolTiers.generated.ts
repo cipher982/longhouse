@@ -59,6 +59,25 @@ export const TOOL_TIERS: Record<string, ToolTierMeta> = {
   "update_plan": { tier: "action", aggregate: null, icon: "+", label: "plan", color: "accent" },
 };
 
+export const TOOL_EXACT_ALIASES: Record<string, ToolTierMeta> = {
+  "exec": { tier: "action", aggregate: null, icon: "$", label: "exec", color: "warning" },
+  "wait": { tier: "action", aggregate: null, icon: "\u2026", label: "Wait", color: "tertiary" },
+  "request_user_input": { tier: "action", aggregate: null, icon: "?", label: "Question", color: "accent" },
+  "ReadFile": { tier: "context", aggregate: "read", icon: "R", label: "Read", color: "cyan" },
+  "StrReplace": { tier: "action", aggregate: null, icon: "E", label: "Edit", color: "brand" },
+  "AwaitShell": { tier: "action", aggregate: null, icon: "\u2026", label: "Wait", color: "tertiary" },
+  "view_file": { tier: "context", aggregate: "read", icon: "R", label: "Read", color: "cyan" },
+  "grep_search": { tier: "noise", aggregate: "search", icon: "~", label: "Search", color: "muted" },
+  "run_command": { tier: "action", aggregate: null, icon: "$", label: "Shell", color: "warning" },
+  "list_dir": { tier: "noise", aggregate: "list", icon: "/", label: "List", color: "muted" },
+  "search_web": { tier: "context", aggregate: null, icon: "S", label: "Search", color: "secondary" },
+  "replace_file_content": { tier: "action", aggregate: null, icon: "E", label: "Edit", color: "brand" },
+  "multi_replace_file_content": { tier: "action", aggregate: null, icon: "E", label: "Edit", color: "brand" },
+  "write_to_file": { tier: "action", aggregate: null, icon: "W", label: "Write", color: "success" },
+  "read_url_content": { tier: "context", aggregate: null, icon: "W", label: "Fetch", color: "cyan" },
+  "invoke_subagent": { tier: "action", aggregate: null, icon: "A", label: "Agent", color: "tertiary" },
+};
+
 export const MCP_NAMESPACES: Record<string, McpNamespaceMeta> = {
   "longhouse": { icon: "O", color: "brand" },
   "life-hub": { icon: "O", color: "brand" },
@@ -100,7 +119,18 @@ export interface ResolvedToolInfo {
   mcpNamespace?: string;
 }
 
-export function resolveToolInfo(toolName: string): ResolvedToolInfo {
+export function exactAliasesDogfoodEnabled(): boolean {
+  try {
+    return typeof localStorage !== "undefined" && localStorage.getItem("longhouse.toolTranslationExact") === "1";
+  } catch {
+    return false;
+  }
+}
+
+export function resolveToolInfo(
+  toolName: string,
+  enableExactAliases = exactAliasesDogfoodEnabled(),
+): ResolvedToolInfo {
   const mcp = parseMcp(toolName);
   if (mcp) {
     const ns = mcp.namespace.toLowerCase();
@@ -131,6 +161,11 @@ export function resolveToolInfo(toolName: string): ResolvedToolInfo {
 
   const exact = TOOL_TIERS[toolName];
   if (exact) return { ...exact };
+
+  if (enableExactAliases) {
+    const alias = TOOL_EXACT_ALIASES[toolName];
+    if (alias) return { ...alias };
+  }
 
   const lower = toolName.toLowerCase();
   for (const [key, meta] of Object.entries(TOOL_TIERS)) {

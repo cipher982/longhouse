@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "id": "tool-translation-golden-v1",
+  "description": "Synthetic, privacy-safe provider-shape evidence. Values are intentionally non-production.",
+  "sources": [
+    { "id": "claude-golden", "provider": "claude", "wire_family": "claude-jsonl-v2", "path": "claude.jsonl" },
+    { "id": "codex-golden", "provider": "codex", "wire_family": "codex-response-item-v1", "path": "codex.jsonl" },
+    { "id": "cursor-golden", "provider": "cursor", "wire_family": "cursor-agent-stream-v1", "path": "cursor.jsonl" },
+    { "id": "opencode-golden", "provider": "opencode", "wire_family": "opencode-part-v1", "path": "opencode.jsonl" },
+    { "id": "antigravity-golden", "provider": "antigravity", "wire_family": "antigravity-message-v1", "path": "antigravity.jsonl" }
+  ],
+  "expected": {
+    "source_events": 18,
+    "canonical_events": 18,
+    "outer_calls": 9,
+    "results": 9,
+    "logical_operations": 9,
+    "paired": 9,
+    "exact": 8,
+    "unknown": 1
+  }
+}

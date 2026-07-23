@@ -1,6 +1,6 @@
 # Tool Translation Evaluation and Delivery
 
-Status: council-refined plan; discuss before starting
+Status: Phases 0–1 implemented (2026-07-23); Phase 2 not started
 Owner: Longhouse timeline
 Depends on: `tool-translation-experience.md`
 
@@ -236,3 +236,27 @@ The first cut succeeds when Longhouse can reproducibly show:
 
 The smallest valuable deliverable is Phase 0 plus Phase 1. Starting the full
 automation factory is explicitly not authorized by this plan.
+
+## Phase 0–1 delivery record
+
+Implemented in the first cut:
+
+- machine ingest/detail contracts preserve arbitrary JSON tool inputs,
+  including Codex string-valued `exec` wrappers;
+- web and iOS generated API clients preserve the same lossless value;
+- `tests/fixtures/tool-translation/manifest.json` freezes a synthetic,
+  privacy-safe golden corpus spanning Claude, Codex, Cursor, OpenCode, and
+  Antigravity with provider/wire provenance and raw-shape fingerprints;
+- `longhouse translation evaluate --corpus <manifest> --json` performs
+  read-only conservation, pairing, identity, Exact/Unknown, and schema-shape
+  accounting without emitting raw payload values;
+- explicit aliases live in `config/tool-tiers.json` and generate identical web
+  and iOS rules; unknown tools keep their raw names;
+- the new aliases are off by default. Web dogfood uses local storage key
+  `longhouse.toolTranslationExact=1`; iOS uses the matching UserDefaults key or
+  `LONGHOUSE_TOOL_TRANSLATION_EXACT=1` in the process environment.
+
+Golden result: 18 source events conserved as 18 canonical events, nine calls
+paired with nine results, eight Exact calls, one deliberate Unknown, and zero
+loss, duplication, or attribution errors. Phase 2 remains a separate decision:
+no Codex wrapper parsing or inferred child operations were added here.
