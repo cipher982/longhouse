@@ -12,16 +12,16 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
-VALID_COMMAND_STATUSES = {"planned", "native", "transitional_shim", "excluded"}
+VALID_COMMAND_STATUSES = {"planned", "native", "implemented", "implemented_fast_snapshot", "transitional_shim", "excluded"}
 VALID_NATIVE_OWNER_STATUSES = {"planned", "native"}
-VALID_SHIM_STATUSES = {"transitional_shim", "legacy_compat"}
+VALID_SHIM_STATUSES = {"transitional_shim", "legacy_compat", "legacy_server_compatibility", "removed_from_device_path"}
 VALID_PROVIDER_OWNERSHIP = {"user_owned", "not_applicable", "excluded_until_provider_surface"}
 VALID_TOKEN_POLICIES = {"env_or_state_file", "no_token", "not_applicable"}
 VALID_CWD_POLICIES = {"strict_absolute_or_existing", "inherits_existing", "not_applicable"}
-VALID_PHASES = {"phase2", "phase3", "phase4", "phase5", "phase6", "phase7"}
+VALID_PHASES = {"phase2", "phase3", "phase4", "phase5", "phase6", "phase7", "device cutover"}
 TRANSITIONAL_CATEGORIES = {"transitional_device", "legacy_compat"}
 DEVICE_INVENTORY_CATEGORIES = {"native_device", *TRANSITIONAL_CATEGORIES}
-FORBIDDEN_NATIVE_COMMAND_BINS = {"longhouse", "python", "python3", "uv", "pip"}
+FORBIDDEN_NATIVE_COMMAND_BINS = {"python", "python3", "uv", "pip", "longhouse-python"}
 
 
 def _repo_root() -> Path:
@@ -96,14 +96,19 @@ def _validate_contract(root: Path, contract: dict[str, Any]) -> list[str]:
         owner = {}
     owner_binary = str(owner.get("binary") or "").strip()
     owner_namespace = str(owner.get("namespace") or "").strip()
-    if owner_binary != "longhouse-engine":
-        errors.append("native_owner.binary must be longhouse-engine")
-    if owner_namespace != "device":
-        errors.append("native_owner.namespace must be device")
+    if (owner_binary, owner_namespace) not in {
+        ("longhouse-engine", "device"),
+        ("longhouse", "public facade"),
+    }:
+        errors.append("native_owner must be longhouse public facade or longhouse-engine device")
     owner_status = str(owner.get("status") or "").strip()
     if owner_status not in VALID_NATIVE_OWNER_STATUSES:
         errors.append(f"native_owner.status must be one of {sorted(VALID_NATIVE_OWNER_STATUSES)}")
-    native_prefix = f"{owner_binary} {owner_namespace}".strip()
+    native_prefix = (
+        owner_binary
+        if (owner_binary, owner_namespace) == ("longhouse", "public facade")
+        else f"{owner_binary} {owner_namespace}".strip()
+    )
 
     shim_entries = contract.get("compatibility_shims")
     if not isinstance(shim_entries, list):
@@ -132,7 +137,10 @@ def _validate_contract(root: Path, contract: dict[str, Any]) -> list[str]:
         if packaged_target and target != packaged_target:
             errors.append(f"compatibility shim {script} target {target!r} does not match packaged target {packaged_target!r}")
         delegates_to = str(shim.get("delegates_to") or "").strip()
-        if delegates_to and not delegates_to.startswith(native_prefix):
+        is_explicit_server_compatibility = (
+            status == "legacy_server_compatibility" and delegates_to.startswith("longhouse-python")
+        )
+        if delegates_to and not is_explicit_server_compatibility and not delegates_to.startswith(native_prefix):
             errors.append(f"compatibility shim {script} delegates_to must start with {native_prefix!r}")
         for item_id in _as_string_list(shim.get("phase1_inventory_ids")):
             if item_id not in inventory_by_id:
@@ -180,7 +188,9 @@ def _validate_contract(root: Path, contract: dict[str, Any]) -> list[str]:
         native_command = str(command.get("native_target_command") or "").strip()
         if native_command:
             native_bin = _native_command_bin(native_command)
-            if native_bin in FORBIDDEN_NATIVE_COMMAND_BINS:
+            if native_bin == "longhouse" and owner_binary != "longhouse":
+                errors.append(f"{command_id}: native_target_command must not route through {native_bin}")
+            elif native_bin in FORBIDDEN_NATIVE_COMMAND_BINS:
                 errors.append(f"{command_id}: native_target_command must not route through {native_bin}")
             if native_prefix and not native_command.startswith(native_prefix):
                 errors.append(f"{command_id}: native_target_command must start with {native_prefix!r}")

@@ -1,42 +1,42 @@
 {
   "schema_version": 1,
   "native_owner": {
-    "binary": "longhouse-engine",
-    "namespace": "device",
+    "binary": "longhouse",
+    "namespace": "public facade",
     "status": "native"
   },
   "compatibility_shims": [
     {
       "script": "longhouse",
       "target": "zerg.cli.main:main",
-      "status": "transitional_shim",
-      "delegates_to": "longhouse-engine device",
+      "status": "legacy_server_compatibility",
+      "delegates_to": "longhouse-python (server compatibility only)",
       "phase1_inventory_ids": [
         "cli-main-provider-entrypoints"
       ],
-      "removal_phase": "phase7"
+      "removal_phase": "device cutover"
     },
     {
       "script": "longhouse-local-health",
       "target": "zerg.cli.local_health_fast:main",
-      "status": "transitional_shim",
-      "delegates_to": "longhouse-engine device local-health",
+      "status": "removed_from_device_path",
+      "delegates_to": "longhouse local-health --fast --json",
       "phase1_inventory_ids": [
         "local-health-fast-cli-python"
       ],
-      "removal_phase": "phase7"
+      "removal_phase": "device cutover"
     }
   ],
   "commands": [
     {
       "id": "device-root",
-      "status": "planned",
-      "implementation_phase": "phase2",
+      "status": "implemented",
+      "implementation_phase": "device cutover",
       "legacy_commands": [
         "longhouse",
         "longhouse --help"
       ],
-      "native_target_command": "longhouse-engine device",
+      "native_target_command": "longhouse",
       "phase1_inventory_ids": [
         "cli-main-provider-entrypoints",
         "cli-common-scaffold",
@@ -47,18 +47,18 @@
       "provider_binary_ownership": "not_applicable",
       "token_policy": "not_applicable",
       "cwd_policy": "not_applicable",
-      "notes": "Native root namespace scaffold and shared device CLI support library. Provider/local-health/repair behavior remains planned for later phases."
+      "notes": "Public native facade owns normal installed-device commands and delegates internal mechanics only to its paired engine. Python is server compatibility only."
     },
     {
       "id": "local-health",
-      "status": "planned",
-      "implementation_phase": "phase7",
+      "status": "implemented_fast_snapshot",
+      "implementation_phase": "device cutover",
       "legacy_commands": [
         "longhouse local-health",
         "longhouse-local-health",
         "Longhouse.app menu-bar health refresh"
       ],
-      "native_target_command": "longhouse-engine device local-health",
+      "native_target_command": "longhouse local-health --fast --json",
       "phase1_inventory_ids": [
         "local-health-cli-python",
         "local-health-fast-cli-python",
@@ -69,7 +69,7 @@
       "provider_binary_ownership": "not_applicable",
       "token_policy": "no_token",
       "cwd_policy": "not_applicable",
-      "notes": "Phase 2B adds read-only native fast status via longhouse-engine device local-health over engine-status.json. Full menu bar, rich local-health, and repair behavior remain planned until the Python collector is replaced."
+      "notes": "The public facade delegates the Desktop-facing fast JSON snapshot to the paired engine. Rich Python local-health remains server compatibility only until its data contract is ported."
     },
     {
       "id": "doctor-repair",
@@ -80,7 +80,7 @@
         "longhouse machine repair",
         "longhouse connect --install"
       ],
-      "native_target_command": "longhouse-engine device repair",
+      "native_target_command": "longhouse machine repair",
       "phase1_inventory_ids": [
         "doctor-cli-python",
         "machine-cli-python",
@@ -100,7 +100,7 @@
         "longhouse provider-live publish",
         "longhouse provider-live canary"
       ],
-      "native_target_command": "longhouse-engine device provider-live",
+      "native_target_command": "longhouse provider-live",
       "phase1_inventory_ids": [
         "provider-live-cli-python"
       ],
@@ -120,7 +120,7 @@
         "longhouse claude-channel send",
         "longhouse claude-channel interrupt"
       ],
-      "native_target_command": "longhouse-engine device claude",
+      "native_target_command": "longhouse claude",
       "phase1_inventory_ids": [
         "claude-launch-wrapper",
         "claude-channel-bridge",
@@ -143,7 +143,7 @@
       "legacy_commands": [
         "longhouse codex"
       ],
-      "native_target_command": "longhouse-engine device codex",
+      "native_target_command": "longhouse codex",
       "phase1_inventory_ids": [
         "codex-launch-wrapper"
       ],
@@ -164,7 +164,7 @@
         "longhouse opencode-channel attach",
         "longhouse opencode-bridge"
       ],
-      "native_target_command": "longhouse-engine device opencode",
+      "native_target_command": "longhouse opencode",
       "phase1_inventory_ids": [
         "opencode-launch-wrapper",
         "opencode-channel-compat",
@@ -187,7 +187,7 @@
         "longhouse antigravity",
         "longhouse antigravity-channel send"
       ],
-      "native_target_command": "longhouse-engine device antigravity",
+      "native_target_command": "longhouse antigravity",
       "phase1_inventory_ids": [
         "antigravity-launch-wrapper",
         "antigravity-channel",
@@ -210,7 +210,7 @@
       "legacy_commands": [
         "longhouse cursor"
       ],
-      "native_target_command": "longhouse-engine device cursor",
+      "native_target_command": "longhouse cursor",
       "phase1_inventory_ids": [
         "cursor-command-wrapper",
         "cursor-helm-launch-wrapper"

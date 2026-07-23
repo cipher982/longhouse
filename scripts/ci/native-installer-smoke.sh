@@ -42,4 +42,5 @@ installed="$HOME_DIR/.local/bin/longhouse"
 [[ -x "$installed" ]]
 [[ -x "$HOME_DIR/.local/bin/longhouse-python" ]]
 HOME="$HOME_DIR" PATH="$HOME_DIR/.local/bin:$HOME_DIR/traps:/usr/bin:/bin:/usr/sbin:/sbin" "$installed" verify-pair >/dev/null
+HOME="$HOME_DIR" PATH="$HOME_DIR/.local/bin:$HOME_DIR/traps:/usr/bin:/bin:/usr/sbin:/sbin" "$installed" local-health --fast --json >/dev/null
 echo "native installer smoke passed"

@@ -37,6 +37,8 @@ enum Commands {
     },
     /// Verify the paired engine is present and built from the same commit.
     VerifyPair,
+    /// Print the native fast local-health snapshot used by Longhouse.app.
+    LocalHealth(LocalHealthArgs),
     /// Configure native Longhouse hooks for Claude.
     #[command(args_conflicts_with_subcommands = true)]
     Claude {
@@ -97,6 +99,19 @@ struct ClaudeLaunchArgs {
     claude_bin: Option<String>,
     #[arg(long, alias = "config-dir")]
     claude_dir: Option<PathBuf>,
+}
+
+#[derive(Args)]
+struct LocalHealthArgs {
+    /// Kept for Desktop and existing CLI compatibility; the native snapshot is always fast.
+    #[arg(long)]
+    fast: bool,
+    /// Emit the snapshot as JSON.
+    #[arg(long)]
+    json: bool,
+    /// Longhouse state root override for diagnostics and tests.
+    #[arg(long)]
+    state_root: Option<PathBuf>,
 }
 
 #[derive(Args)]
@@ -382,6 +397,23 @@ fn shell_quote_path(path: &Path) -> String {
         "'{}'",
         path.display().to_string().replace('\'', "'\\\"'\\\"'")
     )
+}
+
+fn native_local_health(args: LocalHealthArgs) -> anyhow::Result<()> {
+    let _ = args.fast;
+    let mut command = Command::new(paired_engine_path()?);
+    command.args(["device", "local-health"]);
+    if args.json {
+        command.arg("--json");
+    }
+    if let Some(state_root) = args.state_root {
+        command.arg("--state-root").arg(state_root);
+    }
+    let status = command.status().context("run paired native local-health")?;
+    if !status.success() {
+        std::process::exit(status.code().unwrap_or(1));
+    }
+    Ok(())
 }
 
 fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
@@ -1296,6 +1328,7 @@ fn main() -> anyhow::Result<()> {
                 pair.engine_path, pair.facade.commit_short
             );
         }
+        Commands::LocalHealth(args) => native_local_health(args)?,
         Commands::Claude { command, launch } => match command {
             Some(ClaudeCommand::Configure { claude_dir }) => configure_claude_hooks(claude_dir)?,
             None => launch_managed_claude(launch)?,
@@ -1330,6 +1363,16 @@ mod tests {
         assert!(command.is_none());
         assert!(launch.no_attach);
         assert!(launch.attach);
+    }
+
+    #[test]
+    fn local_health_parser_keeps_desktop_fast_shape() {
+        let cli = Cli::try_parse_from(["longhouse", "local-health", "--fast", "--json"]).unwrap();
+        let Commands::LocalHealth(args) = cli.command.unwrap() else {
+            panic!("expected local-health command");
+        };
+        assert!(args.fast);
+        assert!(args.json);
     }
 
     #[test]
