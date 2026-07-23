@@ -846,6 +846,13 @@ def test_live_catalog_timeline_returns_typed_archive_requirement_for_search(tmp_
         list_live_catalog_timeline(params=_params(query="sqlite"))
 
 
+def test_live_catalog_timeline_ignores_search_mode_without_query(tmp_path):
+    # mode=hybrid with no query is an ordinary list request; it must not be
+    # rejected as a search (regression: web client sends mode without query).
+    with pytest.raises(CatalogReadError):
+        list_live_catalog_timeline(params=_params(mode="hybrid"), owner_id=None)
+
+
 def test_live_catalog_machine_list_reuses_bounded_projection(tmp_path):
     engine = make_live_engine(f"sqlite:///{tmp_path / 'live.db'}")
     initialize_catalog_schema(engine)

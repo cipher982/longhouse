@@ -661,6 +661,12 @@ def serve(
         reload=reload,
         workers=workers if not reload else 1,
         log_level="info",
+        # Per-request access logs (presence/heartbeat polls) drown the
+        # structured application records in the journal; uvicorn.error still
+        # logs real server failures. Uvicorn's own log config is applied at
+        # startup, so suppressing uvicorn.access in configure_logging is not
+        # enough.
+        access_log=False,
         # Machine Agent control uses an app-level heartbeat. Uvicorn protocol
         # pings have been flaky behind hosted proxies for non-browser clients,
         # and the control route has its own receive timeout for stale sockets.
