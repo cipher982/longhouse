@@ -93,6 +93,24 @@
       "notes": "Phase 2C adds read-only native repair recommendations via longhouse-engine device repair-plan. Phase 2D adds a narrow write-capable native repair action that can restart only an existing configured launchd/systemd Machine Agent service after LONGHOUSE_HOME safety checks. Full install, hook regeneration, desktop artifact repair, backlog replay, and token rotation remain planned; token values must stay out of argv and logs."
     },
     {
+      "id": "auth",
+      "status": "implemented",
+      "implementation_phase": "device cutover",
+      "legacy_commands": [
+        "longhouse auth"
+      ],
+      "native_target_command": "longhouse auth --url <runtime-url>",
+      "phase1_inventory_ids": [
+        "cli-main-provider-entrypoints",
+        "cli-common-scaffold"
+      ],
+      "providers": "all",
+      "provider_binary_ownership": "not_applicable",
+      "token_policy": "env_or_state_file",
+      "cwd_policy": "not_applicable",
+      "notes": "Native auth validates a device token supplied through LONGHOUSE_DEVICE_TOKEN (or --token-env), then atomically updates canonical machine state and the private token file. It intentionally never accepts a token argument."
+    },
+    {
       "id": "provider-live-proof",
       "status": "planned",
       "implementation_phase": "phase7",
