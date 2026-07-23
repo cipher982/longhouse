@@ -149,8 +149,9 @@ perform the following with no `python3`, `uv`, or Python site-packages on PATH:
 2. launch, cleanly exit, and inspect a Codex Helm session;
 3. attach, send, interrupt, and stop a live Codex Helm session;
 4. run local health and provider-live proof;
-5. perform the equivalent supported operations for Claude, OpenCode, Cursor,
-   and the explicit Antigravity decision.
+5. perform the equivalent supported operations for Claude and OpenCode. Cursor
+   and Antigravity are explicitly excluded from this native normal-device
+   release until one native runtime owns each complete contract.
 
 The gate is hermetic: the device-under-test receives a restricted PATH with
 trap executables for `python`, `python3`, `uv`, `pip`, and

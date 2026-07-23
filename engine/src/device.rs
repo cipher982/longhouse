@@ -749,7 +749,7 @@ where
     if !machine_state.configured {
         return Ok(native_repair_execution_result(
             dry_run,
-            "rejected_connect_install",
+            "rejected_native_setup",
             "Longhouse needs machine setup before native repair can run",
             Vec::new(),
             machine_state,
@@ -757,8 +757,8 @@ where
             before_health,
             None,
             vec![
-                "Native repair only restarts an existing configured Machine Agent service.",
-                "Run longhouse connect --install to create or reconnect this machine.",
+                "Authenticate first with LONGHOUSE_DEVICE_TOKEN=... longhouse auth --url <runtime-url>.",
+                "Then run longhouse machine repair --repair-service to install the native Machine Agent service.",
             ],
         ));
     }
@@ -789,8 +789,7 @@ where
             before_health,
             None,
             vec![
-                "Native repair does not create launchd plists, systemd units, hooks, or desktop artifacts yet.",
-                "Run longhouse connect --install to install the service.",
+                "Run longhouse machine repair --repair-service to create the native Machine Agent service.",
             ],
         ));
     }
@@ -1266,7 +1265,7 @@ fn collect_native_machine_state_detail(
         return Err((
             "rejected_machine_state_incomplete",
             status,
-            "Run longhouse connect --install once to create canonical machine state.",
+            "Authenticate with LONGHOUSE_DEVICE_TOKEN=... longhouse auth --url <runtime-url> to create canonical machine state.",
         ));
     }
 
@@ -1457,14 +1456,24 @@ fn native_repair_plan_from_parts(
 
     let (recommendation, headline, suggested_actions) = if !machine_state.configured {
         (
-            "connect_install",
+            "native_setup",
             "Longhouse needs machine setup",
-            vec![NativeRepairAction {
-                id: "connect_install",
-                label: "Install or reconnect this machine",
-                command: Some("longhouse connect --install".to_string()),
-                status: "compatibility_shim",
-            }],
+            vec![
+                NativeRepairAction {
+                    id: "native_auth",
+                    label: "Authenticate this machine",
+                    command: Some(
+                        "LONGHOUSE_DEVICE_TOKEN=... longhouse auth --url <runtime-url>".to_string(),
+                    ),
+                    status: "native",
+                },
+                NativeRepairAction {
+                    id: "native_service_install",
+                    label: "Install the native Machine Agent service",
+                    command: Some("longhouse machine repair --repair-service".to_string()),
+                    status: "native",
+                },
+            ],
         )
     } else if engine_health.health_state == "healthy" {
         ("healthy", "Longhouse is healthy and configured", Vec::new())
@@ -1493,8 +1502,8 @@ fn native_repair_plan_from_parts(
         engine_health,
         suggested_actions,
         notes: vec![
-            "device repair remains planned; this command only reports native repair recommendations.",
-            "compatibility commands may still route through the Python CLI during the transition.",
+            "This command only reports native repair recommendations; use the listed native commands to act.",
+            "Normal installed-device commands never route through the Python compatibility CLI.",
         ],
     }
 }
@@ -3246,7 +3255,7 @@ mod tests {
     }
 
     #[test]
-    fn native_repair_plan_prefers_connect_install_when_machine_state_missing() {
+    fn native_repair_plan_prefers_native_setup_when_machine_state_missing() {
         let dir = tempfile::tempdir().unwrap();
         let status_path = dir.path().join("agent").join("engine-status.json");
         let machine_path = dir.path().join("machine").join("state.json");
@@ -3266,16 +3275,16 @@ mod tests {
             None,
         );
 
-        assert_eq!(plan.recommendation, "connect_install");
+        assert_eq!(plan.recommendation, "native_setup");
         assert!(plan.reasons.contains(&"machine_state_missing".to_string()));
         assert_eq!(
             plan.suggested_actions[0].command.as_deref(),
-            Some("longhouse connect --install")
+            Some("LONGHOUSE_DEVICE_TOKEN=... longhouse auth --url <runtime-url>")
         );
     }
 
     #[test]
-    fn native_repair_plan_prefers_connect_install_when_machine_state_incomplete() {
+    fn native_repair_plan_prefers_native_setup_when_machine_state_incomplete() {
         let dir = tempfile::tempdir().unwrap();
         let machine_path = dir.path().join("machine").join("state.json");
         std::fs::create_dir_all(machine_path.parent().unwrap()).unwrap();
@@ -3310,14 +3319,14 @@ mod tests {
             None,
         );
 
-        assert_eq!(plan.recommendation, "connect_install");
+        assert_eq!(plan.recommendation, "native_setup");
         assert!(plan
             .reasons
             .contains(&"machine_state_missing_machine_name".to_string()));
     }
 
     #[test]
-    fn native_repair_plan_prefers_connect_install_when_machine_state_unreadable() {
+    fn native_repair_plan_prefers_native_setup_when_machine_state_unreadable() {
         let dir = tempfile::tempdir().unwrap();
         let machine_path = dir.path().join("machine").join("state.json");
         std::fs::create_dir_all(machine_path.parent().unwrap()).unwrap();
@@ -3351,7 +3360,7 @@ mod tests {
             None,
         );
 
-        assert_eq!(plan.recommendation, "connect_install");
+        assert_eq!(plan.recommendation, "native_setup");
         assert!(plan
             .reasons
             .contains(&"machine_state_unreadable".to_string()));
@@ -3635,7 +3644,7 @@ Environment="CLAUDE_CONFIG_DIR=/tmp/claude" "LONGHOUSE_HOME={}" "PATH=/bin"
         )
         .unwrap();
 
-        assert_eq!(execution.state, "rejected_connect_install");
+        assert_eq!(execution.state, "rejected_native_setup");
         assert!(execution.service.is_none());
         assert!(execution.actions.is_empty());
         assert!(execution.after_health.is_none());

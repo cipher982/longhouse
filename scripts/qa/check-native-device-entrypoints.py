@@ -19,8 +19,8 @@ VALID_PROVIDER_OWNERSHIP = {"user_owned", "not_applicable", "excluded_until_prov
 VALID_TOKEN_POLICIES = {"env_or_state_file", "no_token", "not_applicable"}
 VALID_CWD_POLICIES = {"strict_absolute_or_existing", "inherits_existing", "not_applicable"}
 VALID_PHASES = {"phase2", "phase3", "phase4", "phase5", "phase6", "phase7", "device cutover"}
-TRANSITIONAL_CATEGORIES = {"transitional_device", "legacy_compat"}
-DEVICE_INVENTORY_CATEGORIES = {"native_device", "excluded_device", *TRANSITIONAL_CATEGORIES}
+TRANSITIONAL_CATEGORIES = {"transitional_device"}
+DEVICE_INVENTORY_CATEGORIES = {"native_device", "excluded_device", "legacy_compat", *TRANSITIONAL_CATEGORIES}
 FORBIDDEN_NATIVE_COMMAND_BINS = {"python", "python3", "uv", "pip", "longhouse-python"}
 
 

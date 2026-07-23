@@ -48,12 +48,13 @@ longhouse opencode     # managed server session: send, interrupt, reattach (not 
 
 Bare provider CLI sessions still get ingested into the timeline — they stay unmanaged: searchable and observable, but without Longhouse-owned remote control.
 
-The web UI lives at `http://localhost:8080`. The same surface is scriptable:
+The web UI lives at `http://localhost:8080`. Runtime Host administration is a
+separate server lane and uses its explicit compatibility entrypoint:
 
 ```bash
-longhouse wall --json
-longhouse recall "that auth refresh bug from last week"
-longhouse tail <session-id>
+longhouse-python wall --json
+longhouse-python recall "that auth refresh bug from last week"
+longhouse-python tail <session-id>
 ```
 
 ## Durable Self-Host
@@ -63,17 +64,20 @@ A laptop runtime stops when the laptop sleeps. For real durability, run the Runt
 **On the always-on box** — a public bind requires auth, so set it up first:
 
 ```bash
-export LONGHOUSE_PASSWORD_HASH="$(longhouse hash-password)"   # prompts for a password
+export LONGHOUSE_PASSWORD_HASH="$(longhouse-python hash-password)"   # prompts for a password
 export JWT_SECRET=$(openssl rand -hex 32)
 export INTERNAL_API_SECRET=$(openssl rand -hex 32)
 
-longhouse serve --host 0.0.0.0 --domain longhouse.example.com
+longhouse-python serve --host 0.0.0.0 --domain longhouse.example.com
 ```
 
 **On each dev machine:**
 
 ```bash
-longhouse connect --domain longhouse.example.com --install
+curl -fsSL https://get.longhouse.ai/install.sh | bash
+export LONGHOUSE_DEVICE_TOKEN="..." # device token issued by the Runtime Host
+longhouse auth --url https://longhouse.example.com
+longhouse machine repair --repair-service
 ```
 
 Binding beyond localhost without auth is refused by default — `longhouse serve` exits and tells you what to set. The three exports above are the whole requirement: a password hash plus two random secrets. (If a trusted reverse proxy already authenticates requests, pass `--allow-public-no-auth` to accept the risk.) For TLS, put Caddy in front — `reverse_proxy 127.0.0.1:8080` is the whole config.
@@ -83,10 +87,10 @@ Or skip running the box — hosted (we run the Runtime Host for you) is availabl
 ## Repair
 
 ```bash
-longhouse doctor              # diagnose
-longhouse upgrade             # update CLI
-longhouse machine repair      # repair a configured machine
-longhouse connect --install   # first install or force reinstall
+curl -fsSL https://get.longhouse.ai/install.sh | bash  # install or upgrade the native pair
+longhouse local-health --fast --json                   # diagnose
+longhouse machine repair                               # restart a configured machine
+longhouse machine repair --repair-service              # install/repair its native service
 ```
 
 `longhouse --help` lists every subcommand. Full docs: <https://longhouse.ai/docs>.
@@ -123,7 +127,7 @@ Issues: <https://github.com/cipher982/longhouse/issues>
 
 ## Status
 
-Alpha. Actively developed. Claude Code, Codex, Cursor, OpenCode, and Antigravity sessions sync today. Managed control is deliberately provider-specific: Claude and Codex Helm sessions support send, interrupt, active-turn steer, and reattach; Cursor Helm supports send, interrupt, and reattach but not active-turn steer; OpenCode Helm supports send, interrupt, and terminate but not active-turn steer or pause-answer; Antigravity supports queued input injection at a native hook boundary but not Console execution, reattach, interrupt, or steer. The native iOS companion can page on `needs_user` / `blocked` once APNs is configured.
+Alpha. Actively developed. Claude Code, Codex, Cursor, OpenCode, and Antigravity sessions sync today. Native Helm currently supports Claude, Codex, and OpenCode; Cursor and Antigravity remain Shadow-only until their complete native control runtimes exist. The native iOS companion can page on `needs_user` / `blocked` once APNs is configured.
 
 Built and maintained by [David W. Rose](https://drose.io/)
 ([cipher982](https://github.com/cipher982)). Apache-2.0.

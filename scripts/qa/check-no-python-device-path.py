@@ -16,7 +16,7 @@ import tomllib
 DEFAULT_INVENTORY: tuple[dict[str, Any], ...] = (
     {
         "id": "cli-main-provider-entrypoints",
-        "category": "transitional_device",
+        "category": "legacy_compat",
         "provider": "all",
         "path": "server/zerg/cli/main.py",
         "owner_area": "native-device-entrypoint",
@@ -27,7 +27,7 @@ DEFAULT_INVENTORY: tuple[dict[str, Any], ...] = (
     },
     {
         "id": "cli-common-scaffold",
-        "category": "transitional_device",
+        "category": "legacy_compat",
         "provider": "all",
         "path": "server/zerg/cli/_common.py",
         "owner_area": "native-device-entrypoint",
@@ -38,7 +38,7 @@ DEFAULT_INVENTORY: tuple[dict[str, Any], ...] = (
     },
     {
         "id": "cli-launch-ui-scaffold",
-        "category": "transitional_device",
+        "category": "legacy_compat",
         "provider": "all",
         "path": "server/zerg/cli/_launch_ui.py",
         "owner_area": "native-device-entrypoint",
@@ -49,7 +49,7 @@ DEFAULT_INVENTORY: tuple[dict[str, Any], ...] = (
     },
     {
         "id": "cli-managed-contract-scaffold",
-        "category": "transitional_device",
+        "category": "legacy_compat",
         "provider": "all",
         "path": "server/zerg/cli/_managed_contract.py",
         "owner_area": "native-device-entrypoint",
@@ -60,7 +60,7 @@ DEFAULT_INVENTORY: tuple[dict[str, Any], ...] = (
     },
     {
         "id": "claude-launch-wrapper",
-        "category": "transitional_device",
+        "category": "legacy_compat",
         "provider": "claude",
         "path": "server/zerg/cli/claude.py",
         "owner_area": "claude-native",
@@ -119,7 +119,7 @@ DEFAULT_INVENTORY: tuple[dict[str, Any], ...] = (
     },
     {
         "id": "claude-channel-helpers",
-        "category": "transitional_device",
+        "category": "legacy_compat",
         "provider": "claude",
         "path": "server/zerg/services/claude_channel_bridge.py",
         "owner_area": "claude-native",
@@ -143,7 +143,7 @@ DEFAULT_INVENTORY: tuple[dict[str, Any], ...] = (
     },
     {
         "id": "device-hook-installer-python",
-        "category": "transitional_device",
+        "category": "legacy_compat",
         "provider": "all",
         "path": "server/zerg/services/shipper/hooks.py",
         "owner_area": "native-health-repair",
@@ -169,7 +169,7 @@ DEFAULT_INVENTORY: tuple[dict[str, Any], ...] = (
     },
     {
         "id": "claude-permission-gate-hook-python",
-        "category": "transitional_device",
+        "category": "legacy_compat",
         "provider": "claude",
         "path": "server/zerg/services/shipper/hooks.py",
         "symbol": "PERMISSION_GATE_SCRIPT",
@@ -200,7 +200,7 @@ DEFAULT_INVENTORY: tuple[dict[str, Any], ...] = (
     },
     {
         "id": "codex-launch-wrapper",
-        "category": "transitional_device",
+        "category": "legacy_compat",
         "provider": "codex",
         "path": "server/zerg/cli/codex.py",
         "owner_area": "native-device-entrypoint",
@@ -210,8 +210,20 @@ DEFAULT_INVENTORY: tuple[dict[str, Any], ...] = (
         "python_dependency_kind": "entrypoint",
     },
     {
+        "id": "codex-public-facade-native",
+        "category": "native_device",
+        "provider": "codex",
+        "path": "engine/src/longhouse.rs",
+        "symbol": "Codex",
+        "native_dispatch_symbols": ["launch_managed_codex"],
+        "owner_area": "native-device-entrypoint",
+        "replacement_phase": "device cutover",
+        "reason": "The native public facade owns normal Codex Helm launch and lifecycle.",
+        "device_command": True,
+    },
+    {
         "id": "opencode-launch-wrapper",
-        "category": "transitional_device",
+        "category": "legacy_compat",
         "provider": "opencode",
         "path": "server/zerg/cli/opencode.py",
         "owner_area": "native-device-entrypoint",
@@ -219,6 +231,18 @@ DEFAULT_INVENTORY: tuple[dict[str, Any], ...] = (
         "reason": "Python still owns the local OpenCode managed launch UX.",
         "device_command": True,
         "python_dependency_kind": "entrypoint",
+    },
+    {
+        "id": "opencode-public-facade-native",
+        "category": "native_device",
+        "provider": "opencode",
+        "path": "engine/src/longhouse.rs",
+        "symbol": "Opencode",
+        "native_dispatch_symbols": ["launch_managed_opencode"],
+        "owner_area": "native-device-entrypoint",
+        "replacement_phase": "device cutover",
+        "reason": "The native public facade and paired engine own normal OpenCode Helm lifecycle.",
+        "device_command": True,
     },
     {
         "id": "opencode-channel-compat",
@@ -235,7 +259,7 @@ DEFAULT_INVENTORY: tuple[dict[str, Any], ...] = (
     },
     {
         "id": "opencode-bridge-cli",
-        "category": "transitional_device",
+        "category": "legacy_compat",
         "provider": "opencode",
         "path": "server/zerg/cli/opencode_bridge.py",
         "owner_area": "native-device-entrypoint",
@@ -330,7 +354,7 @@ DEFAULT_INVENTORY: tuple[dict[str, Any], ...] = (
     },
     {
         "id": "local-health-cli-python",
-        "category": "transitional_device",
+        "category": "legacy_compat",
         "provider": "all",
         "path": "server/zerg/cli/local_health.py",
         "owner_area": "native-health-repair",
@@ -341,7 +365,7 @@ DEFAULT_INVENTORY: tuple[dict[str, Any], ...] = (
     },
     {
         "id": "local-health-fast-cli-python",
-        "category": "transitional_device",
+        "category": "legacy_compat",
         "provider": "all",
         "path": "server/zerg/cli/local_health_fast.py",
         "owner_area": "native-health-repair",
@@ -352,7 +376,7 @@ DEFAULT_INVENTORY: tuple[dict[str, Any], ...] = (
     },
     {
         "id": "local-health-service-python",
-        "category": "transitional_device",
+        "category": "legacy_compat",
         "provider": "all",
         "path": "server/zerg/services/local_health/__init__.py",
         "owner_area": "native-health-repair",
@@ -363,7 +387,7 @@ DEFAULT_INVENTORY: tuple[dict[str, Any], ...] = (
     },
     {
         "id": "desktop-app-health-launcher-python",
-        "category": "transitional_device",
+        "category": "legacy_compat",
         "provider": "all",
         "path": "server/zerg/services/desktop_app.py",
         "owner_area": "native-health-repair",
@@ -374,7 +398,7 @@ DEFAULT_INVENTORY: tuple[dict[str, Any], ...] = (
     },
     {
         "id": "doctor-cli-python",
-        "category": "transitional_device",
+        "category": "legacy_compat",
         "provider": "all",
         "path": "server/zerg/cli/doctor.py",
         "owner_area": "native-health-repair",
@@ -385,7 +409,7 @@ DEFAULT_INVENTORY: tuple[dict[str, Any], ...] = (
     },
     {
         "id": "machine-cli-python",
-        "category": "transitional_device",
+        "category": "legacy_compat",
         "provider": "all",
         "path": "server/zerg/cli/machine.py",
         "owner_area": "native-health-repair",
@@ -396,7 +420,7 @@ DEFAULT_INVENTORY: tuple[dict[str, Any], ...] = (
     },
     {
         "id": "provider-live-cli-python",
-        "category": "transitional_device",
+        "category": "legacy_compat",
         "provider": "all",
         "path": "server/zerg/cli/provider_live.py",
         "owner_area": "native-proof",
@@ -503,7 +527,8 @@ VALID_CATEGORIES = {
     "transitional_device",
 }
 DEVICE_CATEGORIES = {"blocker", "native_device", "native_exempt", "excluded_device", "transitional_device", "legacy_compat"}
-TRANSITIONAL_CATEGORIES = {"transitional_device", "legacy_compat"}
+TRANSITIONAL_CATEGORIES = {"transitional_device"}
+COMPATIBILITY_CATEGORIES = {"legacy_compat"}
 PYTHON_DEPENDENCY_KINDS = {
     "adapter",
     "control_shellout",
@@ -687,12 +712,12 @@ def _validate_inventory(root: Path, inventory: list[dict[str, Any]]) -> list[str
         for required in ("owner_area", "replacement_phase", "reason"):
             if not str(item.get(required) or "").strip():
                 errors.append(f"{item_id}: {required} is required")
-        if category in TRANSITIONAL_CATEGORIES:
+        if category in TRANSITIONAL_CATEGORIES | COMPATIBILITY_CATEGORIES:
             for required in ("owner_area", "replacement_phase", "reason"):
                 if not str(item.get(required) or "").strip():
-                    errors.append(f"{item_id}: transitional entries must include {required}")
+                    errors.append(f"{item_id}: compatibility entries must include {required}")
             if not dependency_kind:
-                errors.append(f"{item_id}: transitional entries must include python_dependency_kind")
+                errors.append(f"{item_id}: compatibility entries must include python_dependency_kind")
             elif dependency_kind not in PYTHON_DEPENDENCY_KINDS:
                 errors.append(
                     f"{item_id}: python_dependency_kind {dependency_kind!r} must be one of "
@@ -814,7 +839,8 @@ def _print_report(root: Path, inventory: list[dict[str, Any]]) -> None:
         entries = [item for item in inventory if _provider_matches(item.get("provider"), provider)]
         transitional = [item for item in entries if item.get("category") in TRANSITIONAL_CATEGORIES]
         native = [item for item in entries if item.get("category") == "native_device"]
-        status = "native" if native and not transitional else "transitional"
+        excluded = [item for item in entries if item.get("category") == "excluded_device"]
+        status = "native" if native and not transitional else "excluded" if excluded and not native else "transitional"
         print(f"- {provider}: {status}; requires_longhouse_cli={bool(contract.get('requires_longhouse_cli'))}")
         for item in entries:
             if item.get("category") in {"server_only", "test_only"}:

@@ -36,6 +36,14 @@ pub struct StartResult {
     pub server_url: String,
 }
 
+#[derive(serde::Deserialize)]
+struct ExistingState {
+    run_id: String,
+    pid: u32,
+    provider_session_id: String,
+    server_url: String,
+}
+
 pub fn start(config: StartConfig) -> Result<StartResult> {
     let session_id = normalize_uuid(&config.session_id, "session_id")?;
     let run_id = normalize_uuid(&config.run_id, "run_id")?;
@@ -55,17 +63,25 @@ pub fn start(config: StartConfig) -> Result<StartResult> {
         bail!("unsupported OpenCode launch mode");
     }
     let state_dir = state_dir(config.claude_dir.as_deref())?;
+    let _start_lock = acquire_start_lock(&state_dir.join(format!("{session_id}.start.lock")))?;
     let state_path = state_dir.join(format!("{session_id}.json"));
     if state_path.exists() {
-        let stale_pid = fs::read(&state_path)
+        let existing = fs::read(&state_path)
             .ok()
-            .and_then(|raw| serde_json::from_slice::<serde_json::Value>(&raw).ok())
-            .and_then(|value| value.get("pid").and_then(serde_json::Value::as_u64))
-            .and_then(|pid| u32::try_from(pid).ok());
-        if stale_pid.is_none_or(|pid| !pid_alive(pid)) {
+            .and_then(|raw| serde_json::from_slice::<ExistingState>(&raw).ok());
+        if existing.as_ref().is_none_or(|state| !pid_alive(state.pid)) {
             fs::remove_file(&state_path)?;
-        } else {
+        } else if let Some(existing) = existing {
+            if existing.run_id == run_id {
+                return Ok(StartResult {
+                    session_id,
+                    provider_session_id: existing.provider_session_id,
+                    server_url: existing.server_url,
+                });
+            }
             bail!("managed OpenCode bridge already has a live state for {session_id}; stop it before starting again");
+        } else {
+            unreachable!("live OpenCode state was handled above");
         }
     }
     fs::create_dir_all(state_dir.join("logs"))?;
@@ -150,6 +166,30 @@ pub fn start(config: StartConfig) -> Result<StartResult> {
         let _ = stop_pid(pid);
     }
     result
+}
+
+fn acquire_start_lock(lock_path: &Path) -> Result<fd_lock::RwLockWriteGuard<'static, fs::File>> {
+    if let Some(parent) = lock_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(lock_path)
+        .with_context(|| format!("open OpenCode start lock {}", lock_path.display()))?;
+    let lock = Box::leak(Box::new(fd_lock::RwLock::new(file)));
+    lock.try_write().map_err(|err| {
+        if err.kind() == std::io::ErrorKind::WouldBlock {
+            anyhow::anyhow!(
+                "another OpenCode start is in progress for {}",
+                lock_path.display()
+            )
+        } else {
+            anyhow::Error::from(err).context(format!("lock OpenCode start {}", lock_path.display()))
+        }
+    })
 }
 
 pub fn stop(

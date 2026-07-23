@@ -72,25 +72,40 @@
       "notes": "The public facade delegates the Desktop-facing fast JSON snapshot to the paired engine. Rich Python local-health remains server compatibility only until its data contract is ported."
     },
     {
-      "id": "doctor-repair",
-      "status": "planned",
-      "implementation_phase": "phase7",
+      "id": "machine-repair",
+      "status": "implemented",
+      "implementation_phase": "device cutover",
       "legacy_commands": [
-        "longhouse doctor",
-        "longhouse machine repair",
-        "longhouse connect --install"
+        "longhouse machine repair"
       ],
       "native_target_command": "longhouse machine repair",
       "phase1_inventory_ids": [
-        "doctor-cli-python",
-        "machine-cli-python",
-        "device-hook-installer-python"
+        "machine-cli-python"
       ],
       "providers": "all",
       "provider_binary_ownership": "not_applicable",
       "token_policy": "env_or_state_file",
       "cwd_policy": "not_applicable",
-      "notes": "Phase 2C adds read-only native repair recommendations via longhouse-engine device repair-plan. Phase 2D adds a narrow write-capable native repair action that can restart only an existing configured launchd/systemd Machine Agent service after LONGHOUSE_HOME safety checks. Full install, hook regeneration, desktop artifact repair, backlog replay, and token rotation remain planned; token values must stay out of argv and logs."
+      "notes": "Native repair provides read-only recommendations and a narrow write-capable action that can restart only an existing configured launchd/systemd Machine Agent service after LONGHOUSE_HOME safety checks. Full install, desktop artifact repair, backlog replay, and token rotation remain separate explicit work; token values stay out of argv and logs."
+    },
+    {
+      "id": "native-machine-setup",
+      "status": "implemented",
+      "implementation_phase": "device cutover",
+      "legacy_commands": [
+        "longhouse connect --install",
+        "longhouse doctor"
+      ],
+      "native_target_command": "longhouse auth --url <runtime-url> && longhouse machine repair --repair-service",
+      "phase1_inventory_ids": [
+        "doctor-cli-python",
+        "device-hook-installer-python"
+      ],
+      "providers": "all",
+      "provider_binary_ownership": "not_applicable",
+      "token_policy": "not_applicable",
+      "cwd_policy": "not_applicable",
+      "notes": "Native first install stores a device token supplied only through LONGHOUSE_DEVICE_TOKEN, then writes and activates the paired Machine Agent service. `longhouse connect --install` and `longhouse doctor` are not normal-device commands; server compatibility remains explicit under longhouse-python."
     },
     {
       "id": "auth",
@@ -130,8 +145,8 @@
     },
     {
       "id": "claude-managed",
-      "status": "planned",
-      "implementation_phase": "phase3",
+      "status": "implemented",
+      "implementation_phase": "device cutover",
       "legacy_commands": [
         "longhouse claude",
         "longhouse claude-channel serve",
@@ -152,12 +167,12 @@
       "provider_binary_ownership": "user_owned",
       "token_policy": "env_or_state_file",
       "cwd_policy": "strict_absolute_or_existing",
-      "notes": "Phase 3 owns Claude launch plus the native channel bridge. This does not change Claude capability claims in Phase 2."
+      "notes": "The public native facade owns Claude launch/configure and delegates channel mechanics only to its paired native engine. Python commands remain explicit longhouse-python compatibility. Installed-provider lifecycle proof is still required before release."
     },
     {
       "id": "codex-managed",
-      "status": "planned",
-      "implementation_phase": "phase4",
+      "status": "implemented",
+      "implementation_phase": "device cutover",
       "legacy_commands": [
         "longhouse codex"
       ],
@@ -171,12 +186,12 @@
       "provider_binary_ownership": "user_owned",
       "token_policy": "env_or_state_file",
       "cwd_policy": "strict_absolute_or_existing",
-      "notes": "Phase 4 should preserve the existing Rust Codex bridge and replace only the Python launch/attach wrapper."
+      "notes": "The public native facade owns Codex launch/attach/stop and delegates bridge mechanics only to its paired native engine. Python commands remain explicit longhouse-python compatibility. Installed-provider lifecycle proof is still required before release."
     },
     {
       "id": "opencode-managed",
-      "status": "planned",
-      "implementation_phase": "phase5",
+      "status": "implemented",
+      "implementation_phase": "device cutover",
       "legacy_commands": [
         "longhouse opencode",
         "longhouse opencode-channel attach",
@@ -194,7 +209,7 @@
       "provider_binary_ownership": "user_owned",
       "token_policy": "env_or_state_file",
       "cwd_policy": "strict_absolute_or_existing",
-      "notes": "Phase 5 keeps native remote OpenCode control intact while replacing local Python launch/attach compatibility."
+      "notes": "The public native facade and paired native engine own OpenCode launch/attach/stop. Python commands remain explicit longhouse-python compatibility. Runtime plugins and answerable permission pauses remain deliberately unsupported until native counterparts exist; installed-provider lifecycle proof is still required before release."
     },
     {
       "id": "antigravity-managed",
