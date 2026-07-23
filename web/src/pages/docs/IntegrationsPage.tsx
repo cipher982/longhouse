@@ -157,16 +157,16 @@ export default function IntegrationsPage() {
       </p>
       <p>
         The native Machine Agent service is installed with <code>longhouse machine repair --repair-service</code> after <code>longhouse auth</code>.
-        Runtime Host compatibility tooling can trigger a one-time import with:
+        The Runtime Host can trigger a one-time import with:
       </p>
-      <CodeBlock title="terminal">{`longhouse-python ship`}</CodeBlock>
+      <CodeBlock title="terminal">{`longhouse-server ship`}</CodeBlock>
 
       <h2>MCP Server</h2>
       <p>
         Longhouse includes a built-in MCP server that exposes session search,
         recall, and coordination to any MCP-compatible host:
       </p>
-      <CodeBlock title="terminal">{`longhouse-python mcp-server`}</CodeBlock>
+      <CodeBlock title="terminal">{`longhouse-server mcp-server`}</CodeBlock>
       <p>
         This is the same <Link to="/docs/api">Machine API</Link> surface
         exposed over the MCP protocol. Add it to your Claude Code or Codex

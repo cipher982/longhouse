@@ -262,7 +262,7 @@ install_native_pair() {
     CURRENT_INSTALL_STAGE="native_binary_install"
     local target source_dir="${LONGHOUSE_NATIVE_BIN_DIR:-}" version base_url tmp_dir checksums facade_asset engine_asset
     local native_bin_dir="$HOME/.local/bin" native_root="$HOME/.local/share/longhouse" release_id release_dir
-    local current_link="$native_root/current" next_current existing_facade legacy_facade
+    local current_link="$native_root/current" next_current existing_facade
     target="$(native_target)"; facade_asset="longhouse-${target}"; engine_asset="longhouse-engine-${target}"; tmp_dir="$(mktemp -d)"
     if [[ -n "$source_dir" ]]; then
         INSTALL_TELEMETRY_SOURCE="local"; INSTALL_TELEMETRY_PACKAGE_REF="$source_dir"; INSTALL_RELEASE_VERSION=""
@@ -283,7 +283,7 @@ install_native_pair() {
     mv "$tmp_dir/longhouse" "$release_dir/longhouse"
     mv "$tmp_dir/longhouse-engine" "$release_dir/longhouse-engine"
     "$release_dir/longhouse" verify-pair >/dev/null || { rm -rf "$tmp_dir"; return 1; }
-    existing_facade="$native_bin_dir/longhouse"; legacy_facade="$native_bin_dir/longhouse-python"
+    existing_facade="$native_bin_dir/longhouse"
     next_current="$native_root/.current-${tmp_dir##*/}"
     ln -s "releases/$release_id" "$next_current"
     ln -s "../share/longhouse/current/longhouse" "$native_bin_dir/.longhouse-native"
@@ -295,13 +295,11 @@ install_native_pair() {
     rm -f "$current_link"
     mv "$next_current" "$current_link"
     if [[ -e "$existing_facade" || -L "$existing_facade" ]] && ! "$existing_facade" verify-pair >/dev/null 2>&1; then
-        [[ ! -e "$legacy_facade" ]] || { error "Refusing to overwrite existing $legacy_facade; move it before installing the native CLI"; rm -rf "$tmp_dir"; return 1; }
-        mv "$existing_facade" "$legacy_facade"; info "Quarantined the previous Python CLI as $legacy_facade"
-    fi
-    if ! mv "$native_bin_dir/.longhouse-native" "$existing_facade"; then
-        [[ -e "$legacy_facade" ]] && mv "$legacy_facade" "$existing_facade"
+        error "Refusing to overwrite a non-native $existing_facade; remove it before installing Longhouse"
+        rm -rf "$tmp_dir"
         return 1
     fi
+    mv "$native_bin_dir/.longhouse-native" "$existing_facade"
     mv "$native_bin_dir/.longhouse-engine-native" "$native_bin_dir/longhouse-engine"
     rm -rf "$tmp_dir"; "$native_bin_dir/longhouse" verify-pair >/dev/null
     export PATH="$native_bin_dir:$PATH"

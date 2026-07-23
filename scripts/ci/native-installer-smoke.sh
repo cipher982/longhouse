@@ -28,7 +28,7 @@ mkdir -p "$PAIR_DIR" "$HOME_DIR/traps"
 cp "$ROOT_DIR/engine/target/ci/longhouse" "$PAIR_DIR/longhouse"
 cp "$ROOT_DIR/engine/target/ci/longhouse-engine" "$PAIR_DIR/longhouse-engine"
 
-for command in python python3 uv pip longhouse-python; do
+for command in python python3 uv pip; do
   cat > "$HOME_DIR/traps/$command" <<'EOF'
 #!/usr/bin/env sh
 echo "unexpected Python-path invocation: $0" >&2
@@ -36,14 +36,6 @@ exit 97
 EOF
   chmod 755 "$HOME_DIR/traps/$command"
 done
-
-mkdir -p "$HOME_DIR/.local/bin"
-cat > "$HOME_DIR/.local/bin/longhouse" <<'EOF'
-#!/usr/bin/env sh
-echo "legacy Python longhouse shim" >&2
-exit 2
-EOF
-chmod 755 "$HOME_DIR/.local/bin/longhouse"
 
 HOME="$HOME_DIR" \
 PATH="$HOME_DIR/traps:/usr/bin:/bin:/usr/sbin:/sbin" \
@@ -64,7 +56,6 @@ second_release="$(readlink "$HOME_DIR/.local/share/longhouse/current")"
 
 installed="$HOME_DIR/.local/bin/longhouse"
 [[ -x "$installed" ]]
-[[ -x "$HOME_DIR/.local/bin/longhouse-python" ]]
 HOME="$HOME_DIR" PATH="$HOME_DIR/.local/bin:$HOME_DIR/traps:/usr/bin:/bin:/usr/sbin:/sbin" "$installed" verify-pair >/dev/null
 HOME="$HOME_DIR" PATH="$HOME_DIR/.local/bin:$HOME_DIR/traps:/usr/bin:/bin:/usr/sbin:/sbin" "$installed" local-health --fast --json >/dev/null
 

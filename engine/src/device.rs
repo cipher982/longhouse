@@ -1,10 +1,4 @@
-//! Native device command surface scaffold.
-//!
-//! This module owns the first compiled `longhouse-engine device ...` surface.
-//! Phase 2A reports the native-entrypoint contract. Phase 2B adds a native
-//! fast local-health snapshot from the engine-owned status file, without
-//! porting repair, provider proof, or provider launch behavior yet. Phase 2C
-//! adds a read-only repair-plan projection over the same native status inputs.
+//! Native device command surface.
 
 use crate::config;
 use anyhow::Context;
@@ -51,8 +45,6 @@ pub struct NativeDeviceContract {
     pub schema_version: u64,
     pub native_owner: NativeOwner,
     #[serde(default)]
-    pub compatibility_shims: Vec<CompatibilityShim>,
-    #[serde(default)]
     pub commands: Vec<DeviceCommandPlan>,
 }
 
@@ -64,26 +56,10 @@ pub struct NativeOwner {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct CompatibilityShim {
-    pub script: String,
-    pub target: String,
-    pub status: String,
-    pub delegates_to: String,
-    #[serde(default)]
-    pub phase1_inventory_ids: Vec<String>,
-    pub removal_phase: String,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct DeviceCommandPlan {
     pub id: String,
     pub status: String,
-    pub implementation_phase: String,
-    #[serde(default)]
-    pub legacy_commands: Vec<String>,
     pub native_target_command: String,
-    #[serde(default)]
-    pub phase1_inventory_ids: Vec<String>,
     pub providers: Value,
     pub provider_binary_ownership: String,
     pub token_policy: String,
@@ -95,25 +71,14 @@ pub struct DeviceCommandPlan {
 struct DeviceStatus<'a> {
     schema_version: u64,
     native_owner: &'a NativeOwner,
-    compatibility_shims: Vec<CompatibilityShimStatus<'a>>,
     commands: Vec<DeviceCommandStatus<'a>>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct CompatibilityShimStatus<'a> {
-    script: &'a str,
-    delegates_to: &'a str,
-    status: &'a str,
-    removal_phase: &'a str,
 }
 
 #[derive(Debug, Clone, Serialize)]
 struct DeviceCommandStatus<'a> {
     id: &'a str,
     status: &'a str,
-    implementation_phase: &'a str,
     native_target_command: &'a str,
-    legacy_commands: &'a [String],
     providers: &'a Value,
 }
 
@@ -381,14 +346,14 @@ pub fn embedded_contract() -> anyhow::Result<NativeDeviceContract> {
 pub fn contract_from_str(raw: &str) -> anyhow::Result<NativeDeviceContract> {
     let contract: NativeDeviceContract =
         serde_json::from_str(raw).context("parsing native device entrypoint contract")?;
-    if contract.schema_version != 1 {
+    if contract.schema_version != 2 {
         anyhow::bail!(
-            "native device entrypoint contract schema_version must be 1, got {}",
+            "native device command contract schema_version must be 2, got {}",
             contract.schema_version
         );
     }
-    if contract.native_owner.binary != "longhouse-engine" {
-        anyhow::bail!("native device owner binary must be longhouse-engine");
+    if contract.native_owner.binary != "longhouse" {
+        anyhow::bail!("native device owner binary must be longhouse");
     }
     if contract.native_owner.namespace != "device" {
         anyhow::bail!("native device owner namespace must be device");
@@ -400,25 +365,13 @@ fn status_from_contract(contract: &NativeDeviceContract) -> DeviceStatus<'_> {
     DeviceStatus {
         schema_version: contract.schema_version,
         native_owner: &contract.native_owner,
-        compatibility_shims: contract
-            .compatibility_shims
-            .iter()
-            .map(|shim| CompatibilityShimStatus {
-                script: &shim.script,
-                delegates_to: &shim.delegates_to,
-                status: &shim.status,
-                removal_phase: &shim.removal_phase,
-            })
-            .collect(),
         commands: contract
             .commands
             .iter()
             .map(|command| DeviceCommandStatus {
                 id: &command.id,
                 status: &command.status,
-                implementation_phase: &command.implementation_phase,
                 native_target_command: &command.native_target_command,
-                legacy_commands: &command.legacy_commands,
                 providers: &command.providers,
             })
             .collect(),
@@ -426,36 +379,28 @@ fn status_from_contract(contract: &NativeDeviceContract) -> DeviceStatus<'_> {
 }
 
 fn print_contract_plan(contract: &NativeDeviceContract) {
-    println!("native device entrypoint plan");
+    println!("native device commands");
     println!();
     print_owner(contract);
-    println!("- compatibility shims:");
-    for shim in &contract.compatibility_shims {
-        println!(
-            "  - {} -> {} ({}, removal {})",
-            shim.script, shim.delegates_to, shim.status, shim.removal_phase
-        );
-    }
     println!("- command groups:");
     for command in &contract.commands {
         println!(
-            "  - {}: {} ({}, {})",
-            command.id, command.native_target_command, command.status, command.implementation_phase
+            "  - {}: {} ({})",
+            command.id, command.native_target_command, command.status
         );
-        println!("    legacy: {}", command.legacy_commands.join(", "));
         println!("    notes: {}", command.notes);
     }
 }
 
 fn print_contract_status(contract: &NativeDeviceContract) {
-    println!("native device entrypoint status");
+    println!("native device status");
     println!();
     print_owner(contract);
     println!("- command groups:");
     for command in &contract.commands {
         println!(
-            "  - {}: {} -> {} ({})",
-            command.id, command.status, command.native_target_command, command.implementation_phase
+            "  - {}: {} -> {}",
+            command.id, command.status, command.native_target_command
         );
     }
 }
@@ -776,7 +721,7 @@ where
             Some(service),
             before_health,
             None,
-            vec!["Phase 2D supports existing launchd and systemd user services only."],
+            vec!["Repair supports existing launchd and systemd user services only."],
         ));
     }
 
@@ -830,16 +775,14 @@ where
     if service.native_engine_matches != Some(true) {
         return Ok(native_repair_execution_result(
             dry_run,
-            "rejected_legacy_service",
-            "Longhouse found a non-native Machine Agent service",
+            "rejected_service_mismatch",
+            "Longhouse refused to restart an unrecognized Machine Agent service",
             Vec::new(),
             machine_state,
             Some(service),
             before_health,
             None,
-            vec![
-                "Run longhouse machine repair --repair-service to replace the legacy service with the paired native engine.",
-            ],
+            vec!["The service must use the paired longhouse-engine executable."],
         ));
     }
 
@@ -853,7 +796,7 @@ where
             Some(service),
             before_health,
             None,
-            vec!["Phase 2D supports existing launchd and systemd user services only."],
+            vec!["Repair supports existing launchd and systemd user services only."],
         ));
     };
 
@@ -876,7 +819,7 @@ where
             None,
             vec![
                 "Dry run only; no service restart was attempted.",
-                "Native repair does not regenerate service files, hooks, desktop artifacts, or tokens in Phase 2D.",
+                "Native repair does not regenerate service files, hooks, desktop artifacts, or tokens.",
             ],
         ));
     }
@@ -982,7 +925,7 @@ where
             None,
             before_health,
             None,
-            vec!["Phase 2E supports launchd and systemd user services only."],
+            vec!["Service repair supports launchd and systemd user services only."],
         ));
     }
 
@@ -1176,7 +1119,7 @@ where
                     Some(service),
                     before_health,
                     None,
-                    vec!["Native service repair did not attempt fallback process killing or legacy service cleanup."],
+                    vec!["Native service repair does not kill fallback processes."],
                 ));
             }
         }
@@ -1521,7 +1464,7 @@ fn native_repair_plan_from_parts(
         suggested_actions,
         notes: vec![
             "This command only reports native repair recommendations; use the listed native commands to act.",
-            "Normal installed-device commands never route through the Python compatibility CLI.",
+            "Normal installed-device commands use the paired native binaries.",
         ],
     }
 }
@@ -1543,7 +1486,7 @@ fn repair_actions_with_inspection(
         id: "machine_repair",
         label: "Repair the configured Longhouse machine",
         command: Some("longhouse machine repair".to_string()),
-        status: "compatibility_shim",
+        status: "available",
     }];
     if !health.reasons.is_empty() {
         actions.push(NativeRepairAction {
@@ -2227,17 +2170,12 @@ fn looks_like_longhouse_service(platform: NativeServicePlatform, raw: &str) -> b
             let has_label = raw.contains(&format!("<string>{LAUNCHD_LABEL}</string>"));
             let native_engine =
                 raw.contains("longhouse-engine") && raw.contains("<string>connect</string>");
-            let legacy_python = raw.contains("<string>/usr/bin/python")
-                && (raw.contains("<string>zerg</string>")
-                    || raw.contains("<string>longhouse</string>"));
-            has_label && (native_engine || legacy_python)
+            has_label && native_engine
         }
         NativeServicePlatform::Linux => {
             let has_description = raw.contains("Description=Longhouse Engine - Session Sync");
             let native_engine = raw.contains("longhouse-engine") && raw.contains(" connect");
-            let legacy_python =
-                raw.contains("python") && (raw.contains(" zerg") || raw.contains(" longhouse"));
-            has_description && (native_engine || legacy_python)
+            has_description && native_engine
         }
         NativeServicePlatform::Unsupported => false,
     }
@@ -2819,16 +2757,16 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
 
     #[test]
-    fn embedded_contract_marks_native_owner_but_not_command_groups() {
+    fn embedded_contract_describes_available_native_commands() {
         let contract = embedded_contract().unwrap();
-        assert_eq!(contract.native_owner.binary, "longhouse-engine");
+        assert_eq!(contract.native_owner.binary, "longhouse");
         assert_eq!(contract.native_owner.namespace, "device");
-        assert_eq!(contract.native_owner.status, "native");
-        assert!(contract.commands.len() >= 8);
+        assert_eq!(contract.native_owner.status, "available");
+        assert!(contract.commands.len() >= 6);
         assert!(contract
             .commands
             .iter()
-            .all(|command| command.status == "planned"));
+            .all(|command| matches!(command.status.as_str(), "available" | "excluded")));
     }
 
     #[test]
@@ -2836,29 +2774,29 @@ mod tests {
         let contract = embedded_contract().unwrap();
         let status = status_from_contract(&contract);
         let value = serde_json::to_value(status).unwrap();
-        assert_eq!(value["schema_version"].as_u64(), Some(1));
-        assert_eq!(value["native_owner"]["status"].as_str(), Some("native"));
+        assert_eq!(value["schema_version"].as_u64(), Some(2));
+        assert_eq!(value["native_owner"]["status"].as_str(), Some("available"));
         assert!(value["commands"]
             .as_array()
             .unwrap()
             .iter()
-            .any(|command| command["id"] == "device-root"
-                && command["native_target_command"] == "longhouse-engine device"));
+            .any(|command| command["id"] == "codex-managed"
+                && command["native_target_command"] == "longhouse codex"));
     }
 
     #[test]
     fn contract_rejects_wrong_schema_version() {
         let err = contract_from_str(
             r#"{
-                "schema_version": 2,
-                "native_owner": {"binary": "longhouse-engine", "namespace": "device", "status": "native"},
+                "schema_version": 1,
+                "native_owner": {"binary": "longhouse", "namespace": "device", "status": "available"},
                 "commands": []
             }"#,
         )
         .unwrap_err()
         .to_string();
 
-        assert!(err.contains("schema_version must be 1"));
+        assert!(err.contains("schema_version must be 2"));
     }
 
     #[test]
@@ -3855,7 +3793,7 @@ Environment="CLAUDE_CONFIG_DIR=/tmp/claude" "LONGHOUSE_HOME={}" "PATH=/bin"
     }
 
     #[test]
-    fn native_repair_refuses_to_restart_a_legacy_python_service() {
+    fn native_repair_refuses_to_restart_an_unrecognized_service() {
         let state = tempfile::tempdir().unwrap();
         let home = tempfile::tempdir().unwrap();
         write_configured_machine_state(state.path());
@@ -3875,11 +3813,11 @@ Environment="CLAUDE_CONFIG_DIR=/tmp/claude" "LONGHOUSE_HOME={}" "PATH=/bin"
             false,
             NativeServicePlatform::Macos,
             home.path(),
-            |_| panic!("legacy service must not be restarted"),
+            |_| panic!("unrecognized service must not be restarted"),
         )
         .unwrap();
 
-        assert_eq!(execution.state, "rejected_legacy_service");
+        assert_eq!(execution.state, "rejected_service_mismatch");
         assert_eq!(
             execution.service.unwrap().native_engine_matches,
             Some(false)
@@ -4329,7 +4267,6 @@ Environment="CLAUDE_CONFIG_DIR=/tmp/claude" "LONGHOUSE_HOME={}" "PATH=/bin"
             }),
         );
         let mut commands = Vec::new();
-
         let execution = collect_native_service_artifact_repair_execution_with_runner(
             Some(state.path()),
             false,
@@ -4371,7 +4308,6 @@ Environment="CLAUDE_CONFIG_DIR=/tmp/claude" "LONGHOUSE_HOME={}" "PATH=/bin"
             }),
         );
         let mut commands = Vec::new();
-
         let execution = collect_native_service_artifact_repair_execution_with_runner(
             Some(state.path()),
             false,
@@ -4422,7 +4358,6 @@ Environment="CLAUDE_CONFIG_DIR=/tmp/claude" "LONGHOUSE_HOME={}" "PATH=/bin"
         .unwrap();
         write_service_artifact(&plan).unwrap();
         let mut commands = Vec::new();
-
         let execution = collect_native_service_artifact_repair_execution_with_runner(
             Some(state.path()),
             false,
@@ -4444,7 +4379,7 @@ Environment="CLAUDE_CONFIG_DIR=/tmp/claude" "LONGHOUSE_HOME={}" "PATH=/bin"
     }
 
     #[test]
-    fn native_service_repair_migrates_a_matching_legacy_python_service() {
+    fn native_service_repair_rejects_an_unrecognized_service() {
         let state = tempfile::tempdir().unwrap();
         let home = tempfile::tempdir().unwrap();
         let engine = write_fake_engine(home.path());
@@ -4459,7 +4394,6 @@ Environment="CLAUDE_CONFIG_DIR=/tmp/claude" "LONGHOUSE_HOME={}" "PATH=/bin"
             ),
         )
         .unwrap();
-        let mut commands = Vec::new();
 
         let execution = collect_native_service_artifact_repair_execution_with_runner(
             Some(state.path()),
@@ -4467,21 +4401,11 @@ Environment="CLAUDE_CONFIG_DIR=/tmp/claude" "LONGHOUSE_HOME={}" "PATH=/bin"
             NativeServicePlatform::Macos,
             home.path(),
             service_repair_options(&engine),
-            |command| {
-                commands.push(command.id);
-                Ok(())
-            },
+            |_| panic!("unrecognized service must not be rewritten"),
         )
         .unwrap();
 
-        assert_eq!(execution.state, "completed");
-        assert_eq!(
-            commands,
-            vec!["unload_launchd_service", "load_launchd_service"]
-        );
-        assert!(std::fs::read_to_string(path)
-            .unwrap()
-            .contains(engine.to_string_lossy().as_ref()));
+        assert_eq!(execution.state, "rejected_existing_service_ambiguous");
     }
 
     #[test]

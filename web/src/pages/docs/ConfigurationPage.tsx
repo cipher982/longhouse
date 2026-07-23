@@ -21,14 +21,14 @@ export default function ConfigurationPage() {
         protection:
       </p>
       <CodeBlock title="terminal">
-        {`LONGHOUSE_PASSWORD=your-password longhouse-python serve`}
+        {`LONGHOUSE_PASSWORD=your-password longhouse-server serve`}
       </CodeBlock>
       <p>
         For production, you can also use a pre-hashed password to avoid passing
         the raw value in the environment:
       </p>
       <CodeBlock title="terminal">
-        {`LONGHOUSE_PASSWORD_HASH="$2b$12$..." longhouse-python serve`}
+        {`LONGHOUSE_PASSWORD_HASH="$2b$12$..." longhouse-server serve`}
       </CodeBlock>
       <div className="docs-callout">
         <p>
@@ -42,7 +42,7 @@ export default function ConfigurationPage() {
       <h2>Port</h2>
       <p>Default port is 8080. Override with:</p>
       <CodeBlock title="terminal">
-        {`longhouse-python serve --port 9090`}
+        {`longhouse-server serve --port 9090`}
       </CodeBlock>
 
       <h2>Data location</h2>
@@ -52,7 +52,7 @@ export default function ConfigurationPage() {
         <code>DATABASE_URL</code> environment variable:
       </p>
       <CodeBlock title="terminal">
-        {`DATABASE_URL=sqlite:///path/to/your.db longhouse-python serve`}
+        {`DATABASE_URL=sqlite:///path/to/your.db longhouse-server serve`}
       </CodeBlock>
 
       <h2>Environment variables</h2>
@@ -123,7 +123,7 @@ export LONGHOUSE_PASSWORD="your-password"
 export LONGHOUSE_HOST="0.0.0.0"
 
 # Start
-longhouse-python serve`}
+longhouse-server serve`}
       </CodeBlock>
       <p>
         Put a reverse proxy (nginx, Caddy) in front for TLS. The hosted plan

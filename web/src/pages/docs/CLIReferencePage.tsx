@@ -12,18 +12,17 @@ export default function CLIReferencePage() {
       <h1>CLI Reference</h1>
       <p className="docs-subtitle">
         The native <code>longhouse</code> CLI owns device setup and managed
-        provider sessions. <code>longhouse-python</code> is explicit Runtime
-        Host compatibility tooling.
+        provider sessions. <code>longhouse-server</code> runs the Runtime Host.
       </p>
 
       <h2>Core Commands</h2>
 
-      <h3>longhouse-python serve</h3>
-      <p>Start the Runtime Host from its explicit server compatibility environment.</p>
+      <h3>longhouse-server serve</h3>
+      <p>Start the Runtime Host from its server environment.</p>
       <CodeBlock title="terminal">
-        {`longhouse-python serve                # default: localhost:8080
-longhouse-python serve --port 9090    # custom port
-longhouse-python serve --demo         # start with demo data`}
+        {`longhouse-server serve                # default: localhost:8080
+longhouse-server serve --port 9090    # custom port
+longhouse-server serve --demo         # start with demo data`}
       </CodeBlock>
 
       <h3>longhouse claude / codex / opencode</h3>
@@ -47,22 +46,22 @@ longhouse opencode             # start OpenCode (managed live control)`}
         Antigravity are Shadow-only in the native device release.
       </p>
 
-      <h3>longhouse-python ship</h3>
+      <h3>longhouse-server ship</h3>
       <p>
         One-time import of existing session files into the timeline. Useful
         when you want to backfill history from a machine.
       </p>
       <CodeBlock title="terminal">
-        {`longhouse-python ship                 # import all detected sessions`}
+        {`longhouse-server ship                 # import all detected sessions`}
       </CodeBlock>
 
-      <h2>Runtime Host compatibility commands</h2>
+      <h2>Runtime Host commands</h2>
 
-      <h3>longhouse-python recall</h3>
+      <h3>longhouse-server recall</h3>
       <p>Semantic search — find sessions by meaning, not just keywords.</p>
       <CodeBlock title="terminal">
-        {`longhouse-python recall "how did I handle rate limiting"
-longhouse-python recall "the session where CI was fixed"`}
+        {`longhouse-server recall "how did I handle rate limiting"
+longhouse-server recall "the session where CI was fixed"`}
       </CodeBlock>
       <p>
         Full-text keyword search is available through the browser timeline and
@@ -71,44 +70,44 @@ longhouse-python recall "the session where CI was fixed"`}
 
       <h2>Session Control</h2>
 
-      <h3>longhouse-python wall</h3>
+      <h3>longhouse-server wall</h3>
       <p>List active and recent sessions, scoped to the current project or machine.</p>
       <CodeBlock title="terminal">
-        {`longhouse-python wall                 # human-readable
-longhouse-python wall --json          # machine-readable`}
+        {`longhouse-server wall                 # human-readable
+longhouse-server wall --json          # machine-readable`}
       </CodeBlock>
 
-      <h3>longhouse-python peers</h3>
+      <h3>longhouse-server peers</h3>
       <p>Show connected peers and runner machines available for remote execution.</p>
       <CodeBlock title="terminal">
-        {`longhouse-python peers`}
+        {`longhouse-server peers`}
       </CodeBlock>
 
-      <h3>longhouse-python tail</h3>
+      <h3>longhouse-server tail</h3>
       <p>Stream live events from a running session.</p>
       <CodeBlock title="terminal">
-        {`longhouse-python tail SESSION_ID`}
+        {`longhouse-server tail SESSION_ID`}
       </CodeBlock>
 
-      <h3>longhouse-python message</h3>
+      <h3>longhouse-server message</h3>
       <p>Send a directed message to a session's inbox.</p>
       <CodeBlock title="terminal">
-        {`longhouse-python message SESSION_ID "Check the failing test"
-longhouse-python messages ack MESSAGE_ID  # acknowledge a message`}
+        {`longhouse-server message SESSION_ID "Check the failing test"
+longhouse-server messages ack MESSAGE_ID  # acknowledge a message`}
       </CodeBlock>
 
-      <h3>longhouse-python continue</h3>
+      <h3>longhouse-server continue</h3>
       <p>Continue a stopped session from its recovered context.</p>
       <CodeBlock title="terminal">
-        {`longhouse-python continue SESSION_ID`}
+        {`longhouse-server continue SESSION_ID`}
       </CodeBlock>
 
-      <h3>longhouse-python sessions</h3>
+      <h3>longhouse-server sessions</h3>
       <p>Inspect session detail and events.</p>
       <CodeBlock title="terminal">
-        {`longhouse-python sessions get SESSION_ID --json
-longhouse-python sessions events SESSION_ID
-longhouse-python sessions continue SESSION_ID`}
+        {`longhouse-server sessions get SESSION_ID --json
+longhouse-server sessions events SESSION_ID
+longhouse-server sessions continue SESSION_ID`}
       </CodeBlock>
 
       <h3>longhouse auth</h3>

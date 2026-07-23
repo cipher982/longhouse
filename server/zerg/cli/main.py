@@ -10,15 +10,8 @@ import typer
 import zerg.bootstrap_sqlite  # noqa: F401
 from zerg.build_info import BuildIdentityMissing
 from zerg.build_info import load as load_build_identity
-from zerg.cli.antigravity import antigravity
-from zerg.cli.antigravity_channel import app as antigravity_channel_app
 from zerg.cli.apns_smoke import apns_smoke_command
 from zerg.cli.archive import app as archive_app
-from zerg.cli.claude import claude
-from zerg.cli.claude_channel import app as claude_channel_app
-from zerg.cli.codex import app as codex_app
-from zerg.cli.connect import auth
-from zerg.cli.connect import connect as connect_command
 from zerg.cli.connect import recall
 from zerg.cli.connect import ship
 from zerg.cli.coordination import message
@@ -26,16 +19,8 @@ from zerg.cli.coordination import messages_app
 from zerg.cli.coordination import peers
 from zerg.cli.coordination import tail
 from zerg.cli.coordination import wall
-from zerg.cli.cursor import app as cursor_app
-from zerg.cli.doctor import doctor
-from zerg.cli.local_health import app as local_health_app
-from zerg.cli.machine import app as machine_app
 from zerg.cli.mcp_serve import mcp_server
 from zerg.cli.onboard import onboard
-from zerg.cli.opencode import opencode
-from zerg.cli.opencode_bridge import app as opencode_bridge_app
-from zerg.cli.opencode_channel import app as opencode_channel_app
-from zerg.cli.provider_live import app as provider_live_app
 from zerg.cli.runtime_artifact_smoke import runtime_artifact_install_command
 from zerg.cli.runtime_artifact_smoke import runtime_artifact_smoke_command
 from zerg.cli.serve import hash_password
@@ -545,31 +530,14 @@ app.add_typer(sessions_app, name="sessions", help="Session inspection commands")
 app.add_typer(config_app, name="config", help="Configuration management")
 app.add_typer(db_app, name="db", help="SQLite database diagnostics and maintenance")
 app.add_typer(storage_migrate_app, name="storage-migrate", help="Convert the legacy corpus to storage-v2")
-app.add_typer(claude_channel_app, name="claude-channel", help="Claude channel bridge commands", hidden=True)
-app.add_typer(opencode_bridge_app, name="opencode-bridge", help="OpenCode bridge commands", hidden=True)
-app.add_typer(opencode_channel_app, name="opencode-channel", help="OpenCode server bridge commands", hidden=True)
-app.add_typer(antigravity_channel_app, name="antigravity-channel", help="Antigravity hook-inbox commands", hidden=True)
-app.add_typer(codex_app, name="codex")
-app.add_typer(cursor_app, name="cursor")
-app.add_typer(local_health_app, name="local-health")
-app.add_typer(machine_app, name="machine", help="Machine runtime repair and reconciliation")
 app.add_typer(archive_app, name="archive", help="Archive backlog inspection and control")
-app.add_typer(provider_live_app, name="provider-live", help="Managed-provider live proof canaries")
 
-for command in (serve, status, claude, wall, peers, message, tail, auth, ship, recall):
+for command in (serve, status, wall, peers, message, tail, ship, recall):
     app.command()(command)
 
 app.command(name="hash-password")(hash_password)
 
-app.command(context_settings={"allow_extra_args": True, "ignore_unknown_options": True})(opencode)
-app.command(name="agy", context_settings={"allow_extra_args": True, "ignore_unknown_options": True})(antigravity)
-app.command(
-    name="antigravity",
-    hidden=True,
-    context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
-)(antigravity)
 app.command(name="continue")(continue_session)
-app.command(name="connect")(connect_command)
 app.command(name="version")(version_command)
 app.command(name="upgrade")(upgrade_command)
 app.command(hidden=True, name="record-install")(record_install_command)
@@ -740,7 +708,7 @@ def rebuild_session(
         raise typer.Exit(code=1)
 
 
-for command in (onboard, doctor):
+for command in (onboard,):
     app.command()(command)
 
 app.command(hidden=True)(mcp_server)

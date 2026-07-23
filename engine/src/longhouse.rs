@@ -126,7 +126,7 @@ struct ClaudeLaunchArgs {
 
 #[derive(Args)]
 struct LocalHealthArgs {
-    /// Kept for Desktop and existing CLI compatibility; the native snapshot is always fast.
+    /// Return the native snapshot immediately.
     #[arg(long)]
     fast: bool,
     /// Emit the snapshot as JSON.
@@ -473,14 +473,6 @@ fn configure_claude_hooks(claude_dir: Option<PathBuf>) -> anyhow::Result<()> {
         &user_config_path,
         format!("{}\n", serde_json::to_string_pretty(&user_config)?),
     )?;
-    let legacy_gate = claude_dir.join("hooks/longhouse-permission-gate.py");
-    if legacy_gate.exists() {
-        std::fs::remove_file(&legacy_gate)?;
-    }
-    let legacy_lifecycle = claude_dir.join("hooks/longhouse-hook.sh");
-    if legacy_lifecycle.exists() {
-        std::fs::remove_file(&legacy_lifecycle)?;
-    }
     println!(
         "Configured native Claude hooks in {}",
         settings_path.display()
@@ -1922,13 +1914,6 @@ mod tests {
         let claude_dir = temp.path().join(".claude");
         let engine = temp.path().join("longhouse engine");
         std::fs::write(&engine, "").unwrap();
-        std::fs::create_dir_all(claude_dir.join("hooks")).unwrap();
-        std::fs::write(
-            claude_dir.join("hooks/longhouse-permission-gate.py"),
-            "legacy",
-        )
-        .unwrap();
-        std::fs::write(claude_dir.join("hooks/longhouse-hook.sh"), "legacy").unwrap();
         temp_env::with_var(
             "LONGHOUSE_ENGINE_BIN",
             Some(engine.display().to_string()),
@@ -1965,10 +1950,6 @@ mod tests {
             user_config["mcpServers"]["longhouse-channel"]["args"][0],
             "claude-channel"
         );
-        assert!(!claude_dir
-            .join("hooks/longhouse-permission-gate.py")
-            .exists());
-        assert!(!claude_dir.join("hooks/longhouse-hook.sh").exists());
     }
 
     #[test]

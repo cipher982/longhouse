@@ -32,8 +32,7 @@ longhouse machine repair --repair-service
 
 The shell installer installs the native pair. On macOS it also drops
 `Longhouse.app` into `/Applications`; open it to finish setup. Runtime Host
-operators who deliberately need the Python server compatibility CLI install
-`longhouse-python` separately in that server environment.
+operators install `longhouse-server` in that server environment.
 
 ## First Session
 
@@ -48,12 +47,12 @@ OpenCode Helm supports send, interrupt, and terminate but not active-turn steer 
 Bare provider CLI sessions still get ingested into the timeline — they stay unmanaged: searchable and observable, but without Longhouse-owned remote control.
 
 The web UI lives at `http://localhost:8080`. Runtime Host administration is a
-separate server lane and uses its explicit compatibility entrypoint:
+separate server lane and uses `longhouse-server`:
 
 ```bash
-longhouse-python wall --json
-longhouse-python recall "that auth refresh bug from last week"
-longhouse-python tail <session-id>
+longhouse-server wall --json
+longhouse-server recall "that auth refresh bug from last week"
+longhouse-server tail <session-id>
 ```
 
 ## Durable Self-Host
@@ -63,11 +62,11 @@ A laptop runtime stops when the laptop sleeps. For real durability, run the Runt
 **On the always-on box** — a public bind requires auth, so set it up first:
 
 ```bash
-export LONGHOUSE_PASSWORD_HASH="$(longhouse-python hash-password)"   # prompts for a password
+export LONGHOUSE_PASSWORD_HASH="$(longhouse-server hash-password)"   # prompts for a password
 export JWT_SECRET=$(openssl rand -hex 32)
 export INTERNAL_API_SECRET=$(openssl rand -hex 32)
 
-longhouse-python serve --host 0.0.0.0 --domain longhouse.example.com
+longhouse-server serve --host 0.0.0.0 --domain longhouse.example.com
 ```
 
 **On each dev machine:**
@@ -78,7 +77,7 @@ longhouse auth --url https://longhouse.example.com
 longhouse machine repair --repair-service
 ```
 
-Binding beyond localhost without auth is refused by default — `longhouse-python serve` exits and tells you what to set. The three exports above are the whole requirement: a password hash plus two random secrets. (If a trusted reverse proxy already authenticates requests, pass `--allow-public-no-auth` to accept the risk.) For TLS, put Caddy in front — `reverse_proxy 127.0.0.1:8080` is the whole config.
+Binding beyond localhost without auth is refused by default — `longhouse-server serve` exits and tells you what to set. The three exports above are the whole requirement: a password hash plus two random secrets. (If a trusted reverse proxy already authenticates requests, pass `--allow-public-no-auth` to accept the risk.) For TLS, put Caddy in front — `reverse_proxy 127.0.0.1:8080` is the whole config.
 
 Or skip running the box — hosted (we run the Runtime Host for you) is available at <https://control.longhouse.ai/signup>.
 

@@ -61,7 +61,7 @@ longhouse machine repair --repair-service`}
       <div className="docs-callout">
         <p>
           <strong>No sessions yet?</strong> Use the hosted Runtime Host or run
-          its explicit server compatibility command, <code>longhouse-python serve --demo</code>, for a safe preview.
+          <code>longhouse-server serve --demo</code> for a safe preview.
         </p>
       </div>
       <div className="docs-callout">
