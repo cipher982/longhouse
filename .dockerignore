@@ -16,7 +16,6 @@
 config/*
 !config/models.json
 !config/tool-tiers.json
-!config/tool-tiers.json
 
 !docker/
 docker/*

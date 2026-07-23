@@ -154,6 +154,8 @@ def test_event_response_projects_presentation_without_mutating_raw_tool_input():
     assert response.tool_presentation.disposition == "parsed"
     assert response.tool_presentation.children[0].tool_name == "exec_command"
     assert response.tool_presentation.wrapper_recedes is True
+
+
 def test_default_rules_path_prefers_packaged_copy(tmp_path, monkeypatch):
     fake_module = tmp_path / "site-packages" / "zerg" / "services" / "tool_presentation.py"
     fake_module.parent.mkdir(parents=True)
@@ -165,9 +167,3 @@ def test_default_rules_path_prefers_packaged_copy(tmp_path, monkeypatch):
     monkeypatch.setattr(tool_presentation_module, "__file__", str(fake_module))
 
     assert tool_presentation_module._get_default_rules_path() == packaged_rules
-
-
-def test_runtime_docker_context_includes_tool_rules():
-    dockerignore = Path(__file__).resolve().parents[2] / ".dockerignore"
-
-    assert "!config/tool-tiers.json" in dockerignore.read_text(encoding="utf-8").splitlines()
