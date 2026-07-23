@@ -289,6 +289,30 @@ fn configure_claude_hooks(claude_dir: Option<PathBuf>) -> anyhow::Result<()> {
         .context("Claude PreToolUse hooks must be an array")?;
     pre_tool.retain(|entry| !entry.to_string().contains("longhouse-permission-gate.py"));
     pre_tool.push(json!({"hooks": [{"type": "command", "command": format!("{} claude-permission-gate", paired_engine_path()?.display()), "async": false, "timeout": 30}]}));
+    let lifecycle_command = format!("{} claude-lifecycle-hook", paired_engine_path()?.display());
+    for event in [
+        "SessionStart",
+        "Stop",
+        "UserPromptSubmit",
+        "PreToolUse",
+        "PostToolUse",
+        "PostToolUseFailure",
+        "PermissionRequest",
+        "Notification",
+    ] {
+        let entries = hooks
+            .entry(event)
+            .or_insert_with(|| json!([]))
+            .as_array_mut()
+            .with_context(|| format!("Claude {event} hooks must be an array"))?;
+        entries.retain(|entry| !entry.to_string().contains("longhouse-hook.sh"));
+        if !entries
+            .iter()
+            .any(|entry| entry.to_string().contains("claude-lifecycle-hook"))
+        {
+            entries.push(json!({"hooks": [{"type": "command", "command": lifecycle_command, "async": false, "timeout": 5}]}));
+        }
+    }
     let mut user_config: serde_json::Map<String, serde_json::Value> =
         match std::fs::read(&user_config_path) {
             Ok(raw) => serde_json::from_slice(&raw)
@@ -332,6 +356,10 @@ fn configure_claude_hooks(claude_dir: Option<PathBuf>) -> anyhow::Result<()> {
     let legacy_gate = claude_dir.join("hooks/longhouse-permission-gate.py");
     if legacy_gate.exists() {
         std::fs::remove_file(&legacy_gate)?;
+    }
+    let legacy_lifecycle = claude_dir.join("hooks/longhouse-hook.sh");
+    if legacy_lifecycle.exists() {
+        std::fs::remove_file(&legacy_lifecycle)?;
     }
     println!(
         "Configured native Claude hooks in {}",
@@ -1158,6 +1186,7 @@ mod tests {
             "legacy",
         )
         .unwrap();
+        std::fs::write(claude_dir.join("hooks/longhouse-hook.sh"), "legacy").unwrap();
         temp_env::with_var(
             "LONGHOUSE_ENGINE_BIN",
             Some(engine.display().to_string()),
@@ -1171,6 +1200,9 @@ mod tests {
         assert!(settings["hooks"]["PreToolUse"]
             .to_string()
             .contains("claude-permission-gate"));
+        assert!(settings["hooks"]["SessionStart"]
+            .to_string()
+            .contains("claude-lifecycle-hook"));
         let user_config: serde_json::Value =
             serde_json::from_slice(&std::fs::read(temp.path().join(".claude.json")).unwrap())
                 .unwrap();
@@ -1181,6 +1213,7 @@ mod tests {
         assert!(!claude_dir
             .join("hooks/longhouse-permission-gate.py")
             .exists());
+        assert!(!claude_dir.join("hooks/longhouse-hook.sh").exists());
     }
 
     #[test]

@@ -2,6 +2,7 @@ mod bench;
 mod build_identity;
 mod claude_channel_control;
 mod claude_channel_server;
+mod claude_lifecycle_hook;
 mod claude_permission_gate;
 mod claude_print;
 mod codex_app_server_canary;
@@ -569,6 +570,9 @@ enum Commands {
     /// Native Claude PreToolUse permission hook (installed by the device facade).
     ClaudePermissionGate,
 
+    /// Native Claude lifecycle hook (installed by the device facade).
+    ClaudeLifecycleHook,
+
     /// Native managed Cursor Helm control utilities
     CursorHelm {
         #[command(subcommand)]
@@ -1098,6 +1102,7 @@ fn command_name(command: &Commands) -> &'static str {
             ClaudeChannelCommands::Inspect { .. } => "claude-channel-inspect",
         },
         Commands::ClaudePermissionGate => "claude-permission-gate",
+        Commands::ClaudeLifecycleHook => "claude-lifecycle-hook",
         Commands::CursorHelm { command } => match command {
             CursorHelmCommands::Stop { .. } => "cursor-helm-stop",
             CursorHelmCommands::Send { .. } => "cursor-helm-send",
@@ -1592,6 +1597,9 @@ fn main() -> anyhow::Result<()> {
         },
         Commands::ClaudePermissionGate => {
             claude_permission_gate::run()?;
+        }
+        Commands::ClaudeLifecycleHook => {
+            claude_lifecycle_hook::run()?;
         }
         Commands::CursorHelm { command } => {
             let rt = tokio::runtime::Runtime::new()?;
