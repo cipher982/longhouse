@@ -69,6 +69,22 @@ public enum ToolTiers {
         "create_file": ToolTierMeta(tier: .action, aggregate: nil, icon: "W", label: "create", color: .success),
         "str_replace_editor": ToolTierMeta(tier: .action, aggregate: nil, icon: "E", label: "edit", color: .brand),
         "update_plan": ToolTierMeta(tier: .action, aggregate: nil, icon: "+", label: "plan", color: .accent),
+        "exec": ToolTierMeta(tier: .action, aggregate: nil, icon: "$", label: "exec", color: .warning),
+        "wait": ToolTierMeta(tier: .action, aggregate: nil, icon: "…", label: "Wait", color: .tertiary),
+        "request_user_input": ToolTierMeta(tier: .action, aggregate: nil, icon: "?", label: "Question", color: .accent),
+        "ReadFile": ToolTierMeta(tier: .context, aggregate: .read, icon: "R", label: "Read", color: .cyan),
+        "StrReplace": ToolTierMeta(tier: .action, aggregate: nil, icon: "E", label: "Edit", color: .brand),
+        "AwaitShell": ToolTierMeta(tier: .action, aggregate: nil, icon: "…", label: "Wait", color: .tertiary),
+        "view_file": ToolTierMeta(tier: .context, aggregate: .read, icon: "R", label: "Read", color: .cyan),
+        "grep_search": ToolTierMeta(tier: .noise, aggregate: .search, icon: "~", label: "Search", color: .muted),
+        "run_command": ToolTierMeta(tier: .action, aggregate: nil, icon: "$", label: "Shell", color: .warning),
+        "list_dir": ToolTierMeta(tier: .noise, aggregate: .list, icon: "/", label: "List", color: .muted),
+        "search_web": ToolTierMeta(tier: .context, aggregate: nil, icon: "S", label: "Search", color: .secondary),
+        "replace_file_content": ToolTierMeta(tier: .action, aggregate: nil, icon: "E", label: "Edit", color: .brand),
+        "multi_replace_file_content": ToolTierMeta(tier: .action, aggregate: nil, icon: "E", label: "Edit", color: .brand),
+        "write_to_file": ToolTierMeta(tier: .action, aggregate: nil, icon: "W", label: "Write", color: .success),
+        "read_url_content": ToolTierMeta(tier: .context, aggregate: nil, icon: "W", label: "Fetch", color: .cyan),
+        "invoke_subagent": ToolTierMeta(tier: .action, aggregate: nil, icon: "A", label: "Agent", color: .tertiary),
     ]
 
     public static let mcpNamespaces: [String: McpNamespaceMeta] = [

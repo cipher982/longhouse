@@ -2,6 +2,11 @@ import XCTest
 @testable import Longhouse
 
 final class TimelineBuilderTests: XCTestCase {
+    func testExactAliasesAlwaysApplyAndUnknownsStayRaw() {
+        XCTAssertEqual(ToolTiers.resolve("view_file").label, "Read")
+        XCTAssertEqual(ToolTiers.resolve("CallDynamicTool").label, "CallDynamicTool")
+    }
+
     private func event(
         id: Int,
         role: String,

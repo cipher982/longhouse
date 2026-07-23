@@ -56,7 +56,7 @@ class ParsedEvent:
     role: str  # 'user' | 'assistant' | 'tool' | 'system'
     content_text: str | None = None
     tool_name: str | None = None
-    tool_input_json: dict | None = None
+    tool_input_json: object | None = None
     tool_output_text: str | None = None
     tool_call_id: str | None = None  # cross-provider call/result linkage ID
     source_offset: int = 0  # byte offset in file
@@ -215,7 +215,7 @@ def _extract_assistant_events(
                 timestamp=timestamp,
                 role="assistant",
                 tool_name=tool_name,
-                tool_input_json=tool_input if isinstance(tool_input, dict) else None,
+                tool_input_json=tool_input,
                 tool_call_id=tool_id or None,
                 source_offset=offset,
                 raw_type="assistant",

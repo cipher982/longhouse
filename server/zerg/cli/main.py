@@ -29,6 +29,7 @@ from zerg.cli.serve import status
 from zerg.cli.sessions import app as sessions_app
 from zerg.cli.sessions import continue_session
 from zerg.cli.storage_migrate import app as storage_migrate_app
+from zerg.cli.translation import app as translation_app
 from zerg.cli.update_manager import maybe_notify_update
 from zerg.cli.update_manager import record_install_command
 from zerg.cli.update_manager import upgrade_command
@@ -530,6 +531,7 @@ app.add_typer(sessions_app, name="sessions", help="Session inspection commands")
 app.add_typer(config_app, name="config", help="Configuration management")
 app.add_typer(db_app, name="db", help="SQLite database diagnostics and maintenance")
 app.add_typer(storage_migrate_app, name="storage-migrate", help="Convert the legacy corpus to storage-v2")
+app.add_typer(translation_app, name="translation", help="Read-only provider tool translation evaluation")
 app.add_typer(archive_app, name="archive", help="Archive backlog inspection and control")
 
 for command in (serve, status, wall, peers, message, tail, ship, recall):

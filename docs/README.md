@@ -32,3 +32,5 @@ source of truth — the code and the canonical specs above are.
 ## Runbooks
 
 Operational runbooks live in [`runbooks/`](runbooks/).
+
+- [`runbooks/production-logging.md`](runbooks/production-logging.md) — production stdout retention and journal queries

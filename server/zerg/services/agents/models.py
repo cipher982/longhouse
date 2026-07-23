@@ -23,7 +23,7 @@ class EventIngest(BaseModel):
     role: str = Field(..., description="Message role: user, assistant, tool, system")
     content_text: Optional[str] = Field(None, description="Message text content")
     tool_name: Optional[str] = Field(None, description="Tool name if this is a tool call")
-    tool_input_json: Optional[Dict[str, Any]] = Field(None, description="Tool call parameters")
+    tool_input_json: Any = Field(None, description="Lossless JSON tool input; providers may emit objects, strings, or scalars")
     tool_output_text: Optional[str] = Field(None, description="Tool result")
     tool_call_id: Optional[str] = Field(
         None,
