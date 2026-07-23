@@ -1336,7 +1336,7 @@ def _run_antigravity_plugin_command(
     )
 
 
-def _antigravity_plugin_argv(binary: str, *args: str) -> list[str]:
+def _antigravity_plugin_argv(binary: str, *args: str, strict_provider_binary: bool = False) -> list[str]:
     """Build an agy plugin command that still works under isolated HOME.
 
     The maintainer's dogfood binary may be a tiny wrapper that resolves the real agy as
@@ -1350,14 +1350,14 @@ def _antigravity_plugin_argv(binary: str, *args: str) -> list[str]:
         text = path.read_text(encoding="utf-8", errors="ignore")[:512] if path.is_file() else ""
     except OSError:
         text = ""
-    if "$HOME/.local/bin/agy" in text and "--dangerously-skip-permissions" in text:
+    if not strict_provider_binary and "$HOME/.local/bin/agy" in text and "--dangerously-skip-permissions" in text:
         direct = Path.home() / ".local" / "bin" / "agy"
         if direct.is_file() and os.access(direct, os.X_OK):
             return [str(direct), "--dangerously-skip-permissions", *args]
     return [binary, *args]
 
 
-def _run_antigravity_plugin_contract(binary: str, root: Path) -> dict[str, Any]:
+def _run_antigravity_plugin_contract(binary: str, root: Path, *, strict_provider_binary: bool = False) -> dict[str, Any]:
     plugin_root, _global_hooks_path = _write_antigravity_canary_plugin(root / "plugin")
     isolated_home = root / "home"
 
@@ -1368,6 +1368,7 @@ def _run_antigravity_plugin_contract(binary: str, root: Path) -> dict[str, Any]:
                 "plugin",
                 "validate",
                 str(plugin_root),
+                strict_provider_binary=strict_provider_binary,
             ),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
@@ -1382,7 +1383,13 @@ def _run_antigravity_plugin_contract(binary: str, root: Path) -> dict[str, Any]:
 
     try:
         install = _run_antigravity_plugin_command(
-            _antigravity_plugin_argv(binary, "plugin", "install", str(plugin_root)),
+            _antigravity_plugin_argv(
+                binary,
+                "plugin",
+                "install",
+                str(plugin_root),
+                strict_provider_binary=strict_provider_binary,
+            ),
             home=isolated_home,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
@@ -1397,7 +1404,15 @@ def _run_antigravity_plugin_contract(binary: str, root: Path) -> dict[str, Any]:
         )
 
     try:
-        listed = _run_antigravity_plugin_command(_antigravity_plugin_argv(binary, "plugin", "list"), home=isolated_home)
+        listed = _run_antigravity_plugin_command(
+            _antigravity_plugin_argv(
+                binary,
+                "plugin",
+                "list",
+                strict_provider_binary=strict_provider_binary,
+            ),
+            home=isolated_home,
+        )
     except (OSError, subprocess.TimeoutExpired) as exc:
         return _fail("antigravity_plugin_list_failed", f"{type(exc).__name__}: {exc}")
     if listed.returncode != 0:
@@ -1926,7 +1941,11 @@ def run_antigravity_live_canary(args: argparse.Namespace, root: Path) -> dict[st
     canaries = {
         "binary_identity": binary_identity,
         "command_shape": _run_antigravity_command_shape(binary),
-        "plugin_contract": _run_antigravity_plugin_contract(binary, root),
+        "plugin_contract": _run_antigravity_plugin_contract(
+            binary,
+            root,
+            strict_provider_binary=bool(getattr(args, "strict_provider_binary", False)),
+        ),
         "global_hooks_contract": _run_antigravity_global_hooks_contract(root / "plugin" / "global-hooks.json"),
         "hook_inbox_claim_contract": _run_antigravity_hook_inbox_contract(root),
     }

@@ -48,6 +48,8 @@ def _request(
     executable_identity: str,
     expected_version: str | None = None,
     profile: str | None = None,
+    producer_class: str = "local_diagnostic",
+    run_reference: str | None = None,
 ) -> Path:
     registered_profile, _output, registered_version = PROFILES[provider]
     payload = {
@@ -58,10 +60,12 @@ def _request(
         "expected_provider_version": expected_version or registered_version,
         "expected_executable_identity": executable_identity,
         "invocation_id": f"{provider}-identity-1",
-        "producer_class": "local_diagnostic",
+        "producer_class": producer_class,
         "producer_version": "test",
         "longhouse_git_sha": TEST_SHA,
     }
+    if run_reference is not None:
+        payload["run_reference"] = run_reference
     path = tmp_path / f"{provider}-request.json"
     path.write_text(json.dumps(payload), encoding="utf-8")
     return path
@@ -194,3 +198,44 @@ def test_digest_mismatch_rejects_each_provider_before_execution(tmp_path: Path, 
 
     assert not marker.exists()
     assert not output.exists()
+
+
+def test_release_factory_request_requires_run_reference_before_execution(tmp_path: Path) -> None:
+    binary, executable_identity, marker = _fake_binary(tmp_path, "claude", "2.1.198 (Claude Code)")
+    output = tmp_path / "output"
+
+    with pytest.raises(identity.RequestError, match="release_factory requests require run_reference"):
+        provider_qualification.run(
+            _request(
+                tmp_path,
+                provider="claude",
+                binary=binary,
+                executable_identity=executable_identity,
+                producer_class="release_factory",
+            ),
+            output,
+        )
+
+    assert not marker.exists()
+    assert not output.exists()
+
+
+def test_release_factory_records_preserve_run_reference(tmp_path: Path) -> None:
+    binary, executable_identity, _marker = _fake_binary(tmp_path, "claude", "2.1.198 (Claude Code)")
+    output = tmp_path / "output"
+
+    provider_qualification.run(
+        _request(
+            tmp_path,
+            provider="claude",
+            binary=binary,
+            executable_identity=executable_identity,
+            producer_class="release_factory",
+            run_reference="github-actions:run/123/job/456",
+        ),
+        output,
+    )
+
+    records = json.loads((output / "proof-bundle.json").read_text())["records"]
+    assert {record["producer_class"] for record in records} == {"release_factory"}
+    assert {record["run_reference"] for record in records} == {"github-actions:run/123/job/456"}

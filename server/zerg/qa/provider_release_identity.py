@@ -43,6 +43,7 @@ REQUEST_KEYS = frozenset(
         "invocation_id",
         "producer_class",
         "producer_version",
+        "run_reference",
         "longhouse_git_sha",
     }
 )
@@ -119,7 +120,12 @@ def load_request(path: Path, *, provider: str, profile: str) -> dict[str, Any]:
         raise RequestError("schema_version must be 1")
     if payload.get("provider") != provider or payload.get("profile") != profile:
         raise RequestError("unsupported provider/profile")
-    for key in REQUEST_KEYS - {"schema_version", "provider", "profile"}:
+    for key in REQUEST_KEYS - {
+        "schema_version",
+        "provider",
+        "profile",
+        "run_reference",
+    }:
         if not isinstance(payload.get(key), str) or not payload[key].strip():
             raise RequestError(f"{key} must be a non-empty string")
     if not Path(payload["provider_bin"]).is_absolute():
@@ -128,8 +134,13 @@ def load_request(path: Path, *, provider: str, profile: str) -> dict[str, Any]:
         raise RequestError("expected_executable_identity must be sha256:<64 lowercase hex>")
     if not STRICT_SEMVER.fullmatch(payload["expected_provider_version"]):
         raise RequestError("expected_provider_version must be strict semver")
-    if payload["producer_class"] != "local_diagnostic":
-        raise RequestError("producer_class must be local_diagnostic")
+    if payload["producer_class"] not in {"local_diagnostic", "release_factory"}:
+        raise RequestError("producer_class must be local_diagnostic or release_factory")
+    run_reference = payload.get("run_reference")
+    if run_reference is not None and (not isinstance(run_reference, str) or not run_reference.strip()):
+        raise RequestError("run_reference must be a non-empty string when provided")
+    if payload["producer_class"] == "release_factory" and not run_reference:
+        raise RequestError("release_factory requests require run_reference")
     return payload
 
 
@@ -220,6 +231,7 @@ def _record(
         producer_class=request["producer_class"],
         producer_version=request["producer_version"],
         invocation_id=request["invocation_id"],
+        run_reference=request.get("run_reference"),
         platform=platform.system(),
         architecture=platform.machine(),
         raw_reference_digests=(raw_digest,),

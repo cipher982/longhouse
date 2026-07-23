@@ -10,8 +10,8 @@ import yaml
 
 from zerg.managed_provider_contract_manifest import _validate_machine_control_supports
 from zerg.managed_provider_contract_manifest import _validate_operation_evidence
-from zerg.managed_provider_contract_manifest import normalize_contract_manifest
 from zerg.managed_provider_contract_manifest import managed_provider_contract_entry_digest
+from zerg.managed_provider_contract_manifest import normalize_contract_manifest
 from zerg.managed_provider_contract_manifest import render_contract_manifest_json
 from zerg.managed_provider_contract_manifest import validate_generated_contract_manifest
 from zerg.provider_cli_contract import PROVIDER_CLI_BINARY_BY_PROVIDER
@@ -123,9 +123,7 @@ def test_provider_identity_contracts_are_manifest_backed():
         "antigravity": True,
         "cursor": False,
     }
-    assert sorted(
-        control_plane for contract in all_managed_provider_contracts() for control_plane in contract.control_planes
-    ) == sorted(
+    assert sorted(control_plane for contract in all_managed_provider_contracts() for control_plane in contract.control_planes) == sorted(
         {
             "codex_bridge",
             "codex_app_server",
@@ -140,10 +138,7 @@ def test_provider_identity_contracts_are_manifest_backed():
 
 
 def test_startup_coordination_context_support_is_explicit():
-    assert {
-        contract.provider: contract.startup_coordination_context
-        for contract in all_managed_provider_contracts()
-    } == {
+    assert {contract.provider: contract.startup_coordination_context for contract in all_managed_provider_contracts()} == {
         "codex": False,
         "claude": True,
         "opencode": False,
@@ -163,14 +158,19 @@ def test_semantic_capabilities_include_exact_coordination_and_steer_limitations(
         "coordination.message.send",
         "coordination.message.receive",
     }
-    assert set(claude.capabilities) == expected
+    assert set(claude.capabilities) == expected | {"session.launch.helm", "session.turn.start"}
     assert set(codex.capabilities) == expected
-    assert set(opencode.capabilities) == expected
+    assert set(opencode.capabilities) == expected | {"session.launch.helm", "session.reattach.helm"}
     cursor = contract_for_provider("cursor")
     antigravity = contract_for_provider("antigravity")
     assert cursor is not None and antigravity is not None
+    assert set(cursor.capabilities) == {"session.input.steer_active"}
+    assert set(antigravity.capabilities) == {
+        "session.input.steer_active",
+        "session.launch.helm",
+        "session.input.send",
+    }
     for contract in (cursor, antigravity):
-        assert set(contract.capabilities) == {"session.input.steer_active"}
         declaration = contract.capabilities["session.input.steer_active"]
         assert declaration["disposition"] == "upstream_absent"
         assert declaration["reason_code"] == "upstream_unavailable"
@@ -289,9 +289,7 @@ def test_codex_contract_keeps_helm_and_console_controls():
 
 
 def test_codex_and_managed_claude_advertise_remote_pause_answering():
-    supports_by_provider = {
-        contract.provider: set(contract.machine_control_supports) for contract in all_managed_provider_contracts()
-    }
+    supports_by_provider = {contract.provider: set(contract.machine_control_supports) for contract in all_managed_provider_contracts()}
 
     assert "codex.answer_pause" in supports_by_provider["codex"]
     assert "claude.answer_pause" in supports_by_provider["claude"]
@@ -477,9 +475,7 @@ def test_machine_control_command_projection_is_manifest_backed_for_every_provide
         if contract.can_resume and contract.run_once:
             assert f"{contract.provider}.resume_run_once" in contract.machine_control_supports
     assert run_once_supported_providers() == frozenset(
-        contract.provider
-        for contract in all_managed_provider_contracts()
-        if contract.run_once
+        contract.provider for contract in all_managed_provider_contracts() if contract.run_once
     )
 
 
@@ -628,8 +624,5 @@ def test_agents_service_package_imports_without_database_url():
         text=True,
         timeout=60,
     )
-    assert result.returncode == 0, (
-        f"agents package import failed without DATABASE_URL:\nSTDOUT:\n{result.stdout}\n"
-        f"STDERR:\n{result.stderr}"
-    )
+    assert result.returncode == 0, f"agents package import failed without DATABASE_URL:\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
     assert "IMPORT_OK" in result.stdout

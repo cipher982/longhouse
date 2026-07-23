@@ -122,9 +122,7 @@ def test_claude_provider_live_canary_maps_live_token_session_to_operation_eviden
 
     def fake_live_session(config):
         calls.append(config)
-        assert config.cwd == (
-            tmp_path / "evidence" / "claude-live-token-contract" / "workspace"
-        )
+        assert config.cwd == (tmp_path / "evidence" / "claude-live-token-contract" / "workspace")
         assert config.expected.startswith("LONGHOUSE CLAUDE LIVE TOKEN READY ")
         assert config.steer_expected.startswith("LONGHOUSE CLAUDE LIVE TOKEN STEER ")
         assert config.response_timeout_secs == 7.0
@@ -488,6 +486,13 @@ def test_antigravity_plugin_argv_unwraps_home_based_debug_wrapper(
         "plugin",
         "list",
     ]
+
+    assert plc._antigravity_plugin_argv(
+        str(wrapper),
+        "plugin",
+        "list",
+        strict_provider_binary=True,
+    ) == [str(wrapper), "plugin", "list"]
 
 
 def test_provider_live_canary_cli_exits_nonzero_on_red(tmp_path: Path) -> None:

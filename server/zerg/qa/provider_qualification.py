@@ -8,20 +8,26 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from zerg.qa import antigravity_hook_qualification
 from zerg.qa import antigravity_release_identity
+from zerg.qa import claude_real_print_qualification
 from zerg.qa import claude_release_identity
 from zerg.qa import codex_helm_interrupt
 from zerg.qa import codex_release_identity
 from zerg.qa import codex_tool_call_result
 from zerg.qa import opencode_release_identity
+from zerg.qa import opencode_server_qualification
 
 _PROFILES = {
     ("antigravity", antigravity_release_identity.PROFILE): antigravity_release_identity.run,
+    ("antigravity", antigravity_hook_qualification.PROFILE): antigravity_hook_qualification.run,
     ("claude", claude_release_identity.PROFILE): claude_release_identity.run,
+    ("claude", claude_real_print_qualification.PROFILE): claude_real_print_qualification.run,
     ("codex", codex_release_identity.PROFILE): codex_release_identity.run,
     ("codex", codex_helm_interrupt.PROFILE): codex_helm_interrupt.run,
     ("codex", codex_tool_call_result.PROFILE): codex_tool_call_result.run,
     ("opencode", opencode_release_identity.PROFILE): opencode_release_identity.run,
+    ("opencode", opencode_server_qualification.PROFILE): opencode_server_qualification.run,
 }
 
 

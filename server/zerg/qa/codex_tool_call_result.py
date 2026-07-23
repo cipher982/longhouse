@@ -134,6 +134,7 @@ def _record(
         producer_class=request["producer_class"],
         producer_version=request["producer_version"],
         invocation_id=request["invocation_id"],
+        run_reference=request.get("run_reference"),
         mode=None,
         platform=platform.system(),
         architecture=platform.machine(),

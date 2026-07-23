@@ -182,6 +182,36 @@ providers:
   transcript_binding: true
   startup_coordination_context: true
   capabilities:
+    session.launch.helm:
+      disposition: implemented
+      reason_code: semantic_proof_missing
+      policy_key: provider.claude.launch_local
+      action_gate: ceiling
+      contexts:
+        modes: [helm]
+      runtime_prerequisites: []
+      required_assertions:
+      - id: claude_cli_channel_contract_preserved
+        scenario_id: claude_real_print
+        oracle_source: server/zerg/qa/provider_release_semantic_oracles.py
+        minimum_scenario_revision: 1
+        acceptable_evidence: [live_no_token]
+        max_age_seconds: 604800
+    session.turn.start:
+      disposition: implemented
+      reason_code: semantic_proof_missing
+      policy_key: provider.claude.turn_start
+      action_gate: strict
+      contexts:
+        modes: [console]
+      runtime_prerequisites: [session_context]
+      required_assertions:
+      - id: real_print_marker_returned
+        scenario_id: claude_real_print
+        oracle_source: server/zerg/qa/provider_release_semantic_oracles.py
+        minimum_scenario_revision: 1
+        acceptable_evidence: [live_token]
+        max_age_seconds: 86400
     coordination.awareness.create:
       disposition: implemented
       reason_code: semantic_proof_missing
@@ -336,6 +366,36 @@ providers:
   transcript_binding: true
   startup_coordination_context: false
   capabilities:
+    session.launch.helm:
+      disposition: implemented
+      reason_code: semantic_proof_missing
+      policy_key: provider.opencode.launch_local
+      action_gate: ceiling
+      contexts:
+        modes: [helm]
+      runtime_prerequisites: []
+      required_assertions:
+      - id: serve_session_contract_preserved
+        scenario_id: opencode_server_contract
+        oracle_source: server/zerg/qa/provider_release_semantic_oracles.py
+        minimum_scenario_revision: 1
+        acceptable_evidence: [live_no_token]
+        max_age_seconds: 604800
+    session.reattach.helm:
+      disposition: implemented
+      reason_code: semantic_proof_missing
+      policy_key: provider.opencode.reattach
+      action_gate: ceiling
+      contexts:
+        modes: [helm]
+      runtime_prerequisites: [session_context]
+      required_assertions:
+      - id: process_restart_reattach_preserved
+        scenario_id: opencode_server_contract
+        oracle_source: server/zerg/qa/provider_release_semantic_oracles.py
+        minimum_scenario_revision: 1
+        acceptable_evidence: [live_no_token]
+        max_age_seconds: 604800
     coordination.awareness.create:
       disposition: implemented
       reason_code: semantic_proof_missing
@@ -493,6 +553,36 @@ providers:
   transcript_binding: true
   startup_coordination_context: false
   capabilities:
+    session.launch.helm:
+      disposition: implemented
+      reason_code: semantic_proof_missing
+      policy_key: provider.antigravity.launch_local
+      action_gate: ceiling
+      contexts:
+        modes: [helm]
+      runtime_prerequisites: []
+      required_assertions:
+      - id: hook_inbox_contract_preserved
+        scenario_id: antigravity_hook_inbox
+        oracle_source: server/zerg/qa/provider_release_semantic_oracles.py
+        minimum_scenario_revision: 1
+        acceptable_evidence: [live_no_token]
+        max_age_seconds: 604800
+    session.input.send:
+      disposition: implemented
+      reason_code: semantic_proof_missing
+      policy_key: provider.antigravity.send_input
+      action_gate: strict
+      contexts:
+        modes: [helm]
+      runtime_prerequisites: [session_context]
+      required_assertions:
+      - id: real_print_injection_observed
+        scenario_id: antigravity_hook_inbox
+        oracle_source: server/zerg/qa/provider_release_semantic_oracles.py
+        minimum_scenario_revision: 1
+        acceptable_evidence: [live_token]
+        max_age_seconds: 86400
     session.input.steer_active:
       disposition: upstream_absent
       reason_code: upstream_unavailable
