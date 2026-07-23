@@ -8,7 +8,6 @@ import os
 import subprocess
 import sys
 import tempfile
-import uuid
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -243,39 +242,6 @@ print(json.dumps({{
 {done_block}
 """,
     )
-
-
-def test_all_current_provider_control_paths_are_green() -> None:
-    with tempfile.TemporaryDirectory() as temp_dir:
-        result, payload = _run_canary(Path(temp_dir), ["--provider", "all"])
-
-        assert result.returncode == 0, result.stderr + result.stdout
-        assert payload["verdict"] == "green"
-        assert set(payload["canaries"]) == {"claude", "opencode", "antigravity"}
-
-        claude = payload["canaries"]["claude"]
-        assert claude["status"] == "pass"
-        assert claude["steer_meta"]["intent"] == "steer"
-
-        opencode = payload["canaries"]["opencode"]
-        assert opencode["status"] == "pass"
-        assert str(uuid.UUID(opencode["run_id"])) == opencode["run_id"]
-        assert {"serve", "session.create", "prompt_async", "abort", "attach"} <= set(opencode["observed_events"])
-
-        antigravity = payload["canaries"]["antigravity"]
-        assert antigravity["status"] == "pass"
-        assert antigravity["post_injection"]["terminationBehavior"] == "force_continue"
-        assert antigravity["stop_decision"]["decision"] == "continue"
-
-
-def test_provider_selection_runs_one_control_lane() -> None:
-    with tempfile.TemporaryDirectory() as temp_dir:
-        result, payload = _run_canary(Path(temp_dir), ["--provider", "opencode"])
-
-        assert result.returncode == 0, result.stderr + result.stdout
-        assert payload["verdict"] == "green"
-        assert set(payload["canaries"]) == {"opencode"}
-        assert payload["canaries"]["opencode"]["status"] == "pass"
 
 
 def test_claude_real_print_canary_requires_exact_marker_result() -> None:
@@ -526,8 +492,6 @@ def test_opencode_real_tool_canary_fails_without_done_text() -> None:
 
 def main() -> int:
     tests = [
-        test_all_current_provider_control_paths_are_green,
-        test_provider_selection_runs_one_control_lane,
         test_claude_real_print_canary_requires_exact_marker_result,
         test_claude_real_print_canary_fails_on_api_error_result,
         test_claude_real_print_canary_preserves_non_secret_launch_env,

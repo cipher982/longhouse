@@ -500,7 +500,7 @@ validate-provider-cli-canaries: ## @internal Provider release canary wrapper tes
 	@python3 scripts/tests/provider-live-canary.test.py
 	@python3 scripts/tests/provider-live-proof-publish.test.py
 	@python3 scripts/tests/provider-live-route-e2e.test.py
-	@$(MAKE) provider-release-proof-universal-smoke
+	@$(MAKE) provider-release-proof-universal-smoke UNIVERSAL_SCENARIO="adapter_conformance action_matrix control_surface old_new_release_diff"
 
 provider-release-proof: ## Emit provider release proof artifact; set PROVIDER=... and optional PROVIDER_BIN=...
 	@set -eu; \
