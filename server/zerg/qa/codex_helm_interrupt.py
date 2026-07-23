@@ -599,9 +599,12 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
     }
     active_turn = send_active or state_active
     active_evidence_available = send_active_evidence or state_active_evidence
+    sent_turn_id = str(send_summary.get("turn_id") or "")
+    interrupted_turn_id = str(canary_result.get("interrupted_turn_id") or "")
+    exact_turn_interrupted = bool(sent_turn_id and interrupted_turn_id == sent_turn_id)
     terminal_status = canary_result.get("last_turn_status") or retained_state.get("last_turn_status")
     terminal_evidence_available = bool(str(terminal_status or "").strip())
-    terminal = str(terminal_status or "").lower() in {"interrupted", "cancelled"}
+    terminal = exact_turn_interrupted and str(terminal_status or "").lower() in {"interrupted", "cancelled"}
     cleanup = bool(
         stop
         and stop.get("attempted") is True

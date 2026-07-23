@@ -1142,6 +1142,20 @@ def run_managed_live_interrupt(args: argparse.Namespace, evidence_root: Path, co
         except ValueError:
             send_summary = {}
 
+        sent_turn_id = str(send_summary.get("turn_id") or "")
+        pre_interrupt_state = _read_json(state_file)
+        interrupted_turn_id = str(pre_interrupt_state.get("active_turn_id") or "")
+        if not sent_turn_id or interrupted_turn_id != sent_turn_id:
+            return _fail(
+                "managed_live_interrupt_turn_mismatch",
+                "managed live-interrupt state did not retain the exact turn returned by send",
+                evidence_root=str(root),
+                state=pre_interrupt_state,
+                start_summary=summary,
+                send_summary=send_summary,
+                interrupted_turn_id=interrupted_turn_id,
+            )
+
         interrupt_result = _run(
             [
                 _resolve_executable(args.engine, "longhouse-engine") or "longhouse-engine",
@@ -1202,6 +1216,7 @@ def run_managed_live_interrupt(args: argparse.Namespace, evidence_root: Path, co
             marker=marker,
             start_summary=summary,
             send_summary=send_summary,
+            interrupted_turn_id=interrupted_turn_id,
             last_turn_status=state.get("last_turn_status"),
         )
     except Exception as exc:  # noqa: BLE001

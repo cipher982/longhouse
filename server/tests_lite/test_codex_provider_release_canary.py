@@ -89,7 +89,10 @@ def test_live_interrupt_semantic_failure_retains_start_send_and_turn_state(tmp_p
     state_root.mkdir(parents=True)
     state_file = state_root / "session-1.json"
     state = {"active_turn_id": None, "last_turn_status": "completed"}
-    state_file.write_text(json.dumps(state), encoding="utf-8")
+    state_file.write_text(
+        json.dumps({"active_turn_id": "turn-1", "last_turn_status": "inProgress"}),
+        encoding="utf-8",
+    )
     start_summary = {
         "session_id": "session-1",
         "thread_id": "thread-1",
@@ -114,7 +117,13 @@ def test_live_interrupt_semantic_failure_retains_start_send_and_turn_state(tmp_p
         "_start_bridge",
         lambda *_args, **_kwargs: (start_summary, start_result, isolation_root),
     )
-    monkeypatch.setattr(canary, "_run", lambda *_args, **_kwargs: next(command_results))
+    def run_command(*_args, **_kwargs):
+        result = next(command_results)
+        if result.args == ["interrupt"]:
+            state_file.write_text(json.dumps(state), encoding="utf-8")
+        return result
+
+    monkeypatch.setattr(canary, "_run", run_command)
     monkeypatch.setattr(
         canary,
         "_stop_bridge",
@@ -132,3 +141,48 @@ def test_live_interrupt_semantic_failure_retains_start_send_and_turn_state(tmp_p
     assert result["send_summary"] == send_summary
     assert result["state"] == state
     assert result["last_turn_status"] == "completed"
+
+
+def test_live_interrupt_rejects_state_for_a_different_turn(tmp_path: Path, monkeypatch) -> None:
+    args = _args(tmp_path)
+    evidence_root = tmp_path / "evidence"
+    isolation_root = tmp_path / "isolation"
+    state_root = isolation_root / "codex-bridge"
+    state_root.mkdir(parents=True)
+    state_file = state_root / "session-1.json"
+    state_file.write_text(
+        json.dumps({"active_turn_id": "turn-other", "last_turn_status": "inProgress"}),
+        encoding="utf-8",
+    )
+    start_summary = {
+        "session_id": "session-1",
+        "thread_id": "thread-1",
+        "state_file": str(state_file),
+    }
+    send_summary = {
+        "session_id": "session-1",
+        "thread_id": "thread-1",
+        "turn_id": "turn-1",
+        "turn_status": "inProgress",
+    }
+    monkeypatch.setattr(
+        canary,
+        "_start_bridge",
+        lambda *_args, **_kwargs: (
+            start_summary,
+            subprocess.CompletedProcess(["start"], 0, json.dumps(start_summary), ""),
+            isolation_root,
+        ),
+    )
+    monkeypatch.setattr(
+        canary,
+        "_run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess(["send"], 0, json.dumps(send_summary), ""),
+    )
+    monkeypatch.setattr(canary, "_stop_bridge", lambda *_args, **_kwargs: {"attempted": True})
+
+    result = canary.run_managed_live_interrupt(args, evidence_root, "/exact/codex")
+
+    assert result["failure_code"] == "managed_live_interrupt_turn_mismatch"
+    assert result["interrupted_turn_id"] == "turn-other"
+    assert result["send_summary"] == send_summary

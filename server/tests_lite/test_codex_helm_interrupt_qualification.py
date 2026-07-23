@@ -150,6 +150,7 @@ def _successful_fake_canary(expected_engine: Path, agents_token: str, provider_t
                 "turn_id": "turn-1",
                 "turn_status": "inProgress",
             },
+            "interrupted_turn_id": "turn-1",
             "last_turn_status": "interrupted",
             "message": provider_token,
         }
