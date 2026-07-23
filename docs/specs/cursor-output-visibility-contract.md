@@ -294,7 +294,8 @@ The first tests cover:
 - four failed retry artifacts correlated to one rendered response;
 - terminal redraw semantics.
 
-Next implementation work should add timestamped PTY chunk capture and immutable
-store/JSONL snapshots to Gate 0, then migrate the visibility scenarios into the
-universal Cursor adapter. Those artifacts gate terminal-only promotion, not the
-receipt-backed correction shipped here.
+Timestamped PTY chunk capture and immutable store/JSONL snapshots remain the
+evidence gate for terminal-only promotion, but are deferred until a concrete
+product or repeated-incident need justifies them. The next incident response is
+the smaller launch-honesty and failed-turn work in
+`cursor-helm-stream-failure-analysis.md`.
