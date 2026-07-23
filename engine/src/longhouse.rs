@@ -55,6 +55,14 @@ enum Commands {
         #[command(flatten)]
         launch: CodexLaunchArgs,
     },
+    /// Launch or manage a native Longhouse OpenCode Helm session.
+    #[command(args_conflicts_with_subcommands = true)]
+    Opencode {
+        #[command(subcommand)]
+        command: Option<OpencodeCommand>,
+        #[command(flatten)]
+        launch: OpencodeLaunchArgs,
+    },
 }
 
 #[derive(Subcommand)]
@@ -65,6 +73,12 @@ enum CodexCommand {
     Attach(CodexAttachArgs),
     /// Stop a managed Codex bridge and its provider execution.
     Stop(CodexStopArgs),
+}
+
+#[derive(Subcommand)]
+enum OpencodeCommand {
+    Attach(OpencodeAttachArgs),
+    Stop(OpencodeStopArgs),
 }
 
 #[derive(Subcommand)]
@@ -140,6 +154,43 @@ struct CodexLaunchArgs {
     model_reasoning_effort: Option<String>,
     #[arg(long)]
     dangerously_bypass_approvals_and_sandbox: bool,
+}
+
+#[derive(Args)]
+struct OpencodeLaunchArgs {
+    #[arg(long, default_value = ".")]
+    cwd: PathBuf,
+    #[arg(long)]
+    project: Option<String>,
+    #[arg(long)]
+    name: Option<String>,
+    #[arg(long, default_value = "assist")]
+    loop_mode: String,
+    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+    attach: bool,
+    #[arg(long)]
+    no_attach: bool,
+    #[arg(long)]
+    url: Option<String>,
+    #[arg(long)]
+    token: Option<String>,
+    #[arg(long)]
+    opencode_bin: Option<String>,
+    #[arg(long, alias = "config-dir")]
+    claude_dir: Option<PathBuf>,
+}
+
+#[derive(Args)]
+struct OpencodeAttachArgs {
+    #[arg(long)]
+    session_id: String,
+    #[arg(long)]
+    opencode_bin: Option<String>,
+}
+#[derive(Args)]
+struct OpencodeStopArgs {
+    #[arg(long)]
+    session_id: String,
 }
 
 #[derive(Args)]
@@ -527,6 +578,160 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
     }
     if exit != 0 {
         std::process::exit(exit);
+    }
+    Ok(())
+}
+
+fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
+    let cwd = std::fs::canonicalize(&args.cwd)?;
+    let (url, token, machine_name) = resolve_codex_config(args.url, args.token)?;
+    let opencode_bin = resolve_provider_binary(
+        args.opencode_bin
+            .or_else(|| std::env::var("LONGHOUSE_OPENCODE_BIN").ok()),
+        "opencode",
+        "OpenCode",
+        "--opencode-bin",
+    )?;
+    let (launch_actor, launch_surface) = interactive_human_shell_provenance();
+    let mut payload = json!({"cwd": cwd, "provider":"opencode", "project":args.project, "display_name":args.name, "loop_mode":args.loop_mode, "machine_name":machine_name});
+    if let Some(actor) = launch_actor {
+        payload["launch_actor"] = json!(actor);
+    }
+    if let Some(surface) = launch_surface {
+        payload["launch_surface"] = json!(surface);
+    }
+    let endpoint = format!(
+        "{}/api/sessions/managed-local/this-device",
+        url.trim_end_matches('/')
+    );
+    let runtime = tokio::runtime::Runtime::new()?;
+    let response: ManagedLaunchResponse = runtime.block_on(async {
+        let response = reqwest::Client::new()
+            .post(endpoint)
+            .header("X-Agents-Token", &token)
+            .json(&payload)
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            anyhow::bail!("managed OpenCode launch failed ({})", response.status());
+        }
+        Ok::<_, anyhow::Error>(response.json().await?)
+    })?;
+    if response.managed_transport.as_deref() != Some("opencode_server_bridge") {
+        anyhow::bail!("Longhouse returned an unsupported managed-local transport for OpenCode");
+    }
+    let bridge = paired_engine_path()?;
+    let mut start = Command::new(&bridge);
+    start
+        .args([
+            "opencode-bridge",
+            "start",
+            "--session-id",
+            &response.session_id,
+            "--run-id",
+            &response.run_id,
+            "--cwd",
+        ])
+        .arg(&cwd)
+        .args([
+            "--opencode-bin",
+            &opencode_bin,
+            "--launch-mode",
+            if args.attach
+                && !args.no_attach
+                && std::io::stdin().is_terminal()
+                && std::io::stdout().is_terminal()
+            {
+                "attached_tui"
+            } else {
+                "detached"
+            },
+        ]);
+    if let Some(name) = &args.name {
+        start.args(["--display-name", name]);
+    }
+    if let Some(dir) = &args.claude_dir {
+        start.arg("--claude-dir").arg(dir);
+    }
+    let output = start.output().context("start native OpenCode bridge")?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "OpenCode bridge failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    println!(
+        "Managed OpenCode ready\n→ {}/s/{}",
+        url.trim_end_matches('/'),
+        response
+            .session_id
+            .split('-')
+            .next()
+            .unwrap_or(&response.session_id)
+    );
+    let attached = args.attach
+        && !args.no_attach
+        && std::io::stdin().is_terminal()
+        && std::io::stdout().is_terminal();
+    if !attached {
+        println!(
+            "Attach: longhouse opencode attach --session-id {}",
+            response.session_id
+        );
+        return Ok(());
+    }
+    let mut attach = Command::new(&bridge);
+    attach.args([
+        "opencode-bridge",
+        "attach",
+        "--session-id",
+        &response.session_id,
+        "--opencode-bin",
+        &opencode_bin,
+    ]);
+    let run_result = run_foreground_command(&mut attach);
+    let stop_result = stop_opencode_bridge(&response.session_id);
+    let exit = run_result?;
+    stop_result?;
+    if exit != 0 {
+        std::process::exit(exit);
+    }
+    print_helm_closed(&machine_name);
+    Ok(())
+}
+
+fn attach_managed_opencode(args: OpencodeAttachArgs) -> anyhow::Result<()> {
+    validate_session_id(&args.session_id)?;
+    let mut command = Command::new(paired_engine_path()?);
+    command.args([
+        "opencode-bridge",
+        "attach",
+        "--session-id",
+        &args.session_id,
+    ]);
+    if let Some(bin) = args.opencode_bin {
+        command.args(["--opencode-bin", &bin]);
+    }
+    let run_result = run_foreground_command(&mut command);
+    let stop_result = stop_opencode_bridge(&args.session_id);
+    let exit = run_result?;
+    stop_result?;
+    if exit != 0 {
+        std::process::exit(exit);
+    }
+    Ok(())
+}
+
+fn stop_opencode_bridge(session_id: &str) -> anyhow::Result<()> {
+    validate_session_id(session_id)?;
+    let output = Command::new(paired_engine_path()?)
+        .args(["opencode-bridge", "stop", "--session-id", session_id])
+        .output()?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "failed to stop native OpenCode bridge: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
     }
     Ok(())
 }
@@ -1345,6 +1550,11 @@ fn main() -> anyhow::Result<()> {
                 }
             }
             None => launch_managed_codex(launch)?,
+        },
+        Commands::Opencode { command, launch } => match command {
+            Some(OpencodeCommand::Attach(args)) => attach_managed_opencode(args)?,
+            Some(OpencodeCommand::Stop(args)) => stop_opencode_bridge(&args.session_id)?,
+            None => launch_managed_opencode(launch)?,
         },
     }
     Ok(())
