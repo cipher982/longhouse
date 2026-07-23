@@ -9,6 +9,10 @@ license = "Apache-2.0"
 name = "longhouse-engine"
 path = "src/main.rs"
 
+[[bin]]
+name = "longhouse"
+path = "src/longhouse.rs"
+
 [dependencies]
 # Serialization
 serde = { version = "1", features = ["derive"] }
