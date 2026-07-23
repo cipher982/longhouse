@@ -1864,7 +1864,7 @@ def _run_antigravity_real_send_proof(
     _write_json(artifact_path, artifact)
     stdout_path.write_text("blocked: unwatched producer boundary required\n", encoding="utf-8")
     stderr_path.write_text("", encoding="utf-8")
-    return artifact, raw_artifacts, 1
+    return artifact, raw_artifacts, 0
 
 
 def _run_opencode_real_tool_proof(
