@@ -353,3 +353,36 @@ fn stop_pid(pid: u32) -> Result<()> {
 fn pid_alive(pid: u32) -> bool {
     pid > 0 && unsafe { libc::kill(pid as i32, 0) == 0 }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn bridge_state_is_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("private/state.json");
+        write_private_json(&path, &json!({"password":"secret"})).unwrap();
+        assert_eq!(
+            fs::metadata(path.parent().unwrap())
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+
+    #[test]
+    fn rejects_non_local_listen_urls() {
+        assert!(read_listen_url(Path::new("/definitely/not/there"))
+            .unwrap()
+            .is_none());
+    }
+}
