@@ -712,7 +712,7 @@ def test_opencode_release_proof_blocks_on_source_canary_red() -> None:
             env={"FAKE_VERDICT": "red"},
         )
 
-        assert result.returncode == 0
+        assert result.returncode == 1
         assert payload["verdict"] == "red"
         assert payload["failure_code"] == "fake_provider_break"
         assert payload["canaries"]["source_canary"]["status"] == "fail"
@@ -733,8 +733,8 @@ def test_opencode_release_proof_blocks_green_artifact_from_failed_source_canary(
             env={"FAKE_EXIT_ONE": "1"},
         )
 
-        assert result.returncode == 0
-        assert payload["verdict"] == "yellow"
+        assert result.returncode == 1
+        assert payload["verdict"] == "red"
         assert payload["failure_code"] == "source_canary_returncode_mismatch"
         assert payload["source_canary_returncode"] == 1
 
@@ -751,8 +751,8 @@ def test_opencode_release_proof_blocks_when_source_artifact_missing() -> None:
             env={"FAKE_SKIP_ARTIFACT": "1"},
         )
 
-        assert result.returncode == 0
-        assert payload["verdict"] == "yellow"
+        assert result.returncode == 1
+        assert payload["verdict"] == "red"
         assert payload["failure_code"] == "provider_release_proof_source_missing"
 
 
