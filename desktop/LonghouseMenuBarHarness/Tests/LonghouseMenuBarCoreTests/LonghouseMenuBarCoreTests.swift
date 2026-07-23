@@ -1592,13 +1592,14 @@ struct LonghouseMenuBarCoreTests {
     }
 
     @Test
-    func bundledSetupScriptPinsReleaseVersionOrOverride() throws {
+    func bundledSetupScriptInstallsNativePair() throws {
         let scriptURL = try #require(Bundle.module.url(forResource: "desktop-app-setup", withExtension: "sh"))
         let script = try String(contentsOf: scriptURL, encoding: .utf8)
 
-        #expect(script.contains("LONGHOUSE_PKG_SOURCE"))
-        #expect(script.contains("CFBundleShortVersionString"))
-        #expect(script.contains("longhouse=="))
+        #expect(script.contains("https://get.longhouse.ai/install.sh"))
+        #expect(script.contains("longhouse verify-pair"))
+        #expect(!script.contains("uv tool"))
+        #expect(!script.contains("uv python"))
     }
 
     @Test
