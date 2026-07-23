@@ -1,9 +1,8 @@
 """End-to-end flock test: real `longhouse-engine codex-bridge run` must bail
 if another process already holds the bridge sidecar lock.
 
-This is the test that actually exercises the PID-reuse-immune liveness
-primitive. Unit tests in test_local_health_cli.py stub the probe; this one
-boots the real engine binary and observes its behavior.
+This exercises the PID-reuse-immune liveness primitive by booting the real
+engine binary and observing its behavior.
 
 Skips when the engine binary isn't on PATH (e.g. barebones CI sandboxes).
 """

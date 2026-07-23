@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 import signal
 from contextlib import suppress
 from pathlib import Path
@@ -40,6 +41,9 @@ def main() -> int:
     parser.add_argument("--database", type=Path, required=True)
     parser.add_argument("--socket", type=Path, required=True)
     args = parser.parse_args()
+    from zerg.logging_config import configure_logging
+
+    configure_logging(os.getenv("LOG_LEVEL", "INFO"))
     try:
         asyncio.run(_run(args.database, args.socket))
     except KeyboardInterrupt:

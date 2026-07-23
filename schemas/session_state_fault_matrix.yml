@@ -40,7 +40,7 @@ scenarios:
   - id: F06
     fault: bridge_death_execution_survives
     deterministic:
-      - server/tests_lite/test_local_health_cli.py::test_collect_local_health_flags_dead_codex_bridge_with_orphan_app_server
+      - server/tests_lite/test_codex_bridge_flock.py::test_engine_acquires_lock_then_releases_on_sigkill
       - server/tests_lite/test_session_state_facts_projector.py::test_served_projector_without_control_head_fails_actions_closed
     live: required
     expect: [execution_not_called_residue, control_actions_denied]
@@ -53,7 +53,7 @@ scenarios:
   - id: F08
     fault: stale_pid_or_state_file
     deterministic:
-      - server/tests_lite/test_local_health_cli.py::test_opencode_server_not_live_when_pid_reused_by_other_command
+      - server/tests_lite/test_opencode_channel_cli.py::test_stop_bridge_rejects_reused_pid
       - server/tests_lite/test_catalogd_fact_reducer.py::test_stale_position_and_old_run_cannot_mutate_current_head
     live: optional
     expect: [old_identity_cannot_grant_control, residue_localized]
@@ -66,7 +66,7 @@ scenarios:
   - id: F10
     fault: mixed_current_and_residue
     deterministic:
-      - server/tests_lite/test_local_health_cli.py::test_collect_local_health_flags_orphaned_managed_bridge
+      - server/tests_lite/test_codex_bridge_contract.py::test_bridge_state_file_schema_matches_python_reader
     live: required
     expect: [five_current_rows_stable, three_residues_cleanup_only]
   - id: F11
@@ -103,7 +103,7 @@ scenarios:
       - server/tests_lite/test_storage_v2_workspace.py::test_storage_v2_workspace_composes_catalog_shell_and_tail
       - server/tests_lite/test_session_state_diagnostics.py::test_diagnostics_route_reports_only_canonical_serve_and_authorization
       - server/tests_lite/test_heartbeat_endpoint.py::test_heartbeat_legacy_managed_sessions_still_materialize_control
-      - server/tests_lite/test_local_health_cli.py::test_collect_local_health_does_not_promote_local_phase_evidence_to_activity
+      - server/tests_lite/test_session_state_contract.py::test_control_lease_generation_is_stable_current_evidence_not_activity
     live: required
     expect: [canonical_ingest_always_on, legacy_identity_never_authorizes]
 

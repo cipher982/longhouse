@@ -1083,11 +1083,7 @@ def test_full_action_suite_uses_provider_scoped_old_new_artifacts(tmp_path: Path
         "run_codex_provider_release_canary",
         _fake_codex_permission_canary_only(codex_provider_release_canary.run_codex_provider_release_canary),
     )
-    monkeypatch.setenv(
-        "LONGHOUSE_ENGINE_BIN",
-        str(_fake_longhouse_engine_claude_channel(tmp_path / "bin" / "longhouse-engine")),
-    )
-    providers = ("claude", "codex")
+    providers = ("codex",)
     old_paths = {
         provider: _write_release_proof(
             tmp_path,
@@ -1217,6 +1213,7 @@ def test_control_surface_keeps_unsupported_and_live_token_rows_explicit(tmp_path
 
 
 @pytest.mark.timeout(60)
+@pytest.mark.skip(reason="Python device-control canaries were retired by the native-device cutover")
 def test_full_action_suite_runs_same_abstract_surface_for_all_providers(tmp_path: Path, monkeypatch) -> None:
     from zerg.qa import codex_provider_release_canary
 
@@ -2519,7 +2516,6 @@ def test_remaining_surface_scenarios_emit_honest_results_for_all_providers(tmp_p
             providers=uah.SUPPORTED_PROVIDERS,
             scenarios=(
                 "multi_turn_continuity",
-                "external_event_channel",
                 "permission_prompt",
                 "crash_timeout_cleanup",
             ),
@@ -2584,27 +2580,6 @@ def test_remaining_surface_scenarios_emit_honest_results_for_all_providers(tmp_p
         assert crash["data"]["operation_evidence"]["crash_timeout_cleanup"]["status"] == "pass"
         assert crash["data"]["cleanup_assertions"]["diagnostics_written"] is True
         assert Path(crash["data"]["diagnostics_path"]).is_file()
-
-    claude_external = by_key[("claude", "external_event_channel")]
-    assert claude_external["status"] == "pass"
-    assert claude_external["data"]["operation_evidence"]["external_event_channel"]["status"] == "pass"
-    assert claude_external["data"]["operation_evidence"]["external_event_channel"]["canary"] == (
-        "claude_development_channels_contract"
-    )
-    assert claude_external["data"]["source_artifact_kind"] == "provider_live_canary"
-    assert (Path(claude_external["evidence_root"]) / "longhouse" / "db-ingest-result.json").is_file()
-
-    for provider in ("codex", "opencode"):
-        external = by_key[(provider, "external_event_channel")]
-        assert external["status"] == "unsupported_gap"
-        assert external["failure_code"] == "external_event_channel_unsupported"
-
-    antigravity = by_key[("antigravity", "external_event_channel")]
-    assert antigravity["status"] == "pass"
-    assert antigravity["data"]["operation_evidence"]["external_event_channel"]["status"] == "pass"
-    assert antigravity["data"]["source_artifact_kind"] == "provider_control_e2e_canary"
-    assert (Path(antigravity["evidence_root"]) / "longhouse" / "db-ingest-result.json").is_file()
-
 
 def test_opencode_interrupt_cancel_uses_session_abort_canary(tmp_path: Path) -> None:
     fake_opencode = _fake_opencode_server(tmp_path / "bin" / "opencode")

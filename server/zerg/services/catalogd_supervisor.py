@@ -50,6 +50,7 @@ class CatalogdSupervisor:
         self._process: asyncio.subprocess.Process | None = None
         self._stopping = False
         self._restart_count = 0
+        self._last_logged_status: tuple[object, ...] | None = None
 
     async def start(self, *, readiness_timeout_seconds: float = 15.0) -> dict[str, Any]:
         if self._task is None or self._task.done():
@@ -166,6 +167,7 @@ class CatalogdSupervisor:
             except CatalogUnavailable as exc:
                 self._write_status(
                     "degraded",
+                    log_transition=False,
                     ownership="owned",
                     pid=process.pid,
                     error=f"{type(exc).__name__}: {exc}",
@@ -197,7 +199,9 @@ class CatalogdSupervisor:
             and ping.get("schema_generation") == CATALOG_SCHEMA_GENERATION
         )
 
-    def _write_status(self, status: str, **details: Any) -> None:
+    def _write_status(self, status: str, *, log_transition: bool = True, **details: Any) -> None:
+        if log_transition:
+            self._log_status_transition(status, details)
         self.status_path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "schema_version": CATALOG_SCHEMA_VERSION,
@@ -219,6 +223,31 @@ class CatalogdSupervisor:
                 os.unlink(temporary)
             except FileNotFoundError:
                 pass
+
+    def _log_status_transition(self, status: str, details: dict[str, Any]) -> None:
+        restart_count = details.get("restart_count", self._restart_count)
+        signature = (
+            status,
+            details.get("ownership"),
+            restart_count,
+            details.get("last_exit_code"),
+            details.get("error"),
+        )
+        if signature == self._last_logged_status:
+            return
+        self._last_logged_status = signature
+        level = logging.WARNING if status in {"degraded", "waiting_for_compatible_owner"} else logging.INFO
+        context = {
+            "tag": "CATALOGD",
+            "event": "supervisor_state_changed",
+            "status": status,
+            "ownership": details.get("ownership", "unknown"),
+            "restart_count": restart_count,
+        }
+        for key in ("pid", "last_exit_code", "error"):
+            if key in details:
+                context[key] = details[key]
+        logger.log(level, "catalogd supervisor state changed", extra=context)
 
 
 _supervisor: CatalogdSupervisor | None = None
