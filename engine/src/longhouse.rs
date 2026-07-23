@@ -134,6 +134,8 @@ struct BridgeState {
     cwd: String,
     codex_bin: String,
     ws_url: Option<String>,
+    status: Option<String>,
+    thread_id: Option<String>,
 }
 
 fn paired_engine_path() -> anyhow::Result<PathBuf> {
@@ -442,11 +444,63 @@ fn codex_bridge_reattachable(session_id: &str) -> bool {
     let Ok(path) = codex_bridge_state_path(session_id) else {
         return false;
     };
-    std::fs::read(path)
+    let Some(state) = std::fs::read(path)
         .ok()
         .and_then(|raw| serde_json::from_slice::<BridgeState>(&raw).ok())
-        .and_then(|state| state.ws_url)
-        .is_some_and(|url| !url.trim().is_empty())
+    else {
+        return false;
+    };
+    if state.status.as_deref() != Some("ready")
+        || state
+            .thread_id
+            .as_deref()
+            .is_none_or(|thread| thread.trim().is_empty())
+    {
+        return false;
+    }
+    bridge_readyz_healthy(state.ws_url.as_deref())
+}
+
+fn bridge_readyz_healthy(ws_url: Option<&str>) -> bool {
+    let Some(ws_url) = ws_url.filter(|value| !value.trim().is_empty()) else {
+        return false;
+    };
+    let Ok(mut readyz_url) = reqwest::Url::parse(ws_url) else {
+        return false;
+    };
+    match readyz_url.scheme() {
+        "ws" => {
+            if readyz_url.set_scheme("http").is_err() {
+                return false;
+            }
+        }
+        "wss" => {
+            if readyz_url.set_scheme("https").is_err() {
+                return false;
+            }
+        }
+        "http" | "https" => {}
+        _ => return false,
+    }
+    let path = readyz_url.path().trim_end_matches('/');
+    readyz_url.set_path(&format!("{path}/readyz"));
+    readyz_url.set_query(None);
+    tokio::runtime::Runtime::new()
+        .ok()
+        .and_then(|runtime| {
+            runtime.block_on(async {
+                reqwest::Client::builder()
+                    .timeout(Duration::from_secs(1))
+                    .build()
+                    .ok()?
+                    .get(readyz_url)
+                    .send()
+                    .await
+                    .ok()
+                    .map(|response| response.status().is_success())
+            })
+        })
+        .unwrap_or(false)
 }
 
 fn interactive_stdio() -> bool {
