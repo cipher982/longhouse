@@ -293,6 +293,11 @@ class Settings:  # noqa: D401 – simple data container
     # cookie), and the workspace SSE accepts it for the canary session only.
     canary_token: str | None = None
 
+    # Provider capability qualification factory -------------------------
+    # Optional by design: ordinary OSS/self-hosted runtimes do not publish
+    # globally trusted executable-provider qualification records.
+    provider_capability_factory_token: str | None = None
+
     # Memory Files -----------------------------------------------------
     memory_files_enabled: bool = False
     memory_files_context_enabled: bool = False
@@ -622,6 +627,7 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
         apns_private_key_p8=os.getenv("APNS_PRIVATE_KEY_P8"),
         apns_topic=os.getenv("APNS_TOPIC", "ai.longhouse.ios"),
         canary_token=os.getenv("LONGHOUSE_CANARY_TOKEN"),
+        provider_capability_factory_token=os.getenv("PROVIDER_CAPABILITY_FACTORY_TOKEN"),
     )
 
 
