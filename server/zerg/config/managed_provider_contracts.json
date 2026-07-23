@@ -897,11 +897,10 @@
       },
       "can_resume": false,
       "turn_start": false,
-      "operation_evidence": {
-        "launch_local": {
-          "level": "live_no_token",
-          "source": "longhouse provider-live canary --provider antigravity version/help/plugin checks",
-          "next": "prove real agy loop invocation"
+    "operation_evidence": {
+      "launch_local": {
+      "level": "none",
+      "source": "excluded from the native normal-device release"
         },
         "run_once": {
           "level": "none",
@@ -911,10 +910,9 @@
           "level": "none",
           "source": "unsupported until Antigravity exposes stable reattach"
         },
-        "send_input": {
-          "level": "live_token",
-          "source": "scripts/qa/provider-control-e2e-canary.py --provider antigravity --antigravity-real-agy-send proves real agy PreInvocation hook-inbox injection changes the model-visible turn",
-          "next": "keep interrupt, active-turn steer, and continuation gated on separate bounded-behavior canaries"
+      "send_input": {
+      "level": "none",
+      "source": "excluded from the native normal-device release"
         },
         "interrupt": {
           "level": "none",
@@ -932,29 +930,24 @@
           "level": "none",
           "source": "unsupported until process termination policy is designed"
         },
-        "tail_output": {
-          "level": "hermetic",
-          "source": "Antigravity hook transcript binding tests",
-          "next": "promote with real agy transcript canary"
+      "tail_output": {
+      "level": "none",
+      "source": "excluded from the native normal-device release"
         },
-        "runtime_phase": {
-          "level": "hermetic",
-          "source": "Antigravity hook runtime outbox tests",
-          "next": "promote with real agy phase canary"
+      "runtime_phase": {
+      "level": "none",
+      "source": "excluded from the native normal-device release"
         },
-        "transcript_binding": {
-          "level": "hermetic",
-          "source": "Antigravity hook binding tests",
-          "next": "promote with real agy transcript assertion"
+      "transcript_binding": {
+      "level": "none",
+      "source": "excluded from the native normal-device release"
         },
         "turn_start": {
           "level": "none",
           "source": "Antigravity has no turn-scoped Console adapter"
         }
       },
-      "machine_control_supports": [
-        "antigravity.send"
-      ],
+  "machine_control_supports": [],
       "adapter_digest": "86ff5db6a902cf3cce2097c650e72a0a5f673ed0d9083df90f387aec66574a80"
     },
     {
