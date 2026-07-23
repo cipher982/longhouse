@@ -64,10 +64,6 @@ interface SSEDone {
   timestamp: string;
 }
 
-interface SessionDraftReplyResponse {
-  draft_text?: string;
-}
-
 // Message for display
 interface ChatMessage {
   id: string;
@@ -198,7 +194,6 @@ export function SessionChat({
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [isDraftingReply, setIsDraftingReply] = useState(false);
   const [isInterrupting, setIsInterrupting] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -551,10 +546,11 @@ export function SessionChat({
   const canInterruptTurn =
     isManagedLocal && session.session_state.control.actions.interrupt.state === "available";
   const attachmentInputEnabled = attachImagesEnabled && !isSendLocked;
-  // Inline interrupt is offered for any locked managed-local turn. When the
-  // stall-recovery card is showing it already exposes the same action, so we
-  // hide the composer copy to avoid two buttons doing the identical thing.
-  const showInlineInterrupt = canInterruptTurn && !isStalled;
+  // Inline interrupt is only offered while a turn is actually running — an
+  // idle session has nothing to stop. When the stall-recovery card is showing
+  // it already exposes the same action, so we hide the composer copy to avoid
+  // two buttons doing the identical thing.
+  const showInlineInterrupt = canInterruptTurn && isSendLocked && !isStalled;
   // When steer is available, the primary action is steer. Queue-next becomes
   // a secondary escape hatch. If only queue is available, primary = queue.
   const primaryIntent: "auto" | "queue" | "steer" = !isSendLocked
@@ -694,65 +690,10 @@ export function SessionChat({
     }
   };
 
-  const canRequestDraftReply =
-    isManagedLocal &&
-    !isComposerDisabled &&
-    !draft.trim() &&
-    !isSubmitting &&
-    !isStreaming &&
-    !isDraftingReply;
-
-  const handleDraftReply = useCallback(async () => {
-    if (!canRequestDraftReply) return;
-
-    setIsDraftingReply(true);
-    setError(null);
-    try {
-      const response = await fetchWithRefresh(buildUrl(`/sessions/${session.id}/draft-reply`), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ max_chars: 1200 }),
-        credentials: "include",
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        const detail =
-          typeof errorData?.detail === "string"
-            ? errorData.detail
-            : typeof errorData?.error === "string"
-              ? errorData.error
-              : `Request failed: ${response.status}`;
-        throw new Error(detail);
-      }
-
-      const result = (await response.json()) as SessionDraftReplyResponse;
-      const draftText = String(result.draft_text ?? "").trim();
-      if (!draftText) {
-        throw new Error("No draft suggestion available yet.");
-      }
-
-      setDraft(draftText);
-      setBlockedKeyboardSubmit(false);
-      window.requestAnimationFrame(() => {
-        composerTextareaRef.current?.focus();
-        if (composerTextareaRef.current) {
-          autoResizeDockTextarea(composerTextareaRef.current);
-        }
-      });
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Draft reply is unavailable");
-    } finally {
-      setIsDraftingReply(false);
-    }
-  }, [autoResizeDockTextarea, canRequestDraftReply, session.id]);
-
   const statusBadge = isComposerDisabled
     ? { variant: "warning" as const, label: "Unavailable" }
     : isStreaming
     ? { variant: "success" as const, label: "Streaming" }
-    : isDraftingReply
-      ? { variant: "warning" as const, label: "Drafting" }
     : isSubmitting
       ? { variant: "warning" as const, label: "Sending" }
     : isStalled
@@ -1072,23 +1013,6 @@ export function SessionChat({
             ) : isDock ? null : (
               <div className="session-chat-confirmation session-chat-confirmation--spacer" aria-hidden="true" />
             )}
-            {isManagedLocal ? (
-              <div className="session-chat-draft-row">
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="sm"
-                  onClick={handleDraftReply}
-                  disabled={!canRequestDraftReply}
-                  title={draft.trim() ? "Draft reply is available when the composer is empty" : undefined}
-                >
-                  {isDraftingReply ? "Drafting" : "Draft reply"}
-                </Button>
-                <span className="session-chat-draft-row__copy">
-                  Review the suggestion before sending.
-                </span>
-              </div>
-            ) : null}
             {isManagedLocal && pendingManagedLocalInput ? (
               <div className="session-chat-pending-message">
                 <span className="session-chat-pending-message__text">{pendingManagedLocalInput.text}</span>
@@ -1124,7 +1048,7 @@ export function SessionChat({
                   }}
                   onKeyDown={handleKeyDown}
                   placeholder={composerPlaceholder || "Type a message..."}
-                  disabled={isSubmitting || isDraftingReply}
+                  disabled={isSubmitting}
                   rows={1}
                 />
                 {isManagedLocal && sentConfirmation ? (
@@ -1154,7 +1078,7 @@ export function SessionChat({
                         variant="secondary"
                         size="sm"
                         onClick={() => void handleSecondaryQueue()}
-                        disabled={!draft.trim() || isSubmitting || isDraftingReply}
+                        disabled={!draft.trim() || isSubmitting}
                       >
                         Queue next
                       </Button>
@@ -1163,7 +1087,7 @@ export function SessionChat({
                       type="submit"
                       variant="primary"
                       size="sm"
-                      disabled={!hasComposerContent || isSubmitting || isDraftingReply || isSendBlocked || attachmentSendBlocked || composerAttachments.isCompressing}
+                      disabled={!hasComposerContent || isSubmitting || isSendBlocked || attachmentSendBlocked || composerAttachments.isCompressing}
                     >
                       {submitButtonLabel}
                     </Button>
@@ -1178,7 +1102,7 @@ export function SessionChat({
                   onChange={(e) => handleDraftChange(e.target.value)}
                   onKeyDown={handleKeyDown}
                   placeholder={composerPlaceholder || "Type a message..."}
-                  disabled={isComposerDisabled || isSubmitting || isDraftingReply}
+                  disabled={isComposerDisabled || isSubmitting}
                   rows={2}
                   title={composerDisabledReason ?? undefined}
                 />
@@ -1207,7 +1131,7 @@ export function SessionChat({
                           variant="secondary"
                           size="sm"
                           onClick={() => void handleSecondaryQueue()}
-                          disabled={isComposerDisabled || !draft.trim() || isSubmitting || isDraftingReply}
+                          disabled={isComposerDisabled || !draft.trim() || isSubmitting}
                         >
                           Queue next
                         </Button>
@@ -1216,7 +1140,7 @@ export function SessionChat({
                         type="submit"
                         variant="primary"
                         size="sm"
-                        disabled={isComposerDisabled || !hasComposerContent || isSubmitting || isDraftingReply || isSendBlocked || attachmentSendBlocked || composerAttachments.isCompressing}
+                        disabled={isComposerDisabled || !hasComposerContent || isSubmitting || isSendBlocked || attachmentSendBlocked || composerAttachments.isCompressing}
                         title={composerDisabledReason ?? undefined}
                       >
                         {submitButtonLabel}

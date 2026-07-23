@@ -391,6 +391,13 @@
     align-items: baseline;
   }
 
+  /* inline-flex drops the whitespace text nodes around the bullet, so the
+     separator needs real margins or the meta line reads as one jammed run. */
+  .session-runtime-strip__meta-separator {
+    margin-inline: 0.45em;
+    opacity: 0.55;
+  }
+
   .session-runtime-strip__elapsed {
     display: inline-block;
     white-space: nowrap;

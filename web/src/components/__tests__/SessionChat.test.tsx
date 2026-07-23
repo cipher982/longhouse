@@ -304,6 +304,7 @@ describe("SessionChat", () => {
 
     renderSessionChat({
       chatMode: "managed_local",
+      isSessionExecuting: true,
       session: makeSession({
         provider: "cursor",
         session_state: makeSessionStateFacts({
@@ -409,95 +410,6 @@ describe("SessionChat", () => {
     ).toBeInTheDocument();
     expect(screen.queryByText(/--resume/i)).not.toBeInTheDocument();
   });
-
-  it("drafts a managed-local reply into an empty composer", async () => {
-    const user = userEvent.setup();
-
-    fetchWithRefreshMock.mockImplementation((url: string) => {
-      if (url.endsWith("/draft-reply")) {
-        return Promise.resolve(jsonResponse({ draft_text: "Ask for a concise status update." }));
-      }
-      return Promise.reject(new Error(`Unexpected request: ${url}`));
-    });
-
-    renderSessionChat({ chatMode: "managed_local" });
-
-    await user.click(screen.getByRole("button", { name: /draft reply/i }));
-
-    expect(getLastRequestBody("/draft-reply")).toEqual({ max_chars: 1200 });
-    await waitFor(() => {
-      expect(screen.getByRole("textbox")).toHaveValue("Ask for a concise status update.");
-    });
-    expect(screen.getByRole("button", { name: /send/i })).toBeEnabled();
-  });
-
-  it("keeps draft reply disabled once the composer has text", async () => {
-    const user = userEvent.setup();
-
-    renderSessionChat({ chatMode: "managed_local" });
-
-    await user.type(screen.getByRole("textbox"), "I already know what to send");
-
-    expect(screen.getByRole("button", { name: /draft reply/i })).toBeDisabled();
-    expect(getRequestCallCount("/draft-reply")).toBe(0);
-  });
-
-  it("allows draft reply while the live session is working", async () => {
-    const user = userEvent.setup();
-    const queryClient = new QueryClient({
-      defaultOptions: {
-        queries: { retry: false },
-      },
-    });
-    queryClient.setQueryData<SessionLockInfo | null>(["session-lock", "sess-1"], {
-      locked: true,
-      holder: "req-1234",
-      time_remaining_seconds: 120,
-      fork_available: true,
-    });
-
-    fetchWithRefreshMock.mockImplementation((url: string) => {
-      if (url.endsWith("/draft-reply")) {
-        return Promise.resolve(jsonResponse({ draft_text: "Prepare a follow-up while it works." }));
-      }
-      return Promise.reject(new Error(`Unexpected request: ${url}`));
-    });
-
-    renderSessionChat({ chatMode: "managed_local" }, { queryClient });
-
-    expect(screen.getByText("Working")).toBeInTheDocument();
-    expect(screen.getByText(/Agent is working/i)).toBeInTheDocument();
-    expect(screen.queryByText(/req-1234/i)).not.toBeInTheDocument();
-    expect(screen.queryByText(/remaining/i)).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /draft reply/i })).toBeEnabled();
-
-    await user.click(screen.getByRole("button", { name: /draft reply/i }));
-
-    await waitFor(() => {
-      expect(screen.getByRole("textbox")).toHaveValue("Prepare a follow-up while it works.");
-    });
-    expect(screen.getByRole("textbox")).toBeEnabled();
-    expect(screen.getByRole("button", { name: /waiting/i })).toBeDisabled();
-  });
-
-  it("shows a clear message when a draft reply is empty", async () => {
-    const user = userEvent.setup();
-
-    fetchWithRefreshMock.mockImplementation((url: string) => {
-      if (url.endsWith("/draft-reply")) {
-        return Promise.resolve(jsonResponse({ draft_text: "   " }));
-      }
-      return Promise.reject(new Error(`Unexpected request: ${url}`));
-    });
-
-    renderSessionChat({ chatMode: "managed_local" });
-
-    await user.click(screen.getByRole("button", { name: /draft reply/i }));
-
-    expect(await screen.findByText("No draft suggestion available yet.")).toBeInTheDocument();
-    expect(screen.getByRole("textbox")).toHaveValue("");
-  });
-
 
   it("blocks duplicate input until a managed-local ack arrives, then refreshes all workspace caches", async () => {
     const user = userEvent.setup();

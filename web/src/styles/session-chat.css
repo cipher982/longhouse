@@ -462,22 +462,6 @@
   flex-shrink: 0;
 }
 
-.session-chat-draft-row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  min-height: 30px;
-  padding: 2px;
-  border-radius: var(--radius-md);
-  background: rgba(18, 11, 9, 0.32);
-}
-
-.session-chat-draft-row__copy {
-  color: rgba(203, 187, 164, 0.82);
-  font-size: var(--font-size-xs);
-  line-height: 1.3;
-}
-
 .session-chat-composer textarea {
   width: 100%;
   resize: none;
@@ -652,22 +636,6 @@
 @media (max-width: 900px) {
   .session-chat--dock {
     gap: 6px;
-  }
-
-  .session-chat-draft-row {
-    min-height: 0;
-    gap: 6px;
-    padding: 0;
-    background: transparent;
-  }
-
-  .session-chat-draft-row .ui-button {
-    height: 28px;
-    padding-inline: 10px;
-  }
-
-  .session-chat-draft-row__copy {
-    display: none;
   }
 
   .session-chat-composer-row {
