@@ -888,14 +888,7 @@ fn require_claude_lifecycle_hook() -> Result<()> {
 }
 
 fn require_claude_lifecycle_hook_at(provider_home: &Path) -> Result<()> {
-    let hook_path = provider_home.join("hooks").join("longhouse-hook.sh");
     let settings_path = provider_home.join("settings.json");
-    if !hook_path.is_file() {
-        anyhow::bail!(
-            "Claude Console requires the Longhouse lifecycle hook at {}; run `longhouse machine repair`",
-            hook_path.display()
-        );
-    }
     let settings: Value = serde_json::from_slice(
         &std::fs::read(&settings_path)
             .with_context(|| format!("reading Claude settings {}", settings_path.display()))?,
@@ -913,7 +906,10 @@ fn require_claude_lifecycle_hook_at(provider_home: &Path) -> Result<()> {
                 .into_iter()
                 .flatten()
                 .filter_map(|hook| hook.get("command").and_then(Value::as_str))
-                .any(|command| command.contains("longhouse-hook.sh"))
+                .any(|command| {
+                    command.contains("longhouse-hook.sh")
+                        || command.contains("claude-lifecycle-hook")
+                })
         })
     });
     if !registered {
