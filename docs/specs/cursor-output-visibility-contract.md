@@ -296,6 +296,6 @@ The first tests cover:
 
 Timestamped PTY chunk capture and immutable store/JSONL snapshots remain the
 evidence gate for terminal-only promotion, but are deferred until a concrete
-product or repeated-incident need justifies them. The next incident response is
-the smaller launch-honesty and failed-turn work in
+product or repeated-incident need justifies them. The 2026-07-23 stream incident
+did not justify terminal promotion or a new failed-turn presentation path; see
 `cursor-helm-stream-failure-analysis.md`.
