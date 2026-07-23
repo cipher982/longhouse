@@ -41,6 +41,7 @@ def test_live_catalog_workspace_dependency_does_not_open_legacy_database(monkeyp
 async def test_storage_v2_workspace_composes_catalog_shell_and_tail(monkeypatch):
     session_id = uuid4()
     session = SimpleNamespace(
+        provider="codex",
         runtime_display=SimpleNamespace(lifecycle="open"),
         capabilities=SimpleNamespace(live_control_available=True),
         model_dump=lambda **_kwargs: {"id": str(session_id), "lifecycle": "open", "capabilities": {}},
@@ -73,6 +74,18 @@ async def test_storage_v2_workspace_composes_catalog_shell_and_tail(monkeypatch)
                     "tool_output_text": None,
                     "tool_call_id": None,
                     "branch_kind": None,
+                },
+                {
+                    "event_id": "event-2",
+                    "cursor": "cursor-2",
+                    "timestamp": "2026-07-12T12:00:01+00:00",
+                    "role": "assistant",
+                    "content_text": None,
+                    "tool_name": "exec",
+                    "tool_input_json": 'const r = await tools.write_stdin({"session_id": 17, "chars": ""}); text(JSON.stringify(r));',
+                    "tool_output_text": None,
+                    "tool_call_id": "call-2",
+                    "branch_kind": None,
                 }
             ],
             "next_cursor": "cursor-1",
@@ -99,9 +112,12 @@ async def test_storage_v2_workspace_composes_catalog_shell_and_tail(monkeypatch)
 
     assert result is not None
     assert result["projection"]["items"][0]["event"]["id"] == "event-1"
+    wait_event = result["projection"]["items"][1]["event"]
+    assert wait_event["tool_presentation"]["label"] == "Wait"
+    assert wait_event["tool_presentation"]["wrapper_recedes"] is True
     assert result["projection"]["next_cursor"] == "cursor-1"
-    assert result["projection"]["page_offset"] == 74
-    assert result["workspace_revision"]["latest_event_id"] == "event-1"
+    assert result["projection"]["page_offset"] == 73
+    assert result["workspace_revision"]["latest_event_id"] == "event-2"
     assert read_args == {"owner_id": 42}
 
 

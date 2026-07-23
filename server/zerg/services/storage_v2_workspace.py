@@ -17,6 +17,7 @@ from zerg.routers.agents_storage_v2 import read_storage_v2_session_events_page
 from zerg.services.catalog_read_gateway import CatalogReadError
 from zerg.services.catalogd_supervisor import get_catalogd_client
 from zerg.services.live_catalog_timeline import read_live_catalog_session
+from zerg.services.tool_presentation import project_tool_presentation
 from zerg.utils.server_timing import ServerTimingRecorder
 
 
@@ -25,6 +26,7 @@ def _event_projection(
     *,
     session_id: UUID,
     closed: bool,
+    provider: str | None,
     completed_tool_call_ids: set[str],
 ) -> dict[str, object]:
     event_id = str(event["event_id"])
@@ -49,6 +51,11 @@ def _event_projection(
             "tool_output_truncated": False,
             "tool_output_original_chars": None,
             "tool_call_id": tool_call_id,
+            "tool_presentation": project_tool_presentation(
+                event.get("tool_name"),
+                event.get("tool_input_json"),
+                provider=provider,
+            ),
             "timestamp": event["timestamp"],
             "in_active_context": True,
             "branch_id": None,
@@ -94,6 +101,7 @@ def _workspace_envelope(
             event,
             session_id=session_id,
             closed=session.runtime_display.lifecycle == "closed",
+            provider=getattr(session, "provider", None),
             completed_tool_call_ids=completed_tool_call_ids,
         )
         for event in events
