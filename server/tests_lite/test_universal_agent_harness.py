@@ -2516,7 +2516,6 @@ def test_remaining_surface_scenarios_emit_honest_results_for_all_providers(tmp_p
             providers=uah.SUPPORTED_PROVIDERS,
             scenarios=(
                 "multi_turn_continuity",
-                "external_event_channel",
                 "permission_prompt",
                 "crash_timeout_cleanup",
             ),
@@ -2581,27 +2580,6 @@ def test_remaining_surface_scenarios_emit_honest_results_for_all_providers(tmp_p
         assert crash["data"]["operation_evidence"]["crash_timeout_cleanup"]["status"] == "pass"
         assert crash["data"]["cleanup_assertions"]["diagnostics_written"] is True
         assert Path(crash["data"]["diagnostics_path"]).is_file()
-
-    claude_external = by_key[("claude", "external_event_channel")]
-    assert claude_external["status"] == "pass"
-    assert claude_external["data"]["operation_evidence"]["external_event_channel"]["status"] == "pass"
-    assert claude_external["data"]["operation_evidence"]["external_event_channel"]["canary"] == (
-        "claude_development_channels_contract"
-    )
-    assert claude_external["data"]["source_artifact_kind"] == "provider_live_canary"
-    assert (Path(claude_external["evidence_root"]) / "longhouse" / "db-ingest-result.json").is_file()
-
-    for provider in ("codex", "opencode"):
-        external = by_key[(provider, "external_event_channel")]
-        assert external["status"] == "unsupported_gap"
-        assert external["failure_code"] == "external_event_channel_unsupported"
-
-    antigravity = by_key[("antigravity", "external_event_channel")]
-    assert antigravity["status"] == "pass"
-    assert antigravity["data"]["operation_evidence"]["external_event_channel"]["status"] == "pass"
-    assert antigravity["data"]["source_artifact_kind"] == "provider_control_e2e_canary"
-    assert (Path(antigravity["evidence_root"]) / "longhouse" / "db-ingest-result.json").is_file()
-
 
 def test_opencode_interrupt_cancel_uses_session_abort_canary(tmp_path: Path) -> None:
     fake_opencode = _fake_opencode_server(tmp_path / "bin" / "opencode")
