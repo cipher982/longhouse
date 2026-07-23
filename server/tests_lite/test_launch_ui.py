@@ -17,7 +17,7 @@ _SESSION_ID = "111a5a5d-a4b5-49eb-95f7-863a69669959"
 
 # Strings that claim remote durability / steer. Soft-fail paths must not print these.
 _STEER_CLAIMS = ("Steer from anywhere",)
-_DURABLE_EXIT_CLAIMS = ("thread saved", "hearth banked")
+_DURABLE_EXIT_CLAIMS = ("safely saved in Longhouse", "hearth is banked")
 _WATCH_ONLY_CLAIMS = ("Watch on your timeline",)
 
 
@@ -117,7 +117,7 @@ def test_degraded_helm_launch_panel_honesty_matrix(capsys, capability, must_incl
 @pytest.mark.parametrize(
     ("durable", "must_include", "must_exclude"),
     [
-        (True, ("hearth banked",), ("not synced to Longhouse",)),
+        (True, ("hearth is banked",), ("not synced to Longhouse",)),
         (False, ("not synced to Longhouse",), _DURABLE_EXIT_CLAIMS),
     ],
 )
@@ -174,7 +174,13 @@ def test_quiet_diagnostic_logs_silences_noisy_loggers_unless_verbose():
 def test_exit_bookend_clean_exit_banks_the_hearth(capsys):
     launch_ui.exit_bookend(exit_code=0, machine_name="cinder")
     out = capsys.readouterr().out
-    assert "hearth banked on cinder" in out
+    assert "Longhouse — Session closed" in out
+    assert "hearth is banked" in out
+    assert "cinder" in out
+    assert "This Helm has ended." in out
+    assert "thread is safely saved in Longhouse" in out
+    assert "Until next time" in out
+    assert "still burns" not in out
     assert "scattered" not in out
 
 
@@ -189,8 +195,7 @@ def test_exit_bookend_crash_scatters_and_shows_rekindle(capsys):
     assert "longhouse continue abc-123" in out
 
 
-def test_exit_bookend_reattachable_crash_does_not_claim_death(capsys):
-    # Codex leaves its bridge running on a nonzero exit — must NOT say "scattered/dead".
+def test_exit_bookend_recoverable_crash_offers_continuation_without_claiming_liveness(capsys):
     launch_ui.exit_bookend(
         exit_code=7,
         machine_name="cinder",
@@ -198,6 +203,7 @@ def test_exit_bookend_reattachable_crash_does_not_claim_death(capsys):
         reattachable_on_nonzero_exit=True,
     )
     out = capsys.readouterr().out
-    assert "still burns" in out
-    assert "Rejoin: codex --resume ..." in out
+    assert "hearth went quiet (exit 7)" in out
+    assert "Continue: codex --resume ..." in out
+    assert "still burns" not in out
     assert "scattered" not in out

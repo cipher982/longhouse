@@ -147,29 +147,70 @@ def exit_bookend(
 ) -> None:
     """Closing bookend keyed on the real process exit code. Print-only.
 
-    - clean exit                              -> the hearth is banked, thread saved
-    - clean exit, not durable                 -> local session ended (not synced)
-    - crash, reattachable_on_nonzero_exit     -> the hearth still burns, rejoin it
-      (codex: the bridge is left running and is reattachable, so "scattered/dead"
-       would be a lie)
+    - clean exit                              -> Helm ended, durable thread saved
+    - clean exit, not durable                 -> Helm ended locally (not synced)
+    - crash with a recovery target            -> the hearth went quiet; continue it
     - crash, otherwise                        -> the fire scattered, rekindle it
     """
     if exit_code == 0:
-        if durable:
-            typer.secho(f"·  The hearth banked on {machine_name} — thread saved.", fg=typer.colors.BRIGHT_BLACK)
-        else:
-            typer.secho(
-                f"·  Local Helm ended on {machine_name} — session was not synced to Longhouse.",
-                fg=typer.colors.BRIGHT_BLACK,
-            )
+        _clean_exit_panel(machine_name=machine_name, durable=durable)
         return
 
     if reattachable_on_nonzero_exit:
-        typer.secho(f"🔥  The hearth still burns — detached (exit {exit_code}).", fg=typer.colors.YELLOW)
+        typer.secho(f"🔥  The hearth went quiet (exit {exit_code}).", fg=typer.colors.YELLOW)
         if reattach_command:
-            typer.echo(f"   Rejoin: {reattach_command}")
+            typer.echo(f"   Continue: {reattach_command}")
         return
 
     typer.secho(f"✗  The fire scattered (exit {exit_code}). Rekindle:", fg=typer.colors.YELLOW)
     if reattach_command:
         typer.echo(f"   {reattach_command}")
+
+
+def _clean_exit_panel(*, machine_name: str, durable: bool) -> None:
+    """Render the deliberate closing receipt for a Helm the user has exited.
+
+    This must never imply a still-running provider process. A durable thread is
+    archive state, not a detached execution owner.
+    """
+    if durable:
+        headline = "░▒▓  🔥  The hearth is banked  🔥  ▓▒░"
+        status = "The thread is safely saved in Longhouse."
+        footer = "✦  Until next time"
+    else:
+        headline = "░▒▓  ·  The local hearth is out  ·  ▓▒░"
+        status = "This local session was not synced to Longhouse."
+        footer = "✦  Local-only session"
+
+    try:
+        from rich.box import ROUNDED
+        from rich.console import Console
+        from rich.panel import Panel
+        from rich.table import Table
+        from rich.text import Text
+
+        body = Table.grid(padding=(0, 0))
+        body.add_column()
+        body.add_row(Text(headline, style="bold orange3"))
+        body.add_row(Text(f"                    {machine_name}", style="dim orange3"))
+        body.add_row("")
+        body.add_row(Text("This Helm has ended.", style="bold"))
+        body.add_row(Text(status, style="dim"))
+        body.add_row("")
+        body.add_row(Text(footer, style="dim"))
+
+        Console().print(
+            Panel(
+                body,
+                title=Text("⬡ Longhouse — Session closed", style="bold"),
+                title_align="left",
+                box=ROUNDED,
+                border_style="orange3",
+                padding=(1, 3),
+                expand=False,
+            )
+        )
+    except Exception:
+        # Presentation must never turn a successful Helm exit into a failure.
+        typer.secho(f"🔥  The hearth is banked on {machine_name}.", fg=typer.colors.YELLOW)
+        typer.echo("   This Helm has ended. " + status)
