@@ -36,6 +36,12 @@ from zerg.services.longhouse_paths import get_agent_outbox_dir
 from zerg.services.longhouse_paths import get_agent_status_path
 from zerg.services.machine_state import MachineState
 from zerg.services.machine_state import machine_state_source_hash
+from zerg.services.managed_provider_contracts import all_managed_provider_contracts
+from zerg.services.provider_capability_local_proof import executable_identity
+from zerg.services.provider_capability_proof import AssertionOutcome
+from zerg.services.provider_capability_proof import EvidenceClass
+from zerg.services.provider_capability_proof import ProviderCapabilityProofRecord
+from zerg.services.provider_capability_remote_proof import TrustedProviderProofs
 
 _REAL_COMPUTE_PROCESS_SNAPSHOT = local_health_service._compute_process_snapshot
 _REAL_SCAN_PROVIDER_PROCESSES = local_health_service._scan_provider_processes
@@ -751,6 +757,70 @@ def test_fast_local_health_skips_provider_hook_transcript_scan(monkeypatch, tmp_
 
     assert snapshot["provider_hook_diagnostics"]["state"] == "skipped"
     assert snapshot["provider_hook_diagnostics"]["skipped_reason"] == "fast_local_health"
+
+
+def test_fast_local_health_re_evaluates_cached_server_trusted_proofs_without_fetching(monkeypatch, tmp_path: Path):
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    binary = tmp_path / "codex"
+    binary.write_bytes(b"exact provider executable")
+    provider_identity = executable_identity(str(binary))
+    contract = next(contract for contract in all_managed_provider_contracts() if contract.provider == "codex")
+    declaration = contract.capabilities["coordination.message.send"]
+    assertion = declaration["required_assertions"][0]
+    record = ProviderCapabilityProofRecord(
+        provider="codex",
+        provider_version="0.145.0",
+        provider_executable_identity=provider_identity,
+        provider_contract_digest=contract.contract_entry_digest,
+        adapter_digest=contract.adapter_digest,
+        scenario_id=assertion["scenario_id"],
+        scenario_revision=assertion["minimum_scenario_revision"],
+        oracle_digest=assertion["oracle_digest"],
+        assertion_id=assertion["id"],
+        outcome=AssertionOutcome.PASS,
+        evidence_class=EvidenceClass.HERMETIC,
+        generated_at="2026-07-22T16:00:00Z",
+        producer_class="release_factory",
+        producer_version="1",
+        invocation_id="factory-run-1",
+        run_reference="factory://run-1",
+        raw_reference_digests=("sha256:raw",),
+    )
+    monkeypatch.setattr(
+        local_health_service,
+        "_collect_provider_clis",
+        lambda: {"codex": {"path": str(binary), "source": "PATH", "resolution_error": None}},
+    )
+    monkeypatch.setattr(
+        local_health_service,
+        "collect_provider_release_status",
+        lambda provider_clis, *, fast: {
+            "schema_version": 1,
+            "statuses": {"codex": {"current_version": "0.145.0"}},
+        },
+    )
+    cached = TrustedProviderProofs(
+        records_by_provider={"codex": (record,)},
+        trusted_artifact_ids=frozenset({record.artifact_id}),
+        summary={"cache_state": "present", "refresh_state": "cache_only"},
+    )
+    monkeypatch.setattr(local_health_service, "load_cached_provider_capability_proofs", lambda *args, **kwargs: cached)
+    monkeypatch.setattr(
+        local_health_service,
+        "refresh_cached_provider_capability_proofs",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("fast local health must not fetch proofs")),
+    )
+    _write_engine_status(tmp_path, age_seconds=5)
+
+    snapshot = local_health_service.collect_local_health(tmp_path, fast=True)
+
+    decision = snapshot["provider_support_state"]["providers"]["codex"]["capabilities"]["operation_decisions"][
+        "coordination.message.send"
+    ]
+    assert decision["verification"] == "proven"
+    assert snapshot["provider_capability_proofs"]["trusted_runtime_cache"]["refresh_state"] == "cache_only"
+    assert snapshot["provider_capability_proofs"]["providers"]["codex"]["trusted_record_count"] == 1
 
 
 def test_collect_local_health_classifies_missing_cwd_from_managed_session_contract(monkeypatch, tmp_path: Path):
