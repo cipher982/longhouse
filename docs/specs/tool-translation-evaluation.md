@@ -175,8 +175,7 @@ becomes an archive epic, not a presentation workaround.
 
 - Implement replay accounting and the invariants above.
 - Add only explicit native tool aliases through the shared rules/config path.
-- Render Exact aliases behind a dogfood flag to exercise the whole disclosure
-  path early.
+- Render Exact aliases directly through the shared presentation path.
 - Review a stratified set of rendered sessions per provider.
 
 Gate: zero loss, duplication, or false attribution in the golden corpus;
@@ -252,9 +251,8 @@ Implemented in the first cut:
   accounting without emitting raw payload values;
 - explicit aliases live in `config/tool-tiers.json` and generate identical web
   and iOS rules; unknown tools keep their raw names;
-- the new aliases are off by default. Web dogfood uses local storage key
-  `longhouse.toolTranslationExact=1`; iOS uses the matching UserDefaults key or
-  `LONGHOUSE_TOOL_TRANSLATION_EXACT=1` in the process environment.
+- Exact aliases are the sole presentation behavior on web and iOS; there is no
+  flag or legacy rendering path. Unknown names still render raw.
 
 Golden result: 18 source events conserved as 18 canonical events, nine calls
 paired with nine results, eight Exact calls, one deliberate Unknown, and zero

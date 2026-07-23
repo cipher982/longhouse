@@ -57,9 +57,6 @@ export const TOOL_TIERS: Record<string, ToolTierMeta> = {
   "create_file": { tier: "action", aggregate: null, icon: "W", label: "create", color: "success" },
   "str_replace_editor": { tier: "action", aggregate: null, icon: "E", label: "edit", color: "brand" },
   "update_plan": { tier: "action", aggregate: null, icon: "+", label: "plan", color: "accent" },
-};
-
-export const TOOL_EXACT_ALIASES: Record<string, ToolTierMeta> = {
   "exec": { tier: "action", aggregate: null, icon: "$", label: "exec", color: "warning" },
   "wait": { tier: "action", aggregate: null, icon: "\u2026", label: "Wait", color: "tertiary" },
   "request_user_input": { tier: "action", aggregate: null, icon: "?", label: "Question", color: "accent" },
@@ -119,18 +116,7 @@ export interface ResolvedToolInfo {
   mcpNamespace?: string;
 }
 
-export function exactAliasesDogfoodEnabled(): boolean {
-  try {
-    return typeof localStorage !== "undefined" && localStorage.getItem("longhouse.toolTranslationExact") === "1";
-  } catch {
-    return false;
-  }
-}
-
-export function resolveToolInfo(
-  toolName: string,
-  enableExactAliases = exactAliasesDogfoodEnabled(),
-): ResolvedToolInfo {
+export function resolveToolInfo(toolName: string): ResolvedToolInfo {
   const mcp = parseMcp(toolName);
   if (mcp) {
     const ns = mcp.namespace.toLowerCase();
@@ -161,11 +147,6 @@ export function resolveToolInfo(
 
   const exact = TOOL_TIERS[toolName];
   if (exact) return { ...exact };
-
-  if (enableExactAliases) {
-    const alias = TOOL_EXACT_ALIASES[toolName];
-    if (alias) return { ...alias };
-  }
 
   const lower = toolName.toLowerCase();
   for (const [key, meta] of Object.entries(TOOL_TIERS)) {

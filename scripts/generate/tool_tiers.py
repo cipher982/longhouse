@@ -31,7 +31,6 @@ def _aggregate_literal(value: object) -> str:
 
 def render_ts(data: dict) -> str:
     tools = data["tools"]
-    exact_aliases = data.get("exact_aliases", {})
     shell = data["shell_classifier"]
     mcp_ns = data["mcp_namespaces"]
     default_tier = data["default_tier"]
@@ -54,14 +53,6 @@ def render_ts(data: dict) -> str:
     for ns, meta in mcp_ns.items():
         mcp_entries.append(
             f'  {quote(ns)}: {{ icon: {quote(meta["icon"])}, color: {quote(meta["color"])} }},'
-        )
-
-    alias_entries = []
-    for name, meta in exact_aliases.items():
-        aggregate = meta.get("aggregate", default_aggregate)
-        alias_entries.append(
-            f'  {quote(name)}: {{ tier: {quote(meta["tier"])}, aggregate: {_aggregate_literal(aggregate)}, '
-            f'icon: {quote(meta["icon"])}, label: {quote(meta["label"])}, color: {quote(meta["color"])} }},'
         )
 
     return f"""// @generated from config/tool-tiers.json — do not edit by hand.
@@ -94,10 +85,6 @@ export const MCP_DEFAULT_AGGREGATE: ToolAggregate | null = {_aggregate_literal(m
 
 export const TOOL_TIERS: Record<string, ToolTierMeta> = {{
 {chr(10).join(entries)}
-}};
-
-export const TOOL_EXACT_ALIASES: Record<string, ToolTierMeta> = {{
-{chr(10).join(alias_entries)}
 }};
 
 export const MCP_NAMESPACES: Record<string, McpNamespaceMeta> = {{
@@ -136,18 +123,7 @@ export interface ResolvedToolInfo {{
   mcpNamespace?: string;
 }}
 
-export function exactAliasesDogfoodEnabled(): boolean {{
-  try {{
-    return typeof localStorage !== "undefined" && localStorage.getItem("longhouse.toolTranslationExact") === "1";
-  }} catch {{
-    return false;
-  }}
-}}
-
-export function resolveToolInfo(
-  toolName: string,
-  enableExactAliases = exactAliasesDogfoodEnabled(),
-): ResolvedToolInfo {{
+export function resolveToolInfo(toolName: string): ResolvedToolInfo {{
   const mcp = parseMcp(toolName);
   if (mcp) {{
     const ns = mcp.namespace.toLowerCase();
@@ -178,11 +154,6 @@ export function resolveToolInfo(
 
   const exact = TOOL_TIERS[toolName];
   if (exact) return {{ ...exact }};
-
-  if (enableExactAliases) {{
-    const alias = TOOL_EXACT_ALIASES[toolName];
-    if (alias) return {{ ...alias }};
-  }}
 
   const lower = toolName.toLowerCase();
   for (const [key, meta] of Object.entries(TOOL_TIERS)) {{
@@ -219,7 +190,6 @@ export const SHELL_DEFAULT_READ_AGGREGATE: ToolAggregate = {json.dumps(shell["de
 
 def render_swift(data: dict) -> str:
     tools = data["tools"]
-    exact_aliases = data.get("exact_aliases", {})
     shell = data["shell_classifier"]
     mcp_ns = data["mcp_namespaces"]
     default_aggregate = data.get("default_aggregate", None)
@@ -243,15 +213,6 @@ def render_swift(data: dict) -> str:
     for ns, meta in mcp_ns.items():
         mcp_entries.append(
             f'        "{ns}": McpNamespaceMeta(icon: "{meta["icon"]}", color: .{meta["color"]}),'
-        )
-
-    alias_entries = []
-    for name, meta in exact_aliases.items():
-        aggregate = meta.get("aggregate", default_aggregate)
-        alias_entries.append(
-            f'        "{name}": ToolTierMeta(tier: .{meta["tier"]}, '
-            f'aggregate: {swift_aggregate(aggregate)}, '
-            f'icon: "{meta["icon"]}", label: "{meta["label"]}", color: .{meta["color"]}),'
         )
 
     return f"""// @generated from config/tool-tiers.json — do not edit by hand.
@@ -298,10 +259,6 @@ public enum ToolTiers {{
 {chr(10).join(tool_entries)}
     ]
 
-    public static let exactAliases: [String: ToolTierMeta] = [
-{chr(10).join(alias_entries)}
-    ]
-
     public static let mcpNamespaces: [String: McpNamespaceMeta] = [
 {chr(10).join(mcp_entries)}
     ]
@@ -315,15 +272,7 @@ public enum ToolTiers {{
         public let mcpNamespace: String?
     }}
 
-    public static var exactAliasesDogfoodEnabled: Bool {{
-        ProcessInfo.processInfo.environment["LONGHOUSE_TOOL_TRANSLATION_EXACT"] == "1" ||
-            UserDefaults.standard.bool(forKey: "longhouse.toolTranslationExact")
-    }}
-
-    public static func resolve(
-        _ name: String,
-        enableExactAliases: Bool = exactAliasesDogfoodEnabled
-    ) -> Resolved {{
+    public static func resolve(_ name: String) -> Resolved {{
         if let mcp = parseMcp(name) {{
             let ns = mcp.namespace.lowercased()
             let parts = Set(ns.split(whereSeparator: {{ $0 == "-" || $0 == "_" }}).map(String.init))
@@ -342,10 +291,6 @@ public enum ToolTiers {{
         if let exact = tools[name] {{
             return Resolved(tier: exact.tier, aggregate: exact.aggregate, icon: exact.icon,
                             label: exact.label, color: exact.color, mcpNamespace: nil)
-        }}
-        if enableExactAliases, let alias = exactAliases[name] {{
-            return Resolved(tier: alias.tier, aggregate: alias.aggregate, icon: alias.icon,
-                            label: alias.label, color: alias.color, mcpNamespace: nil)
         }}
         let lower = name.lowercased()
         for (key, meta) in tools where key.lowercased() == lower {{

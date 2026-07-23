@@ -83,16 +83,12 @@ def _load_records(path: Path) -> list[dict[str, Any]]:
     return records
 
 
-def _rule_lookup(rules: dict[str, Any]) -> tuple[set[str], set[str]]:
-    native = {str(name).lower() for name in (rules.get("tools") or {})}
-    aliases = {str(name) for name in (rules.get("exact_aliases") or {})}
-    return native, aliases
+def _rule_lookup(rules: dict[str, Any]) -> set[str]:
+    return {str(name).lower() for name in (rules.get("tools") or {})}
 
 
-def _is_exact(tool_name: str, native: set[str], aliases: set[str]) -> bool:
-    if tool_name.lower() in native or tool_name.startswith("mcp__"):
-        return True
-    return tool_name in aliases
+def _is_exact(tool_name: str, native: set[str]) -> bool:
+    return tool_name.lower() in native or tool_name.startswith("mcp__")
 
 
 def evaluate_manifest(manifest_path: Path, *, rules_path: Path = DEFAULT_RULES_PATH) -> dict[str, Any]:
@@ -107,7 +103,7 @@ def evaluate_manifest(manifest_path: Path, *, rules_path: Path = DEFAULT_RULES_P
         raise TranslationEvaluationError("manifest must contain at least one source")
 
     rules = _load_json(rules_path.resolve())
-    native_tools, exact_aliases = _rule_lookup(rules)
+    native_tools = _rule_lookup(rules)
     rules_hash = hashlib.sha256(rules_path.resolve().read_bytes()).hexdigest()[:16]
 
     totals: Counter[str] = Counter()
@@ -190,7 +186,7 @@ def evaluate_manifest(manifest_path: Path, *, rules_path: Path = DEFAULT_RULES_P
                         call_slots[(provider, session_id, call_id)].append(event_id)
                     else:
                         totals["orphan_calls"] += 1
-                    if _is_exact(tool_name, native_tools, exact_aliases):
+                    if _is_exact(tool_name, native_tools):
                         totals["exact"] += 1
                         by_provider[provider]["exact"] += 1
                     else:
