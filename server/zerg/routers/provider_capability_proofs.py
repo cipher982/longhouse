@@ -71,8 +71,8 @@ async def _read_capped_json(request: Request) -> dict[str, Any]:
 
 
 def _validated_records(payload: dict[str, Any]) -> tuple[ProviderCapabilityProofRecord, ...]:
-    if payload.get("schema_version") != 1:
-        raise ValueError("proof bundle schema_version must be 1")
+    if payload.get("schema_version") != 2:
+        raise ValueError("proof bundle schema_version must be 2")
     if payload.get("artifact_kind") != _BUNDLE_KIND:
         raise ValueError(f"proof bundle artifact_kind must be {_BUNDLE_KIND}")
     raw_records = payload.get("records")

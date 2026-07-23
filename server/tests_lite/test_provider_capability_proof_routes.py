@@ -45,7 +45,7 @@ def _record(**changes) -> ProviderCapabilityProofRecord:
         mode="helm",
         platform="darwin",
         architecture="arm64",
-        run_reference="factory://runs/factory-run-123",
+        run_reference="github-actions://cipher982/longhouse/actions/runs/12345/attempts/2",
         raw_reference_digests=("sha256:raw",),
     )
     return replace(record, **changes)
@@ -53,7 +53,7 @@ def _record(**changes) -> ProviderCapabilityProofRecord:
 
 def _bundle(*records: ProviderCapabilityProofRecord) -> dict:
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "artifact_kind": "provider_capability_proof_bundle",
         "records": [record.serialize() for record in records],
         # Publisher claims are deliberately ignored. Trust is derived from the
@@ -104,6 +104,7 @@ def test_factory_publish_is_authenticated_idempotent_and_machine_read_is_server_
     assert fetched.json()["artifact_kind"] == "trusted_provider_capability_proof_bundle"
     assert fetched.json()["trusted_artifact_ids"] == [record.artifact_id]
     assert fetched.json()["records"] == [record.serialize()]
+    assert fetched.json()["records"][0]["run_reference"] == record.run_reference
 
 
 def test_factory_publish_is_absent_when_token_is_unconfigured(monkeypatch, tmp_path: Path) -> None:
@@ -194,7 +195,7 @@ def test_factory_rejects_untrusted_producer_and_mixed_invocations(monkeypatch, t
 def test_factory_rejects_unknown_provider_and_bundle_schema(monkeypatch, tmp_path: Path) -> None:
     client = _client(monkeypatch, tmp_path)
     invalid_schema = _bundle(_record())
-    invalid_schema["schema_version"] = 2
+    invalid_schema["schema_version"] = 1
     try:
         unknown_provider = client.post(
             "/api/internal/provider-capability-proofs",
