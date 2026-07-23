@@ -38,6 +38,7 @@ enum Commands {
     /// Verify the paired engine is present and built from the same commit.
     VerifyPair,
     /// Configure native Longhouse hooks for Claude.
+    #[command(args_conflicts_with_subcommands = true)]
     Claude {
         #[command(subcommand)]
         command: Option<ClaudeCommand>,
@@ -91,6 +92,8 @@ struct ClaudeLaunchArgs {
     remote_approve: bool,
     #[arg(long)]
     claude_bin: Option<String>,
+    #[arg(long, alias = "config-dir")]
+    claude_dir: Option<PathBuf>,
 }
 
 #[derive(Args)]
@@ -161,6 +164,7 @@ struct ManagedLaunchResponse {
     provider_session_id: Option<String>,
     permission_mode: Option<String>,
     hook_token: Option<String>,
+    managed_transport: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -256,7 +260,8 @@ fn configure_claude_hooks(claude_dir: Option<PathBuf>) -> anyhow::Result<()> {
                 PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".into())).join(".claude")
             })
     });
-    let settings_path = claude_dir.parent().unwrap_or(Path::new(".")).join(format!(
+    let settings_path = claude_dir.join("settings.json");
+    let user_config_path = claude_dir.parent().unwrap_or(Path::new(".")).join(format!(
         "{}.json",
         claude_dir
             .file_name()
@@ -284,23 +289,52 @@ fn configure_claude_hooks(claude_dir: Option<PathBuf>) -> anyhow::Result<()> {
         .context("Claude PreToolUse hooks must be an array")?;
     pre_tool.retain(|entry| !entry.to_string().contains("longhouse-permission-gate.py"));
     pre_tool.push(json!({"hooks": [{"type": "command", "command": format!("{} claude-permission-gate", paired_engine_path()?.display()), "async": false, "timeout": 30}]}));
-    let mcp = settings
+    let mut user_config: serde_json::Map<String, serde_json::Value> =
+        match std::fs::read(&user_config_path) {
+            Ok(raw) => serde_json::from_slice(&raw)
+                .with_context(|| format!("parse {}", user_config_path.display()))?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => serde_json::Map::new(),
+            Err(error) => {
+                return Err(error).with_context(|| format!("read {}", user_config_path.display()))
+            }
+        };
+    let mcp = user_config
         .entry("mcpServers")
         .or_insert_with(|| json!({}))
         .as_object_mut()
         .context("Claude settings mcpServers must be an object")?;
     mcp.insert("longhouse-channel".into(), json!({"type":"stdio", "command": paired_engine_path()?, "args":["claude-channel","serve"], "env":{}}));
     std::fs::create_dir_all(&claude_dir)?;
+    if let Some(projects) = user_config
+        .get_mut("projects")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        for project in projects
+            .values_mut()
+            .filter_map(serde_json::Value::as_object_mut)
+        {
+            if let Some(servers) = project
+                .get_mut("mcpServers")
+                .and_then(serde_json::Value::as_object_mut)
+            {
+                servers.remove("longhouse-channel");
+            }
+        }
+    }
     std::fs::write(
         &settings_path,
         format!("{}\n", serde_json::to_string_pretty(&settings)?),
+    )?;
+    std::fs::write(
+        &user_config_path,
+        format!("{}\n", serde_json::to_string_pretty(&user_config)?),
     )?;
     let legacy_gate = claude_dir.join("hooks/longhouse-permission-gate.py");
     if legacy_gate.exists() {
         std::fs::remove_file(&legacy_gate)?;
     }
     println!(
-        "Configured native Claude permission gate in {}",
+        "Configured native Claude hooks in {}",
         settings_path.display()
     );
     Ok(())
@@ -308,9 +342,36 @@ fn configure_claude_hooks(claude_dir: Option<PathBuf>) -> anyhow::Result<()> {
 
 fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
     let cwd = std::fs::canonicalize(&args.cwd)?;
-    configure_claude_hooks(None)?;
+    configure_claude_hooks(args.claude_dir.clone())?;
     let (url, token, machine_name) = resolve_codex_config(args.url, args.token)?;
-    let payload = json!({"cwd":cwd,"provider":"claude","project":args.project,"display_name":args.name,"loop_mode":args.loop_mode,"machine_name":machine_name,"permission_mode":if args.remote_approve {"remote_approve"} else {"bypass"},"native_claude_channels_available":true});
+    let binary = resolve_provider_binary(
+        args.claude_bin
+            .or_else(|| std::env::var("LONGHOUSE_CLAUDE_BIN").ok()),
+        "claude",
+        "Claude",
+        "--claude-bin",
+    )?;
+    ensure_claude_channel_prerequisite(&binary)?;
+    let git = |args: &[&str]| {
+        Command::new("git")
+            .arg("-C")
+            .arg(&cwd)
+            .args(args)
+            .output()
+            .ok()
+            .filter(|output| output.status.success())
+            .and_then(|output| String::from_utf8(output.stdout).ok())
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+    };
+    let (launch_actor, launch_surface) = interactive_human_shell_provenance();
+    let mut payload = json!({"cwd":cwd,"provider":"claude","project":args.project,"git_repo":git(&["rev-parse", "--show-toplevel"]),"git_branch":git(&["rev-parse", "--abbrev-ref", "HEAD"]),"display_name":args.name,"loop_mode":args.loop_mode,"machine_name":machine_name,"permission_mode":if args.remote_approve {"remote_approve"} else {"bypass"},"native_claude_channels_available":true});
+    if let Some(actor) = launch_actor {
+        payload["launch_actor"] = json!(actor);
+    }
+    if let Some(surface) = launch_surface {
+        payload["launch_surface"] = json!(surface);
+    }
     let endpoint = format!(
         "{}/api/sessions/managed-local/this-device",
         url.trim_end_matches('/')
@@ -331,10 +392,9 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
     let provider_session_id = response
         .provider_session_id
         .context("Longhouse did not return a Claude provider session")?;
-    let binary = resolve_codex_binary(
-        args.claude_bin
-            .or_else(|| std::env::var("LONGHOUSE_CLAUDE_BIN").ok()),
-    )?;
+    if response.managed_transport.as_deref() != Some("claude_channel_bridge") {
+        anyhow::bail!("Longhouse returned an unsupported managed-local transport for Claude");
+    }
     let mut command = Command::new(binary);
     if response.permission_mode.as_deref() != Some("remote_approve") {
         command.arg("--dangerously-skip-permissions");
@@ -346,13 +406,22 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
             "--dangerously-load-development-channels",
             "server:longhouse-channel",
         ])
-        .current_dir(cwd)
+        .current_dir(&cwd)
         .env("LONGHOUSE_MANAGED_SESSION_ID", &response.session_id)
         .env("LONGHOUSE_RUN_ID", &response.run_id)
+        .env("LONGHOUSE_CHANNEL_SESSION_ID", &response.session_id)
         .env("LONGHOUSE_PROVIDER_SESSION_ID", &provider_session_id)
-        .env("LONGHOUSE_CHANNEL_CWD", &args.cwd)
+        .env("LONGHOUSE_CHANNEL_CWD", &cwd)
         .env("LONGHOUSE_HOOK_URL", &url)
-        .env("LONGHOUSE_HOOK_TOKEN", response.hook_token.unwrap_or(token));
+        .env("LONGHOUSE_HOOK_TOKEN", response.hook_token.unwrap_or(token))
+        .env(
+            "LONGHOUSE_PERMISSION_HOOK_ENABLED",
+            if response.permission_mode.as_deref() == Some("remote_approve") {
+                "1"
+            } else {
+                "0"
+            },
+        );
     let exit = run_foreground_command(&mut command)?;
     if exit != 0 {
         std::process::exit(exit);
@@ -396,15 +465,27 @@ fn resolve_codex_config(
 }
 
 fn resolve_codex_binary(explicit: Option<String>) -> anyhow::Result<String> {
-    let candidate = explicit
-        .or_else(|| std::env::var("LONGHOUSE_CODEX_BIN").ok())
-        .unwrap_or_else(|| "codex".into());
+    resolve_provider_binary(
+        explicit.or_else(|| std::env::var("LONGHOUSE_CODEX_BIN").ok()),
+        "codex",
+        "Codex",
+        "--codex-bin",
+    )
+}
+
+fn resolve_provider_binary(
+    explicit: Option<String>,
+    default: &str,
+    label: &str,
+    flag: &str,
+) -> anyhow::Result<String> {
+    let candidate = explicit.unwrap_or_else(|| default.into());
     let path = PathBuf::from(&candidate);
     if path.components().count() > 1 {
         return path
             .is_file()
             .then(|| path.display().to_string())
-            .context("--codex-bin is not an executable file");
+            .with_context(|| format!("{flag} is not an executable file"));
     }
     for dir in std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()) {
         let found = dir.join(&candidate);
@@ -412,7 +493,47 @@ fn resolve_codex_binary(explicit: Option<String>) -> anyhow::Result<String> {
             return Ok(found.display().to_string());
         }
     }
-    anyhow::bail!("Codex executable not found. Install stock `codex` or set LONGHOUSE_CODEX_BIN / --codex-bin.")
+    anyhow::bail!(
+        "{label} executable not found. Install stock `{default}` or set an explicit binary path."
+    )
+}
+
+fn ensure_claude_channel_prerequisite(binary: &str) -> anyhow::Result<()> {
+    let output = Command::new(binary)
+        .args(["auth", "status", "--json"])
+        .output()
+        .with_context(|| format!("run {binary} auth status"))?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "Claude native channels unavailable: `claude auth status` exited {}",
+            output.status
+        );
+    }
+    let status: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .context("Claude auth status returned invalid JSON")?;
+    if status.get("loggedIn").and_then(serde_json::Value::as_bool) != Some(true) {
+        anyhow::bail!("Claude native channels unavailable: Claude is not logged in");
+    }
+    Ok(())
+}
+
+fn interactive_human_shell_provenance() -> (Option<&'static str>, Option<&'static str>) {
+    let hidden = std::env::var("LONGHOUSE_ORIGIN_KIND")
+        .ok()
+        .is_some_and(|value| !value.trim().is_empty());
+    let sidechain = matches!(
+        std::env::var("LONGHOUSE_IS_SIDECHAIN")
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase()
+            .as_str(),
+        "1" | "true" | "yes" | "on"
+    );
+    if std::io::stdin().is_terminal() && std::io::stdout().is_terminal() && !hidden && !sidechain {
+        (Some("human_shell"), Some("terminal"))
+    } else {
+        (None, None)
+    }
 }
 
 fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
@@ -1026,7 +1147,7 @@ mod tests {
     }
 
     #[test]
-    fn claude_configure_uses_user_config_and_removes_python_gate() {
+    fn claude_configure_places_hooks_and_mcp_at_the_provider_paths() {
         let temp = tempfile::tempdir().unwrap();
         let claude_dir = temp.path().join(".claude");
         let engine = temp.path().join("longhouse-engine");
@@ -1045,13 +1166,31 @@ mod tests {
             },
         );
         let settings: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(temp.path().join(".claude.json")).unwrap())
+            serde_json::from_slice(&std::fs::read(claude_dir.join("settings.json")).unwrap())
                 .unwrap();
         assert!(settings["hooks"]["PreToolUse"]
             .to_string()
             .contains("claude-permission-gate"));
+        let user_config: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(temp.path().join(".claude.json")).unwrap())
+                .unwrap();
+        assert_eq!(
+            user_config["mcpServers"]["longhouse-channel"]["args"][0],
+            "claude-channel"
+        );
         assert!(!claude_dir
             .join("hooks/longhouse-permission-gate.py")
             .exists());
+    }
+
+    #[test]
+    fn claude_parser_keeps_config_dir_alias() {
+        let cli =
+            Cli::try_parse_from(["longhouse", "claude", "--config-dir", "/tmp/claude"]).unwrap();
+        let Commands::Claude { command, launch } = cli.command.unwrap() else {
+            panic!("expected claude command");
+        };
+        assert!(command.is_none());
+        assert_eq!(launch.claude_dir.unwrap(), PathBuf::from("/tmp/claude"));
     }
 }
