@@ -40,7 +40,9 @@ enum Commands {
     /// Configure native Longhouse hooks for Claude.
     Claude {
         #[command(subcommand)]
-        command: ClaudeCommand,
+        command: Option<ClaudeCommand>,
+        #[command(flatten)]
+        launch: ClaudeLaunchArgs,
     },
     /// Launch or manage a native Longhouse Codex Helm session.
     #[command(args_conflicts_with_subcommands = true)]
@@ -69,6 +71,26 @@ enum ClaudeCommand {
         #[arg(long)]
         claude_dir: Option<PathBuf>,
     },
+}
+
+#[derive(Args)]
+struct ClaudeLaunchArgs {
+    #[arg(long, default_value = ".")]
+    cwd: PathBuf,
+    #[arg(long)]
+    project: Option<String>,
+    #[arg(long)]
+    name: Option<String>,
+    #[arg(long, default_value = "assist")]
+    loop_mode: String,
+    #[arg(long)]
+    url: Option<String>,
+    #[arg(long)]
+    token: Option<String>,
+    #[arg(long)]
+    remote_approve: bool,
+    #[arg(long)]
+    claude_bin: Option<String>,
 }
 
 #[derive(Args)]
@@ -136,6 +158,9 @@ struct MachineState {
 struct ManagedLaunchResponse {
     session_id: String,
     run_id: String,
+    provider_session_id: Option<String>,
+    permission_mode: Option<String>,
+    hook_token: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -259,6 +284,12 @@ fn configure_claude_hooks(claude_dir: Option<PathBuf>) -> anyhow::Result<()> {
         .context("Claude PreToolUse hooks must be an array")?;
     pre_tool.retain(|entry| !entry.to_string().contains("longhouse-permission-gate.py"));
     pre_tool.push(json!({"hooks": [{"type": "command", "command": format!("{} claude-permission-gate", paired_engine_path()?.display()), "async": false, "timeout": 30}]}));
+    let mcp = settings
+        .entry("mcpServers")
+        .or_insert_with(|| json!({}))
+        .as_object_mut()
+        .context("Claude settings mcpServers must be an object")?;
+    mcp.insert("longhouse-channel".into(), json!({"type":"stdio", "command": paired_engine_path()?, "args":["claude-channel","serve"], "env":{}}));
     std::fs::create_dir_all(&claude_dir)?;
     std::fs::write(
         &settings_path,
@@ -272,6 +303,60 @@ fn configure_claude_hooks(claude_dir: Option<PathBuf>) -> anyhow::Result<()> {
         "Configured native Claude permission gate in {}",
         settings_path.display()
     );
+    Ok(())
+}
+
+fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
+    let cwd = std::fs::canonicalize(&args.cwd)?;
+    configure_claude_hooks(None)?;
+    let (url, token, machine_name) = resolve_codex_config(args.url, args.token)?;
+    let payload = json!({"cwd":cwd,"provider":"claude","project":args.project,"display_name":args.name,"loop_mode":args.loop_mode,"machine_name":machine_name,"permission_mode":if args.remote_approve {"remote_approve"} else {"bypass"},"native_claude_channels_available":true});
+    let endpoint = format!(
+        "{}/api/sessions/managed-local/this-device",
+        url.trim_end_matches('/')
+    );
+    let runtime = tokio::runtime::Runtime::new()?;
+    let response: ManagedLaunchResponse = runtime.block_on(async {
+        let r = reqwest::Client::new()
+            .post(endpoint)
+            .header("X-Agents-Token", &token)
+            .json(&payload)
+            .send()
+            .await?;
+        if !r.status().is_success() {
+            anyhow::bail!("managed Claude launch failed ({})", r.status());
+        }
+        Ok::<_, anyhow::Error>(r.json().await?)
+    })?;
+    let provider_session_id = response
+        .provider_session_id
+        .context("Longhouse did not return a Claude provider session")?;
+    let binary = resolve_codex_binary(
+        args.claude_bin
+            .or_else(|| std::env::var("LONGHOUSE_CLAUDE_BIN").ok()),
+    )?;
+    let mut command = Command::new(binary);
+    if response.permission_mode.as_deref() != Some("remote_approve") {
+        command.arg("--dangerously-skip-permissions");
+    }
+    command
+        .args([
+            "--session-id",
+            &provider_session_id,
+            "--dangerously-load-development-channels",
+            "server:longhouse-channel",
+        ])
+        .current_dir(cwd)
+        .env("LONGHOUSE_MANAGED_SESSION_ID", &response.session_id)
+        .env("LONGHOUSE_RUN_ID", &response.run_id)
+        .env("LONGHOUSE_PROVIDER_SESSION_ID", &provider_session_id)
+        .env("LONGHOUSE_CHANNEL_CWD", &args.cwd)
+        .env("LONGHOUSE_HOOK_URL", &url)
+        .env("LONGHOUSE_HOOK_TOKEN", response.hook_token.unwrap_or(token));
+    let exit = run_foreground_command(&mut command)?;
+    if exit != 0 {
+        std::process::exit(exit);
+    }
     Ok(())
 }
 
@@ -862,8 +947,9 @@ fn main() -> anyhow::Result<()> {
                 pair.engine_path, pair.facade.commit_short
             );
         }
-        Commands::Claude { command } => match command {
-            ClaudeCommand::Configure { claude_dir } => configure_claude_hooks(claude_dir)?,
+        Commands::Claude { command, launch } => match command {
+            Some(ClaudeCommand::Configure { claude_dir }) => configure_claude_hooks(claude_dir)?,
+            None => launch_managed_claude(launch)?,
         },
         Commands::Codex { command, launch } => match command {
             Some(CodexCommand::Launch(args)) => launch_managed_codex(args)?,
