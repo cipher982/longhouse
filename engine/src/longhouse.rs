@@ -41,6 +41,11 @@ enum Commands {
     Auth(AuthArgs),
     /// Print the native fast local-health snapshot used by Longhouse.app.
     LocalHealth(LocalHealthArgs),
+    /// Repair native Machine Agent service state without invoking Python.
+    Machine {
+        #[command(subcommand)]
+        command: MachineCommand,
+    },
     /// Configure native Longhouse hooks for Claude.
     #[command(args_conflicts_with_subcommands = true)]
     Claude {
@@ -144,6 +149,23 @@ struct AuthArgs {
     /// Override the stored machine name.
     #[arg(long)]
     device: Option<String>,
+}
+
+#[derive(Subcommand)]
+enum MachineCommand {
+    Repair(MachineRepairArgs),
+}
+
+#[derive(Args)]
+struct MachineRepairArgs {
+    #[arg(long)]
+    dry_run: bool,
+    #[arg(long)]
+    repair_service: bool,
+    #[arg(long)]
+    json: bool,
+    #[arg(long)]
+    state_root: Option<PathBuf>,
 }
 
 #[derive(Args)]
@@ -552,6 +574,30 @@ fn native_auth(args: AuthArgs) -> anyhow::Result<()> {
         "Stored native Longhouse credentials for {}",
         state["machine_name"].as_str().unwrap_or("this machine")
     );
+    Ok(())
+}
+
+fn native_machine_repair(args: MachineRepairArgs) -> anyhow::Result<()> {
+    let mut command = Command::new(paired_engine_path()?);
+    command.args(["device", "repair"]);
+    if args.dry_run {
+        command.arg("--dry-run");
+    }
+    if args.repair_service {
+        command.arg("--repair-service");
+    }
+    if args.json {
+        command.arg("--json");
+    }
+    if let Some(root) = args.state_root {
+        command.arg("--state-root").arg(root);
+    }
+    let status = command
+        .status()
+        .context("run paired native machine repair")?;
+    if !status.success() {
+        std::process::exit(status.code().unwrap_or(1));
+    }
     Ok(())
 }
 
@@ -1662,6 +1708,9 @@ fn main() -> anyhow::Result<()> {
         }
         Commands::Auth(args) => native_auth(args)?,
         Commands::LocalHealth(args) => native_local_health(args)?,
+        Commands::Machine { command } => match command {
+            MachineCommand::Repair(args) => native_machine_repair(args)?,
+        },
         Commands::Claude { command, launch } => match command {
             Some(ClaudeCommand::Configure { claude_dir }) => configure_claude_hooks(claude_dir)?,
             None => launch_managed_claude(launch)?,
