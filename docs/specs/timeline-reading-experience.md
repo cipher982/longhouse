@@ -47,25 +47,82 @@ observed on hosted david010 at wide viewports:
 Open question: user bubble = faint background tint (leaning yes) vs. pure
 chromeless offset.
 
-## Change B — Content-aware Bash salience (classifier)
+## Change B — Content-aware shell salience (classifier)
 
-Sub-classify `Bash`/`shell`/`exec` interactions by command string:
+### Evidence (local corpus, 5,570 real shell commands)
 
-- **Read-only commands → noise/context**, eligible to join exploration runs:
-  `grep`, `rg`, `ls`, `find`, `cat`, `head`, `tail`, `wc`, `stat`, `which`,
-  `echo`, `pwd`, `git status/log/diff/show`, `sqlite3 … ".tables"/SELECT`, etc.
-  Unwrap one level of `ssh <host> "<cmd>"` and classify the inner command;
-  pipes classify by the most-consequential segment.
-- **Mutating/heavyweight → action** (unchanged full row): `rm`, `mv`, `cp`
-  into tracked paths, `git commit/push/reset`, `docker`, `kill`, installs,
-  redirects (`>`), `make`, deploys, long-running anything.
-- **Unknown/ambiguous → context** (middle), not action. Also revisit
-  `default_tier: action` for MCP/unknown tools → `context`.
-- Remote target (`ssh cube …`) does not change tier but adds a host chip to
-  the row/summary — visibility badge, not salience escalation.
+First-word head of the distribution: `sed` 16.2%, `git` 15.1%, `grep`+`rg`
+13.3%, `uv` 5.6%, `nl` 4.7%, `ls` 3.3%, `find` 3.3%, `ssh` 3.0%. With the
+conservative classifier below, **40.4% of all shell commands classify as
+read-only**, and 46% of those occur in adjacent runs of 2+ (371 runs, avg
+2.8, max 10). So ~20% of shell rows collapse into exploration chips and
+another ~20% demote to quiet one-liners.
 
-Classifier lives beside the tier config so web and iOS share it (extend the
-`tool_tiers.py` generator model with command-pattern rules).
+### Design principle: detect boring, never detect danger
+
+Enumerating dangerous commands is an unbounded long tail. Instead: a
+conservative **allowlist of read-only commands demotes; everything
+unrecognized keeps today's full action row.** Failure asymmetry does the
+work — a missed read renders big (status quo, harmless); a mutation can
+only demote if it passes an explicit read-only shape, and mutating verbs
+are simply not on the list. Salience is not safety: a demoted row is still
+visible, expandable, and grouped, so the classifier only needs to be
+roughly right, forever. No pressure to chase freak cases.
+
+### Classifier contract
+
+Input: raw command string from the tool call (`command`/`cmd` field).
+Output: `read` (demote) or `opaque` (keep action tier). Rules:
+
+1. **Per-segment strictness.** Split on `&&`, `||`, `;`, `|`. Every segment
+   must pass or the whole command is `opaque`. `cd` segments are neutral.
+   Leading `VAR=value` assignments are stripped per segment.
+2. **Any redirect (`>`, `>>`) anywhere → `opaque`.** Catches file writes
+   via bash categorically. (Heredoc `<<` also → `opaque`.)
+3. **Allowlist first words** (basename of segment head): `grep rg ls find
+   cat head tail nl wc stat which file echo pwd du df ps env printenv
+   whoami hostname date awk jq sqlite3 tree diff column sort uniq xxd
+   basename dirname type true man`.
+4. **Special cases:** `sed` is read unless `-i` present. `git` requires a
+   read subcommand (`status log diff show branch remote rev-parse ls-files
+   blame describe shortlog`). `ssh [flags] host "cmd"` unwraps one level
+   and classifies the inner command recursively; unparseable ssh →
+   `opaque`.
+5. Command substitution `$(…)`, backticks, `for`/`while`, functions,
+   subshells → `opaque` (no shell parsing heroics).
+
+### Wiring
+
+- Rules live in `config/tool-tiers.json` under a new `shell_classifier`
+  block (allowlist, git subcommands, shell tool names). Structural rules
+  (redirects, segmenting, ssh unwrap) are code in the generator templates —
+  they are grammar, not data.
+- `scripts/generate/tool_tiers.py` emits `classifyShellCommand()` in both
+  `toolTiers.generated.ts` and `ToolTiers.generated.swift` so web and iOS
+  stay byte-identical in behavior.
+- Web call sites: `getToolTier` / `isExplorationEligible` /
+  `formatExplorationSummary` in `timelineModel.ts` gain command awareness
+  for tools listed as shell tools (`Bash`, `shell`, `exec_command`, …).
+  Demoted shell reads get aggregate by head word: `grep|rg|find` → search,
+  `ls|tree|du|df` → list, everything else → read.
+- iOS call site: `TimelineBuilder` aggregate checks (lines ~82/97) pass the
+  command string through the same generated Swift function.
+- **Host chip:** an `ssh <host>` read does not change tier but surfaces the
+  host in the row one-liner and in the exploration-chip summary (visibility
+  badge, not salience escalation).
+- MCP/unknown `default_tier` stays `action` for now — separate decision,
+  not bundled into this change.
+
+### Validation
+
+- TS unit tests: classifier table tests (corpus-derived fixtures incl.
+  ssh-wrapped reads, pipes, redirects, `sed -i`, git subcommands) plus a
+  `timelineModel` grouping test proving consecutive shell reads collapse
+  and a mutation breaks the run.
+- Visual: `make ui-capture` fixture pass showing a Bash-heavy transcript
+  collapsing (extend session-detail-stress with a shell exploration run).
+- iOS: generated Swift compiles; TimelineBuilder unit test with a shell
+  read run. Full suite at ship cutover, not per-phase.
 
 ## Change C — Grouping presentation
 
