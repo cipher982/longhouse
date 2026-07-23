@@ -47,8 +47,11 @@ pub(crate) struct OpenCodeAttachState {
     pub password: String,
 }
 
-pub(crate) fn read_for_bridge(session_id: &str) -> Result<OpenCodeAttachState> {
-    let state = read_bridge_state(session_id, None)?;
+pub(crate) fn read_for_bridge(
+    session_id: &str,
+    state_dir: Option<&Path>,
+) -> Result<OpenCodeAttachState> {
+    let state = read_bridge_state(session_id, state_dir)?;
     Ok(OpenCodeAttachState {
         provider_session_id: state.provider_session_id,
         server_url: state.server_url,
@@ -97,9 +100,28 @@ pub async fn interrupt(session_id: &str) -> Result<OpenCodeControlResult> {
 }
 
 pub fn stop_server_bridge(session_id: &str) -> Result<OpenCodeStopResult> {
-    let state = read_bridge_state(session_id, None)?;
+    stop_server_bridge_at(session_id, None)
+}
+
+pub fn stop_server_bridge_at(
+    session_id: &str,
+    state_dir: Option<&Path>,
+) -> Result<OpenCodeStopResult> {
+    let state = read_bridge_state(session_id, state_dir)?;
     let pid = state.pid;
     let stopped = terminate_recorded_opencode_server(&state)?;
+    if stopped || pid.is_none_or(|pid| !pid_is_running(pid)) {
+        let directory = state_dir
+            .map(Path::to_path_buf)
+            .or_else(crate::managed_opencode_scan::default_opencode_server_state_dir)
+            .context("OpenCode server bridge state directory could not be resolved")?;
+        let path = directory.join(format!("{}.json", normalize_session_id(session_id)?));
+        let _ = fs::remove_file(path);
+    } else if !stopped {
+        bail!(
+            "refusing to remove OpenCode bridge state for a live process with unverified identity"
+        );
+    }
     Ok(OpenCodeStopResult { pid, stopped })
 }
 

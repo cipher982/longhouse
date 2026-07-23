@@ -57,7 +57,16 @@ pub fn start(config: StartConfig) -> Result<StartResult> {
     let state_dir = state_dir(config.claude_dir.as_deref())?;
     let state_path = state_dir.join(format!("{session_id}.json"));
     if state_path.exists() {
-        bail!("managed OpenCode bridge already has state for {session_id}; stop it before starting again");
+        let stale_pid = fs::read(&state_path)
+            .ok()
+            .and_then(|raw| serde_json::from_slice::<serde_json::Value>(&raw).ok())
+            .and_then(|value| value.get("pid").and_then(serde_json::Value::as_u64))
+            .and_then(|pid| u32::try_from(pid).ok());
+        if stale_pid.is_none_or(|pid| !pid_alive(pid)) {
+            fs::remove_file(&state_path)?;
+        } else {
+            bail!("managed OpenCode bridge already has a live state for {session_id}; stop it before starting again");
+        }
     }
     fs::create_dir_all(state_dir.join("logs"))?;
     let binary = resolve_binary(config.opencode_bin)?;
@@ -143,21 +152,24 @@ pub fn start(config: StartConfig) -> Result<StartResult> {
     result
 }
 
-pub fn stop(session_id: &str) -> Result<crate::opencode_control::OpenCodeStopResult> {
-    let result = crate::opencode_control::stop_server_bridge(session_id)?;
-    if result.stopped {
-        let path = state_dir(None)?.join(format!(
-            "{}.json",
-            normalize_uuid(session_id, "session_id")?
-        ));
-        let _ = fs::remove_file(path);
-    }
-    Ok(result)
+pub fn stop(
+    session_id: &str,
+    claude_dir: Option<PathBuf>,
+) -> Result<crate::opencode_control::OpenCodeStopResult> {
+    let state_dir = claude_dir.map(|path| path.join("managed-local/opencode-server"));
+    crate::opencode_control::stop_server_bridge_at(session_id, state_dir.as_deref())
 }
 
-pub fn attach(session_id: &str, opencode_bin: Option<String>) -> Result<i32> {
-    let state = crate::opencode_control::read_for_bridge(session_id)?;
+pub fn attach(
+    session_id: &str,
+    opencode_bin: Option<String>,
+    claude_dir: Option<PathBuf>,
+) -> Result<i32> {
+    let state_dir = claude_dir.map(|path| path.join("managed-local/opencode-server"));
+    let state = crate::opencode_control::read_for_bridge(session_id, state_dir.as_deref())?;
     let binary = resolve_binary(opencode_bin)?;
+    let runtime = tokio::runtime::Runtime::new()?;
+    runtime.block_on(assert_health(&state.server_url, &state.password))?;
     let status = Command::new(binary)
         .args([
             "attach",
@@ -244,17 +256,10 @@ async fn create_session(
     if base.host_str() != Some("127.0.0.1") {
         bail!("OpenCode server must listen on localhost");
     }
+    assert_health(server_url, password).await?;
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
         .build()?;
-    let health = client
-        .get(format!("{server_url}/global/health"))
-        .basic_auth(USERNAME, Some(password))
-        .send()
-        .await?;
-    if !health.status().is_success() {
-        bail!("OpenCode server health check failed ({})", health.status());
-    }
     let mut session_url = Url::parse(&format!("{server_url}/session"))?;
     session_url
         .query_pairs_mut()
@@ -274,7 +279,37 @@ async fn create_session(
         .context("OpenCode session creation returned no id")
 }
 
+async fn assert_health(server_url: &str, password: &str) -> Result<()> {
+    let health = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()?
+        .get(format!("{server_url}/global/health"))
+        .basic_auth(USERNAME, Some(password))
+        .send()
+        .await?;
+    if !health.status().is_success() {
+        bail!("OpenCode server health check failed ({})", health.status());
+    }
+    if health
+        .json::<serde_json::Value>()
+        .await?
+        .get("healthy")
+        .and_then(serde_json::Value::as_bool)
+        != Some(true)
+    {
+        bail!("OpenCode server health check did not report healthy");
+    }
+    Ok(())
+}
+
 fn write_private_json(path: &Path, payload: &serde_json::Value) -> Result<()> {
+    let parent = path.parent().context("OpenCode state has no parent")?;
+    fs::create_dir_all(parent)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(parent, fs::Permissions::from_mode(0o700))?;
+    }
     let temporary = path.with_extension(format!("json.tmp.{}", std::process::id()));
     let mut file = OpenOptions::new()
         .write(true)
@@ -283,6 +318,11 @@ fn write_private_json(path: &Path, payload: &serde_json::Value) -> Result<()> {
     file.write_all(format!("{}\n", serde_json::to_string_pretty(payload)?).as_bytes())?;
     file.sync_all()?;
     drop(file);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&temporary, fs::Permissions::from_mode(0o600))?;
+    }
     fs::rename(temporary, path)?;
     Ok(())
 }
@@ -308,4 +348,8 @@ fn stop_pid(pid: u32) -> Result<()> {
     } else {
         Ok(())
     }
+}
+
+fn pid_alive(pid: u32) -> bool {
+    pid > 0 && unsafe { libc::kill(pid as i32, 0) == 0 }
 }

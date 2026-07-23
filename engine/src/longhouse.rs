@@ -226,6 +226,8 @@ struct OpencodeAttachArgs {
     session_id: String,
     #[arg(long)]
     opencode_bin: Option<String>,
+    #[arg(long, alias = "config-dir")]
+    claude_dir: Option<PathBuf>,
 }
 #[derive(Args)]
 struct OpencodeStopArgs {
@@ -863,7 +865,7 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
         &opencode_bin,
     ]);
     let run_result = run_foreground_command(&mut attach);
-    let stop_result = stop_opencode_bridge(&response.session_id);
+    let stop_result = stop_opencode_bridge(&response.session_id, args.claude_dir.clone());
     let exit = run_result?;
     stop_result?;
     if exit != 0 {
@@ -885,8 +887,11 @@ fn attach_managed_opencode(args: OpencodeAttachArgs) -> anyhow::Result<()> {
     if let Some(bin) = args.opencode_bin {
         command.args(["--opencode-bin", &bin]);
     }
+    if let Some(dir) = args.claude_dir {
+        command.arg("--claude-dir").arg(dir);
+    }
     let run_result = run_foreground_command(&mut command);
-    let stop_result = stop_opencode_bridge(&args.session_id);
+    let stop_result = stop_opencode_bridge(&args.session_id, None);
     let exit = run_result?;
     stop_result?;
     if exit != 0 {
@@ -895,11 +900,14 @@ fn attach_managed_opencode(args: OpencodeAttachArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn stop_opencode_bridge(session_id: &str) -> anyhow::Result<()> {
+fn stop_opencode_bridge(session_id: &str, claude_dir: Option<PathBuf>) -> anyhow::Result<()> {
     validate_session_id(session_id)?;
-    let output = Command::new(paired_engine_path()?)
-        .args(["opencode-bridge", "stop", "--session-id", session_id])
-        .output()?;
+    let mut command = Command::new(paired_engine_path()?);
+    command.args(["opencode-bridge", "stop", "--session-id", session_id]);
+    if let Some(dir) = claude_dir {
+        command.arg("--claude-dir").arg(dir);
+    }
+    let output = command.output()?;
     if !output.status.success() {
         anyhow::bail!(
             "failed to stop native OpenCode bridge: {}",
@@ -1730,7 +1738,7 @@ fn main() -> anyhow::Result<()> {
         },
         Commands::Opencode { command, launch } => match command {
             Some(OpencodeCommand::Attach(args)) => attach_managed_opencode(args)?,
-            Some(OpencodeCommand::Stop(args)) => stop_opencode_bridge(&args.session_id)?,
+            Some(OpencodeCommand::Stop(args)) => stop_opencode_bridge(&args.session_id, None)?,
             None => launch_managed_opencode(launch)?,
         },
     }

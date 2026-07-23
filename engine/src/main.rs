@@ -617,6 +617,8 @@ enum OpencodeBridgeCommands {
     Stop {
         #[arg(long)]
         session_id: String,
+        #[arg(long)]
+        claude_dir: Option<PathBuf>,
     },
     /// Attach the stock OpenCode TUI without exposing bridge credentials.
     Attach {
@@ -624,6 +626,8 @@ enum OpencodeBridgeCommands {
         session_id: String,
         #[arg(long)]
         opencode_bin: Option<String>,
+        #[arg(long)]
+        claude_dir: Option<PathBuf>,
     },
 }
 
@@ -1574,8 +1578,11 @@ fn main() -> anyhow::Result<()> {
                 })?;
                 println!("{}", serde_json::to_string(&result)?);
             }
-            OpencodeBridgeCommands::Stop { session_id } => {
-                let result = opencode_bridge::stop(&session_id)?;
+            OpencodeBridgeCommands::Stop {
+                session_id,
+                claude_dir,
+            } => {
+                let result = opencode_bridge::stop(&session_id, claude_dir)?;
                 println!(
                     "{}",
                     serde_json::to_string(&json!({"pid": result.pid, "stopped": result.stopped}))?
@@ -1584,8 +1591,9 @@ fn main() -> anyhow::Result<()> {
             OpencodeBridgeCommands::Attach {
                 session_id,
                 opencode_bin,
+                claude_dir,
             } => {
-                let exit = opencode_bridge::attach(&session_id, opencode_bin)?;
+                let exit = opencode_bridge::attach(&session_id, opencode_bin, claude_dir)?;
                 if exit != 0 {
                     std::process::exit(exit);
                 }
