@@ -592,7 +592,9 @@ def list_live_catalog_timeline(
 ) -> TimelineSessionsListResponse:
     """List timeline cards from one catalogd-owned SQLite snapshot."""
 
-    if params.query is not None or (params.mode or "lexical") != "lexical":
+    # A mode with no query has nothing to search; only an actual query
+    # needs the archive path.
+    if params.query is not None:
         raise ValueError("search_requires_archive")
     snapshot_params = {
         "project": params.project,
@@ -663,7 +665,7 @@ def list_live_catalog_sessions(
 ) -> SessionsListResponse:
     """Machine-facing flat session list from the same bounded card projection."""
 
-    if params.query is not None or (params.mode or "lexical") != "lexical":
+    if params.query is not None:
         raise ValueError("search_requires_archive")
     timeline = list_live_catalog_timeline(params=params, owner_id=owner_id)
     return SessionsListResponse(
