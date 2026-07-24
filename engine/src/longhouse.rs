@@ -378,13 +378,6 @@ fn configure_claude_hooks(claude_dir: Option<PathBuf>) -> anyhow::Result<()> {
             })
     });
     let settings_path = claude_dir.join("settings.json");
-    let user_config_path = claude_dir.parent().unwrap_or(Path::new(".")).join(format!(
-        "{}.json",
-        claude_dir
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or(".claude")
-    ));
     let mut settings: serde_json::Map<String, serde_json::Value> =
         match std::fs::read(&settings_path) {
             Ok(raw) => serde_json::from_slice(&raw)
@@ -434,45 +427,10 @@ fn configure_claude_hooks(claude_dir: Option<PathBuf>) -> anyhow::Result<()> {
         });
         entries.push(json!({"hooks": [{"type": "command", "command": lifecycle_command, "async": false, "timeout": 5}]}));
     }
-    let mut user_config: serde_json::Map<String, serde_json::Value> =
-        match std::fs::read(&user_config_path) {
-            Ok(raw) => serde_json::from_slice(&raw)
-                .with_context(|| format!("parse {}", user_config_path.display()))?,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => serde_json::Map::new(),
-            Err(error) => {
-                return Err(error).with_context(|| format!("read {}", user_config_path.display()))
-            }
-        };
-    let mcp = user_config
-        .entry("mcpServers")
-        .or_insert_with(|| json!({}))
-        .as_object_mut()
-        .context("Claude settings mcpServers must be an object")?;
-    mcp.insert("longhouse-channel".into(), json!({"type":"stdio", "command": paired_engine_path()?, "args":["claude-channel","serve"], "env":{}}));
     std::fs::create_dir_all(&claude_dir)?;
-    if let Some(projects) = user_config
-        .get_mut("projects")
-        .and_then(serde_json::Value::as_object_mut)
-    {
-        for project in projects
-            .values_mut()
-            .filter_map(serde_json::Value::as_object_mut)
-        {
-            if let Some(servers) = project
-                .get_mut("mcpServers")
-                .and_then(serde_json::Value::as_object_mut)
-            {
-                servers.remove("longhouse-channel");
-            }
-        }
-    }
     std::fs::write(
         &settings_path,
         format!("{}\n", serde_json::to_string_pretty(&settings)?),
-    )?;
-    std::fs::write(
-        &user_config_path,
-        format!("{}\n", serde_json::to_string_pretty(&user_config)?),
     )?;
     println!(
         "Configured native Claude hooks in {}",
@@ -724,7 +682,7 @@ impl Drop for PrivateTempFile {
     }
 }
 
-fn write_claude_coordination_mcp_config(
+fn write_claude_mcp_config(
     session_id: &str,
     coordination_token: &str,
 ) -> anyhow::Result<PrivateTempFile> {
@@ -736,6 +694,14 @@ fn write_claude_coordination_mcp_config(
         .join(format!("{session_id}-{}.json", Uuid::new_v4()));
     let config = json!({
         "mcpServers": {
+            "longhouse-channel": {
+                "type": "stdio",
+                "command": paired_engine_path()?,
+                "args": ["claude-channel", "serve"],
+                "env": {
+                    "LONGHOUSE_MANAGED_SESSION_ID": session_id,
+                },
+            },
             "longhouse-coordination": {
                 "type": "stdio",
                 "command": paired_engine_path()?,
@@ -857,8 +823,7 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
         None if resuming => issue_coordination_token(&runtime, &url, &token, &response.session_id)?,
         None => anyhow::bail!("Longhouse did not issue coordination authority for this session"),
     };
-    let coordination_config =
-        write_claude_coordination_mcp_config(&response.session_id, &coordination_token)?;
+    let mcp_config = write_claude_mcp_config(&response.session_id, &coordination_token)?;
     let mut command = Command::new(&binary);
     if response.permission_mode.as_deref() != Some("remote_approve") {
         command.arg("--dangerously-skip-permissions");
@@ -874,7 +839,7 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
             "server:longhouse-channel",
             "--mcp-config",
         ])
-        .arg(&coordination_config.path)
+        .arg(&mcp_config.path)
         .current_dir(&cwd)
         .env("LONGHOUSE_MANAGED_SESSION_ID", &response.session_id)
         .env("LONGHOUSE_RUN_ID", &response.run_id)
@@ -2048,7 +2013,7 @@ mod tests {
     }
 
     #[test]
-    fn claude_configure_places_hooks_and_mcp_at_the_provider_paths() {
+    fn claude_configure_places_hooks_at_the_provider_path() {
         let temp = tempfile::tempdir().unwrap();
         let claude_dir = temp.path().join(".claude");
         let engine = temp.path().join("longhouse engine");
@@ -2082,17 +2047,11 @@ mod tests {
         assert!(settings["hooks"]["SessionStart"]
             .to_string()
             .contains("claude-lifecycle-hook"));
-        let user_config: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(temp.path().join(".claude.json")).unwrap())
-                .unwrap();
-        assert_eq!(
-            user_config["mcpServers"]["longhouse-channel"]["args"][0],
-            "claude-channel"
-        );
+        assert!(!temp.path().join(".claude.json").exists());
     }
 
     #[test]
-    fn claude_coordination_mcp_config_is_private_scoped_and_ephemeral() {
+    fn claude_mcp_config_is_private_scoped_and_ephemeral() {
         let temp = tempfile::tempdir().unwrap();
         let engine = temp.path().join("longhouse-engine");
         std::fs::write(&engine, "").unwrap();
@@ -2102,7 +2061,7 @@ mod tests {
                 ("LONGHOUSE_ENGINE_BIN", Some(engine.display().to_string())),
             ],
             || {
-                let config = write_claude_coordination_mcp_config(
+                let config = write_claude_mcp_config(
                     "11111111-1111-4111-8111-111111111111",
                     "session-secret",
                 )
@@ -2110,6 +2069,13 @@ mod tests {
                 let path = config.path.clone();
                 let payload: serde_json::Value =
                     serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+                assert_eq!(
+                    payload["mcpServers"]["longhouse-channel"]["env"],
+                    json!({"LONGHOUSE_MANAGED_SESSION_ID":"11111111-1111-4111-8111-111111111111"})
+                );
+                assert!(payload["mcpServers"]["longhouse-channel"]["env"]
+                    ["LONGHOUSE_COORDINATION_TOKEN"]
+                    .is_null());
                 assert_eq!(
                     payload["mcpServers"]["longhouse-coordination"]["env"]
                         ["LONGHOUSE_COORDINATION_TOKEN"],

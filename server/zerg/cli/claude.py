@@ -35,9 +35,9 @@ from zerg.cli._managed_launch import record_contract_or_warn
 from zerg.cli._managed_launch import resolve_managed_launch_credentials as _load_api_credentials
 from zerg.cli._managed_launch import start_managed_launch
 from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_PATH
+from zerg.services.claude_channel_bridge import CLAUDE_CHANNEL_SERVER_NAME
 from zerg.services.claude_channel_bridge import CLAUDE_COORDINATION_SERVER_NAME
 from zerg.services.claude_channel_bridge import build_claude_channel_exec_command
-from zerg.services.claude_channel_bridge import remove_claude_channel_mcp_server
 from zerg.services.claude_channel_bridge import wait_for_claude_channel_state
 from zerg.services.longhouse_paths import get_agent_runtime_events_outbox_dir
 from zerg.services.machine_identity import get_machine_name_label
@@ -179,9 +179,31 @@ def _ensure_native_claude_prereqs(
     try:
         resolved_claude_dir = _resolve_claude_dir(config_dir)
         install_hooks(base_url, token=token, claude_dir=str(resolved_claude_dir))
-        remove_claude_channel_mcp_server(claude_dir=resolved_claude_dir)
     except Exception as exc:  # pragma: no cover - exercised through CLI wrappers
         raise _NativeClaudeError(str(exc)) from exc
+
+
+def _build_native_claude_mcp_config(*, session_id: str, coordination_token: str) -> dict[str, object]:
+    engine_server = {
+        "type": "stdio",
+        "command": "longhouse-engine",
+        "args": ["claude-channel", "serve"],
+    }
+    return {
+        "mcpServers": {
+            CLAUDE_CHANNEL_SERVER_NAME: {
+                **engine_server,
+                "env": {"LONGHOUSE_MANAGED_SESSION_ID": session_id},
+            },
+            CLAUDE_COORDINATION_SERVER_NAME: {
+                **engine_server,
+                "env": {
+                    "LONGHOUSE_COORDINATION_TOKEN": coordination_token,
+                    "LONGHOUSE_MANAGED_SESSION_ID": session_id,
+                },
+            },
+        }
+    }
 
 
 def _run_native_claude_tui(
@@ -215,19 +237,10 @@ def _run_native_claude_tui(
     ).start()
     with tempfile.TemporaryDirectory(prefix="longhouse-claude-mcp-") as temp_dir:
         mcp_config_path = Path(temp_dir) / "mcp.json"
-        mcp_config = {
-            "mcpServers": {
-                CLAUDE_COORDINATION_SERVER_NAME: {
-                    "type": "stdio",
-                    "command": "longhouse-engine",
-                    "args": ["claude-channel", "serve"],
-                    "env": {
-                        "LONGHOUSE_COORDINATION_TOKEN": coordination_token,
-                        "LONGHOUSE_MANAGED_SESSION_ID": session_id,
-                    },
-                }
-            }
-        }
+        mcp_config = _build_native_claude_mcp_config(
+            session_id=session_id,
+            coordination_token=coordination_token,
+        )
         fd = os.open(mcp_config_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             json.dump(mcp_config, handle, separators=(",", ":"))

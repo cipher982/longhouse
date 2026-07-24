@@ -180,13 +180,14 @@ Agent must validate exact provider process evidence such as PID plus process
 start time before exchanging local launch evidence for that credential.
 Environment session IDs alone are never authority.
 
-Claude uses two MCP processes with mutually exclusive roles. The persistent
-`longhouse-channel` process advertises only the native channel capability and
-owns injection state. A launch-scoped `longhouse-coordination` process receives
-the session credential in a private temporary config, advertises only the five
-tools, and never binds the channel HTTP port or writes channel state. Codex
-passes the same credential from its native facade through the bridge into only
-the coordination MCP subprocess; the provider process does not inherit it.
+Claude uses two launch-scoped MCP processes from one private temporary config.
+The `longhouse-channel` process advertises only the native channel capability
+and owns injection state. The `longhouse-coordination` process alone receives
+the session credential, advertises only the five tools, and never binds the
+channel HTTP port or writes channel state. Neither facade mutates Claude's
+global MCP configuration. Codex passes the same credential from its native
+facade through the bridge into only the coordination MCP subprocess; the
+provider process does not inherit it.
 
 ### Idempotency and ordering
 

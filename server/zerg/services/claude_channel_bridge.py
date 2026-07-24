@@ -27,38 +27,6 @@ def _resolve_claude_dir(claude_dir: str | Path | None = None) -> Path:
     return Path(claude_dir).expanduser()
 
 
-def resolve_claude_user_config_path(*, claude_dir: str | Path | None = None) -> Path:
-    resolved_dir = _resolve_claude_dir(claude_dir)
-    return resolved_dir.parent / f"{resolved_dir.name}.json"
-
-
-def _read_json_object(path: Path) -> dict[str, Any]:
-    if not path.exists():
-        return {}
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return {}
-    return raw if isinstance(raw, dict) else {}
-
-
-def _write_json_object(path: Path, data: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-
-
-def remove_claude_channel_mcp_server(*, claude_dir: str | Path | None = None) -> bool:
-    """Remove the obsolete global channel registration used before launch-scoped auth."""
-
-    user_config_path = resolve_claude_user_config_path(claude_dir=claude_dir)
-    settings = _read_json_object(user_config_path)
-    mcp_servers = settings.get("mcpServers")
-    if not isinstance(mcp_servers, dict) or mcp_servers.pop(CLAUDE_CHANNEL_SERVER_NAME, None) is None:
-        return False
-    _write_json_object(user_config_path, settings)
-    return True
-
-
 def resolve_claude_channel_state_root(
     *,
     state_root: str | Path | None = None,
@@ -208,9 +176,7 @@ __all__ = [
     "CLAUDE_CHANNEL_SERVER_NAME",
     "build_claude_channel_exec_command",
     "build_claude_channel_state_file",
-    "remove_claude_channel_mcp_server",
     "read_claude_channel_state",
     "resolve_claude_channel_state_root",
-    "resolve_claude_user_config_path",
     "wait_for_claude_channel_state",
 ]
