@@ -917,6 +917,12 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
     if response.managed_transport.as_deref() != Some("opencode_server_bridge") {
         anyhow::bail!("Longhouse returned an unsupported managed-local transport for OpenCode");
     }
+    let coordination_token = response
+        .coordination_token
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .context("Longhouse did not issue coordination authority for this session")?;
     let bridge = paired_engine_path()?;
     let mut start = Command::new(&bridge);
     start
@@ -943,7 +949,8 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
             } else {
                 "detached"
             },
-        ]);
+        ])
+        .env("LONGHOUSE_COORDINATION_TOKEN", coordination_token);
     if let Some(name) = &args.name {
         start.args(["--display-name", name]);
     }

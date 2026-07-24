@@ -271,7 +271,7 @@ def _validate_managed_local_launch_response_contract(
 
 
 def _managed_local_launch_response(db: Session, result, *, owner_id: int | None = None) -> ManagedLocalSessionLaunchResponse:
-    from zerg.services.directed_input_envelope import provider_supports_directed_input
+    from zerg.services.directed_input_envelope import provider_supports_coordination_tools
     from zerg.services.managed_local_launcher import managed_local_run_id_for_session
 
     session = result.session
@@ -291,7 +291,7 @@ def _managed_local_launch_response(db: Session, result, *, owner_id: int | None 
     # reject durable device tokens). Bypass launches never get one.
     hook_token: str | None = None
     coordination_token: str | None = None
-    if owner_id is not None and provider_supports_directed_input(session.provider):
+    if owner_id is not None and provider_supports_coordination_tools(session.provider):
         from zerg.auth.managed_session_tokens import MANAGED_SESSION_SCOPE_COORDINATION
         from zerg.auth.managed_session_tokens import MANAGED_SESSION_SCOPE_HOOK
         from zerg.auth.managed_session_tokens import issue_managed_session_token
@@ -342,11 +342,11 @@ def _managed_local_launch_response_from_plan(
 ) -> ManagedLocalSessionLaunchResponse:
     """Build a managed-local launch response before archive projection exists."""
 
-    from zerg.services.directed_input_envelope import provider_supports_directed_input
+    from zerg.services.directed_input_envelope import provider_supports_coordination_tools
 
     hook_token: str | None = None
     coordination_token: str | None = None
-    if owner_id is not None and provider_supports_directed_input(plan.provider):
+    if owner_id is not None and provider_supports_coordination_tools(plan.provider):
         from zerg.auth.managed_session_tokens import MANAGED_SESSION_SCOPE_COORDINATION
         from zerg.auth.managed_session_tokens import MANAGED_SESSION_SCOPE_HOOK
         from zerg.auth.managed_session_tokens import issue_managed_session_token

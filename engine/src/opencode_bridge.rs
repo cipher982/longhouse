@@ -27,6 +27,7 @@ pub struct StartConfig {
     pub opencode_bin: Option<String>,
     pub claude_dir: Option<PathBuf>,
     pub launch_mode: String,
+    pub coordination_token: String,
 }
 
 #[derive(Serialize)]
@@ -62,6 +63,10 @@ pub fn start(config: StartConfig) -> Result<StartResult> {
     ) {
         bail!("unsupported OpenCode launch mode");
     }
+    let coordination_token = config.coordination_token.trim();
+    if coordination_token.is_empty() {
+        bail!("Longhouse did not issue coordination authority for this session");
+    }
     let state_dir = state_dir(config.claude_dir.as_deref())?;
     let _start_lock = acquire_start_lock(&state_dir.join(format!("{session_id}.start.lock")))?;
     let state_path = state_dir.join(format!("{session_id}.json"));
@@ -96,9 +101,7 @@ pub fn start(config: StartConfig) -> Result<StartResult> {
     let engine = std::env::current_exe().context("resolve native engine for OpenCode MCP")?;
     // This process is the paired engine binary, so the registered command is
     // absolute and remains valid even when the facade is not on PATH.
-    let mcp_config = serde_json::json!({
-        "mcp": {"longhouse": {"type": "local", "command": [engine, "claude-channel", "serve"], "enabled": true}}
-    });
+    let mcp_config = opencode_mcp_config(&engine, &session_id, coordination_token);
     command
         .args([
             "serve",
@@ -111,14 +114,8 @@ pub fn start(config: StartConfig) -> Result<StartResult> {
         .current_dir(&cwd)
         .stdin(Stdio::null())
         .stdout(Stdio::from(log.try_clone()?))
-        .stderr(Stdio::from(log))
-        .env("LONGHOUSE_MANAGED_SESSION_ID", &session_id)
-        .env("OPENCODE_SERVER_USERNAME", USERNAME)
-        .env("OPENCODE_SERVER_PASSWORD", &password)
-        .env(
-            "OPENCODE_CONFIG_CONTENT",
-            serde_json::to_string(&mcp_config)?,
-        );
+        .stderr(Stdio::from(log));
+    configure_opencode_environment(&mut command, &session_id, &password, &mcp_config)?;
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
@@ -176,6 +173,44 @@ pub fn start(config: StartConfig) -> Result<StartResult> {
         let _ = stop_pid(pid);
     }
     result
+}
+
+fn opencode_mcp_config(
+    engine: &Path,
+    session_id: &str,
+    coordination_token: &str,
+) -> serde_json::Value {
+    json!({
+        "mcp": {
+            "longhouse": {
+                "type": "local",
+                "command": [engine, "claude-channel", "serve"],
+                "environment": {
+                    "LONGHOUSE_COORDINATION_TOKEN": coordination_token,
+                    "LONGHOUSE_MANAGED_SESSION_ID": session_id,
+                },
+                "enabled": true,
+            }
+        }
+    })
+}
+
+fn configure_opencode_environment(
+    command: &mut Command,
+    session_id: &str,
+    password: &str,
+    mcp_config: &serde_json::Value,
+) -> Result<()> {
+    command
+        .env_remove("LONGHOUSE_COORDINATION_TOKEN")
+        .env("LONGHOUSE_MANAGED_SESSION_ID", session_id)
+        .env("OPENCODE_SERVER_USERNAME", USERNAME)
+        .env("OPENCODE_SERVER_PASSWORD", password)
+        .env(
+            "OPENCODE_CONFIG_CONTENT",
+            serde_json::to_string(mcp_config)?,
+        );
+    Ok(())
 }
 
 fn acquire_start_lock(lock_path: &Path) -> Result<fd_lock::RwLockWriteGuard<'static, fs::File>> {
@@ -434,5 +469,52 @@ mod tests {
         assert!(read_listen_url(Path::new("/definitely/not/there"))
             .unwrap()
             .is_none());
+    }
+
+    #[test]
+    fn mcp_config_scopes_coordination_authority_to_the_server() {
+        let config = opencode_mcp_config(
+            Path::new("/opt/longhouse-engine"),
+            "11111111-1111-4111-8111-111111111111",
+            "session-secret",
+        );
+        let server = &config["mcp"]["longhouse"];
+        assert_eq!(server["command"][0], "/opt/longhouse-engine");
+        assert_eq!(server["command"][1], "claude-channel");
+        assert_eq!(server["command"][2], "serve");
+        assert_eq!(
+            server["environment"]["LONGHOUSE_COORDINATION_TOKEN"],
+            "session-secret"
+        );
+        assert_eq!(
+            server["environment"]["LONGHOUSE_MANAGED_SESSION_ID"],
+            "11111111-1111-4111-8111-111111111111"
+        );
+
+        let mut command = Command::new("opencode");
+        command.env("LONGHOUSE_COORDINATION_TOKEN", "ambient-parent-secret");
+        configure_opencode_environment(
+            &mut command,
+            "11111111-1111-4111-8111-111111111111",
+            "server-password",
+            &config,
+        )
+        .unwrap();
+        let envs = command
+            .get_envs()
+            .map(|(key, value)| {
+                (
+                    key.to_string_lossy().into_owned(),
+                    value.map(|item| item.to_string_lossy().into_owned()),
+                )
+            })
+            .collect::<std::collections::HashMap<_, _>>();
+        assert_eq!(envs["LONGHOUSE_COORDINATION_TOKEN"], None);
+        let embedded: serde_json::Value =
+            serde_json::from_str(envs["OPENCODE_CONFIG_CONTENT"].as_deref().unwrap()).unwrap();
+        assert_eq!(
+            embedded["mcp"]["longhouse"]["environment"]["LONGHOUSE_COORDINATION_TOKEN"],
+            "session-secret"
+        );
     }
 }

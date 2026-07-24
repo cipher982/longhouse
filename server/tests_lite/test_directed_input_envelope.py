@@ -4,15 +4,23 @@ import json
 from types import SimpleNamespace
 from uuid import UUID
 
-from zerg.services.directed_input_envelope import provider_supports_directed_input
+from zerg.services.directed_input_envelope import provider_supports_coordination_tools
+from zerg.services.directed_input_envelope import provider_supports_live_directed_input
 from zerg.services.directed_input_envelope import render_directed_input_envelope
 
 
-def test_v1_adapter_support_is_explicit():
-    assert provider_supports_directed_input("claude") is True
-    assert provider_supports_directed_input("codex") is True
-    assert provider_supports_directed_input("opencode") is False
-    assert provider_supports_directed_input("cursor") is False
+def test_v1_coordination_tool_support_is_explicit():
+    for provider in ("claude", "codex", "opencode"):
+        assert provider_supports_coordination_tools(provider) is True
+    for provider in ("cursor", "antigravity", "gemini"):
+        assert provider_supports_coordination_tools(provider) is False
+
+
+def test_v1_live_delivery_support_is_explicit():
+    for provider in ("claude", "codex", "opencode"):
+        assert provider_supports_live_directed_input(provider) is True
+    for provider in ("cursor", "antigravity", "gemini"):
+        assert provider_supports_live_directed_input(provider) is False
 
 
 def test_directed_input_envelope_keeps_untrusted_body_inside_json():

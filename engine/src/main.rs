@@ -1575,6 +1575,8 @@ fn main() -> anyhow::Result<()> {
                     opencode_bin,
                     claude_dir,
                     launch_mode,
+                    coordination_token: std::env::var("LONGHOUSE_COORDINATION_TOKEN")
+                        .unwrap_or_default(),
                 })?;
                 println!("{}", serde_json::to_string(&result)?);
             }

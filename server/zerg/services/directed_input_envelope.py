@@ -5,13 +5,19 @@ from __future__ import annotations
 import json
 from typing import Any
 
-DIRECTED_INPUT_ADAPTER_PROVIDERS = frozenset({"claude", "codex"})
+DIRECTED_INPUT_PROVIDERS = frozenset({"claude", "codex", "opencode"})
 
 
-def provider_supports_directed_input(provider: object) -> bool:
-    """Return whether V1 has a proved authenticated adapter for the provider."""
+def provider_supports_coordination_tools(provider: object) -> bool:
+    """Return whether managed launches can bind the five tools to this session."""
 
-    return str(provider or "").strip().lower() in DIRECTED_INPUT_ADAPTER_PROVIDERS
+    return str(provider or "").strip().lower() in DIRECTED_INPUT_PROVIDERS
+
+
+def provider_supports_live_directed_input(provider: object) -> bool:
+    """Return whether a live target can accept input through the shared send path."""
+
+    return str(provider or "").strip().lower() in DIRECTED_INPUT_PROVIDERS
 
 
 def render_directed_input_envelope(*, source_session: Any, input_id: int, text: str) -> str:

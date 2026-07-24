@@ -258,7 +258,8 @@ def test_directed_input_create_uses_scoped_sender_and_catalog(monkeypatch):
     assert observed["params"]["source_session_id"] == str(source_id)
 
 
-def test_directed_input_delivery_links_real_input_receipt(monkeypatch):
+@pytest.mark.parametrize("provider", ["codex", "opencode"])
+def test_directed_input_delivery_links_real_input_receipt(monkeypatch, provider):
     sender_id = UUID("00000000-0000-0000-0000-000000000021")
     target_id = UUID("00000000-0000-0000-0000-000000000022")
     observed = {}
@@ -286,7 +287,7 @@ def test_directed_input_delivery_links_real_input_receipt(monkeypatch):
             sender_session=SimpleNamespace(id=sender_id, device_name="clifford", device_id="device-7"),
             target_session=SimpleNamespace(
                 id=target_id,
-                provider="codex",
+                provider=provider,
                 catalog_facts={
                     "runtime": {"phase": "idle"},
                     "latest_run": {"id": "run-1", "ended_at": None},
@@ -313,7 +314,7 @@ def test_directed_input_delivery_links_real_input_receipt(monkeypatch):
     assert '"type":"longhouse_directed_input"' in observed["input"].text
 
 
-@pytest.mark.parametrize("provider", ["opencode", "cursor", "antigravity"])
+@pytest.mark.parametrize("provider", ["cursor", "antigravity"])
 def test_directed_input_to_unsupported_provider_stays_durable_without_attempt(monkeypatch, provider):
     directed_input = {"id": 16, "text": "store only"}
     monkeypatch.setattr(

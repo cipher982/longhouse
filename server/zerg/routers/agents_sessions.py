@@ -54,7 +54,8 @@ from zerg.services.console_turns import ConsoleTurnUnavailable
 from zerg.services.console_turns import dispatch_next_console_turn
 from zerg.services.console_turns import enqueue_catalog_console_turn
 from zerg.services.console_turns import enqueue_console_turn
-from zerg.services.directed_input_envelope import provider_supports_directed_input
+from zerg.services.directed_input_envelope import provider_supports_coordination_tools
+from zerg.services.directed_input_envelope import provider_supports_live_directed_input
 from zerg.services.directed_input_envelope import render_directed_input_envelope
 from zerg.services.live_catalog_timeline import list_live_catalog_sessions
 from zerg.services.live_catalog_timeline import read_live_catalog_session
@@ -2205,8 +2206,8 @@ async def issue_session_coordination_token(
     session = load_live_control_session_snapshot(session_id, owner_id=owner_id)
     if session is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
-    if not provider_supports_directed_input(getattr(session, "provider", None)):
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Session provider has no directed-input adapter")
+    if not provider_supports_coordination_tools(getattr(session, "provider", None)):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Session provider has no coordination tools")
     token_device_id = str(getattr(_auth, "device_id", "") or "").strip()
     session_device_id = str(getattr(session, "device_id", "") or "").strip()
     if not token_device_id or not session_device_id or token_device_id != session_device_id:
@@ -2258,7 +2259,7 @@ async def _attempt_directed_input_delivery(
 ) -> dict[str, Any]:
     from zerg.services.live_control_catalog import live_control_session_capability_available
 
-    if not provider_supports_directed_input(getattr(target_session, "provider", None)):
+    if not provider_supports_live_directed_input(getattr(target_session, "provider", None)):
         return directed_input
     if not live_control_session_capability_available(target_session, capability="send"):
         return directed_input

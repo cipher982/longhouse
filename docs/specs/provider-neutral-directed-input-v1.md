@@ -19,12 +19,13 @@ The Runtime Host owns durable routing intent. Provider adapters own the
 mechanics of placing an input into a provider. The target transcript remains
 the evidence of what the model actually perceived.
 
-V1 proves the provider-neutral kernel through Claude and Codex because those
-managed launches can carry a session-scoped adapter credential and expose the
-same exact five tools. OpenCode, Cursor, Antigravity, and future providers do
-not advertise directed-input capability until an equally trustworthy adapter
-is implemented and proved. The kernel remains provider-neutral; provider
-support remains explicit.
+V1 proves the provider-neutral kernel through every provider with a shipped
+managed Helm launch: Claude, Codex, and OpenCode. Each launch carries a
+session-scoped adapter credential and exposes the same exact five tools.
+Cursor and Antigravity remain Shadow-only, and Gemini is not currently a
+managed Longhouse provider, so none of those sessions receive coordination
+authority. The kernel remains provider-neutral; provider support remains
+explicit.
 
 This is a prelaunch replacement of the first coordination loop. There are no
 legacy contracts, compatibility aliases, dual-write cutovers, or migration
@@ -126,6 +127,25 @@ reply(input_id, text, client_request_id?)
 
 The machine API is canonical. CLI and MCP bindings stay thin.
 
+### Provider capability matrix
+
+Coordination tools and live target delivery are separate capabilities. A
+managed provider may gain one without implicitly claiming the other.
+
+| Provider | Longhouse mode | Five tools | Live target delivery |
+| --- | --- | --- | --- |
+| Claude | Helm | yes | yes |
+| Codex | Helm | yes | yes |
+| OpenCode | Helm | yes | yes |
+| Cursor | Shadow | no | no |
+| Antigravity | Shadow | no | no |
+| Gemini | not managed | no | no |
+
+The first three use their normal provider MCP configuration shapes and one
+shared Longhouse MCP server. Provider-specific launch code only carries the
+session-scoped credential into that MCP subprocess. It does not create a new
+message protocol or provider-specific delivery kernel.
+
 ### Delivery policy
 
 V1 uses one conservative policy across providers:
@@ -188,6 +208,10 @@ channel HTTP port or writes channel state. Neither facade mutates Claude's
 global MCP configuration. Codex passes the same credential from its native
 facade through the bridge into only the coordination MCP subprocess; the
 provider process does not inherit it.
+OpenCode passes the same credential through its native facade into the local
+MCP server's `environment` configuration. The stock `opencode serve` process
+does not receive ambient coordination-token authority, although its MCP config
+necessarily contains the credential it passes to the child server.
 
 ### Idempotency and ordering
 
@@ -292,7 +316,7 @@ handshake with the exact five tools and trustworthy current-session identity.
 ### Phase 5: provider and live verification
 
 - Run focused unit, catalog, engine, and core E2E targets.
-- Dogfood at least two different managed providers.
+- Dogfood all shipped managed Helm providers.
 - Complete a cross-provider round trip through the hosted Runtime Host.
 - Keep physical cross-machine execution as an explicit environmental proof for
   the first legitimate second Longhouse machine. Do not provision a provider
@@ -324,8 +348,9 @@ reachability proof without reopening the provider-neutral kernel.
 - Sender identity is session-bound and survives negative inheritance tests.
 - No acknowledgement or peer-specific parallel delivery lifecycle remains.
 - No cold session is started implicitly.
-- Two different providers complete the live round trip through the hosted
-  Runtime Host.
+- Claude, Codex, and OpenCode expose the same five tools, and at least two
+  different providers complete the live round trip through the hosted Runtime
+  Host.
 - Physical cross-machine execution remains a visible environmental proof until
   a second machine legitimately has Longhouse and a supported provider.
 - Busy, cold, observe-only, identity-spoof, retry, and failure cases are proven.
