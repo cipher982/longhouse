@@ -1,6 +1,6 @@
 # Provider-Neutral Directed Input v1
 
-Status: In live validation
+Status: Shipped 2026-07-24
 Owner: session kernel / managed providers
 Created: 2026-07-23
 
@@ -293,15 +293,19 @@ handshake with the exact five tools and trustworthy current-session identity.
 
 - Run focused unit, catalog, engine, and core E2E targets.
 - Dogfood at least two different managed providers.
-- Complete a cross-provider, cross-machine round trip through the hosted
-  Runtime Host.
+- Complete a cross-provider round trip through the hosted Runtime Host.
+- Keep physical cross-machine execution as an explicit environmental proof for
+  the first legitimate second Longhouse machine. Do not provision a provider
+  or copy provider credentials solely to simulate this condition.
 - Prove active target queues, cold target does not resume, observe-only target
   remains durable without a live claim, spoofed identity fails, idempotent
   retry creates one envelope, and reply correlation is correct.
 - Run independent architecture reviews during implementation and delete
   complexity that is not earning its keep.
 
-Gate: the live journey and negative cases leave durable inspectable evidence.
+Gate: the hosted live journey and negative cases leave durable inspectable
+evidence. The first real second-machine installation adds the environmental
+reachability proof without reopening the provider-neutral kernel.
 
 ### Phase 6: ship
 
@@ -320,7 +324,10 @@ Gate: the live journey and negative cases leave durable inspectable evidence.
 - Sender identity is session-bound and survives negative inheritance tests.
 - No acknowledgement or peer-specific parallel delivery lifecycle remains.
 - No cold session is started implicitly.
-- Two different providers on different machines complete the live round trip.
+- Two different providers complete the live round trip through the hosted
+  Runtime Host.
+- Physical cross-machine execution remains a visible environmental proof until
+  a second machine legitimately has Longhouse and a supported provider.
 - Busy, cold, observe-only, identity-spoof, retry, and failure cases are proven.
 - Independent review findings are dispositioned; final architecture remains
   appropriate for one developer and zero users.
