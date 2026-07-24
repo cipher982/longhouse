@@ -346,7 +346,6 @@ def _opencode_config_content_with_longhouse_plugin(
     device_id: str,
     model: str | None = None,
     coordination_instructions_path: Path | None = None,
-    longhouse_mcp_command: tuple[str, ...] | None = None,
 ) -> str:
     if existing_content and existing_content.strip():
         try:
@@ -382,18 +381,6 @@ def _opencode_config_content_with_longhouse_plugin(
             raise _OpenCodeLaunchError("OPENCODE_CONFIG_CONTENT instructions field must be an array")
         instruction_path = str(coordination_instructions_path.resolve())
         config["instructions"] = [*instructions, instruction_path] if instruction_path not in instructions else instructions
-    if longhouse_mcp_command is not None:
-        mcp = config.get("mcp", {})
-        if not isinstance(mcp, dict):
-            raise _OpenCodeLaunchError("OPENCODE_CONFIG_CONTENT mcp field must be an object")
-        config["mcp"] = {
-            **mcp,
-            "longhouse": {
-                "type": "local",
-                "command": list(longhouse_mcp_command),
-                "enabled": True,
-            },
-        }
     normalized_model = str(model or "").strip()
     if normalized_model:
         config["model"] = normalized_model
@@ -412,7 +399,6 @@ def _write_opencode_runtime_config_content(
     plugin_path = _ensure_opencode_runtime_plugin(config_dir)
     coordination_enabled = _opencode_coordination_enabled(session_id=session_id, device_id=device_id)
     instructions_path = _ensure_opencode_coordination_instructions(config_dir) if coordination_enabled else None
-    api_url = runtime_events_url.partition("/api/agents/")[0]
     content = _opencode_config_content_with_longhouse_plugin(
         existing_content=os.environ.get("OPENCODE_CONFIG_CONTENT"),
         plugin_path=plugin_path,
@@ -422,7 +408,6 @@ def _write_opencode_runtime_config_content(
         device_id=device_id,
         model=model,
         coordination_instructions_path=instructions_path,
-        longhouse_mcp_command=("longhouse", "mcp-server", "--url", api_url) if coordination_enabled else None,
     )
     runtime_dir = _opencode_runtime_dir(config_dir)
     runtime_dir.mkdir(parents=True, exist_ok=True)
@@ -703,7 +688,6 @@ def _run_native_opencode(
         session_id=session_id,
         device_id=machine_name,
         coordination_instructions_path=instructions_path,
-        longhouse_mcp_command=("longhouse", "mcp-server", "--url", url) if coordination_enabled else None,
     )
 
     def _record_state(server_url: str) -> None:

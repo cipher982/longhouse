@@ -65,10 +65,8 @@ def observe_opencode_launch_scoped_coordination(*, provider_bin: str | None = No
         except json.JSONDecodeError as exc:
             raise RuntimeError("OpenCode config probe did not return JSON") from exc
         instruction_path = str((root / "longhouse" / "managed-local" / "opencode" / "longhouse-coordination.md").resolve())
-        expected_command = ["longhouse", "mcp-server", "--url", "https://longhouse.invalid"]
         return {
             "instruction_loaded": instruction_path in (resolved.get("instructions") or []),
-            "longhouse_mcp_loaded": (resolved.get("mcp") or {}).get("longhouse", {}).get("command") == expected_command,
             "configured_instruction_present": instruction_path in (configured.get("instructions") or []),
         }
 

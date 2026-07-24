@@ -127,7 +127,7 @@ where
                         if trimmed.is_empty() {
                             continue;
                         }
-                        let response = match handle_rpc_line(trimmed, &state) {
+                        let response = match handle_rpc_line(trimmed, &state).await {
                             Ok(response) => response,
                             Err(err) => {
                                 loop_result = Err(err);
@@ -175,7 +175,7 @@ where
     Ok(())
 }
 
-fn handle_rpc_line(raw: &str, state: &BridgeState) -> Result<Option<Value>> {
+async fn handle_rpc_line(raw: &str, state: &BridgeState) -> Result<Option<Value>> {
     let message: Value = match serde_json::from_str(raw) {
         Ok(message) => message,
         Err(_) => {
@@ -220,7 +220,14 @@ fn handle_rpc_line(raw: &str, state: &BridgeState) -> Result<Option<Value>> {
                 "instructions": "Longhouse native Claude channel bridge. Claude may receive channel notifications from this local server."
             }
         }),
-        "tools/list" => json!({"jsonrpc": "2.0", "id": id, "result": {"tools": []}}),
+        "tools/list" => {
+            json!({"jsonrpc": "2.0", "id": id, "result": {"tools": coordination_tools()}})
+        }
+        "tools/call" => {
+            return Ok(Some(
+                call_coordination_tool(id, message.get("params"), state).await,
+            ))
+        }
         "resources/list" => json!({"jsonrpc": "2.0", "id": id, "result": {"resources": []}}),
         "prompts/list" => json!({"jsonrpc": "2.0", "id": id, "result": {"prompts": []}}),
         "ping" => json!({"jsonrpc": "2.0", "id": id, "result": {}}),
@@ -234,6 +241,216 @@ fn handle_rpc_line(raw: &str, state: &BridgeState) -> Result<Option<Value>> {
         }),
     };
     Ok(Some(response))
+}
+
+fn coordination_tools() -> Vec<Value> {
+    vec![
+        tool(
+            "peers",
+            "List current same-repo collaborators from the live Longhouse wall.",
+            json!({"repo":{"type":"string"},"active_only":{"type":"boolean","default":true}}),
+        ),
+        tool(
+            "message_session",
+            "Send a directed message to another session.",
+            json!({"to_session_id":{"type":"string"},"text":{"type":"string"},"source_event_id":{"type":"integer"}}),
+        ),
+        tool(
+            "check_messages",
+            "Inspect durable messages for the current managed session.",
+            json!({"direction":{"type":"string","enum":["inbound","outbound","all"],"default":"inbound"},"unacknowledged_only":{"type":"boolean","default":true},"limit":{"type":"integer","default":20}}),
+        ),
+        tool(
+            "ack_message",
+            "Acknowledge that the current managed session handled a message.",
+            json!({"message_id":{"type":"integer"}}),
+        ),
+        tool(
+            "check_wall",
+            "Check the Longhouse wall for active and recent sessions.",
+            json!({"repo":{"type":"string"},"project":{"type":"string"},"days":{"type":"integer","default":7}}),
+        ),
+        tool(
+            "session_tail",
+            "Read the last events from another session transcript.",
+            json!({"session_id":{"type":"string"},"limit":{"type":"integer","default":30}}),
+        ),
+    ]
+}
+
+fn tool(name: &str, description: &str, properties: Value) -> Value {
+    json!({"name":name,"description":description,"inputSchema":{"type":"object","properties":properties}})
+}
+
+async fn call_coordination_tool(id: Value, params: Option<&Value>, state: &BridgeState) -> Value {
+    let params = params.unwrap_or(&Value::Null);
+    let Some(name) = params.get("name").and_then(Value::as_str) else {
+        return rpc_error(id, -32602, "tools/call requires a tool name");
+    };
+    let arguments = params
+        .get("arguments")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let session_id = state
+        .inner
+        .lock()
+        .expect("bridge state mutex poisoned")
+        .session_id
+        .clone()
+        .or_else(|| std::env::var("LONGHOUSE_MANAGED_SESSION_ID").ok());
+    let config = match crate::config::ShipperConfig::from_env() {
+        Ok(config) => config,
+        Err(error) => return tool_result(id, json!({"error": error.to_string()})),
+    };
+    let client = reqwest::Client::new();
+    let base = config.api_url.trim_end_matches('/');
+    let mut request = match name {
+        "peers" => {
+            let mut repo = arguments
+                .get("repo")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            if repo.is_none() {
+                if let Some(current) = session_id.as_deref() {
+                    repo =
+                        resolve_session_repo(&client, base, config.api_token.as_deref(), current)
+                            .await;
+                }
+            }
+            if repo.is_none() {
+                repo = state.inner.lock().ok().and_then(|inner| inner.cwd.clone());
+            }
+            let Some(repo) = repo else {
+                return tool_result(
+                    id,
+                    json!({"error":"peers requires repo or a current managed session cwd"}),
+                );
+            };
+            client
+                .get(format!("{base}/api/agents/sessions/wall"))
+                .query(&[("repo", repo.as_str()), ("days", "7")])
+        }
+        "message_session" => {
+            let Some(current) = session_id.as_deref() else {
+                return tool_result(
+                    id,
+                    json!({"error":"message_session requires a current managed session context"}),
+                );
+            };
+            client
+                .post(format!("{base}/api/agents/messages"))
+                .header("X-Longhouse-Session-Id", current)
+                .json(&arguments)
+        }
+        "check_messages" => {
+            let Some(current) = session_id.as_deref() else {
+                return tool_result(
+                    id,
+                    json!({"error":"check_messages requires a current managed session context"}),
+                );
+            };
+            let mut query = arguments.clone();
+            if let Some(map) = query.as_object_mut() {
+                // The advertised schema defaults unacknowledged_only to true;
+                // the API defaults it to false, so fill it in when omitted.
+                map.entry("unacknowledged_only").or_insert(json!(true));
+            }
+            client
+                .get(format!("{base}/api/agents/messages"))
+                .header("X-Longhouse-Session-Id", current)
+                .query(&query)
+        }
+        "ack_message" => {
+            let Some(current) = session_id.as_deref() else {
+                return tool_result(
+                    id,
+                    json!({"error":"ack_message requires a current managed session context"}),
+                );
+            };
+            let Some(message_id) = arguments.get("message_id").and_then(Value::as_i64) else {
+                return tool_result(id, json!({"error":"ack_message requires message_id"}));
+            };
+            client
+                .post(format!("{base}/api/agents/messages/{message_id}/ack"))
+                .header("X-Longhouse-Session-Id", current)
+                .json(&json!({}))
+        }
+        "check_wall" => client
+            .get(format!("{base}/api/agents/sessions/wall"))
+            .query(&arguments),
+        "session_tail" => {
+            let Some(session_id) = arguments.get("session_id").and_then(Value::as_str) else {
+                return tool_result(id, json!({"error":"session_tail requires session_id"}));
+            };
+            client
+                .get(format!("{base}/api/agents/sessions/{session_id}/tail"))
+                .query(&[(
+                    "limit",
+                    arguments
+                        .get("limit")
+                        .and_then(Value::as_i64)
+                        .unwrap_or(30)
+                        .to_string(),
+                )])
+        }
+        _ => return rpc_error(id, -32601, &format!("unknown coordination tool: {name}")),
+    };
+    if let Some(token) = config.api_token.as_deref() {
+        request = request.header("X-Agents-Token", token);
+    }
+    match request.send().await {
+        Ok(response) => {
+            let status = response.status().as_u16();
+            match response.text().await {
+                Ok(text) if (200..300).contains(&status) => tool_text_result(id, text),
+                Ok(text) => tool_result(
+                    id,
+                    json!({"error":format!("API returned {status}"),"detail":parse_json_or_text(&text)}),
+                ),
+                Err(error) => tool_result(id, json!({"error":error.to_string()})),
+            }
+        }
+        Err(error) => tool_result(id, json!({"error":error.to_string()})),
+    }
+}
+
+async fn resolve_session_repo(
+    client: &reqwest::Client,
+    base: &str,
+    token: Option<&str>,
+    session_id: &str,
+) -> Option<String> {
+    let mut request = client.get(format!("{base}/api/agents/sessions/{session_id}"));
+    if let Some(token) = token {
+        request = request.header("X-Agents-Token", token);
+    }
+    let response = request.send().await.ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+    let detail: Value = response.json().await.ok()?;
+    for key in ["git_repo", "cwd"] {
+        if let Some(value) = detail.get(key).and_then(Value::as_str) {
+            let trimmed = value.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn parse_json_or_text(text: &str) -> Value {
+    serde_json::from_str(text).unwrap_or_else(|_| Value::String(text.to_string()))
+}
+fn tool_text_result(id: Value, text: String) -> Value {
+    json!({"jsonrpc":"2.0","id":id,"result":{"content":[{"type":"text","text":text}]}})
+}
+fn tool_result(id: Value, value: Value) -> Value {
+    tool_text_result(id, value.to_string())
+}
+fn rpc_error(id: Value, code: i64, message: &str) -> Value {
+    json!({"jsonrpc":"2.0","id":id,"error":{"code":code,"message":message}})
 }
 
 async fn write_json_line<W>(writer: &mut W, value: &Value) -> Result<()>
@@ -811,10 +1028,14 @@ mod tests {
         assert_eq!(parse_error["id"], Value::Null);
         assert_eq!(parse_error["error"]["code"], -32700);
         let tools = read_json_line(&mut stdout).await;
-        assert_eq!(
-            tools,
-            json!({"jsonrpc": "2.0", "id": 2, "result": {"tools": []}})
-        );
+        let tool_names = tools["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .collect::<Vec<_>>();
+        assert!(tool_names.contains(&"peers"));
+        assert!(tool_names.contains(&"message_session"));
 
         let state: Value =
             serde_json::from_slice(&std::fs::read(state_path(temp.path())).unwrap()).unwrap();
