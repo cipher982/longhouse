@@ -43,7 +43,7 @@
           "tool_output_text": null,
           "tool_call_id": "w1",
           "tool_presentation": {
-            "version": 1,
+            "version": 2,
             "disposition": "parsed",
             "tool_name": "write_stdin",
             "source_tool_name": "exec",
@@ -62,7 +62,7 @@
             "wrapper_recedes": true,
             "children": [
               {
-                "version": 1,
+                "version": 2,
                 "disposition": "exact",
                 "tool_name": "write_stdin",
                 "label": "Wait",
@@ -118,7 +118,7 @@
           "tool_output_text": null,
           "tool_call_id": "w2",
           "tool_presentation": {
-            "version": 1,
+            "version": 2,
             "disposition": "parsed",
             "tool_name": "write_stdin",
             "source_tool_name": "exec",
@@ -137,7 +137,7 @@
             "wrapper_recedes": true,
             "children": [
               {
-                "version": 1,
+                "version": 2,
                 "disposition": "exact",
                 "tool_name": "write_stdin",
                 "label": "Wait",
@@ -193,7 +193,7 @@
           "tool_output_text": null,
           "tool_call_id": "w3",
           "tool_presentation": {
-            "version": 1,
+            "version": 2,
             "disposition": "parsed",
             "tool_name": "write_stdin",
             "source_tool_name": "exec",
@@ -212,7 +212,7 @@
             "wrapper_recedes": true,
             "children": [
               {
-                "version": 1,
+                "version": 2,
                 "disposition": "exact",
                 "tool_name": "write_stdin",
                 "label": "Wait",
@@ -268,7 +268,7 @@
           "tool_output_text": null,
           "tool_call_id": "w4",
           "tool_presentation": {
-            "version": 1,
+            "version": 2,
             "disposition": "parsed",
             "tool_name": "write_stdin",
             "source_tool_name": "exec",
@@ -287,7 +287,7 @@
             "wrapper_recedes": true,
             "children": [
               {
-                "version": 1,
+                "version": 2,
                 "disposition": "exact",
                 "tool_name": "write_stdin",
                 "label": "Wait",
