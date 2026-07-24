@@ -30,7 +30,7 @@ def check(project_root: Path) -> list[str]:
     if "--longhouse-bin longhouse-server" not in release_workflow:
         errors.append("release build-identity verification must use longhouse-server")
     dogfood = (project_root / "scripts/dev/dogfood-runtime.sh").read_text(encoding="utf-8")
-    if "zerg.cli.main" in dogfood or "connect --install" in dogfood:
+    if "zerg.cli.main" in dogfood or "connect --install" in dogfood or "provider-live publish" in dogfood:
         errors.append("dogfood refresh still invokes the retired Python device CLI")
     return errors
 

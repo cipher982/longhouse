@@ -12,21 +12,12 @@ if [[ -n "${COMMAND}" ]]; then
   shift
 fi
 
-DEFAULT_ROUTE_E2E_PROVIDER="auto"
 ENGINE_PROFILE="${LONGHOUSE_DOGFOOD_ENGINE_PROFILE:-ci}"
 CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 URL_OVERRIDE="${LONGHOUSE_DOGFOOD_URL:-}"
 MACHINE_NAME_OVERRIDE="${LONGHOUSE_DOGFOOD_MACHINE_NAME:-}"
-ROUTE_E2E_PROVIDER="${LONGHOUSE_DOGFOOD_PROVIDER_LIVE_ROUTE_PROVIDER:-$DEFAULT_ROUTE_E2E_PROVIDER}"
-ROUTE_E2E_STRICT="${LONGHOUSE_DOGFOOD_PROVIDER_LIVE_ROUTE_STRICT:-0}"
-ROUTE_E2E_HTTP_TIMEOUT_S="${LONGHOUSE_DOGFOOD_PROVIDER_LIVE_ROUTE_HTTP_TIMEOUT_S:-45}"
-# Provider proofs can overlap with the publish step immediately above. Keep
-# the route harness's normal transient retry budget so an in-flight 409 does
-# not leave dogfood health falsely yellow.
-ROUTE_E2E_ATTEMPTS="${LONGHOUSE_DOGFOOD_PROVIDER_LIVE_ROUTE_ATTEMPTS:-6}"
 MENUBAR=1
 SKIP_ENGINE=0
-SKIP_ROUTE_E2E=0
 FULL_HEALTH="${LONGHOUSE_DOGFOOD_FULL_HEALTH:-0}"
 
 resolve_longhouse_home() {
@@ -47,7 +38,7 @@ resolve_longhouse_home() {
 usage() {
   cat <<'EOF'
 Usage:
-  scripts/dev/dogfood-runtime.sh refresh [--url <url>] [--machine-name <name>] [--claude-dir <path>] [--no-menubar] [--skip-engine] [--skip-route-e2e] [--route-provider <auto|provider|all>]
+  scripts/dev/dogfood-runtime.sh refresh [--url <url>] [--machine-name <name>] [--no-menubar] [--skip-engine]
   scripts/dev/dogfood-runtime.sh check [--claude-dir <path>]
 
 Purpose:
@@ -57,9 +48,6 @@ Purpose:
 Notes:
   - This is the dogfood loop for repo work. It installs into the actual local runtime.
   - DMG/drag-install is release transport only. Daily dogfooding should use this script.
-  - Refresh reports a no-token hosted provider-live route E2E after install unless --skip-route-e2e is set.
-    The default provider set is auto from current sidecars. Set LONGHOUSE_DOGFOOD_PROVIDER_LIVE_ROUTE_STRICT=1 to fail refresh on this remote check.
-    The hosted route check is capped by LONGHOUSE_DOGFOOD_PROVIDER_LIVE_ROUTE_HTTP_TIMEOUT_S (default 45s) and LONGHOUSE_DOGFOOD_PROVIDER_LIVE_ROUTE_ATTEMPTS (default 1).
   - Engine builds use LONGHOUSE_DOGFOOD_ENGINE_PROFILE=ci by default. Set it to release to force the slower release-LTO profile.
   - Check prints one local-health JSON-derived launch summary by default. Set LONGHOUSE_DOGFOOD_FULL_HEALTH=1 to also print the full human local-health report.
 EOF
@@ -301,47 +289,6 @@ run_check() {
   rm -f "$snapshot_file"
 }
 
-publish_provider_live_proof() {
-  local status=0
-  require_cmd longhouse
-
-  log "==> Publishing provider live proof"
-  LONGHOUSE_HOME="$LONGHOUSE_HOME" \
-    longhouse provider-live publish || status=$?
-  if (( status != 0 )); then
-    log "WARN: provider live proof published with failures (exit $status); local-health will show the sidecar state."
-    log "Evidence root: $ROOT_DIR/.build/canaries/provider-live"
-  fi
-}
-
-run_provider_live_route_e2e() {
-  local status=0
-  local route_artifact="$LONGHOUSE_HOME/provider-live-route-e2e/latest.json"
-  local repo_artifact="$ARTIFACT_DIR/provider-live-route-e2e.json"
-  require_cmd python3
-
-  log ""
-  log "==> Hosted provider-live route E2E"
-  log "Provider: $ROUTE_E2E_PROVIDER"
-  log "Evidence: $route_artifact"
-  mkdir -p "$(dirname "$route_artifact")" "$ARTIFACT_DIR"
-  LONGHOUSE_HOME="$LONGHOUSE_HOME" \
-    python3 "$ROOT_DIR/scripts/qa/provider-live-route-e2e.py" \
-      --provider "$ROUTE_E2E_PROVIDER" \
-      --skip-mismatch \
-      --require-verdict non-red \
-      --http-timeout-s "$ROUTE_E2E_HTTP_TIMEOUT_S" \
-      --attempts "$ROUTE_E2E_ATTEMPTS" \
-      --artifact "$route_artifact" || status=$?
-  cp -f "$route_artifact" "$repo_artifact" 2>/dev/null || true
-  if (( status != 0 )); then
-    log "WARN: hosted provider-live route E2E failed (exit $status). See $route_artifact"
-    if [[ "$ROUTE_E2E_STRICT" == "1" || "$ROUTE_E2E_STRICT" == "true" || "$ROUTE_E2E_STRICT" == "yes" ]]; then
-      fail "Hosted provider-live route E2E failed in strict mode (exit $status). See $route_artifact"
-    fi
-  fi
-}
-
 run_refresh() {
   local url
   local machine_name
@@ -384,16 +331,7 @@ run_refresh() {
   LONGHOUSE_DEVICE_TOKEN="$device_token" run_repo_longhouse auth --url "$url" --device "$machine_name"
   run_repo_longhouse machine repair --repair-service --json >/dev/null
 
-  log ""
-  publish_provider_live_proof
-  log ""
   run_check
-  if (( SKIP_ROUTE_E2E == 0 )); then
-    run_provider_live_route_e2e
-    log ""
-    log "==> Local health after provider-live route E2E"
-    run_repo_longhouse local-health
-  fi
 }
 
 if [[ "${LONGHOUSE_DOGFOOD_RUNTIME_SOURCE_ONLY:-0}" == "1" ]]; then
@@ -421,14 +359,6 @@ while [[ $# -gt 0 ]]; do
     --skip-engine)
       SKIP_ENGINE=1
       shift
-      ;;
-    --skip-route-e2e)
-      SKIP_ROUTE_E2E=1
-      shift
-      ;;
-    --route-provider)
-      ROUTE_E2E_PROVIDER="${2:-}"
-      shift 2
       ;;
     -h|--help)
       usage
