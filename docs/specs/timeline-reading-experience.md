@@ -198,7 +198,7 @@ still occupied 58–85% of visible timeline rows:
 | Codex / metadata refinement | 107 | 81 | 3 |
 | Claude / RL work | 120 | 67 | 4 |
 | Cursor / patent work | 57 | 43 | 6 |
-| OpenCode / Hatch work | 30 | 25 | 1 |
+| OpenCode / agent review work | 30 | 25 | 1 |
 
 The translation layer is working, but the resulting page is still a ledger.
 The failure is the grouping boundary: an `Edit`, shell validation, plan update,
