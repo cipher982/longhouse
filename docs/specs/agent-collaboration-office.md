@@ -1,6 +1,6 @@
 # Managed Agent Coordination Loop
 
-Status: Shipped
+Status: Superseded by `provider-neutral-directed-input-v1.md`
 Owner: session kernel / managed providers
 Updated: 2026-07-21
 
