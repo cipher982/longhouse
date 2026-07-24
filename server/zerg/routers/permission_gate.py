@@ -9,7 +9,7 @@ Claude. See ``session_chat`` for the answer path and ``session_pause_requests``
 for the store.
 
 Authentication mirrors presence ingest: the same ``X-Agents-Token`` / managed-local
-hook token, and a managed-local hook token must match the target session.
+hook-scoped session token, and it must match the target session.
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ from pydantic import Field
 from sqlalchemy.orm import Session
 
 from zerg import database as database_module
-from zerg.auth.managed_local_hook_tokens import ManagedLocalHookToken
+from zerg.auth.managed_session_tokens import ManagedSessionToken
 from zerg.database import get_db
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentSession
@@ -109,16 +109,16 @@ def _enforce_session_scope(token: object, session_id: str) -> None:
 
     These endpoints act *as* a single managed session, so a machine-wide durable
     device token must not be able to register/poll/resolve arbitrary sessions'
-    permission requests. Only a managed-local hook token bound to this session is
+    permission requests. Only a hook-scoped session token bound to this session is
     accepted (``None`` is the AUTH_DISABLED dev/test path).
     """
     if token is None:
         return
-    if isinstance(token, ManagedLocalHookToken):
+    if isinstance(token, ManagedSessionToken):
         if session_id != token.session_id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Managed-local hook token does not match session",
+                detail="Managed-session hook scope does not match session",
             )
         return
     # A durable device token (or anything else) is not session-scoped.

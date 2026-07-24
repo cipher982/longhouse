@@ -14,11 +14,11 @@ from zerg.cli.apns_smoke import apns_smoke_command
 from zerg.cli.archive import app as archive_app
 from zerg.cli.connect import recall
 from zerg.cli.connect import ship
-from zerg.cli.coordination import message
-from zerg.cli.coordination import messages_app
+from zerg.cli.coordination import inbox
 from zerg.cli.coordination import peers
+from zerg.cli.coordination import reply
+from zerg.cli.coordination import send
 from zerg.cli.coordination import tail
-from zerg.cli.coordination import wall
 from zerg.cli.mcp_serve import mcp_server
 from zerg.cli.onboard import onboard
 from zerg.cli.provider import app as provider_app
@@ -527,7 +527,6 @@ def db_classify_automation(
         typer.echo(f"  {candidate['session_id']} {candidate['provider']} {candidate['prompt_preview'][:100]}")
 
 
-app.add_typer(messages_app, name="messages", help="Durable session inbox commands")
 app.add_typer(sessions_app, name="sessions", help="Session inspection commands")
 app.add_typer(config_app, name="config", help="Configuration management")
 app.add_typer(db_app, name="db", help="SQLite database diagnostics and maintenance")
@@ -536,7 +535,7 @@ app.add_typer(translation_app, name="translation", help="Read-only provider tool
 app.add_typer(provider_app, name="provider", help="Provider contracts and automation-factory diagnostics")
 app.add_typer(archive_app, name="archive", help="Archive backlog inspection and control")
 
-for command in (serve, status, wall, peers, message, tail, ship, recall):
+for command in (serve, status, peers, tail, send, inbox, reply, ship, recall):
     app.command()(command)
 
 app.command(name="hash-password")(hash_password)

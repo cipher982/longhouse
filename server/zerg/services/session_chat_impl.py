@@ -171,6 +171,8 @@ class ManagedLocalSessionLaunchResponse(BaseModel):
     # exports it as LONGHOUSE_HOOK_TOKEN so the permission gate authenticates as
     # this session (the permission-gate endpoints reject durable device tokens).
     hook_token: str | None = None
+    # Session-scoped sender authority passed only to the coordination adapter.
+    coordination_token: str | None = None
 
 
 class SessionDraftReplyResponse(BaseModel):
@@ -269,6 +271,7 @@ def _validate_managed_local_launch_response_contract(
 
 
 def _managed_local_launch_response(db: Session, result, *, owner_id: int | None = None) -> ManagedLocalSessionLaunchResponse:
+    from zerg.services.directed_input_envelope import provider_supports_directed_input
     from zerg.services.managed_local_launcher import managed_local_run_id_for_session
 
     session = result.session
@@ -287,15 +290,27 @@ def _managed_local_launch_response(db: Session, result, *, owner_id: int | None 
     # permission gate can authenticate as this exact session (the gate endpoints
     # reject durable device tokens). Bypass launches never get one.
     hook_token: str | None = None
-    if permission_mode == "remote_approve" and owner_id is not None:
-        from zerg.auth.managed_local_hook_tokens import issue_managed_local_hook_token
+    coordination_token: str | None = None
+    if owner_id is not None and provider_supports_directed_input(session.provider):
+        from zerg.auth.managed_session_tokens import MANAGED_SESSION_SCOPE_COORDINATION
+        from zerg.auth.managed_session_tokens import MANAGED_SESSION_SCOPE_HOOK
+        from zerg.auth.managed_session_tokens import issue_managed_session_token
 
-        hook_token = issue_managed_local_hook_token(
+        coordination_token = issue_managed_session_token(
             owner_id=owner_id,
             session_id=str(session.id),
             project=getattr(session, "project", None),
             device_id=getattr(session, "device_id", None),
+            scope=MANAGED_SESSION_SCOPE_COORDINATION,
         )
+        if permission_mode == "remote_approve":
+            hook_token = issue_managed_session_token(
+                owner_id=owner_id,
+                session_id=str(session.id),
+                project=getattr(session, "project", None),
+                device_id=getattr(session, "device_id", None),
+                scope=MANAGED_SESSION_SCOPE_HOOK,
+            )
     response = ManagedLocalSessionLaunchResponse(
         session_id=str(session.id),
         run_id=str(managed_local_run_id_for_session(session.id)),
@@ -310,6 +325,7 @@ def _managed_local_launch_response(db: Session, result, *, owner_id: int | None 
         attach_command=result.attach_command,
         permission_mode=permission_mode,
         hook_token=hook_token,
+        coordination_token=coordination_token,
     )
     _validate_managed_local_launch_response_contract(
         session_id=str(session.id),
@@ -326,16 +342,30 @@ def _managed_local_launch_response_from_plan(
 ) -> ManagedLocalSessionLaunchResponse:
     """Build a managed-local launch response before archive projection exists."""
 
-    hook_token: str | None = None
-    if plan.permission_mode == "remote_approve" and owner_id is not None:
-        from zerg.auth.managed_local_hook_tokens import issue_managed_local_hook_token
+    from zerg.services.directed_input_envelope import provider_supports_directed_input
 
-        hook_token = issue_managed_local_hook_token(
+    hook_token: str | None = None
+    coordination_token: str | None = None
+    if owner_id is not None and provider_supports_directed_input(plan.provider):
+        from zerg.auth.managed_session_tokens import MANAGED_SESSION_SCOPE_COORDINATION
+        from zerg.auth.managed_session_tokens import MANAGED_SESSION_SCOPE_HOOK
+        from zerg.auth.managed_session_tokens import issue_managed_session_token
+
+        coordination_token = issue_managed_session_token(
             owner_id=owner_id,
             session_id=str(plan.session_id),
             project=plan.project,
             device_id=plan.source_name,
+            scope=MANAGED_SESSION_SCOPE_COORDINATION,
         )
+        if plan.permission_mode == "remote_approve":
+            hook_token = issue_managed_session_token(
+                owner_id=owner_id,
+                session_id=str(plan.session_id),
+                project=plan.project,
+                device_id=plan.source_name,
+                scope=MANAGED_SESSION_SCOPE_HOOK,
+            )
     response = ManagedLocalSessionLaunchResponse(
         session_id=str(plan.session_id),
         run_id=run_id,
@@ -350,6 +380,7 @@ def _managed_local_launch_response_from_plan(
         attach_command=plan.attach_command,
         permission_mode=plan.permission_mode,
         hook_token=hook_token,
+        coordination_token=coordination_token,
     )
     _validate_managed_local_launch_response_contract(
         session_id=str(plan.session_id),

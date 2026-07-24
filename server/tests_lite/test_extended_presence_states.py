@@ -31,7 +31,6 @@ import os
 from datetime import datetime
 from datetime import timezone
 from types import SimpleNamespace
-from uuid import UUID
 from uuid import uuid4
 
 import pytest
@@ -235,7 +234,7 @@ def test_presence_releases_request_db_before_serialized_write(tmp_path, monkeypa
         api_app.dependency_overrides.clear()
         engine.dispose()
 
-    assert observations == {"before_close": 1, "after_close": 0}
+    assert observations == {"before_close": 0, "after_close": 0}
 
 
 # ---------------------------------------------------------------------------
@@ -328,9 +327,7 @@ def test_needs_user_does_not_auto_resume_snoozed(client, tmp_path):
         db = SessionLocal()
         session = _make_session(db)
         # Snooze the session
-        db.query(AgentSession).filter(AgentSession.id == session.id).update(
-            {"user_state": "snoozed"}, synchronize_session=False
-        )
+        db.query(AgentSession).filter(AgentSession.id == session.id).update({"user_state": "snoozed"}, synchronize_session=False)
         db.commit()
 
         c.post(
@@ -341,9 +338,7 @@ def test_needs_user_does_not_auto_resume_snoozed(client, tmp_path):
 
         db.expire_all()
         updated = db.query(AgentSession).filter(AgentSession.id == session.id).first()
-        assert updated.user_state == "snoozed", (
-            f"needs_user should NOT auto-resume snoozed session, got user_state={updated.user_state!r}"
-        )
+        assert updated.user_state == "snoozed", f"needs_user should NOT auto-resume snoozed session, got user_state={updated.user_state!r}"
         db.close()
     api_app.dependency_overrides.clear()
     engine.dispose()
@@ -364,9 +359,7 @@ def test_blocked_does_not_auto_resume_snoozed(client, tmp_path):
     with TestClient(api_app) as c:
         db = SessionLocal()
         session = _make_session(db)
-        db.query(AgentSession).filter(AgentSession.id == session.id).update(
-            {"user_state": "snoozed"}, synchronize_session=False
-        )
+        db.query(AgentSession).filter(AgentSession.id == session.id).update({"user_state": "snoozed"}, synchronize_session=False)
         db.commit()
 
         c.post(
@@ -377,9 +370,7 @@ def test_blocked_does_not_auto_resume_snoozed(client, tmp_path):
 
         db.expire_all()
         updated = db.query(AgentSession).filter(AgentSession.id == session.id).first()
-        assert updated.user_state == "snoozed", (
-            f"blocked should NOT auto-resume snoozed session, got user_state={updated.user_state!r}"
-        )
+        assert updated.user_state == "snoozed", f"blocked should NOT auto-resume snoozed session, got user_state={updated.user_state!r}"
         db.close()
     api_app.dependency_overrides.clear()
     engine.dispose()
@@ -400,9 +391,7 @@ def test_thinking_still_auto_resumes_snoozed(client, tmp_path):
     with TestClient(api_app) as c:
         db = SessionLocal()
         session = _make_session(db)
-        db.query(AgentSession).filter(AgentSession.id == session.id).update(
-            {"user_state": "snoozed"}, synchronize_session=False
-        )
+        db.query(AgentSession).filter(AgentSession.id == session.id).update({"user_state": "snoozed"}, synchronize_session=False)
         db.commit()
 
         c.post(
@@ -413,9 +402,7 @@ def test_thinking_still_auto_resumes_snoozed(client, tmp_path):
 
         db.expire_all()
         updated = db.query(AgentSession).filter(AgentSession.id == session.id).first()
-        assert updated.user_state == "active", (
-            f"thinking should auto-resume snoozed session, got user_state={updated.user_state!r}"
-        )
+        assert updated.user_state == "active", f"thinking should auto-resume snoozed session, got user_state={updated.user_state!r}"
         db.close()
     api_app.dependency_overrides.clear()
     engine.dispose()

@@ -18,7 +18,7 @@ def _identity() -> ScenarioProofIdentity:
         provider_executable_identity="sha256:provider",
         provider_contract_digest="sha256:contract",
         adapter_digest="sha256:adapter",
-        scenario_id="codex_coordination_message",
+        scenario_id="codex_coordination_directed_input",
         scenario_revision=1,
         oracle_digest="sha256:oracle",
         evidence_class=EvidenceClass.HERMETIC,
@@ -37,15 +37,15 @@ def test_publisher_emits_one_immutable_record_per_assertion(tmp_path: Path) -> N
     records = publish_scenario_assertions(
         identity=_identity(),
         assertions={
-            "attributed_message_visible": False,
-            "directed_message_persisted_and_delivered": True,
+            "attributed_input_visible": False,
+            "provider_input_receipt_linked": True,
         },
         store=store,
     )
 
     assert [record.assertion_id for record in records] == [
-        "attributed_message_visible",
-        "directed_message_persisted_and_delivered",
+        "attributed_input_visible",
+        "provider_input_receipt_linked",
     ]
     assert [record.outcome for record in records] == [AssertionOutcome.SEMANTIC_FAIL, AssertionOutcome.PASS]
     assert {record.artifact_id for record in store.records("codex")} == {record.artifact_id for record in records}

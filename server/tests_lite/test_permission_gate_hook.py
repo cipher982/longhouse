@@ -117,7 +117,7 @@ def _run_hook(*, base_url: str | None, timeout_env: str = "3", extra_env: dict |
         # The canonical installed script is dormant by default; engage it (the
         # launcher sets this in remote-approve mode). The disabled test overrides.
         "LONGHOUSE_PERMISSION_HOOK_ENABLED": "1",
-        "LONGHOUSE_HOOK_TOKEN": "zht_test",
+        "LONGHOUSE_HOOK_TOKEN": "zst_test",
         "LONGHOUSE_MANAGED_SESSION_ID": "11111111-1111-1111-1111-111111111111",
         "LONGHOUSE_PERMISSION_HOOK_TIMEOUT_S": timeout_env,
         "PATH": "/usr/bin:/bin",

@@ -1196,7 +1196,6 @@ class WallSessionResponse(UTCBaseModel):
     kernel_observe_only: bool = Field(False, description="Raw kernel bit: Longhouse can observe output but not steer.")
     kernel_search_only: bool = Field(False, description="Raw kernel bit: imported/search-only transcript.")
     kernel_staleness_reason: Optional[str] = Field(None, description="Raw kernel reason live control is unavailable, when known.")
-    pending_inbound_messages: int = 0
     user_messages: int = 0
     assistant_messages: int = 0
     tool_calls: int = 0

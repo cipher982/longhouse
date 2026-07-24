@@ -31,11 +31,6 @@ def resolve_claude_user_config_path(*, claude_dir: str | Path | None = None) -> 
     return resolved_dir.parent / f"{resolved_dir.name}.json"
 
 
-def resolve_claude_project_key(workspace_path: str | Path) -> str:
-    workspace = Path(workspace_path).expanduser().resolve()
-    return str(workspace)
-
-
 def _read_json_object(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
@@ -51,61 +46,16 @@ def _write_json_object(path: Path, data: dict[str, Any]) -> None:
     path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
 
-def install_claude_channel_mcp_server(
-    *,
-    workspace_path: str | Path | None = None,
-    claude_dir: str | Path | None = None,
-    command: str = "longhouse-engine",
-    args: list[str] | None = None,
-) -> list[str]:
-    """Ensure the Longhouse Claude channel MCP server is registered in Claude's user config.
-
-    Native Claude channels are loaded by name from Claude's effective MCP config.
-    A project-local MCP server is ignored until that workspace is trusted, so it
-    can break managed launches in new directories. The Longhouse channel bridge
-    is a Longhouse-owned local transport, not workspace-provided code, so install
-    it at user scope where Claude can resolve it consistently.
-    """
+def remove_claude_channel_mcp_server(*, claude_dir: str | Path | None = None) -> bool:
+    """Remove the obsolete global channel registration used before launch-scoped auth."""
 
     user_config_path = resolve_claude_user_config_path(claude_dir=claude_dir)
     settings = _read_json_object(user_config_path)
-    actions: list[str] = []
-
-    desired = {
-        "type": "stdio",
-        "command": command,
-        "args": list(args or ["claude-channel", "serve"]),
-        "env": {},
-    }
-
     mcp_servers = settings.get("mcpServers")
-    if not isinstance(mcp_servers, dict):
-        mcp_servers = {}
-        settings["mcpServers"] = mcp_servers
-    current = mcp_servers.get(CLAUDE_CHANNEL_SERVER_NAME)
-    if current != desired:
-        mcp_servers[CLAUDE_CHANNEL_SERVER_NAME] = desired
-        actions.append(f"Updated {user_config_path} with user MCP server {CLAUDE_CHANNEL_SERVER_NAME}")
-
-    projects = settings.get("projects")
-    if isinstance(projects, dict):
-        removed_from: list[str] = []
-        for project_key, project_settings in projects.items():
-            if not isinstance(project_settings, dict):
-                continue
-            project_mcp_servers = project_settings.get("mcpServers")
-            if not isinstance(project_mcp_servers, dict):
-                continue
-            if project_mcp_servers.pop(CLAUDE_CHANNEL_SERVER_NAME, None) is not None:
-                removed_from.append(str(project_key))
-        if removed_from:
-            message = "Removed project-local MCP server " f"{CLAUDE_CHANNEL_SERVER_NAME} from {len(removed_from)} Claude project(s)"
-            actions.append(message)
-
-    if actions:
-        _write_json_object(user_config_path, settings)
-
-    return actions
+    if not isinstance(mcp_servers, dict) or mcp_servers.pop(CLAUDE_CHANNEL_SERVER_NAME, None) is None:
+        return False
+    _write_json_object(user_config_path, settings)
+    return True
 
 
 def resolve_claude_channel_state_root(
@@ -200,6 +150,7 @@ def build_claude_channel_exec_command(
     hook_url: str | None = None,
     claude_command: str = "claude",
     permission_mode: str = CLAUDE_PERMISSION_MODE_BYPASS,
+    mcp_config_path: str | Path | None = None,
 ) -> str:
     """Build the native Claude launch/resume shell command for channel sessions."""
 
@@ -226,6 +177,8 @@ def build_claude_channel_exec_command(
         CLAUDE_CHANNEL_DEVELOPMENT_FLAG,
         f"server:{CLAUDE_CHANNEL_SERVER_NAME}",
     ]
+    if mcp_config_path is not None:
+        command_bits += ["--mcp-config", str(Path(mcp_config_path))]
     inner = [
         build_managed_local_shell_prelude(required_commands=(claude_command,)),
         f"cd {_quote(working_dir)}",
@@ -254,9 +207,8 @@ __all__ = [
     "CLAUDE_CHANNEL_SERVER_NAME",
     "build_claude_channel_exec_command",
     "build_claude_channel_state_file",
-    "install_claude_channel_mcp_server",
+    "remove_claude_channel_mcp_server",
     "read_claude_channel_state",
-    "resolve_claude_project_key",
     "resolve_claude_channel_state_root",
     "resolve_claude_user_config_path",
     "wait_for_claude_channel_state",

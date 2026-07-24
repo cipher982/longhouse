@@ -17,15 +17,14 @@ from uuid import uuid4
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import sessionmaker
 
+from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
+from zerg.database import Base
 from zerg.database import get_db
 from zerg.database import make_engine
 from zerg.models.agents import AgentEvent
-from zerg.database import Base
 from zerg.models.agents import AgentSession
-from zerg.models.agents import SessionMessage
 from zerg.models.agents import SessionRuntimeState
 from zerg.services.session_hot_cards import upsert_timeline_card_from_session
-from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
 
 # ---------------------------------------------------------------------------
 # DB / client helpers
@@ -151,6 +150,7 @@ def test_wall_filters_by_repo(tmp_path):
     finally:
         api_ref.dependency_overrides = {}
 
+
 def test_wall_repo_filter_matches_cwd(tmp_path):
     """Wall repo filter also matches against cwd for non-git workspaces."""
     SessionLocal = _make_db(tmp_path)
@@ -183,48 +183,6 @@ def test_wall_filters_by_project(tmp_path):
         data = resp.json()
         assert data["total"] == 1
         assert data["sessions"][0]["project"] == "zerg"
-    finally:
-        api_ref.dependency_overrides = {}
-
-
-def test_wall_includes_pending_inbound_message_count(tmp_path):
-    """Wall query surfaces unacknowledged inbound message counts."""
-    SessionLocal = _make_db(tmp_path)
-    with SessionLocal() as db:
-        source = _seed_session(db, device_id="shipper-laptop", device_name="laptop", git_repo="repo-a")
-        target = _seed_session(db, device_id="shipper-demo", device_name="demo-machine", git_repo="repo-b")
-        db.add_all(
-            [
-                SessionMessage(
-                    from_session_id=source.id,
-                    to_session_id=target.id,
-                    body="queued work",
-                    delivery_status="stored_only",
-                ),
-                SessionMessage(
-                    from_session_id=source.id,
-                    to_session_id=target.id,
-                    body="already handled",
-                    delivery_status="delivered",
-                    acknowledged_at=datetime.now(timezone.utc),
-                ),
-                SessionMessage(
-                    from_session_id=source.id,
-                    to_session_id=target.id,
-                    body="failed delivery",
-                    delivery_status="failed",
-                ),
-            ]
-        )
-        db.commit()
-
-    client, api_ref = _make_client(SessionLocal)
-    try:
-        resp = client.get("/api/agents/sessions/wall")
-        assert resp.status_code == 200
-        data = resp.json()
-        session = next(s for s in data["sessions"] if s["device_name"] == "demo-machine")
-        assert session["pending_inbound_messages"] == 1
     finally:
         api_ref.dependency_overrides = {}
 
@@ -313,7 +271,7 @@ def test_wall_includes_kernel_control_buckets(tmp_path):
             can_interrupt=False,
             can_tail_output=True,
         )
-        imported = _seed_session(db, provider="claude", device_name="imported-machine", git_repo="control-imported")
+        _seed_session(db, provider="claude", device_name="imported-machine", git_repo="control-imported")
         db.commit()
 
     client, api_ref = _make_client(SessionLocal)

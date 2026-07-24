@@ -1,18 +1,15 @@
+import json
 import shutil
 import sys
-import json
 from pathlib import Path
 
 import pytest
 
-from zerg.qa.provider_coordination_scenarios import observe_codex_post_compaction_bootstrap
 from zerg.qa.provider_coordination_scenarios import main
-from zerg.qa.provider_coordination_scenarios import observe_opencode_launch_scoped_coordination
+from zerg.qa.provider_coordination_scenarios import observe_codex_post_compaction_bootstrap
 from zerg.qa.provider_coordination_scenarios import publish_codex_bootstrap_noise_proof
-from zerg.qa.provider_coordination_scenarios import publish_opencode_launch_config_proof
 from zerg.services.provider_capability_proof import AssertionOutcome
 from zerg.services.provider_capability_proof_store import ProviderCapabilityProofStore
-from zerg.qa.provider_opencode_coordination_oracles import opencode_launch_config_assertions
 
 
 @pytest.mark.skipif(shutil.which("jq") is None, reason="jq is required")
@@ -76,34 +73,3 @@ def test_coordination_driver_emits_ci_verifiable_bundle(monkeypatch, tmp_path: P
     assert payload["artifact_kind"] == "provider_capability_proof_bundle"
     assert payload["records"][0]["producer_class"] == "release_ci"
     assert bundle.with_suffix(".raw.json").is_file()
-
-
-@pytest.mark.skipif(shutil.which("opencode") is None, reason="stock OpenCode is required")
-def test_stock_opencode_accepts_launch_scoped_coordination_without_terminal_output() -> None:
-    observation = observe_opencode_launch_scoped_coordination()
-
-    assert observation["configured_instruction_present"] is True
-    assert opencode_launch_config_assertions(observation) == {"launch_scoped_coordination_config_loaded": True}
-
-
-@pytest.mark.skipif(shutil.which("opencode") is None, reason="stock OpenCode is required")
-def test_stock_opencode_launch_config_publishes_live_no_token_proof(tmp_path: Path) -> None:
-    binary = shutil.which("opencode")
-    assert binary is not None
-    store = ProviderCapabilityProofStore(tmp_path)
-
-    artifact_id = publish_opencode_launch_config_proof(
-        provider_version="1.17.20",
-        provider_executable_identity="sha256:provider",
-        provider_bin=binary,
-        store=store,
-        producer_class="local_diagnostic",
-        producer_version="2",
-        invocation_id="run-1",
-        generated_at="2026-07-22T18:00:00Z",
-    )
-
-    [record] = store.records("opencode")
-    assert record.artifact_id == artifact_id
-    assert record.evidence_class.value == "live_no_token"
-    assert record.assertion_id == "launch_scoped_coordination_config_loaded"

@@ -78,32 +78,32 @@ providers:
         minimum_scenario_revision: 1
         acceptable_evidence: [hermetic, live_token]
         max_age_seconds: 604800
-    coordination.message.send:
+    coordination.directed_input.send:
       disposition: implemented
       reason_code: semantic_proof_missing
-      policy_key: provider.codex.coordination_message
+      policy_key: provider.codex.coordination_directed_input
       action_gate: strict
       contexts:
         modes: [helm, console]
       runtime_prerequisites: [session_context]
       required_assertions:
-      - id: directed_message_persisted_and_delivered
-        scenario_id: codex_coordination_message
+      - id: provider_input_receipt_linked
+        scenario_id: codex_coordination_directed_input
         oracle_source: server/zerg/qa/provider_coordination_oracles.py
         minimum_scenario_revision: 1
         acceptable_evidence: [hermetic, live_token]
         max_age_seconds: 604800
-    coordination.message.receive:
+    coordination.directed_input.receive:
       disposition: implemented
       reason_code: semantic_proof_missing
-      policy_key: provider.codex.coordination_message
+      policy_key: provider.codex.coordination_directed_input
       action_gate: ceiling
       contexts:
         modes: [helm, console]
       runtime_prerequisites: [session_context]
       required_assertions:
-      - id: attributed_message_visible
-        scenario_id: codex_coordination_message
+      - id: attributed_input_visible
+        scenario_id: codex_coordination_directed_input
         oracle_source: server/zerg/qa/provider_coordination_oracles.py
         minimum_scenario_revision: 1
         acceptable_evidence: [hermetic, live_token]
@@ -261,32 +261,32 @@ providers:
         minimum_scenario_revision: 1
         acceptable_evidence: [hermetic, live_token]
         max_age_seconds: 604800
-    coordination.message.send:
+    coordination.directed_input.send:
       disposition: implemented
       reason_code: semantic_proof_missing
-      policy_key: provider.claude.coordination_message
+      policy_key: provider.claude.coordination_directed_input
       action_gate: strict
       contexts:
         modes: [helm, console]
       runtime_prerequisites: [session_context]
       required_assertions:
-      - id: directed_message_persisted_and_delivered
-        scenario_id: claude_coordination_message
+      - id: provider_input_receipt_linked
+        scenario_id: claude_coordination_directed_input
         oracle_source: server/zerg/qa/provider_coordination_oracles.py
         minimum_scenario_revision: 1
         acceptable_evidence: [hermetic, live_token]
         max_age_seconds: 604800
-    coordination.message.receive:
+    coordination.directed_input.receive:
       disposition: implemented
       reason_code: semantic_proof_missing
-      policy_key: provider.claude.coordination_message
+      policy_key: provider.claude.coordination_directed_input
       action_gate: ceiling
       contexts:
         modes: [helm, console]
       runtime_prerequisites: [session_context]
       required_assertions:
-      - id: attributed_message_visible
-        scenario_id: claude_coordination_message
+      - id: attributed_input_visible
+        scenario_id: claude_coordination_directed_input
         oracle_source: server/zerg/qa/provider_coordination_oracles.py
         minimum_scenario_revision: 1
         acceptable_evidence: [hermetic, live_token]
@@ -414,79 +414,6 @@ providers:
         minimum_scenario_revision: 1
         acceptable_evidence: [live_no_token]
         max_age_seconds: 604800
-    coordination.awareness.create:
-      disposition: implemented
-      reason_code: semantic_proof_missing
-      policy_key: provider.opencode.coordination_awareness
-      action_gate: ceiling
-      contexts:
-        modes: [helm]
-      runtime_prerequisites: [session_context]
-      required_assertions:
-      - id: launch_scoped_coordination_config_loaded
-        scenario_id: opencode_coordination_launch_config
-        oracle_source: server/zerg/qa/provider_opencode_coordination_oracles.py
-        minimum_scenario_revision: 1
-        acceptable_evidence: [live_no_token]
-        max_age_seconds: 604800
-      - id: coordination_instructions_model_visible
-        scenario_id: opencode_coordination_awareness_create
-        oracle_source: server/zerg/qa/provider_coordination_oracles.py
-        minimum_scenario_revision: 1
-        acceptable_evidence: [live_token]
-        max_age_seconds: 86400
-    coordination.awareness.post_compaction:
-      disposition: implemented
-      reason_code: semantic_proof_missing
-      policy_key: provider.opencode.coordination_awareness
-      action_gate: ceiling
-      contexts:
-        modes: [helm]
-      runtime_prerequisites: [session_context]
-      required_assertions:
-      - id: coordination_instructions_model_visible_after_compaction
-        scenario_id: opencode_coordination_awareness_post_compaction
-        oracle_source: server/zerg/qa/provider_coordination_oracles.py
-        minimum_scenario_revision: 1
-        acceptable_evidence: [live_token]
-        max_age_seconds: 86400
-      - id: no_duplicate_visible_bootstrap
-        scenario_id: opencode_coordination_awareness_post_compaction
-        oracle_source: server/zerg/qa/provider_coordination_oracles.py
-        minimum_scenario_revision: 1
-        acceptable_evidence: [hermetic, live_token]
-        max_age_seconds: 604800
-    coordination.message.send:
-      disposition: implemented
-      reason_code: semantic_proof_missing
-      policy_key: provider.opencode.coordination_message
-      action_gate: strict
-      contexts:
-        modes: [helm]
-      runtime_prerequisites: [session_context]
-      required_assertions:
-      - id: directed_message_persisted_and_delivered
-        scenario_id: opencode_coordination_message
-        oracle_source: server/zerg/qa/provider_coordination_oracles.py
-        minimum_scenario_revision: 1
-        acceptable_evidence: [hermetic, live_token]
-        max_age_seconds: 604800
-    coordination.message.receive:
-      disposition: implemented
-      reason_code: semantic_proof_missing
-      policy_key: provider.opencode.coordination_message
-      action_gate: ceiling
-      contexts:
-        modes: [helm]
-      runtime_prerequisites: [session_context]
-      required_assertions:
-      - id: attributed_message_visible
-        scenario_id: opencode_coordination_message
-        oracle_source: server/zerg/qa/provider_coordination_oracles.py
-        minimum_scenario_revision: 1
-        acceptable_evidence: [hermetic, live_token]
-        max_age_seconds: 604800
-
   can_resume: false
   turn_start: true
   operation_evidence:

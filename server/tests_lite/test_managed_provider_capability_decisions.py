@@ -18,15 +18,14 @@ def _context(provider: str, *, mode: str = "helm") -> EvaluationContext:
     )
 
 
-def test_ceiling_capability_enables_real_opencode_launch_consumer_without_proof() -> None:
-    decision = evaluate_managed_provider_capability(
-        capability_id="coordination.awareness.create",
-        context=_context("opencode"),
+def test_undeclared_opencode_coordination_awareness_remains_unavailable() -> None:
+    assert (
+        evaluate_managed_provider_capability(
+            capability_id="coordination.awareness.create",
+            context=_context("opencode"),
+        )
+        is None
     )
-
-    assert decision is not None
-    assert decision.action is ProductAction.ENABLED
-    assert "cli_unavailable" in decision.reason_codes
 
 
 def test_undeclared_cursor_coordination_awareness_remains_unavailable() -> None:

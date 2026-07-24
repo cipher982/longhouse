@@ -25,7 +25,7 @@ from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
 
 import zerg.database as database_module
-from zerg.auth.managed_local_hook_tokens import ManagedLocalHookToken
+from zerg.auth.managed_session_tokens import ManagedSessionToken
 from zerg.catalogd.client import CatalogRemoteError
 from zerg.catalogd.client import CatalogUnavailable
 from zerg.config import get_settings
@@ -53,6 +53,8 @@ from zerg.services.console_turns import ConsoleTurnUnavailable
 from zerg.services.console_turns import dispatch_next_console_turn
 from zerg.services.console_turns import enqueue_catalog_console_turn
 from zerg.services.console_turns import enqueue_console_turn
+from zerg.services.directed_input_envelope import provider_supports_directed_input
+from zerg.services.directed_input_envelope import render_directed_input_envelope
 from zerg.services.live_catalog_timeline import list_live_catalog_sessions
 from zerg.services.live_catalog_timeline import read_live_catalog_session
 from zerg.services.live_catalog_timeline import stream_live_catalog_machine_sessions
@@ -68,12 +70,9 @@ from zerg.services.session_archive import build_session_archive_manifest_item
 from zerg.services.session_archive import build_storage_v2_archive_bundle
 from zerg.services.session_archive import build_storage_v2_archive_manifest
 from zerg.services.session_chat_impl import _resolve_agents_owner_id
-from zerg.services.session_coordination import acknowledge_session_message as acknowledge_session_message_for_session
-from zerg.services.session_coordination import list_session_messages
 from zerg.services.session_coordination import load_session_tail
 from zerg.services.session_coordination import project_storage_v2_wall
 from zerg.services.session_coordination import query_wall_sessions
-from zerg.services.session_coordination import serialize_session_message
 from zerg.services.session_graph_projection import build_session_graph_projection
 from zerg.services.session_hot_cards import upsert_timeline_card_from_session
 from zerg.services.session_kernel_projection import project_provider_session_id
@@ -81,9 +80,6 @@ from zerg.services.session_kernel_projection import project_session_lineage_fiel
 from zerg.services.session_listing import SessionListingError
 from zerg.services.session_listing import SessionListParams
 from zerg.services.session_listing import list_agent_sessions
-from zerg.services.session_message_envelope import render_session_message_envelope
-from zerg.services.session_messages import create_session_message
-from zerg.services.session_messages import resolve_session_message_owner_id
 from zerg.services.session_pause_requests import load_hot_session_projection_map
 from zerg.services.session_turns import execute_session_turn_write
 from zerg.services.session_turns import get_session_turn_by_id
@@ -450,7 +446,7 @@ def _bounded_preview(value: str | None, *, max_len: int) -> str | None:
     return stripped[:max_len]
 
 
-def _parse_message_session_header(request: Request) -> UUID | None:
+def _parse_current_session_header(request: Request) -> UUID | None:
     raw = str(request.headers.get(_CURRENT_SESSION_HEADER, "") or "").strip()
     if not raw:
         return None
@@ -479,56 +475,38 @@ def _build_projection_seam_response(*, db: Session, item) -> SessionProjectionIt
     )
 
 
-def _resolve_message_actor_session(
+def _resolve_directed_input_actor(
     *,
     db: Session | None,
     request: Request,
     token: object | None,
-    declared_session_id: UUID | None,
 ):
-    header_session_id = _parse_message_session_header(request)
-    token_session_raw = str(getattr(token, "session_id", "") or "").strip()
-    token_session_id: UUID | None = None
-    if token_session_raw:
-        try:
-            token_session_id = UUID(token_session_raw)
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Authenticated session context is invalid",
-            ) from exc
-
-    resolved_session_id = declared_session_id
-    if token_session_id is not None:
-        if header_session_id is not None and header_session_id != token_session_id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Authenticated session context does not match request header",
-            )
-        if declared_session_id is not None and declared_session_id != token_session_id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Authenticated session context does not match request body",
-            )
-        resolved_session_id = token_session_id
-    elif header_session_id is not None:
-        if declared_session_id is not None and declared_session_id != header_session_id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Current session header does not match request body",
-            )
-        resolved_session_id = header_session_id
-
-    if resolved_session_id is None:
+    if not isinstance(token, ManagedSessionToken) or token.scope != "coordination":
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Provide {_CURRENT_SESSION_HEADER} or session_id context for this request",
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Directed input requires session-scoped coordination authority",
+        )
+    header_session_id = _parse_current_session_header(request)
+    try:
+        resolved_session_id = UUID(token.session_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Authenticated session context is invalid",
+        ) from exc
+    if header_session_id is not None and header_session_id != resolved_session_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Authenticated session context does not match request header",
         )
 
     if database_module.live_catalog_enabled() and db is None:
         from zerg.services.live_control_catalog import load_live_control_session_snapshot
 
-        session = load_live_control_session_snapshot(resolved_session_id)
+        session = load_live_control_session_snapshot(
+            resolved_session_id,
+            owner_id=int(token.owner_id),
+        )
     else:
         assert db is not None
         session = db.query(AgentSession).filter(AgentSession.id == resolved_session_id).first()
@@ -538,9 +516,9 @@ def _resolve_message_actor_session(
             detail=f"Session {resolved_session_id} not found",
         )
 
-    token_device_id = str(getattr(token, "device_id", "") or "").strip()
+    token_device_id = str(token.device_id or "").strip()
     session_device_id = str(getattr(session, "device_id", "") or "").strip()
-    if token_device_id and session_device_id and token_device_id != session_device_id:
+    if not token_device_id or not session_device_id or token_device_id != session_device_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Authenticated device cannot act as the requested session",
@@ -758,11 +736,11 @@ def get_startup_context(
 ) -> StartupContextResponse:
     """Return a small project-scoped continuity block for session-start hooks."""
 
-    if isinstance(_auth, ManagedLocalHookToken):
+    if isinstance(_auth, ManagedSessionToken):
         if project != _auth.project:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Managed-local hook token requires a matching project filter",
+                detail="Managed-session hook scope requires a matching project filter",
             )
 
     try:
@@ -908,33 +886,10 @@ async def wall_query(
                 "offset": 0,
             }
         )
-        session_ids = list(
-            dict.fromkeys(
-                str(catalog["session_id"])
-                for row in snapshot.get("rows") or []
-                if isinstance(row, dict)
-                and isinstance((facts := row.get("facts")), dict)
-                and isinstance((catalog := facts.get("catalog")), dict)
-                and catalog.get("session_id")
-            )
-        )
-        counts: dict[str, int] = {}
-        if session_ids:
-            pending = await _catalog_message_call(
-                "session.message.pending_counts.v2",
-                {
-                    "owner_id": _catalog_message_owner_id(_auth),
-                    "session_ids": session_ids,
-                },
-            )
-            pending_counts = pending.get("counts")
-            if isinstance(pending_counts, dict):
-                counts = pending_counts
         items = project_storage_v2_wall(
             snapshot,
             repo=repo,
             limit=limit,
-            pending_counts=counts,
         )
         return WallResponse(sessions=items, total=len(items))
     assert db is not None
@@ -2057,7 +2012,7 @@ async def get_session_workspace(
     limit: int = Query(100, ge=1, le=1000, description="Max projected items"),
     cursor: Optional[str] = Query(None, description="Exclusive storage-v2 cursor for the next older page"),
     legacy_session_factory=Depends(get_legacy_workspace_session_factory),
-    _auth: DeviceToken | ManagedLocalHookToken | None = Depends(verify_agents_token),
+    _auth: DeviceToken | ManagedSessionToken | None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> SessionWorkspaceResponse | dict[str, object]:
     """Get the focused session, its thread, and the first projection page in one round trip."""
@@ -2213,22 +2168,58 @@ async def export_session_archive_bundle(
     return result
 
 
-class SessionMessageCreate(UTCBaseModel):
-    """Create a directed message from one session to another."""
+class DirectedInputCreate(UTCBaseModel):
+    """Create provider-neutral input for another managed session."""
 
-    from_session_id: UUID | None = None
-    to_session_id: UUID
+    target_session_id: UUID
     text: str
-    source_event_id: Optional[int] = None
+    client_request_id: str | None = None
 
 
-class SessionMessageAcknowledge(UTCBaseModel):
-    """Acknowledge an inbound session message."""
+class DirectedInputReply(UTCBaseModel):
+    """Reply to one inbound directed input."""
 
-    session_id: UUID | None = None
+    text: str
+    client_request_id: str | None = None
 
 
-def _catalog_message_owner_id(auth: object) -> int:
+@router.post("/sessions/{session_id}/coordination-token")
+async def issue_session_coordination_token(
+    session_id: UUID,
+    _auth: object = Depends(verify_agents_token),
+    _single: None = Depends(require_single_tenant),
+) -> dict[str, str]:
+    """Issue fresh adapter-only authority when a managed session is resumed."""
+
+    if isinstance(_auth, ManagedSessionToken):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="A device token is required")
+    if not database_module.live_catalog_enabled():
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Coordination authority requires catalogd")
+    from zerg.auth.managed_session_tokens import MANAGED_SESSION_SCOPE_COORDINATION
+    from zerg.auth.managed_session_tokens import issue_managed_session_token
+    from zerg.services.live_control_catalog import load_live_control_session_snapshot
+
+    owner_id = _directed_input_owner_id(_auth)
+    session = load_live_control_session_snapshot(session_id, owner_id=owner_id)
+    if session is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+    if not provider_supports_directed_input(getattr(session, "provider", None)):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Session provider has no directed-input adapter")
+    token_device_id = str(getattr(_auth, "device_id", "") or "").strip()
+    session_device_id = str(getattr(session, "device_id", "") or "").strip()
+    if not token_device_id or not session_device_id or token_device_id != session_device_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Session belongs to another device")
+    token = issue_managed_session_token(
+        owner_id=owner_id,
+        session_id=str(session_id),
+        project=getattr(session, "project", None),
+        device_id=session_device_id,
+        scope=MANAGED_SESSION_SCOPE_COORDINATION,
+    )
+    return {"coordination_token": token}
+
+
+def _directed_input_owner_id(auth: object) -> int:
     owner_id = getattr(auth, "owner_id", None)
     if owner_id is None:
         from zerg.services.catalog_read_gateway import active_owner_id
@@ -2239,10 +2230,10 @@ def _catalog_message_owner_id(auth: object) -> int:
     return int(owner_id)
 
 
-async def _catalog_message_call(method: str, params: dict[str, Any]) -> dict[str, Any]:
+async def _directed_input_call(method: str, params: dict[str, Any]) -> dict[str, Any]:
     catalogd = get_catalogd_client()
     if catalogd is None:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Session messaging is unavailable")
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Directed input is unavailable")
     try:
         return await catalogd.call(method, params, timeout_seconds=1.0)
     except CatalogRemoteError as exc:
@@ -2253,30 +2244,29 @@ async def _catalog_message_call(method: str, params: dict[str, Any]) -> dict[str
         }.get(exc.code, status.HTTP_503_SERVICE_UNAVAILABLE)
         raise HTTPException(status_code=status_code, detail=str(exc)) from exc
     except CatalogUnavailable as exc:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Session messaging is unavailable") from exc
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Directed input is unavailable") from exc
 
 
-async def _attempt_catalog_message_delivery(
+async def _attempt_directed_input_delivery(
     *,
     owner_id: int,
     sender_session,
     target_session,
-    message: dict[str, Any],
+    directed_input: dict[str, Any],
 ) -> dict[str, Any]:
     from zerg.services.live_control_catalog import live_control_session_capability_available
 
+    if not provider_supports_directed_input(getattr(target_session, "provider", None)):
+        return directed_input
     if not live_control_session_capability_available(target_session, capability="send"):
-        return message
+        return directed_input
 
-    injected_text = render_session_message_envelope(
-        sender_session=sender_session,
-        message_id=int(message["id"]),
-        text=str(message["text"]),
+    input_request_id = f"directed-input-{directed_input['id']}"
+    injected_text = render_directed_input_envelope(
+        source_session=sender_session,
+        input_id=int(directed_input["id"]),
+        text=str(directed_input["text"]),
     )
-    delivery_status = "stored_only"
-    delivered_via = None
-    delivered_at = None
-    last_error = None
     try:
         from zerg.routers.session_chat import INPUT_INTENT_AUTO
         from zerg.routers.session_chat import INPUT_INTENT_QUEUE
@@ -2294,201 +2284,174 @@ async def _attempt_catalog_message_delivery(
             body=SessionInputRequest(
                 text=injected_text,
                 intent=intent,
-                client_request_id=f"session-message-{message['id']}",
+                client_request_id=input_request_id,
             ),
             db=None,
         )
-        if response.outcome == "sent":
-            delivery_status = "delivered"
-            delivered_via = "live_input"
-            delivered_at = datetime.now(timezone.utc).isoformat()
-        else:
-            delivery_status = "queued"
-            delivered_via = "live_input_queue"
     except HTTPException as exc:
-        delivery_status = "failed"
-        last_error = str(exc.detail)[:500]
-    except Exception as exc:
-        logger.warning("Session message %s live delivery failed", message.get("id"), exc_info=True)
-        delivery_status = "failed"
-        last_error = str(exc)[:500] or type(exc).__name__
+        logger.info("Directed input %s was persisted without live delivery: %s", directed_input.get("id"), exc.detail)
+        response = None
+    except Exception:
+        logger.warning("Directed input %s live delivery failed", directed_input.get("id"), exc_info=True)
+        response = None
 
-    result = await _catalog_message_call(
-        "session.message.delivery.v2",
+    receipt_id = response.live_input_id if response is not None else None
+    if receipt_id is None:
+        from zerg.services.live_session_inputs import load_live_input_receipt_by_client_request_best_effort
+
+        receipt = await load_live_input_receipt_by_client_request_best_effort(
+            owner_id=owner_id,
+            session_id=target_session.id,
+            client_request_id=input_request_id,
+        )
+        receipt_id = receipt.id if receipt is not None else None
+    if receipt_id is None:
+        return directed_input
+
+    result = await _directed_input_call(
+        "directed_input.link_receipt.v2",
         {
             "owner_id": owner_id,
-            "message_id": int(message["id"]),
-            "expected_status": str(message["delivery_status"]),
-            "delivery_status": delivery_status,
-            "delivery_attempts": int(message.get("delivery_attempts") or 0) + 1,
-            "last_error": last_error,
-            "delivered_via": delivered_via,
-            "delivered_at": delivered_at,
-            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "directed_input_id": int(directed_input["id"]),
+            "input_receipt_id": receipt_id,
+            "observed_at": datetime.now(timezone.utc).isoformat(),
         },
     )
-    updated = result.get("message")
-    return updated if isinstance(updated, dict) else message
+    updated = result.get("directed_input")
+    return updated if isinstance(updated, dict) else directed_input
 
 
-@router.post("/messages", status_code=status.HTTP_201_CREATED)
-async def create_message(
+async def _create_directed_input_for_actor(
+    *,
+    owner_id: int,
+    source_session,
+    target_session_id: UUID,
+    text: str,
+    client_request_id: str | None,
+    reply_to_id: int | None,
+) -> dict[str, Any]:
+    from zerg.services.live_control_catalog import load_live_control_session_snapshot
+
+    target_session = load_live_control_session_snapshot(target_session_id, owner_id=owner_id)
+    if target_session is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Target session not found")
+    created = await _directed_input_call(
+        "directed_input.create.v2",
+        {
+            "owner_id": owner_id,
+            "source_session_id": str(source_session.id),
+            "target_session_id": str(target_session_id),
+            "text": text,
+            "reply_to_id": reply_to_id,
+            "client_request_id": client_request_id or str(uuid4()),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+    directed_input = created.get("directed_input")
+    if not isinstance(directed_input, dict):
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Invalid directed input response")
+    if directed_input.get("input_receipt") is not None:
+        return directed_input
+    return await _attempt_directed_input_delivery(
+        owner_id=owner_id,
+        sender_session=source_session,
+        target_session=target_session,
+        directed_input=directed_input,
+    )
+
+
+@router.post("/directed-inputs", status_code=status.HTTP_201_CREATED)
+async def create_directed_input(
     request: Request,
-    payload: SessionMessageCreate,
+    payload: DirectedInputCreate,
     db: Session | None = Depends(coordination_db_dependency),
     _auth: object = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
-) -> dict:
-    """Create a directed session message and attempt delivery when safe."""
-    sender_session = _resolve_message_actor_session(
+) -> dict[str, Any]:
+    """Persist attributed input for another session, then deliver when safe."""
+
+    if not database_module.live_catalog_enabled():
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Directed input requires catalogd")
+    source_session = _resolve_directed_input_actor(
         db=db,
         request=request,
         token=_auth,
-        declared_session_id=payload.from_session_id,
     )
-    if database_module.live_catalog_enabled():
-        owner_id = _catalog_message_owner_id(_auth)
-        from zerg.services.live_control_catalog import load_live_control_session_snapshot
-
-        target_session = load_live_control_session_snapshot(payload.to_session_id)
-        if target_session is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Target session not found")
-        created = await _catalog_message_call(
-            "session.message.create.v2",
-            {
-                "message_key": str(uuid4()),
-                "owner_id": owner_id,
-                "from_session_id": str(sender_session.id),
-                "to_session_id": str(payload.to_session_id),
-                "text": payload.text[:4000],
-                "source_event_id": payload.source_event_id,
-                "created_at": datetime.now(timezone.utc).isoformat(),
-            },
-        )
-        message = created.get("message")
-        if not isinstance(message, dict):
-            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Invalid catalog message response")
-        return await _attempt_catalog_message_delivery(
-            owner_id=owner_id,
-            sender_session=sender_session,
-            target_session=target_session,
-            message=message,
-        )
-    assert db is not None
-    try:
-        outcome = await create_session_message(
-            db=db,
-            owner_id=resolve_session_message_owner_id(db, _auth),
-            from_session_id=sender_session.id,
-            to_session_id=payload.to_session_id,
-            text=payload.text[:4000],
-            source_event_id=payload.source_event_id,
-        )
-    except ValueError as exc:
-        detail = str(exc)
-        status_code = status.HTTP_404_NOT_FOUND if detail.endswith("not found") else status.HTTP_400_BAD_REQUEST
-        raise HTTPException(status_code=status_code, detail=detail) from exc
-
-    return serialize_session_message(outcome.message, delivery_status=outcome.delivery_status)
+    return await _create_directed_input_for_actor(
+        owner_id=_directed_input_owner_id(_auth),
+        source_session=source_session,
+        target_session_id=payload.target_session_id,
+        text=payload.text,
+        client_request_id=payload.client_request_id,
+        reply_to_id=None,
+    )
 
 
-@router.get("/messages")
-async def list_messages(
+@router.get("/directed-inputs")
+async def list_directed_inputs(
     request: Request,
-    session_id: UUID | None = Query(None, description="Session ID to inspect messages for"),
-    direction: str = Query("inbound", description="Message direction: inbound|outbound|all"),
-    unacknowledged_only: bool = Query(False, description="Only include messages without acknowledged_at"),
+    direction: str = Query("inbound", description="Direction: inbound|outbound|all"),
+    after_id: int = Query(0, ge=0, description="Return inputs after this stable id cursor"),
     limit: int = Query(50, ge=1, le=200, description="Max results"),
     db: Session | None = Depends(coordination_db_dependency),
     _auth: object = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
-) -> dict:
-    """List durable session messages without mutating delivery or ack state."""
+) -> dict[str, Any]:
+    """Recover durable directed input for the authenticated current session."""
+
+    if not database_module.live_catalog_enabled():
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Directed input requires catalogd")
     if direction not in {"inbound", "outbound", "all"}:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="direction must be inbound, outbound, or all",
-        )
-
-    actor_session = _resolve_message_actor_session(
-        db=db,
-        request=request,
-        token=_auth,
-        declared_session_id=session_id,
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="direction must be inbound, outbound, or all")
+    actor_session = _resolve_directed_input_actor(db=db, request=request, token=_auth)
+    result = await _directed_input_call(
+        "directed_input.list.v2",
+        {
+            "owner_id": _directed_input_owner_id(_auth),
+            "session_id": str(actor_session.id),
+            "direction": direction,
+            "after_id": after_id,
+            "limit": limit,
+        },
     )
-    resolved_session_id = actor_session.id
-
-    if database_module.live_catalog_enabled():
-        result = await _catalog_message_call(
-            "session.message.list.v2",
-            {
-                "owner_id": _catalog_message_owner_id(_auth),
-                "session_id": str(resolved_session_id),
-                "direction": direction,
-                "unacknowledged_only": unacknowledged_only,
-                "limit": limit,
-            },
-        )
-        messages = result.get("messages")
-        if not isinstance(messages, list):
-            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Invalid catalog message response")
-        return {"messages": messages, "total": len(messages)}
-
-    assert db is not None
-    messages = list_session_messages(
-        db,
-        session_id=resolved_session_id,
-        direction=direction,
-        unacknowledged_only=unacknowledged_only,
-        limit=limit,
-    )
+    directed_inputs = result.get("directed_inputs")
+    if not isinstance(directed_inputs, list):
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Invalid directed input response")
     return {
-        "messages": [serialize_session_message(message) for message in messages],
-        "total": len(messages),
+        "directed_inputs": directed_inputs,
+        "next_cursor": int(result.get("next_cursor") or after_id),
     }
 
 
-@router.post("/messages/{message_id}/ack")
-async def acknowledge_message(
-    message_id: int,
+@router.post("/directed-inputs/{directed_input_id}/reply", status_code=status.HTTP_201_CREATED)
+async def reply_to_directed_input(
+    directed_input_id: int,
     request: Request,
-    payload: SessionMessageAcknowledge | None = None,
+    payload: DirectedInputReply,
     db: Session | None = Depends(coordination_db_dependency),
     _auth: object = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
-) -> dict:
-    """Acknowledge that the target session has handled a delivered message."""
-    actor_session = _resolve_message_actor_session(
-        db=db,
-        request=request,
-        token=_auth,
-        declared_session_id=payload.session_id if payload is not None else None,
+) -> dict[str, Any]:
+    """Reply to an inbound directed input without copying a session id."""
+
+    if not database_module.live_catalog_enabled():
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Directed input requires catalogd")
+    source_session = _resolve_directed_input_actor(db=db, request=request, token=_auth)
+    owner_id = _directed_input_owner_id(_auth)
+    parent_result = await _directed_input_call(
+        "directed_input.read.v2",
+        {"owner_id": owner_id, "directed_input_id": directed_input_id},
     )
-    if database_module.live_catalog_enabled():
-        result = await _catalog_message_call(
-            "session.message.ack.v2",
-            {
-                "owner_id": _catalog_message_owner_id(_auth),
-                "message_id": message_id,
-                "target_session_id": str(actor_session.id),
-                "acknowledged_at": datetime.now(timezone.utc).isoformat(),
-            },
-        )
-        message = result.get("message")
-        if not isinstance(message, dict):
-            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Invalid catalog message response")
-        return message
-    assert db is not None
-    try:
-        message = acknowledge_session_message_for_session(
-            db,
-            message_id=message_id,
-            target_session_id=actor_session.id,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-    except PermissionError as exc:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
-    except RuntimeError as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-    return serialize_session_message(message)
+    parent = parent_result.get("directed_input")
+    if not isinstance(parent, dict):
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Invalid directed input response")
+    if str(parent.get("target_session_id")) != str(source_session.id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only the target session can reply")
+    return await _create_directed_input_for_actor(
+        owner_id=owner_id,
+        source_session=source_session,
+        target_session_id=UUID(str(parent["source_session_id"])),
+        text=payload.text,
+        client_request_id=payload.client_request_id,
+        reply_to_id=directed_input_id,
+    )

@@ -42,7 +42,7 @@ from fastapi import Response
 from fastapi import status
 from sqlalchemy.orm import Session
 
-from zerg.auth.managed_local_hook_tokens import ManagedLocalHookToken
+from zerg.auth.managed_session_tokens import ManagedSessionToken
 from zerg.config import get_settings
 from zerg.database import catalog_db_dependency
 from zerg.database import live_store_configured
@@ -63,9 +63,6 @@ from zerg.services.apns_sender import send_session_attention_push
 from zerg.services.apns_sender import send_session_attention_resolution_push
 from zerg.services.apns_sender import send_session_live_activity_push
 from zerg.services.apns_sender import send_widget_timeline_push
-from zerg.services.session_messages import deliver_queued_session_messages
-from zerg.services.session_messages import is_session_message_deliverable_state
-from zerg.services.session_messages import resolve_session_message_owner_id
 from zerg.services.session_runtime import RuntimeEventBatchIngest
 from zerg.services.session_runtime import RuntimeEventBatchResult
 from zerg.services.session_runtime import RuntimeEventIngest
@@ -137,10 +134,10 @@ async def upsert_presence(
     if payload.state not in VALID_STATES:
         # Silently ignore unknown states rather than erroring hooks
         return Response(status_code=status.HTTP_204_NO_CONTENT)
-    if isinstance(_token, ManagedLocalHookToken) and payload.session_id != _token.session_id:
+    if isinstance(_token, ManagedSessionToken) and payload.session_id != _token.session_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Managed-local hook token does not match session",
+            detail="Managed-session hook scope does not match session",
         )
 
     if payload.occurred_at is not None:
@@ -194,7 +191,8 @@ async def upsert_presence(
         return Response(status_code=status.HTTP_204_NO_CONTENT, headers=dict(runtime_response.headers))
 
     assert db is not None
-    owner_id = resolve_session_message_owner_id(db, _token)
+    token_owner_id = getattr(_token, "owner_id", None)
+    owner_id = int(token_owner_id) if token_owner_id is not None else None
 
     def _do_presence_writes(write_db: Session):
         if session_uuid is not None:
@@ -294,14 +292,8 @@ async def upsert_presence(
             source=runtime_event.source,
         )
 
-    if session_uuid is not None and is_session_message_deliverable_state(canonical_presence_state):
+    if session_uuid is not None and canonical_presence_state in {"idle", "needs_user"}:
         with post_write_db_session(ws, db) as delivery_db:
-            await deliver_queued_session_messages(
-                db=delivery_db,
-                owner_id=owner_id,
-                target_session_id=session_uuid,
-                target_presence_state=canonical_presence_state,
-            )
             from zerg.services.session_input_queue import wake_session_input_queue
 
             await wake_session_input_queue(

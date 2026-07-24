@@ -38,9 +38,7 @@ def test_greenfield_catalog_has_pragmas_live_schema_and_identity(tmp_path):
         assert connection.exec_driver_sql("PRAGMA busy_timeout").scalar_one() == 1_234
         assert connection.exec_driver_sql("PRAGMA wal_autocheckpoint").scalar_one() == 0
         assert connection.exec_driver_sql("PRAGMA user_version").scalar_one() == CATALOG_SCHEMA_VERSION
-        tables = {
-            row[0] for row in connection.exec_driver_sql("SELECT name FROM sqlite_master WHERE type='table'").all()
-        }
+        tables = {row[0] for row in connection.exec_driver_sql("SELECT name FROM sqlite_master WHERE type='table'").all()}
     assert {
         "catalog_meta",
         "legacy_migration_runs",
@@ -77,7 +75,7 @@ def test_feature_marker_refuses_to_heal_an_incomplete_reducer_schema(tmp_path):
         initialize_catalog_schema(engine)
 
 
-def test_existing_v2_adopts_reducer_tables_without_advancing_global_version(tmp_path):
+def test_existing_catalog_adopts_reducer_tables_without_advancing_global_version(tmp_path):
     engine = create_catalog_engine(tmp_path / "longhouse-live.db")
     initialize_catalog_schema(engine)
     with engine.begin() as connection:
@@ -89,13 +87,11 @@ def test_existing_v2_adopts_reducer_tables_without_advancing_global_version(tmp_
 
     metadata = initialize_catalog_schema(engine)
 
-    assert metadata.schema_version == 2
+    assert metadata.schema_version == CATALOG_SCHEMA_VERSION
     with engine.connect() as connection:
         tables = {row[0] for row in connection.exec_driver_sql("SELECT name FROM sqlite_master WHERE type='table'")}
         assert {"fact_heads", "fact_receipts", "fact_conflicts", "fact_parity_deltas"}.issubset(tables)
-        assert connection.exec_driver_sql(
-            "SELECT fact_reducer_generation FROM catalog_meta WHERE singleton = 1"
-        ).scalar_one()
+        assert connection.exec_driver_sql("SELECT fact_reducer_generation FROM catalog_meta WHERE singleton = 1").scalar_one()
 
 
 def test_interrupted_reducer_adoption_rolls_back_without_partial_marker(tmp_path):
@@ -126,7 +122,7 @@ def test_interrupted_reducer_adoption_rolls_back_without_partial_marker(tmp_path
     assert "fact_reducer_generation" not in columns
 
     metadata = initialize_catalog_schema(engine)
-    assert metadata.schema_version == 2
+    assert metadata.schema_version == CATALOG_SCHEMA_VERSION
 
 
 def test_existing_reducer_generation_atomically_adopts_parity_diagnostics(tmp_path):
@@ -154,18 +150,14 @@ def test_existing_reducer_generation_atomically_adopts_parity_diagnostics(tmp_pa
 
     with engine.connect() as connection:
         tables = set(connection.exec_driver_sql("SELECT name FROM sqlite_master WHERE type='table'").scalars())
-        marker = connection.exec_driver_sql(
-            "SELECT fact_reducer_generation FROM catalog_meta WHERE singleton = 1"
-        ).scalar_one()
+        marker = connection.exec_driver_sql("SELECT fact_reducer_generation FROM catalog_meta WHERE singleton = 1").scalar_one()
     assert "fact_parity_deltas" not in tables
     assert marker == catalog_schema._FACT_REDUCER_V1_GENERATION
 
     initialize_catalog_schema(engine)
     with engine.connect() as connection:
         tables = set(connection.exec_driver_sql("SELECT name FROM sqlite_master WHERE type='table'").scalars())
-        marker = connection.exec_driver_sql(
-            "SELECT fact_reducer_generation FROM catalog_meta WHERE singleton = 1"
-        ).scalar_one()
+        marker = connection.exec_driver_sql("SELECT fact_reducer_generation FROM catalog_meta WHERE singleton = 1").scalar_one()
     assert "fact_parity_deltas" in tables
     assert marker == catalog_schema.FACT_REDUCER_GENERATION
 
@@ -192,9 +184,7 @@ def test_reducer_schema_validation_rejects_wrong_server_default(tmp_path):
     engine = create_catalog_engine(tmp_path / "longhouse-live.db")
     initialize_catalog_schema(engine)
     with engine.begin() as connection:
-        create_sql = connection.exec_driver_sql(
-            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'fact_heads'"
-        ).scalar_one()
+        create_sql = connection.exec_driver_sql("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'fact_heads'").scalar_one()
         wrong_default_sql = create_sql.replace("DEFAULT ''", "DEFAULT 'wrong'", 1)
         assert wrong_default_sql != create_sql
         connection.exec_driver_sql("DROP TABLE fact_heads")
@@ -206,7 +196,7 @@ def test_reducer_schema_validation_rejects_wrong_server_default(tmp_path):
         initialize_catalog_schema(engine)
 
 
-def test_additive_reducer_storage_remains_readable_to_previous_v2_shape(tmp_path):
+def test_reducer_storage_remains_readable_to_current_catalog_shape(tmp_path):
     engine = create_catalog_engine(tmp_path / "longhouse-live.db")
     initialize_catalog_schema(engine)
 
@@ -216,7 +206,7 @@ def test_additive_reducer_storage_remains_readable_to_previous_v2_shape(tmp_path
         ).one()
         tables = set(connection.exec_driver_sql("SELECT name FROM sqlite_master WHERE type='table'").scalars())
 
-    assert row.schema_version == 2
+    assert row.schema_version == CATALOG_SCHEMA_VERSION
     assert row.singleton == 1
     assert {"fact_heads", "fact_receipts", "fact_conflicts"}.issubset(tables)
 
@@ -359,9 +349,7 @@ def test_registered_version_migration_updates_both_markers_atomically(tmp_path, 
     with engine.connect() as connection:
         assert connection.exec_driver_sql("PRAGMA user_version").scalar_one() == next_version
         assert (
-            connection.exec_driver_sql(
-                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='catalog_v2_proof'"
-            ).scalar_one()
+            connection.exec_driver_sql("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='catalog_v2_proof'").scalar_one()
             == 1
         )
 

@@ -1,7 +1,7 @@
 # Agents Machine Surface
 
 Status: Active canon
-Last updated: 2026-04-18
+Last updated: 2026-07-23
 
 ## Goal
 
@@ -25,9 +25,10 @@ This is the surface agents, CLIs, scripts, CI jobs, and background automations s
 - The normal machine token is a device token (`zdt_*`).
 - The agents surface is single-tenant only for now. Multi-tenant behavior is intentionally not part of this contract yet.
 
-### Import / presence hook token exception
+### Managed-session token scopes
 
-Shipper and presence hook tokens are intentionally narrow and are only valid for:
+Managed launches receive signed session credentials (`zst_*`) with one narrow
+scope. Hook-scoped credentials are valid only for:
 
 - `GET /api/agents/sessions`
 - `GET /api/agents/sessions/stream` — SSE cold snapshot followed by
@@ -36,7 +37,14 @@ Shipper and presence hook tokens are intentionally narrow and are only valid for
 - `POST /api/agents/ingest`
 - `POST /api/agents/presence`
 
-They exist to support session import and presence reporting, not to grant broad machine API access.
+Coordination-scoped credentials are valid only for:
+
+- `POST /api/agents/directed-inputs`
+- `GET /api/agents/directed-inputs`
+- `POST /api/agents/directed-inputs/{id}/reply`
+
+The signed credential binds owner, device, and session. The session UUID header
+is context that must match the credential; it is never authority by itself.
 
 ## Session Context
 
@@ -48,9 +56,9 @@ Some machine actions act "as" a specific session instead of just "as" a device.
 
 Use it for directed session actions such as:
 
-- `POST /api/agents/messages`
-- `GET /api/agents/messages`
-- `POST /api/agents/messages/{id}/ack`
+- `POST /api/agents/directed-inputs`
+- `GET /api/agents/directed-inputs`
+- `POST /api/agents/directed-inputs/{id}/reply`
 
 ### Resolution rules
 
@@ -61,16 +69,20 @@ Use it for directed session actions such as:
 
 ### CLI and MCP source of session context
 
-- Longhouse-managed launchers inject current session context into the process environment for the running session.
-- The CLI and MCP layers translate current managed-session context into `X-Longhouse-Session-Id` when they call the API.
+- Longhouse-managed launchers give the registered coordination adapter a
+  launch-scoped credential and current-session context.
+- Nested provider processes do not inherit coordination authority.
+- CLI and MCP translate the adapter context into the session header and signed
+  credential when they call the API.
 
 ## Response Conventions
 
 - Responses are JSON-only.
 - UUIDs are serialized as strings.
 - Timestamps are ISO-8601 UTC strings.
-- List responses use stable envelopes like `{sessions, total}`, `{events, total}`, `{messages, total}`, or `{turns, total}`.
-- Directed message payloads use explicit delivery fields instead of inferring state from fetch behavior.
+- List responses use stable envelopes like `{sessions, total}`, `{events, total}`, `{directed_inputs, next_cursor}`, or `{turns, total}`.
+- Directed-input payloads expose their linked provider input receipt facts.
+  An absent receipt means no live delivery attempt was made.
 - Machine errors should use normal HTTP status codes plus JSON `detail`.
 
 ## Canonical Route Families
@@ -139,19 +151,23 @@ green route proof cannot masquerade as all-provider coverage. The route harness
 retries transient hosted dispatch failures per provider; typed version
 mismatches and provider verdict failures remain strict evidence.
 
-### Coordination and directed messaging
+### Coordination and directed input
 
-- `POST /api/agents/messages`
-- `GET /api/agents/messages`
-- `POST /api/agents/messages/{message_id}/ack`
-Current delivery model:
+- `POST /api/agents/directed-inputs`
+- `GET /api/agents/directed-inputs`
+- `POST /api/agents/directed-inputs/{directed_input_id}/reply`
+- `POST /api/agents/sessions/{session_id}/coordination-token` — device-authorized
+  issuance for a managed adapter on that exact owner/device/session
 
-- durable message row first
-- safe-boundary delivery attempt when the target session has a live control path
-- drain up to 10 queued messages while the target remains in a deliverable state
-- explicit acknowledgement from the target session
-- non-live sessions can still poll the durable inbox
-- wall entries now surface `pending_inbound_messages` so agents can see which sessions already have unacknowledged inbound work
+Current delivery contract:
+
+- persist the directed-input envelope first;
+- use the existing managed session-input receipt as the only delivery path;
+- inject at a proved quiescent boundary or queue behind an active turn;
+- do not steer an active turn and do not start or resume a cold session;
+- keep observe-only or unavailable targets durable without claiming an attempt;
+- recover all inbound and outbound inputs by stable id cursor; and
+- correlate replies with `reply_to_id` instead of acknowledgement state.
 
 ### Project context
 
@@ -188,11 +204,10 @@ The current CLI contract sits directly on the canonical machine surface:
 
 - `longhouse wall`
 - `longhouse peers`
-- `longhouse message`
-- `longhouse continue`
 - `longhouse tail`
-- `longhouse messages`
-- `longhouse messages ack`
+- `longhouse send`
+- `longhouse inbox`
+- `longhouse reply`
 - `longhouse sessions get`
 - `longhouse sessions events`
 
@@ -215,46 +230,47 @@ curl -s \
 longhouse wall --repo longhouse --json
 ```
 
-### Send a directed session message
+### Send directed input
 
 ```bash
 curl -s \
-  -H "X-Agents-Token: $LONGHOUSE_TOKEN" \
+  -H "X-Agents-Token: $LONGHOUSE_COORDINATION_TOKEN" \
   -H "X-Longhouse-Session-Id: $CURRENT_SESSION_ID" \
   -H "Content-Type: application/json" \
-  -d '{"to_session_id":"'"$TARGET_SESSION_ID"'","text":"Please inspect the failing test and report back."}' \
-  "$LONGHOUSE_URL/api/agents/messages"
+  -d '{"target_session_id":"'"$TARGET_SESSION_ID"'","text":"Please inspect the failing test and report back.","client_request_id":"review-test-1"}' \
+  "$LONGHOUSE_URL/api/agents/directed-inputs"
 ```
 
 ```bash
-longhouse message "$TARGET_SESSION_ID" "Please inspect the failing test and report back." --json
+longhouse send "$TARGET_SESSION_ID" "Please inspect the failing test and report back." --client-request-id review-test-1 --json
 ```
 
-### Read and acknowledge the durable inbox
+### Recover the durable inbox and reply
 
 ```bash
 curl -s \
-  -H "X-Agents-Token: $LONGHOUSE_TOKEN" \
+  -H "X-Agents-Token: $LONGHOUSE_COORDINATION_TOKEN" \
   -H "X-Longhouse-Session-Id: $CURRENT_SESSION_ID" \
-  "$LONGHOUSE_URL/api/agents/messages?direction=inbound&unacknowledged_only=true&limit=20"
+  "$LONGHOUSE_URL/api/agents/directed-inputs?direction=inbound&after_id=0&limit=20"
 ```
 
 ```bash
-longhouse messages --json
+longhouse inbox --json
 ```
 
 ```bash
 curl -s \
   -X POST \
-  -H "X-Agents-Token: $LONGHOUSE_TOKEN" \
+  -H "X-Agents-Token: $LONGHOUSE_COORDINATION_TOKEN" \
   -H "X-Longhouse-Session-Id: $CURRENT_SESSION_ID" \
   -H "Content-Type: application/json" \
   -d '{}' \
-  "$LONGHOUSE_URL/api/agents/messages/$MESSAGE_ID/ack"
+  -d '{"text":"The test is fixed.","client_request_id":"review-test-reply-1"}' \
+  "$LONGHOUSE_URL/api/agents/directed-inputs/$INPUT_ID/reply"
 ```
 
 ```bash
-longhouse messages ack "$MESSAGE_ID" --json
+longhouse reply "$INPUT_ID" "The test is fixed." --client-request-id review-test-reply-1 --json
 ```
 
 ## Non-Goals

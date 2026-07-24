@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+from datetime import UTC
+from datetime import datetime
+
 from zerg.services.managed_provider_contracts import all_managed_provider_contracts
-from zerg.services.provider_support_state import CONTRACT_OPERATIONS
-from zerg.services.provider_support_state import collect_provider_support_state
 from zerg.services.provider_capability_proof import AssertionOutcome
 from zerg.services.provider_capability_proof import EvidenceClass
 from zerg.services.provider_capability_proof import ProviderCapabilityProofRecord
-from datetime import UTC, datetime
+from zerg.services.provider_support_state import CONTRACT_OPERATIONS
+from zerg.services.provider_support_state import collect_provider_support_state
 
 CLAUDE_LIVE_CONTROL_OPERATIONS = [
     "send",
@@ -36,9 +38,7 @@ def _expected_unsupported_operations(contract) -> list[str]:
 
 def _expected_live_operations(contract) -> list[str]:
     return [
-        operation
-        for operation in contract.machine_control_operations
-        if operation not in {"run_once", "resume_run_once", "turn_start"}
+        operation for operation in contract.machine_control_operations if operation not in {"run_once", "resume_run_once", "turn_start"}
     ]
 
 
@@ -89,7 +89,7 @@ def test_support_state_provider_capability_axes_match_manifest_contracts() -> No
 
 def test_support_state_consumes_matching_v2_proof_without_enabling_machine_wide_action() -> None:
     contract = next(contract for contract in all_managed_provider_contracts() if contract.provider == "codex")
-    declaration = contract.capabilities["coordination.message.send"]
+    declaration = contract.capabilities["coordination.directed_input.send"]
     assertion = declaration["required_assertions"][0]
     record = ProviderCapabilityProofRecord(
         provider="codex",
@@ -119,9 +119,7 @@ def test_support_state_consumes_matching_v2_proof_without_enabling_machine_wide_
         trusted_capability_artifact_ids=frozenset({record.artifact_id}),
     )
 
-    decision = support["providers"]["codex"]["capabilities"]["semantic_capability_shadow"][
-        "coordination.message.send"
-    ]
+    decision = support["providers"]["codex"]["capabilities"]["semantic_capability_shadow"]["coordination.directed_input.send"]
     assert decision["verification"] == "proven"
     assert decision["action"] == "hidden"
     assert support["providers"]["codex"]["capabilities"]["capability_proof_record_count"] == 1
@@ -129,7 +127,7 @@ def test_support_state_consumes_matching_v2_proof_without_enabling_machine_wide_
 
 def test_local_record_cannot_self_assert_release_ci_trust() -> None:
     contract = next(contract for contract in all_managed_provider_contracts() if contract.provider == "codex")
-    declaration = contract.capabilities["coordination.message.send"]
+    declaration = contract.capabilities["coordination.directed_input.send"]
     assertion = declaration["required_assertions"][0]
     record = ProviderCapabilityProofRecord(
         provider="codex",
@@ -157,9 +155,7 @@ def test_local_record_cannot_self_assert_release_ci_trust() -> None:
         provider_executable_identities={"codex": "sha256:provider"},
     )
 
-    decision = support["providers"]["codex"]["capabilities"]["semantic_capability_shadow"][
-        "coordination.message.send"
-    ]
+    decision = support["providers"]["codex"]["capabilities"]["semantic_capability_shadow"]["coordination.directed_input.send"]
     assert decision["verification"] == "inconclusive"
     assert "proof_untrusted_producer" in decision["reason_codes"]
 
@@ -312,9 +308,7 @@ def _collect_opencode_action_coverage(release_info: dict) -> dict:
 
 def test_support_state_ignores_stale_release_action_coverage() -> None:
     """A stale artifact must not paint orchestration coverage green."""
-    opencode = _collect_opencode_action_coverage(
-        _opencode_release_info_with_coverage(status="stale", freshness_status="stale")
-    )
+    opencode = _collect_opencode_action_coverage(_opencode_release_info_with_coverage(status="stale", freshness_status="stale"))
 
     # Local derivation, not the stale release proof: orchestration stays unknown.
     assert opencode["action_coverage"]["classify_subagents"]["state"] == "unknown"
@@ -340,9 +334,7 @@ def test_support_state_ignores_version_mismatched_release_action_coverage() -> N
 
 def test_support_state_ignores_schema_mismatched_release_action_coverage() -> None:
     """A schema-mismatched artifact must not overlay even if fresh and matching."""
-    opencode = _collect_opencode_action_coverage(
-        _opencode_release_info_with_coverage(status="schema_mismatch", schema_status="mismatch")
-    )
+    opencode = _collect_opencode_action_coverage(_opencode_release_info_with_coverage(status="schema_mismatch", schema_status="mismatch"))
 
     assert opencode["action_coverage"]["classify_subagents"]["state"] == "unknown"
     assert opencode["action_coverage"]["fork"]["state"] == "unknown"
@@ -565,9 +557,7 @@ def test_support_state_keeps_release_warning_advisory() -> None:
         },
         control_channel={
             "status": "connected",
-            "control_operations_by_provider": {
-                "claude": CLAUDE_LIVE_CONTROL_OPERATIONS
-            },
+            "control_operations_by_provider": {"claude": CLAUDE_LIVE_CONTROL_OPERATIONS},
         },
     )
 
@@ -847,10 +837,7 @@ def test_support_state_does_not_attach_global_live_failure_to_passing_operation(
 
     claude = support["providers"]["claude"]
     assert claude["operations"]["send_input"]["local_proof_evidence"]["failure_code"] is None
-    assert (
-        claude["operations"]["transcript_binding"]["local_proof_evidence"]["failure_code"]
-        == "claude_provider_auth_prompt"
-    )
+    assert claude["operations"]["transcript_binding"]["local_proof_evidence"]["failure_code"] == "claude_provider_auth_prompt"
 
 
 def test_support_state_surfaces_red_matching_local_live_proof_without_operation_evidence() -> None:

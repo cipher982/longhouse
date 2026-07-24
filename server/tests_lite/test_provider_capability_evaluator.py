@@ -15,14 +15,13 @@ from zerg.services.provider_capability_proof import AssertionOutcome
 from zerg.services.provider_capability_proof import EvidenceClass
 from zerg.services.provider_capability_proof import ProviderCapabilityProofRecord
 
-
 NOW = datetime(2026, 7, 22, 17, 0, tzinfo=UTC)
 
 
 def _contract_and_declaration():
     contract = contract_for_provider("codex")
     assert contract is not None
-    return contract, contract.capabilities["coordination.message.send"]
+    return contract, contract.capabilities["coordination.directed_input.send"]
 
 
 def _context(**changes) -> EvaluationContext:
@@ -43,7 +42,7 @@ def _context(**changes) -> EvaluationContext:
 def _identity() -> ProviderProofIdentity:
     return ProviderProofIdentity(
         adapter_digest="sha256:adapter",
-        oracle_digests={"codex_coordination_message": "sha256:oracle"},
+        oracle_digests={"codex_coordination_directed_input": "sha256:oracle"},
     )
 
 
@@ -54,10 +53,10 @@ def _record(contract_digest: str, **changes) -> ProviderCapabilityProofRecord:
         "provider_executable_identity": "sha256:provider",
         "provider_contract_digest": contract_digest,
         "adapter_digest": "sha256:adapter",
-        "scenario_id": "codex_coordination_message",
+        "scenario_id": "codex_coordination_directed_input",
         "scenario_revision": 1,
         "oracle_digest": "sha256:oracle",
-        "assertion_id": "directed_message_persisted_and_delivered",
+        "assertion_id": "provider_input_receipt_linked",
         "outcome": AssertionOutcome.PASS,
         "evidence_class": EvidenceClass.HERMETIC,
         "generated_at": "2026-07-22T16:00:00Z",
@@ -74,7 +73,7 @@ def test_shadow_decision_is_inconclusive_without_identity_or_proof() -> None:
     contract, declaration = _contract_and_declaration()
 
     decision = evaluate_capability(
-        capability_id="coordination.message.send",
+        capability_id="coordination.directed_input.send",
         declaration=declaration,
         provider_contract_digest=contract.contract_entry_digest,
         context=_context(),
@@ -91,8 +90,8 @@ def test_generated_declaration_supplies_scoped_adapter_and_oracle_identity() -> 
     identity = proof_identity_for_declaration(adapter_digest=contract.adapter_digest, declaration=declaration)
 
     assert identity.adapter_digest == contract.adapter_digest
-    assert set(identity.oracle_digests) == {"codex_coordination_message"}
-    assert len(identity.oracle_digests["codex_coordination_message"]) == 64
+    assert set(identity.oracle_digests) == {"codex_coordination_directed_input"}
+    assert len(identity.oracle_digests["codex_coordination_directed_input"]) == 64
 
 
 def test_incomplete_cli_context_keeps_records_visible_but_inconclusive() -> None:
@@ -100,7 +99,7 @@ def test_incomplete_cli_context_keeps_records_visible_but_inconclusive() -> None
     record = _record(contract.contract_entry_digest)
 
     decision = evaluate_capability(
-        capability_id="coordination.message.send",
+        capability_id="coordination.directed_input.send",
         declaration=declaration,
         provider_contract_digest=contract.contract_entry_digest,
         context=_context(provider_version=None),
@@ -118,7 +117,7 @@ def test_provider_wide_context_cannot_enable_session_action() -> None:
     record = _record(contract.contract_entry_digest)
 
     decision = evaluate_capability(
-        capability_id="coordination.message.send",
+        capability_id="coordination.directed_input.send",
         declaration=declaration,
         provider_contract_digest=contract.contract_entry_digest,
         context=_context(session_id=None),
@@ -138,7 +137,7 @@ def test_exact_proof_and_session_context_enable_strict_action() -> None:
     record = _record(contract.contract_entry_digest)
 
     decision = evaluate_capability(
-        capability_id="coordination.message.send",
+        capability_id="coordination.directed_input.send",
         declaration=declaration,
         provider_contract_digest=contract.contract_entry_digest,
         context=_context(),
@@ -158,10 +157,10 @@ def test_resolved_policy_disables_proven_action() -> None:
     record = _record(contract.contract_entry_digest)
 
     decision = evaluate_capability(
-        capability_id="coordination.message.send",
+        capability_id="coordination.directed_input.send",
         declaration=declaration,
         provider_contract_digest=contract.contract_entry_digest,
-        context=_context(resolved_policy={"provider.codex.coordination_message": False}),
+        context=_context(resolved_policy={"provider.codex.coordination_directed_input": False}),
         records=(record,),
         proof_identity=_identity(),
         trusted_artifact_ids=frozenset({record.artifact_id}),
@@ -175,7 +174,7 @@ def test_context_outside_authored_modes_is_hidden() -> None:
     contract, declaration = _contract_and_declaration()
 
     decision = evaluate_capability(
-        capability_id="coordination.message.send",
+        capability_id="coordination.directed_input.send",
         declaration=declaration,
         provider_contract_digest=contract.contract_entry_digest,
         context=_context(mode="shadow"),
@@ -188,7 +187,7 @@ def test_missing_records_have_explicit_reason() -> None:
     contract, declaration = _contract_and_declaration()
 
     decision = evaluate_capability(
-        capability_id="coordination.message.send",
+        capability_id="coordination.directed_input.send",
         declaration=declaration,
         provider_contract_digest=contract.contract_entry_digest,
         context=_context(),
@@ -204,7 +203,7 @@ def test_expired_proof_is_stale_and_cannot_enable_strict_action() -> None:
     record = _record(contract.contract_entry_digest, generated_at="2026-07-01T16:00:00Z")
 
     decision = evaluate_capability(
-        capability_id="coordination.message.send",
+        capability_id="coordination.directed_input.send",
         declaration=declaration,
         provider_contract_digest=contract.contract_entry_digest,
         context=_context(),

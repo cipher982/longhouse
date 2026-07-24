@@ -1,12 +1,11 @@
 """Shared coordination helpers for the session kernel.
 
-These helpers keep the machine-facing API routes and in-process agent tools on
-the same wall/tail/message semantics without forcing a broad router rewrite.
+These helpers keep the machine-facing API routes and agent adapters on the same
+session discovery and tail semantics.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from collections.abc import Sequence
 from datetime import datetime
 from datetime import timedelta
@@ -14,12 +13,10 @@ from datetime import timezone
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
-from zerg.models.agents import SessionMessage
 from zerg.models.live_store import LiveRuntimeState
 from zerg.models.live_store import LiveSessionCatalog
 from zerg.models.live_store import LiveSessionConnection
@@ -32,30 +29,10 @@ from zerg.services.agents.kernel_capabilities import project_capabilities_from_r
 from zerg.services.catalog_facts import decode_catalog_datetime
 from zerg.services.catalog_facts import hydrate_catalog_row
 from zerg.services.provisional_events import durable_transcript_event_predicate
-from zerg.services.session_messages import MESSAGE_STATUS_DELIVERING
-from zerg.services.session_messages import MESSAGE_STATUS_FAILED
-from zerg.services.session_messages import MESSAGE_STATUS_QUEUED
 from zerg.services.session_runtime import build_runtime_view
 from zerg.services.session_runtime import load_runtime_state_map
 from zerg.services.session_runtime import resolve_runtime_overlay
 from zerg.services.session_views import WallSessionResponse
-
-
-def serialize_session_message(message: SessionMessage, *, delivery_status: str | None = None) -> dict[str, Any]:
-    return {
-        "id": message.id,
-        "from_session_id": str(message.from_session_id),
-        "to_session_id": str(message.to_session_id),
-        "text": message.body,
-        "source_event_id": message.source_event_id,
-        "delivery_status": delivery_status or message.delivery_status,
-        "delivery_attempts": message.delivery_attempts,
-        "last_error": message.last_error,
-        "delivered_via": message.delivered_via,
-        "created_at": message.created_at.isoformat() if message.created_at else None,
-        "delivered_at": message.delivered_at.isoformat() if message.delivered_at else None,
-        "acknowledged_at": message.acknowledged_at.isoformat() if message.acknowledged_at else None,
-    }
 
 
 def query_wall_sessions(
@@ -101,18 +78,6 @@ def query_wall_sessions(
     last_tool_call = store.get_last_tool_call_map(session_ids)
     runtime_state_map = load_runtime_state_map(db, session_ids)
     kernel_capabilities_map = project_capabilities_bulk(db, session_ids=session_ids)
-    pending_inbound_map: dict[UUID, int] = {}
-    if session_ids:
-        pending_rows = (
-            db.query(SessionMessage.to_session_id, func.count(SessionMessage.id))
-            .filter(SessionMessage.to_session_id.in_(session_ids))
-            .filter(SessionMessage.acknowledged_at.is_(None))
-            .filter(SessionMessage.delivery_status != MESSAGE_STATUS_FAILED)
-            .group_by(SessionMessage.to_session_id)
-            .all()
-        )
-        pending_inbound_map = {UUID(str(session_id)): int(count) for session_id, count in pending_rows}
-
     now = datetime.now(timezone.utc)
     items: list[WallSessionResponse] = []
     for session in sessions:
@@ -154,7 +119,6 @@ def query_wall_sessions(
                 kernel_observe_only=(bool(kernel_capabilities.observe_only) if kernel_capabilities is not None else False),
                 kernel_search_only=(bool(kernel_capabilities.search_only) if kernel_capabilities is not None else False),
                 kernel_staleness_reason=(kernel_capabilities.staleness_reason if kernel_capabilities is not None else None),
-                pending_inbound_messages=pending_inbound_map.get(session.id, 0),
                 user_messages=session.user_messages or 0,
                 assistant_messages=session.assistant_messages or 0,
                 tool_calls=session.tool_calls or 0,
@@ -169,7 +133,6 @@ def project_storage_v2_wall(
     *,
     repo: str | None = None,
     limit: int = 50,
-    pending_counts: Mapping[str | UUID, int] | None = None,
 ) -> list[WallSessionResponse]:
     """Project catalogd timeline facts into the wall contract without a DB.
 
@@ -184,7 +147,6 @@ def project_storage_v2_wall(
         raise ValueError("catalog timeline snapshot is missing observed_at")
     if limit <= 0:
         return []
-    pending_by_session = {str(session_id): int(count) for session_id, count in (pending_counts or {}).items()}
     repo_lower = repo.lower() if repo else None
 
     items: list[WallSessionResponse] = []
@@ -240,7 +202,6 @@ def project_storage_v2_wall(
                 kernel_observe_only=capabilities.observe_only,
                 kernel_search_only=capabilities.search_only,
                 kernel_staleness_reason=capabilities.staleness_reason,
-                pending_inbound_messages=pending_by_session.get(session_id, 0),
                 user_messages=int((card.user_messages if card is not None else session.user_messages) or 0),
                 assistant_messages=int((card.assistant_messages if card is not None else session.assistant_messages) or 0),
                 tool_calls=int((card.tool_calls if card is not None else session.tool_calls) or 0),
@@ -283,7 +244,6 @@ def build_peer_payloads(
                 "kernel_search_only": session.kernel_search_only,
                 "kernel_staleness_reason": session.kernel_staleness_reason,
                 "presence_state": session.presence_state,
-                "pending_inbound_messages": session.pending_inbound_messages,
                 "summary_title": session.summary_title,
                 "git_branch": session.git_branch,
             }
@@ -327,48 +287,3 @@ def load_session_tail(
         }
         for event in events
     ]
-
-
-def list_session_messages(
-    db: Session,
-    *,
-    session_id: UUID,
-    direction: str = "inbound",
-    unacknowledged_only: bool = False,
-    limit: int = 50,
-) -> list[SessionMessage]:
-    """List durable session messages for a specific session."""
-    query = db.query(SessionMessage)
-    if direction == "inbound":
-        query = query.filter(SessionMessage.to_session_id == session_id)
-    elif direction == "outbound":
-        query = query.filter(SessionMessage.from_session_id == session_id)
-    else:
-        query = query.filter((SessionMessage.to_session_id == session_id) | (SessionMessage.from_session_id == session_id))
-    if unacknowledged_only:
-        query = query.filter(SessionMessage.acknowledged_at.is_(None))
-
-    return query.order_by(SessionMessage.created_at.desc(), SessionMessage.id.desc()).limit(limit).all()
-
-
-def acknowledge_session_message(
-    db: Session,
-    *,
-    message_id: int,
-    target_session_id: UUID,
-) -> SessionMessage:
-    """Acknowledge a delivered message for the target session."""
-    message = db.query(SessionMessage).filter(SessionMessage.id == message_id).first()
-    if message is None:
-        raise ValueError(f"Message {message_id} not found")
-    if target_session_id != message.to_session_id:
-        raise PermissionError("Only the target session can acknowledge this message")
-    if message.delivery_status in {MESSAGE_STATUS_QUEUED, MESSAGE_STATUS_DELIVERING}:
-        raise RuntimeError("Message has not been delivered to the target session yet")
-    if message.delivery_status == MESSAGE_STATUS_FAILED:
-        raise RuntimeError("Failed messages cannot be acknowledged")
-    if message.acknowledged_at is None:
-        message.acknowledged_at = datetime.now(timezone.utc)
-        db.commit()
-        db.refresh(message)
-    return message

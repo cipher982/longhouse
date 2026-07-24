@@ -16,9 +16,15 @@ surface across providers:
 5. reply without copying session identifiers.
 
 The Runtime Host owns durable routing intent. Provider adapters own the
-mechanics of placing an input into Claude, Codex, OpenCode, Antigravity, Cursor,
-or a future provider. The target transcript remains the evidence of what the
-model actually perceived.
+mechanics of placing an input into a provider. The target transcript remains
+the evidence of what the model actually perceived.
+
+V1 proves the provider-neutral kernel through Claude and Codex because those
+managed launches can carry a session-scoped adapter credential and expose the
+same exact five tools. OpenCode, Cursor, Antigravity, and future providers do
+not advertise directed-input capability until an equally trustworthy adapter
+is implemented and proved. The kernel remains provider-neutral; provider
+support remains explicit.
 
 This is a prelaunch replacement of the first coordination loop. There are no
 legacy contracts, compatibility aliases, dual-write cutovers, or migration
@@ -205,23 +211,19 @@ Delete or do not build:
 
 ## Implementation Shape
 
-The current code has two peer-message writers and two delivery paths. The
-catalog path already bridges a durable peer message into the real SessionInput
-delivery kernel. V1 simplifies around that existing seam:
+V1 has one directed-input writer and reuses the existing SessionInput delivery
+kernel:
 
 1. make the bounded catalog the only directed-input store;
-2. reduce its peer-message row to envelope fields plus `reply_to_id` and real
-   client idempotency;
+2. keep only envelope fields plus `reply_to_id` and client idempotency;
 3. link it to the existing live input receipt instead of copying delivery
    status onto the envelope;
-4. delete archive/legacy `SessionMessage` delivery and runtime wake paths;
-5. delete acknowledgement storage, routes, RPCs, tools, counts, tests, and
-   provider instructions;
-6. expose the five primitives through the canonical agents API;
-7. make CLI and the installed native MCP adapter thin clients of that API;
-8. remove duplicate in-process coordination tool implementations when no
+4. keep the removed archive `SessionMessage` and acknowledgement paths absent;
+5. expose the five primitives through the canonical agents API;
+6. make CLI and the installed native MCP adapter thin clients of that API;
+7. remove duplicate in-process coordination tool implementations when no
    production caller remains; and
-9. keep wall/session-event APIs available outside the five-tool coordination
+8. keep wall/session-event APIs available outside the five-tool coordination
    surface where they serve timeline or diagnostic clients.
 
 ## Execution Plan
@@ -229,10 +231,10 @@ delivery kernel. V1 simplifies around that existing seam:
 ### Phase 1: prove boundaries
 
 - Trace every current directed-message and session-input writer/reader.
-- Run managed-provider identity experiments with ambient session identity
+- Run Claude and Codex identity experiments with ambient session identity
   removed, corrupted, nested, and resumed.
-- Prove idle, active, cold, and observe-only delivery behavior on the provider
-  adapters needed for the first cross-provider journey.
+- Prove idle, active, cold, and observe-only delivery behavior on the two V1
+  adapters.
 - Establish which provider acceptance and transcript/turn correlation facts
   are genuinely observable.
 
@@ -288,6 +290,16 @@ handshake with the exact five tools and trustworthy current-session identity.
   genuinely difficult decision or final independent review if needed.
 
 Gate: the live journey and negative cases leave durable inspectable evidence.
+
+## Independent Review Record
+
+- `hatch_20260724T022537.789461000Z_492c38a7847f865d`: keep the envelope and
+  existing input receipt; delete duplicate delivery state and stores.
+- `hatch_20260724T024120.315108000Z_9f1241b7f61b625b`: use launch-scoped signed
+  session authority and avoid PID exchange when the provider can carry it.
+- `hatch_20260724T031309.962484000Z_db2d6147d50fbf64`: constrain V1 adapters to
+  Claude and Codex, fail closed on owner/device binding, preserve failed input
+  receipts, and expose exactly five coordination tools.
 
 ### Phase 6: ship
 

@@ -155,12 +155,12 @@ def test_semantic_capabilities_include_exact_coordination_and_steer_limitations(
     expected = {
         "coordination.awareness.create",
         "coordination.awareness.post_compaction",
-        "coordination.message.send",
-        "coordination.message.receive",
+        "coordination.directed_input.send",
+        "coordination.directed_input.receive",
     }
     assert set(claude.capabilities) == expected | {"session.launch.helm", "session.turn.start"}
     assert set(codex.capabilities) == expected
-    assert set(opencode.capabilities) == expected | {"session.launch.helm", "session.reattach.helm"}
+    assert set(opencode.capabilities) == {"session.launch.helm", "session.reattach.helm"}
     cursor = contract_for_provider("cursor")
     antigravity = contract_for_provider("antigravity")
     assert cursor is not None and antigravity is not None
@@ -174,7 +174,7 @@ def test_semantic_capabilities_include_exact_coordination_and_steer_limitations(
         declaration = contract.capabilities["session.input.steer_active"]
         assert declaration["disposition"] == "upstream_absent"
         assert declaration["reason_code"] == "upstream_unavailable"
-    assert opencode.capabilities["coordination.awareness.create"]["contexts"]["modes"] == ["helm"]
+    assert claude.capabilities["coordination.awareness.create"]["contexts"]["modes"] == ["helm", "console"]
     assert claude.contract_entry_digest == managed_provider_contract_entry_digest("claude")
     assert claude.contract_entry_digest != codex.contract_entry_digest
     assert len(claude.adapter_digest) == 64

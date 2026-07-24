@@ -37,9 +37,6 @@ from zerg.services.apns_sender import prepare_session_needs_answer_push
 from zerg.services.apns_sender import prepare_widget_timeline_push
 from zerg.services.apns_sender import send_presence_pushes
 from zerg.services.catalogd_supervisor import get_catalogd_client
-from zerg.services.session_messages import deliver_queued_session_messages
-from zerg.services.session_messages import is_session_message_deliverable_state
-from zerg.services.session_messages import resolve_session_message_owner_id
 from zerg.services.session_pause_requests import PAUSE_KIND_STRUCTURED_QUESTION
 from zerg.services.session_pause_requests import load_active_pause_request_map
 from zerg.services.session_runtime import RuntimeEventBatchIngest
@@ -141,7 +138,8 @@ async def ingest_runtime_observation_batch(
 
         if live_transcript_only:
             _publish_live_transcript_previews(events, now=now_utc)
-        owner_id = None if catalog_mode else resolve_session_message_owner_id(db, _token)
+        token_owner_id = getattr(_token, "owner_id", None)
+        owner_id = None if catalog_mode or token_owner_id is None else int(token_owner_id)
 
         def _do_runtime_state(wdb: Session):
             ingest_result = ingest_runtime_events(wdb, events)
@@ -445,14 +443,8 @@ async def ingest_runtime_observation_batch(
                         ws=ws,
                         dispatch_label_prefix="runtime",
                     )
-                    if is_session_message_deliverable_state(canonical_state):
+                    if canonical_state in {"idle", "needs_user"}:
                         with _dispatch_db() as dispatch_db:
-                            await deliver_queued_session_messages(
-                                db=dispatch_db,
-                                owner_id=owner_id,
-                                target_session_id=sid,
-                                target_presence_state=canonical_state,
-                            )
                             from zerg.services.session_input_queue import wake_session_input_queue
 
                             await wake_session_input_queue(

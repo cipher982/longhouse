@@ -20,10 +20,9 @@ def awareness_post_compaction_assertions(observation: Mapping[str, object]) -> d
     }
 
 
-def message_assertions(observation: Mapping[str, object]) -> dict[str, bool]:
+def directed_input_assertions(observation: Mapping[str, object]) -> dict[str, bool]:
     return {
-        "directed_message_persisted_and_delivered": (
-            observation.get("message_persisted") is True and observation.get("message_delivered") is True
-        ),
-        "attributed_message_visible": (observation.get("message_visible") is True and bool(observation.get("source_session_id"))),
+        "directed_input_persisted": observation.get("input_persisted") is True,
+        "provider_input_receipt_linked": observation.get("input_receipt_linked") is True,
+        "attributed_input_visible": (observation.get("input_visible") is True and bool(observation.get("source_session_id"))),
     }

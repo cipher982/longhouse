@@ -161,8 +161,7 @@ def launch_managed_local_from_api(
         raise typer.Exit(code=EXIT_SETUP_FAILED)
     except httpx.TimeoutException:
         typer.secho(
-            f"Timed out waiting for Longhouse to create the managed {provider} session at {url}. "
-            f"No local {provider} process was started.",
+            f"Timed out waiting for Longhouse to create the managed {provider} session at {url}. No local {provider} process was started.",
             fg=typer.colors.RED,
         )
         raise typer.Exit(code=EXIT_SETUP_FAILED)
@@ -218,6 +217,7 @@ def launch_managed_local_from_api(
         managed_transport=str(body.get("managed_transport") or "") or None,
         permission_mode=str(body.get("permission_mode") or "bypass"),
         hook_token=(str(body["hook_token"]) if body.get("hook_token") else None),
+        coordination_token=(str(body["coordination_token"]) if body.get("coordination_token") else None),
     )
 
 

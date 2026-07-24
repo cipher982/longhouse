@@ -62,15 +62,15 @@ def test_missing_permission_mode_defaults_to_bypass():
 
 
 def test_launch_response_mints_scoped_hook_token_only_for_remote_approve():
-    """remote_approve launches return a session-scoped zht_ hook token bound to
+    """remote_approve launches return a session-scoped hook token bound to
     the session; bypass launches return none (gate dormant, device token rejected)."""
     from uuid import uuid4
 
     import zerg.services.session_chat_impl as impl
-    from zerg.auth.managed_local_hook_tokens import validate_managed_local_hook_token
+    from zerg.auth.managed_session_tokens import validate_managed_session_token
     from zerg.services.session_kernel_projection import SessionKernelProjection
-    from zerg.session_execution_home import SessionExecutionHome
     from zerg.session_execution_home import ManagedSessionTransport
+    from zerg.session_execution_home import SessionExecutionHome
 
     class _Caps:
         live_control_available = True
@@ -113,8 +113,8 @@ def test_launch_response_mints_scoped_hook_token_only_for_remote_approve():
     try:
         resp = impl._managed_local_launch_response(None, result, owner_id=42)
         assert resp.permission_mode == "remote_approve"
-        assert resp.hook_token and resp.hook_token.startswith("zht_")
-        decoded = validate_managed_local_hook_token(resp.hook_token)
+        assert resp.hook_token and resp.hook_token.startswith("zst_")
+        decoded = validate_managed_session_token(resp.hook_token)
         assert decoded is not None and decoded.session_id == str(sid)
 
         session.permission_mode = "bypass"

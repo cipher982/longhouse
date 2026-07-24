@@ -497,31 +497,30 @@ class LiveSession(LiveBase):
     updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
 
 
-class LiveSessionMessage(LiveBase):
-    """Durable directed session message owned by the bounded catalog."""
+class LiveDirectedInput(LiveBase):
+    """Provider-neutral input intent from one managed session to another."""
 
-    __tablename__ = "session_messages"
+    __tablename__ = "directed_inputs"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    message_key = Column(String(36), nullable=False, unique=True, index=True)
     owner_id = Column(Integer, nullable=False, index=True)
-    from_session_id = Column(String(36), nullable=False, index=True)
-    to_session_id = Column(String(36), nullable=False, index=True)
-    body = Column("text", Text, nullable=False)
-    source_event_id = Column(Integer, nullable=True)
-    delivery_status = Column(String(32), nullable=False, server_default=text("'stored_only'"))
-    delivery_attempts = Column(Integer, nullable=False, server_default=text("0"))
-    last_error = Column(Text, nullable=True)
-    delivered_via = Column(String(32), nullable=True)
-    delivered_at = Column(DateTime(timezone=True), nullable=True)
-    acknowledged_at = Column(DateTime(timezone=True), nullable=True)
+    source_session_id = Column(String(36), nullable=False, index=True)
+    target_session_id = Column(String(36), nullable=False, index=True)
+    body = Column(Text, nullable=False)
+    reply_to_id = Column(Integer, nullable=True, index=True)
+    client_request_id = Column(String(64), nullable=False)
+    input_receipt_id = Column(String(36), nullable=True, unique=True, index=True)
     created_at = Column(DateTime(timezone=True), nullable=False)
-    updated_at = Column(DateTime(timezone=True), nullable=False)
 
     __table_args__ = (
-        Index("ix_session_messages_to_status_created", "to_session_id", "delivery_status", "created_at"),
-        Index("ix_session_messages_from_created", "from_session_id", "created_at"),
-        Index("ix_session_messages_owner_to_ack", "owner_id", "to_session_id", "acknowledged_at"),
+        UniqueConstraint(
+            "owner_id",
+            "source_session_id",
+            "client_request_id",
+            name="uq_directed_inputs_source_request",
+        ),
+        Index("ix_directed_inputs_target_id", "owner_id", "target_session_id", "id"),
+        Index("ix_directed_inputs_source_id", "owner_id", "source_session_id", "id"),
     )
 
 

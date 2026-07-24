@@ -1,7 +1,7 @@
 """Auth-enabled tests for the permission-gate endpoints.
 
 These run WITHOUT AUTH_DISABLED so they exercise verify_agents_token + the
-session-scoped enforcement: a managed-local hook token must match its session,
+session-scoped enforcement: a hook-scoped managed-session token must match its session,
 and a machine-wide durable device token must be rejected (it cannot be scoped to
 one session). This is the security boundary that keeps one managed session from
 registering/polling/resolving another session's permission requests.
@@ -29,7 +29,8 @@ os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 os.environ.setdefault("JWT_SECRET", "test-jwt-secret-permission-auth")
 os.environ.setdefault("INTERNAL_API_SECRET", Fernet.generate_key().decode())
 
-from zerg.auth.managed_local_hook_tokens import issue_managed_local_hook_token
+from zerg.auth.managed_session_tokens import MANAGED_SESSION_SCOPE_HOOK
+from zerg.auth.managed_session_tokens import issue_managed_session_token
 from zerg.database import get_db
 from zerg.database import initialize_database
 from zerg.database import make_engine
@@ -100,8 +101,12 @@ def _seed(session_local):
 
 
 def _hook_token(owner_id: int, session_id) -> str:
-    return issue_managed_local_hook_token(
-        owner_id=owner_id, session_id=str(session_id), project="perm-auth", device_id="cinder"
+    return issue_managed_session_token(
+        owner_id=owner_id,
+        session_id=str(session_id),
+        project="perm-auth",
+        device_id="cinder",
+        scope=MANAGED_SESSION_SCOPE_HOOK,
     )
 
 

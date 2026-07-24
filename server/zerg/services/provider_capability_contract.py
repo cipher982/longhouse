@@ -64,8 +64,8 @@ SEMANTIC_CAPABILITY_IDS = frozenset(
         "session.runtime.phase",
         "coordination.awareness.create",
         "coordination.awareness.post_compaction",
-        "coordination.message.send",
-        "coordination.message.receive",
+        "coordination.directed_input.send",
+        "coordination.directed_input.receive",
     }
 )
 

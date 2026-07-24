@@ -48,13 +48,10 @@ CORE_TOOLS: frozenset[str] = frozenset(
         "get_session_detail",
         "get_session_events",
         "http_request",
-        "message_session",
-        "peers",
         "runner_doctor",
         "runner_exec",
         "runner_list",
         "search_sessions",
-        "session_tail",
         "web_fetch",
         "web_search",
     ]
@@ -73,7 +70,6 @@ EXECUTION_CORE_TOOLS: frozenset[str] = frozenset(
         "runner_exec",
         "runner_list",
         "search_sessions",
-        "session_tail",
         "web_fetch",
         "web_search",
     ]

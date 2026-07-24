@@ -36,14 +36,8 @@ fn registered_engine_command_advertises_coordination_tools() {
         .iter()
         .filter_map(|tool| tool["name"].as_str())
         .collect::<Vec<_>>();
-    for expected in [
-        "peers",
-        "message_session",
-        "check_messages",
-        "ack_message",
-        "check_wall",
-        "session_tail",
-    ] {
+    assert_eq!(names.len(), 5);
+    for expected in ["peers", "tail", "send", "inbox", "reply"] {
         assert!(names.contains(&expected), "missing {expected}");
     }
     assert!(child.wait().unwrap().success());

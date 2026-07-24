@@ -14,7 +14,6 @@ from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
-from zerg.cli.opencode import _write_opencode_runtime_config_content
 from zerg.mcp_server.server import COORDINATION_INSTRUCTIONS
 from zerg.provider_cli_contract import PROVIDER_CLI_BINARY_BY_PROVIDER
 from zerg.services.longhouse_paths import resolve_longhouse_home
@@ -27,48 +26,6 @@ from zerg.services.shipper.hooks import CODEX_HOOK_SCRIPT
 from .provider_capability_proof_publish import ScenarioProofIdentity
 from .provider_capability_proof_publish import publish_scenario_assertions
 from .provider_coordination_oracles import awareness_post_compaction_assertions
-from .provider_opencode_coordination_oracles import opencode_launch_config_assertions
-
-
-def observe_opencode_launch_scoped_coordination(*, provider_bin: str | None = None) -> dict[str, object]:
-    binary = provider_bin or shutil.which("opencode")
-    if not binary:
-        raise RuntimeError("stock OpenCode binary is required")
-    with tempfile.TemporaryDirectory(prefix="longhouse-opencode-coordination-") as raw_root:
-        root = Path(raw_root)
-        config_path = _write_opencode_runtime_config_content(
-            config_dir=root / "longhouse",
-            runtime_events_url="https://longhouse.invalid/api/agents/runtime/events/batch",
-            token="integration-fixture-token",
-            session_id="11111111-1111-1111-1111-111111111111",
-            device_id="integration-machine",
-        )
-        configured = json.loads(config_path.read_text(encoding="utf-8"))
-        env = os.environ.copy()
-        env["OPENCODE_CONFIG_CONTENT"] = config_path.read_text(encoding="utf-8")
-        env["XDG_DATA_HOME"] = str(root / "xdg-data")
-        env["XDG_CACHE_HOME"] = str(root / "xdg-cache")
-        env["XDG_STATE_HOME"] = str(root / "xdg-state")
-        completed = subprocess.run(
-            [binary, "debug", "config"],
-            cwd=root,
-            env=env,
-            text=True,
-            capture_output=True,
-            check=False,
-            timeout=30,
-        )
-        if completed.returncode != 0:
-            raise RuntimeError(completed.stderr or f"OpenCode config probe exited {completed.returncode}")
-        try:
-            resolved = json.loads(completed.stdout)
-        except json.JSONDecodeError as exc:
-            raise RuntimeError("OpenCode config probe did not return JSON") from exc
-        instruction_path = str((root / "longhouse" / "managed-local" / "opencode" / "longhouse-coordination.md").resolve())
-        return {
-            "instruction_loaded": instruction_path in (resolved.get("instructions") or []),
-            "configured_instruction_present": instruction_path in (configured.get("instructions") or []),
-        }
 
 
 def observe_codex_post_compaction_bootstrap(*, compactions: int = 4) -> dict[str, object]:
@@ -159,56 +116,9 @@ def publish_codex_bootstrap_noise_proof(
     return records[0].artifact_id
 
 
-def publish_opencode_launch_config_proof(
-    *,
-    provider_version: str,
-    provider_executable_identity: str,
-    provider_bin: str,
-    store: ProviderCapabilityProofStore,
-    producer_class: str,
-    producer_version: str,
-    invocation_id: str,
-    generated_at: str,
-    run_reference: str | None = None,
-    longhouse_git_sha: str | None = None,
-) -> str:
-    contract = contract_for_provider("opencode")
-    if contract is None:
-        raise RuntimeError("OpenCode managed-provider contract is missing")
-    declaration = contract.capabilities["coordination.awareness.create"]
-    assertion = next(item for item in declaration["required_assertions"] if item["id"] == "launch_scoped_coordination_config_loaded")
-    observations = observe_opencode_launch_scoped_coordination(provider_bin=provider_bin)
-    raw_payload = json.dumps(observations, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode()
-    assertions = opencode_launch_config_assertions(observations)
-    records = publish_scenario_assertions(
-        identity=ScenarioProofIdentity(
-            provider="opencode",
-            provider_version=provider_version,
-            provider_executable_identity=provider_executable_identity,
-            provider_contract_digest=contract.contract_entry_digest,
-            adapter_digest=contract.adapter_digest,
-            scenario_id=assertion["scenario_id"],
-            scenario_revision=assertion["minimum_scenario_revision"],
-            oracle_digest=assertion["oracle_digest"],
-            evidence_class=EvidenceClass.LIVE_NO_TOKEN,
-            generated_at=generated_at,
-            producer_class=producer_class,
-            producer_version=producer_version,
-            invocation_id=invocation_id,
-            mode="helm",
-            run_reference=run_reference,
-            raw_reference_digests=(f"sha256:{hashlib.sha256(raw_payload).hexdigest()}",),
-            longhouse_git_sha=longhouse_git_sha,
-        ),
-        assertions=assertions,
-        store=store,
-    )
-    return records[0].artifact_id
-
-
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--provider", choices=("codex", "opencode"), default="codex")
+    parser.add_argument("--provider", choices=("codex",), default="codex")
     parser.add_argument("--provider-bin")
     parser.add_argument("--store-root")
     parser.add_argument("--producer-class", default="local_diagnostic")
@@ -223,7 +133,7 @@ def main() -> int:
     provider_version = str(args.provider_version or "").strip()
     identity = str(args.provider_executable_identity or "").strip()
     binary = Path(args.provider_bin or shutil.which(PROVIDER_CLI_BINARY_BY_PROVIDER[args.provider]) or "")
-    if not provider_version or not identity or args.provider == "opencode":
+    if not provider_version or not identity:
         identity = executable_identity(str(binary)) or ""
         if not identity:
             raise SystemExit(f"provider binary not found: {binary}")
@@ -237,35 +147,21 @@ def main() -> int:
     generated_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
     invocation_id = args.invocation_id or str(uuid4())
     raw_payload: bytes | None = None
-    if args.provider == "opencode":
-        artifact_id = publish_opencode_launch_config_proof(
-            provider_version=provider_version,
-            provider_executable_identity=identity,
-            provider_bin=str(binary),
-            store=store,
-            producer_class=args.producer_class,
-            producer_version=args.producer_version,
-            invocation_id=invocation_id,
-            generated_at=generated_at,
-            run_reference=args.run_reference,
-            longhouse_git_sha=args.longhouse_git_sha,
-        )
-    else:
-        observations = observe_codex_post_compaction_bootstrap()
-        raw_payload = json.dumps(observations, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode()
-        artifact_id = publish_codex_bootstrap_noise_proof(
-            provider_version=provider_version,
-            provider_executable_identity=identity,
-            store=store,
-            producer_class=args.producer_class,
-            producer_version=args.producer_version,
-            invocation_id=invocation_id,
-            generated_at=generated_at,
-            observations=observations,
-            run_reference=args.run_reference,
-            raw_reference_digests=(f"sha256:{hashlib.sha256(raw_payload).hexdigest()}",),
-            longhouse_git_sha=args.longhouse_git_sha,
-        )
+    observations = observe_codex_post_compaction_bootstrap()
+    raw_payload = json.dumps(observations, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode()
+    artifact_id = publish_codex_bootstrap_noise_proof(
+        provider_version=provider_version,
+        provider_executable_identity=identity,
+        store=store,
+        producer_class=args.producer_class,
+        producer_version=args.producer_version,
+        invocation_id=invocation_id,
+        generated_at=generated_at,
+        observations=observations,
+        run_reference=args.run_reference,
+        raw_reference_digests=(f"sha256:{hashlib.sha256(raw_payload).hexdigest()}",),
+        longhouse_git_sha=args.longhouse_git_sha,
+    )
     if args.bundle_output:
         record = next(record for record in store.records(args.provider) if record.artifact_id == artifact_id)
         bundle_path = Path(args.bundle_output)

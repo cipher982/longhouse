@@ -27,12 +27,6 @@ class ToolName(str, Enum):
     RUNNER_CREATE_ENROLL_TOKEN = "runner_create_enroll_token"
     RUNNER_DOCTOR = "runner_doctor"
     SEND_SLACK_WEBHOOK = "send_slack_webhook"
-    PEERS = "peers"
-    GET_SESSION_EVENTS = "get_session_events"
-    SESSION_TAIL = "session_tail"
-    MESSAGE_SESSION = "message_session"
-    CHECK_MESSAGES = "check_messages"
-    ACK_MESSAGE = "ack_message"
     SEARCH_SESSIONS = "search_sessions"
     GREP_SESSIONS = "grep_sessions"
     FILTER_SESSIONS = "filter_sessions"
@@ -83,12 +77,6 @@ TOOL_SERVER_MAPPING: Dict[ToolName, ServerName] = {
     ToolName.RUNNER_CREATE_ENROLL_TOKEN: ServerName.RUNNER_SETUP,
     ToolName.RUNNER_DOCTOR: ServerName.RUNNER_SETUP,
     ToolName.SEND_SLACK_WEBHOOK: ServerName.SLACK,
-    ToolName.PEERS: ServerName.COORDINATION,
-    ToolName.GET_SESSION_EVENTS: ServerName.COORDINATION,
-    ToolName.SESSION_TAIL: ServerName.COORDINATION,
-    ToolName.MESSAGE_SESSION: ServerName.COORDINATION,
-    ToolName.CHECK_MESSAGES: ServerName.COORDINATION,
-    ToolName.ACK_MESSAGE: ServerName.COORDINATION,
     ToolName.SEARCH_SESSIONS: ServerName.SESSION,
     ToolName.GREP_SESSIONS: ServerName.SESSION,
     ToolName.FILTER_SESSIONS: ServerName.SESSION,

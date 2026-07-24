@@ -63,6 +63,7 @@ from zerg.models.live_store import LiveArchiveOutbox
 from zerg.models.live_store import LiveConsoleTurn
 from zerg.models.live_store import LiveControlLease
 from zerg.models.live_store import LiveDeviceToken
+from zerg.models.live_store import LiveDirectedInput
 from zerg.models.live_store import LiveHeartbeatStamp
 from zerg.models.live_store import LiveInteractionRequest
 from zerg.models.live_store import LiveLaunchReadiness
@@ -78,7 +79,6 @@ from zerg.models.live_store import LiveSessionInputAttachment
 from zerg.models.live_store import LiveSessionInputReceipt
 from zerg.models.live_store import LiveSessionLaunchAttempt
 from zerg.models.live_store import LiveSessionLivePreview
-from zerg.models.live_store import LiveSessionMessage
 from zerg.models.live_store import LiveSessionRun
 from zerg.models.live_store import LiveSessionThread
 from zerg.models.live_store import LiveSessionThreadAlias
@@ -428,20 +428,16 @@ def _input_attachment_dto(row: Any) -> dict[str, Any]:
     }
 
 
-def _session_message_dto(row: Any) -> dict[str, Any]:
+def _directed_input_dto(row: Any, receipt: Any | None = None) -> dict[str, Any]:
     return {
         "id": int(row.id),
-        "from_session_id": str(row.from_session_id),
-        "to_session_id": str(row.to_session_id),
-        "text": str(getattr(row, "body", row.text)),
-        "source_event_id": row.source_event_id,
-        "delivery_status": str(row.delivery_status),
-        "delivery_attempts": int(row.delivery_attempts or 0),
-        "last_error": row.last_error,
-        "delivered_via": row.delivered_via,
+        "source_session_id": str(row.source_session_id),
+        "target_session_id": str(row.target_session_id),
+        "text": str(row.body),
+        "reply_to_id": int(row.reply_to_id) if row.reply_to_id is not None else None,
+        "client_request_id": str(row.client_request_id),
         "created_at": _encode_datetime(row.created_at),
-        "delivered_at": _encode_datetime(row.delivered_at),
-        "acknowledged_at": _encode_datetime(row.acknowledged_at),
+        "input_receipt": _input_receipt_dto(receipt) if receipt is not None else None,
     }
 
 
@@ -3090,22 +3086,7 @@ class CatalogStore:
                     if session_facts
                     else None
                 )
-                next_queued_receipt = (
-                    orm.query(LiveSessionInputReceipt)
-                    .filter(
-                        LiveSessionInputReceipt.session_id == session_id,
-                        LiveSessionInputReceipt.status == "queued",
-                    )
-                    .order_by(LiveSessionInputReceipt.created_at.asc(), LiveSessionInputReceipt.id.asc())
-                    .first()
-                )
-                collaboration_waits_for_quiescence = bool(
-                    projection is not None
-                    and projection.activity.state == "blocked"
-                    and next_queued_receipt is not None
-                    and str(next_queued_receipt.client_request_id or "").startswith("session-message-")
-                )
-                if projection is None or projection.activity.state not in {"quiescent", "blocked"} or collaboration_waits_for_quiescence:
+                if projection is None or projection.activity.state not in {"quiescent", "blocked"}:
                     orm.rollback()
                     return {
                         "claimed": False,
@@ -3221,30 +3202,6 @@ class CatalogStore:
                     )
                 if snapshot is None:
                     raise RuntimeError("claimed input receipt disappeared during finish")
-                linked_message_changed = False
-                client_request_id = str(snapshot.client_request_id or "")
-                if client_request_id.startswith("session-message-"):
-                    try:
-                        message_id = int(client_request_id.removeprefix("session-message-"))
-                    except ValueError:
-                        message_id = 0
-                    message = (
-                        orm.query(LiveSessionMessage)
-                        .filter(
-                            LiveSessionMessage.id == message_id,
-                            LiveSessionMessage.owner_id == snapshot.owner_id,
-                        )
-                        .first()
-                    )
-                    if message is not None and message.delivery_status == "queued":
-                        message.delivery_status = status
-                        message.delivery_attempts = max(int(message.delivery_attempts or 0), 1)
-                        message.last_error = error if status == "failed" else None
-                        message.delivered_via = "live_input_queue"
-                        message.delivered_at = observed_at if status == "delivered" else None
-                        message.updated_at = observed_at
-                        orm.commit()
-                        linked_message_changed = True
             except BaseException:
                 orm.rollback()
                 raise
@@ -3255,7 +3212,6 @@ class CatalogStore:
                 "found": True,
                 "changed": True,
                 "receipt": _input_receipt_dto(snapshot),
-                "linked_message_changed": linked_message_changed,
                 "commit_seq": str(commit_seq),
             }
 
@@ -3977,189 +3933,203 @@ class CatalogStore:
             return outbox_owner is not None and str(outbox_owner) == owner_text
         return True
 
-    def create_session_message(
+    def create_directed_input(
         self,
         *,
-        message_key: str,
         owner_id: int,
-        from_session_id: str,
-        to_session_id: str,
+        source_session_id: str,
+        target_session_id: str,
         text: str,
-        source_event_id: int | None,
+        reply_to_id: int | None,
+        client_request_id: str,
         created_at: datetime,
     ) -> dict[str, Any]:
-        table = LiveSessionMessage.__table__
+        table = LiveDirectedInput.__table__
         with _write_transaction(self.engine) as connection:
-            existing = connection.execute(select(table).where(table.c.message_key == message_key)).mappings().first()
+            existing = (
+                connection.execute(
+                    select(table).where(
+                        table.c.owner_id == owner_id,
+                        table.c.source_session_id == source_session_id,
+                        table.c.client_request_id == client_request_id,
+                    )
+                )
+                .mappings()
+                .first()
+            )
             if existing is not None:
                 exact = (
-                    int(existing["owner_id"]) == owner_id
-                    and str(existing["from_session_id"]) == from_session_id
-                    and str(existing["to_session_id"]) == to_session_id
-                    and str(existing["text"]) == text
-                    and existing["source_event_id"] == source_event_id
-                    and _as_aware_utc(existing["created_at"]) == created_at
+                    str(existing["target_session_id"]) == target_session_id
+                    and str(existing["body"]) == text
+                    and existing["reply_to_id"] == reply_to_id
                 )
+                receipt = None
+                if exact and existing["input_receipt_id"] is not None:
+                    receipt = (
+                        connection.execute(
+                            select(LiveSessionInputReceipt.__table__).where(LiveSessionInputReceipt.id == existing["input_receipt_id"])
+                        )
+                        .mappings()
+                        .first()
+                    )
                 return {
                     "created": False,
                     "idempotency_conflict": not exact,
-                    "message": _session_message_dto(SimpleNamespace(**existing)) if exact else None,
+                    "directed_input": (
+                        _directed_input_dto(
+                            SimpleNamespace(**existing),
+                            SimpleNamespace(**receipt) if receipt is not None else None,
+                        )
+                        if exact
+                        else None
+                    ),
                     "commit_seq": str(_current_commit_seq(connection)),
                 }
-            if from_session_id == to_session_id:
+            if source_session_id == target_session_id:
                 return {"invalid": "same_session", "commit_seq": str(_current_commit_seq(connection))}
-            if not self._session_belongs_to_owner(connection, session_id=from_session_id, owner_id=owner_id):
-                return {"not_found": "sender", "commit_seq": str(_current_commit_seq(connection))}
-            if not self._session_belongs_to_owner(connection, session_id=to_session_id, owner_id=owner_id):
+            if not self._session_belongs_to_owner(connection, session_id=source_session_id, owner_id=owner_id):
+                return {"not_found": "source", "commit_seq": str(_current_commit_seq(connection))}
+            if not self._session_belongs_to_owner(connection, session_id=target_session_id, owner_id=owner_id):
                 return {"not_found": "target", "commit_seq": str(_current_commit_seq(connection))}
-            result = connection.execute(
-                insert(table)
-                .values(
-                    message_key=message_key,
-                    owner_id=owner_id,
-                    from_session_id=from_session_id,
-                    to_session_id=to_session_id,
-                    text=text,
-                    source_event_id=source_event_id,
-                    delivery_status="stored_only",
-                    delivery_attempts=0,
-                    created_at=created_at,
-                    updated_at=created_at,
-                )
-                .returning(table.c.id)
+            if reply_to_id is not None:
+                parent = connection.execute(select(table).where(table.c.id == reply_to_id, table.c.owner_id == owner_id)).mappings().first()
+                if parent is None:
+                    return {"not_found": "reply", "commit_seq": str(_current_commit_seq(connection))}
+                if str(parent["target_session_id"]) != source_session_id or str(parent["source_session_id"]) != target_session_id:
+                    return {"invalid": "reply_direction", "commit_seq": str(_current_commit_seq(connection))}
+            directed_input_id = int(
+                connection.execute(
+                    insert(table)
+                    .values(
+                        owner_id=owner_id,
+                        source_session_id=source_session_id,
+                        target_session_id=target_session_id,
+                        body=text,
+                        reply_to_id=reply_to_id,
+                        client_request_id=client_request_id,
+                        created_at=created_at,
+                    )
+                    .returning(table.c.id)
+                ).scalar_one()
             )
-            message_id = int(result.scalar_one())
             commit_seq = _advance_commit_seq(connection, created_at)
-            row = connection.execute(select(table).where(table.c.id == message_id)).mappings().one()
+            row = connection.execute(select(table).where(table.c.id == directed_input_id)).mappings().one()
             return {
                 "created": True,
                 "idempotency_conflict": False,
-                "message": _session_message_dto(SimpleNamespace(**row)),
+                "directed_input": _directed_input_dto(SimpleNamespace(**row)),
                 "commit_seq": str(commit_seq),
             }
 
-    def list_session_messages(
+    def link_directed_input_receipt(
+        self,
+        *,
+        owner_id: int,
+        directed_input_id: int,
+        input_receipt_id: str,
+        observed_at: datetime,
+    ) -> dict[str, Any]:
+        table = LiveDirectedInput.__table__
+        receipt_table = LiveSessionInputReceipt.__table__
+        with _write_transaction(self.engine) as connection:
+            row = connection.execute(select(table).where(table.c.id == directed_input_id, table.c.owner_id == owner_id)).mappings().first()
+            if row is None:
+                return {"not_found": "directed_input", "commit_seq": str(_current_commit_seq(connection))}
+            receipt = (
+                connection.execute(
+                    select(receipt_table).where(
+                        receipt_table.c.id == input_receipt_id,
+                        receipt_table.c.owner_id == owner_id,
+                        receipt_table.c.session_id == row["target_session_id"],
+                    )
+                )
+                .mappings()
+                .first()
+            )
+            if receipt is None:
+                return {"not_found": "receipt", "commit_seq": str(_current_commit_seq(connection))}
+            existing_receipt_id = row["input_receipt_id"]
+            if existing_receipt_id is not None and str(existing_receipt_id) != input_receipt_id:
+                return {"conflict": True, "commit_seq": str(_current_commit_seq(connection))}
+            if existing_receipt_id is None:
+                connection.execute(update(table).where(table.c.id == directed_input_id).values(input_receipt_id=input_receipt_id))
+                commit_seq = _advance_commit_seq(connection, observed_at)
+                row = connection.execute(select(table).where(table.c.id == directed_input_id)).mappings().one()
+            else:
+                commit_seq = _current_commit_seq(connection)
+            return {
+                "directed_input": _directed_input_dto(
+                    SimpleNamespace(**row),
+                    SimpleNamespace(**receipt),
+                ),
+                "commit_seq": str(commit_seq),
+            }
+
+    def list_directed_inputs(
         self,
         *,
         owner_id: int,
         session_id: str,
         direction: str,
-        unacknowledged_only: bool,
+        after_id: int,
         limit: int,
     ) -> dict[str, Any]:
-        table = LiveSessionMessage.__table__
+        table = LiveDirectedInput.__table__
+        receipt_table = LiveSessionInputReceipt.__table__
         with _read_snapshot(self.engine) as connection:
             if not self._session_belongs_to_owner(connection, session_id=session_id, owner_id=owner_id):
-                return {"found": False, "messages": [], "commit_seq": str(_current_commit_seq(connection))}
-            query = select(table).where(table.c.owner_id == owner_id)
+                return {"found": False, "directed_inputs": [], "commit_seq": str(_current_commit_seq(connection))}
+            query = select(table).where(table.c.owner_id == owner_id, table.c.id > after_id)
             if direction == "inbound":
-                query = query.where(table.c.to_session_id == session_id)
+                query = query.where(table.c.target_session_id == session_id)
             elif direction == "outbound":
-                query = query.where(table.c.from_session_id == session_id)
+                query = query.where(table.c.source_session_id == session_id)
             else:
-                query = query.where(or_(table.c.to_session_id == session_id, table.c.from_session_id == session_id))
-            if unacknowledged_only:
-                query = query.where(table.c.acknowledged_at.is_(None))
-            rows = connection.execute(query.order_by(table.c.created_at.desc(), table.c.id.desc()).limit(limit)).mappings().all()
+                query = query.where(or_(table.c.target_session_id == session_id, table.c.source_session_id == session_id))
+            rows = connection.execute(query.order_by(table.c.id.asc()).limit(limit)).mappings().all()
+            receipt_ids = [str(row["input_receipt_id"]) for row in rows if row["input_receipt_id"] is not None]
+            receipts = {
+                str(receipt["id"]): receipt
+                for receipt in (
+                    connection.execute(select(receipt_table).where(receipt_table.c.id.in_(receipt_ids))).mappings().all()
+                    if receipt_ids
+                    else []
+                )
+            }
+            directed_inputs = [
+                _directed_input_dto(
+                    SimpleNamespace(**row),
+                    SimpleNamespace(**receipts[str(row["input_receipt_id"])])
+                    if row["input_receipt_id"] is not None and str(row["input_receipt_id"]) in receipts
+                    else None,
+                )
+                for row in rows
+            ]
             return {
                 "found": True,
-                "messages": [_session_message_dto(SimpleNamespace(**row)) for row in rows],
+                "directed_inputs": directed_inputs,
+                "next_cursor": directed_inputs[-1]["id"] if directed_inputs else after_id,
                 "commit_seq": str(_current_commit_seq(connection)),
             }
 
-    def acknowledge_session_message(
-        self,
-        *,
-        owner_id: int,
-        message_id: int,
-        target_session_id: str,
-        acknowledged_at: datetime,
-    ) -> dict[str, Any]:
-        table = LiveSessionMessage.__table__
-        with _write_transaction(self.engine) as connection:
-            row = connection.execute(select(table).where(table.c.id == message_id, table.c.owner_id == owner_id)).mappings().first()
-            if row is None:
-                return {"not_found": True, "commit_seq": str(_current_commit_seq(connection))}
-            if str(row["to_session_id"]) != target_session_id:
-                return {"forbidden": True, "commit_seq": str(_current_commit_seq(connection))}
-            if row["delivery_status"] in {"queued", "delivering"}:
-                return {"conflict": "not_delivered", "commit_seq": str(_current_commit_seq(connection))}
-            if row["delivery_status"] == "failed":
-                return {"conflict": "failed", "commit_seq": str(_current_commit_seq(connection))}
-            changed = row["acknowledged_at"] is None
-            if changed:
-                connection.execute(
-                    update(table).where(table.c.id == message_id).values(acknowledged_at=acknowledged_at, updated_at=acknowledged_at)
-                )
-                commit_seq = _advance_commit_seq(connection, acknowledged_at)
-                row = connection.execute(select(table).where(table.c.id == message_id)).mappings().one()
-            else:
-                commit_seq = _current_commit_seq(connection)
-            return {
-                "changed": changed,
-                "message": _session_message_dto(SimpleNamespace(**row)),
-                "commit_seq": str(commit_seq),
-            }
-
-    def update_session_message_delivery(
-        self,
-        *,
-        owner_id: int,
-        message_id: int,
-        expected_status: str,
-        delivery_status: str,
-        delivery_attempts: int,
-        last_error: str | None,
-        delivered_via: str | None,
-        delivered_at: datetime | None,
-        updated_at: datetime,
-    ) -> dict[str, Any]:
-        table = LiveSessionMessage.__table__
-        with _write_transaction(self.engine) as connection:
-            row = connection.execute(select(table).where(table.c.id == message_id, table.c.owner_id == owner_id)).mappings().first()
-            if row is None:
-                return {"not_found": True, "commit_seq": str(_current_commit_seq(connection))}
-            desired = {
-                "delivery_status": delivery_status,
-                "delivery_attempts": delivery_attempts,
-                "last_error": last_error,
-                "delivered_via": delivered_via,
-                "delivered_at": delivered_at,
-            }
-            replay = all((_as_aware_utc(row[key]) if key == "delivered_at" else row[key]) == value for key, value in desired.items())
-            if replay:
-                return {
-                    "changed": False,
-                    "message": _session_message_dto(SimpleNamespace(**row)),
-                    "commit_seq": str(_current_commit_seq(connection)),
-                }
-            if row["delivery_status"] != expected_status:
-                return {"conflict": "status_changed", "commit_seq": str(_current_commit_seq(connection))}
-            connection.execute(update(table).where(table.c.id == message_id).values(**desired, updated_at=updated_at))
-            commit_seq = _advance_commit_seq(connection, updated_at)
-            row = connection.execute(select(table).where(table.c.id == message_id)).mappings().one()
-            return {
-                "changed": True,
-                "message": _session_message_dto(SimpleNamespace(**row)),
-                "commit_seq": str(commit_seq),
-            }
-
-    def pending_session_message_counts(self, *, owner_id: int, session_ids: list[str]) -> dict[str, Any]:
-        table = LiveSessionMessage.__table__
+    def read_directed_input(self, *, owner_id: int, directed_input_id: int) -> dict[str, Any]:
+        table = LiveDirectedInput.__table__
+        receipt_table = LiveSessionInputReceipt.__table__
         with _read_snapshot(self.engine) as connection:
-            rows = connection.execute(
-                select(table.c.to_session_id, func.count(table.c.id))
-                .where(
-                    table.c.owner_id == owner_id,
-                    table.c.to_session_id.in_(session_ids),
-                    table.c.acknowledged_at.is_(None),
-                    table.c.delivery_status != "failed",
-                )
-                .group_by(table.c.to_session_id)
-            ).all()
-            counts = {session_id: 0 for session_id in session_ids}
-            counts.update({str(session_id): int(count) for session_id, count in rows})
-            return {"counts": counts, "commit_seq": str(_current_commit_seq(connection))}
+            row = connection.execute(select(table).where(table.c.id == directed_input_id, table.c.owner_id == owner_id)).mappings().first()
+            if row is None:
+                return {"found": False, "commit_seq": str(_current_commit_seq(connection))}
+            receipt = None
+            if row["input_receipt_id"] is not None:
+                receipt = connection.execute(select(receipt_table).where(receipt_table.c.id == row["input_receipt_id"])).mappings().first()
+            return {
+                "found": True,
+                "directed_input": _directed_input_dto(
+                    SimpleNamespace(**row),
+                    SimpleNamespace(**receipt) if receipt is not None else None,
+                ),
+                "commit_seq": str(_current_commit_seq(connection)),
+            }
 
     def list_active_session_ids(self, *, limit: int, days_back: int, observed_at: datetime) -> dict[str, Any]:
         """Return bounded recently observed session identities from the live lane."""

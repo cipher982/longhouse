@@ -14,8 +14,8 @@ from fastapi import HTTPException
 from fastapi import Request
 from fastapi import status
 
-from zerg.auth.managed_local_hook_tokens import ManagedLocalHookToken
-from zerg.auth.managed_local_hook_tokens import validate_managed_local_hook_token
+from zerg.auth.managed_session_tokens import ManagedSessionToken
+from zerg.auth.managed_session_tokens import validate_managed_session_token
 from zerg.config import get_settings
 from zerg.database import get_catalog_session_factory
 from zerg.database import live_store_configured
@@ -86,8 +86,19 @@ def _normalized_agents_path(request: Request) -> str:
     return path
 
 
-def _managed_local_hook_token_allowed(request: Request) -> bool:
-    return (request.method.upper(), _normalized_agents_path(request)) in _MANAGED_LOCAL_HOOK_ALLOWED_ROUTES
+def _managed_session_token_allowed(request: Request, token: ManagedSessionToken) -> bool:
+    method = request.method.upper()
+    path = _normalized_agents_path(request)
+    if token.scope == "hook":
+        return (method, path) in _MANAGED_LOCAL_HOOK_ALLOWED_ROUTES
+    if token.scope == "coordination":
+        if (method, path) in {
+            ("GET", "/agents/directed-inputs"),
+            ("POST", "/agents/directed-inputs"),
+        }:
+            return True
+        return method == "POST" and path.startswith("/agents/directed-inputs/") and path.endswith("/reply")
+    return False
 
 
 def _validate_device_token_for_request(token: str) -> DeviceToken | None:
@@ -182,7 +193,7 @@ def _decode_catalog_datetime(value: object) -> datetime | None:
     return decoded
 
 
-def verify_agents_token(request: Request) -> DeviceToken | ManagedLocalHookToken | None:
+def verify_agents_token(request: Request) -> DeviceToken | ManagedSessionToken | None:
     """Verify the agents API token for write operations."""
     settings = get_settings()
     if settings.auth_disabled:
@@ -195,6 +206,10 @@ def verify_agents_token(request: Request) -> DeviceToken | ManagedLocalHookToken
             device_token = _validate_device_token_for_request(provided_token)
             if device_token is not None:
                 return device_token
+        if provided_token:
+            session_token = validate_managed_session_token(provided_token)
+            if session_token is not None and _managed_session_token_allowed(request, session_token):
+                return session_token
         return None
 
     provided_token = request.headers.get("X-Agents-Token")
@@ -214,18 +229,18 @@ def verify_agents_token(request: Request) -> DeviceToken | ManagedLocalHookToken
                 _enforce_rate_limit(rate_key)
             return device_token
     else:
-        hook_token = validate_managed_local_hook_token(provided_token)
-        if hook_token:
-            if not _managed_local_hook_token_allowed(request):
+        session_token = validate_managed_session_token(provided_token)
+        if session_token:
+            if not _managed_session_token_allowed(request, session_token):
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Managed-local hook token is not allowed on this endpoint",
+                    detail="Managed-session token scope is not allowed on this endpoint",
                 )
-            rate_key = f"managed-local-hook:{hook_token.session_id}"
+            rate_key = f"managed-session:{session_token.scope}:{session_token.session_id}"
             request.state.agents_rate_key = rate_key
             if not settings.testing:
                 _enforce_rate_limit(rate_key)
-            return hook_token
+            return session_token
 
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,

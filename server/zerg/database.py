@@ -296,9 +296,7 @@ def make_engine(db_url: str, *, busy_timeout_ms: int | None = None, **kwargs) ->
         raise ValueError(f"Invalid DATABASE_URL: {e}") from e
 
     if not parsed.drivername.startswith("sqlite"):
-        raise ValueError(
-            f"Unsupported DATABASE_URL driver '{parsed.drivername}'. " "Only SQLite is supported (sqlite:///path/to/db.sqlite)."
-        )
+        raise ValueError(f"Unsupported DATABASE_URL driver '{parsed.drivername}'. Only SQLite is supported (sqlite:///path/to/db.sqlite).")
 
     # SQLite configuration
     connect_args = kwargs.setdefault("connect_args", {})
@@ -1311,11 +1309,9 @@ def _migrate_agents_columns(engine: Engine) -> None:
             # Multi-column indexes the model layer doesn't declare on these columns.
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_sessions_execution_home ON sessions(execution_home)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_sessions_source_runner_id ON sessions(source_runner_id)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_sessions_thread_head ON sessions(thread_root_session_id, is_writable_head)"))
             conn.execute(
-                text("CREATE INDEX IF NOT EXISTS ix_sessions_thread_head " "ON sessions(thread_root_session_id, is_writable_head)")
-            )
-            conn.execute(
-                text("CREATE INDEX IF NOT EXISTS ix_sessions_continued_from_started " "ON sessions(continued_from_session_id, started_at)")
+                text("CREATE INDEX IF NOT EXISTS ix_sessions_continued_from_started ON sessions(continued_from_session_id, started_at)")
             )
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_sessions_last_activity_at ON sessions(last_activity_at)"))
     except Exception:
@@ -1507,14 +1503,14 @@ def _migrate_agents_columns(engine: Engine) -> None:
                 conn.execute(text("UPDATE agent_heartbeats SET ship_server_errors_1h = 0 WHERE ship_server_errors_1h IS NULL"))
             if columns and "ship_payload_rejections_1h" not in columns:
                 conn.execute(text("ALTER TABLE agent_heartbeats ADD COLUMN ship_payload_rejections_1h INTEGER DEFAULT 0"))
-                conn.execute(text("UPDATE agent_heartbeats SET ship_payload_rejections_1h = 0 " "WHERE ship_payload_rejections_1h IS NULL"))
+                conn.execute(text("UPDATE agent_heartbeats SET ship_payload_rejections_1h = 0 WHERE ship_payload_rejections_1h IS NULL"))
             if columns and "ship_payload_too_large_1h" not in columns:
                 conn.execute(text("ALTER TABLE agent_heartbeats ADD COLUMN ship_payload_too_large_1h INTEGER DEFAULT 0"))
-                conn.execute(text("UPDATE agent_heartbeats SET ship_payload_too_large_1h = 0 " "WHERE ship_payload_too_large_1h IS NULL"))
+                conn.execute(text("UPDATE agent_heartbeats SET ship_payload_too_large_1h = 0 WHERE ship_payload_too_large_1h IS NULL"))
             if columns and "ship_retryable_client_errors_1h" not in columns:
                 conn.execute(text("ALTER TABLE agent_heartbeats ADD COLUMN ship_retryable_client_errors_1h INTEGER DEFAULT 0"))
                 conn.execute(
-                    text("UPDATE agent_heartbeats SET ship_retryable_client_errors_1h = 0 " "WHERE ship_retryable_client_errors_1h IS NULL")
+                    text("UPDATE agent_heartbeats SET ship_retryable_client_errors_1h = 0 WHERE ship_retryable_client_errors_1h IS NULL")
                 )
             if columns and "ship_connect_errors_1h" not in columns:
                 conn.execute(text("ALTER TABLE agent_heartbeats ADD COLUMN ship_connect_errors_1h INTEGER DEFAULT 0"))
@@ -1660,7 +1656,7 @@ def _migrate_agents_columns(engine: Engine) -> None:
                 conn.commit()
     except Exception:
         logger.error(
-            "session_inputs queue migration FAILED — client_request_id dedupe or " "queue-attempt recovery may be incomplete",
+            "session_inputs queue migration FAILED — client_request_id dedupe or queue-attempt recovery may be incomplete",
             exc_info=True,
         )
         try:
@@ -1692,70 +1688,6 @@ def _migrate_agents_columns(engine: Engine) -> None:
                     logger.debug("failed to emit database_migrations_failed_total metric", exc_info=True)
     except Exception:
         logger.debug("session_input_delivery_attempts verification skipped", exc_info=True)
-
-    # session_messages table migrations
-    try:
-        with engine.connect() as conn:
-            conn.execute(
-                text(
-                    """
-                    CREATE TABLE IF NOT EXISTS session_messages (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        from_session_id CHAR(36) NOT NULL,
-                        to_session_id CHAR(36) NOT NULL,
-                        text TEXT NOT NULL,
-                        source_event_id INTEGER,
-                        delivery_status VARCHAR(32) NOT NULL DEFAULT 'queued',
-                        delivery_attempts INTEGER NOT NULL DEFAULT 0,
-                        last_error TEXT,
-                        delivered_via VARCHAR(32),
-                        delivered_at DATETIME,
-                        acknowledged_at DATETIME,
-                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-                    )
-                    """
-                )
-            )
-            columns = {row[1] for row in conn.execute(text("PRAGMA table_info(session_messages)"))}
-            if columns:
-                if "source_event_id" not in columns:
-                    conn.execute(text("ALTER TABLE session_messages ADD COLUMN source_event_id INTEGER"))
-                if "delivery_status" not in columns:
-                    conn.execute(text("ALTER TABLE session_messages ADD COLUMN delivery_status " "VARCHAR(32) NOT NULL DEFAULT 'queued'"))
-                if "delivery_attempts" not in columns:
-                    conn.execute(text("ALTER TABLE session_messages ADD COLUMN delivery_attempts INTEGER NOT NULL DEFAULT 0"))
-                if "last_error" not in columns:
-                    conn.execute(text("ALTER TABLE session_messages ADD COLUMN last_error TEXT"))
-                if "delivered_via" not in columns:
-                    conn.execute(text("ALTER TABLE session_messages ADD COLUMN delivered_via VARCHAR(32)"))
-                if "delivered_at" not in columns:
-                    conn.execute(text("ALTER TABLE session_messages ADD COLUMN delivered_at DATETIME"))
-                if "acknowledged_at" not in columns:
-                    conn.execute(text("ALTER TABLE session_messages ADD COLUMN acknowledged_at DATETIME"))
-                if "created_at" not in columns:
-                    conn.execute(text("ALTER TABLE session_messages ADD COLUMN created_at DATETIME DEFAULT CURRENT_TIMESTAMP"))
-                if "updated_at" not in columns:
-                    conn.execute(text("ALTER TABLE session_messages ADD COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP"))
-            conn.execute(
-                text(
-                    """
-                    CREATE INDEX IF NOT EXISTS ix_session_messages_to_status_created
-                    ON session_messages(to_session_id, delivery_status, created_at)
-                    """
-                )
-            )
-            conn.execute(
-                text(
-                    """
-                    CREATE INDEX IF NOT EXISTS ix_session_messages_from_created
-                    ON session_messages(from_session_id, created_at)
-                    """
-                )
-            )
-            conn.commit()
-    except Exception:
-        logger.debug("session_messages table migration skipped", exc_info=True)
 
     # insights table migrations
     # `origin` has Python default= but no server_default (legacy rows must
@@ -1818,11 +1750,9 @@ def _migrate_agents_columns(engine: Engine) -> None:
                     """
                 )
             )
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_session_branches_session_created ON session_branches(session_id, created_at)"))
             conn.execute(
-                text("CREATE INDEX IF NOT EXISTS ix_session_branches_session_created " "ON session_branches(session_id, created_at)")
-            )
-            conn.execute(
-                text("CREATE UNIQUE INDEX IF NOT EXISTS ix_session_branches_head " "ON session_branches(session_id) WHERE is_head = 1")
+                text("CREATE UNIQUE INDEX IF NOT EXISTS ix_session_branches_head ON session_branches(session_id) WHERE is_head = 1")
             )
             conn.execute(
                 text(
@@ -1927,7 +1857,7 @@ def _migrate_agents_columns(engine: Engine) -> None:
                         )
                     )
                 conn.execute(
-                    text("CREATE INDEX IF NOT EXISTS ix_events_session_branch_timestamp " "ON events(session_id, branch_id, timestamp)")
+                    text("CREATE INDEX IF NOT EXISTS ix_events_session_branch_timestamp ON events(session_id, branch_id, timestamp)")
                 )
                 conn.execute(
                     text(
@@ -2230,13 +2160,10 @@ def _migrate_agents_columns(engine: Engine) -> None:
             )
             # One control attachment per (run, control_plane) — capability
             # projection invariant. Phase 2 upsert depends on this.
-            conn.execute(
-                text("CREATE UNIQUE INDEX IF NOT EXISTS ux_connections_run_plane " "ON session_connections(run_id, control_plane)")
-            )
+            conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ux_connections_run_plane ON session_connections(run_id, control_plane)"))
             conn.execute(
                 text(
-                    "CREATE INDEX IF NOT EXISTS ix_connections_device_state_health "
-                    "ON session_connections(device_id, state, last_health_at)"
+                    "CREATE INDEX IF NOT EXISTS ix_connections_device_state_health ON session_connections(device_id, state, last_health_at)"
                 )
             )
             conn.commit()

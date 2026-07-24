@@ -379,12 +379,15 @@ def _start_native_codex_bridge(
     cwd: Path,
     url: str,
     token: str,
+    coordination_token: str,
     codex_bin: str,
     model: str | None = None,
     model_reasoning_effort: str | None = None,
     create_initial_thread: bool = False,
     launch_mode: str = "tui",
 ) -> tuple[str, str, str | None]:
+    if not coordination_token:
+        raise _NativeBridgeError("Longhouse did not issue coordination authority for this session")
     try:
         engine = get_engine_executable()
     except RuntimeError as exc:
@@ -415,6 +418,7 @@ def _start_native_codex_bridge(
     cmd.append("--json")
     env = os.environ.copy()
     env[_CODEX_BRIDGE_TOKEN_ENV] = token
+    env["LONGHOUSE_COORDINATION_TOKEN"] = coordination_token
     completed = subprocess.run(
         cmd,
         check=False,
@@ -905,6 +909,7 @@ def codex(
             cwd=cwd,
             url=resolved_url,
             token=resolved_token,
+            coordination_token=result.coordination_token or "",
             codex_bin=resolved_codex_bin,
             model=model,
             model_reasoning_effort=model_reasoning_effort,

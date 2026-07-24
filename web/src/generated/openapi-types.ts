@@ -3482,31 +3482,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/agents/messages": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Messages
-         * @description List durable session messages without mutating delivery or ack state.
-         */
-        get: operations["list_messages_agents_messages_get"];
-        put?: never;
-        /**
-         * Create Message
-         * @description Create a directed session message and attempt delivery when safe.
-         */
-        post: operations["create_message_agents_messages_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/agents/messages/{message_id}/ack": {
+    "/api/agents/sessions/{session_id}/coordination-token": {
         parameters: {
             query?: never;
             header?: never;
@@ -3516,10 +3492,54 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Acknowledge Message
-         * @description Acknowledge that the target session has handled a delivered message.
+         * Issue Session Coordination Token
+         * @description Issue fresh adapter-only authority when a managed session is resumed.
          */
-        post: operations["acknowledge_message_agents_messages__message_id__ack_post"];
+        post: operations["issue_session_coordination_token_agents_sessions__session_id__coordination_token_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/directed-inputs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Directed Inputs
+         * @description Recover durable directed input for the authenticated current session.
+         */
+        get: operations["list_directed_inputs_agents_directed_inputs_get"];
+        put?: never;
+        /**
+         * Create Directed Input
+         * @description Persist attributed input for another session, then deliver when safe.
+         */
+        post: operations["create_directed_input_agents_directed_inputs_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/directed-inputs/{directed_input_id}/reply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reply To Directed Input
+         * @description Reply to an inbound directed input without copying a session id.
+         */
+        post: operations["reply_to_directed_input_agents_directed_inputs__directed_input_id__reply_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -5245,6 +5265,31 @@ export interface components {
             sessions_deleted: number;
         };
         /**
+         * DirectedInputCreate
+         * @description Create provider-neutral input for another managed session.
+         */
+        DirectedInputCreate: {
+            /**
+             * Target Session Id
+             * Format: uuid
+             */
+            target_session_id: string;
+            /** Text */
+            text: string;
+            /** Client Request Id */
+            client_request_id?: string | null;
+        };
+        /**
+         * DirectedInputReply
+         * @description Reply to one inbound directed input.
+         */
+        DirectedInputReply: {
+            /** Text */
+            text: string;
+            /** Client Request Id */
+            client_request_id?: string | null;
+        };
+        /**
          * EnrollTokenResponse
          * @description Response containing enrollment token and setup instructions.
          */
@@ -6256,6 +6301,8 @@ export interface components {
             permission_mode: string;
             /** Hook Token */
             hook_token?: string | null;
+            /** Coordination Token */
+            coordination_token?: string | null;
         };
         /**
          * ManagedLocalThisDeviceLaunchRequest
@@ -8853,31 +8900,6 @@ export interface components {
             /** Session Id */
             session_id: string;
             loop_mode: components["schemas"]["SessionLoopMode"];
-        };
-        /**
-         * SessionMessageAcknowledge
-         * @description Acknowledge an inbound session message.
-         */
-        SessionMessageAcknowledge: {
-            /** Session Id */
-            session_id?: string | null;
-        };
-        /**
-         * SessionMessageCreate
-         * @description Create a directed message from one session to another.
-         */
-        SessionMessageCreate: {
-            /** From Session Id */
-            from_session_id?: string | null;
-            /**
-             * To Session Id
-             * Format: uuid
-             */
-            to_session_id: string;
-            /** Text */
-            text: string;
-            /** Source Event Id */
-            source_event_id?: number | null;
         };
         /**
          * SessionMessageRequest
@@ -11698,11 +11720,6 @@ export interface components {
              * @description Raw kernel reason live control is unavailable, when known.
              */
             kernel_staleness_reason?: string | null;
-            /**
-             * Pending Inbound Messages
-             * @default 0
-             */
-            pending_inbound_messages: number;
             /**
              * User Messages
              * @default 0
@@ -18008,15 +18025,46 @@ export interface operations {
             };
         };
     };
-    list_messages_agents_messages_get: {
+    issue_session_coordination_token_agents_sessions__session_id__coordination_token_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_directed_inputs_agents_directed_inputs_get: {
         parameters: {
             query?: {
-                /** @description Session ID to inspect messages for */
-                session_id?: string | null;
-                /** @description Message direction: inbound|outbound|all */
+                /** @description Direction: inbound|outbound|all */
                 direction?: string;
-                /** @description Only include messages without acknowledged_at */
-                unacknowledged_only?: boolean;
+                /** @description Return inputs after this stable id cursor */
+                after_id?: number;
                 /** @description Max results */
                 limit?: number;
             };
@@ -18048,7 +18096,7 @@ export interface operations {
             };
         };
     };
-    create_message_agents_messages_post: {
+    create_directed_input_agents_directed_inputs_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -18057,7 +18105,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["SessionMessageCreate"];
+                "application/json": components["schemas"]["DirectedInputCreate"];
             };
         };
         responses: {
@@ -18083,23 +18131,23 @@ export interface operations {
             };
         };
     };
-    acknowledge_message_agents_messages__message_id__ack_post: {
+    reply_to_directed_input_agents_directed_inputs__directed_input_id__reply_post: {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                message_id: number;
+                directed_input_id: number;
             };
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
-                "application/json": components["schemas"]["SessionMessageAcknowledge"] | null;
+                "application/json": components["schemas"]["DirectedInputReply"];
             };
         };
         responses: {
             /** @description Successful Response */
-            200: {
+            201: {
                 headers: {
                     [name: string]: unknown;
                 };

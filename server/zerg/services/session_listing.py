@@ -13,7 +13,7 @@ from datetime import timezone
 
 from sqlalchemy.orm import Session
 
-from zerg.auth.managed_local_hook_tokens import ManagedLocalHookToken
+from zerg.auth.managed_session_tokens import ManagedSessionToken
 from zerg.services.agents import AgentsStore
 from zerg.services.session_hybrid_search import list_hybrid_sessions
 from zerg.services.session_listing_types import SessionListingError
@@ -54,13 +54,13 @@ async def list_agent_sessions(
 
 
 def _validate_managed_hook_scope(auth: object, params: SessionListParams) -> None:
-    if not isinstance(auth, ManagedLocalHookToken):
+    if not isinstance(auth, ManagedSessionToken):
         return
 
     if params.project != auth.project:
         raise SessionListingError(
             403,
-            "Managed-local hook token requires a matching project filter",
+            "Managed-session hook scope requires a matching project filter",
         )
     if (
         params.provider is not None
@@ -79,7 +79,7 @@ def _validate_managed_hook_scope(auth: object, params: SessionListParams) -> Non
     ):
         raise SessionListingError(
             403,
-            "Managed-local hook token only supports bounded recent project lookup",
+            "Managed-session hook scope only supports bounded recent project lookup",
         )
 
 

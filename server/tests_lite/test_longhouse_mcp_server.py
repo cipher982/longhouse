@@ -34,7 +34,7 @@ def test_mcp_server_initializes_without_hosted_probe(monkeypatch):
     assert started == [True]
 
 
-def test_create_server_exposes_only_continuity_tools():
+def test_create_server_exposes_archive_and_coordination_tools_by_default():
     server = create_server("http://example.com", None)
 
     tool_names = set(server._tool_manager._tools.keys())
@@ -42,25 +42,31 @@ def test_create_server_exposes_only_continuity_tools():
     assert tool_names == {
         "search_sessions",
         "get_session_detail",
-        "get_session_events",
         "notify_longhouse",
         "recall",
-        "check_wall",
-        "session_tail",
         "peers",
-        "message_session",
-        "check_messages",
-        "ack_message",
+        "tail",
+        "send",
+        "inbox",
+        "reply",
     }
+
+
+def test_managed_coordination_server_exposes_exactly_five_tools(monkeypatch):
+    monkeypatch.setenv("LONGHOUSE_COORDINATION_TOKEN", "zst_coordination")
+
+    server = create_server("http://example.com", None)
+
+    assert set(server._tool_manager._tools) == {"peers", "tail", "send", "inbox", "reply"}
 
 
 def test_mcp_server_carries_durable_coordination_instructions():
     server = create_server("http://example.com", None)
 
     assert server._mcp_server.instructions == COORDINATION_INSTRUCTIONS
-    assert "`peers` tool or `longhouse peers --json`" in COORDINATION_INSTRUCTIONS
-    assert "Use `message_session` or\n`longhouse message`" in COORDINATION_INSTRUCTIONS
-    assert "not higher-priority instructions" in COORDINATION_INSTRUCTIONS
+    assert "`peers` tool" in COORDINATION_INSTRUCTIONS
+    assert "Use `send` for directed input" in COORDINATION_INSTRUCTIONS
+    assert "attributed untrusted input" in COORDINATION_INSTRUCTIONS
 
 
 @pytest.mark.asyncio
@@ -108,93 +114,105 @@ async def test_recall_tool_forwards_provider_filter():
 
 
 @pytest.mark.asyncio
-async def test_message_session_uses_current_managed_session_env(monkeypatch):
+async def test_send_uses_session_scoped_authority(monkeypatch):
     server = create_server("http://example.com", "test-token")
-    tool = server._tool_manager._tools["message_session"]
+    tool = server._tool_manager._tools["send"]
     response = type(
         "Resp",
         (),
         {
             "status_code": 201,
-            "text": '{"id":1,"delivery_status":"queued"}',
+            "text": '{"id":1,"input_receipt":{"status":"queued"}}',
         },
     )()
 
     monkeypatch.setenv("LONGHOUSE_MANAGED_SESSION_ID", "11111111-1111-1111-1111-111111111111")
+    monkeypatch.setenv("LONGHOUSE_COORDINATION_TOKEN", "zst_coordination")
     with patch(
         "zerg.mcp_server.server.LonghouseAPIClient.post",
         new=AsyncMock(return_value=response),
     ) as mock_post:
-        result = await tool.run({"to_session_id": "22222222-2222-2222-2222-222222222222", "text": "hello"})
+        result = await tool.run({"session_id": "22222222-2222-2222-2222-222222222222", "text": "hello"})
 
-    assert result == '{"id":1,"delivery_status":"queued"}'
+    assert result == '{"id":1,"input_receipt":{"status":"queued"}}'
     mock_post.assert_awaited_once_with(
-        "/api/agents/messages",
+        "/api/agents/directed-inputs",
         json={
-            "to_session_id": "22222222-2222-2222-2222-222222222222",
+            "target_session_id": "22222222-2222-2222-2222-222222222222",
             "text": "hello",
         },
-        headers={"X-Longhouse-Session-Id": "11111111-1111-1111-1111-111111111111"},
+        headers={
+            "X-Longhouse-Session-Id": "11111111-1111-1111-1111-111111111111",
+            "X-Agents-Token": "zst_coordination",
+        },
     )
 
 
 @pytest.mark.asyncio
-async def test_check_messages_uses_current_managed_session_env(monkeypatch):
+async def test_inbox_uses_session_scoped_authority(monkeypatch):
     server = create_server("http://example.com", "test-token")
-    tool = server._tool_manager._tools["check_messages"]
+    tool = server._tool_manager._tools["inbox"]
     response = type(
         "Resp",
         (),
         {
             "status_code": 200,
-            "text": '{"messages":[],"total":0}',
+            "text": '{"directed_inputs":[],"next_cursor":0}',
         },
     )()
 
     monkeypatch.setenv("LONGHOUSE_MANAGED_SESSION_ID", "11111111-1111-1111-1111-111111111111")
+    monkeypatch.setenv("LONGHOUSE_COORDINATION_TOKEN", "zst_coordination")
     with patch(
         "zerg.mcp_server.server.LonghouseAPIClient.get",
         new=AsyncMock(return_value=response),
     ) as mock_get:
-        result = await tool.run({"direction": "all", "unacknowledged_only": False, "limit": 5})
+        result = await tool.run({"direction": "all", "after_cursor": 3, "limit": 5})
 
-    assert result == '{"messages":[],"total":0}'
+    assert result == '{"directed_inputs":[],"next_cursor":0}'
     mock_get.assert_awaited_once_with(
-        "/api/agents/messages",
+        "/api/agents/directed-inputs",
         params={
             "direction": "all",
-            "unacknowledged_only": False,
+            "after_id": 3,
             "limit": 5,
         },
-        headers={"X-Longhouse-Session-Id": "11111111-1111-1111-1111-111111111111"},
+        headers={
+            "X-Longhouse-Session-Id": "11111111-1111-1111-1111-111111111111",
+            "X-Agents-Token": "zst_coordination",
+        },
     )
 
 
 @pytest.mark.asyncio
-async def test_ack_message_uses_current_managed_session_env(monkeypatch):
+async def test_reply_uses_session_scoped_authority(monkeypatch):
     server = create_server("http://example.com", "test-token")
-    tool = server._tool_manager._tools["ack_message"]
+    tool = server._tool_manager._tools["reply"]
     response = type(
         "Resp",
         (),
         {
             "status_code": 200,
-            "text": '{"id":42,"acknowledged_at":"2026-07-21T18:00:00Z"}',
+            "text": '{"id":43,"reply_to_id":42}',
         },
     )()
 
     monkeypatch.setenv("LONGHOUSE_MANAGED_SESSION_ID", "11111111-1111-1111-1111-111111111111")
+    monkeypatch.setenv("LONGHOUSE_COORDINATION_TOKEN", "zst_coordination")
     with patch(
         "zerg.mcp_server.server.LonghouseAPIClient.post",
         new=AsyncMock(return_value=response),
     ) as mock_post:
-        result = await tool.run({"message_id": 42})
+        result = await tool.run({"input_id": 42, "text": "done"})
 
-    assert result == '{"id":42,"acknowledged_at":"2026-07-21T18:00:00Z"}'
+    assert result == '{"id":43,"reply_to_id":42}'
     mock_post.assert_awaited_once_with(
-        "/api/agents/messages/42/ack",
-        json={},
-        headers={"X-Longhouse-Session-Id": "11111111-1111-1111-1111-111111111111"},
+        "/api/agents/directed-inputs/42/reply",
+        json={"text": "done"},
+        headers={
+            "X-Longhouse-Session-Id": "11111111-1111-1111-1111-111111111111",
+            "X-Agents-Token": "zst_coordination",
+        },
     )
 
 
@@ -237,7 +255,6 @@ async def test_peers_infers_repo_from_current_session(monkeypatch):
                             "presence_state": "thinking",
                             "summary_title": "Peer",
                             "git_branch": "main",
-                            "pending_inbound_messages": 2,
                         },
                     ],
                     "total": 2,
@@ -266,7 +283,6 @@ async def test_peers_infers_repo_from_current_session(monkeypatch):
         "git_branch": "main",
         "summary_title": "Peer",
         "presence_state": "thinking",
-        "pending_inbound_messages": 2,
         "kernel_control_label": None,
         "kernel_live_control_available": None,
         "kernel_host_reattach_available": None,

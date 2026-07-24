@@ -1,7 +1,7 @@
-"""Durable user-originated session inputs.
+"""Durable managed-session inputs.
 
-Separate from `SessionMessage` (agent-to-agent). Records user text targeted at
-a managed session, along with the user's intent and the lifecycle status.
+Records user or directed text targeted at a managed session, along with the
+input intent and delivery lifecycle.
 
 Status lifecycle:
   queued -> delivering -> delivered | failed

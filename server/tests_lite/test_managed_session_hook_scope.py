@@ -13,7 +13,8 @@ os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
-from zerg.auth.managed_local_hook_tokens import issue_managed_local_hook_token
+from zerg.auth.managed_session_tokens import MANAGED_SESSION_SCOPE_HOOK
+from zerg.auth.managed_session_tokens import issue_managed_session_token
 from zerg.database import get_db
 from zerg.database import initialize_database
 from zerg.database import make_engine
@@ -26,7 +27,7 @@ from zerg.services.session_hot_cards import upsert_timeline_card_from_session
 
 
 def _make_db(tmp_path):
-    db_path = tmp_path / "test_managed_local_hook_tokens.db"
+    db_path = tmp_path / "test_managed_session_hook_scope.db"
     engine = make_engine(f"sqlite:///{db_path}")
     initialize_database(engine)
     return make_sessionmaker(engine)
@@ -85,17 +86,18 @@ def _make_client(db_session):
     return TestClient(api_app)
 
 
-def test_presence_accepts_matching_managed_local_hook_token(tmp_path):
+def test_presence_accepts_matching_managed_session_hook_token(tmp_path):
     session_local = _make_db(tmp_path)
 
     with session_local() as db:
         user = _seed_user(db)
         session = _seed_session(db, project="hiring", device_id="cinder")
-        token = issue_managed_local_hook_token(
+        token = issue_managed_session_token(
             owner_id=user.id,
             session_id=str(session.id),
             project="hiring",
             device_id="cinder",
+            scope=MANAGED_SESSION_SCOPE_HOOK,
         )
         client = _make_client(db)
 
@@ -119,17 +121,18 @@ def test_presence_accepts_matching_managed_local_hook_token(tmp_path):
             api_app.dependency_overrides.clear()
 
 
-def test_presence_rejects_mismatched_managed_local_hook_token(tmp_path):
+def test_presence_rejects_mismatched_managed_session_hook_token(tmp_path):
     session_local = _make_db(tmp_path)
 
     with session_local() as db:
         user = _seed_user(db)
         session = _seed_session(db, project="hiring", device_id="cinder")
-        token = issue_managed_local_hook_token(
+        token = issue_managed_session_token(
             owner_id=user.id,
             session_id=str(session.id),
             project="hiring",
             device_id="cinder",
+            scope=MANAGED_SESSION_SCOPE_HOOK,
         )
         client = _make_client(db)
 
@@ -146,22 +149,23 @@ def test_presence_rejects_mismatched_managed_local_hook_token(tmp_path):
                 )
 
             assert response.status_code == 403, response.text
-            assert response.json()["detail"] == "Managed-local hook token does not match session"
+            assert response.json()["detail"] == "Managed-session hook scope does not match session"
         finally:
             api_app.dependency_overrides.clear()
 
 
-def test_ingest_accepts_managed_local_hook_token_and_forces_session_scope(tmp_path):
+def test_ingest_accepts_managed_session_hook_token_and_forces_session_scope(tmp_path):
     session_local = _make_db(tmp_path)
 
     with session_local() as db:
         user = _seed_user(db)
         session_id = str(uuid4())
-        token = issue_managed_local_hook_token(
+        token = issue_managed_session_token(
             owner_id=user.id,
             session_id=session_id,
             project="hiring",
             device_id="cinder",
+            scope=MANAGED_SESSION_SCOPE_HOOK,
         )
         client = _make_client(db)
 
@@ -189,18 +193,19 @@ def test_ingest_accepts_managed_local_hook_token_and_forces_session_scope(tmp_pa
             api_app.dependency_overrides.clear()
 
 
-def test_agents_sessions_allows_bounded_project_lookup_for_managed_local_hook_token(tmp_path):
+def test_agents_sessions_allows_bounded_project_lookup_for_managed_session_hook_token(tmp_path):
     session_local = _make_db(tmp_path)
 
     with session_local() as db:
         user = _seed_user(db)
         session = _seed_session(db, project="hiring", device_id="cinder")
         _seed_session(db, project="other", device_id="cinder")
-        token = issue_managed_local_hook_token(
+        token = issue_managed_session_token(
             owner_id=user.id,
             session_id=str(session.id),
             project="hiring",
             device_id="cinder",
+            scope=MANAGED_SESSION_SCOPE_HOOK,
         )
         client = _make_client(db)
 
@@ -220,17 +225,18 @@ def test_agents_sessions_allows_bounded_project_lookup_for_managed_local_hook_to
             api_app.dependency_overrides.clear()
 
 
-def test_agents_sessions_rejects_broader_filters_for_managed_local_hook_token(tmp_path):
+def test_agents_sessions_rejects_broader_filters_for_managed_session_hook_token(tmp_path):
     session_local = _make_db(tmp_path)
 
     with session_local() as db:
         user = _seed_user(db)
         session = _seed_session(db, project="hiring", device_id="cinder")
-        token = issue_managed_local_hook_token(
+        token = issue_managed_session_token(
             owner_id=user.id,
             session_id=str(session.id),
             project="hiring",
             device_id="cinder",
+            scope=MANAGED_SESSION_SCOPE_HOOK,
         )
         client = _make_client(db)
 
@@ -248,13 +254,13 @@ def test_agents_sessions_rejects_broader_filters_for_managed_local_hook_token(tm
 
                     assert response.status_code == 403, response.text
                     assert response.json()["detail"] == (
-                        "Managed-local hook token only supports bounded recent project lookup"
+                        "Managed-session hook scope only supports bounded recent project lookup"
                     )
         finally:
             api_app.dependency_overrides.clear()
 
 
-def test_startup_context_allows_bounded_project_lookup_for_managed_local_hook_token(tmp_path):
+def test_startup_context_allows_bounded_project_lookup_for_managed_session_hook_token(tmp_path):
     session_local = _make_db(tmp_path)
 
     with session_local() as db:
@@ -263,11 +269,12 @@ def test_startup_context_allows_bounded_project_lookup_for_managed_local_hook_to
         session.summary = "Recent hiring session."
         session.summary_title = "Hiring work"
         db.commit()
-        token = issue_managed_local_hook_token(
+        token = issue_managed_session_token(
             owner_id=user.id,
             session_id=str(session.id),
             project="hiring",
             device_id="cinder",
+            scope=MANAGED_SESSION_SCOPE_HOOK,
         )
         client = _make_client(db)
 
@@ -287,17 +294,18 @@ def test_startup_context_allows_bounded_project_lookup_for_managed_local_hook_to
             api_app.dependency_overrides.clear()
 
 
-def test_managed_local_hook_token_is_rejected_outside_allowed_surfaces(tmp_path):
+def test_managed_session_hook_token_is_rejected_outside_allowed_surfaces(tmp_path):
     session_local = _make_db(tmp_path)
 
     with session_local() as db:
         user = _seed_user(db)
         session = _seed_session(db, project="hiring", device_id="cinder")
-        token = issue_managed_local_hook_token(
+        token = issue_managed_session_token(
             owner_id=user.id,
             session_id=str(session.id),
             project="hiring",
             device_id="cinder",
+            scope=MANAGED_SESSION_SCOPE_HOOK,
         )
         client = _make_client(db)
 
@@ -310,6 +318,6 @@ def test_managed_local_hook_token_is_rejected_outside_allowed_surfaces(tmp_path)
                 )
 
             assert response.status_code == 403, response.text
-            assert response.json()["detail"] == "Managed-local hook token is not allowed on this endpoint"
+            assert response.json()["detail"] == "Managed-session token scope is not allowed on this endpoint"
         finally:
             api_app.dependency_overrides.clear()

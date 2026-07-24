@@ -44,13 +44,7 @@ const THREAD_SUBSCRIBE_BACKGROUND_RETRY_MS: u64 = 500;
 const THREAD_SUBSCRIBE_RETRY_ATTEMPTS: usize = 8;
 const THREAD_SUBSCRIBE_RETRY_DELAY_MS: u64 = 250;
 const CODEX_DISABLE_UPDATE_CHECK_CONFIG: &str = "check_for_update_on_startup=false";
-const LONGHOUSE_COORDINATION_TOOLS: &[&str] = &[
-    "peers",
-    "session_tail",
-    "check_messages",
-    "ack_message",
-    "message_session",
-];
+const LONGHOUSE_COORDINATION_TOOLS: &[&str] = &["peers", "tail", "send", "inbox", "reply"];
 pub const CODEX_BRIDGE_TOKEN_ENV: &str = "LONGHOUSE_CODEX_BRIDGE_TOKEN";
 pub const BRIDGE_STATE_SCHEMA_VERSION: u32 = 4;
 pub const LAUNCH_MODE_DETACHED_UI: &str = "detached_ui";
@@ -2341,6 +2335,7 @@ async fn spawn_app_server_client(config: &BridgeRunConfig) -> Result<RpcClient> 
     let mut command = Command::new(&config.codex_bin);
     command.args(codex_app_server_args(config));
     command
+        .env_remove("LONGHOUSE_COORDINATION_TOKEN")
         .env("LONGHOUSE_MANAGED_SESSION_ID", &config.session_id)
         .env("LONGHOUSE_HOOK_URL", &config.api_url)
         .env("LONGHOUSE_HOOK_TOKEN", &config.api_token)
@@ -2489,6 +2484,15 @@ fn codex_app_server_args(config: &BridgeRunConfig) -> Vec<OsString> {
         "mcp_servers.longhouse.env.LONGHOUSE_MANAGED_SESSION_ID={}",
         serde_json::to_string(&config.session_id).expect("session id is serializable")
     )));
+    if let Ok(token) = std::env::var("LONGHOUSE_COORDINATION_TOKEN") {
+        if !token.trim().is_empty() {
+            args.push(OsString::from("-c"));
+            args.push(OsString::from(format!(
+                "mcp_servers.longhouse.env.LONGHOUSE_COORDINATION_TOKEN={}",
+                serde_json::to_string(&token).expect("coordination token is serializable")
+            )));
+        }
+    }
     if let Some(effort) = config.model_reasoning_effort.as_deref() {
         args.push(OsString::from("-c"));
         args.push(OsString::from(format!("model_reasoning_effort={effort}")));

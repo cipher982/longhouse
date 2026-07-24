@@ -1,6 +1,6 @@
 from zerg.qa.provider_coordination_oracles import awareness_create_assertions
 from zerg.qa.provider_coordination_oracles import awareness_post_compaction_assertions
-from zerg.qa.provider_coordination_oracles import message_assertions
+from zerg.qa.provider_coordination_oracles import directed_input_assertions
 
 
 def test_awareness_oracles_require_model_visibility_and_no_duplicate_cards() -> None:
@@ -27,19 +27,21 @@ def test_awareness_oracles_require_model_visibility_and_no_duplicate_cards() -> 
     }
 
 
-def test_message_oracle_requires_durable_delivery_and_attribution() -> None:
-    assert message_assertions(
+def test_directed_input_oracle_keeps_persistence_receipt_and_visibility_separate() -> None:
+    assert directed_input_assertions(
         {
-            "message_persisted": True,
-            "message_delivered": True,
-            "message_visible": True,
+            "input_persisted": True,
+            "input_receipt_linked": True,
+            "input_visible": True,
             "source_session_id": "session-1",
         }
     ) == {
-        "directed_message_persisted_and_delivered": True,
-        "attributed_message_visible": True,
+        "directed_input_persisted": True,
+        "provider_input_receipt_linked": True,
+        "attributed_input_visible": True,
     }
-    assert message_assertions({}) == {
-        "directed_message_persisted_and_delivered": False,
-        "attributed_message_visible": False,
+    assert directed_input_assertions({}) == {
+        "directed_input_persisted": False,
+        "provider_input_receipt_linked": False,
+        "attributed_input_visible": False,
     }

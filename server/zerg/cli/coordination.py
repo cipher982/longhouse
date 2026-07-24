@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from uuid import UUID
 
@@ -16,8 +17,6 @@ from zerg.services.managed_session_env import CURRENT_SESSION_HEADER
 from zerg.services.managed_session_env import get_managed_session_id
 from zerg.services.shipper import get_zerg_url
 from zerg.services.shipper import load_token
-
-messages_app = typer.Typer(help="Durable session inbox commands")
 
 
 def _load_api_credentials(*, url: str | None, token: str | None, config_dir: Path | None) -> tuple[str, str]:
@@ -79,7 +78,7 @@ def _print_peer_summary(peer: dict) -> None:
     title = str(peer.get("summary_title") or "").strip()
 
     typer.secho(session_id, fg=typer.colors.CYAN, bold=True)
-    typer.echo(f"  provider: {provider}  device: {device_name}  " f"control: {control_label}  presence: {presence_state}  branch: {branch}")
+    typer.echo(f"  provider: {provider}  device: {device_name}  control: {control_label}  presence: {presence_state}  branch: {branch}")
     if title:
         typer.echo(f"  {title}")
 
@@ -102,23 +101,18 @@ def _resolve_session_context(raw: str | None, *, label: str, guidance: str) -> s
     return parse_uuid_or_exit(raw, label=label, missing_message=guidance)
 
 
-def _print_message_summary(message: dict) -> None:
-    message_id = str(message.get("id") or "-")
-    from_session_id = str(message.get("from_session_id") or "-")
-    status = str(message.get("delivery_status") or "-")
-    created_at = str(message.get("created_at") or "-")
-    text = str(message.get("text") or "").strip()
+def _print_directed_input(item: dict) -> None:
+    input_id = str(item.get("id") or "-")
+    source_session_id = str(item.get("source_session_id") or "-")
+    created_at = str(item.get("created_at") or "-")
+    receipt = item.get("input_receipt") if isinstance(item.get("input_receipt"), dict) else None
+    receipt_status = str(receipt.get("status") or "-") if receipt else "not-attempted"
+    text = str(item.get("text") or "").strip()
 
-    typer.secho(f"#{message_id}  {status}  {created_at}", fg=typer.colors.CYAN, bold=True)
-    typer.echo(f"  from: {from_session_id}")
+    typer.secho(f"#{input_id}  {receipt_status}  {created_at}", fg=typer.colors.CYAN, bold=True)
+    typer.echo(f"  from: {source_session_id}")
     if text:
         typer.echo(f"  {text}")
-
-
-def _wall_value(item: dict, kernel_key: str, legacy_key: str):
-    if kernel_key in item:
-        return item.get(kernel_key)
-    return item.get(legacy_key)
 
 
 def _fetch_wall_payload(
@@ -158,104 +152,6 @@ def _fetch_wall_payload(
         raise typer.Exit(code=1)
 
     return response.json()
-
-
-def _print_wall_session_summary(session: dict) -> None:
-    session_id = str(session.get("session_id") or "")
-    provider = str(session.get("provider") or "-")
-    device_name = str(session.get("device_name") or "-")
-    presence_state = str(session.get("presence_state") or "-")
-    control_label = str(session.get("kernel_control_label") or session.get("control_label") or "-")
-    branch = str(session.get("git_branch") or "-")
-    repo = str(session.get("git_repo") or "-")
-    last_event_at = str(session.get("last_event_at") or "-")
-    title = str(session.get("summary_title") or "").strip()
-
-    typer.secho(session_id, fg=typer.colors.CYAN, bold=True)
-    typer.echo(f"  provider: {provider}  device: {device_name}  " f"control: {control_label}  presence: {presence_state}  branch: {branch}")
-    typer.echo(f"  repo: {repo}  last_event_at: {last_event_at}")
-    if title:
-        typer.echo(f"  {title}")
-
-
-def wall(
-    repo: str | None = typer.Option(
-        None,
-        "--repo",
-        "-r",
-        help="Optional repo filter (substring match on session git_repo).",
-    ),
-    project: str | None = typer.Option(
-        None,
-        "--project",
-        "-p",
-        help="Optional project filter.",
-    ),
-    days: int = typer.Option(
-        7,
-        "--days",
-        help="Days to look back for session activity.",
-    ),
-    limit: int = typer.Option(
-        50,
-        "--limit",
-        "-n",
-        help="Max wall sessions to return.",
-    ),
-    output_json: bool = typer.Option(
-        False,
-        "--json",
-        "-j",
-        help="Output raw JSON response.",
-    ),
-    url: str | None = typer.Option(
-        None,
-        "--url",
-        "-u",
-        help="Longhouse API URL (uses stored URL if not specified).",
-    ),
-    token: str | None = typer.Option(
-        None,
-        "--token",
-        "-t",
-        help="Device token (uses stored token if not specified).",
-    ),
-    claude_dir: str | None = typer.Option(
-        None,
-        "--claude-dir",
-        help="Claude config directory (default: ~/.claude).",
-    ),
-) -> None:
-    """Read the raw wall surface for recent sessions."""
-    config_dir = Path(claude_dir) if claude_dir else None
-    base_url, resolved_token = _load_api_credentials(url=url, token=token, config_dir=config_dir)
-    payload = _fetch_wall_payload(
-        base_url=base_url,
-        token=resolved_token,
-        repo=repo,
-        project=project,
-        days=days,
-        limit=limit,
-    )
-
-    if output_json:
-        typer.echo(json.dumps(payload, indent=2))
-        return
-
-    sessions = list(payload.get("sessions", []))
-    if not sessions:
-        typer.echo("No wall sessions found.")
-        return
-
-    typer.echo(f"Found {len(sessions)} wall session{'s' if len(sessions) != 1 else ''}")
-    if repo:
-        typer.echo(f"Repo filter: {repo}")
-    if project:
-        typer.echo(f"Project filter: {project}")
-    typer.echo("")
-    for session in sessions:
-        _print_wall_session_summary(session)
-        typer.echo("")
 
 
 def peers(
@@ -346,21 +242,12 @@ def peers(
                 "git_branch": item.get("git_branch"),
                 "summary_title": item.get("summary_title"),
                 "presence_state": item.get("presence_state"),
-                "pending_inbound_messages": item.get("pending_inbound_messages", 0),
-                "kernel_control_label": _wall_value(item, "kernel_control_label", "control_label"),
-                "kernel_live_control_available": _wall_value(
-                    item,
-                    "kernel_live_control_available",
-                    "live_control_available",
-                ),
-                "kernel_host_reattach_available": _wall_value(
-                    item,
-                    "kernel_host_reattach_available",
-                    "host_reattach_available",
-                ),
-                "kernel_observe_only": _wall_value(item, "kernel_observe_only", "observe_only"),
-                "kernel_search_only": _wall_value(item, "kernel_search_only", "search_only"),
-                "kernel_staleness_reason": _wall_value(item, "kernel_staleness_reason", "staleness_reason"),
+                "kernel_control_label": item.get("kernel_control_label"),
+                "kernel_live_control_available": item.get("kernel_live_control_available"),
+                "kernel_host_reattach_available": item.get("kernel_host_reattach_available"),
+                "kernel_observe_only": item.get("kernel_observe_only"),
+                "kernel_search_only": item.get("kernel_search_only"),
+                "kernel_staleness_reason": item.get("kernel_staleness_reason"),
             }
         )
 
@@ -387,19 +274,13 @@ def peers(
         typer.echo("")
 
 
-def message(
-    to_session_id: str = typer.Argument(..., help="Target session UUID."),
-    text: str = typer.Argument(..., help="Message body."),
-    from_session_id: str | None = typer.Option(
+def send(
+    session_id: str = typer.Argument(..., help="Target session UUID."),
+    text: str = typer.Argument(..., help="Directed input body."),
+    client_request_id: str | None = typer.Option(
         None,
-        "--from-session",
-        "--from",
-        help="Sender session UUID. Defaults to the current managed session when available.",
-    ),
-    source_event_id: int | None = typer.Option(
-        None,
-        "--source-event-id",
-        help="Optional source event id for traceability.",
+        "--client-request-id",
+        help="Optional idempotency key.",
     ),
     output_json: bool = typer.Option(
         False,
@@ -425,30 +306,34 @@ def message(
         help="Claude config directory (default: ~/.claude).",
     ),
 ) -> None:
-    """Send a directed message to another session."""
+    """Send durable attributed input to another managed session."""
     config_dir = Path(claude_dir) if claude_dir else None
-    base_url, resolved_token = _load_api_credentials(url=url, token=token, config_dir=config_dir)
-    resolved_to_session_id = parse_uuid_or_exit(to_session_id, label="to_session_id")
-    resolved_from_session_id = _resolve_session_context(
-        from_session_id or get_managed_session_id(),
-        label="from_session_id",
-        guidance="Provide --from-session or run inside a Longhouse-managed session.",
+    base_url, _resolved_token = _load_api_credentials(url=url, token=token, config_dir=config_dir)
+    coordination_token = str(os.environ.get("LONGHOUSE_COORDINATION_TOKEN") or "").strip()
+    if not coordination_token:
+        typer.secho("send requires session-scoped coordination authority.", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+    resolved_target_session_id = parse_uuid_or_exit(session_id, label="session_id")
+    resolved_source_session_id = _resolve_session_context(
+        get_managed_session_id(),
+        label="current_session_id",
+        guidance="Run send inside a Longhouse-managed session.",
     )
 
     body: dict[str, object] = {
-        "to_session_id": resolved_to_session_id,
+        "target_session_id": resolved_target_session_id,
         "text": text,
     }
-    if source_event_id is not None:
-        body["source_event_id"] = source_event_id
+    if client_request_id is not None:
+        body["client_request_id"] = client_request_id
 
     try:
         with httpx.Client(timeout=15) as client:
             response = client.post(
-                f"{base_url.rstrip('/')}/api/agents/messages",
+                f"{base_url.rstrip('/')}/api/agents/directed-inputs",
                 headers={
-                    "X-Agents-Token": resolved_token,
-                    CURRENT_SESSION_HEADER: resolved_from_session_id,
+                    "X-Agents-Token": coordination_token,
+                    CURRENT_SESSION_HEADER: resolved_source_session_id,
                 },
                 json=body,
             )
@@ -477,14 +362,12 @@ def message(
         typer.echo(json.dumps(payload, indent=2))
         return
 
-    typer.secho("Message created.", fg=typer.colors.GREEN)
-    typer.echo(f"Message ID: {payload.get('id')}")
-    typer.echo(f"From: {resolved_from_session_id}")
-    typer.echo(f"To: {resolved_to_session_id}")
-    typer.echo(f"Status: {payload.get('delivery_status')}")
-    delivered_via = str(payload.get("delivered_via") or "").strip()
-    if delivered_via:
-        typer.echo(f"Delivered via: {delivered_via}")
+    typer.secho("Directed input created.", fg=typer.colors.GREEN)
+    typer.echo(f"Input ID: {payload.get('id')}")
+    typer.echo(f"From: {resolved_source_session_id}")
+    typer.echo(f"To: {resolved_target_session_id}")
+    receipt = payload.get("input_receipt") if isinstance(payload.get("input_receipt"), dict) else None
+    typer.echo(f"Provider input: {receipt.get('status') if receipt else 'not attempted'}")
 
 
 def tail(
@@ -566,28 +449,23 @@ def tail(
         typer.echo("")
 
 
-def check_messages(
-    session_id: str | None = typer.Option(
-        None,
-        "--session",
-        "-s",
-        help="Session UUID. Defaults to the current managed session when available.",
-    ),
+def inbox(
     direction: str = typer.Option(
         "inbound",
         "--direction",
-        help="Message direction: inbound, outbound, or all.",
+        help="Input direction: inbound, outbound, or all.",
     ),
-    unacknowledged_only: bool = typer.Option(
-        True,
-        "--unacknowledged-only/--all",
-        help="Show only unacknowledged messages by default.",
+    after_cursor: int = typer.Option(
+        0,
+        "--after-cursor",
+        min=0,
+        help="Return inputs after this stable id cursor.",
     ),
     limit: int = typer.Option(
         50,
         "--limit",
         "-n",
-        help="Max messages to return.",
+        help="Max inputs to return.",
     ),
     output_json: bool = typer.Option(
         False,
@@ -613,26 +491,30 @@ def check_messages(
         help="Claude config directory (default: ~/.claude).",
     ),
 ) -> None:
-    """Inspect the durable message inbox for a session."""
+    """Recover durable input for the current managed session."""
     config_dir = Path(claude_dir) if claude_dir else None
-    base_url, resolved_token = _load_api_credentials(url=url, token=token, config_dir=config_dir)
+    base_url, _resolved_token = _load_api_credentials(url=url, token=token, config_dir=config_dir)
+    coordination_token = str(os.environ.get("LONGHOUSE_COORDINATION_TOKEN") or "").strip()
+    if not coordination_token:
+        typer.secho("inbox requires session-scoped coordination authority.", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
     resolved_session_id = _resolve_session_context(
-        session_id or get_managed_session_id(),
+        get_managed_session_id(),
         label="session_id",
-        guidance="Provide --session or run inside a Longhouse-managed session.",
+        guidance="Run inbox inside a Longhouse-managed session.",
     )
 
     try:
         with httpx.Client(timeout=15) as client:
             response = client.get(
-                f"{base_url.rstrip('/')}/api/agents/messages",
+                f"{base_url.rstrip('/')}/api/agents/directed-inputs",
                 headers={
-                    "X-Agents-Token": resolved_token,
+                    "X-Agents-Token": coordination_token,
                     CURRENT_SESSION_HEADER: resolved_session_id,
                 },
                 params={
                     "direction": direction,
-                    "unacknowledged_only": unacknowledged_only,
+                    "after_id": after_cursor,
                     "limit": limit,
                 },
             )
@@ -661,26 +543,27 @@ def check_messages(
         typer.echo(json.dumps(payload, indent=2))
         return
 
-    messages = list(payload.get("messages", []))
-    if not messages:
-        typer.echo(f"No messages found for session {resolved_session_id}")
+    directed_inputs = list(payload.get("directed_inputs", []))
+    if not directed_inputs:
+        typer.echo(f"No directed input found for session {resolved_session_id}")
         return
 
     typer.echo(f"Session: {resolved_session_id}")
-    typer.echo(f"Messages: {len(messages)}")
+    typer.echo(f"Inputs: {len(directed_inputs)}")
+    typer.echo(f"Next cursor: {payload.get('next_cursor', after_cursor)}")
     typer.echo("")
-    for item in messages:
-        _print_message_summary(item)
+    for item in directed_inputs:
+        _print_directed_input(item)
         typer.echo("")
 
 
-def ack_message(
-    message_id: int = typer.Argument(..., help="Message id to acknowledge."),
-    session_id: str | None = typer.Option(
+def reply(
+    input_id: int = typer.Argument(..., help="Inbound directed input id."),
+    text: str = typer.Argument(..., help="Reply body."),
+    client_request_id: str | None = typer.Option(
         None,
-        "--session",
-        "-s",
-        help="Target session UUID. Defaults to the current managed session when available.",
+        "--client-request-id",
+        help="Optional idempotency key.",
     ),
     output_json: bool = typer.Option(
         False,
@@ -706,24 +589,32 @@ def ack_message(
         help="Claude config directory (default: ~/.claude).",
     ),
 ) -> None:
-    """Acknowledge an inbound message for the target session."""
+    """Reply to inbound input without copying its source session id."""
     config_dir = Path(claude_dir) if claude_dir else None
-    base_url, resolved_token = _load_api_credentials(url=url, token=token, config_dir=config_dir)
+    base_url, _resolved_token = _load_api_credentials(url=url, token=token, config_dir=config_dir)
+    coordination_token = str(os.environ.get("LONGHOUSE_COORDINATION_TOKEN") or "").strip()
+    if not coordination_token:
+        typer.secho("reply requires session-scoped coordination authority.", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
     resolved_session_id = _resolve_session_context(
-        session_id or get_managed_session_id(),
+        get_managed_session_id(),
         label="session_id",
-        guidance="Provide --session or run inside a Longhouse-managed session.",
+        guidance="Run reply inside a Longhouse-managed session.",
     )
+
+    body: dict[str, str] = {"text": text}
+    if client_request_id is not None:
+        body["client_request_id"] = client_request_id
 
     try:
         with httpx.Client(timeout=15) as client:
             response = client.post(
-                f"{base_url.rstrip('/')}/api/agents/messages/{message_id}/ack",
+                f"{base_url.rstrip('/')}/api/agents/directed-inputs/{input_id}/reply",
                 headers={
-                    "X-Agents-Token": resolved_token,
+                    "X-Agents-Token": coordination_token,
                     CURRENT_SESSION_HEADER: resolved_session_id,
                 },
-                json={},
+                json=body,
             )
     except httpx.ConnectError:
         typer.secho(f"Could not connect to {base_url}", fg=typer.colors.RED)
@@ -735,7 +626,7 @@ def ack_message(
     if response.status_code == 401:
         typer.secho("Authentication failed. Run 'longhouse auth' to re-authenticate.", fg=typer.colors.RED)
         raise typer.Exit(code=1)
-    if response.status_code != 200:
+    if response.status_code not in (200, 201):
         detail = response.text[:200]
         try:
             payload = response.json()
@@ -750,117 +641,6 @@ def ack_message(
         typer.echo(json.dumps(payload, indent=2))
         return
 
-    typer.secho("Message acknowledged.", fg=typer.colors.GREEN)
-    typer.echo(f"Message ID: {payload.get('id')}")
-    typer.echo(f"Status: {payload.get('delivery_status')}")
-    acknowledged_at = str(payload.get("acknowledged_at") or "").strip()
-    if acknowledged_at:
-        typer.echo(f"Acknowledged at: {acknowledged_at}")
-
-
-@messages_app.callback(invoke_without_command=True)
-def messages(
-    ctx: typer.Context,
-    session_id: str | None = typer.Option(
-        None,
-        "--session",
-        "-s",
-        help="Session UUID. Defaults to the current managed session when available.",
-    ),
-    direction: str = typer.Option(
-        "inbound",
-        "--direction",
-        help="Message direction: inbound, outbound, or all.",
-    ),
-    unacknowledged_only: bool = typer.Option(
-        True,
-        "--unacknowledged-only/--all",
-        help="Show only unacknowledged messages by default.",
-    ),
-    limit: int = typer.Option(
-        50,
-        "--limit",
-        "-n",
-        help="Max messages to return.",
-    ),
-    output_json: bool = typer.Option(
-        False,
-        "--json",
-        "-j",
-        help="Output raw JSON response.",
-    ),
-    url: str | None = typer.Option(
-        None,
-        "--url",
-        "-u",
-        help="Longhouse API URL (uses stored URL if not specified).",
-    ),
-    token: str | None = typer.Option(
-        None,
-        "--token",
-        "-t",
-        help="Device token (uses stored token if not specified).",
-    ),
-    claude_dir: str | None = typer.Option(
-        None,
-        "--claude-dir",
-        help="Claude config directory (default: ~/.claude).",
-    ),
-) -> None:
-    """List durable session messages for a session."""
-    if ctx.invoked_subcommand is not None:
-        return
-    check_messages(
-        session_id=session_id,
-        direction=direction,
-        unacknowledged_only=unacknowledged_only,
-        limit=limit,
-        output_json=output_json,
-        url=url,
-        token=token,
-        claude_dir=claude_dir,
-    )
-
-
-@messages_app.command("ack")
-def messages_ack(
-    message_id: int = typer.Argument(..., help="Message id to acknowledge."),
-    session_id: str | None = typer.Option(
-        None,
-        "--session",
-        "-s",
-        help="Target session UUID. Defaults to the current managed session when available.",
-    ),
-    output_json: bool = typer.Option(
-        False,
-        "--json",
-        "-j",
-        help="Output raw JSON response.",
-    ),
-    url: str | None = typer.Option(
-        None,
-        "--url",
-        "-u",
-        help="Longhouse API URL (uses stored URL if not specified).",
-    ),
-    token: str | None = typer.Option(
-        None,
-        "--token",
-        "-t",
-        help="Device token (uses stored token if not specified).",
-    ),
-    claude_dir: str | None = typer.Option(
-        None,
-        "--claude-dir",
-        help="Claude config directory (default: ~/.claude).",
-    ),
-) -> None:
-    """Acknowledge an inbound durable session message."""
-    ack_message(
-        message_id=message_id,
-        session_id=session_id,
-        output_json=output_json,
-        url=url,
-        token=token,
-        claude_dir=claude_dir,
-    )
+    typer.secho("Reply created.", fg=typer.colors.GREEN)
+    typer.echo(f"Input ID: {payload.get('id')}")
+    typer.echo(f"Reply to: {payload.get('reply_to_id')}")

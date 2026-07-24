@@ -7,6 +7,7 @@ import os
 import shlex
 import shutil
 import subprocess
+import tempfile
 import threading
 from datetime import datetime
 from datetime import timezone
@@ -36,7 +37,7 @@ from zerg.cli._managed_launch import start_managed_launch
 from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_PATH
 from zerg.services.claude_channel_bridge import CLAUDE_CHANNEL_SERVER_NAME
 from zerg.services.claude_channel_bridge import build_claude_channel_exec_command
-from zerg.services.claude_channel_bridge import install_claude_channel_mcp_server
+from zerg.services.claude_channel_bridge import remove_claude_channel_mcp_server
 from zerg.services.claude_channel_bridge import wait_for_claude_channel_state
 from zerg.services.longhouse_paths import get_agent_runtime_events_outbox_dir
 from zerg.services.machine_identity import get_machine_name_label
@@ -62,7 +63,16 @@ _CLAUDE_LAUNCH_ENV_KEYS = (
 _FORCE_NATIVE_CLAUDE_CHANNELS_ENV = "LONGHOUSE_FORCE_NATIVE_CLAUDE_CHANNELS"
 _CLAUDE_TERMINAL_POST_TIMEOUT_SECS = 2.0
 _CLAUDE_TERMINAL_SOURCE = "claude_channel_wrapper"
-_CLAUDE_SUBPROCESS_ENV_BLOCKLIST = ("CLAUDE_CONFIG_DIR",)
+_CLAUDE_SUBPROCESS_ENV_BLOCKLIST = (
+    "CLAUDE_CONFIG_DIR",
+    "LONGHOUSE_COORDINATION_TOKEN",
+    "LONGHOUSE_MANAGED_SESSION_ID",
+    "LONGHOUSE_SESSION_ID",
+    "LONGHOUSE_CHANNEL_SESSION_ID",
+    "LONGHOUSE_PROVIDER_SESSION_ID",
+    "LONGHOUSE_RUN_ID",
+    "LONGHOUSE_HOOK_TOKEN",
+)
 _CLAUDE_BIN_ENV = "LONGHOUSE_CLAUDE_BIN"
 _CLAUDE_CHANNEL_READY_TIMEOUT_SECS = 20.0
 
@@ -159,29 +169,6 @@ def _resolve_claude_dir(config_dir: Path | None) -> Path:
     return config_dir or (Path.home() / ".claude")
 
 
-def _verify_claude_channel_mcp_server(*, workspace_path: Path, timeout_secs: float = 15.0) -> None:
-    try:
-        completed = subprocess.run(
-            [_resolve_claude_command(), "mcp", "get", CLAUDE_CHANNEL_SERVER_NAME],
-            cwd=str(workspace_path),
-            check=False,
-            capture_output=True,
-            env=_claude_subprocess_env(),
-            text=True,
-            timeout=timeout_secs,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise _NativeClaudeError(f"Could not verify Claude MCP server {CLAUDE_CHANNEL_SERVER_NAME}: {exc}") from exc
-
-    if completed.returncode == 0:
-        return
-
-    detail = (completed.stderr or completed.stdout or "").strip()
-    if not detail:
-        detail = f"claude mcp get {CLAUDE_CHANNEL_SERVER_NAME} exited {completed.returncode}"
-    raise _NativeClaudeError(f"Claude cannot resolve MCP server {CLAUDE_CHANNEL_SERVER_NAME}: {detail}")
-
-
 def _ensure_native_claude_prereqs(
     *,
     base_url: str,
@@ -192,11 +179,7 @@ def _ensure_native_claude_prereqs(
     try:
         resolved_claude_dir = _resolve_claude_dir(config_dir)
         install_hooks(base_url, token=token, claude_dir=str(resolved_claude_dir))
-        install_claude_channel_mcp_server(
-            workspace_path=workspace_path,
-            claude_dir=resolved_claude_dir,
-        )
-        _verify_claude_channel_mcp_server(workspace_path=workspace_path)
+        remove_claude_channel_mcp_server(claude_dir=resolved_claude_dir)
     except Exception as exc:  # pragma: no cover - exercised through CLI wrappers
         raise _NativeClaudeError(str(exc)) from exc
 
@@ -210,32 +193,56 @@ def _run_native_claude_tui(
     base_url: str,
     token: str,
     hook_token: str | None = None,
+    coordination_token: str | None = None,
     permission_mode: str = "bypass",
     resume: bool = False,
 ) -> int:
     """ARCHITECTURE.md's "Session modes": Helm launched from a physical terminal.
     Runs in the foreground and blocks until the user exits Claude.
     """
-    command = build_claude_channel_exec_command(
-        provider_session_id=provider_session_id,
-        longhouse_session_id=session_id,
-        longhouse_run_id=run_id,
-        cwd=str(cwd),
-        resume=resume,
-        hook_url=base_url,
-        claude_command=_resolve_claude_command(),
-        permission_mode=permission_mode,
-    )
+    if not coordination_token:
+        raise _NativeClaudeError("Longhouse did not issue coordination authority for this session")
     # In remote-approve mode the permission gate authenticates as this session
     # using the server-minted session-scoped hook token (the gate rejects the
     # durable device token). Other hooks keep using the device token.
-    env = _claude_subprocess_env(LONGHOUSE_HOOK_TOKEN=hook_token or token)
+    env = _claude_subprocess_env()
+    if hook_token:
+        env["LONGHOUSE_HOOK_TOKEN"] = hook_token
     threading.Thread(
         target=_warn_if_claude_channel_not_ready,
         kwargs={"session_id": session_id},
         daemon=True,
     ).start()
-    completed = subprocess.run(shlex.split(command), check=False, cwd=str(cwd), env=env)
+    with tempfile.TemporaryDirectory(prefix="longhouse-claude-mcp-") as temp_dir:
+        mcp_config_path = Path(temp_dir) / "mcp.json"
+        mcp_config = {
+            "mcpServers": {
+                CLAUDE_CHANNEL_SERVER_NAME: {
+                    "type": "stdio",
+                    "command": "longhouse-engine",
+                    "args": ["claude-channel", "serve"],
+                    "env": {
+                        "LONGHOUSE_COORDINATION_TOKEN": coordination_token,
+                        "LONGHOUSE_CHANNEL_SESSION_ID": session_id,
+                    },
+                }
+            }
+        }
+        fd = os.open(mcp_config_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(mcp_config, handle, separators=(",", ":"))
+        command = build_claude_channel_exec_command(
+            provider_session_id=provider_session_id,
+            longhouse_session_id=session_id,
+            longhouse_run_id=run_id,
+            cwd=str(cwd),
+            resume=resume,
+            hook_url=base_url,
+            claude_command=_resolve_claude_command(),
+            permission_mode=permission_mode,
+            mcp_config_path=mcp_config_path,
+        )
+        completed = subprocess.run(shlex.split(command), check=False, cwd=str(cwd), env=env)
     exit_code = int(completed.returncode)
     _post_claude_terminal_signal(
         base_url=base_url,
@@ -409,6 +416,7 @@ def _finalize_native_claude_launch(
             base_url=base_url,
             token=token,
             hook_token=result.hook_token,
+            coordination_token=result.coordination_token,
             permission_mode=result.permission_mode,
             resume=resume,
         )
@@ -469,6 +477,19 @@ def _resolve_native_claude_resume(
     if not cwd.is_absolute() or not cwd.is_dir():
         raise _NativeClaudeError(f"Claude session workspace is unavailable: {cwd}")
     permission_mode = str(payload.get("permission_mode") or "bypass").strip() or "bypass"
+    try:
+        token_response = httpx.post(
+            f"{base_url.rstrip('/')}/api/agents/sessions/{resolved_session_id}/coordination-token",
+            headers={"X-Agents-Token": token},
+            timeout=10,
+        )
+    except httpx.HTTPError as exc:
+        raise _NativeClaudeError(f"Could not issue resume coordination authority: {exc}") from exc
+    if token_response.status_code != 200:
+        raise _NativeClaudeError(f"Could not issue resume coordination authority: {token_response.text[:200]}")
+    coordination_token = str(token_response.json().get("coordination_token") or "").strip()
+    if not coordination_token:
+        raise _NativeClaudeError("Longhouse returned empty resume coordination authority")
     attach_command = build_claude_channel_exec_command(
         provider_session_id=provider_session_id,
         longhouse_session_id=resolved_session_id,
@@ -486,6 +507,7 @@ def _resolve_native_claude_resume(
             source_runner_name=machine_name,
             managed_transport=ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE.value,
             permission_mode=permission_mode,
+            coordination_token=coordination_token,
         ),
         cwd,
     )

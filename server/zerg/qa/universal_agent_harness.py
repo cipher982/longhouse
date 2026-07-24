@@ -2029,16 +2029,22 @@ class UniversalProviderAdapter:
         # The stub socket exists only because the hook is a real subprocess that
         # needs a URL. Its handlers delegate to the REAL endpoint coroutines +
         # the REAL pause-response route, authenticated by a real session-scoped
-        # ManagedLocalHookToken — so the genuine auth-scope, _is_permission_gate_row
+        # ManagedSessionToken — so the genuine auth-scope, _is_permission_gate_row
         # filter, explicit-allow decision logic, and answer route all execute.
         import asyncio as _asyncio
 
-        from zerg.auth.managed_local_hook_tokens import ManagedLocalHookToken
+        from zerg.auth.managed_session_tokens import MANAGED_SESSION_SCOPE_HOOK
+        from zerg.auth.managed_session_tokens import ManagedSessionToken
         from zerg.routers.permission_gate import PermissionRequestIn
         from zerg.routers.permission_gate import get_permission_decision
         from zerg.routers.permission_gate import register_permission_request
 
-        scoped_token = ManagedLocalHookToken(session_id=session_id, owner_id=1, device_id="universal-harness")
+        scoped_token = ManagedSessionToken(
+            session_id=session_id,
+            owner_id=1,
+            device_id="universal-harness",
+            scope=MANAGED_SESSION_SCOPE_HOOK,
+        )
 
         def _register(body: dict[str, Any]) -> dict[str, Any]:
             with session_factory() as db:
@@ -2164,7 +2170,7 @@ class UniversalProviderAdapter:
             "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
             "LONGHOUSE_PERMISSION_HOOK_ENABLED": "1",
             "LONGHOUSE_HOOK_URL": base_url,
-            "LONGHOUSE_HOOK_TOKEN": "zht_universal_harness",
+            "LONGHOUSE_HOOK_TOKEN": "zst_universal_harness",
             "LONGHOUSE_MANAGED_SESSION_ID": session_id,
             "LONGHOUSE_PERMISSION_HOOK_TIMEOUT_S": "10",
         }

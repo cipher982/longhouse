@@ -21,7 +21,7 @@ from fastapi import Response
 from fastapi import status
 from sqlalchemy.orm import Session
 
-from zerg.auth.managed_local_hook_tokens import ManagedLocalHookToken
+from zerg.auth.managed_session_tokens import ManagedSessionToken
 from zerg.config import get_settings
 from zerg.database import catalog_db_dependency
 from zerg.database import live_catalog_enabled
@@ -896,7 +896,7 @@ async def ingest_session(
     request: Request,
     response: Response,
     db: Session | None = Depends(ingest_db_dependency),
-    auth_token: DeviceToken | ManagedLocalHookToken | None = Depends(verify_agents_token),
+    auth_token: DeviceToken | ManagedSessionToken | None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> IngestResponse:
     """Ingest a session with events.
@@ -920,7 +920,7 @@ async def ingest_session(
             },
         )
     tracer = get_tracer(__name__)
-    if isinstance(auth_token, ManagedLocalHookToken):
+    if isinstance(auth_token, ManagedSessionToken):
         auth_kind_label = "managed_local_hook"
     elif auth_token is not None:
         auth_kind_label = "device_token"
@@ -995,13 +995,13 @@ async def ingest_session(
                         detail=f"Invalid payload: {e}",
                     )
 
-                if isinstance(auth_token, ManagedLocalHookToken):
+                if isinstance(auth_token, ManagedSessionToken):
                     hook_session_id = UUID(auth_token.session_id)
                     if data.id is not None and data.id != hook_session_id:
                         request_status_label = "forbidden"
                         raise HTTPException(
                             status_code=status.HTTP_403_FORBIDDEN,
-                            detail="Managed-local hook token does not match session",
+                            detail="Managed-session hook scope does not match session",
                         )
                     data.id = hook_session_id
                     if auth_token.device_id:
@@ -1054,7 +1054,7 @@ async def ingest_session(
                 # Only provider-originated events (source_path set by engine) count toward
                 # the SLA histogram. Server-synthesized events (live_session_dispatch) use
                 # now() as timestamp and would deflate p50/p95 with ~0ms samples.
-                managed_label = "true" if isinstance(auth_token, ManagedLocalHookToken) else "false"
+                managed_label = "true" if isinstance(auth_token, ManagedSessionToken) else "false"
                 if data.events:
                     from datetime import datetime
                     from datetime import timezone

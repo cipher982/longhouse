@@ -34,12 +34,6 @@ components:
         - runner_create_enroll_token
         - runner_doctor
         - send_slack_webhook
-        - peers
-        - get_session_events
-        - session_tail
-        - message_session
-        - check_messages
-        - ack_message
         - search_sessions
         - grep_sessions
         - filter_sessions
@@ -146,18 +140,6 @@ components:
               const: runner_setup
             send_slack_webhook:
               const: slack
-            peers:
-              const: coordination
-            get_session_events:
-              const: coordination
-            session_tail:
-              const: coordination
-            message_session:
-              const: coordination
-            check_messages:
-              const: coordination
-            ack_message:
-              const: coordination
             search_sessions:
               const: session
             grep_sessions:
@@ -196,12 +178,6 @@ components:
             - runner_create_enroll_token
             - runner_doctor
             - send_slack_webhook
-            - peers
-            - get_session_events
-            - session_tail
-            - message_session
-            - check_messages
-            - ack_message
             - search_sessions
             - grep_sessions
             - filter_sessions

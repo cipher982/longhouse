@@ -71,7 +71,7 @@
                 "live_token"
               ],
               "max_age_seconds": 86400,
-              "oracle_digest": "f04baee795132903cb82a5bf5f5a5fe2ce0eca8f7b4d561d92eca58de77f3620"
+              "oracle_digest": "ddf0aae0c879c9b48dea816c64742d052cbd3e6ef2e832deee67b723f5e3bcee"
             }
           ]
         },
@@ -99,7 +99,7 @@
                 "live_token"
               ],
               "max_age_seconds": 86400,
-              "oracle_digest": "f04baee795132903cb82a5bf5f5a5fe2ce0eca8f7b4d561d92eca58de77f3620"
+              "oracle_digest": "ddf0aae0c879c9b48dea816c64742d052cbd3e6ef2e832deee67b723f5e3bcee"
             },
             {
               "id": "no_duplicate_visible_bootstrap",
@@ -111,14 +111,14 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "f04baee795132903cb82a5bf5f5a5fe2ce0eca8f7b4d561d92eca58de77f3620"
+              "oracle_digest": "ddf0aae0c879c9b48dea816c64742d052cbd3e6ef2e832deee67b723f5e3bcee"
             }
           ]
         },
-        "coordination.message.send": {
+        "coordination.directed_input.send": {
           "disposition": "implemented",
           "reason_code": "semantic_proof_missing",
-          "policy_key": "provider.codex.coordination_message",
+          "policy_key": "provider.codex.coordination_directed_input",
           "action_gate": "strict",
           "contexts": {
             "modes": [
@@ -131,8 +131,8 @@
           ],
           "required_assertions": [
             {
-              "id": "directed_message_persisted_and_delivered",
-              "scenario_id": "codex_coordination_message",
+              "id": "provider_input_receipt_linked",
+              "scenario_id": "codex_coordination_directed_input",
               "oracle_source": "server/zerg/qa/provider_coordination_oracles.py",
               "minimum_scenario_revision": 1,
               "acceptable_evidence": [
@@ -140,14 +140,14 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "f04baee795132903cb82a5bf5f5a5fe2ce0eca8f7b4d561d92eca58de77f3620"
+              "oracle_digest": "ddf0aae0c879c9b48dea816c64742d052cbd3e6ef2e832deee67b723f5e3bcee"
             }
           ]
         },
-        "coordination.message.receive": {
+        "coordination.directed_input.receive": {
           "disposition": "implemented",
           "reason_code": "semantic_proof_missing",
-          "policy_key": "provider.codex.coordination_message",
+          "policy_key": "provider.codex.coordination_directed_input",
           "action_gate": "ceiling",
           "contexts": {
             "modes": [
@@ -160,8 +160,8 @@
           ],
           "required_assertions": [
             {
-              "id": "attributed_message_visible",
-              "scenario_id": "codex_coordination_message",
+              "id": "attributed_input_visible",
+              "scenario_id": "codex_coordination_directed_input",
               "oracle_source": "server/zerg/qa/provider_coordination_oracles.py",
               "minimum_scenario_revision": 1,
               "acceptable_evidence": [
@@ -169,7 +169,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "f04baee795132903cb82a5bf5f5a5fe2ce0eca8f7b4d561d92eca58de77f3620"
+              "oracle_digest": "ddf0aae0c879c9b48dea816c64742d052cbd3e6ef2e832deee67b723f5e3bcee"
             }
           ]
         }
@@ -244,7 +244,7 @@
         "codex.resume_run_once",
         "codex.turn_start"
       ],
-      "adapter_digest": "62c0e830a5bbd6e88144d0f72dbcd7e12d1001d10f51e939c428e7552bb876a9"
+      "adapter_digest": "85473847fe3c364f2a259c40d8ee9ad5927e0d4c49ffe8dabd130818c893c0cb"
     },
     {
       "provider": "claude",
@@ -365,7 +365,7 @@
                 "live_token"
               ],
               "max_age_seconds": 86400,
-              "oracle_digest": "f04baee795132903cb82a5bf5f5a5fe2ce0eca8f7b4d561d92eca58de77f3620"
+              "oracle_digest": "ddf0aae0c879c9b48dea816c64742d052cbd3e6ef2e832deee67b723f5e3bcee"
             }
           ]
         },
@@ -393,7 +393,7 @@
                 "live_token"
               ],
               "max_age_seconds": 86400,
-              "oracle_digest": "f04baee795132903cb82a5bf5f5a5fe2ce0eca8f7b4d561d92eca58de77f3620"
+              "oracle_digest": "ddf0aae0c879c9b48dea816c64742d052cbd3e6ef2e832deee67b723f5e3bcee"
             },
             {
               "id": "no_duplicate_visible_bootstrap",
@@ -405,14 +405,14 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "f04baee795132903cb82a5bf5f5a5fe2ce0eca8f7b4d561d92eca58de77f3620"
+              "oracle_digest": "ddf0aae0c879c9b48dea816c64742d052cbd3e6ef2e832deee67b723f5e3bcee"
             }
           ]
         },
-        "coordination.message.send": {
+        "coordination.directed_input.send": {
           "disposition": "implemented",
           "reason_code": "semantic_proof_missing",
-          "policy_key": "provider.claude.coordination_message",
+          "policy_key": "provider.claude.coordination_directed_input",
           "action_gate": "strict",
           "contexts": {
             "modes": [
@@ -425,8 +425,8 @@
           ],
           "required_assertions": [
             {
-              "id": "directed_message_persisted_and_delivered",
-              "scenario_id": "claude_coordination_message",
+              "id": "provider_input_receipt_linked",
+              "scenario_id": "claude_coordination_directed_input",
               "oracle_source": "server/zerg/qa/provider_coordination_oracles.py",
               "minimum_scenario_revision": 1,
               "acceptable_evidence": [
@@ -434,14 +434,14 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "f04baee795132903cb82a5bf5f5a5fe2ce0eca8f7b4d561d92eca58de77f3620"
+              "oracle_digest": "ddf0aae0c879c9b48dea816c64742d052cbd3e6ef2e832deee67b723f5e3bcee"
             }
           ]
         },
-        "coordination.message.receive": {
+        "coordination.directed_input.receive": {
           "disposition": "implemented",
           "reason_code": "semantic_proof_missing",
-          "policy_key": "provider.claude.coordination_message",
+          "policy_key": "provider.claude.coordination_directed_input",
           "action_gate": "ceiling",
           "contexts": {
             "modes": [
@@ -454,8 +454,8 @@
           ],
           "required_assertions": [
             {
-              "id": "attributed_message_visible",
-              "scenario_id": "claude_coordination_message",
+              "id": "attributed_input_visible",
+              "scenario_id": "claude_coordination_directed_input",
               "oracle_source": "server/zerg/qa/provider_coordination_oracles.py",
               "minimum_scenario_revision": 1,
               "acceptable_evidence": [
@@ -463,7 +463,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "f04baee795132903cb82a5bf5f5a5fe2ce0eca8f7b4d561d92eca58de77f3620"
+              "oracle_digest": "ddf0aae0c879c9b48dea816c64742d052cbd3e6ef2e832deee67b723f5e3bcee"
             }
           ]
         }
@@ -536,7 +536,7 @@
         "claude.turn_start",
         "claude.turn_interrupt"
       ],
-      "adapter_digest": "95f6f92bb4d58960052da37c2408cca143356da222cfecb0d39ee9b4645c06b4"
+      "adapter_digest": "bb7d8a05628235c757e193953a81eb5c87f1bfbad53eb7d93b2589d01b7a8353"
     },
     {
       "provider": "opencode",
@@ -633,139 +633,6 @@
               "oracle_digest": "8343df3ac1c1b437f8dc9f9d5e8ca21c64259afc29546363625420a139b686d8"
             }
           ]
-        },
-        "coordination.awareness.create": {
-          "disposition": "implemented",
-          "reason_code": "semantic_proof_missing",
-          "policy_key": "provider.opencode.coordination_awareness",
-          "action_gate": "ceiling",
-          "contexts": {
-            "modes": [
-              "helm"
-            ]
-          },
-          "runtime_prerequisites": [
-            "session_context"
-          ],
-          "required_assertions": [
-            {
-              "id": "launch_scoped_coordination_config_loaded",
-              "scenario_id": "opencode_coordination_launch_config",
-              "oracle_source": "server/zerg/qa/provider_opencode_coordination_oracles.py",
-              "minimum_scenario_revision": 1,
-              "acceptable_evidence": [
-                "live_no_token"
-              ],
-              "max_age_seconds": 604800,
-              "oracle_digest": "774348f8a581a99515357cae7a07434a1f208fcccb6a30d8e5a6009ae17559f7"
-            },
-            {
-              "id": "coordination_instructions_model_visible",
-              "scenario_id": "opencode_coordination_awareness_create",
-              "oracle_source": "server/zerg/qa/provider_coordination_oracles.py",
-              "minimum_scenario_revision": 1,
-              "acceptable_evidence": [
-                "live_token"
-              ],
-              "max_age_seconds": 86400,
-              "oracle_digest": "f04baee795132903cb82a5bf5f5a5fe2ce0eca8f7b4d561d92eca58de77f3620"
-            }
-          ]
-        },
-        "coordination.awareness.post_compaction": {
-          "disposition": "implemented",
-          "reason_code": "semantic_proof_missing",
-          "policy_key": "provider.opencode.coordination_awareness",
-          "action_gate": "ceiling",
-          "contexts": {
-            "modes": [
-              "helm"
-            ]
-          },
-          "runtime_prerequisites": [
-            "session_context"
-          ],
-          "required_assertions": [
-            {
-              "id": "coordination_instructions_model_visible_after_compaction",
-              "scenario_id": "opencode_coordination_awareness_post_compaction",
-              "oracle_source": "server/zerg/qa/provider_coordination_oracles.py",
-              "minimum_scenario_revision": 1,
-              "acceptable_evidence": [
-                "live_token"
-              ],
-              "max_age_seconds": 86400,
-              "oracle_digest": "f04baee795132903cb82a5bf5f5a5fe2ce0eca8f7b4d561d92eca58de77f3620"
-            },
-            {
-              "id": "no_duplicate_visible_bootstrap",
-              "scenario_id": "opencode_coordination_awareness_post_compaction",
-              "oracle_source": "server/zerg/qa/provider_coordination_oracles.py",
-              "minimum_scenario_revision": 1,
-              "acceptable_evidence": [
-                "hermetic",
-                "live_token"
-              ],
-              "max_age_seconds": 604800,
-              "oracle_digest": "f04baee795132903cb82a5bf5f5a5fe2ce0eca8f7b4d561d92eca58de77f3620"
-            }
-          ]
-        },
-        "coordination.message.send": {
-          "disposition": "implemented",
-          "reason_code": "semantic_proof_missing",
-          "policy_key": "provider.opencode.coordination_message",
-          "action_gate": "strict",
-          "contexts": {
-            "modes": [
-              "helm"
-            ]
-          },
-          "runtime_prerequisites": [
-            "session_context"
-          ],
-          "required_assertions": [
-            {
-              "id": "directed_message_persisted_and_delivered",
-              "scenario_id": "opencode_coordination_message",
-              "oracle_source": "server/zerg/qa/provider_coordination_oracles.py",
-              "minimum_scenario_revision": 1,
-              "acceptable_evidence": [
-                "hermetic",
-                "live_token"
-              ],
-              "max_age_seconds": 604800,
-              "oracle_digest": "f04baee795132903cb82a5bf5f5a5fe2ce0eca8f7b4d561d92eca58de77f3620"
-            }
-          ]
-        },
-        "coordination.message.receive": {
-          "disposition": "implemented",
-          "reason_code": "semantic_proof_missing",
-          "policy_key": "provider.opencode.coordination_message",
-          "action_gate": "ceiling",
-          "contexts": {
-            "modes": [
-              "helm"
-            ]
-          },
-          "runtime_prerequisites": [
-            "session_context"
-          ],
-          "required_assertions": [
-            {
-              "id": "attributed_message_visible",
-              "scenario_id": "opencode_coordination_message",
-              "oracle_source": "server/zerg/qa/provider_coordination_oracles.py",
-              "minimum_scenario_revision": 1,
-              "acceptable_evidence": [
-                "hermetic",
-                "live_token"
-              ],
-              "max_age_seconds": 604800,
-              "oracle_digest": "f04baee795132903cb82a5bf5f5a5fe2ce0eca8f7b4d561d92eca58de77f3620"
-            }
-          ]
         }
       },
       "can_resume": false,
@@ -834,7 +701,7 @@
         "opencode.turn_start",
         "opencode.turn_interrupt"
       ],
-      "adapter_digest": "8195ac886a2297bc22972e348fb7ba007a6040d76e31f8a658ff7ff2a4054274"
+      "adapter_digest": "96bfc238ad80b7ea8ee2dc2e15fd78feb11484d744078920ff6d9b35c25a4c65"
     },
     {
       "provider": "antigravity",

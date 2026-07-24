@@ -196,8 +196,8 @@ The initial coordination set is intentionally consumer-backed:
 ```text
 coordination.awareness.create
 coordination.awareness.post_compaction
-coordination.message.send
-coordination.message.receive
+coordination.directed_input.send
+coordination.directed_input.receive
 ```
 
 Resume is an awareness test context. Reply, acknowledgement, and terminal noise

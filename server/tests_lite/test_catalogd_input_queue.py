@@ -394,19 +394,18 @@ def test_catalogd_queue_claim_uses_canonical_activity_and_control(mutates_queue_
     assert result["commit_seq"].isdigit()
 
 
-def test_catalogd_blocked_activity_does_not_drain_collaboration_message(tmp_path):
-    engine = create_catalog_engine(tmp_path / "blocked-collaboration.db")
+def test_catalogd_blocked_activity_can_drain_directed_input(tmp_path):
+    engine = create_catalog_engine(tmp_path / "blocked-directed-input.db")
     initialize_catalog_schema(engine)
-    session_id, _receipt_id = _seed_queue(engine, client_request_id="session-message-42")
+    session_id, _receipt_id = _seed_queue(engine, client_request_id="directed-input-42")
     _replace_activity_head(engine, session_id, kind="blocked")
 
     result = CatalogStore(engine).claim_queued_input(
         session_id=str(session_id),
-        delivery_request_id="blocked-collaboration",
+        delivery_request_id="blocked-directed-input",
     )
 
-    assert result["claimed"] is False
-    assert result["reason"] == "activity_not_drainable"
+    assert result["claimed"] is True
     engine.dispose()
 
 

@@ -30,6 +30,7 @@ class ManagedLocalLaunchResponse:
     # Session-scoped hook token for remote_approve launches; the launcher exports
     # it as LONGHOUSE_HOOK_TOKEN so the permission gate authenticates per-session.
     hook_token: str | None = None
+    coordination_token: str | None = None
 
 
 def load_api_credentials(

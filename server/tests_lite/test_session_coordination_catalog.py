@@ -3,7 +3,6 @@ from __future__ import annotations
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
-from uuid import UUID
 
 import pytest
 
@@ -115,10 +114,7 @@ def test_project_storage_v2_wall_uses_bounded_facts_only():
         "total": 1,
     }
 
-    [item] = project_storage_v2_wall(
-        snapshot,
-        pending_counts={UUID(SESSION_ID): 3},
-    )
+    [item] = project_storage_v2_wall(snapshot)
 
     assert item.session_id == SESSION_ID
     assert item.device_name == "clifford"
@@ -134,11 +130,10 @@ def test_project_storage_v2_wall_uses_bounded_facts_only():
     assert item.kernel_observe_only is False
     assert item.kernel_search_only is False
     assert item.kernel_staleness_reason is None
-    assert item.pending_inbound_messages == 3
     assert (item.user_messages, item.assistant_messages, item.tool_calls) == (4, 5, 6)
 
 
-def test_project_storage_v2_wall_preserves_imported_and_default_pending_count():
+def test_project_storage_v2_wall_preserves_imported_session_shape():
     facts = _facts(managed=False)
     facts["runtime"] = None
 
@@ -157,7 +152,6 @@ def test_project_storage_v2_wall_preserves_imported_and_default_pending_count():
     assert item.kernel_observe_only is False
     assert item.kernel_search_only is True
     assert item.kernel_staleness_reason == "imported_only"
-    assert item.pending_inbound_messages == 0
 
 
 def test_project_storage_v2_wall_applies_repo_filter_and_limit_after_snapshot():

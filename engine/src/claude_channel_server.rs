@@ -251,29 +251,24 @@ fn coordination_tools() -> Vec<Value> {
             json!({"repo":{"type":"string"},"active_only":{"type":"boolean","default":true}}),
         ),
         tool(
-            "message_session",
-            "Send a directed message to another session.",
-            json!({"to_session_id":{"type":"string"},"text":{"type":"string"},"source_event_id":{"type":"integer"}}),
-        ),
-        tool(
-            "check_messages",
-            "Inspect durable messages for the current managed session.",
-            json!({"direction":{"type":"string","enum":["inbound","outbound","all"],"default":"inbound"},"unacknowledged_only":{"type":"boolean","default":true},"limit":{"type":"integer","default":20}}),
-        ),
-        tool(
-            "ack_message",
-            "Acknowledge that the current managed session handled a message.",
-            json!({"message_id":{"type":"integer"}}),
-        ),
-        tool(
-            "check_wall",
-            "Check the Longhouse wall for active and recent sessions.",
-            json!({"repo":{"type":"string"},"project":{"type":"string"},"days":{"type":"integer","default":7}}),
-        ),
-        tool(
-            "session_tail",
+            "tail",
             "Read the last events from another session transcript.",
             json!({"session_id":{"type":"string"},"limit":{"type":"integer","default":30}}),
+        ),
+        tool(
+            "send",
+            "Send durable attributed input to another managed session.",
+            json!({"session_id":{"type":"string"},"text":{"type":"string"},"client_request_id":{"type":"string"}}),
+        ),
+        tool(
+            "inbox",
+            "Recover durable input for the current managed session.",
+            json!({"direction":{"type":"string","enum":["inbound","outbound","all"],"default":"inbound"},"after_cursor":{"type":"integer","default":0},"limit":{"type":"integer","default":20}}),
+        ),
+        tool(
+            "reply",
+            "Reply to inbound input without copying its source session id.",
+            json!({"input_id":{"type":"integer"},"text":{"type":"string"},"client_request_id":{"type":"string"}}),
         ),
     ]
 }
@@ -296,14 +291,26 @@ async fn call_coordination_tool(id: Value, params: Option<&Value>, state: &Bridg
         .lock()
         .expect("bridge state mutex poisoned")
         .session_id
-        .clone()
-        .or_else(|| std::env::var("LONGHOUSE_MANAGED_SESSION_ID").ok());
+        .clone();
     let config = match crate::config::ShipperConfig::from_env() {
         Ok(config) => config,
         Err(error) => return tool_result(id, json!({"error": error.to_string()})),
     };
     let client = reqwest::Client::new();
     let base = config.api_url.trim_end_matches('/');
+    let request_token = if matches!(name, "send" | "inbox" | "reply") {
+        match std::env::var("LONGHOUSE_COORDINATION_TOKEN") {
+            Ok(token) if !token.trim().is_empty() => token,
+            _ => {
+                return tool_result(
+                    id,
+                    json!({"error":"coordination authority is unavailable for this managed session"}),
+                )
+            }
+        }
+    } else {
+        config.api_token.clone().unwrap_or_default()
+    };
     let mut request = match name {
         "peers" => {
             let mut repo = arguments
@@ -330,57 +337,9 @@ async fn call_coordination_tool(id: Value, params: Option<&Value>, state: &Bridg
                 .get(format!("{base}/api/agents/sessions/wall"))
                 .query(&[("repo", repo.as_str()), ("days", "7")])
         }
-        "message_session" => {
-            let Some(current) = session_id.as_deref() else {
-                return tool_result(
-                    id,
-                    json!({"error":"message_session requires a current managed session context"}),
-                );
-            };
-            client
-                .post(format!("{base}/api/agents/messages"))
-                .header("X-Longhouse-Session-Id", current)
-                .json(&arguments)
-        }
-        "check_messages" => {
-            let Some(current) = session_id.as_deref() else {
-                return tool_result(
-                    id,
-                    json!({"error":"check_messages requires a current managed session context"}),
-                );
-            };
-            let mut query = arguments.clone();
-            if let Some(map) = query.as_object_mut() {
-                // The advertised schema defaults unacknowledged_only to true;
-                // the API defaults it to false, so fill it in when omitted.
-                map.entry("unacknowledged_only").or_insert(json!(true));
-            }
-            client
-                .get(format!("{base}/api/agents/messages"))
-                .header("X-Longhouse-Session-Id", current)
-                .query(&query)
-        }
-        "ack_message" => {
-            let Some(current) = session_id.as_deref() else {
-                return tool_result(
-                    id,
-                    json!({"error":"ack_message requires a current managed session context"}),
-                );
-            };
-            let Some(message_id) = arguments.get("message_id").and_then(Value::as_i64) else {
-                return tool_result(id, json!({"error":"ack_message requires message_id"}));
-            };
-            client
-                .post(format!("{base}/api/agents/messages/{message_id}/ack"))
-                .header("X-Longhouse-Session-Id", current)
-                .json(&json!({}))
-        }
-        "check_wall" => client
-            .get(format!("{base}/api/agents/sessions/wall"))
-            .query(&arguments),
-        "session_tail" => {
+        "tail" => {
             let Some(session_id) = arguments.get("session_id").and_then(Value::as_str) else {
-                return tool_result(id, json!({"error":"session_tail requires session_id"}));
+                return tool_result(id, json!({"error":"tail requires session_id"}));
             };
             client
                 .get(format!("{base}/api/agents/sessions/{session_id}/tail"))
@@ -393,10 +352,70 @@ async fn call_coordination_tool(id: Value, params: Option<&Value>, state: &Bridg
                         .to_string(),
                 )])
         }
+        "send" => {
+            let Some(current) = session_id.as_deref() else {
+                return tool_result(
+                    id,
+                    json!({"error":"send requires a current managed session context"}),
+                );
+            };
+            let Some(target_session_id) = arguments.get("session_id").and_then(Value::as_str)
+            else {
+                return tool_result(id, json!({"error":"send requires session_id"}));
+            };
+            let mut body = arguments.clone();
+            if let Some(map) = body.as_object_mut() {
+                map.remove("session_id");
+                map.insert("target_session_id".to_string(), json!(target_session_id));
+            }
+            client
+                .post(format!("{base}/api/agents/directed-inputs"))
+                .header("X-Longhouse-Session-Id", current)
+                .json(&body)
+        }
+        "inbox" => {
+            let Some(current) = session_id.as_deref() else {
+                return tool_result(
+                    id,
+                    json!({"error":"inbox requires a current managed session context"}),
+                );
+            };
+            let mut query = arguments.clone();
+            if let Some(map) = query.as_object_mut() {
+                if let Some(after_cursor) = map.remove("after_cursor") {
+                    map.insert("after_id".to_string(), after_cursor);
+                }
+            }
+            client
+                .get(format!("{base}/api/agents/directed-inputs"))
+                .header("X-Longhouse-Session-Id", current)
+                .query(&query)
+        }
+        "reply" => {
+            let Some(current) = session_id.as_deref() else {
+                return tool_result(
+                    id,
+                    json!({"error":"reply requires a current managed session context"}),
+                );
+            };
+            let Some(input_id) = arguments.get("input_id").and_then(Value::as_i64) else {
+                return tool_result(id, json!({"error":"reply requires input_id"}));
+            };
+            let mut body = arguments.clone();
+            if let Some(map) = body.as_object_mut() {
+                map.remove("input_id");
+            }
+            client
+                .post(format!(
+                    "{base}/api/agents/directed-inputs/{input_id}/reply"
+                ))
+                .header("X-Longhouse-Session-Id", current)
+                .json(&body)
+        }
         _ => return rpc_error(id, -32601, &format!("unknown coordination tool: {name}")),
     };
-    if let Some(token) = config.api_token.as_deref() {
-        request = request.header("X-Agents-Token", token);
+    if !request_token.is_empty() {
+        request = request.header("X-Agents-Token", request_token);
     }
     match request.send().await {
         Ok(response) => {
@@ -1035,7 +1054,7 @@ mod tests {
             .filter_map(|tool| tool["name"].as_str())
             .collect::<Vec<_>>();
         assert!(tool_names.contains(&"peers"));
-        assert!(tool_names.contains(&"message_session"));
+        assert_eq!(tool_names, vec!["peers", "tail", "send", "inbox", "reply"]);
 
         let state: Value =
             serde_json::from_slice(&std::fs::read(state_path(temp.path())).unwrap()).unwrap();

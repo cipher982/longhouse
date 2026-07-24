@@ -11,6 +11,7 @@ from fastapi import HTTPException
 from starlette.requests import Request
 
 import zerg.database as database_module
+from zerg.auth.managed_session_tokens import ManagedSessionToken
 from zerg.database import _live_database_enabled_for_process
 from zerg.database import catalog_db_dependency
 from zerg.database import get_catalog_session_factory
@@ -21,9 +22,9 @@ from zerg.database import make_sessionmaker
 from zerg.database import refresh_database_settings_from_env
 from zerg.models.live_store import LiveSessionCatalog
 from zerg.models.user import User
-from zerg.routers.agents_sessions import SessionMessageCreate
-from zerg.routers.agents_sessions import _attempt_catalog_message_delivery
-from zerg.routers.agents_sessions import create_message
+from zerg.routers.agents_sessions import DirectedInputCreate
+from zerg.routers.agents_sessions import _attempt_directed_input_delivery
+from zerg.routers.agents_sessions import create_directed_input
 from zerg.routers.agents_sessions import set_session_loop_mode
 from zerg.routers.agents_sessions import wall_query
 from zerg.routers.runtime import _resume_live_snoozed_sessions
@@ -171,17 +172,13 @@ def _request_with_headers(**headers: str) -> Request:
     return Request({"type": "http", "method": "GET", "path": "/", "headers": raw_headers})
 
 
-def test_catalog_wall_handles_empty_snapshot_without_message_rpc(monkeypatch):
+def test_catalog_wall_handles_empty_snapshot(monkeypatch):
     monkeypatch.setattr(database_module, "live_catalog_enabled", lambda: True)
     monkeypatch.setattr(
         "zerg.routers.agents_sessions.timeline_snapshot",
         lambda _params: {"observed_at": datetime.now(timezone.utc).isoformat(), "rows": [], "total": 0},
     )
 
-    async def fail_rpc(*_args, **_kwargs):
-        raise AssertionError("empty wall must not call pending-count RPC")
-
-    monkeypatch.setattr("zerg.routers.agents_sessions._catalog_message_call", fail_rpc)
     response = asyncio.run(
         wall_query(
             repo=None,
@@ -198,11 +195,11 @@ def test_catalog_wall_handles_empty_snapshot_without_message_rpc(monkeypatch):
     assert response.sessions == []
 
 
-def test_catalog_message_create_uses_catalog_rpc_without_sqlite(monkeypatch):
-    sender_id = UUID("00000000-0000-0000-0000-000000000011")
+def test_directed_input_create_uses_scoped_sender_and_catalog(monkeypatch):
+    source_id = UUID("00000000-0000-0000-0000-000000000011")
     target_id = UUID("00000000-0000-0000-0000-000000000012")
     snapshots = {
-        sender_id: SimpleNamespace(id=sender_id, device_id="device-7"),
+        source_id: SimpleNamespace(id=source_id, device_id="device-7"),
         target_id: SimpleNamespace(id=target_id, device_id="device-7", catalog_facts={"latest_run": None, "connections": []}),
     }
     observed = {}
@@ -210,62 +207,74 @@ def test_catalog_message_create_uses_catalog_rpc_without_sqlite(monkeypatch):
     monkeypatch.setattr(database_module, "live_catalog_enabled", lambda: True)
     monkeypatch.setattr(
         "zerg.services.live_control_catalog.load_live_control_session_snapshot",
-        lambda session_id: snapshots.get(UUID(str(session_id))),
+        lambda session_id, *, owner_id=None: snapshots.get(UUID(str(session_id))) if owner_id == 7 else None,
     )
 
     async def catalog_call(method, params):
         observed["method"] = method
         observed["params"] = params
         return {
-            "message": {
+            "directed_input": {
                 "id": 9,
-                "from_session_id": str(sender_id),
-                "to_session_id": str(target_id),
+                "source_session_id": str(source_id),
+                "target_session_id": str(target_id),
                 "text": params["text"],
-                "delivery_status": "stored_only",
-                "delivery_attempts": 0,
+                "reply_to_id": None,
+                "input_receipt": None,
             }
         }
 
-    monkeypatch.setattr("zerg.routers.agents_sessions._catalog_message_call", catalog_call)
+    monkeypatch.setattr("zerg.routers.agents_sessions._directed_input_call", catalog_call)
     response = asyncio.run(
-        create_message(
-            request=_request_with_headers(),
-            payload=SessionMessageCreate(from_session_id=sender_id, to_session_id=target_id, text="catalog native"),
+        create_directed_input(
+            request=_request_with_headers(x_longhouse_session_id=str(source_id)),
+            payload=DirectedInputCreate(target_session_id=target_id, text="catalog native"),
             db=None,
-            _auth=SimpleNamespace(owner_id=7, device_id="device-7"),
+            _auth=ManagedSessionToken(
+                owner_id=7,
+                session_id=str(source_id),
+                device_id="device-7",
+                scope="coordination",
+            ),
             _single=None,
         )
     )
 
     assert response["id"] == 9
-    assert observed["method"] == "session.message.create.v2"
+    assert observed["method"] == "directed_input.create.v2"
     assert observed["params"]["owner_id"] == 7
-    assert observed["params"]["from_session_id"] == str(sender_id)
+    assert observed["params"]["source_session_id"] == str(source_id)
 
 
-def test_catalog_message_delivery_preserves_owner_and_expected_status(monkeypatch):
+def test_directed_input_delivery_links_real_input_receipt(monkeypatch):
     sender_id = UUID("00000000-0000-0000-0000-000000000021")
     target_id = UUID("00000000-0000-0000-0000-000000000022")
     observed = {}
 
     async def create_input_response(**kwargs):
         observed["input"] = kwargs["body"]
-        return SimpleNamespace(outcome="sent")
+        return SimpleNamespace(outcome="sent", live_input_id="00000000-0000-0000-0000-000000000099")
 
     async def catalog_call(method, params):
         observed["method"] = method
         observed["params"] = params
-        return {"message": {"id": 13, "delivery_status": "delivered"}}
+        return {
+            "directed_input": {
+                "id": 13,
+                "input_receipt": {"id": params["input_receipt_id"], "status": "delivered"},
+            }
+        }
 
+    monkeypatch.setattr("zerg.services.live_control_catalog.live_control_session_capability_available", lambda *_args, **_kwargs: True)
     monkeypatch.setattr("zerg.routers.session_chat._create_catalog_session_input_response", create_input_response)
-    monkeypatch.setattr("zerg.routers.agents_sessions._catalog_message_call", catalog_call)
+    monkeypatch.setattr("zerg.routers.agents_sessions._directed_input_call", catalog_call)
     response = asyncio.run(
-        _attempt_catalog_message_delivery(
+        _attempt_directed_input_delivery(
             owner_id=7,
             sender_session=SimpleNamespace(id=sender_id, device_name="clifford", device_id="device-7"),
             target_session=SimpleNamespace(
                 id=target_id,
+                provider="codex",
                 catalog_facts={
                     "runtime": {"phase": "idle"},
                     "latest_run": {"id": "run-1", "ended_at": None},
@@ -278,46 +287,109 @@ def test_catalog_message_delivery_preserves_owner_and_expected_status(monkeypatc
                     ],
                 },
             ),
-            message={
+            directed_input={
                 "id": 13,
                 "text": "deliver me",
-                "delivery_status": "stored_only",
-                "delivery_attempts": 0,
             },
         )
     )
 
-    assert response["delivery_status"] == "delivered"
-    assert observed["method"] == "session.message.delivery.v2"
+    assert response["input_receipt"]["status"] == "delivered"
+    assert observed["method"] == "directed_input.link_receipt.v2"
     assert observed["params"]["owner_id"] == 7
-    assert observed["params"]["expected_status"] == "stored_only"
     assert observed["input"].intent == "auto"
-    assert '"type":"longhouse_collaboration_message"' in observed["input"].text
+    assert '"type":"longhouse_directed_input"' in observed["input"].text
+
+
+@pytest.mark.parametrize("provider", ["opencode", "cursor", "antigravity"])
+def test_directed_input_to_unsupported_provider_stays_durable_without_attempt(monkeypatch, provider):
+    directed_input = {"id": 16, "text": "store only"}
+    monkeypatch.setattr(
+        "zerg.services.live_control_catalog.live_control_session_capability_available",
+        lambda *_args, **_kwargs: pytest.fail("unsupported provider must not enter the delivery kernel"),
+    )
+
+    response = asyncio.run(
+        _attempt_directed_input_delivery(
+            owner_id=7,
+            sender_session=SimpleNamespace(id=UUID("00000000-0000-0000-0000-000000000041"), provider="claude"),
+            target_session=SimpleNamespace(id=UUID("00000000-0000-0000-0000-000000000042"), provider=provider),
+            directed_input=directed_input,
+        )
+    )
+
+    assert response is directed_input
+
+
+def test_directed_input_delivery_links_failed_receipt_when_attempt_started(monkeypatch):
+    target_id = UUID("00000000-0000-0000-0000-000000000023")
+    receipt_id = "00000000-0000-0000-0000-000000000097"
+    observed = {}
+
+    async def create_input_response(**_kwargs):
+        raise HTTPException(status_code=502, detail={"error_code": "provider_rejected"})
+
+    async def load_receipt(**kwargs):
+        observed["lookup"] = kwargs
+        return SimpleNamespace(id=receipt_id, status="failed")
+
+    async def catalog_call(method, params):
+        observed["method"] = method
+        observed["link"] = params
+        return {"directed_input": {"id": 15, "input_receipt": {"id": receipt_id, "status": "failed"}}}
+
+    monkeypatch.setattr("zerg.services.live_control_catalog.live_control_session_capability_available", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr("zerg.routers.session_chat._create_catalog_session_input_response", create_input_response)
+    monkeypatch.setattr(
+        "zerg.services.live_session_inputs.load_live_input_receipt_by_client_request_best_effort",
+        load_receipt,
+    )
+    monkeypatch.setattr("zerg.routers.agents_sessions._directed_input_call", catalog_call)
+
+    response = asyncio.run(
+        _attempt_directed_input_delivery(
+            owner_id=7,
+            sender_session=SimpleNamespace(id=UUID("00000000-0000-0000-0000-000000000024")),
+            target_session=SimpleNamespace(
+                id=target_id,
+                provider="codex",
+                catalog_facts={"runtime": {"phase": "idle"}},
+            ),
+            directed_input={"id": 15, "text": "attempt me"},
+        )
+    )
+
+    assert response["input_receipt"]["status"] == "failed"
+    assert observed["lookup"]["client_request_id"] == "directed-input-15"
+    assert observed["method"] == "directed_input.link_receipt.v2"
+    assert observed["link"]["input_receipt_id"] == receipt_id
 
 
 @pytest.mark.parametrize("target_phase", ["thinking", "running", "blocked", "stalled", ""])
-def test_catalog_message_delivery_queues_until_quiescent(monkeypatch, target_phase):
+def test_directed_input_delivery_queues_until_quiescent(monkeypatch, target_phase):
     sender_id = UUID("00000000-0000-0000-0000-000000000031")
     target_id = UUID("00000000-0000-0000-0000-000000000032")
     observed = {}
 
     async def create_input_response(**kwargs):
         observed["input"] = kwargs["body"]
-        return SimpleNamespace(outcome="queued")
+        return SimpleNamespace(outcome="queued", live_input_id="00000000-0000-0000-0000-000000000098")
 
     async def catalog_call(method, params):
         observed["method"] = method
         observed["params"] = params
-        return {"message": {"id": 14, "delivery_status": params["delivery_status"]}}
+        return {"directed_input": {"id": 14, "input_receipt": {"status": "queued"}}}
 
+    monkeypatch.setattr("zerg.services.live_control_catalog.live_control_session_capability_available", lambda *_args, **_kwargs: True)
     monkeypatch.setattr("zerg.routers.session_chat._create_catalog_session_input_response", create_input_response)
-    monkeypatch.setattr("zerg.routers.agents_sessions._catalog_message_call", catalog_call)
+    monkeypatch.setattr("zerg.routers.agents_sessions._directed_input_call", catalog_call)
     response = asyncio.run(
-        _attempt_catalog_message_delivery(
+        _attempt_directed_input_delivery(
             owner_id=7,
             sender_session=SimpleNamespace(id=sender_id, provider="claude", device_name="cinder"),
             target_session=SimpleNamespace(
                 id=target_id,
+                provider="codex",
                 catalog_facts={
                     "runtime": {"phase": target_phase},
                     "latest_run": {"id": "run-1", "ended_at": None},
@@ -330,18 +402,13 @@ def test_catalog_message_delivery_queues_until_quiescent(monkeypatch, target_pha
                     ],
                 },
             ),
-            message={
+            directed_input={
                 "id": 14,
                 "text": "queue me",
-                "delivery_status": "stored_only",
-                "delivery_attempts": 0,
             },
         )
     )
 
-    assert response["delivery_status"] == "queued"
+    assert response["input_receipt"]["status"] == "queued"
     assert observed["input"].intent == "queue"
-    assert observed["method"] == "session.message.delivery.v2"
-    assert observed["params"]["expected_status"] == "stored_only"
-    assert observed["params"]["delivery_status"] == "queued"
-    assert observed["params"]["delivered_via"] == "live_input_queue"
+    assert observed["method"] == "directed_input.link_receipt.v2"

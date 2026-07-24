@@ -136,7 +136,7 @@ def test_initialize_live_database_creates_only_live_tables(tmp_path):
         "live_console_turns",
         "live_session_live_previews",
         "live_sessions",
-        "session_messages",
+        "directed_inputs",
         "runner_enroll_tokens",
         "runner_health_incidents",
         "runner_jobs",
@@ -533,6 +533,7 @@ def test_live_archive_outbox_drains_heartbeat_to_archive_idempotently(tmp_path):
     finally:
         archive_engine.dispose()
         live_engine.dispose()
+
 
 def test_live_archive_outbox_drains_managed_local_launch_to_archive_idempotently(tmp_path):
     now = datetime.now(timezone.utc)
@@ -1284,18 +1285,13 @@ def test_live_archive_outbox_drains_runtime_event_to_archive(tmp_path):
         assert drain_result.failed == 0
 
         with ArchiveSession() as archive_db:
-            state = (
-                archive_db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == event.runtime_key).one()
-            )
+            state = archive_db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == event.runtime_key).one()
             assert state.phase == "running"
             assert state.active_tool == "Shell"
             session = archive_db.query(AgentSession).filter(AgentSession.id == session_id).one()
             assert session.user_state == "active"
             assert session.user_state_at is not None
-            assert (
-                archive_db.query(SessionObservation).filter(SessionObservation.runtime_key == event.runtime_key).count()
-                == 1
-            )
+            assert archive_db.query(SessionObservation).filter(SessionObservation.runtime_key == event.runtime_key).count() == 1
 
         with LiveSession() as live_db:
             row = live_db.query(LiveArchiveOutbox).one()
@@ -1308,10 +1304,7 @@ def test_live_archive_outbox_drains_runtime_event_to_archive(tmp_path):
 
         assert drain_result.processed == 0
         with ArchiveSession() as archive_db:
-            assert (
-                archive_db.query(SessionObservation).filter(SessionObservation.runtime_key == event.runtime_key).count()
-                == 1
-            )
+            assert archive_db.query(SessionObservation).filter(SessionObservation.runtime_key == event.runtime_key).count() == 1
     finally:
         archive_engine.dispose()
         live_engine.dispose()
@@ -1374,16 +1367,8 @@ def test_live_archive_outbox_runtime_event_retry_is_idempotent(tmp_path, monkeyp
         assert drain_result.drained == 0
         assert drain_result.failed == 1
         with ArchiveSession() as archive_db:
-            assert (
-                archive_db.query(SessionRuntimeState)
-                .filter(SessionRuntimeState.runtime_key == event.runtime_key)
-                .count()
-                == 0
-            )
-            assert (
-                archive_db.query(SessionObservation).filter(SessionObservation.runtime_key == event.runtime_key).count()
-                == 0
-            )
+            assert archive_db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == event.runtime_key).count() == 0
+            assert archive_db.query(SessionObservation).filter(SessionObservation.runtime_key == event.runtime_key).count() == 0
         with LiveSession() as live_db:
             row = live_db.query(LiveArchiveOutbox).one()
             assert row.drained_at is None
@@ -1408,16 +1393,8 @@ def test_live_archive_outbox_runtime_event_retry_is_idempotent(tmp_path, monkeyp
         assert drain_result.drained == 1
         assert drain_result.failed == 0
         with ArchiveSession() as archive_db:
-            assert (
-                archive_db.query(SessionRuntimeState)
-                .filter(SessionRuntimeState.runtime_key == event.runtime_key)
-                .count()
-                == 1
-            )
-            assert (
-                archive_db.query(SessionObservation).filter(SessionObservation.runtime_key == event.runtime_key).count()
-                == 1
-            )
+            assert archive_db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == event.runtime_key).count() == 1
+            assert archive_db.query(SessionObservation).filter(SessionObservation.runtime_key == event.runtime_key).count() == 1
     finally:
         archive_engine.dispose()
         live_engine.dispose()
@@ -1687,9 +1664,7 @@ def test_fresh_live_launch_readiness_feeds_session_response_before_archive(tmp_p
 
         with ArchiveSession() as archive_db:
             session = archive_db.get(AgentSession, session_id)
-            cold_attempt = (
-                archive_db.query(SessionLaunchAttempt).filter(SessionLaunchAttempt.session_id == session_id).one()
-            )
+            cold_attempt = archive_db.query(SessionLaunchAttempt).filter(SessionLaunchAttempt.session_id == session_id).one()
             live_map = latest_live_launch_readiness([session_id], now=now)
             monkeypatch.setattr(
                 session_views_module,

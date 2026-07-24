@@ -169,29 +169,36 @@ export default function MachineAPIPage() {
 # Returns distinct projects, providers, and machine IDs for UI dropdowns`}
       </CodeBlock>
 
-      <h3>Send a message</h3>
-      <CodeBlock title="POST /api/agents/messages">
-        {`curl -X POST http://localhost:8080/api/agents/messages \\
+      <h3>Send directed input</h3>
+      <CodeBlock title="POST /api/agents/directed-inputs">
+        {`curl -X POST http://localhost:8080/api/agents/directed-inputs \\
+  -H "X-Agents-Token: $LONGHOUSE_COORDINATION_TOKEN" \\
+  -H "X-Longhouse-Session-Id: $SOURCE_SESSION_ID" \\
   -H "Content-Type: application/json" \\
-  -d '{"to_session_id": "SESSION_ID", "text": "Check the failing test"}'
+  -d '{"target_session_id": "TARGET_SESSION_ID", "text": "Check the failing test", "client_request_id": "check-test-1"}'
 
-# Requires X-Longhouse-Session-Id header or from_session_id in body`}
+# Persists before any safe-boundary delivery attempt`}
       </CodeBlock>
 
-      <h3>List messages</h3>
-      <CodeBlock title="GET /api/agents/messages">
-        {`curl "http://localhost:8080/api/agents/messages?session_id=SESSION_ID"
+      <h3>Recover directed input</h3>
+      <CodeBlock title="GET /api/agents/directed-inputs">
+        {`curl "http://localhost:8080/api/agents/directed-inputs?direction=inbound&after_id=0&limit=20" \\
+  -H "X-Agents-Token: $LONGHOUSE_COORDINATION_TOKEN" \\
+  -H "X-Longhouse-Session-Id: $CURRENT_SESSION_ID"
 
 # Query parameters:
-#   session_id           - session to inspect
-#   direction            - inbound|outbound|all (default: inbound)
-#   unacknowledged_only  - only undelivered messages (default: false)
-#   limit                - max results (default 50, max 200)`}
+#   direction  - inbound|outbound|all (default: inbound)
+#   after_id   - stable input cursor (default: 0)
+#   limit      - max results (default 20, max 200)`}
       </CodeBlock>
 
-      <h3>Acknowledge message</h3>
-      <CodeBlock title="POST /api/agents/messages/:id/ack">
-        {`curl -X POST http://localhost:8080/api/agents/messages/MESSAGE_ID/ack`}
+      <h3>Reply to directed input</h3>
+      <CodeBlock title="POST /api/agents/directed-inputs/:id/reply">
+        {`curl -X POST http://localhost:8080/api/agents/directed-inputs/INPUT_ID/reply \\
+  -H "X-Agents-Token: $LONGHOUSE_COORDINATION_TOKEN" \\
+  -H "X-Longhouse-Session-Id: $CURRENT_SESSION_ID" \\
+  -H "Content-Type: application/json" \\
+  -d '{"text": "The test is fixed", "client_request_id": "check-test-reply-1"}'`}
       </CodeBlock>
 
       <h3>Send live message to active session</h3>

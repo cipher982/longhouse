@@ -23,7 +23,6 @@ def test_execution_core_tools_are_builtin():
 def test_execution_core_tools_no_coordinator_only_tools():
     """Execution agents should not receive tools that spawn or steer peer work."""
     coordinator_only = {
-        "message_session",
         "peers",
         "runner_create_enroll_token",
     }

@@ -39,7 +39,7 @@ from sqlalchemy.schema import CreateColumn
 from zerg.catalogd.models import CatalogBase
 from zerg.models.live_store import LiveBase
 
-CATALOG_SCHEMA_VERSION = 2
+CATALOG_SCHEMA_VERSION = 3
 DEFAULT_BUSY_TIMEOUT_MS = 5_000
 
 
@@ -139,9 +139,7 @@ CATALOG_SCHEMA_GENERATION = _schema_generation()
 # Every version bump must register the transaction that moves the preceding
 # durable version forward. An empty registry is intentional for initial v1.
 def _hide_empty_human_launch_shells(connection: Connection) -> None:
-    human_launch = (
-        "(launch_actor IN ('user', 'human_ui', 'human_shell') " "OR launch_surface IN ('web', 'ios', 'console', 'terminal', 'api'))"
-    )
+    human_launch = "(launch_actor IN ('user', 'human_ui', 'human_shell') OR launch_surface IN ('web', 'ios', 'console', 'terminal', 'api'))"
     connection.exec_driver_sql(
         "UPDATE live_session_catalog SET hidden_from_default_timeline = 1 "
         "WHERE hidden_from_default_timeline = 0 AND transcript_revision = 0 "
@@ -157,6 +155,12 @@ def _hide_empty_human_launch_shells(connection: Connection) -> None:
         "WHERE hidden_from_default_timeline = 0 AND transcript_revision = 0 "
         "AND user_messages = 0 AND assistant_messages = 0 AND tool_calls = 0 AND " + human_launch
     )
+
+
+def _replace_session_messages_with_directed_inputs(connection: Connection) -> None:
+    """Discard the pre-launch collaboration prototype before creating v1."""
+
+    connection.exec_driver_sql("DROP TABLE IF EXISTS session_messages")
 
 
 _FACT_REDUCER_V1_TABLES = ("fact_heads", "fact_receipts", "fact_conflicts")
@@ -302,7 +306,7 @@ def _initialize_fact_reducer_schema_in_transaction(connection: Connection) -> No
                 raise CatalogSchemaMismatchError("catalog fact reducer v2 schema is ambiguous")
             connection.exec_driver_sql("ALTER TABLE fact_heads ADD COLUMN session_id VARCHAR(255)")
             connection.exec_driver_sql(
-                "CREATE INDEX ix_fact_heads_session_family_recent " "ON fact_heads(session_id, family, updated_commit_seq)"
+                "CREATE INDEX ix_fact_heads_session_family_recent ON fact_heads(session_id, family, updated_commit_seq)"
             )
             # Schema-v2 facts lack authority classes and true launch-scoped run
             # identities. Rebuild shadow-only state instead of projecting mixed
@@ -333,6 +337,7 @@ def _initialize_fact_reducer_schema_in_transaction(connection: Connection) -> No
 
 CATALOG_SCHEMA_MIGRATIONS: dict[int, Callable[[Connection], None]] = {
     1: _hide_empty_human_launch_shells,
+    2: _replace_session_messages_with_directed_inputs,
 }
 
 
@@ -495,7 +500,7 @@ def read_catalog_meta(engine: Engine, *, expected_schema_version: int | None = N
     metadata = _decode_meta(rows[0], expected_schema_version=expected_schema_version)
     if user_version != metadata.schema_version:
         raise CatalogSchemaMismatchError(
-            f"PRAGMA user_version={user_version} does not match " f"catalog metadata schema_version={metadata.schema_version}"
+            f"PRAGMA user_version={user_version} does not match catalog metadata schema_version={metadata.schema_version}"
         )
     return metadata
 
