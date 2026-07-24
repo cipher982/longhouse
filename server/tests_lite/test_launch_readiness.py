@@ -106,9 +106,8 @@ def test_required_workflow_must_succeed(monkeypatch):
     assert checks == [
         mod.Check(
             "workflow:Launch Gate",
-            False,
+            "failed",
             "run 12 completed/skipped https://example.test/run/12",
-            terminal=True,
         )
     ]
 
@@ -128,7 +127,7 @@ def test_missing_required_workflow_includes_dispatch_hint(monkeypatch):
     assert checks == [
         mod.Check(
             "workflow:Launch Gate",
-            False,
+            "missing",
             "no exact-SHA run found",
             hint=(
                 "No exact-SHA evidence exists for this required workflow. "
@@ -136,7 +135,6 @@ def test_missing_required_workflow_includes_dispatch_hint(monkeypatch):
                 "that points at 3b4031587155: "
                 "gh workflow run launch-gate.yml -R cipher982/longhouse --ref <branch-or-tag>"
             ),
-            state="missing",
         )
     ]
 
@@ -159,7 +157,9 @@ def test_default_workflows_use_release_artifact_evidence():
 def test_human_output_prints_hints(capsys):
     mod = _load_module()
 
-    mod.print_human([mod.Check("workflow:Launch Gate", False, "no exact-SHA run found", hint="dispatch it")])
+    mod.print_human(
+        [mod.Check("workflow:Launch Gate", "missing", "no exact-SHA run found", hint="dispatch it")]
+    )
 
     captured = capsys.readouterr()
     assert "FAIL workflow:Launch Gate: no exact-SHA run found" in captured.out
@@ -172,9 +172,8 @@ def test_wait_mode_exits_on_terminal_workflow_failure(monkeypatch, capsys):
     checks = [
         mod.Check(
             "workflow:Launch Gate",
-            False,
+            "failed",
             "run 12 completed/failure https://example.test/run/12",
-            terminal=True,
         )
     ]
 
@@ -216,10 +215,9 @@ def test_wait_mode_missing_workflow_fails_after_discovery_grace(monkeypatch, cap
         return [
             mod.Check(
                 "workflow:Local Runtime Binary Release",
-                False,
+                "missing",
                 "no exact-SHA run found",
                 hint="dispatch it",
-                state="missing",
             )
         ]
 
@@ -256,9 +254,9 @@ def test_wait_mode_accepts_workflow_appearing_before_grace(monkeypatch, capsys):
     sha = "3b40315871558fe77984c90423851d0194337923"
     clock = _FakeClock()
     sequences = [
-        mod.Check("workflow:CI", False, "no exact-SHA run found", state="missing"),
-        mod.Check("workflow:CI", False, "run 12 queued/-", state="pending"),
-        mod.Check("workflow:CI", True, "run 12 completed/success"),
+        mod.Check("workflow:CI", "missing", "no exact-SHA run found"),
+        mod.Check("workflow:CI", "pending", "run 12 queued/-"),
+        mod.Check("workflow:CI", "succeeded", "run 12 completed/success"),
     ]
 
     def fake_checks(args, target, required, **kwargs):
@@ -301,7 +299,7 @@ def test_wait_mode_suppresses_unchanged_pending_output(monkeypatch, capsys):
         mod,
         "run_checks",
         lambda args, target, required, **kwargs: [
-            mod.Check("workflow:CI", False, "run 12 in_progress/-", state="pending")
+            mod.Check("workflow:CI", "pending", "run 12 in_progress/-")
         ],
     )
     monkeypatch.setattr(mod.time, "monotonic", clock.monotonic)
@@ -331,17 +329,24 @@ def test_run_checks_memoizes_successful_immutable_release_checks(monkeypatch):
     monkeypatch.setattr(
         mod,
         "check_latest_release",
-        lambda repo, target: (mod.Check("release:latest", True, f"v0.1.30 commit={target}"), "v0.1.30"),
+        lambda repo, target: (
+            mod.Check("release:latest", "succeeded", f"v0.1.30 commit={target}"),
+            "v0.1.30",
+        ),
     )
     monkeypatch.setattr(mod, "runtime_artifact_components", lambda: ("engine",))
 
     def package(tag, target):
         calls["package"] += 1
-        return mod.Check("package:pypi", True, f"version=0.1.30 commit={target}")
+        return mod.Check("package:pypi", "succeeded", f"version=0.1.30 commit={target}")
 
     def artifact(root, tag, target, component):
         calls["artifact"] += 1
-        return mod.Check(f"runtime-artifact:{component}", True, f"version=0.1.30 commit={target}")
+        return mod.Check(
+            f"runtime-artifact:{component}",
+            "succeeded",
+            f"version=0.1.30 commit={target}",
+        )
 
     monkeypatch.setattr(mod, "check_public_package", package)
     monkeypatch.setattr(mod, "check_runtime_artifact", artifact)
@@ -358,10 +363,10 @@ def test_check_states_cover_machine_readable_contract():
     mod = _load_module()
 
     checks = [
-        mod.Check("missing", False, "none", state="missing"),
-        mod.Check("pending", False, "queued"),
-        mod.Check("succeeded", True, "done"),
-        mod.Check("failed", False, "bad", terminal=True),
+        mod.Check("missing", "missing", "none"),
+        mod.Check("pending", "pending", "queued"),
+        mod.Check("succeeded", "succeeded", "done"),
+        mod.Check("failed", "failed", "bad"),
     ]
 
     assert [check.state for check in checks] == ["missing", "pending", "succeeded", "failed"]

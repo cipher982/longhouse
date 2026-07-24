@@ -30,17 +30,17 @@ DEFAULT_REQUIRED_WORKFLOWS = (
 @dataclass(frozen=True)
 class Check:
     name: str
-    ok: bool
+    state: str
     detail: str
-    terminal: bool = False
     hint: str | None = None
-    state: str = ""
 
-    def __post_init__(self) -> None:
-        if self.state:
-            return
-        state = "succeeded" if self.ok else ("failed" if self.terminal else "pending")
-        object.__setattr__(self, "state", state)
+    @property
+    def ok(self) -> bool:
+        return self.state == "succeeded"
+
+    @property
+    def terminal(self) -> bool:
+        return self.state == "failed"
 
 
 WORKFLOW_DISPATCH_FILES = {
@@ -173,10 +173,9 @@ def check_workflows(repo: str, sha: str, required: tuple[str, ...]) -> list[Chec
             checks.append(
                 Check(
                     f"workflow:{workflow}",
-                    False,
+                    "missing",
                     "no exact-SHA run found",
                     hint=missing_workflow_hint(repo, sha, workflow),
-                    state="missing",
                 )
             )
             continue
@@ -189,9 +188,8 @@ def check_workflows(repo: str, sha: str, required: tuple[str, ...]) -> list[Chec
         checks.append(
             Check(
                 f"workflow:{workflow}",
-                ok,
+                "succeeded" if ok else ("failed" if terminal else "pending"),
                 f"run {run_id} {status}/{conclusion or '-'} {url}",
-                terminal=terminal,
             )
         )
     return checks
@@ -210,16 +208,16 @@ def check_live_surface(name: str, url: str, sha: str) -> Check:
     try:
         payload = fetch_json_url(url)
     except Exception as exc:
-        return Check(f"live:{name}", False, f"{url} unreachable: {exc}")
+        return Check(f"live:{name}", "pending", f"{url} unreachable: {exc}")
     build = payload.get("build")
     if not isinstance(build, dict):
-        return Check(f"live:{name}", False, f"{url} response missing build object")
+        return Check(f"live:{name}", "pending", f"{url} response missing build object")
     commit = str(build.get("commit") or "")
     status = str(payload.get("status") or "")
     ok = commit_matches(commit, sha) and status in {"ok", "healthy", "degraded"}
     return Check(
         f"live:{name}",
-        ok,
+        "succeeded" if ok else "pending",
         f"status={status or '<missing>'} commit={commit or '<missing>'} url={url}",
     )
 
@@ -235,9 +233,9 @@ def check_latest_release(repo: str, sha: str) -> tuple[Check, str | None]:
     try:
         tag, commit = latest_release(repo)
     except Exception as exc:
-        return Check("release:latest", False, f"could not resolve latest release: {exc}"), None
+        return Check("release:latest", "pending", f"could not resolve latest release: {exc}"), None
     ok = commit_matches(commit, sha)
-    return Check("release:latest", ok, f"{tag} commit={commit}"), tag
+    return Check("release:latest", "succeeded" if ok else "pending", f"{tag} commit={commit}"), tag
 
 
 def check_public_package(tag: str, sha: str) -> Check:
@@ -257,18 +255,22 @@ def check_public_package(tag: str, sha: str) -> Check:
         check=False,
     )
     if proc.returncode != 0:
-        return Check("package:pypi", False, (proc.stderr or proc.stdout).strip())
+        return Check("package:pypi", "pending", (proc.stderr or proc.stdout).strip())
     try:
         payload = json.loads(proc.stdout)
     except json.JSONDecodeError as exc:
-        return Check("package:pypi", False, f"version command did not emit JSON: {exc}")
+        return Check("package:pypi", "pending", f"version command did not emit JSON: {exc}")
     build = payload.get("build") if isinstance(payload, dict) else None
     if not isinstance(build, dict):
-        return Check("package:pypi", False, "version payload missing build object")
+        return Check("package:pypi", "pending", "version payload missing build object")
     commit = str(build.get("commit") or "")
     actual_version = str(build.get("version") or "")
     ok = commit_matches(commit, sha) and actual_version == version
-    return Check("package:pypi", ok, f"version={actual_version} commit={commit}")
+    return Check(
+        "package:pypi",
+        "succeeded" if ok else "pending",
+        f"version={actual_version} commit={commit}",
+    )
 
 
 def runtime_artifact_components() -> tuple[str, ...]:
@@ -320,18 +322,30 @@ def check_runtime_artifact(root: Path, tag: str, sha: str, component: str) -> Ch
         )
     if proc.returncode != 0:
         detail = (proc.stderr or proc.stdout).strip()
-        return Check(f"runtime-artifact:{component}", False, detail)
+        return Check(f"runtime-artifact:{component}", "pending", detail)
     try:
         payload = json.loads(proc.stdout)
     except json.JSONDecodeError as exc:
-        return Check(f"runtime-artifact:{component}", False, f"smoke did not emit JSON: {exc}")
+        return Check(
+            f"runtime-artifact:{component}",
+            "pending",
+            f"smoke did not emit JSON: {exc}",
+        )
     build = payload.get("build_identity") if isinstance(payload, dict) else None
     if not isinstance(build, dict):
-        return Check(f"runtime-artifact:{component}", False, "smoke payload missing build_identity object")
+        return Check(
+            f"runtime-artifact:{component}",
+            "pending",
+            "smoke payload missing build_identity object",
+        )
     commit = str(build.get("commit") or "")
     actual_version = str(build.get("version") or "")
     ok = commit_matches(commit, sha) and actual_version == version
-    return Check(f"runtime-artifact:{component}", ok, f"version={actual_version} commit={commit}")
+    return Check(
+        f"runtime-artifact:{component}",
+        "succeeded" if ok else "pending",
+        f"version={actual_version} commit={commit}",
+    )
 
 
 def print_human(checks: list[Check]) -> None:
@@ -400,7 +414,6 @@ def _expire_missing_workflows(checks: list[Check]) -> list[Check]:
     return [
         replace(
             check,
-            terminal=True,
             state="failed",
             detail=f"{check.detail} after workflow discovery grace",
         )
@@ -465,7 +478,10 @@ def main(argv: list[str] | None = None) -> int:
                     "target_sha": sha,
                     "ok": ok,
                     "attempts": attempt,
-                    "checks": [check.__dict__ for check in checks],
+                    "checks": [
+                        {**check.__dict__, "ok": check.ok, "terminal": check.terminal}
+                        for check in checks
+                    ],
                 },
                 indent=2,
             )
