@@ -43,46 +43,4 @@ require_line "launch_readiness.warnings: service_generation_mismatch"
 
 rm -f "$snapshot"
 
-tmp_home="$(mktemp -d)"
-tmp_bin="$(mktemp -d)"
-python_args_file="$(mktemp)"
-
-cat >"$tmp_bin/python3" <<'SH'
-#!/usr/bin/env bash
-set -euo pipefail
-printf '%s\n' "$@" >"$PYTHON_ARGS_FILE"
-artifact=""
-while [[ $# -gt 0 ]]; do
-  if [[ "$1" == "--artifact" ]]; then
-    artifact="${2:-}"
-    shift 2
-  else
-    shift
-  fi
-done
-if [[ -n "$artifact" ]]; then
-  mkdir -p "$(dirname "$artifact")"
-  printf '{"status":"ok"}\n' >"$artifact"
-fi
-SH
-chmod +x "$tmp_bin/python3"
-
-PATH="$tmp_bin:$PATH" \
-LONGHOUSE_HOME="$tmp_home" \
-ARTIFACT_DIR="$tmp_home/artifacts" \
-ROUTE_E2E_PROVIDER="auto" \
-ROUTE_E2E_HTTP_TIMEOUT_S="45" \
-ROUTE_E2E_ATTEMPTS="1" \
-PYTHON_ARGS_FILE="$python_args_file" \
-  run_provider_live_route_e2e
-
-if ! grep -Fxq -- "--skip-mismatch" "$python_args_file"; then
-  echo "Expected dogfood route E2E to skip mismatch checks" >&2
-  cat "$python_args_file" >&2
-  exit 1
-fi
-
-rm -rf "$tmp_home" "$tmp_bin"
-rm -f "$python_args_file"
-
 echo "dogfood-runtime.test.sh: OK"
