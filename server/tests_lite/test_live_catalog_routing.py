@@ -23,6 +23,7 @@ from zerg.database import refresh_database_settings_from_env
 from zerg.models.live_store import LiveSessionCatalog
 from zerg.models.user import User
 from zerg.routers.agents_sessions import DirectedInputCreate
+from zerg.routers.agents_sessions import DirectedInputReply
 from zerg.routers.agents_sessions import _attempt_directed_input_delivery
 from zerg.routers.agents_sessions import create_directed_input
 from zerg.routers.agents_sessions import set_session_loop_mode
@@ -193,6 +194,17 @@ def test_catalog_wall_handles_empty_snapshot(monkeypatch):
     )
     assert response.total == 0
     assert response.sessions == []
+
+
+def test_directed_input_models_reject_oversized_bodies():
+    session_id = UUID("22222222-2222-2222-2222-222222222222")
+
+    DirectedInputCreate(target_session_id=session_id, text="x" * 4000)
+    DirectedInputReply(text="x" * 4000)
+    with pytest.raises(ValueError):
+        DirectedInputCreate(target_session_id=session_id, text="x" * 4001)
+    with pytest.raises(ValueError):
+        DirectedInputReply(text="x" * 4001)
 
 
 def test_directed_input_create_uses_scoped_sender_and_catalog(monkeypatch):

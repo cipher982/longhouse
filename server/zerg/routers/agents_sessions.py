@@ -21,6 +21,7 @@ from fastapi import Request
 from fastapi import Response
 from fastapi import status
 from fastapi.responses import JSONResponse
+from pydantic import Field
 from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
 
@@ -169,6 +170,7 @@ VALID_USER_STATES = {"active", "parked", "snoozed", "archived"}
 _CURRENT_SESSION_HEADER = "X-Longhouse-Session-Id"
 _ACTIVE_LIVE_SESSION_CANDIDATE_MULTIPLIER = 5
 _ACTIVE_LIVE_SESSION_CANDIDATE_MAX = 1000
+_DIRECTED_INPUT_MAX_CHARS = 4000
 
 
 class ConsoleTurnCreate(UTCBaseModel):
@@ -2172,14 +2174,14 @@ class DirectedInputCreate(UTCBaseModel):
     """Create provider-neutral input for another managed session."""
 
     target_session_id: UUID
-    text: str
+    text: str = Field(max_length=_DIRECTED_INPUT_MAX_CHARS)
     client_request_id: str | None = None
 
 
 class DirectedInputReply(UTCBaseModel):
     """Reply to one inbound directed input."""
 
-    text: str
+    text: str = Field(max_length=_DIRECTED_INPUT_MAX_CHARS)
     client_request_id: str | None = None
 
 
