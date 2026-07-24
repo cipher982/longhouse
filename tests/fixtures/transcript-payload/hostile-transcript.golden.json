@@ -21,20 +21,13 @@
   },
   {
     "calls" : [
-
-    ],
-    "collapsed" : false,
-    "duration" : "1.0s",
-    "id" : "tool:3",
-    "input" : "{\n  \"issueKey\" : \"PROJ-101\"\n}",
-    "kind" : "tool",
-    "output" : "PROJ-101: blocked on MR rename by Alex at 18:42.",
-    "status" : "done",
-    "subtitle" : "",
-    "title" : "getJiraIssue"
-  },
-  {
-    "calls" : [
+      {
+        "input" : "{\n  \"issueKey\" : \"PROJ-101\"\n}",
+        "output" : "PROJ-101: blocked on MR rename by Alex at 18:42.",
+        "status" : "done",
+        "subtitle" : "",
+        "title" : "getJiraIssue"
+      },
       {
         "input" : "{\n  \"command\" : \"git log --oneline\"\n}",
         "output" : "line 01 of changelog parsing output\nline 02 of changelog parsing output\nline 03 of changelog parsing output\nline 04 of changelog parsing output\nline 05 of changelog parsing output\nline 06 of changelog parsing output\nline 07 of changelog parsing output\nline 08 of changelog parsing output\nline 09 of changelog parsing output\nline 10 of changelog parsing output",
@@ -58,10 +51,10 @@
       }
     ],
     "collapsed" : false,
-    "id" : "passive:5",
-    "kind" : "passiveGroup",
-    "subtitle" : "3",
-    "title" : "Searched 2 · Read 1"
+    "id" : "activity:3",
+    "kind" : "activityGroup",
+    "subtitle" : "4",
+    "title" : "Searched 2 · Read 1 · Ran 1"
   },
   {
     "calls" : [

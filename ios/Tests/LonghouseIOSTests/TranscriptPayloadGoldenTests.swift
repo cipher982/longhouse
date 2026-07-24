@@ -65,12 +65,12 @@ final class TranscriptPayloadGoldenTests: XCTestCase {
 
         let kinds = payload.map(\.kind)
         XCTAssertEqual(kinds.first, "message", "leads with the user message")
-        XCTAssertTrue(kinds.contains("passiveGroup"), "the shell read and two searches collapse into a passive group")
+        XCTAssertTrue(kinds.contains("activityGroup"), "the shell read and two searches collapse into an activity group")
 
         // The read-only Bash call and two consecutive searches collapse;
         // getJiraIssue stays as a full tool row.
-        let passive = payload.first { $0.kind == "passiveGroup" }
-        XCTAssertEqual(passive?.calls.count, 3, "passive group holds the shell read and both searches")
+        let activity = payload.first { $0.kind == "activityGroup" }
+        XCTAssertEqual(activity?.calls.count, 4, "activity group holds all completed supporting calls")
 
         // The orphan/dropped result is surfaced (not erased) with a loud status.
         let dropped = payload.first { $0.status == "dropped" || $0.status == "orphan" }

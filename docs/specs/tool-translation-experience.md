@@ -85,6 +85,7 @@ The initial presentation vocabulary is intentionally closed:
 - `Viewed`
 - `Called`
 - `Asked`
+- `Waited`
 
 Adding a verb requires a spec change and evidence that it describes an
 observable operation rather than inferred agent intent. Do not grow this into
@@ -119,12 +120,13 @@ A wrapper may recede and its children may appear as canonical calls only when:
 Otherwise, keep the wrapper prominent. Emission batches are wire facts;
 parallel execution is not inferred.
 
-## Never hide by default
+## Never omit by default
 
 - failures, nonzero exits, and unattributed results
 - pending, dropped, orphaned, or partially parsed calls
 - approvals and user-input requests
-- edits, external side effects, and other consequential actions
+- edits, external side effects, and other consequential actions from the
+  collapsed summary (the exact call may live inside an activity disclosure)
 - evidence that transcript or translation is incomplete
 
 Successful waits, tool discovery, empty results, and recovered wrappers may

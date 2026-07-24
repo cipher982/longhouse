@@ -54,7 +54,7 @@
       { "kind": "message", "role": "user", "event_id": 11 }
     ],
     "tool_count": 0,
-    "noise_group_count": 0,
+    "activity_group_count": 0,
     "orphan_tool_ids": []
   }
 }

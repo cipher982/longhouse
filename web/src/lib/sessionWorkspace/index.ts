@@ -1,7 +1,7 @@
 export type {
   EventFilter,
   ManagedLaunchSuggestion,
-  NoiseGroup,
+  ActivityGroup,
   SessionInteractionCapabilities,
   SessionInteractionMode,
   TimelineAction,
@@ -30,7 +30,7 @@ export {
 export {
   buildTimelineModel,
   EXPLORATION_OVERFLOW_VISIBLE,
-  formatExplorationSummary,
+  formatActivitySummary,
   formatToolInput,
   getPreferredSelectionKey,
   getInteractionDisplayInfo,
@@ -41,7 +41,7 @@ export {
   getToolSummary,
   getToolTier,
   isAgentToolInteraction,
-  isExplorationEligible,
+  isActivityEligible,
   isOutsideActiveContext,
   isToolInteractionDropped,
   isToolInteractionRunning,

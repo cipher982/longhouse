@@ -147,6 +147,24 @@ function makeToolWithMediaItem(): TimelineItem {
   };
 }
 
+function makeActivityGroupItem(): TimelineItem {
+  const toolItem = makeToolWithMediaItem();
+  if (toolItem.kind !== "tool") throw new Error("fixture must be a tool");
+  const first = toolItem.interaction;
+  return {
+    kind: "activity_group",
+    group: {
+      key: "activity:6",
+      interactions: [
+        first,
+        { ...first, key: "id:second", anchorId: 8, toolName: "Edit" },
+      ],
+      timestamp: first.timestamp,
+      anchorId: first.anchorId,
+    },
+  };
+}
+
 function makeAskUserQuestionItem(state: "running" | "dropped" = "dropped"): TimelineItem {
   return {
     kind: "tool",
@@ -192,6 +210,27 @@ function makeAskUserQuestionItem(state: "running" | "dropped" = "dropped"): Time
 }
 
 describe("TimelinePane", () => {
+  it("reveals the exact child when a grouped tool is selected", () => {
+    render(
+      <TimelinePane
+        items={[makeActivityGroupItem()]}
+        totalEntries={4}
+        loadedEntries={4}
+        abandonedEvents={0}
+        showAbandonedBranches={false}
+        onShowAbandonedBranchesChange={vi.fn()}
+        hasPreviousPage={false}
+        isFetchingPreviousPage={false}
+        onFetchPreviousPage={vi.fn()}
+        selectedKey="tool:id:second"
+        onSelectKey={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Edit")).toBeInTheDocument();
+    expect(screen.getByText(/^input$/i)).toBeInTheDocument();
+  });
+
   it("renders seam items inline in the timeline list", () => {
     render(
       <TimelinePane

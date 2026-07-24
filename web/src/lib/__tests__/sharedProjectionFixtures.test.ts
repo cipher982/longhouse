@@ -30,7 +30,7 @@ type ExpectedRow =
       result_event_id: number;
     }
   | {
-      kind: "noise_group";
+      kind: "activity_group";
       tool_names: string[];
       call_event_ids: number[];
       result_event_ids: Array<number | null>;
@@ -45,7 +45,7 @@ type SharedProjectionFixture = {
   expectations: {
     rows: ExpectedRow[];
     tool_count: number;
-    noise_group_count: number;
+    activity_group_count: number;
     orphan_tool_ids: number[];
   };
 };
@@ -72,15 +72,15 @@ function summarizeRows(items: TimelineItem[]): ExpectedRow[] {
         event_id: item.action.action.event_id ?? null,
       };
     }
-    if (item.kind === "noise_group") {
+    if (item.kind === "activity_group") {
       return {
-        kind: "noise_group",
+        kind: "activity_group",
         tool_names: item.group.interactions.map((interaction) => interaction.toolName),
         call_event_ids: item.group.interactions.map((interaction) => interaction.callEvent?.id ?? -1),
         result_event_ids: item.group.interactions.map((interaction) => interaction.resultEvent?.id ?? null),
         pairings: item.group.interactions.map((interaction) => {
           if (interaction.pairing === "orphan") {
-            throw new Error("Noise groups cannot contain orphan tool interactions");
+          throw new Error("Activity groups cannot contain orphan tool interactions");
           }
           return interaction.pairing;
         }),
@@ -123,7 +123,7 @@ describe("shared session projection fixtures", () => {
 
       expect(summarizeRows(model.items)).toEqual(fixture.expectations.rows);
       expect(model.toolItems).toHaveLength(fixture.expectations.tool_count);
-      expect(model.noiseGroups).toHaveLength(fixture.expectations.noise_group_count);
+      expect(model.activityGroups).toHaveLength(fixture.expectations.activity_group_count);
       expect(
         model.toolItems
           .filter((interaction) => interaction.pairing === "orphan")

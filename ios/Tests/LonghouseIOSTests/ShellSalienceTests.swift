@@ -100,18 +100,18 @@ final class ShellSalienceTests: XCTestCase {
 
         let (readCall, readResult) = pair("1", "grep -rn pattern web/src")
         XCTAssertTrue(
-            TimelineBuilder.isExplorationEligible(call: readCall, result: readResult, pairing: .id)
+            TimelineBuilder.isActivityEligible(call: readCall, result: readResult, pairing: .id)
         )
 
         let (mutateCall, mutateResult) = pair("2", "rm -rf node_modules")
-        XCTAssertFalse(
-            TimelineBuilder.isExplorationEligible(call: mutateCall, result: mutateResult, pairing: .id)
+        XCTAssertTrue(
+            TimelineBuilder.isActivityEligible(call: mutateCall, result: mutateResult, pairing: .id)
         )
 
         let failedOutput = "Process exited with code 1\nOutput:\nno matches"
         let (failedCall, failedResult) = pair("3", "grep -rn missing web/src", output: failedOutput)
         XCTAssertFalse(
-            TimelineBuilder.isExplorationEligible(call: failedCall, result: failedResult, pairing: .id)
+            TimelineBuilder.isActivityEligible(call: failedCall, result: failedResult, pairing: .id)
         )
     }
 }

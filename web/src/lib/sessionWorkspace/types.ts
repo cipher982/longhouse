@@ -17,7 +17,7 @@ export type ToolInteraction = {
  * Run of 2+ consecutive exploration-eligible tool calls (search/read/list).
  * Collapses into a semantic summary chip; expand reveals each call.
  */
-export type NoiseGroup = {
+export type ActivityGroup = {
   key: string;
   interactions: ToolInteraction[];
   timestamp: string;
@@ -44,7 +44,7 @@ export type TimelineItem =
   | { kind: "action"; action: TimelineAction }
   | { kind: "message"; event: AgentEvent }
   | { kind: "tool"; interaction: ToolInteraction }
-  | { kind: "noise_group"; group: NoiseGroup };
+  | { kind: "activity_group"; group: ActivityGroup };
 
 export type TimelineSelection =
   | {
@@ -61,17 +61,17 @@ export type TimelineSelection =
       parentGroupKey: string | null;
     }
   | {
-      kind: "noise_group";
+      kind: "activity_group";
       key: string;
       rowId: string;
-      group: NoiseGroup;
+      group: ActivityGroup;
     };
 
 export type TimelineModel = {
   events: AgentEvent[];
   items: TimelineItem[];
   toolItems: ToolInteraction[];
-  noiseGroups: NoiseGroup[];
+  activityGroups: ActivityGroup[];
   selectionMap: Map<string, TimelineSelection>;
   eventIdToSelectionKey: Map<AgentEventId, string>;
   eventIdToRowId: Map<AgentEventId, string>;

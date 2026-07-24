@@ -119,7 +119,7 @@
     "rows": [
       {"kind": "message", "role": "user", "event_id": 1},
       {
-        "kind": "noise_group",
+        "kind": "activity_group",
         "tool_names": ["Grep", "Grep"],
         "call_event_ids": [2, 3],
         "result_event_ids": [5, 4],
@@ -128,7 +128,7 @@
       {"kind": "message", "role": "assistant", "event_id": 6}
     ],
     "tool_count": 2,
-    "noise_group_count": 1,
+    "activity_group_count": 1,
     "orphan_tool_ids": []
   }
 }

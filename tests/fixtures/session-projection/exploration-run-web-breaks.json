@@ -170,17 +170,15 @@
     "rows": [
       {"kind": "message", "role": "user", "event_id": 1},
       {
-        "kind": "noise_group",
-        "tool_names": ["Grep", "Grep"],
-        "call_event_ids": [2, 4],
-        "result_event_ids": [3, 5],
-        "pairings": ["id", "id"]
-      },
-      {"kind": "tool", "tool_name": "WebFetch", "call_event_id": 6, "result_event_id": 7, "pairing": "id"},
-      {"kind": "tool", "tool_name": "Grep", "call_event_id": 8, "result_event_id": 9, "pairing": "id"}
+        "kind": "activity_group",
+        "tool_names": ["Grep", "Grep", "WebFetch", "Grep"],
+        "call_event_ids": [2, 4, 6, 8],
+        "result_event_ids": [3, 5, 7, 9],
+        "pairings": ["id", "id", "id", "id"]
+      }
     ],
     "tool_count": 4,
-    "noise_group_count": 1,
+    "activity_group_count": 1,
     "orphan_tool_ids": []
   }
 }

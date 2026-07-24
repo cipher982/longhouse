@@ -1,6 +1,6 @@
 import Foundation
 
-struct PassiveCall: Identifiable, Sendable {
+struct ActivityCall: Identifiable, Sendable {
     let call: SessionEvent
     let result: SessionEvent?
     let pairing: ToolPairing
@@ -19,7 +19,7 @@ enum TimelineItem: Identifiable, Sendable {
     case action(SessionAction, timestamp: String)
     case tool(call: SessionEvent, result: SessionEvent?, pairing: ToolPairing)
     case orphanTool(SessionEvent)
-    case passiveGroup(calls: [PassiveCall])
+    case activityGroup(calls: [ActivityCall])
 
     var id: String {
         switch self {
@@ -28,9 +28,9 @@ enum TimelineItem: Identifiable, Sendable {
         case .action(let action, _): return action.id
         case .tool(let call, _, _): return "tool:\(call.id)"
         case .orphanTool(let e): return "orphan:\(e.id)"
-        case .passiveGroup(let calls):
+        case .activityGroup(let calls):
             let firstId = calls.first?.call.id ?? "missing"
-            return "passive:\(firstId)"
+            return "activity:\(firstId)"
         }
     }
 
@@ -42,7 +42,7 @@ enum TimelineItem: Identifiable, Sendable {
             return timestamp
         case .tool(let call, _, _):
             return call.timestamp
-        case .passiveGroup(let calls):
+        case .activityGroup(let calls):
             return calls.first?.call.timestamp ?? ""
         }
     }
@@ -99,20 +99,43 @@ enum TimelineBuilder {
         return event.toolInputString(key)
     }
 
-    /// Exploration-eligible tools may join consecutive `.passiveGroup` rows.
-    /// Eligibility comes from `ToolTiers.aggregate`, not display tier — so
-    /// completed Reads can join Greps while singleton Reads stay individual.
-    static func isExplorationEligible(call: SessionEvent, result: SessionEvent?, pairing: ToolPairing) -> Bool {
+    private static let humanInteractionTools: Set<String> = [
+        "askuserquestion", "request_user_input", "request_permissions",
+        "request_permission", "request_approval", "approval_request",
+    ]
+
+    static func hasStructuredFailure(_ output: String?) -> Bool {
+        guard let output else { return false }
+        let text = output.trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.lowercased().hasPrefix("[tool error]") { return true }
+        guard let data = text.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return false }
+        let exitCode = object["exit_code"] as? Int ?? object["exitCode"] as? Int
+        return object["ok"] as? Bool == false
+            || object["success"] as? Bool == false
+            || object["is_error"] as? Bool == true
+            || (exitCode != nil && exitCode != 0)
+    }
+
+    /// Completed, attributable tools may join prose-bounded activity groups.
+    static func isActivityEligible(call: SessionEvent, result: SessionEvent?, pairing: ToolPairing) -> Bool {
         guard !(presentedToolName(call)).isEmpty else { return false }
-        guard presentationAggregate(call) != nil || shellSalience(call: call, result: result) != nil else {
-            return false
-        }
         guard pairing == .id || pairing == .fifo else { return false }
         guard result != nil else { return false }
         if call.toolCallState == .dropped || call.toolCallState == .running {
             return false
         }
         if let exit = ShellSalienceClassifier.parseExitCode(result?.toolOutputText), exit != 0 {
+            return false
+        }
+        if hasStructuredFailure(result?.toolOutputText) { return false }
+        let exactNames = [call.toolName, call.toolPresentation?.toolName]
+            .compactMap { $0?.lowercased() }
+        if exactNames.contains(where: humanInteractionTools.contains) { return false }
+        let identity = ([presentedToolName(call), call.toolPresentation?.label].compactMap { $0 })
+            .joined(separator: " ").lowercased()
+        if identity.range(of: #"\b(question|approval|permission)\b"#, options: .regularExpression) != nil {
             return false
         }
         return true
@@ -132,29 +155,41 @@ enum TimelineBuilder {
         return ShellSalienceClassifier.classify(command)
     }
 
-    /// Semantic exploration header: `Searched 5 · Read 14 · Listed 1`.
-    static func explorationSummary(for calls: [PassiveCall]) -> String {
-        var searched = 0
-        var read = 0
-        var listed = 0
-        var waited = 0
+    /// Observable activity header: `Searched 5 · Read 14 · Edited 2 · Ran 1`.
+    static func activitySummary(for calls: [ActivityCall]) -> String {
+        var counts = ["search": 0, "read": 0, "list": 0, "view": 0,
+                      "edit": 0, "call": 0, "run": 0, "wait": 0]
         for call in calls {
             let aggregate = shellSalience(call: call.call, result: call.result)?.aggregate
                 ?? presentationAggregate(call.call)
             switch aggregate {
-            case .search: searched += 1
-            case .read: read += 1
-            case .list: listed += 1
-            case .wait: waited += 1
-            case .none: break
+            case .search: counts["search", default: 0] += 1
+            case .read: counts["read", default: 0] += 1
+            case .list: counts["list", default: 0] += 1
+            case .wait: counts["wait", default: 0] += 1
+            case .none:
+                let identity = ([presentedToolName(call.call), call.call.toolPresentation?.label]
+                    .compactMap { $0 }).joined(separator: " ").lowercased()
+                    .replacingOccurrences(of: #"[^a-z0-9]+"#, with: " ", options: .regularExpression)
+                if identity.range(of: #"\b(edit|edited|write|patch|replace|notebook|create file|write to file)\b"#, options: .regularExpression) != nil {
+                    counts["edit", default: 0] += 1
+                } else if identity.range(of: #"\b(web|browser|fetch|view url|open url|read url|webfetch|websearch|searchweb|readurlcontent)\b"#, options: .regularExpression) != nil {
+                    counts["view", default: 0] += 1
+                } else if call.call.toolPresentation?.mcpNamespace != nil
+                    || identity.range(of: #"\b(agent|task|subagent|invoke|called)\b"#, options: .regularExpression) != nil {
+                    counts["call", default: 0] += 1
+                } else {
+                    counts["run", default: 0] += 1
+                }
             }
         }
-        var parts: [String] = []
-        if searched > 0 { parts.append("Searched \(searched)") }
-        if read > 0 { parts.append("Read \(read)") }
-        if listed > 0 { parts.append("Listed \(listed)") }
-        if waited > 0 { parts.append("Waited \(waited)") }
-        return parts.joined(separator: " · ")
+        let ordered = [("search", "Searched"), ("read", "Read"), ("list", "Listed"),
+                       ("view", "Viewed"), ("edit", "Edited"), ("call", "Called"),
+                       ("run", "Ran"), ("wait", "Waited")]
+        return ordered.compactMap { key, label in
+            let count = counts[key, default: 0]
+            return count > 0 ? "\(label) \(count)" : nil
+        }.joined(separator: " · ")
     }
 
     static let explorationOverflowVisible = 8
@@ -165,19 +200,14 @@ enum TimelineBuilder {
         return (Array(items.prefix(idx)), Array(items.suffix(visible)))
     }
 
-    /// Legacy name — true when the tool has an aggregate category.
-    static func isPassive(_ toolName: String) -> Bool {
-        ToolTiers.aggregate(toolName) != nil
-    }
-
     /// Build a paired, renderable timeline from raw events.
     /// Mirrors the web pairing logic: assistant-with-tool_name registers in a
     /// Map<tool_call_id, item>. Role=tool events look up their tool_call_id
     /// and attach as the result. Orphan tool events render as their own row.
     ///
     /// After pairing, consecutive passive tool calls are collapsed into a
-    /// single `.passiveGroup` row. User messages and non-passive tool calls
-    /// (Bash, Task, Edit, Write, …) are boundaries that flush the buffer.
+    /// single `.activityGroup` row. User/assistant prose and ineligible calls
+    /// are boundaries that flush the buffer.
     static func build(events: [SessionEvent]) -> [TimelineItem] {
         var raw: [TimelineItem] = []
         var callIdToIndex: [String: Int] = [:]
@@ -239,7 +269,7 @@ enum TimelineBuilder {
             }
         }
 
-        return collapsePassive(raw)
+        return collapseActivity(raw)
     }
 
     static func build(items projectionItems: [SessionProjectionItem]) -> [TimelineItem] {
@@ -274,12 +304,10 @@ enum TimelineBuilder {
         return out
     }
 
-    /// Collapse runs of 2+ consecutive exploration-eligible tool calls into
-    /// `.passiveGroup` rows. A single eligible call stays as `.tool`. Breakers
-    /// (user/assistant prose, ineligible tools, orphans, actions) flush.
-    static func collapsePassive(_ items: [TimelineItem]) -> [TimelineItem] {
+    /// Collapse runs of 2+ completed calls into one prose-bounded activity row.
+    static func collapseActivity(_ items: [TimelineItem]) -> [TimelineItem] {
         var out: [TimelineItem] = []
-        var buffer: [PassiveCall] = []
+        var buffer: [ActivityCall] = []
 
         func flush() {
             guard !buffer.isEmpty else { return }
@@ -287,7 +315,7 @@ enum TimelineBuilder {
                 let only = buffer[0]
                 out.append(.tool(call: only.call, result: only.result, pairing: only.pairing))
             } else {
-                out.append(.passiveGroup(calls: buffer))
+                out.append(.activityGroup(calls: buffer))
             }
             buffer.removeAll()
         }
@@ -295,8 +323,8 @@ enum TimelineBuilder {
         for item in items {
             switch item {
             case .tool(let call, let result, let pairing)
-                where Self.isExplorationEligible(call: call, result: result, pairing: pairing):
-                buffer.append(PassiveCall(call: call, result: result, pairing: pairing))
+                where Self.isActivityEligible(call: call, result: result, pairing: pairing):
+                buffer.append(ActivityCall(call: call, result: result, pairing: pairing))
             default:
                 flush()
                 out.append(item)

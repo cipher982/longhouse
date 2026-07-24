@@ -5,9 +5,9 @@ import { describe, expect, it } from "vitest";
 import {
   buildTimelineModel,
   EXPLORATION_OVERFLOW_VISIBLE,
-  formatExplorationSummary,
+  formatActivitySummary,
   getToolSummary,
-  isExplorationEligible,
+  isActivityEligible,
   splitExplorationOverflow,
   type ToolInteraction,
 } from "../sessionWorkspace";
@@ -73,7 +73,7 @@ describe("exploration run helpers", () => {
 
   it("formats semantic verb counts in fixed order", () => {
     expect(
-      formatExplorationSummary([
+      formatActivitySummary([
         interaction({ key: "1", anchorId: 1, toolName: "Glob" }),
         interaction({ key: "2", anchorId: 2, toolName: "Read" }),
         interaction({ key: "3", anchorId: 3, toolName: "Grep" }),
@@ -91,18 +91,18 @@ describe("exploration run helpers", () => {
     expect(latest[0]).toBe(3);
   });
 
-  it("marks WebFetch and pending calls ineligible", () => {
+  it("includes completed web calls but excludes pending calls", () => {
     expect(
-      isExplorationEligible(
+      isActivityEligible(
         interaction({
           key: "w",
           anchorId: 1,
           toolName: "WebFetch",
         }),
       ),
-    ).toBe(false);
+    ).toBe(true);
     expect(
-      isExplorationEligible(
+      isActivityEligible(
         interaction({
           key: "p",
           anchorId: 2,
@@ -112,6 +112,30 @@ describe("exploration run helpers", () => {
         }),
       ),
     ).toBe(false);
+  });
+
+  it("keeps questions and explicit failures out of activity runs", () => {
+    expect(isActivityEligible(interaction({
+      key: "question",
+      anchorId: 1,
+      toolName: "request_user_input",
+    }))).toBe(false);
+    expect(isActivityEligible(interaction({
+      key: "claude-question",
+      anchorId: 2,
+      toolName: "AskUserQuestion",
+    }))).toBe(false);
+    expect(isActivityEligible(interaction({
+      key: "failure",
+      anchorId: 3,
+      toolName: "Edit",
+      resultEvent: event({
+        id: 100,
+        role: "tool",
+        timestamp: "2026-01-01T00:00:01Z",
+        tool_output_text: '{"ok":false,"error":"denied"}',
+      }),
+    }))).toBe(false);
   });
 });
 
@@ -160,20 +184,20 @@ describe("exploration run integration", () => {
     const model = buildTimelineModel(projection(events));
 
     expect(model.items).toHaveLength(1);
-    expect(model.items[0].kind).toBe("noise_group");
-    expect(formatExplorationSummary(model.noiseGroups[0].interactions)).toBe("Waited 6");
+    expect(model.items[0].kind).toBe("activity_group");
+    expect(formatActivitySummary(model.activityGroups[0].interactions)).toBe("Waited 6");
 
-    const failed = model.noiseGroups[0].interactions[0];
+    const failed = model.activityGroups[0].interactions[0];
     failed.resultEvent = event({
       id: 99,
       role: "tool",
       tool_output_text: "Process exited with code 1\nOutput:\nfailed",
       timestamp: "2026-01-01T00:01:00Z",
     });
-    expect(isExplorationEligible(failed)).toBe(false);
+    expect(isActivityEligible(failed)).toBe(false);
   });
 
-  it("collapses Read+Grep bursts and keeps Edit primary", () => {
+  it("collapses mixed completed work into one activity run", () => {
     const model = buildTimelineModel(
       projection([
         event({ id: 1, role: "user", content_text: "go", timestamp: "2026-01-01T00:00:00Z" }),
@@ -233,14 +257,12 @@ describe("exploration run integration", () => {
 
     expect(model.items.map((item) => item.kind)).toEqual([
       "message",
-      "noise_group",
-      "tool",
+      "activity_group",
       "message",
     ]);
-    const group = model.noiseGroups[0];
-    expect(group.interactions.map((i) => i.toolName)).toEqual(["Read", "Grep"]);
-    expect(formatExplorationSummary(group.interactions)).toBe("Searched 1 · Read 1");
-    expect(model.items[2]).toMatchObject({ kind: "tool", interaction: { toolName: "Edit" } });
+    const group = model.activityGroups[0];
+    expect(group.interactions.map((i) => i.toolName)).toEqual(["Read", "Grep", "Edit"]);
+    expect(formatActivitySummary(group.interactions)).toBe("Searched 1 · Read 1 · Edited 1");
   });
 
   it("keeps a singleton Read as an individual context row", () => {
@@ -264,7 +286,7 @@ describe("exploration run integration", () => {
       ]),
     );
     expect(model.items.map((item) => item.kind)).toEqual(["message", "tool"]);
-    expect(model.noiseGroups).toHaveLength(0);
+    expect(model.activityGroups).toHaveLength(0);
   });
 
   it("treats co-located assistant prose as a run boundary", () => {
@@ -323,8 +345,8 @@ describe("exploration run integration", () => {
       "message",
       "tool",
       "message",
-      "noise_group",
+      "activity_group",
     ]);
-    expect(model.noiseGroups[0].interactions.map((i) => i.toolName)).toEqual(["Grep", "Grep"]);
+    expect(model.activityGroups[0].interactions.map((i) => i.toolName)).toEqual(["Grep", "Grep"]);
   });
 });

@@ -111,21 +111,21 @@ describe("timeline grouping with shell salience", () => {
       ...toolPair(5, "Bash", "cat package.json", t),
     ];
     const model = buildTimelineModel(projection(events));
-    const groups = model.items.filter((item) => item.kind === "noise_group");
+    const groups = model.items.filter((item) => item.kind === "activity_group");
     expect(groups).toHaveLength(1);
-    expect(groups[0].kind === "noise_group" && groups[0].group.interactions).toHaveLength(3);
+    expect(groups[0].kind === "activity_group" && groups[0].group.interactions).toHaveLength(3);
   });
 
-  it("a mutating command breaks the run and stays a full action row", () => {
+  it("groups completed shell work while retaining singleton salience metadata", () => {
     const events = [
       ...toolPair(1, "Bash", "grep -rn pattern web/src", t),
       ...toolPair(3, "Bash", "rm -rf node_modules", t),
       ...toolPair(5, "Bash", "ls -la web/src/lib", t),
     ];
     const model = buildTimelineModel(projection(events));
-    expect(model.items.filter((item) => item.kind === "noise_group")).toHaveLength(0);
-    const tools = model.items.filter((item) => item.kind === "tool");
-    expect(tools).toHaveLength(3);
+    const groups = model.items.filter((item) => item.kind === "activity_group");
+    expect(groups).toHaveLength(1);
+    expect(groups[0].kind === "activity_group" && groups[0].group.interactions).toHaveLength(3);
   });
 
   it("read-only Bash with a nonzero exit stays out of exploration runs", () => {
@@ -143,9 +143,9 @@ describe("timeline grouping with shell salience", () => {
       ...toolPair(5, "Bash", "cat package.json", t),
     ];
     const model = buildTimelineModel(projection(events));
-    const groups = model.items.filter((item) => item.kind === "noise_group");
+    const groups = model.items.filter((item) => item.kind === "activity_group");
     expect(groups).toHaveLength(1);
-    expect(groups[0].kind === "noise_group" && groups[0].group.interactions).toHaveLength(2);
+    expect(groups[0].kind === "activity_group" && groups[0].group.interactions).toHaveLength(2);
   });
 
   it("native noise tools and shell reads join the same run", () => {
@@ -177,8 +177,8 @@ describe("timeline grouping with shell salience", () => {
     ];
     const events = [...grepPair, ...toolPair(3, "Bash", "ls -la web", t)];
     const model = buildTimelineModel(projection(events));
-    const groups = model.items.filter((item) => item.kind === "noise_group");
+    const groups = model.items.filter((item) => item.kind === "activity_group");
     expect(groups).toHaveLength(1);
-    expect(groups[0].kind === "noise_group" && groups[0].group.interactions).toHaveLength(2);
+    expect(groups[0].kind === "activity_group" && groups[0].group.interactions).toHaveLength(2);
   });
 });

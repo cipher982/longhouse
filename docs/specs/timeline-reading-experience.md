@@ -169,6 +169,9 @@ g55-style `grep`/`ls`/`cat` runs fully covered.
 
 ## Change C — Grouping presentation
 
+Superseded by Change E. Shell salience remains useful for singleton rows, but
+there is one grouping model: activity runs.
+
 With B in place the existing NoiseChip collapse starts working on Bash-heavy
 sessions. Refine:
 
@@ -177,6 +180,108 @@ sessions. Refine:
 - Runs stay one-click expandable; expanded items keep per-command timing and
   the existing detail drawer.
 - Solo noise commands render as the existing demoted one-liner.
+
+## Change E — Prose-first activity runs
+
+### Evidence from the hosted corpus
+
+A 2026-07-23 sample ranked real sessions by tool volume, then inspected the
+first 200 loaded entries from eight sessions across Codex, Claude, Cursor, and
+OpenCode. The worst sessions contain 3,044, 2,119, 1,549, and 1,443 tool calls.
+Even after semantic translation and exploration grouping, individual tool rows
+still occupied 58–85% of visible timeline rows:
+
+| Provider / workload | Visible rows | Individual tools | Existing groups |
+|---|---:|---:|---:|
+| Codex / remove launch feature | 95 | 74 | 8 |
+| Codex / disk investigation | 92 | 74 | 7 |
+| Codex / metadata refinement | 107 | 81 | 3 |
+| Claude / RL work | 120 | 67 | 4 |
+| Cursor / patent work | 57 | 43 | 6 |
+| OpenCode / Hatch work | 30 | 25 | 1 |
+
+The translation layer is working, but the resulting page is still a ledger.
+The failure is the grouping boundary: an `Edit`, shell validation, plan update,
+web call, or provider wrapper ends an exploration group even when all of those
+calls support one uninterrupted assistant turn.
+
+### Product contract
+
+The default timeline is a conversation, not an execution trace.
+
+- Every consecutive run of **two or more completed tool calls with no known
+  failure signal**
+  between prose, user messages, actions, or branch seams becomes one compact
+  activity row.
+- The row summarizes consequences across the whole run, for example:
+  `Searched 4 · Read 6 · Edited 2 · Ran 3`.
+- Expanding the row reveals every original call in order, with the existing
+  semantic label, input summary, duration, result, and raw provider payload.
+- Single completed calls keep their current semantic row. Short turns should
+  not acquire an unnecessary wrapper.
+- Running, pending, dropped, orphaned, and known-failed calls never join a group.
+  They remain full rows so live state and problems cannot disappear.
+- Human-interaction calls (`AskUserQuestion`, `request_user_input`, and
+  approval/permission tools) never join a group. Questions remain first-class
+  transcript content.
+- Provider identity does not affect grouping. Claude `tool_use`, Codex wrapped
+  calls, Cursor calls, OpenCode calls, and future providers all enter through
+  the same normalized interaction model.
+
+### Deterministic summary vocabulary
+
+Use the closed vocabulary from `tool-translation-experience.md` and normalized
+presentation/aggregate metadata, not provider-specific raw names:
+
+- search aggregate → `Searched`
+- read aggregate → `Read`
+- list aggregate → `Listed`
+- wait aggregate → `Waited`
+- edit/write/create/patch labels or names → `Edited`
+- web search/fetch/browser tools → `Viewed`
+- agent/task/subagent/MCP calls → `Called`
+- everything else → `Ran`
+
+Order is stable: Searched, Read, Listed, Viewed, Edited, Called, Ran, Waited.
+Omit zeroes. The count badge remains the exact number of calls.
+This is intentionally deterministic: it is fast, replayable over historical
+data, identical on web and iOS, and cannot invent activity.
+
+### Implementation and acceptance gates
+
+- Replace exploration-only grouping with activity-run grouping in the shared
+  web and iOS projections. Delete the old eligibility boundary and old
+  `noise_group` / `passiveGroup` naming rather than maintaining two models.
+- A known failure is a failed/error call state, nonzero parsed exit, explicit
+  provider tool-error marker, or structured result with an explicit false
+  success/ok value. Unknown result semantics remain completed evidence; the UI
+  does not claim success, and expansion exposes the exact result.
+- Preserve selection/deep-link behavior: selecting any child call opens its
+  parent group and the exact call.
+- Keep the full raw event stream untouched; this is a presentation projection.
+- Add parity fixtures covering mixed reads, shell calls, edits, plans, waits,
+  questions, failures, pending calls, prose boundaries, and provider wrappers.
+- Re-run the same hosted sample after implementation, collapsed by default and
+  using the same first-200-entry slice. Individual tool rows below 20% are a
+  diagnostic target for completed historical sessions, not a reason to hide
+  live or failed work. The total expandable call count must not change.
+- Group identity is anchored to the first call. A pending call stays separate;
+  completed calls before and after it form stable groups instead of reshaping a
+  prior group when live state changes.
+- Visually inspect at least one worst-case Codex session plus Claude, Cursor,
+  and OpenCode examples on the real timeline at desktop width. Prose should be
+  the dominant visual rhythm; activity rows should be short, quiet, and
+  expandable.
+
+### 2026-07-23 replay result
+
+The same first-200-entry slices were replayed through the new projection. The
+largest examples fell from 95 → 25 visible rows (Codex, 3,044-tool session),
+92 → 19 (Codex, 2,119 tools), 107 → 39 (Codex, 1,443 tools), 57 → 13
+(Cursor), and 30 → 8 (OpenCode). Individual tool rows are now 0–13% in those
+samples. The Claude slide workshop remains the natural edge case at 19
+singleton tools among 87 rows because Claude narrates between nearly every
+edit; those calls are real conversational boundaries, so they remain visible.
 
 ## Change D — Composer cleanup
 
@@ -208,6 +313,8 @@ sessions. Refine:
 - [x] Bash exploration spam crowding prose (Change B v1 implemented: classifier
       + fixtures + web/iOS wiring; Sol+Grok review synthesized — ssh unwrap
       and host chip deferred to v2, summary refinement remains under C)
+- [x] Mixed tool runs still crowding prose (Change E: one activity grouping
+      model across web/iOS, corpus replayed across four providers)
 - [x] Draft reply row + review copy removed (web) — backend/iOS removal pending
 - [x] Stop shown while idle (web: now working-only)
 - [x] Jammed meta separators in runtime strip (web CSS)

@@ -136,7 +136,7 @@
     "rows": [
       {"kind": "message", "role": "user", "event_id": 1},
       {
-        "kind": "noise_group",
+        "kind": "activity_group",
         "tool_names": ["Read", "Grep", "Glob"],
         "call_event_ids": [2, 4, 6],
         "result_event_ids": [3, 5, 7],
@@ -144,7 +144,7 @@
       }
     ],
     "tool_count": 3,
-    "noise_group_count": 1,
+    "activity_group_count": 1,
     "orphan_tool_ids": []
   }
 }

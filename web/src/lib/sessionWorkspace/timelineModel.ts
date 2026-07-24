@@ -1,7 +1,7 @@
 import type { AgentEvent, AgentEventId, AgentSession, AgentSessionProjectionItem } from "../../services/api/agents";
 import { parseUTC } from "../dateUtils";
 import type {
-  NoiseGroup,
+  ActivityGroup,
   TimelineAction,
   TimelineItem,
   TimelineModel,
@@ -22,14 +22,20 @@ import {
 } from "./toolTiers.generated";
 import { classifyShellCommand, isShellTool, type ShellSalience } from "./shellSalience";
 
-/** Latest completed exploration calls shown when a run is expanded. */
+/** Latest completed activity calls shown when a run is expanded. */
 export const EXPLORATION_OVERFLOW_VISIBLE = 8;
 
-const AGGREGATE_SUMMARY_ORDER: ToolAggregate[] = ["search", "read", "list", "wait"];
-const AGGREGATE_SUMMARY_LABEL: Record<ToolAggregate, string> = {
+type ActivityCategory = "search" | "read" | "list" | "view" | "edit" | "call" | "run" | "wait";
+
+const ACTIVITY_SUMMARY_ORDER: ActivityCategory[] = ["search", "read", "list", "view", "edit", "call", "run", "wait"];
+const ACTIVITY_SUMMARY_LABEL: Record<ActivityCategory, string> = {
   search: "Searched",
   read: "Read",
   list: "Listed",
+  view: "Viewed",
+  edit: "Edited",
+  call: "Called",
+  run: "Ran",
   wait: "Waited",
 };
 
@@ -88,29 +94,83 @@ export function getToolTier(interaction: ToolInteraction): ToolTier {
   return getShellSalience(interaction)?.tier ?? interaction.presentation?.tier ?? toolTier(interaction.toolName);
 }
 
-/** Completed calls with an explicit aggregate category may join exploration runs. */
-export function isExplorationEligible(interaction: ToolInteraction): boolean {
-  if (interactionAggregate(interaction) == null && getShellSalience(interaction) == null) {
+const HUMAN_INTERACTION_TOOLS = new Set([
+  "askuserquestion",
+  "request_user_input",
+  "request_permissions",
+  "request_permission",
+  "request_approval",
+  "approval_request",
+]);
+
+function normalizedInteractionIdentity(interaction: ToolInteraction): string {
+  const presentation = interaction.presentation;
+  return [interaction.toolName, presentation?.tool_name, presentation?.label]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function hasStructuredFailure(output: string | null | undefined): boolean {
+  const text = (output || "").trim();
+  if (!text) return false;
+  if (/^\[tool error\]/i.test(text)) return true;
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return false;
+    const record = parsed as Record<string, unknown>;
+    const structuredExit = record.exit_code ?? record.exitCode;
+    return record.ok === false || record.success === false || record.is_error === true
+      || (typeof structuredExit === "number" && structuredExit !== 0);
+  } catch {
     return false;
   }
+}
+
+export function isToolInteractionFailed(interaction: ToolInteraction): boolean {
+  const state = String(interaction.callEvent?.tool_call_state || "").toLowerCase();
+  if (state === "failed" || state === "error") return true;
+  const exitCode = getToolExitCode(interaction);
+  if (exitCode != null && exitCode !== 0) return true;
+  return hasStructuredFailure(interaction.resultEvent?.tool_output_text);
+}
+
+/** Completed, attributable calls may join a prose-bounded activity run. */
+export function isActivityEligible(interaction: ToolInteraction): boolean {
   if (interaction.pairing === "orphan" || interaction.pairing === "pending") return false;
   if (!interaction.resultEvent) return false;
   if (isToolInteractionDropped(interaction) || isToolInteractionRunning(interaction)) return false;
-  const exitCode = getToolExitCode(interaction);
-  if (exitCode != null && exitCode !== 0) return false;
+  if (isToolInteractionFailed(interaction)) return false;
+  const identity = normalizedInteractionIdentity(interaction);
+  const exactNames = [interaction.toolName, interaction.presentation?.tool_name]
+    .filter(Boolean)
+    .map((name) => String(name).toLowerCase());
+  if (exactNames.some((name) => HUMAN_INTERACTION_TOOLS.has(name))) return false;
+  if (/\b(question|approval|permission)\b/.test(identity)) return false;
   return true;
 }
 
-/** Header copy: `Searched 5 · Read 14 · Listed 1` (omit zero categories). */
-export function formatExplorationSummary(interactions: ToolInteraction[]): string {
-  const counts: Record<ToolAggregate, number> = { search: 0, read: 0, list: 0, wait: 0 };
+function activityCategory(interaction: ToolInteraction): ActivityCategory {
+  const aggregate = getShellSalience(interaction)?.aggregate ?? interactionAggregate(interaction);
+  if (aggregate) return aggregate;
+  const identity = normalizedInteractionIdentity(interaction);
+  if (/\b(edit|edited|write|patch|replace|notebook|create file|write to file)\b/.test(identity)) return "edit";
+  if (/\b(web|browser|fetch|view url|open url|read url)\b/.test(identity)
+      || /\b(webfetch|websearch|searchweb|readurlcontent)\b/.test(identity)) return "view";
+  if (interaction.presentation?.mcp_namespace || /\b(agent|task|subagent|invoke|called)\b/.test(identity)) return "call";
+  return "run";
+}
+
+/** Header copy: `Searched 5 · Read 14 · Edited 2 · Ran 1`. */
+export function formatActivitySummary(interactions: ToolInteraction[]): string {
+  const counts = Object.fromEntries(ACTIVITY_SUMMARY_ORDER.map((category) => [category, 0])) as Record<ActivityCategory, number>;
   for (const interaction of interactions) {
-    const category =
-      getShellSalience(interaction)?.aggregate ?? interactionAggregate(interaction);
-    if (category) counts[category] += 1;
+    counts[activityCategory(interaction)] += 1;
   }
-  return AGGREGATE_SUMMARY_ORDER.filter((category) => counts[category] > 0)
-    .map((category) => `${AGGREGATE_SUMMARY_LABEL[category]} ${counts[category]}`)
+  return ACTIVITY_SUMMARY_ORDER.filter((category) => counts[category] > 0)
+    .map((category) => `${ACTIVITY_SUMMARY_LABEL[category]} ${counts[category]}`)
     .join(" · ");
 }
 
@@ -544,14 +604,11 @@ export function buildTimelineModel(projectionItems: AgentSessionProjectionItem[]
     items.push({ kind: "message", event });
   }
 
-  // Pass 3: collapse runs of 2+ consecutive exploration-eligible tools into a
-  // single `noise_group` row (exploration run). Eligibility comes from
-  // tool-tiers `aggregate`, not display tier — so Reads may join Greps while
-  // singleton Reads stay as context one-liners. Action/web/prose/user/seam
-  // boundaries flush the buffer.
+  // Pass 3: collapse runs of 2+ completed tools into one prose-bounded activity
+  // row. Live, failed, orphaned, and human-interaction tools remain prominent.
   const groupedItems: TimelineItem[] = [];
-  const noiseGroups: NoiseGroup[] = [];
-  const groupByInteractionKey = new Map<string, NoiseGroup>();
+  const activityGroups: ActivityGroup[] = [];
+  const groupByInteractionKey = new Map<string, ActivityGroup>();
 
   let buffer: ToolInteraction[] = [];
 
@@ -560,14 +617,14 @@ export function buildTimelineModel(projectionItems: AgentSessionProjectionItem[]
     if (buffer.length === 1) {
       groupedItems.push({ kind: "tool", interaction: buffer[0] });
     } else {
-      const group: NoiseGroup = {
-        key: `noise:${buffer[0].anchorId}`,
+      const group: ActivityGroup = {
+        key: `activity:${buffer[0].anchorId}`,
         interactions: [...buffer],
         timestamp: buffer[0].timestamp,
         anchorId: buffer[0].anchorId,
       };
-      groupedItems.push({ kind: "noise_group", group });
-      noiseGroups.push(group);
+      groupedItems.push({ kind: "activity_group", group });
+      activityGroups.push(group);
       for (const interaction of buffer) {
         groupByInteractionKey.set(interaction.key, group);
       }
@@ -576,7 +633,7 @@ export function buildTimelineModel(projectionItems: AgentSessionProjectionItem[]
   };
 
   for (const item of items) {
-    if (item.kind === "tool" && isExplorationEligible(item.interaction)) {
+    if (item.kind === "tool" && isActivityEligible(item.interaction)) {
       buffer.push(item.interaction);
       continue;
     }
@@ -617,7 +674,7 @@ export function buildTimelineModel(projectionItems: AgentSessionProjectionItem[]
 
     const groupKey = `group:${item.group.key}`;
     const rowId = `event-${item.group.anchorId}`;
-    selectionMap.set(groupKey, { kind: "noise_group", key: groupKey, rowId, group: item.group });
+    selectionMap.set(groupKey, { kind: "activity_group", key: groupKey, rowId, group: item.group });
 
     for (const interaction of item.group.interactions) {
       const key = `tool:${interaction.key}`;
@@ -653,7 +710,7 @@ export function buildTimelineModel(projectionItems: AgentSessionProjectionItem[]
     events,
     items: groupedItems,
     toolItems,
-    noiseGroups,
+    activityGroups,
     selectionMap,
     eventIdToSelectionKey,
     eventIdToRowId,

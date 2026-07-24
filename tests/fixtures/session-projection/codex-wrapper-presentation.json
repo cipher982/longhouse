@@ -340,7 +340,7 @@
         "event_id": 1
       },
       {
-        "kind": "noise_group",
+        "kind": "activity_group",
         "tool_names": [
           "exec",
           "exec",
@@ -371,7 +371,7 @@
       }
     ],
     "tool_count": 4,
-    "noise_group_count": 1,
+    "activity_group_count": 1,
     "orphan_tool_ids": []
   }
 }

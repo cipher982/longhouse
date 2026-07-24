@@ -4,7 +4,7 @@ import remarkGfm from "remark-gfm";
 import { EmptyState, Spinner } from "../ui";
 import { FunnelIcon } from "../icons";
 import type {
-  NoiseGroup,
+  ActivityGroup,
   TimelineAction,
   TimelineItem,
   TimelineSeam,
@@ -12,7 +12,7 @@ import type {
 } from "../../lib/sessionWorkspace";
 import {
   formatContinuationStamp,
-  formatExplorationSummary,
+  formatActivitySummary,
   formatToolInput,
   formatTime,
   getTimelineMessagePreview,
@@ -696,7 +696,7 @@ function ContextLine({
   );
 }
 
-function NoiseChip({
+function ActivityChip({
   group,
   rowId,
   expanded,
@@ -707,7 +707,7 @@ function NoiseChip({
   onToggleInteraction,
   renderMedia,
 }: {
-  group: NoiseGroup;
+  group: ActivityGroup;
   rowId: string;
   expanded: boolean;
   isSelected: boolean;
@@ -718,7 +718,7 @@ function NoiseChip({
   renderMedia: boolean;
 }) {
   const [showEarlier, setShowEarlier] = useState(false);
-  const summary = formatExplorationSummary(group.interactions) || "Explored";
+  const summary = formatActivitySummary(group.interactions) || "Activity";
   const { earlier, latest } = splitExplorationOverflow(group.interactions);
   const visibleInteractions = showEarlier ? group.interactions : latest;
 
@@ -737,7 +737,7 @@ function NoiseChip({
     <div
       id={rowId}
       data-testid="session-timeline-row"
-      data-row-kind="noise-group"
+      data-row-kind="activity-group"
       className={`tl-noise${isSelected ? " is-selected" : ""}${expanded ? " is-expanded" : ""}`}
     >
       <button
@@ -895,7 +895,7 @@ export function TimelinePane({
   const [eventFilter, setEventFilter] = useState<EventFilter>("all");
   const [searchQuery, setSearchQuery] = useState("");
 
-  // Expand state: per-tool-row and per-noise-group. Kept local so we don't
+  // Expand state: per-tool-row and per-activity-group. Kept local so we don't
   // pollute the URL/selection with transient UI state. Selection ≠ expanded.
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
@@ -913,6 +913,19 @@ export function TimelinePane({
       else next.add(key);
       return next;
     });
+
+  // A deep link or external selection of a child call must reveal the exact
+  // evidence instead of landing on a closed parent activity row.
+  useEffect(() => {
+    if (!selectedKey?.startsWith("tool:")) return;
+    const interactionKey = selectedKey.slice("tool:".length);
+    const parent = items.find(
+      (item) => item.kind === "activity_group" && item.group.interactions.some((interaction) => interaction.key === interactionKey),
+    );
+    if (!parent || parent.kind !== "activity_group") return;
+    setExpandedGroups((current) => current.has(parent.group.key) ? current : new Set(current).add(parent.group.key));
+    setExpandedTools((current) => current.has(interactionKey) ? current : new Set(current).add(interactionKey));
+  }, [items, selectedKey]);
 
   const topSentinelRef = useRef<HTMLDivElement | null>(null);
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
@@ -1002,8 +1015,12 @@ export function TimelinePane({
     () => items.filter((item) => item.kind === "message").length,
     [items],
   );
-  const toolRowCount = useMemo(
-    () => items.filter((item) => item.kind === "tool" || item.kind === "noise_group").length,
+  const toolCallCount = useMemo(
+    () => items.reduce((count, item) => {
+      if (item.kind === "tool") return count + 1;
+      if (item.kind === "activity_group") return count + item.group.interactions.length;
+      return count;
+    }, 0),
     [items],
   );
   const outsideActiveCount = useMemo(
@@ -1021,7 +1038,7 @@ export function TimelinePane({
     if (eventFilter === "messages") {
       result = result.filter((item) => item.kind === "message");
     } else if (eventFilter === "tools") {
-      result = result.filter((item) => item.kind === "tool" || item.kind === "noise_group");
+      result = result.filter((item) => item.kind === "tool" || item.kind === "activity_group");
     }
 
     if (!debouncedSearch.trim()) return result;
@@ -1044,7 +1061,7 @@ export function TimelinePane({
         );
       }
       const interactions =
-        item.kind === "noise_group" ? item.group.interactions : [item.interaction];
+        item.kind === "activity_group" ? item.group.interactions : [item.interaction];
       return interactions.some((interaction) => {
         if (interaction.toolName.toLowerCase().includes(query)) return true;
         const toolInput = formatToolInput(interaction.callEvent?.tool_input_json);
@@ -1131,7 +1148,7 @@ export function TimelinePane({
               className={`timeline-pane__filter${eventFilter === "tools" ? " is-active" : ""}`}
               onClick={() => setEventFilter("tools")}
             >
-              Tools ({toolRowCount})
+              Tools ({toolCallCount})
             </button>
           </div>
           <div className="timeline-pane__header-actions">
@@ -1255,7 +1272,7 @@ export function TimelinePane({
               item.group.interactions.some((i) => i.key === k),
             );
             return (
-              <NoiseChip
+              <ActivityChip
                 key={item.group.key}
                 group={item.group}
                 rowId={`event-${item.group.anchorId}`}

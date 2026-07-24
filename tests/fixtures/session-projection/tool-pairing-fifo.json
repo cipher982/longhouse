@@ -195,7 +195,7 @@
       {"kind": "orphan_tool", "tool_name": "Bash", "result_event_id": 10}
     ],
     "tool_count": 6,
-    "noise_group_count": 0,
+    "activity_group_count": 0,
     "orphan_tool_ids": [8, 10]
   }
 }

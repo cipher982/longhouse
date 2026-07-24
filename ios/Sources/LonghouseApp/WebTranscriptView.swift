@@ -258,8 +258,8 @@ struct WebTranscriptView: UIViewRepresentable {
             return toolPayload(id: item.id, call: call, result: result, serverURL: serverURL)
         case .orphanTool(let event):
             return toolPayload(id: item.id, call: event, result: event, orphan: true, serverURL: serverURL)
-        case .passiveGroup(let calls):
-            return passiveGroupPayload(id: item.id, calls: calls, serverURL: serverURL)
+        case .activityGroup(let calls):
+            return activityGroupPayload(id: item.id, calls: calls, serverURL: serverURL)
         }
     }
 
@@ -519,12 +519,12 @@ struct WebTranscriptView: UIViewRepresentable {
         )
     }
 
-    private nonisolated static func passiveGroupPayload(
+    private nonisolated static func activityGroupPayload(
         id: String,
-        calls: [PassiveCall],
+        calls: [ActivityCall],
         serverURL: String?
     ) -> WebTranscriptPayloadItem {
-        let summary = TimelineBuilder.explorationSummary(for: calls)
+        let summary = TimelineBuilder.activitySummary(for: calls)
 
         // Pass every call; WebKit renderer collapses to latest-N with an
         // interactive "Show N earlier" control (never permanent hide).
@@ -557,9 +557,9 @@ struct WebTranscriptView: UIViewRepresentable {
 
         return WebTranscriptPayloadItem(
             id: id,
-            kind: "passiveGroup",
+            kind: "activityGroup",
             role: nil,
-            title: summary.isEmpty ? "Explored" : summary,
+            title: summary.isEmpty ? "Activity" : summary,
             subtitle: "\(calls.count)",
             body: nil,
             fullBody: nil,
@@ -2052,7 +2052,7 @@ private extension WebTranscriptView {
       `;
     }
 
-    function passiveGroup(item) {
+    function activityGroup(item) {
       const all = item.calls || [];
       const visibleLimit = 8;
       const earlierCount = Math.max(0, all.length - visibleLimit);
@@ -2079,7 +2079,7 @@ private extension WebTranscriptView {
       return `
         <details class="passive row">
           <summary>
-            <span class="tool-title">${escapeHtml(item.title || 'Explored')}</span>
+            <span class="tool-title">${escapeHtml(item.title || 'Activity')}</span>
             <span class="tool-subtitle">${escapeHtml(item.subtitle || '')}</span>
           </summary>
           <div class="details-body">${earlierControl}${latestHtml}</div>
@@ -2182,7 +2182,7 @@ private extension WebTranscriptView {
       if (item.kind === 'action') return action(item);
       if (item.kind === 'question') return question(item);
       if (item.kind === 'tool') return toolDetails(item);
-      if (item.kind === 'passiveGroup') return passiveGroup(item);
+      if (item.kind === 'activityGroup') return activityGroup(item);
       return '';
     }
 

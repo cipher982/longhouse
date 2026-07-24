@@ -11,7 +11,7 @@ final class SharedProjectionFixtureTests: XCTestCase {
     private struct Expectations: Decodable {
         let rows: [ExpectedRow]
         let toolCount: Int
-        let noiseGroupCount: Int
+        let activityGroupCount: Int
         let orphanToolIds: [Int]
     }
 
@@ -67,7 +67,7 @@ final class SharedProjectionFixtureTests: XCTestCase {
 
             XCTAssertEqual(summarizeRows(items), fixture.expectations.rows, fixtureName)
             XCTAssertEqual(toolInteractionCount(items), fixture.expectations.toolCount, fixtureName)
-            XCTAssertEqual(noiseGroupCount(items), fixture.expectations.noiseGroupCount, fixtureName)
+            XCTAssertEqual(activityGroupCount(items), fixture.expectations.activityGroupCount, fixtureName)
             XCTAssertEqual(orphanToolIds(items), fixture.expectations.orphanToolIds, fixtureName)
         }
     }
@@ -215,9 +215,9 @@ final class SharedProjectionFixtureTests: XCTestCase {
                     actionKind: nil,
                     provider: nil
                 )
-            case .passiveGroup(let calls):
+            case .activityGroup(let calls):
                 return ExpectedRow(
-                    kind: "noise_group",
+                    kind: "activity_group",
                     role: nil,
                     eventId: nil,
                     toolName: nil,
@@ -240,7 +240,7 @@ final class SharedProjectionFixtureTests: XCTestCase {
             switch item {
             case .tool, .orphanTool:
                 return count + 1
-            case .passiveGroup(let calls):
+            case .activityGroup(let calls):
                 return count + calls.count
             case .user, .assistant, .action:
                 return count
@@ -248,9 +248,9 @@ final class SharedProjectionFixtureTests: XCTestCase {
         }
     }
 
-    private func noiseGroupCount(_ items: [TimelineItem]) -> Int {
+    private func activityGroupCount(_ items: [TimelineItem]) -> Int {
         items.reduce(0) { count, item in
-            if case .passiveGroup = item {
+            if case .activityGroup = item {
                 return count + 1
             }
             return count
@@ -271,7 +271,7 @@ final class SharedProjectionFixtureTests: XCTestCase {
             switch item {
             case .user(let event), .assistant(let event):
                 return event
-            case .tool, .orphanTool, .passiveGroup, .action:
+            case .tool, .orphanTool, .activityGroup, .action:
                 return nil
             }
         }
