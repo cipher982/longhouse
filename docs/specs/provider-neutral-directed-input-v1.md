@@ -1,6 +1,6 @@
 # Provider-Neutral Directed Input v1
 
-Status: In progress
+Status: Ready for ship verification
 Owner: session kernel / managed providers
 Created: 2026-07-23
 
@@ -160,6 +160,10 @@ The sender never appears in a model-controlled tool argument. Runtime Host
 authorization must bind owner and current session before accepting `send`,
 `inbox`, or `reply`.
 
+Directed-input bodies are capped at 4,000 characters at the canonical API
+boundary. Provider adapters may enforce the same limit but are not trusted to
+do so.
+
 Before implementation locks the mechanism, live experiments must prove the
 simplest correct authority path for each provider:
 
@@ -285,21 +289,10 @@ handshake with the exact five tools and trustworthy current-session identity.
 - Prove active target queues, cold target does not resume, observe-only target
   remains durable without a live claim, spoofed identity fails, idempotent
   retry creates one envelope, and reply correlation is correct.
-- Run Hatch Cursor Grok architecture reviews during the implementation and
-  delete complexity that is not earning its keep. Use Hatch Fable for a
-  genuinely difficult decision or final independent review if needed.
+- Run independent architecture reviews during implementation and delete
+  complexity that is not earning its keep.
 
 Gate: the live journey and negative cases leave durable inspectable evidence.
-
-## Independent Review Record
-
-- `hatch_20260724T022537.789461000Z_492c38a7847f865d`: keep the envelope and
-  existing input receipt; delete duplicate delivery state and stores.
-- `hatch_20260724T024120.315108000Z_9f1241b7f61b625b`: use launch-scoped signed
-  session authority and avoid PID exchange when the provider can carry it.
-- `hatch_20260724T031309.962484000Z_db2d6147d50fbf64`: constrain V1 adapters to
-  Claude and Codex, fail closed on owner/device binding, preserve failed input
-  receipts, and expose exactly five coordination tools.
 
 ### Phase 6: ship
 
@@ -320,15 +313,6 @@ Gate: the live journey and negative cases leave durable inspectable evidence.
 - No cold session is started implicitly.
 - Two different providers on different machines complete the live round trip.
 - Busy, cold, observe-only, identity-spoof, retry, and failure cases are proven.
-- Grok findings are dispositioned; final architecture remains appropriate for
-  one developer and zero users.
+- Independent review findings are dispositioned; final architecture remains
+  appropriate for one developer and zero users.
 - The exact task SHA is shipped, locally dogfooded, and live-verified.
-
-## Review Record
-
-- Greenfield review: Hatch Claude Fable, run
-  `hatch_20260724T014845.575339000Z_e35b47bfdee8d76d`.
-- Greenfield review: Hatch OpenRouter Kimi K3, run
-  `hatch_20260724T014847.306986000Z_98d6e58dddd70c4b`.
-- Initial repository simplification audit: Hatch Cursor Grok, run
-  `hatch_20260724T022537.789461000Z_492c38a7847f865d`.
