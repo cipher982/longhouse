@@ -13,8 +13,11 @@ import type {
 import {
   formatContinuationStamp,
   formatActivitySummary,
+  formatEditStat,
   formatToolInput,
   formatTime,
+  getEditStat,
+  getFailurePreview,
   getTimelineMessagePreview,
   getInteractionDisplayInfo,
   getToolDuration,
@@ -23,8 +26,10 @@ import {
   getToolSummary,
   getToolTier,
   isAgentToolInteraction,
+  isEditInteraction,
   isOutsideActiveContext,
   isToolInteractionDropped,
+  isToolInteractionFailed,
   isToolInteractionRunning,
   parseLonghouseOutput,
   splitExplorationOverflow,
@@ -32,7 +37,8 @@ import {
 } from "../../lib/sessionWorkspace";
 import { useDebouncedValue } from "../../hooks/useDebouncedValue";
 import { useScrollToLoad } from "../../hooks/useScrollToLoad";
-import { collapseUnchanged, lineDiff } from "../../lib/sessionWorkspace/diff";
+import { collapseUnchanged, lineDiff, type DiffLine } from "../../lib/sessionWorkspace/diff";
+import type { EditStat } from "../../lib/sessionWorkspace/editSummary";
 import { SyntaxHighlighter, oneDark } from "../../lib/syntaxHighlighter";
 import type { AgentEvent, AgentEventMediaRef } from "../../services/api/agents";
 
@@ -408,29 +414,47 @@ function CodeBlock({
   );
 }
 
-/** Extract old/new strings from an Edit-shape input, if present. */
-function editPatchFromInput(
-  input: Record<string, unknown> | null | undefined,
-): { filePath: string | null; oldStr: string; newStr: string } | null {
-  if (!input) return null;
-  const oldStr = input.old_string;
-  const newStr = input.new_string;
-  if (typeof oldStr !== "string" || typeof newStr !== "string") return null;
-  const filePath = typeof input.file_path === "string" ? input.file_path : null;
-  return { filePath, oldStr, newStr };
-}
+/**
+ * Render an edit as a diff. Covers every shape `getEditStat` understands:
+ * replace runs a line diff, create/delete render as all-added/all-removed, and
+ * patch text renders its own hunks. Stats come from the memoized stat so the
+ * collapsed header and this body cannot disagree.
+ */
+function EditDiffView({ stat }: { stat: EditStat }) {
+  const patch = stat.patch;
+  if (!patch) return null;
 
-function EditDiffView({ patch }: { patch: { filePath: string | null; oldStr: string; newStr: string } }) {
-  const lines = collapseUnchanged(lineDiff(patch.oldStr, patch.newStr), 2);
-  const removed = lines.filter((l) => l.kind === "remove").length;
-  const added = lines.filter((l) => l.kind === "add").length;
+  const lines: DiffLine[] =
+    patch.kind === "replace"
+      ? collapseUnchanged(lineDiff(patch.oldStr, patch.newStr), 2)
+      : patch.kind === "create"
+        ? patch.content.split("\n").map((text, i) => ({ kind: "add" as const, text, oldLine: null, newLine: i + 1 }))
+        : patch.kind === "delete"
+          ? patch.content.split("\n").map((text, i) => ({ kind: "remove" as const, text, oldLine: i + 1, newLine: null }))
+          : patch.text.split("\n").map((text) => ({
+              kind:
+                text.startsWith("+") && !text.startsWith("+++")
+                  ? ("add" as const)
+                  : text.startsWith("-") && !text.startsWith("---")
+                    ? ("remove" as const)
+                    : ("equal" as const),
+              text,
+              oldLine: null,
+              newLine: null,
+            }));
+
   return (
     <section className="tl-detail__block">
       <div className="tl-detail__label">
         diff
-        {patch.filePath ? <span className="tl-detail__path"> · {patch.filePath}</span> : null}
-        <span className="tl-detail__diff-stat tl-detail__diff-stat--remove"> −{removed}</span>
-        <span className="tl-detail__diff-stat tl-detail__diff-stat--add"> +{added}</span>
+        {stat.filePath ? <span className="tl-detail__path"> · {stat.filePath}</span> : null}
+        {stat.hasStat ? (
+          <>
+            <span className="tl-detail__diff-stat tl-detail__diff-stat--remove"> −{stat.removed}</span>
+            <span className="tl-detail__diff-stat tl-detail__diff-stat--add"> +{stat.added}</span>
+            <span className="sr-only">{`${stat.added} lines added, ${stat.removed} lines removed`}</span>
+          </>
+        ) : null}
       </div>
       <div className="tl-diff">
         {lines.map((line, i) => (
@@ -443,6 +467,16 @@ function EditDiffView({ patch }: { patch: { filePath: string | null; oldStr: str
         ))}
       </div>
     </section>
+  );
+}
+
+/** Bounded, click-free preview of a failed call's output. */
+function FailurePreview({ text }: { text: string }) {
+  return (
+    <div className="tl-failure-preview" data-testid="tool-failure-preview" role="note">
+      <span className="sr-only">Error output: </span>
+      <pre className="tl-failure-preview__text">{text}</pre>
+    </div>
   );
 }
 
@@ -459,7 +493,7 @@ function ToolDetail({
   const presentedInput = presentation?.wrapper_recedes ? presentation.tool_input_json : rawInput;
   const inputRecord = getToolInputRecord(presentedInput);
   const inputText = formatToolInput(presentedInput);
-  const editPatch = editPatchFromInput(inputRecord);
+  const editStat = getEditStat(interaction);
   const hasInput = inputRecord
     ? Object.keys(inputRecord).length > 0
     : Boolean(inputText?.trim());
@@ -490,8 +524,8 @@ function ToolDetail({
           ))}
         </section>
       ) : null}
-      {editPatch ? (
-        <EditDiffView patch={editPatch} />
+      {editStat.patch ? (
+        <EditDiffView stat={editStat} />
       ) : hasInput ? (
         <section className="tl-detail__block">
           <div className="tl-detail__label">input</div>
@@ -565,12 +599,20 @@ function ActionCard({
   const outside =
     isOutsideActiveContext(interaction.callEvent) || isOutsideActiveContext(interaction.resultEvent);
 
-  const statusTone = dropped ? "error" : pending ? "pending" : exitCode != null && exitCode !== 0 ? "error" : "ok";
+  // One predicate drives exclusion from grouping, styling, the chip, and the
+  // preview. Keying styling off `exitCode` alone let structured failures render
+  // as successes even though grouping had already rejected them.
+  const failed = isToolInteractionFailed(interaction);
+  const failurePreview = getFailurePreview(interaction);
+  // Only edits get a diff stat: a non-edit input that happens to carry a path
+  // must keep its normal summary.
+  const editLabel = isEditInteraction(interaction) ? formatEditStat(getEditStat(interaction)) : null;
+  const statusTone = dropped ? "error" : pending ? "pending" : failed ? "error" : "ok";
   const statusClass = pending
     ? " tl-action--pending"
     : dropped
       ? " tl-action--dropped"
-      : exitCode != null && exitCode !== 0
+      : failed
         ? " tl-action--error"
         : "";
 
@@ -604,9 +646,19 @@ function ActionCard({
           {agentType || info.displayName}
         </span>
         {info.mcpNamespace ? <span className="tl-action__ns">{info.mcpNamespace}</span> : null}
-        <span className="tl-action__summary">{summary || (dropped ? "dropped" : pending ? "running…" : "")}</span>
+        <span className="tl-action__summary">
+          {editLabel ? (
+            <span className="tl-action__edit-stat" data-testid="tool-edit-stat">{editLabel}</span>
+          ) : (
+            summary || (dropped ? "dropped" : pending ? "running…" : "")
+          )}
+        </span>
         <span className="tl-action__meta">
-          {exitCode != null && exitCode !== 0 ? <span className="tl-chip tl-chip--error">exit {exitCode}</span> : null}
+          {failed ? (
+            <span className="tl-chip tl-chip--error">
+              {exitCode != null && exitCode !== 0 ? `exit ${exitCode}` : "failed"}
+            </span>
+          ) : null}
           {pending ? <span className="tl-chip tl-chip--pending">running</span> : null}
           {dropped ? <span className="tl-chip tl-chip--warning">dropped</span> : null}
           {outside ? <span className="tl-chip tl-chip--warning">outside</span> : null}
@@ -614,6 +666,7 @@ function ActionCard({
           <span className={`tl-action__chev${expanded ? " is-open" : ""}`} aria-hidden="true">›</span>
         </span>
       </button>
+      {!expanded && failurePreview ? <FailurePreview text={failurePreview} /> : null}
       {expanded ? (
         <div id={detailId}>
           <ToolDetail interaction={interaction} renderMedia={renderMedia} />
@@ -701,7 +754,7 @@ function ActivityChip({
   rowId,
   expanded,
   isSelected,
-  expandedInteractionKey,
+  expandedInteractionKeys,
   onSelect,
   onToggleExpand,
   onToggleInteraction,
@@ -711,7 +764,8 @@ function ActivityChip({
   rowId: string;
   expanded: boolean;
   isSelected: boolean;
-  expandedInteractionKey: string | null;
+  /** Full expanded set — grouped children are multi-open, like standalone rows. */
+  expandedInteractionKeys: Set<string>;
   onSelect: () => void;
   onToggleExpand: () => void;
   onToggleInteraction: (key: string) => void;
@@ -727,11 +781,11 @@ function ActivityChip({
   }, [expanded]);
 
   useEffect(() => {
-    if (!expandedInteractionKey) return;
-    if (earlier.some((interaction) => interaction.key === expandedInteractionKey)) {
+    if (expandedInteractionKeys.size === 0) return;
+    if (earlier.some((interaction) => expandedInteractionKeys.has(interaction.key))) {
       setShowEarlier(true);
     }
-  }, [earlier, expandedInteractionKey]);
+  }, [earlier, expandedInteractionKeys]);
 
   return (
     <div
@@ -748,6 +802,7 @@ function ActivityChip({
           onToggleExpand();
         }}
         aria-expanded={expanded}
+        aria-controls={`${rowId}-list`}
       >
         <span className="tl-noise__arrow">↳</span>
         <span
@@ -760,7 +815,7 @@ function ActivityChip({
         <span className={`tl-noise__chev${expanded ? " is-open" : ""}`} aria-hidden="true">›</span>
       </button>
       {expanded ? (
-        <div className="tl-noise__list">
+        <div className="tl-noise__list" id={`${rowId}-list`}>
           {!showEarlier && earlier.length > 0 ? (
             <button
               type="button"
@@ -773,23 +828,37 @@ function ActivityChip({
           {visibleInteractions.map((interaction) => {
             const info = getInteractionDisplayInfo(interaction);
             const sum = getToolSummary(interaction);
-            const isOpen = expandedInteractionKey === interaction.key;
+            const isOpen = expandedInteractionKeys.has(interaction.key);
+            // Distinct per-child IDs so focus, deep links, and keyboard nav can
+            // address one diff instead of the whole group.
+            const childId = `${rowId}-child-${interaction.key}`;
+            const childDetailId = `${childId}-detail`;
+            const editLabel = isEditInteraction(interaction)
+              ? formatEditStat(getEditStat(interaction))
+              : null;
             return (
               <div
                 key={interaction.key}
+                id={childId}
                 className={`tl-noise__item${isOpen ? " is-expanded" : ""}`}
               >
                 <button
                   type="button"
                   className="tl-noise__item-head"
                   onClick={() => onToggleInteraction(interaction.key)}
+                  aria-expanded={isOpen}
+                  aria-controls={childDetailId}
                 >
                   <span className="tl-noise__item-label" style={{ color: info.color }}>
                     {info.displayName}
                   </span>
-                  <span className="tl-noise__item-summary">{sum || "—"}</span>
+                  <span className="tl-noise__item-summary">{editLabel || sum || "—"}</span>
                 </button>
-                {isOpen ? <ToolDetail interaction={interaction} renderMedia={renderMedia} /> : null}
+                {isOpen ? (
+                  <div id={childDetailId}>
+                    <ToolDetail interaction={interaction} renderMedia={renderMedia} />
+                  </div>
+                ) : null}
               </div>
             );
           })}
@@ -1268,9 +1337,6 @@ export function TimelinePane({
             }
 
             const groupKey = `group:${item.group.key}`;
-            const expandedChild = Array.from(expandedTools).find((k) =>
-              item.group.interactions.some((i) => i.key === k),
-            );
             return (
               <ActivityChip
                 key={item.group.key}
@@ -1278,7 +1344,7 @@ export function TimelinePane({
                 rowId={`event-${item.group.anchorId}`}
                 expanded={expandedGroups.has(item.group.key)}
                 isSelected={timelineItemContainsSelection(item, selectedKey)}
-                expandedInteractionKey={expandedChild ?? null}
+                expandedInteractionKeys={expandedTools}
                 onSelect={() => onSelectKey(groupKey)}
                 onToggleExpand={() => toggleGroup(item.group.key)}
                 onToggleInteraction={(k) => toggleTool(k)}

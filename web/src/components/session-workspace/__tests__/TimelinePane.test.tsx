@@ -268,6 +268,112 @@ function makeAskUserQuestionItem(state: "running" | "dropped" = "dropped"): Time
   };
 }
 
+
+/** Render the pane with default props; only `items` varies in these tests. */
+function renderPane(items: TimelineItem[]) {
+  return render(
+    <TimelinePane
+      items={items}
+      totalEntries={items.length}
+      loadedEntries={items.length}
+      abandonedEvents={0}
+      showAbandonedBranches={false}
+      onShowAbandonedBranchesChange={vi.fn()}
+      hasPreviousPage={false}
+      isFetchingPreviousPage={false}
+      onFetchPreviousPage={vi.fn()}
+      loading={false}
+      error={null}
+      selectedKey={null}
+      onSelectKey={vi.fn()}
+    />,
+  );
+}
+
+/** Edit interaction with a real `old_string`/`new_string` shape. */
+function makeEditItem(
+  key: string,
+  filePath: string,
+  oldStr: string,
+  newStr: string,
+): TimelineItem {
+  return {
+    kind: "tool",
+    interaction: {
+      key,
+      toolName: "Edit",
+      callEvent: {
+        id: 20,
+        role: "assistant",
+        content_text: null,
+        tool_name: "Edit",
+        tool_input_json: { file_path: filePath, old_string: oldStr, new_string: newStr },
+        tool_output_text: null,
+        tool_call_id: key,
+        tool_call_state: "completed",
+        timestamp: "2026-03-19T16:49:00Z",
+        in_active_context: true,
+      },
+      resultEvent: {
+        id: 21,
+        role: "tool",
+        content_text: null,
+        tool_name: "Edit",
+        tool_input_json: null,
+        tool_output_text: "ok",
+        tool_call_id: key,
+        timestamp: "2026-03-19T16:49:01Z",
+        in_active_context: true,
+      },
+      pairing: "id",
+      anchorId: 20,
+      timestamp: "2026-03-19T16:49:00Z",
+    },
+  } as TimelineItem;
+}
+
+/**
+ * Failed shell call. `wrapped` selects the Longhouse wrapper text format
+ * (parsed exit code) versus a structured JSON failure with no parsed exit.
+ */
+function makeFailedToolItem(output: string, wrapped = true): TimelineItem {
+  return {
+    kind: "tool",
+    interaction: {
+      key: "id:failed",
+      toolName: "Bash",
+      callEvent: {
+        id: 30,
+        role: "assistant",
+        content_text: null,
+        tool_name: "Bash",
+        tool_input_json: { command: "make test" },
+        tool_output_text: null,
+        tool_call_id: "failed",
+        tool_call_state: "completed",
+        timestamp: "2026-03-19T16:49:00Z",
+        in_active_context: true,
+      },
+      resultEvent: {
+        id: 31,
+        role: "tool",
+        content_text: null,
+        tool_name: "Bash",
+        tool_input_json: null,
+        tool_output_text: wrapped
+          ? `Wall time: 1.0 seconds\nProcess exited with code 2\nOutput:\n${output}`
+          : JSON.stringify({ ok: false, output }),
+        tool_call_id: "failed",
+        timestamp: "2026-03-19T16:49:05Z",
+        in_active_context: true,
+      },
+      pairing: "id",
+      anchorId: 30,
+      timestamp: "2026-03-19T16:49:00Z",
+    },
+  } as TimelineItem;
+}
+
 describe("TimelinePane", () => {
   it("keeps repeated shell work recognizable while collapsed", () => {
     render(
@@ -599,5 +705,55 @@ describe("TimelinePane", () => {
     const image = screen.getByAltText("Session media def456abc123");
     expect(image).toHaveAttribute("src", "/api/media/def456/blob");
     expect(screen.getByTestId("session-event-media")).toBeInTheDocument();
+  });
+
+  it("shows the file and diff stat on a collapsed edit row", () => {
+    const item = makeEditItem("id:edit-1", "src/deep/nested/timelineModel.ts", "a\nb\nc", "a\nB\nc");
+    renderPane([item]);
+    // Basename only in the header; the full path lives in the expanded diff.
+    expect(screen.getByTestId("tool-edit-stat").textContent).toBe("timelineModel.ts +1 −1");
+  });
+
+  it("renders a bounded failure preview without a click", () => {
+    const lines = Array.from({ length: 40 }, (_, i) => `line ${i}`).join("\n");
+    renderPane([makeFailedToolItem(lines)]);
+    const preview = screen.getByTestId("tool-failure-preview");
+    // Head is kept as well as tail: a stack trace's heading must survive.
+    expect(preview.textContent).toContain("line 0");
+    expect(preview.textContent).toContain("line 39");
+    expect(preview.textContent).toContain("more lines");
+    expect(preview.textContent).not.toContain("line 20");
+  });
+
+  it("marks a structured failure as failed even without a parsed exit code", () => {
+    renderPane([makeFailedToolItem("boom", false)]);
+    const row = screen.getAllByTestId("session-timeline-row")[0];
+    expect(row.getAttribute("data-status")).toBe("error");
+  });
+
+  it("keeps two grouped children open at once", () => {
+    const a = makeEditItem("id:edit-a", "a.ts", "x", "y");
+    const b = makeEditItem("id:edit-b", "b.ts", "x", "y");
+    if (a.kind !== "tool" || b.kind !== "tool") throw new Error("fixture");
+    const group: TimelineItem = {
+      kind: "activity_group",
+      group: {
+        key: "activity:20",
+        interactions: [a.interaction, b.interaction],
+        timestamp: a.interaction.timestamp,
+        anchorId: a.interaction.anchorId,
+      },
+    };
+    const { container } = renderPane([group]);
+    fireEvent.click(screen.getByText(/Edited/));
+
+    const heads = container.querySelectorAll(".tl-noise__item-head");
+    expect(heads.length).toBe(2);
+    fireEvent.click(heads[0]);
+    fireEvent.click(heads[1]);
+
+    // Previously an accordion: opening the second closed the first.
+    expect(container.querySelectorAll(".tl-noise__item.is-expanded").length).toBe(2);
+    expect(container.querySelectorAll(".tl-diff").length).toBe(2);
   });
 });

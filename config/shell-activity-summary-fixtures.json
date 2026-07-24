@@ -227,6 +227,154 @@
         }
       ],
       "expected": "Ran gh run view · Waited 1"
+    },
+    {
+      "name": "edit names its file and diff stat",
+      "calls": [
+        {
+          "category": "edit",
+          "input": {
+            "file_path": "web/src/lib/sessionWorkspace/timelineModel.ts",
+            "old_string": "a\nb\nc",
+            "new_string": "a\nB\nc"
+          }
+        },
+        {
+          "category": "read"
+        }
+      ],
+      "expected": "Read 1 · Edited timelineModel.ts +1 −1"
+    },
+    {
+      "name": "edited files deduplicate by path",
+      "calls": [
+        {
+          "category": "edit",
+          "input": {
+            "file_path": "a.ts",
+            "old_string": "x",
+            "new_string": "y"
+          }
+        },
+        {
+          "category": "edit",
+          "input": {
+            "file_path": "b.ts",
+            "old_string": "x",
+            "new_string": "y"
+          }
+        },
+        {
+          "category": "edit",
+          "input": {
+            "file_path": "a.ts",
+            "old_string": "y",
+            "new_string": "z"
+          }
+        }
+      ],
+      "expected": "Edited a.ts +1 −1 · b.ts +1 −1"
+    },
+    {
+      "name": "edited files overflow after two distinct paths",
+      "calls": [
+        {
+          "category": "edit",
+          "input": {
+            "file_path": "a.ts",
+            "old_string": "x",
+            "new_string": "y"
+          }
+        },
+        {
+          "category": "edit",
+          "input": {
+            "file_path": "b.ts",
+            "old_string": "x",
+            "new_string": "y"
+          }
+        },
+        {
+          "category": "edit",
+          "input": {
+            "file_path": "c.ts",
+            "old_string": "x",
+            "new_string": "y"
+          }
+        }
+      ],
+      "expected": "Edited a.ts +1 −1 · b.ts +1 −1 · +1 more"
+    },
+    {
+      "name": "write shape counts added lines only",
+      "calls": [
+        {
+          "category": "edit",
+          "input": {
+            "file_path": "new.ts",
+            "content": "one\ntwo\nthree"
+          }
+        }
+      ],
+      "expected": "Edited new.ts +3 −0"
+    },
+    {
+      "name": "apply_patch counts hunk lines",
+      "calls": [
+        {
+          "category": "edit",
+          "input": {
+            "file_path": "p.ts",
+            "patch": "--- a/p.ts\n+++ b/p.ts\n@@\n-old\n+new\n+extra"
+          }
+        }
+      ],
+      "expected": "Edited p.ts +2 −1"
+    },
+    {
+      "name": "unknown edit shape names the file without a stat",
+      "calls": [
+        {
+          "category": "edit",
+          "input": {
+            "file_path": "mystery.ts",
+            "mode": "rewrite"
+          }
+        }
+      ],
+      "expected": "Edited mystery.ts"
+    },
+    {
+      "name": "edit with no recoverable input falls back to a count",
+      "calls": [
+        {
+          "category": "edit",
+          "input": {}
+        },
+        {
+          "category": "edit",
+          "input": {}
+        }
+      ],
+      "expected": "Edited 2"
+    },
+    {
+      "name": "named and unnamed edits fold into one overflow count",
+      "calls": [
+        {
+          "category": "edit",
+          "input": {
+            "file_path": "a.ts",
+            "old_string": "x",
+            "new_string": "y"
+          }
+        },
+        {
+          "category": "edit",
+          "input": {}
+        }
+      ],
+      "expected": "Edited a.ts +1 −1 · +1 more"
     }
   ]
 }

@@ -422,15 +422,24 @@ struct WebTranscriptView: UIViewRepresentable {
         let presentation = call.toolPresentation
         let duration = result.flatMap { TimelineBuilder.durationSeconds(call: call, result: $0) }
             .map(TimelineBuilder.formatDuration)
+        // iOS previously had no failure surface at all: a non-zero exit or a
+        // structured failure rendered as "done". One predicate now drives the
+        // chip and the preview, as on web (R4).
+        let failed = TimelineBuilder.isFailed(call: call, result: result)
+        let exitCode = ShellSalienceClassifier.parseExitCode(result?.toolOutputText)
         let status: String? = {
             if orphan { return "orphan" }
-            switch call.toolCallState {
-            case .running: return "running"
-            case .dropped: return "dropped"
-            case .completed: return "done"
-            case .none: return nil
-            }
+            if call.toolCallState == .running { return "running" }
+            if call.toolCallState == .dropped { return "dropped" }
+            if failed { return exitCode.map { "exit \($0)" } ?? "failed" }
+            if call.toolCallState == .completed { return "done" }
+            return nil
         }()
+        // Only edits get a stat or a diff. Computing this for every tool would
+        // let any input carrying a `text`/`content` key masquerade as a file
+        // creation and replace its Input block with a bogus diff.
+        let editStat = TimelineBuilder.isEditInteraction(call) ? EditSummary.stat(for: call) : nil
+        let editLabel = editStat.flatMap { EditSummary.format($0) }
         var presentationCalls = presentation?.children.map { child in
             WebTranscriptToolCall(
                 title: child.label,
@@ -461,7 +470,7 @@ struct WebTranscriptView: UIViewRepresentable {
             kind: "tool",
             role: nil,
             title: presentation?.label ?? resolved.label,
-            subtitle: TimelineBuilder.inputSummary(for: call),
+            subtitle: editLabel ?? TimelineBuilder.inputSummary(for: call),
             body: nil,
             fullBody: nil,
             collapsed: false,
@@ -477,7 +486,11 @@ struct WebTranscriptView: UIViewRepresentable {
             origin: presentation?.disposition == "parsed"
                 ? "Parsed via \(presentation?.executionMethod ?? presentation?.sourceToolName ?? toolName)"
                 : nil,
-            media: payloadMediaRefs(call.mediaRefs + (result?.mediaRefs ?? []), serverURL: serverURL)
+            media: payloadMediaRefs(call.mediaRefs + (result?.mediaRefs ?? []), serverURL: serverURL),
+            failurePreview: TimelineBuilder.failurePreview(call: call, result: result),
+            diff: editStat.flatMap { EditSummary.diffLines(for: $0) }.map { lines in
+                lines.map { WebTranscriptDiffLine(kind: $0.kind.rawValue, text: $0.text) }
+            }
         )
     }
 
@@ -1227,6 +1240,15 @@ struct WebTranscriptPayloadItem: Encodable {
     let calls: [WebTranscriptToolCall]
     let origin: String?
     let media: [WebTranscriptMediaRef]?
+    /// Bounded preview shown without a tap on a failed row (R4).
+    var failurePreview: String? = nil
+    /// Rendered diff for edit rows (R3).
+    var diff: [WebTranscriptDiffLine]? = nil
+}
+
+struct WebTranscriptDiffLine: Encodable {
+    let kind: String
+    let text: String
 }
 
 struct WebTranscriptToolCall: Encodable {
@@ -1642,6 +1664,64 @@ private extension WebTranscriptView {
       font-style: normal;
     }
 
+    .tool-meta.failed {
+      color: var(--attention);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0 0 0 0);
+      white-space: nowrap;
+      border: 0;
+    }
+
+    /* Bounded, tap-free preview of a failed call's output (R4). */
+    .failure-preview {
+      margin: 0 10px 8px;
+      border: 1px solid rgba(200, 80, 70, 0.28);
+      border-radius: 6px;
+      background: rgba(40, 12, 10, 0.35);
+      padding: 6px 8px;
+      overflow-x: auto;
+    }
+
+    .failure-preview pre {
+      margin: 0;
+      font: 11px ui-monospace, "SF Mono", Menlo, monospace;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      word-break: break-word;
+      color: var(--secondary);
+    }
+
+    /* Edit diffs (R3). */
+    .diff {
+      border: 1px solid var(--rule);
+      border-radius: 6px;
+      overflow-x: auto;
+      padding: 4px 0;
+    }
+
+    .diff-line {
+      display: flex;
+      gap: 6px;
+      font: 11px ui-monospace, "SF Mono", Menlo, monospace;
+      line-height: 1.5;
+      padding: 0 8px;
+      white-space: pre;
+    }
+
+    .diff-gutter { opacity: 0.6; user-select: none; }
+    .diff-line--add { color: #6fbf73; }
+    .diff-line--remove { color: #d1706a; }
+    .diff-line--equal { opacity: 0.75; }
+
     .details-body {
       border-top: 1px solid var(--rule);
       margin: 4px 10px 0;
@@ -2021,11 +2101,19 @@ private extension WebTranscriptView {
     window.scrollTranscriptToBottom = scrollToBottom;
 
     function toolDetails(item) {
+      // A failure is never hidden behind a duration: the exit chip wins (R4).
+      const isFailure = !!item.failurePreview
+        || (typeof item.status === 'string' && (item.status.indexOf('exit ') === 0 || item.status === 'failed'));
       const meta = item.status === 'running' ? 'running'
         : (item.status === 'dropped' ? 'dropped'
-        : (item.status === 'orphan' ? 'orphan' : ''));
-      const status = item.duration || item.status || '';
-      const input = item.input ? '<div class="section-label">Input</div><pre><code>' + escapeHtml(item.input) + '</code></pre>' : '';
+        : (item.status === 'orphan' ? 'orphan'
+        : (isFailure ? 'failed' : '')));
+      const status = isFailure ? (item.status || 'failed') : (item.duration || item.status || '');
+      // A diff replaces the raw input block when the edit shape is known (R3).
+      const diffHtml = renderDiff(item.diff);
+      const input = diffHtml
+        ? diffHtml
+        : item.input ? '<div class="section-label">Input</div><pre><code>' + escapeHtml(item.input) + '</code></pre>' : '';
       const media = mediaStrip(item.media || []);
       const provenance = (item.calls || []).map(call => {
         const childInput = call.input ? '<pre><code>' + escapeHtml(call.input) + '</code></pre>' : '';
@@ -2040,6 +2128,11 @@ private extension WebTranscriptView {
       } else if (item.status === 'dropped') {
         output = '<p>No result recorded, likely dropped during ingest.</p>';
       }
+      // Failure preview sits outside <details> so it needs no tap (R4).
+      const preview = item.failurePreview
+        ? '<div class="failure-preview" role="note"><span class="sr-only">Error output: </span><pre>'
+          + escapeHtml(item.failurePreview) + '</pre></div>'
+        : '';
       return `
         <details class="tool row">
           <summary>
@@ -2049,7 +2142,20 @@ private extension WebTranscriptView {
           </summary>
           <div class="details-body">${input}${provenance}${output}${media}</div>
         </details>
+        ${preview}
       `;
+    }
+
+    /// Render diff lines as gutter-prefixed rows (R3). Mirrors EditDiffView.
+    function renderDiff(lines) {
+      if (!lines || !lines.length) return '';
+      const rows = lines.map(line => {
+        const gutter = line.kind === 'add' ? '+' : line.kind === 'remove' ? '\u2212' : ' ';
+        return '<div class="diff-line diff-line--' + line.kind + '">'
+          + '<span class="diff-gutter">' + gutter + '</span>'
+          + '<span class="diff-text">' + escapeHtml(line.text || ' ') + '</span></div>';
+      }).join('');
+      return '<div class="section-label">Diff</div><div class="diff">' + rows + '</div>';
     }
 
     function activityGroup(item) {

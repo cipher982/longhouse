@@ -1865,6 +1865,46 @@
   .tl-detail__diff-stat--add    { color: var(--color-intent-success); }
   .tl-detail__diff-stat--remove { color: var(--color-intent-error); }
 
+  /* Screen-reader-only text for diff stats and failure previews. */
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  /* Collapsed edit rows lead with the file and its diff stat. */
+  .tl-action__edit-stat {
+    font-family: var(--font-family-mono);
+    font-size: 12px;
+    color: var(--color-text-secondary);
+  }
+
+  /* Bounded, click-free preview of a failed call's output (R4). */
+  .tl-failure-preview {
+    margin: 0 12px 10px 12px;
+    border-radius: var(--radius-md);
+    border: 1px solid rgba(200, 80, 70, 0.28);
+    background: rgba(40, 12, 10, 0.45);
+    padding: 8px 10px;
+    overflow-x: auto;
+  }
+  .tl-failure-preview__text {
+    margin: 0;
+    font-family: var(--font-family-mono);
+    font-size: 11px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: var(--color-text-secondary);
+    opacity: 0.9;
+  }
+
   .tl-diff {
     margin: 0;
     border-radius: var(--radius-md);

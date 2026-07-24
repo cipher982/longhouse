@@ -17,6 +17,8 @@ private struct ActivitySummaryFixtureFile: Decodable {
 
         let category: String
         let operations: [Operation]?
+        /// Raw tool input, so edit cases carry file paths and diff shapes.
+        let input: [String: JSONValue]?
     }
 
     let cases: [FixtureCase]
@@ -118,6 +120,7 @@ final class TimelineBuilderTests: XCTestCase {
                     id: index * 2 + 1,
                     role: "assistant",
                     tool: toolName,
+                    input: call.input,
                     callId: "fixture-\(index)",
                     toolPresentation: presentation
                 )

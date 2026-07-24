@@ -118,6 +118,64 @@ enum TimelineBuilder {
             || (exitCode != nil && exitCode != 0)
     }
 
+    /// One predicate drives group exclusion, styling, the `exit N` chip, and
+    /// the inline failure preview. Mirrors `isToolInteractionFailed()` on web.
+    /// Dropped and orphan are deliberately NOT failures: they already have
+    /// their own chip and styling, and their "output" is a placeholder, not a
+    /// command's error text.
+    static func isFailed(call: SessionEvent, result: SessionEvent?) -> Bool {
+        if let exit = ShellSalienceClassifier.parseExitCode(result?.toolOutputText), exit != 0 {
+            return true
+        }
+        return hasStructuredFailure(result?.toolOutputText)
+    }
+
+    /// Edit-category membership. Diff stats are only meaningful for edits, so
+    /// render paths gate on this rather than on "the input happens to carry a
+    /// text-ish key". Mirrors `isEditInteraction()` on web.
+    static func isEditInteraction(_ event: SessionEvent) -> Bool {
+        if presentationAggregate(event) != nil { return false }
+        let identity = ([presentedToolName(event), event.toolPresentation?.label]
+            .compactMap { $0 }).joined(separator: " ").lowercased()
+            .replacingOccurrences(of: #"[^a-z0-9]+"#, with: " ", options: .regularExpression)
+        return identity.range(
+            of: #"\b(edit|edited|write|patch|replace|notebook|create file|write to file)\b"#,
+            options: .regularExpression
+        ) != nil
+    }
+
+    /// Bounds for the inline failure preview on a collapsed row.
+    static let failurePreviewHeadLines = 2
+    static let failurePreviewTailLines = 8
+    static let failurePreviewMaxChars = 4096
+
+    /// A failed command's output is not re-derivable, so a collapsed row shows
+    /// a bounded preview without a tap. Head lines are kept as well as tail
+    /// lines: an exception heading or a single-line megabyte JSON error would
+    /// be lost entirely to a pure tail.
+    static func failurePreview(call: SessionEvent, result: SessionEvent?) -> String? {
+        guard isFailed(call: call, result: result) else { return nil }
+        guard let raw = result?.toolOutputText else { return nil }
+        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return nil }
+
+        let lines = text.components(separatedBy: "\n")
+        var preview: String
+        if lines.count <= failurePreviewHeadLines + failurePreviewTailLines + 1 {
+            preview = text
+        } else {
+            let head = lines.prefix(failurePreviewHeadLines)
+            let tail = lines.suffix(failurePreviewTailLines)
+            let elided = lines.count - head.count - tail.count
+            preview = (Array(head) + ["… \(elided) more lines …"] + Array(tail))
+                .joined(separator: "\n")
+        }
+        if preview.count > failurePreviewMaxChars {
+            preview = String(preview.prefix(failurePreviewMaxChars)) + "\n… truncated …"
+        }
+        return preview
+    }
+
     /// Completed, attributable tools may join prose-bounded activity groups.
     static func isActivityEligible(call: SessionEvent, result: SessionEvent?, pairing: ToolPairing) -> Bool {
         guard !(presentedToolName(call)).isEmpty else { return false }
@@ -155,12 +213,27 @@ enum TimelineBuilder {
         return ShellSalienceClassifier.classify(command)
     }
 
-    /// Observable activity header: `Searched 5 · Read 14 · Edited 2 · Ran 1`.
+    /// Distinct edited files named in a collapsed summary before overflow.
+    static let editSummaryVisibleFiles = 2
+
+    /// Observable activity header:
+    /// `Edited timelineModel.ts +4 −1 · +1 more · Read 14 · Ran 1`.
+    ///
+    /// Edits name their files instead of collapsing to a bare count — a file
+    /// change is the work product and must be legible without expanding. Must
+    /// stay byte-identical to `formatActivitySummary()` on web; both are locked
+    /// by `config/shell-activity-summary-fixtures.json`.
     static func activitySummary(for calls: [ActivityCall]) -> String {
         var counts = ["search": 0, "read": 0, "list": 0, "view": 0,
                       "edit": 0, "call": 0, "run": 0, "wait": 0]
         var runOperations: [String: (label: String, count: Int)] = [:]
         var runOperationOrder: [String] = []
+        // Deduplicated by path, first-seen order. A file list is a set, so the
+        // shell first-plus-last bracket does not apply: `A, B, A` must not
+        // render `A · A`.
+        var editFiles: [String: String] = [:]
+        var editFileOrder: [String] = []
+        var unnamedEdits = 0
         var unnamedRuns = 0
         for call in calls {
             let aggregate = shellSalience(call: call.call, result: call.result)?.aggregate
@@ -174,8 +247,18 @@ enum TimelineBuilder {
                 let identity = ([presentedToolName(call.call), call.call.toolPresentation?.label]
                     .compactMap { $0 }).joined(separator: " ").lowercased()
                     .replacingOccurrences(of: #"[^a-z0-9]+"#, with: " ", options: .regularExpression)
-                if identity.range(of: #"\b(edit|edited|write|patch|replace|notebook|create file|write to file)\b"#, options: .regularExpression) != nil {
+                if isEditInteraction(call.call) {
                     counts["edit", default: 0] += 1
+                    let stat = EditSummary.stat(for: call.call)
+                    guard let label = EditSummary.format(stat), let path = stat.filePath else {
+                        unnamedEdits += 1
+                        continue
+                    }
+                    // First write of a path wins its label; later edits fold in.
+                    if editFiles[path] == nil {
+                        editFileOrder.append(path)
+                        editFiles[path] = label
+                    }
                 } else if identity.range(of: #"\b(web|browser|fetch|view url|open url|read url|webfetch|websearch|searchweb|readurlcontent)\b"#, options: .regularExpression) != nil {
                     counts["view", default: 0] += 1
                 } else if call.call.toolPresentation?.mcpNamespace != nil
@@ -206,7 +289,14 @@ enum TimelineBuilder {
         var parts = ordered.compactMap { key, label -> String? in
             if key == "run" || key == "wait" { return nil }
             let count = counts[key, default: 0]
-            return count > 0 ? "\(label) \(count)" : nil
+            guard count > 0 else { return nil }
+            guard key == "edit" else { return "\(label) \(count)" }
+            let labels = editFileOrder.compactMap { editFiles[$0] }
+            guard !labels.isEmpty else { return "\(label) \(count)" }
+            var visible = Array(labels.prefix(editSummaryVisibleFiles))
+            let hidden = labels.count - visible.count + unnamedEdits
+            if hidden > 0 { visible.append("+\(hidden) more") }
+            return "\(label) \(visible.joined(separator: " · "))"
         }
         let operations = runOperationOrder.compactMap { runOperations[$0] }
         if operations.isEmpty {

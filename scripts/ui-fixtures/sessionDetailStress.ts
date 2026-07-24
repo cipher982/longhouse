@@ -573,6 +573,31 @@ export function buildSessionDetailStressFixture(): {
       tool_output_text: "Success. Updated the following files:\nM scripts/ui-capture.ts",
       tool_call_id: "head-tool-3",
     }),
+    // Real `old_string`/`new_string` shape so the collapsed row can show a diff
+    // stat and the expanded row a diff (transcript-action-visibility R2/R3).
+    makeEvent(2071, "assistant", "2026-04-15T15:18:40Z", {
+      tool_name: "Edit",
+      tool_input_json: {
+        file_path: "web/src/lib/sessionWorkspace/timelineModel.ts",
+        old_string:
+          "  const visible = operations.slice(0, 2).map((operation) =>\n" +
+          "    operation.count > 1 ? `${operation.label} x${operation.count}` : operation.label,\n" +
+          "  );",
+        new_string:
+          "  const visibleOperations = operations.length > 2\n" +
+          "    ? [operations[0], operations[operations.length - 1]]\n" +
+          "    : operations;\n" +
+          "  const visible = visibleOperations.map((operation) =>\n" +
+          "    operation.count > 1 ? `${operation.label} x${operation.count}` : operation.label,\n" +
+          "  );",
+      },
+      tool_call_id: "head-tool-edit",
+    }),
+    makeEvent(2072, "tool", "2026-04-15T15:18:41Z", {
+      tool_name: "Edit",
+      tool_output_text: "Applied 1 edit to timelineModel.ts",
+      tool_call_id: "head-tool-edit",
+    }),
     makeEvent(209, "assistant", "2026-04-15T15:19:00Z", {
       content_text:
         "The first cut is wired. I am checking it with the capture harness now, then I will look at the screenshot for density and obvious layout waste.",

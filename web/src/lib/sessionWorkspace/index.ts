@@ -32,6 +32,7 @@ export {
   EXPLORATION_OVERFLOW_VISIBLE,
   formatActivitySummary,
   formatToolInput,
+  getFailurePreview,
   getPreferredSelectionKey,
   getInteractionDisplayInfo,
   getToolDisplayInfo,
@@ -42,8 +43,10 @@ export {
   getToolTier,
   isAgentToolInteraction,
   isActivityEligible,
+  isEditInteraction,
   isOutsideActiveContext,
   isToolInteractionDropped,
+  isToolInteractionFailed,
   isToolInteractionRunning,
   parseLonghouseOutput,
   projectionItemsWithTranscriptPreview,
@@ -53,3 +56,10 @@ export {
 } from "./timelineModel";
 
 export { getSessionInteractionCapabilities } from "./interaction";
+
+export {
+  DIFF_CELL_BUDGET,
+  formatEditStat,
+  getEditStat,
+  type EditStat,
+} from "./editSummary";

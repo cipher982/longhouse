@@ -50,6 +50,8 @@ function interaction(partial: Partial<ToolInteraction> & Pick<ToolInteraction, "
 type SummaryFixtureCall = {
   category: "read" | "edit" | "run" | "wait";
   operations?: Array<{ key: string; label: string; count: number }>;
+  /** Raw tool input, so edit cases can carry file paths and diff shapes. */
+  input?: Record<string, unknown>;
 };
 
 const summaryFixtures = JSON.parse(
@@ -65,6 +67,13 @@ function fixtureInteraction(call: SummaryFixtureCall, index: number): ToolIntera
     key: `fixture-${index}`,
     anchorId: index,
     toolName,
+    callEvent: {
+      id: index,
+      role: "assistant",
+      timestamp: "2026-01-01T00:00:00Z",
+      tool_name: toolName,
+      tool_input_json: call.input ?? null,
+    } as AgentEvent,
     presentation: {
       version: 2,
       disposition: "direct",
@@ -317,7 +326,51 @@ describe("exploration run integration", () => {
     ]);
     const group = model.activityGroups[0];
     expect(group.interactions.map((i) => i.toolName)).toEqual(["Read", "Grep", "Edit"]);
-    expect(formatActivitySummary(group.interactions)).toBe("Searched 1 · Read 1 · Edited 1");
+    // Named, not counted: an input with a path but no diff shape still names
+    // the file so the reader sees *what* changed without expanding.
+    expect(formatActivitySummary(group.interactions)).toBe("Searched 1 · Read 1 · Edited a.ts");
+  });
+
+  it("keeps an alternating edit/read refactor in one group", () => {
+    // The reason grouping was preserved rather than split on mutations: pulling
+    // edits into their own rows makes every homogeneous run length one, and a
+    // refactor degenerates to one row per call.
+    const events = [
+      event({ id: 1, role: "user", content_text: "refactor", timestamp: "2026-01-01T00:00:00Z" }),
+    ];
+    let id = 2;
+    for (let i = 0; i < 4; i++) {
+      const readId = `r${i}`;
+      events.push(event({
+        id: id++, role: "assistant", tool_name: "Read", tool_call_id: readId,
+        tool_input_json: { file_path: `/f${i}.ts` },
+        timestamp: `2026-01-01T00:01:${String(i * 4).padStart(2, "0")}Z`,
+      }));
+      events.push(event({
+        id: id++, role: "tool", tool_call_id: readId, tool_output_text: "body",
+        timestamp: `2026-01-01T00:01:${String(i * 4 + 1).padStart(2, "0")}Z`,
+      }));
+      const editId = `e${i}`;
+      events.push(event({
+        id: id++, role: "assistant", tool_name: "Edit", tool_call_id: editId,
+        tool_input_json: { file_path: `/f${i}.ts`, old_string: "a", new_string: "b" },
+        timestamp: `2026-01-01T00:01:${String(i * 4 + 2).padStart(2, "0")}Z`,
+      }));
+      events.push(event({
+        id: id++, role: "tool", tool_call_id: editId, tool_output_text: "ok",
+        timestamp: `2026-01-01T00:01:${String(i * 4 + 3).padStart(2, "0")}Z`,
+      }));
+    }
+
+    const model = buildTimelineModel(projection(events));
+
+    // 8 tool calls collapse to one group, not 8 rows.
+    expect(model.items.map((item) => item.kind)).toEqual(["message", "activity_group"]);
+    expect(model.activityGroups).toHaveLength(1);
+    expect(model.activityGroups[0].interactions).toHaveLength(8);
+    expect(formatActivitySummary(model.activityGroups[0].interactions)).toBe(
+      "Read 4 · Edited f0.ts +1 −1 · f1.ts +1 −1 · +2 more",
+    );
   });
 
   it("keeps a singleton Read as an individual context row", () => {

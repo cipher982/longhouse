@@ -10,6 +10,7 @@ import type {
   ToolInteraction,
 } from "./types";
 import { truncatePath } from "./formatters";
+import { formatEditStat, getEditStat } from "./editSummary";
 import {
   colorTokenToCss,
   resolveToolInfo,
@@ -137,6 +138,40 @@ export function isToolInteractionFailed(interaction: ToolInteraction): boolean {
   return hasStructuredFailure(interaction.resultEvent?.tool_output_text);
 }
 
+/** Bounds for the inline failure preview on a collapsed row. */
+const FAILURE_PREVIEW_HEAD_LINES = 2;
+const FAILURE_PREVIEW_TAIL_LINES = 8;
+const FAILURE_PREVIEW_MAX_CHARS = 4096;
+
+/**
+ * A failed command's output is not re-derivable, so the collapsed row shows a
+ * bounded preview without a click. Head lines are kept as well as tail lines:
+ * an exception heading or a single-line megabyte JSON error would be lost
+ * entirely to a pure tail.
+ */
+export function getFailurePreview(interaction: ToolInteraction): string | null {
+  if (!isToolInteractionFailed(interaction)) return null;
+  const raw = interaction.resultEvent?.tool_output_text;
+  if (!raw) return null;
+  const parsed = parseLonghouseOutput(raw);
+  const text = ((parsed ? parsed.output : raw) || "").trim();
+  if (!text) return null;
+
+  const lines = text.split("\n");
+  let preview: string;
+  if (lines.length <= FAILURE_PREVIEW_HEAD_LINES + FAILURE_PREVIEW_TAIL_LINES + 1) {
+    preview = text;
+  } else {
+    const head = lines.slice(0, FAILURE_PREVIEW_HEAD_LINES);
+    const tail = lines.slice(-FAILURE_PREVIEW_TAIL_LINES);
+    const elided = lines.length - head.length - tail.length;
+    preview = [...head, `… ${elided} more lines …`, ...tail].join("\n");
+  }
+  return preview.length > FAILURE_PREVIEW_MAX_CHARS
+    ? `${preview.slice(0, FAILURE_PREVIEW_MAX_CHARS)}\n… truncated …`
+    : preview;
+}
+
 /** Completed, attributable calls may join a prose-bounded activity run. */
 export function isActivityEligible(interaction: ToolInteraction): boolean {
   if (interaction.pairing === "orphan" || interaction.pairing === "pending") return false;
@@ -163,13 +198,46 @@ function activityCategory(interaction: ToolInteraction): ActivityCategory {
   return "run";
 }
 
-/** Header copy: `Searched 5 · Read 14 · Edited 2 · Ran 1`. */
+/**
+ * Edit-category membership. Diff stats are only meaningful for edits, so
+ * render paths gate on this rather than on "the input happens to have a path".
+ */
+export function isEditInteraction(interaction: ToolInteraction): boolean {
+  return activityCategory(interaction) === "edit";
+}
+
+/** Distinct edited files named in a collapsed summary before overflow. */
+const EDIT_SUMMARY_VISIBLE_FILES = 2;
+
+/**
+ * Header copy: `Edited timelineModel.ts +4 −1 · +1 more · Read 14 · Ran 1`.
+ *
+ * Edits name their files instead of collapsing to a bare count — a file change
+ * is the work product and must be legible without expanding (see
+ * `docs/specs/transcript-action-visibility.md`).
+ */
 export function formatActivitySummary(interactions: ToolInteraction[]): string {
   const counts = Object.fromEntries(ACTIVITY_SUMMARY_ORDER.map((category) => [category, 0])) as Record<ActivityCategory, number>;
   const runOperations = new Map<string, { label: string; count: number }>();
+  // Deduplicated by path, first-seen order. A file list is a set, so the shell
+  // first-plus-last bracket does not apply: `A, B, A` must not render `A · A`.
+  const editFiles = new Map<string, string>();
+  let unnamedEdits = 0;
   let unnamedRuns = 0;
   for (const interaction of interactions) {
     const category = activityCategory(interaction);
+    if (category === "edit") {
+      counts.edit += 1;
+      const stat = getEditStat(interaction);
+      const label = formatEditStat(stat);
+      if (!label || !stat.filePath) {
+        unnamedEdits += 1;
+        continue;
+      }
+      // First write of a path wins its label; later edits fold into the count.
+      if (!editFiles.has(stat.filePath)) editFiles.set(stat.filePath, label);
+      continue;
+    }
     if (category !== "run") {
       counts[category] += 1;
       continue;
@@ -194,6 +262,19 @@ export function formatActivitySummary(interactions: ToolInteraction[]): string {
 
   const parts: string[] = [];
   for (const category of ACTIVITY_SUMMARY_ORDER) {
+    if (category === "edit") {
+      if (counts.edit === 0) continue;
+      const labels = [...editFiles.values()];
+      if (labels.length === 0) {
+        parts.push(`${ACTIVITY_SUMMARY_LABEL.edit} ${counts.edit}`);
+        continue;
+      }
+      const visible = labels.slice(0, EDIT_SUMMARY_VISIBLE_FILES);
+      const hidden = labels.length - visible.length + unnamedEdits;
+      if (hidden > 0) visible.push(`+${hidden} more`);
+      parts.push(`${ACTIVITY_SUMMARY_LABEL.edit} ${visible.join(" · ")}`);
+      continue;
+    }
     if (category !== "run") {
       if (counts[category] > 0) parts.push(`${ACTIVITY_SUMMARY_LABEL[category]} ${counts[category]}`);
       continue;
