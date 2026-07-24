@@ -13,16 +13,17 @@ import tempfile
 import time
 import urllib.request
 from dataclasses import dataclass
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
-
+from typing import Callable
 
 ACCEPTED_CONCLUSIONS = {"success"}
 DEFAULT_REQUIRED_WORKFLOWS = (
     "CI",
     "Deploy and Verify",
     "Launch Gate",
-    "Installer Validation Ring",
+    "Local Runtime Binary Release",
 )
 
 
@@ -33,6 +34,13 @@ class Check:
     detail: str
     terminal: bool = False
     hint: str | None = None
+    state: str = ""
+
+    def __post_init__(self) -> None:
+        if self.state:
+            return
+        state = "succeeded" if self.ok else ("failed" if self.terminal else "pending")
+        object.__setattr__(self, "state", state)
 
 
 WORKFLOW_DISPATCH_FILES = {
@@ -40,6 +48,7 @@ WORKFLOW_DISPATCH_FILES = {
     "Deploy and Verify": "deploy-and-verify.yml",
     "Launch Gate": "launch-gate.yml",
     "Installer Validation Ring": "test-install.yml",
+    "Local Runtime Binary Release": "local-runtime-release.yml",
 }
 
 
@@ -85,6 +94,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--wait", action="store_true", help="Poll until every check passes or timeout elapses.")
     parser.add_argument("--timeout", type=int, default=3600, help="Wait timeout in seconds. Default: 3600.")
     parser.add_argument("--poll", type=int, default=30, help="Wait poll interval in seconds. Default: 30.")
+    parser.add_argument(
+        "--discovery-grace",
+        type=int,
+        default=300,
+        help="Seconds to allow required workflow runs to appear before missing evidence fails. Default: 300.",
+    )
     parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
     return parser.parse_args(argv)
 
@@ -161,6 +176,7 @@ def check_workflows(repo: str, sha: str, required: tuple[str, ...]) -> list[Chec
                     False,
                     "no exact-SHA run found",
                     hint=missing_workflow_hint(repo, sha, workflow),
+                    state="missing",
                 )
             )
             continue
@@ -326,7 +342,28 @@ def print_human(checks: list[Check]) -> None:
             print(f"  HINT {check.hint}")
 
 
-def run_checks(args: argparse.Namespace, sha: str, required: tuple[str, ...]) -> list[Check]:
+def _cached_immutable_check(
+    cache: dict[tuple[str, ...], Check],
+    key: tuple[str, ...],
+    build: Callable[[], Check],
+) -> Check:
+    cached = cache.get(key)
+    if cached is not None:
+        return cached
+    check = build()
+    if check.ok:
+        cache[key] = check
+    return check
+
+
+def run_checks(
+    args: argparse.Namespace,
+    sha: str,
+    required: tuple[str, ...],
+    *,
+    immutable_success_cache: dict[tuple[str, ...], Check] | None = None,
+) -> list[Check]:
+    cache = immutable_success_cache if immutable_success_cache is not None else {}
     checks: list[Check] = []
     if not args.skip_workflows:
         checks.extend(check_workflows(args.repo, sha, required))
@@ -338,11 +375,43 @@ def run_checks(args: argparse.Namespace, sha: str, required: tuple[str, ...]) ->
         release_check, release_tag = check_latest_release(args.repo, sha)
         checks.append(release_check)
     if not args.skip_public_package and release_tag:
-        checks.append(check_public_package(release_tag, sha))
+        checks.append(
+            _cached_immutable_check(
+                cache,
+                ("package:pypi", release_tag, sha),
+                lambda: check_public_package(release_tag, sha),
+            )
+        )
     if not args.skip_runtime_artifacts and release_tag:
         for component in runtime_artifact_components():
-            checks.append(check_runtime_artifact(repo_root(), release_tag, sha, component))
+            checks.append(
+                _cached_immutable_check(
+                    cache,
+                    ("runtime-artifact", release_tag, sha, component),
+                    lambda component=component: check_runtime_artifact(
+                        repo_root(), release_tag, sha, component
+                    ),
+                )
+            )
     return checks
+
+
+def _expire_missing_workflows(checks: list[Check]) -> list[Check]:
+    return [
+        replace(
+            check,
+            terminal=True,
+            state="failed",
+            detail=f"{check.detail} after workflow discovery grace",
+        )
+        if check.state == "missing"
+        else check
+        for check in checks
+    ]
+
+
+def _pending_signature(checks: list[Check]) -> tuple[tuple[str, str, str], ...]:
+    return tuple((check.name, check.state, check.detail) for check in checks if not check.ok)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -351,14 +420,24 @@ def main(argv: list[str] | None = None) -> int:
     sha = resolve_sha(root, args.sha)
     required = tuple(args.required_workflows or DEFAULT_REQUIRED_WORKFLOWS)
 
-    deadline = time.time() + args.timeout
+    started_at = time.monotonic()
+    deadline = started_at + args.timeout
     attempt = 0
+    last_pending_signature: tuple[tuple[str, str, str], ...] | None = None
+    immutable_success_cache: dict[tuple[str, ...], Check] = {}
     while True:
         attempt += 1
-        checks = run_checks(args, sha, required)
+        checks = run_checks(
+            args,
+            sha,
+            required,
+            immutable_success_cache=immutable_success_cache,
+        )
+        if args.wait and time.monotonic() - started_at >= args.discovery_grace:
+            checks = _expire_missing_workflows(checks)
         ok = all(check.ok for check in checks)
         terminal_failures = [check for check in checks if not check.ok and check.terminal]
-        if ok or not args.wait or time.time() >= deadline:
+        if ok or not args.wait or time.monotonic() >= deadline:
             break
         if terminal_failures:
             print(
@@ -367,11 +446,16 @@ def main(argv: list[str] | None = None) -> int:
                 file=sys.stderr,
             )
             break
-        failing = ", ".join(check.name for check in checks if not check.ok) or "unknown"
-        print(
-            f"Launch readiness pending for {sha[:12]}: {failing}; retrying in {args.poll}s",
-            file=sys.stderr,
-        )
+        pending_signature = _pending_signature(checks)
+        if pending_signature != last_pending_signature:
+            failing = ", ".join(
+                f"{check.name}={check.state}" for check in checks if not check.ok
+            ) or "unknown"
+            print(
+                f"Launch readiness pending for {sha[:12]}: {failing}; retrying in {args.poll}s",
+                file=sys.stderr,
+            )
+            last_pending_signature = pending_signature
         time.sleep(args.poll)
 
     if args.json:

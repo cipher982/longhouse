@@ -2,8 +2,8 @@ name: Installer Validation Ring
 
 on:
   push:
-    tags-ignore:
-      - 'v*'
+    branches:
+      - '**'
     paths:
       - 'scripts/install.sh'
       - 'scripts/ci/installer-first-run.sh'

@@ -203,7 +203,7 @@ echo "  [OK] app and DMG are notarized"
 
 echo ""
 echo "Verifying launch readiness for $BUMP_SHA..."
-"$ROOT/scripts/ops/launch-readiness.py" --sha "$BUMP_SHA" --wait --timeout 7200 --poll 30
+"$ROOT/scripts/ops/launch-readiness.py" --sha "$BUMP_SHA" --wait --timeout 1800 --poll 30
 
 echo ""
 echo "Release $VERSION shipped and verified."

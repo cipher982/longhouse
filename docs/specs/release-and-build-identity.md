@@ -101,10 +101,19 @@ does not infer from "latest green" workflow state. It takes one target SHA and
 checks that:
 
 - launch-critical exact-SHA workflows completed successfully
+- the exact-SHA local runtime release workflow completed successfully
 - `https://longhouse.ai/api/health` reports that build commit
 - the hosted canary `/api/health` reports that build commit
 - the latest GitHub release resolves to that commit
 - the PyPI package for that release reports that same bundled build identity
+
+The path-filtered Installer Validation Ring validates source and installer
+changes on branches, pull requests, manual dispatch, and its nightly lane. It is
+not a release-readiness dependency: the Local Runtime Binary Release workflow
+already installs the published wheel and fetches the matching released engine
+on macOS and Ubuntu. Missing required workflow evidence gets a short discovery
+grace and then fails instead of consuming the full readiness timeout. Successful
+immutable package and runtime-artifact checks are reused within one wait.
 
 This is intentionally stricter than hosted deploy verification. Hosted can be
 green while the public installer still resolves to an older PyPI wheel; launch

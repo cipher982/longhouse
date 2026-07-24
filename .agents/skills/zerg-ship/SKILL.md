@@ -50,6 +50,11 @@ code.
 
 If a tool or workflow already gives you a completion event or a blocking wait primitive, use it once and move on. Do not burn tool calls on `pgrep`, repeated curls, or ad hoc status polling loops while a background task is running.
 
+Unchanged wait output is not a model decision seam. If the harness re-enters the
+model whenever a blocking wait yields, do not generate repeated status turns.
+Keep the durable run ID, report the pending operation once, and resume only when
+the wait becomes terminal or new user input requires judgment.
+
 Good:
 
 ```bash
