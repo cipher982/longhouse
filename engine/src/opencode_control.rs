@@ -825,7 +825,10 @@ mod tests {
 
     #[cfg(unix)]
     fn spawn_fake_opencode_stop_target(root: &Path, new_process_group: bool) -> TestChild {
-        let script_dir = root.join("stop-bin");
+        // Each process gets its own executable. Rewriting the path used by the
+        // previous process can race Linux executable teardown and fail with
+        // ETXTBSY even after wait() has returned.
+        let script_dir = root.join(format!("stop-bin-{}", Uuid::new_v4()));
         fs::create_dir_all(&script_dir).unwrap();
         let path = script_dir.join("opencode");
         fs::write(
