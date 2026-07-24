@@ -212,7 +212,10 @@ enum TimelineBuilder {
         if operations.isEmpty {
             if unnamedRuns > 0 { parts.append("Ran \(unnamedRuns)") }
         } else {
-            var visible = operations.prefix(2).map { operation in
+            let visibleOperations = operations.count > 2
+                ? [operations[0], operations[operations.count - 1]]
+                : operations
+            var visible = visibleOperations.map { operation in
                 operation.count > 1 ? "\(operation.label) ×\(operation.count)" : operation.label
             }
             let hiddenDistinct = operations.count - visible.count

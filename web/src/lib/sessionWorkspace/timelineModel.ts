@@ -203,7 +203,10 @@ export function formatActivitySummary(interactions: ToolInteraction[]): string {
       if (unnamedRuns > 0) parts.push(`Ran ${unnamedRuns}`);
       continue;
     }
-    const visible = operations.slice(0, 2).map((operation) =>
+    const visibleOperations = operations.length > 2
+      ? [operations[0], operations[operations.length - 1]]
+      : operations;
+    const visible = visibleOperations.map((operation) =>
       operation.count > 1 ? `${operation.label} ×${operation.count}` : operation.label,
     );
     const hiddenDistinct = Math.max(0, operations.length - visible.length);

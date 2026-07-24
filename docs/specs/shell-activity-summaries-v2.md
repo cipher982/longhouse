@@ -29,8 +29,9 @@ It is to retain the recognizable operation while keeping the transcript quiet.
 - Shell activity uses the executable plus a small meaningful subcommand shape
   when deterministic syntax supports it.
 - Repeated equivalent operations deduplicate with `×N`.
-- Show at most two distinct shell operations in the collapsed row, followed by
-  `+N more` when necessary.
+- Show at most two distinct shell operations in the collapsed row. When more
+  exist, show the first and last operation as a chronological bracket followed
+  by `+N more`.
 - Never search arbitrary command text for a familiar executable. `rg 'gh run
   view' docs/` is `rg`, not `gh`.
 - Never claim runtime execution from source parsing. The collapsed summary is a
@@ -58,7 +59,7 @@ An activity group may combine semantic categories and shell operations:
 
 If distinct shell operations exceed the display budget:
 
-> Ran `git diff` · `make test` · +3 more
+> Ran `git add` · `git commit` · +3 more
 
 The existing call-count badge remains the exact number of canonical calls, not
 the number of displayed operation labels.
@@ -222,7 +223,8 @@ For every interaction in an activity group:
    non-opaque `shell_summary.operations`. Commands demoted to Search/Read/List
    never reappear as named Ran operations.
 3. Deduplicate by operation key and count occurrences.
-4. Render up to two operation labels in first-evidence order.
+4. Render up to two operation labels. For three or more distinct operations,
+   render the first and last in chronological first-evidence order.
 5. Append `×N` for repeated labels.
 6. Append `+N more` for remaining distinct labels.
 7. Count opaque shell calls and non-shell Ran interactions in one generic

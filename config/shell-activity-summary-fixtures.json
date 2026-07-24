@@ -50,7 +50,7 @@
       "expected": "Read 1 · Edited 1 · Ran gh run view"
     },
     {
-      "name": "display budget preserves distinct overflow",
+      "name": "display budget brackets distinct overflow chronologically",
       "calls": [
         {
           "category": "run",
@@ -83,7 +83,7 @@
           ]
         }
       ],
-      "expected": "Ran gh run view · make test · +1 more"
+      "expected": "Ran gh run view · docker compose up · +1 more"
     },
     {
       "name": "named and opaque work remain honest",
@@ -106,6 +106,80 @@
         }
       ],
       "expected": "Ran gh run view · +2 other"
+    },
+    {
+      "name": "first and last survive a noisy edit verification commit group",
+      "calls": [
+        {
+          "category": "edit"
+        },
+        {
+          "category": "run",
+          "operations": [
+            {
+              "key": "git add",
+              "label": "git add",
+              "count": 1
+            }
+          ]
+        },
+        {
+          "category": "run",
+          "operations": [
+            {
+              "key": "git diff",
+              "label": "git diff",
+              "count": 1
+            }
+          ]
+        },
+        {
+          "category": "run",
+          "operations": [
+            {
+              "key": "go test",
+              "label": "go test",
+              "count": 1
+            }
+          ]
+        },
+        {
+          "category": "run",
+          "operations": [
+            {
+              "key": "git status",
+              "label": "git status",
+              "count": 1
+            }
+          ]
+        },
+        {
+          "category": "run",
+          "operations": [
+            {
+              "key": "git commit",
+              "label": "git commit",
+              "count": 1
+            }
+          ]
+        },
+        {
+          "category": "run"
+        },
+        {
+          "category": "wait"
+        },
+        {
+          "category": "wait"
+        },
+        {
+          "category": "wait"
+        },
+        {
+          "category": "wait"
+        }
+      ],
+      "expected": "Edited 1 · Ran git add · git commit · +3 more · +1 other · Waited 4"
     },
     {
       "name": "all opaque falls back to count",
