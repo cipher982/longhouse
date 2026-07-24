@@ -1,0 +1,158 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "name": "repeated recognizable operation",
+      "calls": [
+        {
+          "category": "run",
+          "operations": [
+            {
+              "key": "gh run view",
+              "label": "gh run view",
+              "count": 1
+            }
+          ]
+        },
+        {
+          "category": "run",
+          "operations": [
+            {
+              "key": "gh run view",
+              "label": "gh run view",
+              "count": 1
+            }
+          ]
+        }
+      ],
+      "expected": "Ran gh run view ×2"
+    },
+    {
+      "name": "semantic salience wins before shell naming",
+      "calls": [
+        {
+          "category": "read"
+        },
+        {
+          "category": "edit"
+        },
+        {
+          "category": "run",
+          "operations": [
+            {
+              "key": "gh run view",
+              "label": "gh run view",
+              "count": 1
+            }
+          ]
+        }
+      ],
+      "expected": "Read 1 · Edited 1 · Ran gh run view"
+    },
+    {
+      "name": "display budget preserves distinct overflow",
+      "calls": [
+        {
+          "category": "run",
+          "operations": [
+            {
+              "key": "gh run view",
+              "label": "gh run view",
+              "count": 1
+            }
+          ]
+        },
+        {
+          "category": "run",
+          "operations": [
+            {
+              "key": "make test",
+              "label": "make test",
+              "count": 1
+            }
+          ]
+        },
+        {
+          "category": "run",
+          "operations": [
+            {
+              "key": "docker compose up",
+              "label": "docker compose up",
+              "count": 1
+            }
+          ]
+        }
+      ],
+      "expected": "Ran gh run view · make test · +1 more"
+    },
+    {
+      "name": "named and opaque work remain honest",
+      "calls": [
+        {
+          "category": "run",
+          "operations": [
+            {
+              "key": "gh run view",
+              "label": "gh run view",
+              "count": 1
+            }
+          ]
+        },
+        {
+          "category": "run"
+        },
+        {
+          "category": "run"
+        }
+      ],
+      "expected": "Ran gh run view · +2 other"
+    },
+    {
+      "name": "all opaque falls back to count",
+      "calls": [
+        {
+          "category": "run"
+        },
+        {
+          "category": "run"
+        }
+      ],
+      "expected": "Ran 2"
+    },
+    {
+      "name": "one call may contain repeated literal operations",
+      "calls": [
+        {
+          "category": "run",
+          "operations": [
+            {
+              "key": "gh run view",
+              "label": "gh run view",
+              "count": 2
+            }
+          ]
+        }
+      ],
+      "expected": "Ran gh run view ×2"
+    },
+    {
+      "name": "wait retains fixed category order",
+      "calls": [
+        {
+          "category": "wait"
+        },
+        {
+          "category": "run",
+          "operations": [
+            {
+              "key": "gh run view",
+              "label": "gh run view",
+              "count": 1
+            }
+          ]
+        }
+      ],
+      "expected": "Ran gh run view · Waited 1"
+    }
+  ]
+}

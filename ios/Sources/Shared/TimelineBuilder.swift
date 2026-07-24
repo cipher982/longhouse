@@ -159,6 +159,9 @@ enum TimelineBuilder {
     static func activitySummary(for calls: [ActivityCall]) -> String {
         var counts = ["search": 0, "read": 0, "list": 0, "view": 0,
                       "edit": 0, "call": 0, "run": 0, "wait": 0]
+        var runOperations: [String: (label: String, count: Int)] = [:]
+        var runOperationOrder: [String] = []
+        var unnamedRuns = 0
         for call in calls {
             let aggregate = shellSalience(call: call.call, result: call.result)?.aggregate
                 ?? presentationAggregate(call.call)
@@ -179,17 +182,48 @@ enum TimelineBuilder {
                     || identity.range(of: #"\b(agent|task|subagent|invoke|called)\b"#, options: .regularExpression) != nil {
                     counts["call", default: 0] += 1
                 } else {
-                    counts["run", default: 0] += 1
+                    guard let summary = call.call.toolPresentation?.shellSummary,
+                          summary.confidence != "opaque",
+                          !summary.operations.isEmpty else {
+                        unnamedRuns += 1
+                        continue
+                    }
+                    for operation in summary.operations {
+                        let count = max(1, operation.count)
+                        if let existing = runOperations[operation.key] {
+                            runOperations[operation.key] = (existing.label, existing.count + count)
+                        } else {
+                            runOperationOrder.append(operation.key)
+                            runOperations[operation.key] = (operation.label, count)
+                        }
+                    }
                 }
             }
         }
         let ordered = [("search", "Searched"), ("read", "Read"), ("list", "Listed"),
                        ("view", "Viewed"), ("edit", "Edited"), ("call", "Called"),
                        ("run", "Ran"), ("wait", "Waited")]
-        return ordered.compactMap { key, label in
+        var parts = ordered.compactMap { key, label -> String? in
+            if key == "run" || key == "wait" { return nil }
             let count = counts[key, default: 0]
             return count > 0 ? "\(label) \(count)" : nil
-        }.joined(separator: " · ")
+        }
+        let operations = runOperationOrder.compactMap { runOperations[$0] }
+        if operations.isEmpty {
+            if unnamedRuns > 0 { parts.append("Ran \(unnamedRuns)") }
+        } else {
+            var visible = operations.prefix(2).map { operation in
+                operation.count > 1 ? "\(operation.label) ×\(operation.count)" : operation.label
+            }
+            let hiddenDistinct = operations.count - visible.count
+            if hiddenDistinct > 0 { visible.append("+\(hiddenDistinct) more") }
+            if unnamedRuns > 0 { visible.append("+\(unnamedRuns) other") }
+            parts.append("Ran \(visible.joined(separator: " · "))")
+        }
+        if counts["wait", default: 0] > 0 {
+            parts.append("Waited \(counts["wait", default: 0])")
+        }
+        return parts.joined(separator: " · ")
     }
 
     static let explorationOverflowVisible = 8

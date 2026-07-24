@@ -166,12 +166,52 @@ function activityCategory(interaction: ToolInteraction): ActivityCategory {
 /** Header copy: `Searched 5 · Read 14 · Edited 2 · Ran 1`. */
 export function formatActivitySummary(interactions: ToolInteraction[]): string {
   const counts = Object.fromEntries(ACTIVITY_SUMMARY_ORDER.map((category) => [category, 0])) as Record<ActivityCategory, number>;
+  const runOperations = new Map<string, { label: string; count: number }>();
+  let unnamedRuns = 0;
   for (const interaction of interactions) {
-    counts[activityCategory(interaction)] += 1;
+    const category = activityCategory(interaction);
+    if (category !== "run") {
+      counts[category] += 1;
+      continue;
+    }
+    const shellSummary = interaction.presentation?.shell_summary;
+    if (!shellSummary || shellSummary.confidence === "opaque" || shellSummary.operations.length === 0) {
+      unnamedRuns += 1;
+      continue;
+    }
+    for (const operation of shellSummary.operations) {
+      const existing = runOperations.get(operation.key);
+      if (existing) {
+        existing.count += Math.max(1, operation.count);
+      } else {
+        runOperations.set(operation.key, {
+          label: operation.label,
+          count: Math.max(1, operation.count),
+        });
+      }
+    }
   }
-  return ACTIVITY_SUMMARY_ORDER.filter((category) => counts[category] > 0)
-    .map((category) => `${ACTIVITY_SUMMARY_LABEL[category]} ${counts[category]}`)
-    .join(" · ");
+
+  const parts: string[] = [];
+  for (const category of ACTIVITY_SUMMARY_ORDER) {
+    if (category !== "run") {
+      if (counts[category] > 0) parts.push(`${ACTIVITY_SUMMARY_LABEL[category]} ${counts[category]}`);
+      continue;
+    }
+    const operations = [...runOperations.values()];
+    if (operations.length === 0) {
+      if (unnamedRuns > 0) parts.push(`Ran ${unnamedRuns}`);
+      continue;
+    }
+    const visible = operations.slice(0, 2).map((operation) =>
+      operation.count > 1 ? `${operation.label} ×${operation.count}` : operation.label,
+    );
+    const hiddenDistinct = Math.max(0, operations.length - visible.length);
+    if (hiddenDistinct > 0) visible.push(`+${hiddenDistinct} more`);
+    if (unnamedRuns > 0) visible.push(`+${unnamedRuns} other`);
+    parts.push(`Ran ${visible.join(" · ")}`);
+  }
+  return parts.join(" · ");
 }
 
 export function splitExplorationOverflow<T>(

@@ -1276,6 +1276,30 @@ class ToolPresentationChildResponse(UTCBaseModel):
     result_forwarded: bool = False
 
 
+class ShellSummaryOperationResponse(UTCBaseModel):
+    """One privacy-bounded executable shape parsed from literal shell source."""
+
+    key: str
+    label: str
+    executable: str
+    subcommands: List[str] = Field(default_factory=list)
+    count: int = 1
+
+
+class ShellCommandSummaryResponse(UTCBaseModel):
+    """Disposable syntactic shell summary; never evidence of process execution."""
+
+    version: int
+    confidence: Literal["syntactic", "partial", "opaque"]
+    operations: List[ShellSummaryOperationResponse] = Field(default_factory=list)
+    candidate_count: int = 0
+    truncated: bool = False
+    dynamic: bool = False
+    parse_error: Optional[str] = None
+    parser_id: str
+    shape_registry_version: int
+
+
 class ToolPresentationResponse(UTCBaseModel):
     """Disposable read-time lens over an immutable provider tool event."""
 
@@ -1294,6 +1318,7 @@ class ToolPresentationResponse(UTCBaseModel):
     rule_id: str
     wrapper_recedes: bool = False
     children: List[ToolPresentationChildResponse] = Field(default_factory=list)
+    shell_summary: Optional[ShellCommandSummaryResponse] = None
 
 
 class EventResponse(UTCBaseModel):

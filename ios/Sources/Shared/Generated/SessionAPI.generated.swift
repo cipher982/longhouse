@@ -436,6 +436,26 @@ enum APIToolCallState: String, Codable, Hashable, Sendable, CaseIterable {
     case dropped = "dropped"
 }
 
+struct APIShellSummaryOperationResponse: Codable, Hashable, Sendable {
+    let key: String
+    let label: String
+    let executable: String
+    let subcommands: [String]?
+    let count: Int?
+}
+
+struct APIShellCommandSummaryResponse: Codable, Hashable, Sendable {
+    let version: Int
+    let confidence: String
+    let operations: [APIShellSummaryOperationResponse]?
+    let candidateCount: Int?
+    let truncated: Bool?
+    let dynamic: Bool?
+    let parseError: String?
+    let parserId: String
+    let shapeRegistryVersion: Int
+}
+
 struct APIToolPresentationChildResponse: Codable, Hashable, Sendable {
     let version: Int
     let childId: String
@@ -470,6 +490,7 @@ struct APIToolPresentationResponse: Codable, Hashable, Sendable {
     let ruleId: String
     let wrapperRecedes: Bool?
     let children: [APIToolPresentationChildResponse]?
+    let shellSummary: APIShellCommandSummaryResponse?
 }
 
 struct APIEventResponse: Codable, Hashable, Sendable {

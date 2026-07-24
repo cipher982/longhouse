@@ -312,6 +312,34 @@ private extension APIToolPresentationChildResponse {
     }
 }
 
+private extension APIShellSummaryOperationResponse {
+    var sessionShellSummaryOperation: ShellSummaryOperation {
+        ShellSummaryOperation(
+            key: key,
+            label: label,
+            executable: executable,
+            subcommands: subcommands ?? [],
+            count: count ?? 1
+        )
+    }
+}
+
+private extension APIShellCommandSummaryResponse {
+    var sessionShellCommandSummary: ShellCommandSummary {
+        ShellCommandSummary(
+            version: version,
+            confidence: confidence,
+            operations: operations?.map(\.sessionShellSummaryOperation) ?? [],
+            candidateCount: candidateCount ?? 0,
+            truncated: truncated ?? false,
+            dynamic: dynamic ?? false,
+            parseError: parseError,
+            parserId: parserId,
+            shapeRegistryVersion: shapeRegistryVersion
+        )
+    }
+}
+
 private extension APIToolPresentationResponse {
     var sessionToolPresentation: ToolPresentation {
         ToolPresentation(
@@ -329,7 +357,8 @@ private extension APIToolPresentationResponse {
             toolInputValue: toolInputJson,
             ruleId: ruleId,
             wrapperRecedes: wrapperRecedes ?? false,
-            children: children?.map(\.sessionToolPresentationChild) ?? []
+            children: children?.map(\.sessionToolPresentationChild) ?? [],
+            shellSummary: shellSummary?.sessionShellCommandSummary
         )
     }
 }

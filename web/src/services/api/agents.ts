@@ -443,6 +443,26 @@ export type ToolPresentationDisposition = "exact" | "parsed" | "generic" | "unkn
 export type ToolPresentationTier = "noise" | "context" | "action";
 export type ToolPresentationAggregate = "search" | "read" | "list" | "wait";
 
+export interface AgentShellSummaryOperation {
+  key: string;
+  label: string;
+  executable: string;
+  subcommands: string[];
+  count: number;
+}
+
+export interface AgentShellCommandSummary {
+  version: number;
+  confidence: "syntactic" | "partial" | "opaque";
+  operations: AgentShellSummaryOperation[];
+  candidate_count: number;
+  truncated: boolean;
+  dynamic: boolean;
+  parse_error?: string | null;
+  parser_id: string;
+  shape_registry_version: number;
+}
+
 export interface AgentToolPresentationChild {
   version: number;
   child_id: string;
@@ -477,6 +497,7 @@ export interface AgentToolPresentation {
   rule_id: string;
   wrapper_recedes: boolean;
   children?: AgentToolPresentationChild[];
+  shell_summary?: AgentShellCommandSummary | null;
 }
 
 export interface AgentEvent {

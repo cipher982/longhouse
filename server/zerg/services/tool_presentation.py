@@ -15,7 +15,9 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-PRESENTATION_VERSION = 1
+from zerg.services.shell_command_summary import summarize_shell_source
+
+PRESENTATION_VERSION = 2
 MAX_WRAPPER_CHARS = 200_000
 MAX_WRAPPER_CALLS = 32
 MAX_LITERAL_DEPTH = 8
@@ -441,6 +443,25 @@ def _base_projection(tool_name: str, tool_input_json: Any, *, rules_path: Path) 
     }
 
 
+def _attach_shell_summary(projection: dict[str, Any], *, rules_path: Path) -> dict[str, Any]:
+    """Attach a disposable shell summary to the final presented tool only."""
+
+    rules = _load_rules(str(rules_path.resolve()))
+    configured = {str(name).lower() for name in rules.get("shell_classifier", {}).get("shell_tools", [])}
+    if str(projection.get("tool_name") or "").lower() not in configured:
+        return projection
+    tool_input = projection.get("tool_input_json")
+    if not isinstance(tool_input, dict):
+        return projection
+    source = tool_input.get("command")
+    if not isinstance(source, str):
+        source = tool_input.get("cmd")
+    summary = summarize_shell_source(source)
+    if summary is not None:
+        projection["shell_summary"] = summary
+    return projection
+
+
 def project_tool_presentation(
     tool_name: str | None,
     tool_input_json: Any,
@@ -464,7 +485,7 @@ def project_tool_presentation(
         if tool_input_json.get("chars") in {None, ""}:
             base.update({"label": "Wait", "icon": "…", "color": "tertiary", "tier": "noise", "aggregate": "wait"})
     if not is_codex or tool_name.lower() != "exec" or not isinstance(tool_input_json, str):
-        return base
+        return _attach_shell_summary(base, rules_path=rules_path)
 
     calls, complete = extract_codex_wrapper_calls(tool_input_json)
     if not calls:
@@ -489,7 +510,7 @@ def project_tool_presentation(
         children.append(child)
     if len(children) == 1 and complete and children[0]["result_forwarded"]:
         child = children[0]
-        return {
+        promoted = {
             **base,
             "version": PRESENTATION_VERSION,
             "disposition": "parsed",
@@ -507,6 +528,7 @@ def project_tool_presentation(
             "children": children,
             "rule_id": "codex:exec:single-child:v1",
         }
+        return _attach_shell_summary(promoted, rules_path=rules_path)
     return {
         **base,
         "disposition": "parsed",

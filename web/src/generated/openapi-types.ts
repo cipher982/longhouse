@@ -10521,6 +10521,61 @@ export interface components {
             unsupported_families: ("mode" | "disposition" | "launch" | "run" | "pending_interaction" | "transcript" | "host" | "presentation")[];
         };
         /**
+         * ShellCommandSummaryResponse
+         * @description Disposable syntactic shell summary; never evidence of process execution.
+         */
+        ShellCommandSummaryResponse: {
+            /** Version */
+            version: number;
+            /**
+             * Confidence
+             * @enum {string}
+             */
+            confidence: "syntactic" | "partial" | "opaque";
+            /** Operations */
+            operations?: components["schemas"]["ShellSummaryOperationResponse"][];
+            /**
+             * Candidate Count
+             * @default 0
+             */
+            candidate_count: number;
+            /**
+             * Truncated
+             * @default false
+             */
+            truncated: boolean;
+            /**
+             * Dynamic
+             * @default false
+             */
+            dynamic: boolean;
+            /** Parse Error */
+            parse_error?: string | null;
+            /** Parser Id */
+            parser_id: string;
+            /** Shape Registry Version */
+            shape_registry_version: number;
+        };
+        /**
+         * ShellSummaryOperationResponse
+         * @description One privacy-bounded executable shape parsed from literal shell source.
+         */
+        ShellSummaryOperationResponse: {
+            /** Key */
+            key: string;
+            /** Label */
+            label: string;
+            /** Executable */
+            executable: string;
+            /** Subcommands */
+            subcommands?: string[];
+            /**
+             * Count
+             * @default 1
+             */
+            count: number;
+        };
+        /**
          * SignalTier
          * @enum {string}
          */
@@ -11214,6 +11269,7 @@ export interface components {
             wrapper_recedes: boolean;
             /** Children */
             children?: components["schemas"]["ToolPresentationChildResponse"][];
+            shell_summary?: components["schemas"]["ShellCommandSummaryResponse"] | null;
         };
         /**
          * TopAutomationUsage

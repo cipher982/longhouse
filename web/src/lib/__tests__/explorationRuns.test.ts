@@ -2,6 +2,8 @@
  * Exploration-run projection helpers — membership, summary copy, overflow.
  */
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import {
   buildTimelineModel,
   EXPLORATION_OVERFLOW_VISIBLE,
@@ -45,7 +47,60 @@ function interaction(partial: Partial<ToolInteraction> & Pick<ToolInteraction, "
   };
 }
 
+type SummaryFixtureCall = {
+  category: "read" | "edit" | "run" | "wait";
+  operations?: Array<{ key: string; label: string; count: number }>;
+};
+
+const summaryFixtures = JSON.parse(
+  readFileSync(resolve(process.cwd(), "../config/shell-activity-summary-fixtures.json"), "utf8"),
+) as { cases: Array<{ name: string; calls: SummaryFixtureCall[]; expected: string }> };
+
+function fixtureInteraction(call: SummaryFixtureCall, index: number): ToolInteraction {
+  const toolName = call.category === "read" ? "Read"
+    : call.category === "edit" ? "Edit"
+      : call.category === "wait" ? "write_stdin"
+        : "shell";
+  return interaction({
+    key: `fixture-${index}`,
+    anchorId: index,
+    toolName,
+    presentation: {
+      version: 2,
+      disposition: "direct",
+      tool_name: toolName,
+      source_tool_name: toolName,
+      execution_method: null,
+      label: toolName,
+      icon: "$",
+      color: "tertiary",
+      tier: "noise",
+      aggregate: call.category === "wait" ? "wait" : null,
+      mcp_namespace: null,
+      tool_input_json: {},
+      rule_id: "fixture",
+      wrapper_recedes: false,
+      children: [],
+      shell_summary: call.operations ? {
+        version: 1,
+        confidence: "syntactic",
+        operations: call.operations.map((operation) => ({ ...operation, executable: operation.label.split(" ")[0], subcommands: [] })),
+        candidate_count: call.operations.length,
+        truncated: false,
+        dynamic: false,
+        parse_error: null,
+        parser_id: "fixture",
+        shape_registry_version: 1,
+      } : null,
+    },
+  });
+}
+
 describe("exploration run helpers", () => {
+  it.each(summaryFixtures.cases)("matches the shared shell summary contract: $name", ({ calls, expected }) => {
+    expect(formatActivitySummary(calls.map(fixtureInteraction))).toBe(expected);
+  });
+
   it("summarizes projected patches by files instead of wrapper syntax", () => {
     expect(getToolSummary(interaction({
       toolName: "apply_patch",

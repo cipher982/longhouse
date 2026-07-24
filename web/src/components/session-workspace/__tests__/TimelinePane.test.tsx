@@ -165,6 +165,65 @@ function makeActivityGroupItem(): TimelineItem {
   };
 }
 
+function makeNamedShellActivityGroupItem(): TimelineItem {
+  const toolItem = makeToolWithMediaItem();
+  if (toolItem.kind !== "tool") throw new Error("fixture must be a tool");
+  const namedInteraction = (key: string, anchorId: number) => ({
+    ...toolItem.interaction,
+    key,
+    anchorId,
+    callEvent: toolItem.interaction.callEvent ? {
+      ...toolItem.interaction.callEvent,
+      id: anchorId,
+      tool_name: "exec_command",
+      tool_input_json: { cmd: `gh run view ${anchorId}` },
+      tool_presentation: {
+        version: 2,
+        disposition: "direct",
+        tool_name: "exec_command",
+        source_tool_name: "exec_command",
+        execution_method: null,
+        label: "Shell",
+        icon: "$",
+        color: "warning",
+        tier: "action",
+        aggregate: null,
+        mcp_namespace: null,
+        tool_input_json: { cmd: `gh run view ${anchorId}` },
+        rule_id: "fixture",
+        wrapper_recedes: false,
+        children: [],
+        shell_summary: {
+          version: 1,
+          confidence: "syntactic",
+          operations: [{ key: "gh run view", label: "gh run view", executable: "gh", subcommands: ["run", "view"], count: 1 }],
+          candidate_count: 1,
+          truncated: false,
+          dynamic: false,
+          parse_error: null,
+          parser_id: "fixture",
+          shape_registry_version: 1,
+        },
+      },
+    } : null,
+    presentation: toolItem.interaction.callEvent?.tool_presentation,
+    toolName: "exec_command",
+  });
+  const first = namedInteraction("id:first", 6);
+  const second = namedInteraction("id:second", 8);
+  first.presentation = first.callEvent?.tool_presentation;
+  second.presentation = second.callEvent?.tool_presentation;
+  return {
+    kind: "activity_group",
+    group: {
+      key: "activity:6",
+      interactions: [first, second],
+      timestamp: first.timestamp,
+      anchorId: first.anchorId,
+    },
+  };
+}
+
 function makeAskUserQuestionItem(state: "running" | "dropped" = "dropped"): TimelineItem {
   return {
     kind: "tool",
@@ -210,6 +269,27 @@ function makeAskUserQuestionItem(state: "running" | "dropped" = "dropped"): Time
 }
 
 describe("TimelinePane", () => {
+  it("keeps repeated shell work recognizable while collapsed", () => {
+    render(
+      <TimelinePane
+        items={[makeNamedShellActivityGroupItem()]}
+        totalEntries={4}
+        loadedEntries={4}
+        abandonedEvents={0}
+        showAbandonedBranches={false}
+        onShowAbandonedBranchesChange={vi.fn()}
+        hasPreviousPage={false}
+        isFetchingPreviousPage={false}
+        onFetchPreviousPage={vi.fn()}
+        selectedKey={null}
+        onSelectKey={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Ran gh run view ×2")).toBeInTheDocument();
+    expect(screen.getByText("2")).toBeInTheDocument();
+  });
+
   it("reveals the exact child when a grouped tool is selected", () => {
     render(
       <TimelinePane

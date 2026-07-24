@@ -1,6 +1,27 @@
 import XCTest
 @testable import Longhouse
 
+private struct ActivitySummaryFixtureFile: Decodable {
+    struct FixtureCase: Decodable {
+        let name: String
+        let calls: [FixtureCall]
+        let expected: String
+    }
+
+    struct FixtureCall: Decodable {
+        struct Operation: Decodable {
+            let key: String
+            let label: String
+            let count: Int
+        }
+
+        let category: String
+        let operations: [Operation]?
+    }
+
+    let cases: [FixtureCase]
+}
+
 final class TimelineBuilderTests: XCTestCase {
     func testExactAliasesAlwaysApplyAndUnknownsStayRaw() {
         XCTAssertEqual(ToolTiers.resolve("view_file").label, "Read")
@@ -34,6 +55,82 @@ final class TimelineBuilderTests: XCTestCase {
             isHeadBranch: true,
             inputOrigin: nil
         )
+    }
+
+    func testSharedShellActivitySummaryContract() throws {
+        let fixtureURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .appendingPathComponent("../../../config/shell-activity-summary-fixtures.json")
+            .standardizedFileURL
+        let fixtures = try JSONDecoder().decode(
+            ActivitySummaryFixtureFile.self,
+            from: Data(contentsOf: fixtureURL)
+        )
+
+        for fixture in fixtures.cases {
+            let calls = fixture.calls.enumerated().map { index, call in
+                let toolName: String
+                switch call.category {
+                case "read": toolName = "Read"
+                case "edit": toolName = "Edit"
+                case "wait": toolName = "write_stdin"
+                default: toolName = "shell"
+                }
+                let operations = call.operations?.map { operation in
+                    ShellSummaryOperation(
+                        key: operation.key,
+                        label: operation.label,
+                        executable: operation.label.split(separator: " ").first.map(String.init) ?? operation.label,
+                        subcommands: [],
+                        count: operation.count
+                    )
+                } ?? []
+                let summary = operations.isEmpty ? nil : ShellCommandSummary(
+                    version: 1,
+                    confidence: "syntactic",
+                    operations: operations,
+                    candidateCount: operations.count,
+                    truncated: false,
+                    dynamic: false,
+                    parseError: nil,
+                    parserId: "fixture",
+                    shapeRegistryVersion: 1
+                )
+                let presentation = ToolPresentation(
+                    version: 2,
+                    disposition: "direct",
+                    toolName: toolName,
+                    sourceToolName: toolName,
+                    executionMethod: nil,
+                    label: toolName,
+                    icon: "$",
+                    color: "tertiary",
+                    tier: "noise",
+                    aggregate: call.category == "wait" ? "wait" : nil,
+                    mcpNamespace: nil,
+                    toolInputValue: .object([:]),
+                    ruleId: "fixture",
+                    wrapperRecedes: false,
+                    children: [],
+                    shellSummary: summary
+                )
+                let callEvent = event(
+                    id: index * 2 + 1,
+                    role: "assistant",
+                    tool: toolName,
+                    callId: "fixture-\(index)",
+                    toolPresentation: presentation
+                )
+                let resultEvent = event(
+                    id: index * 2 + 2,
+                    role: "tool",
+                    output: "ok",
+                    callId: "fixture-\(index)"
+                )
+                return ActivityCall(call: callEvent, result: resultEvent, pairing: .id)
+            }
+            XCTAssertEqual(TimelineBuilder.activitySummary(for: calls), fixture.expected, fixture.name)
+        }
     }
 
     func testCodexPollingWrappersBecomeOneWaitGroup() {

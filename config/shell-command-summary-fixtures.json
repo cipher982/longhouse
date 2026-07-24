@@ -1,0 +1,426 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "name": "gh run view literal",
+      "source": "gh run view 30033644315 --json status",
+      "expected_confidence": "syntactic",
+      "expected_labels": [
+        "gh run view"
+      ],
+      "expected_counts": [
+        1
+      ],
+      "forbidden": [
+        "30033644315",
+        "status"
+      ]
+    },
+    {
+      "name": "leading assignments",
+      "source": "TOKEN=topsecret REGION='us east' gh run view 123",
+      "expected_confidence": "syntactic",
+      "expected_labels": [
+        "gh run view"
+      ],
+      "expected_counts": [
+        1
+      ],
+      "forbidden": [
+        "topsecret",
+        "us east",
+        "123"
+      ]
+    },
+    {
+      "name": "literal wrappers",
+      "source": "env TOKEN=topsecret sudo -u ci timeout 30s command gh run view 123",
+      "expected_confidence": "syntactic",
+      "expected_labels": [
+        "gh run view"
+      ],
+      "expected_counts": [
+        1
+      ],
+      "forbidden": [
+        "topsecret",
+        "ci",
+        "30s",
+        "123"
+      ]
+    },
+    {
+      "name": "quoted executable decoy",
+      "source": "rg 'gh run view' docs/",
+      "expected_confidence": "syntactic",
+      "expected_labels": [
+        "rg"
+      ],
+      "expected_counts": [
+        1
+      ],
+      "forbidden": [
+        "gh run view",
+        "docs/"
+      ]
+    },
+    {
+      "name": "git shape",
+      "source": "git -C /private/repo status --short",
+      "expected_confidence": "syntactic",
+      "expected_labels": [
+        "git status"
+      ],
+      "expected_counts": [
+        1
+      ],
+      "forbidden": [
+        "/private/repo",
+        "--short"
+      ]
+    },
+    {
+      "name": "literal nested shell list",
+      "source": "bash -lc 'gh run view 1 && make test'",
+      "expected_confidence": "partial",
+      "expected_labels": [
+        "gh run view",
+        "make test"
+      ],
+      "expected_counts": [
+        1,
+        1
+      ],
+      "forbidden": [
+        "bash",
+        "-lc"
+      ]
+    },
+    {
+      "name": "pipeline keeps primary only",
+      "source": "npm test | tee /private/test.log",
+      "expected_confidence": "partial",
+      "expected_labels": [
+        "npm test"
+      ],
+      "expected_counts": [
+        1
+      ],
+      "forbidden": [
+        "tee",
+        "/private/test.log"
+      ]
+    },
+    {
+      "name": "eval is opaque",
+      "source": "eval \"$BUILD_CMD\"",
+      "expected_confidence": "opaque",
+      "expected_labels": [],
+      "expected_counts": [],
+      "expected_dynamic": true,
+      "forbidden": [
+        "BUILD_CMD"
+      ]
+    },
+    {
+      "name": "dynamic executable is opaque",
+      "source": "\"$PROGRAM\" \"${ARGS[@]}\"",
+      "expected_confidence": "opaque",
+      "expected_labels": [],
+      "expected_counts": [],
+      "expected_dynamic": true,
+      "forbidden": [
+        "PROGRAM",
+        "ARGS"
+      ]
+    },
+    {
+      "name": "navigation followed by command",
+      "source": "cd /private/repo && gh run view 123",
+      "expected_confidence": "partial",
+      "expected_labels": [
+        "gh run view"
+      ],
+      "expected_counts": [
+        1
+      ],
+      "forbidden": [
+        "/private/repo",
+        "123"
+      ]
+    },
+    {
+      "name": "absolute executable path",
+      "source": "/opt/homebrew/bin/gh run list --repo private/project",
+      "expected_confidence": "syntactic",
+      "expected_labels": [
+        "gh run list"
+      ],
+      "expected_counts": [
+        1
+      ],
+      "forbidden": [
+        "/opt/homebrew",
+        "private/project"
+      ]
+    },
+    {
+      "name": "authorization header never summarized",
+      "source": "curl -H 'Authorization: Bearer topsecret' https://example.test/path?token=topsecret",
+      "expected_confidence": "syntactic",
+      "expected_labels": [
+        "curl"
+      ],
+      "expected_counts": [
+        1
+      ],
+      "forbidden": [
+        "Authorization",
+        "topsecret",
+        "example.test"
+      ]
+    },
+    {
+      "name": "secret shaped make target omitted",
+      "source": "make deploy-secret-token",
+      "expected_confidence": "syntactic",
+      "expected_labels": [
+        "make"
+      ],
+      "expected_counts": [
+        1
+      ],
+      "forbidden": [
+        "deploy-secret-token"
+      ]
+    },
+    {
+      "name": "secret shaped package script omitted",
+      "source": "bun run rotate-api-key",
+      "expected_confidence": "syntactic",
+      "expected_labels": [
+        "bun run"
+      ],
+      "expected_counts": [
+        1
+      ],
+      "forbidden": [
+        "rotate-api-key"
+      ]
+    },
+    {
+      "name": "repeated list operations deduplicate",
+      "source": "gh run view 1; gh run view 2",
+      "expected_confidence": "partial",
+      "expected_labels": [
+        "gh run view"
+      ],
+      "expected_counts": [
+        2
+      ],
+      "forbidden": [
+        "gh run view 1",
+        "gh run view 2"
+      ]
+    },
+    {
+      "name": "distinct list operations preserve order",
+      "source": "gh run view 1 && make test",
+      "expected_confidence": "partial",
+      "expected_labels": [
+        "gh run view",
+        "make test"
+      ],
+      "expected_counts": [
+        1,
+        1
+      ],
+      "forbidden": [
+        "gh run view 1"
+      ]
+    },
+    {
+      "name": "redirection target omitted",
+      "source": "gh run view 1 > /private/result-token.txt",
+      "expected_confidence": "partial",
+      "expected_labels": [
+        "gh run view"
+      ],
+      "expected_counts": [
+        1
+      ],
+      "forbidden": [
+        "/private/result-token.txt",
+        "gh run view 1"
+      ]
+    },
+    {
+      "name": "leading file descriptor redirection keeps the executable",
+      "source": "2>/private/error-token.log gh run view 1",
+      "expected_confidence": "partial",
+      "expected_labels": [
+        "gh run view"
+      ],
+      "expected_counts": [
+        1
+      ],
+      "forbidden": [
+        "/private/error-token.log",
+        "gh run view 1"
+      ]
+    },
+    {
+      "name": "multiline literal list",
+      "source": "gh run view 1\nmake test",
+      "expected_confidence": "partial",
+      "expected_labels": [
+        "gh run view",
+        "make test"
+      ],
+      "expected_counts": [
+        1,
+        1
+      ],
+      "forbidden": [
+        "gh run view 1"
+      ]
+    },
+    {
+      "name": "unbalanced quotes fail closed",
+      "source": "gh run view 'unterminated",
+      "expected_confidence": "opaque",
+      "expected_labels": [],
+      "expected_counts": [],
+      "expected_parse_error": "unbalanced_quotes",
+      "forbidden": [
+        "unterminated"
+      ]
+    },
+    {
+      "name": "unknown executable uses basename only",
+      "source": "./tools/acme-deploy --token topsecret /private/customer",
+      "expected_confidence": "syntactic",
+      "expected_labels": [
+        "acme-deploy"
+      ],
+      "expected_counts": [
+        1
+      ],
+      "forbidden": [
+        "topsecret",
+        "/private/customer",
+        "--token"
+      ]
+    },
+    {
+      "name": "heredoc body is never mined as commands",
+      "source": "cat <<'EOF'\nprivate-secret-command --token customer-value\nEOF",
+      "expected_confidence": "partial",
+      "expected_labels": [
+        "cat"
+      ],
+      "expected_counts": [
+        1
+      ],
+      "expected_dynamic": true,
+      "forbidden": [
+        "private-secret-command",
+        "customer-value",
+        "--token"
+      ]
+    },
+    {
+      "name": "function declaration is opaque",
+      "source": "deploy() { gh run view 123; }",
+      "expected_confidence": "opaque",
+      "expected_labels": [],
+      "expected_counts": [],
+      "expected_dynamic": true,
+      "expected_parse_error": "unsupported_group",
+      "forbidden": [
+        "deploy",
+        "gh run view"
+      ]
+    },
+    {
+      "name": "subshell grouping is opaque",
+      "source": "(gh run view 123)",
+      "expected_confidence": "opaque",
+      "expected_labels": [],
+      "expected_counts": [],
+      "expected_dynamic": true,
+      "expected_parse_error": "unsupported_group",
+      "forbidden": [
+        "gh run view"
+      ]
+    },
+    {
+      "name": "while loop is opaque",
+      "source": "while true; do gh run view 123; done",
+      "expected_confidence": "opaque",
+      "expected_labels": [],
+      "expected_counts": [],
+      "expected_dynamic": true,
+      "expected_parse_error": "unsupported_control",
+      "forbidden": [
+        "do",
+        "done",
+        "gh run view"
+      ]
+    },
+    {
+      "name": "for loop is opaque",
+      "source": "for file in *.txt; do rg secret \"$file\"; done",
+      "expected_confidence": "opaque",
+      "expected_labels": [],
+      "expected_counts": [],
+      "expected_dynamic": true,
+      "expected_parse_error": "unsupported_control",
+      "forbidden": [
+        "do",
+        "done",
+        "rg"
+      ]
+    },
+    {
+      "name": "until loop is opaque",
+      "source": "until false; do make test; done",
+      "expected_confidence": "opaque",
+      "expected_labels": [],
+      "expected_counts": [],
+      "expected_dynamic": true,
+      "expected_parse_error": "unsupported_control",
+      "forbidden": [
+        "do",
+        "done",
+        "make test"
+      ]
+    },
+    {
+      "name": "alias mutation makes later resolution opaque",
+      "source": "alias gh=evil; gh run view 123",
+      "expected_confidence": "opaque",
+      "expected_labels": [],
+      "expected_counts": [],
+      "expected_dynamic": true,
+      "expected_parse_error": "unsupported_alias",
+      "forbidden": [
+        "alias gh",
+        "gh run view"
+      ]
+    },
+    {
+      "name": "unalias mutation makes later resolution opaque",
+      "source": "unalias gh; gh run view 123",
+      "expected_confidence": "opaque",
+      "expected_labels": [],
+      "expected_counts": [],
+      "expected_dynamic": true,
+      "expected_parse_error": "unsupported_alias",
+      "forbidden": [
+        "unalias gh",
+        "gh run view"
+      ]
+    }
+  ]
+}
