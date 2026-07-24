@@ -536,7 +536,7 @@
         "claude.turn_start",
         "claude.turn_interrupt"
       ],
-      "adapter_digest": "bb7d8a05628235c757e193953a81eb5c87f1bfbad53eb7d93b2589d01b7a8353"
+      "adapter_digest": "46d42a9368ea6be677bbffc32585711d749b9d6f29ff484bc242e5f5292783ba"
     },
     {
       "provider": "opencode",
@@ -701,7 +701,7 @@
         "opencode.turn_start",
         "opencode.turn_interrupt"
       ],
-      "adapter_digest": "96bfc238ad80b7ea8ee2dc2e15fd78feb11484d744078920ff6d9b35c25a4c65"
+      "adapter_digest": "513bdf379c53f827be4b062d9af49205f43fa2f46df90662a949425a9351d66f"
     },
     {
       "provider": "antigravity",
