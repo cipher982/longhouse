@@ -306,11 +306,20 @@ async fn call_coordination_tool(id: Value, params: Option<&Value>, state: &Bridg
     let base = config.api_url.trim_end_matches('/');
     let mut request = match name {
         "peers" => {
-            let repo = arguments
+            let mut repo = arguments
                 .get("repo")
                 .and_then(Value::as_str)
-                .map(str::to_owned)
-                .or_else(|| state.inner.lock().ok().and_then(|inner| inner.cwd.clone()));
+                .map(str::to_owned);
+            if repo.is_none() {
+                if let Some(current) = session_id.as_deref() {
+                    repo =
+                        resolve_session_repo(&client, base, config.api_token.as_deref(), current)
+                            .await;
+                }
+            }
+            if repo.is_none() {
+                repo = state.inner.lock().ok().and_then(|inner| inner.cwd.clone());
+            }
             let Some(repo) = repo else {
                 return tool_result(
                     id,
@@ -340,10 +349,16 @@ async fn call_coordination_tool(id: Value, params: Option<&Value>, state: &Bridg
                     json!({"error":"check_messages requires a current managed session context"}),
                 );
             };
+            let mut query = arguments.clone();
+            if let Some(map) = query.as_object_mut() {
+                // The advertised schema defaults unacknowledged_only to true;
+                // the API defaults it to false, so fill it in when omitted.
+                map.entry("unacknowledged_only").or_insert(json!(true));
+            }
             client
                 .get(format!("{base}/api/agents/messages"))
                 .header("X-Longhouse-Session-Id", current)
-                .query(&arguments)
+                .query(&query)
         }
         "ack_message" => {
             let Some(current) = session_id.as_deref() else {
@@ -397,6 +412,32 @@ async fn call_coordination_tool(id: Value, params: Option<&Value>, state: &Bridg
         }
         Err(error) => tool_result(id, json!({"error":error.to_string()})),
     }
+}
+
+async fn resolve_session_repo(
+    client: &reqwest::Client,
+    base: &str,
+    token: Option<&str>,
+    session_id: &str,
+) -> Option<String> {
+    let mut request = client.get(format!("{base}/api/agents/sessions/{session_id}"));
+    if let Some(token) = token {
+        request = request.header("X-Agents-Token", token);
+    }
+    let response = request.send().await.ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+    let detail: Value = response.json().await.ok()?;
+    for key in ["git_repo", "cwd"] {
+        if let Some(value) = detail.get(key).and_then(Value::as_str) {
+            let trimmed = value.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
+            }
+        }
+    }
+    None
 }
 
 fn parse_json_or_text(text: &str) -> Value {
