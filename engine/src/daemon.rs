@@ -3095,19 +3095,31 @@ fn maybe_start_managed_observation_scan(
             |observation| &observation.state_file,
         );
         let cursor_elapsed_ms = cursor_started.elapsed().as_millis() as u64;
-        if full_reconciliation {
-            // Sweep contracts left behind by teardown paths that exited early
-            // or by abrupt process death. Provider-neutral: Codex and Claude
-            // leak these for different reasons.
+        // Sweep contracts left behind by teardown paths that exited early or
+        // by abrupt process death. Provider-neutral: Codex and Claude leak
+        // these for different reasons.
+        //
+        // Gated on a valid process inventory. Without one every observation
+        // reads as dead, and the sweep would delete the launch provenance of
+        // every running session older than the grace period.
+        if full_reconciliation && process_inventory_valid {
             if let Ok(home) = crate::config::get_longhouse_home() {
+                // Liveness is the union of every signal that says something is
+                // still there. A bridge can be gone while its app-server still
+                // listens, and a Claude session can be alive with its bridge
+                // down; neither is an orphaned contract.
                 let live_codex = codex_observations
                     .iter()
-                    .filter(|observation| observation.bridge_alive)
+                    .filter(|observation| {
+                        observation.bridge_alive
+                            || observation.app_server_alive
+                            || observation.has_tui_attachment
+                    })
                     .map(|observation| observation.session_id.clone())
                     .collect::<std::collections::HashSet<_>>();
                 let live_claude = claude_observations
                     .iter()
-                    .filter(|observation| observation.claude_alive)
+                    .filter(|observation| observation.claude_alive || observation.bridge_alive)
                     .map(|observation| observation.session_id.clone())
                     .collect::<std::collections::HashSet<_>>();
                 let now = std::time::SystemTime::now();

@@ -35,9 +35,14 @@ pub fn terminal_dedupe_key(session_id: &str, run_id: Option<&str>) -> String {
     }
 }
 
-/// Build the terminal runtime event. Shape matches what the bridge runtime
-/// sink posted previously; only the dedupe key changed from a random UUID to
-/// a stable identity.
+/// Build the terminal runtime event.
+///
+/// `run_id` is carried explicitly. The server falls back to the runtime
+/// state's *current* run when an event omits it
+/// (`session_runtime.py` `_apply_run_terminal_event`: `event.run_id or
+/// state.run_id`), so a terminal event delivered late — which durable
+/// publication makes more likely, not less — could otherwise end a newer run
+/// of the same session.
 pub fn build_terminal_event(
     session_id: &str,
     run_id: Option<&str>,
@@ -51,6 +56,7 @@ pub fn build_terminal_event(
     json!({
         "runtime_key": format!("codex:{session_id}"),
         "session_id": session_id,
+        "run_id": run_id,
         "provider": "codex",
         "device_id": device_id,
         "source": source,
@@ -146,6 +152,22 @@ pub fn reconcile_terminal_events(state_dir: &Path, outbox_dir: &Path) -> usize {
     reconcile_terminal_event_paths(&paths, outbox_dir)
 }
 
+/// True when the outbox already holds a pending event with this dedupe key.
+fn outbox_already_holds(outbox_dir: &Path, dedupe_key: Option<&str>) -> bool {
+    let Some(dedupe_key) = dedupe_key else {
+        return false;
+    };
+    let Ok(entries) = std::fs::read_dir(outbox_dir) else {
+        return false;
+    };
+    entries.flatten().any(|entry| {
+        std::fs::read(entry.path())
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+            .is_some_and(|event| event["dedupe_key"].as_str() == Some(dedupe_key))
+    })
+}
+
 /// Reconcile a known set of state files. The daemon uses this with the paths
 /// its scan already identified as `stopped`, avoiding a second full read of a
 /// state directory that accumulates thousands of historical sessions.
@@ -162,6 +184,12 @@ pub fn reconcile_terminal_event_paths(paths: &[std::path::PathBuf], outbox_dir: 
             Err(_) => continue,
         };
         if !needs_terminal_reconciliation(&state) {
+            continue;
+        }
+        if outbox_already_holds(outbox_dir, state.terminal_dedupe_key.as_deref()) {
+            // A previous republish is still queued. Enqueuing again would grow
+            // the outbox once per full scan whenever the bookkeeping write
+            // below keeps failing.
             continue;
         }
         if publish_terminal_event(outbox_dir, &state).is_err() {
@@ -337,12 +365,13 @@ mod tests {
         assert_eq!(outbox_event_count(&outbox_dir), 1);
     }
 
-    /// A republish racing the original enqueue, or a concurrent second
-    /// teardown, must collapse server-side. That is what the persisted dedupe
-    /// key buys — the old code minted a fresh UUID per post, so duplicates
-    /// could not collapse.
+    /// Duplicate publication must be harmless. Two layers cover it: the
+    /// pending-event guard suppresses a republish locally, and the dedupe key
+    /// is derived from session and run so anything that does reach the server
+    /// twice collapses there. The old code minted a fresh UUID per post, so
+    /// neither layer existed.
     #[test]
-    fn duplicate_publication_shares_one_dedupe_key() {
+    fn duplicate_publication_is_suppressed_and_shares_one_dedupe_key() {
         let home = tempfile::tempdir().unwrap();
         let state_dir = home.path().join("state");
         let outbox_dir = home.path().join("outbox");
@@ -353,8 +382,13 @@ mod tests {
         publish_terminal_event(&outbox_dir, &state).unwrap();
         reconcile_terminal_events(&state_dir, &outbox_dir);
 
-        assert_eq!(outbox_event_count(&outbox_dir), 2, "both copies on disk");
-        let keys = std::fs::read_dir(&outbox_dir)
+        assert_eq!(
+            outbox_event_count(&outbox_dir),
+            1,
+            "republish must not stack on a still-pending identical event"
+        );
+
+        let key = std::fs::read_dir(&outbox_dir)
             .unwrap()
             .flatten()
             .map(|entry| {
@@ -362,9 +396,12 @@ mod tests {
                     serde_json::from_slice(&std::fs::read(entry.path()).unwrap()).unwrap();
                 value["dedupe_key"].as_str().unwrap().to_string()
             })
-            .collect::<std::collections::HashSet<_>>();
-        assert_eq!(keys.len(), 1, "duplicates must share one dedupe key");
-        assert!(keys.contains("bridge:terminal:session-d:run-d"));
+            .next()
+            .unwrap();
+        assert_eq!(
+            key, "bridge:terminal:session-d:run-d",
+            "dedupe key must be derived from session and run, not random"
+        );
     }
 
     /// A running session must never be treated as terminal.
@@ -415,6 +452,44 @@ mod tests {
         let after = read_state(&path).terminal_event.unwrap();
         assert_eq!(before, after);
         assert_eq!(before["payload"]["terminal_state"], "session_ended");
+    }
+
+    /// The server resolves a terminal event's run as `event.run_id or
+    /// state.run_id`. Omitting it lets a late event end whatever run is
+    /// current — and durable publication makes late delivery more likely, not
+    /// less. So the run must travel with the event.
+    #[test]
+    fn terminal_event_carries_its_own_run_id() {
+        let state = stopped_state("s1", Some("r1"));
+        let event = state.terminal_event.unwrap();
+        assert_eq!(event["run_id"], "r1");
+    }
+
+    /// A republish must not re-enqueue while an identical event is still
+    /// pending, or a persistently failing bookkeeping write would grow the
+    /// outbox once per full scan.
+    #[test]
+    fn reconciliation_does_not_stack_duplicates_while_one_is_pending() {
+        let home = tempfile::tempdir().unwrap();
+        let state_dir = home.path().join("state");
+        let outbox_dir = home.path().join("outbox");
+        let path = commit_to_disk(&state_dir, "session-h", "run-h");
+
+        // Enqueue once, then roll the flag back to simulate a failed
+        // published-flag write, and reconcile repeatedly.
+        assert_eq!(reconcile_terminal_events(&state_dir, &outbox_dir), 1);
+        let mut state = read_state(&path);
+        state.terminal_published = false;
+        crate::codex_bridge::write_bridge_state_file(&path, &state).unwrap();
+
+        reconcile_terminal_events(&state_dir, &outbox_dir);
+        reconcile_terminal_events(&state_dir, &outbox_dir);
+
+        assert_eq!(
+            outbox_event_count(&outbox_dir),
+            1,
+            "a pending identical event must suppress further republishes"
+        );
     }
 
     #[test]

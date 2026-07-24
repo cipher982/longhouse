@@ -64,7 +64,7 @@ fn contract_path(home: &Path) -> PathBuf {
         .join(format!("{SESSION_ID}.json"))
 }
 
-fn write_state(home: &Path, status: &str) {
+fn write_state_full(home: &Path, status: &str, run_id: Option<&str>, stopped: bool) {
     let dir = state_dir(home);
     fs::create_dir_all(&dir).unwrap();
     let state = serde_json::json!({
@@ -76,6 +76,8 @@ fn write_state(home: &Path, status: &str) {
         "thread_id": "thread-1",
         "pid": 1u32,
         "status": status,
+        "run_id": run_id,
+        "stopped_at": if stopped { Some("2026-07-24T00:00:00Z") } else { None },
         "log_file": "/tmp/x.log",
         "active_turn_id": serde_json::Value::Null,
         "last_turn_status": serde_json::Value::Null,
@@ -87,6 +89,12 @@ fn write_state(home: &Path, status: &str) {
         serde_json::to_vec_pretty(&state).unwrap(),
     )
     .unwrap();
+}
+
+/// A durable teardown commit: stopped, with the terminal marker present.
+fn write_state(home: &Path, status: &str) {
+    let stopped = status == "stopped";
+    write_state_full(home, status, Some("run-1"), stopped);
 }
 
 fn write_contract(home: &Path) {
@@ -170,8 +178,9 @@ fn unresponsive_helper_without_commit_is_an_error() {
     );
 }
 
-/// T6: no state file at all and the helper failed. The daemon reconciles;
-/// the user should not see an error.
+/// T6: no state file at all and the helper failed. Nothing local can
+/// reconstruct the terminal event, so the user is told plainly what is and is
+/// not known — but their exit is not failed over a bridge that is already gone.
 #[test]
 fn missing_state_after_failed_stop_is_a_warning_not_an_error() {
     let home = tempfile::tempdir().unwrap();
@@ -186,8 +195,13 @@ fn missing_state_after_failed_stop_is_a_warning_not_an_error() {
         run.stderr
     );
     assert!(
-        run.stderr.contains("reconcile"),
-        "user should be told it reconciles automatically; got: {}",
+        run.stderr.contains("no bridge state file remains"),
+        "user should be told what is missing; got: {}",
+        run.stderr
+    );
+    assert!(
+        !run.stderr.contains("reconcile"),
+        "must not promise reconciliation with no durable record; got: {}",
         run.stderr
     );
     assert!(!contract_path(home.path()).exists());
@@ -266,5 +280,46 @@ fn teardown_does_not_depend_on_hosted_reachability() {
     assert!(
         started.elapsed() < std::time::Duration::from_secs(10),
         "teardown stalled on an unreachable host"
+    );
+}
+
+/// A helper that exits 0 without the bridge ever committing must not be read
+/// as a clean close — the RPC's exit status is evidence, not authority.
+#[test]
+fn helper_success_without_commit_is_not_a_clean_close() {
+    let home = tempfile::tempdir().unwrap();
+    write_state(home.path(), "running");
+    write_contract(home.path());
+    let helper = write_stub_helper(home.path(), "exit 0");
+
+    let run = run_facade_stop(home.path(), &helper);
+
+    assert!(
+        !run.status.success(),
+        "a successful helper with uncommitted state must not report a clean close"
+    );
+    assert!(
+        contract_path(home.path()).exists(),
+        "contract must be retained when the session may still be live"
+    );
+}
+
+/// A `stopped` file written by an engine predating durable teardown carries no
+/// terminal event, so nothing can reconstruct the run's end. Report that
+/// honestly rather than promising reconciliation.
+#[test]
+fn stopped_state_without_durable_marker_is_not_committed() {
+    let home = tempfile::tempdir().unwrap();
+    write_state_full(home.path(), "stopped", Some("run-1"), false);
+    write_contract(home.path());
+    let helper = write_stub_helper(home.path(), "exit 0");
+
+    let run = run_facade_stop(home.path(), &helper);
+
+    assert!(run.status.success(), "must not fail the user's exit");
+    assert!(
+        !run.stderr.contains("reconcile"),
+        "must not promise reconciliation with no terminal record; got: {}",
+        run.stderr
     );
 }

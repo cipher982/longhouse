@@ -106,6 +106,19 @@ mod tests {
         assert!(dir.path().join("launching.json").exists());
     }
 
+    /// The caller gates this on a valid process inventory. This test pins the
+    /// consequence of that gate being wrong: with no live sessions known,
+    /// every aged contract is swept. It documents why the daemon must not call
+    /// this with an incomplete inventory.
+    #[test]
+    fn empty_live_set_sweeps_everything_aged() {
+        let dir = tempfile::tempdir().unwrap();
+        write_contract(dir.path(), "a");
+        write_contract(dir.path(), "b");
+        let removed = sweep_orphan_contracts(dir.path(), &HashSet::new(), later(7200));
+        assert_eq!(removed, 2);
+    }
+
     #[test]
     fn ignores_non_contract_files() {
         let dir = tempfile::tempdir().unwrap();

@@ -1376,7 +1376,7 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
                             &terminal_reason,
                             BRIDGE_RUNTIME_SOURCE,
                         );
-                        let commit = write_state_file(&context.state_file, &context.state);
+                        let commit = write_state_file_durable(&context.state_file, &context.state);
                         if let Err(error) = commit {
                             // Nothing durable recorded this run as closed, so
                             // do not acknowledge success. The facade surfaces
@@ -1430,8 +1430,23 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
                                 None,
                             );
                         }
-                        let _ = reply.send(Ok(json!({})));
-                        shutdown_child(&mut client).await?;
+                        // Release the provider before acknowledging. The facade
+                        // removes the session contract on success, so a
+                        // success reply that raced a still-live app-server
+                        // would drop launch provenance for a running process.
+                        // This stays local and bounded (SIGTERM, 500ms grace,
+                        // SIGKILL) — the network is no longer on this path.
+                        let released = shutdown_child(&mut client).await;
+                        match released {
+                            Ok(()) => {
+                                let _ = reply.send(Ok(json!({})));
+                            }
+                            Err(error) => {
+                                let _ = reply.send(Err(anyhow!(
+                                    "codex teardown committed but could not release the provider: {error:#}"
+                                )));
+                            }
+                        }
                         break;
                     }
                 }
@@ -2354,6 +2369,21 @@ fn acquire_bridge_lock(lock_path: &Path) -> Result<()> {
 }
 
 fn write_state_file(path: &Path, state: &BridgeStateFile) -> Result<()> {
+    write_state_file_inner(path, state, false)
+}
+
+/// Durable variant used for the teardown commit only.
+///
+/// `fsync` is deliberately not applied to ordinary state writes: this file is
+/// rewritten several times per turn (turn start, turn completion, thread
+/// subscription changes), and forcing a disk flush on each would add blocking
+/// latency to the bridge's async loop for no lifecycle benefit. Teardown is
+/// the one write whose survival a crash must not cost.
+fn write_state_file_durable(path: &Path, state: &BridgeStateFile) -> Result<()> {
+    write_state_file_inner(path, state, true)
+}
+
+fn write_state_file_inner(path: &Path, state: &BridgeStateFile, durable: bool) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -2361,26 +2391,34 @@ fn write_state_file(path: &Path, state: &BridgeStateFile) -> Result<()> {
     next.updated_at = Utc::now().to_rfc3339();
     let tmp = path.with_extension("json.tmp");
     {
-        // fsync before rename: teardown treats this file as the durable
-        // commit point for session lifecycle, so a rename that survives a
-        // crash with unflushed contents would strand the run open.
         use std::io::Write as _;
         let mut file =
             fs::File::create(&tmp).with_context(|| format!("creating {}", tmp.display()))?;
         file.write_all(&serde_json::to_vec_pretty(&next)?)
             .with_context(|| format!("writing {}", tmp.display()))?;
-        file.sync_all()
-            .with_context(|| format!("syncing {}", tmp.display()))?;
+        if durable {
+            file.sync_all()
+                .with_context(|| format!("syncing {}", tmp.display()))?;
+        }
     }
     fs::rename(&tmp, path)
         .with_context(|| format!("renaming {} -> {}", tmp.display(), path.display()))?;
+    if durable {
+        // Also flush the directory entry, so the rename itself survives power
+        // loss rather than only the file contents.
+        if let Some(parent) = path.parent() {
+            if let Ok(dir) = fs::File::open(parent) {
+                let _ = dir.sync_all();
+            }
+        }
+    }
     Ok(())
 }
 
 /// Durable state write for callers outside this module (teardown
 /// reconciliation). Same atomic temp + fsync + rename commit.
 pub fn write_bridge_state_file(path: &Path, state: &BridgeStateFile) -> Result<()> {
-    write_state_file(path, state)
+    write_state_file_durable(path, state)
 }
 
 fn read_state_file(path: &Path) -> Result<BridgeStateFile> {

@@ -297,6 +297,13 @@ struct BridgeState {
     ws_url: Option<String>,
     status: Option<String>,
     thread_id: Option<String>,
+    #[serde(default)]
+    run_id: Option<String>,
+    /// Present only once teardown has committed a terminal outcome. Its
+    /// absence distinguishes a stale `stopped` file written by an older engine
+    /// from a genuine durable commit.
+    #[serde(default)]
+    stopped_at: Option<String>,
 }
 
 fn paired_engine_path() -> anyhow::Result<PathBuf> {
@@ -1480,7 +1487,11 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
             .as_deref()
             .is_none_or(|thread| thread.trim().is_empty())
     {
-        let _ = stop_codex_bridge(&response.session_id, "bridge_start_failed");
+        let _ = stop_codex_bridge(
+            &response.session_id,
+            Some(response.run_id.as_str()),
+            "bridge_start_failed",
+        );
         anyhow::bail!("Native Codex bridge did not return thread_id for detached launch");
     }
     println!(
@@ -1514,7 +1525,11 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
         args.model_reasoning_effort.as_deref(),
         args.dangerously_bypass_approvals_and_sandbox,
     );
-    let stop_result = stop_codex_bridge(&response.session_id, "clean_tui_exit");
+    let stop_result = stop_codex_bridge(
+        &response.session_id,
+        Some(response.run_id.as_str()),
+        "clean_tui_exit",
+    );
     let exit = tui_result?;
     let exit = finish_codex_teardown(
         stop_result?,
@@ -1755,9 +1770,11 @@ fn run_foreground_command(command: &mut Command) -> anyhow::Result<i32> {
 enum TeardownOutcome {
     /// The bridge committed a terminal state. Normal close.
     Committed,
-    /// No commit, but the bridge process is gone. The daemon's reconciliation
-    /// and lease withdrawal converge; nothing for the user to do.
-    OrphanedWillReconcile { detail: String },
+    /// No durable stop record. Nothing local can reconstruct the terminal
+    /// event, so this is reported honestly rather than as a clean close — but
+    /// it does not fail the user's exit, because the bridge is already gone
+    /// and there is nothing for them to do about it.
+    NoDurableRecord { detail: String },
     /// No commit and the bridge is still alive, or the committed fact could
     /// not be read at all. The only genuine error.
     Unresponsive { detail: String },
@@ -1768,7 +1785,11 @@ enum TeardownOutcome {
 /// independently chosen number that can silently disagree with it.
 const CODEX_STOP_DEADLINE: Duration = Duration::from_secs(4);
 
-fn stop_codex_bridge(session_id: &str, reason: &str) -> anyhow::Result<TeardownOutcome> {
+fn stop_codex_bridge(
+    session_id: &str,
+    expected_run_id: Option<&str>,
+    reason: &str,
+) -> anyhow::Result<TeardownOutcome> {
     validate_session_id(session_id)?;
     let mut child = Command::new(paired_engine_path()?)
         .args([
@@ -1811,13 +1832,23 @@ fn stop_codex_bridge(session_id: &str, reason: &str) -> anyhow::Result<TeardownO
     }
 
     // The RPC result is evidence, not authority. Re-read the durable fact.
-    Ok(classify_codex_teardown(session_id, rpc_detail))
+    Ok(classify_codex_teardown(
+        session_id,
+        expected_run_id,
+        rpc_detail,
+    ))
 }
 
-fn classify_codex_teardown(session_id: &str, rpc_detail: Option<String>) -> TeardownOutcome {
-    let Some(detail) = rpc_detail else {
-        return TeardownOutcome::Committed;
-    };
+fn classify_codex_teardown(
+    session_id: &str,
+    expected_run_id: Option<&str>,
+    rpc_detail: Option<String>,
+) -> TeardownOutcome {
+    // The stop RPC's exit status is evidence, not authority: validate the
+    // durable fact even when the helper reported success, because a helper
+    // that exits 0 without committing would otherwise close the session and
+    // discard its contract.
+    let detail = rpc_detail.unwrap_or_else(|| "stop helper reported success".to_string());
     let state_path = match codex_bridge_state_path(session_id) {
         Ok(path) => path,
         Err(error) => {
@@ -1827,27 +1858,42 @@ fn classify_codex_teardown(session_id: &str, rpc_detail: Option<String>) -> Tear
         }
     };
     if !state_path.exists() {
-        return TeardownOutcome::OrphanedWillReconcile {
+        return TeardownOutcome::NoDurableRecord {
             detail: format!("{detail}; no bridge state file remains"),
         };
     }
-    match read_codex_bridge_state(&state_path) {
-        Ok(state) => {
-            let status = state.status.unwrap_or_default();
-            if status.trim().eq_ignore_ascii_case("stopped") {
-                TeardownOutcome::Committed
-            } else {
-                TeardownOutcome::Unresponsive {
-                    detail: format!("{detail}; bridge state is still '{status}'"),
-                }
+    let state = match read_codex_bridge_state(&state_path) {
+        Ok(state) => state,
+        // Never treat an unreadable commit as a clean close.
+        Err(error) => {
+            return TeardownOutcome::Unresponsive {
+                detail: format!("{detail}; bridge state unreadable: {error:#}"),
             }
         }
-        // Never downgrade an unreadable commit to "will reconcile" — that
-        // would promise convergence that cannot happen.
-        Err(error) => TeardownOutcome::Unresponsive {
-            detail: format!("{detail}; bridge state unreadable: {error:#}"),
-        },
+    };
+    let status = state.status.clone().unwrap_or_default();
+    if !status.trim().eq_ignore_ascii_case("stopped") {
+        return TeardownOutcome::Unresponsive {
+            detail: format!("{detail}; bridge state is still '{status}'"),
+        };
     }
+    // A stale `stopped` file from a previous run of the same session id must
+    // not be read as this run's outcome.
+    if let (Some(expected), Some(found)) = (expected_run_id, state.run_id.as_deref()) {
+        if expected != found {
+            return TeardownOutcome::NoDurableRecord {
+                detail: format!("{detail}; bridge state belongs to run {found}, not {expected}"),
+            };
+        }
+    }
+    // `stopped` without a terminal commit marker means the file predates
+    // durable teardown, so there is no reconstructable terminal event.
+    if state.stopped_at.is_none() {
+        return TeardownOutcome::NoDurableRecord {
+            detail: format!("{detail}; bridge state has no durable terminal record"),
+        };
+    }
+    TeardownOutcome::Committed
 }
 
 fn read_codex_bridge_state(state_path: &Path) -> anyhow::Result<BridgeState> {
@@ -1873,9 +1919,12 @@ fn finish_codex_teardown(
             }
             Ok(provider_exit)
         }
-        TeardownOutcome::OrphanedWillReconcile { detail } => {
+        TeardownOutcome::NoDurableRecord { detail } => {
             remove_codex_contract_best_effort(session_id);
-            eprintln!("Longhouse notice: {detail}. The session end will reconcile automatically.");
+            eprintln!(
+                "Longhouse notice: {detail}. The session stopped locally; hosted may show it \
+                 open until its control lease expires."
+            );
             Ok(provider_exit)
         }
         TeardownOutcome::Unresponsive { detail } => {
@@ -1994,7 +2043,7 @@ fn attach_managed_codex(args: CodexAttachArgs) -> anyhow::Result<()> {
         args.model_reasoning_effort.as_deref(),
         args.dangerously_bypass_approvals_and_sandbox,
     );
-    let stop_result = stop_codex_bridge(&args.session_id, "clean_tui_exit");
+    let stop_result = stop_codex_bridge(&args.session_id, None, "clean_tui_exit");
     let exit = tui_result?;
     let exit = finish_codex_teardown(stop_result?, &args.session_id, Some("this machine"), exit)?;
     if exit != 0 {
@@ -2037,7 +2086,7 @@ fn main() -> anyhow::Result<()> {
             Some(CodexCommand::Launch(args)) => launch_managed_codex(args)?,
             Some(CodexCommand::Attach(args)) => attach_managed_codex(args)?,
             Some(CodexCommand::Stop(args)) => {
-                let outcome = stop_codex_bridge(&args.session_id, "bridge_stop")?;
+                let outcome = stop_codex_bridge(&args.session_id, None, "bridge_stop")?;
                 finish_codex_teardown(outcome, &args.session_id, None, 0)?;
             }
             None => launch_managed_codex(launch)?,
