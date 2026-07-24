@@ -1613,7 +1613,8 @@ fn main() -> anyhow::Result<()> {
                 rt.block_on(claude_channel_server::run(
                     claude_channel_server::ClaudeChannelServeConfig {
                         session_id: session_id
-                            .or_else(|| env_string("LONGHOUSE_CHANNEL_SESSION_ID")),
+                            .or_else(|| env_string("LONGHOUSE_CHANNEL_SESSION_ID"))
+                            .or_else(|| env_string("LONGHOUSE_MANAGED_SESSION_ID")),
                         run_id: run_id.or_else(|| env_string("LONGHOUSE_RUN_ID")),
                         provider_session_id: provider_session_id
                             .or_else(|| env_string("LONGHOUSE_PROVIDER_SESSION_ID")),

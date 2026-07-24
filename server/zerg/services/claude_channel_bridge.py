@@ -13,6 +13,7 @@ from zerg.services.managed_local_shell import build_managed_local_shell_prelude
 from zerg.services.managed_session_env import build_managed_session_env_exports
 
 CLAUDE_CHANNEL_SERVER_NAME = "longhouse-channel"
+CLAUDE_COORDINATION_SERVER_NAME = "longhouse-coordination"
 CLAUDE_CHANNEL_DEVELOPMENT_FLAG = "--dangerously-load-development-channels"
 
 

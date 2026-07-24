@@ -281,6 +281,7 @@ struct ManagedLaunchResponse {
     permission_mode: Option<String>,
     hook_token: Option<String>,
     managed_transport: Option<String>,
+    coordination_token: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -713,6 +714,76 @@ fn write_private_text(path: &Path, value: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+struct PrivateTempFile {
+    path: PathBuf,
+}
+
+impl Drop for PrivateTempFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+fn write_claude_coordination_mcp_config(
+    session_id: &str,
+    coordination_token: &str,
+) -> anyhow::Result<PrivateTempFile> {
+    if coordination_token.trim().is_empty() {
+        anyhow::bail!("Longhouse did not issue coordination authority for this session");
+    }
+    let path = longhouse_home()?
+        .join("run/claude-mcp")
+        .join(format!("{session_id}-{}.json", Uuid::new_v4()));
+    let config = json!({
+        "mcpServers": {
+            "longhouse-coordination": {
+                "type": "stdio",
+                "command": paired_engine_path()?,
+                "args": ["claude-channel", "serve"],
+                "env": {
+                    "LONGHOUSE_COORDINATION_TOKEN": coordination_token,
+                    "LONGHOUSE_MANAGED_SESSION_ID": session_id,
+                },
+            }
+        }
+    });
+    write_private_text(&path, &serde_json::to_string(&config)?)?;
+    Ok(PrivateTempFile { path })
+}
+
+fn issue_coordination_token(
+    runtime: &tokio::runtime::Runtime,
+    url: &str,
+    device_token: &str,
+    session_id: &str,
+) -> anyhow::Result<String> {
+    let endpoint = format!(
+        "{}/api/agents/sessions/{session_id}/coordination-token",
+        url.trim_end_matches('/')
+    );
+    runtime.block_on(async {
+        let response = reqwest::Client::new()
+            .post(endpoint)
+            .header("X-Agents-Token", device_token)
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            anyhow::bail!(
+                "Could not issue coordination authority for session {session_id}: HTTP {}",
+                response.status()
+            );
+        }
+        let payload: serde_json::Value = response.json().await?;
+        payload
+            .get("coordination_token")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .context("Longhouse returned empty coordination authority")
+    })
+}
+
 fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
     let mut cwd = std::fs::canonicalize(&args.cwd)?;
     configure_claude_hooks(args.claude_dir.clone())?;
@@ -776,6 +847,18 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
     if response.managed_transport.as_deref() != Some("claude_channel_bridge") {
         anyhow::bail!("Longhouse returned an unsupported managed-local transport for Claude");
     }
+    let coordination_token = match response
+        .coordination_token
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(token) => token.to_owned(),
+        None if resuming => issue_coordination_token(&runtime, &url, &token, &response.session_id)?,
+        None => anyhow::bail!("Longhouse did not issue coordination authority for this session"),
+    };
+    let coordination_config =
+        write_claude_coordination_mcp_config(&response.session_id, &coordination_token)?;
     let mut command = Command::new(&binary);
     if response.permission_mode.as_deref() != Some("remote_approve") {
         command.arg("--dangerously-skip-permissions");
@@ -789,7 +872,9 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
         .args([
             "--dangerously-load-development-channels",
             "server:longhouse-channel",
+            "--mcp-config",
         ])
+        .arg(&coordination_config.path)
         .current_dir(&cwd)
         .env("LONGHOUSE_MANAGED_SESSION_ID", &response.session_id)
         .env("LONGHOUSE_RUN_ID", &response.run_id)
@@ -798,6 +883,7 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
         .env("LONGHOUSE_CHANNEL_CWD", &cwd)
         .env("LONGHOUSE_HOOK_URL", &url)
         .env("LONGHOUSE_HOOK_TOKEN", response.hook_token.unwrap_or(token))
+        .env_remove("LONGHOUSE_COORDINATION_TOKEN")
         .env(
             "LONGHOUSE_PERMISSION_HOOK_ENABLED",
             if response.permission_mode.as_deref() == Some("remote_approve") {
@@ -1081,6 +1167,7 @@ fn resolve_managed_claude_resume(
                     .map(str::to_owned),
                 hook_token: None,
                 managed_transport: Some("claude_channel_bridge".into()),
+                coordination_token: None,
             },
             cwd,
         ))
@@ -1341,6 +1428,12 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
         }
         Ok::<_, anyhow::Error>(response.json().await?)
     })?;
+    let coordination_token = response
+        .coordination_token
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .context("Longhouse did not issue coordination authority for this session")?;
     if response.run_id.trim().is_empty() {
         anyhow::bail!("Longhouse server did not return the managed run identity");
     }
@@ -1368,7 +1461,8 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
             launch_mode,
             "--json",
         ])
-        .env("LONGHOUSE_CODEX_BRIDGE_TOKEN", &token);
+        .env("LONGHOUSE_CODEX_BRIDGE_TOKEN", &token)
+        .env("LONGHOUSE_COORDINATION_TOKEN", coordination_token);
     if !attach {
         bridge.arg("--create-initial-thread");
     }
@@ -1994,6 +2088,44 @@ mod tests {
         assert_eq!(
             user_config["mcpServers"]["longhouse-channel"]["args"][0],
             "claude-channel"
+        );
+    }
+
+    #[test]
+    fn claude_coordination_mcp_config_is_private_scoped_and_ephemeral() {
+        let temp = tempfile::tempdir().unwrap();
+        let engine = temp.path().join("longhouse-engine");
+        std::fs::write(&engine, "").unwrap();
+        temp_env::with_vars(
+            [
+                ("LONGHOUSE_HOME", Some(temp.path().display().to_string())),
+                ("LONGHOUSE_ENGINE_BIN", Some(engine.display().to_string())),
+            ],
+            || {
+                let config = write_claude_coordination_mcp_config(
+                    "11111111-1111-4111-8111-111111111111",
+                    "session-secret",
+                )
+                .unwrap();
+                let path = config.path.clone();
+                let payload: serde_json::Value =
+                    serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+                assert_eq!(
+                    payload["mcpServers"]["longhouse-coordination"]["env"]
+                        ["LONGHOUSE_COORDINATION_TOKEN"],
+                    "session-secret"
+                );
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    assert_eq!(
+                        std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                        0o600
+                    );
+                }
+                drop(config);
+                assert!(!path.exists());
+            },
         );
     }
 

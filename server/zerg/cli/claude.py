@@ -35,7 +35,7 @@ from zerg.cli._managed_launch import record_contract_or_warn
 from zerg.cli._managed_launch import resolve_managed_launch_credentials as _load_api_credentials
 from zerg.cli._managed_launch import start_managed_launch
 from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_PATH
-from zerg.services.claude_channel_bridge import CLAUDE_CHANNEL_SERVER_NAME
+from zerg.services.claude_channel_bridge import CLAUDE_COORDINATION_SERVER_NAME
 from zerg.services.claude_channel_bridge import build_claude_channel_exec_command
 from zerg.services.claude_channel_bridge import remove_claude_channel_mcp_server
 from zerg.services.claude_channel_bridge import wait_for_claude_channel_state
@@ -217,13 +217,13 @@ def _run_native_claude_tui(
         mcp_config_path = Path(temp_dir) / "mcp.json"
         mcp_config = {
             "mcpServers": {
-                CLAUDE_CHANNEL_SERVER_NAME: {
+                CLAUDE_COORDINATION_SERVER_NAME: {
                     "type": "stdio",
                     "command": "longhouse-engine",
                     "args": ["claude-channel", "serve"],
                     "env": {
                         "LONGHOUSE_COORDINATION_TOKEN": coordination_token,
-                        "LONGHOUSE_CHANNEL_SESSION_ID": session_id,
+                        "LONGHOUSE_MANAGED_SESSION_ID": session_id,
                     },
                 }
             }

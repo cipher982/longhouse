@@ -99,9 +99,10 @@ where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
 {
+    let coordination = coordination_mcp_enabled();
     let state = BridgeState::new(config)?;
     let (outbound_tx, mut outbound_rx) = mpsc::unbounded_channel::<Value>();
-    let mut http = if state.has_managed_session() {
+    let mut http = if !coordination && state.has_managed_session() {
         let http = HttpServerHandle::start(state.clone(), outbound_tx.clone())?;
         state.set_port(http.port())?;
         state.write_state()?;
@@ -127,7 +128,7 @@ where
                         if trimmed.is_empty() {
                             continue;
                         }
-                        let response = match handle_rpc_line(trimmed, &state).await {
+                        let response = match handle_rpc_line(trimmed, &state, coordination).await {
                             Ok(response) => response,
                             Err(err) => {
                                 loop_result = Err(err);
@@ -169,13 +170,27 @@ where
             }
         }
     }
-    let cleanup_result = state.remove_state();
+    let cleanup_result = if coordination {
+        Ok(())
+    } else {
+        state.remove_state()
+    };
     loop_result?;
     cleanup_result?;
     Ok(())
 }
 
-async fn handle_rpc_line(raw: &str, state: &BridgeState) -> Result<Option<Value>> {
+fn coordination_mcp_enabled() -> bool {
+    std::env::var("LONGHOUSE_COORDINATION_TOKEN")
+        .ok()
+        .is_some_and(|token| !token.trim().is_empty())
+}
+
+async fn handle_rpc_line(
+    raw: &str,
+    state: &BridgeState,
+    coordination: bool,
+) -> Result<Option<Value>> {
     let message: Value = match serde_json::from_str(raw) {
         Ok(message) => message,
         Err(_) => {
@@ -192,41 +207,58 @@ async fn handle_rpc_line(raw: &str, state: &BridgeState) -> Result<Option<Value>
     let method = message.get("method").and_then(Value::as_str).unwrap_or("");
     let id = message.get("id").cloned();
     if method == "notifications/initialized" || method == "initialized" {
-        state.set_ready(true)?;
+        if !coordination {
+            state.set_ready(true)?;
+        }
         return Ok(None);
     }
     let Some(id) = id else {
         return Ok(None);
     };
     let response = match method {
-        "initialize" => json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "result": {
-                "protocolVersion": message
-                    .get("params")
-                    .and_then(|params| params.get("protocolVersion"))
-                    .and_then(Value::as_str)
-                    .unwrap_or("2025-11-25"),
-                "capabilities": {
-                    "experimental": {
-                        CLAUDE_CHANNEL_CAPABILITY: {}
+        "initialize" => {
+            json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": {
+                    "protocolVersion": message
+                        .get("params")
+                        .and_then(|params| params.get("protocolVersion"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("2025-11-25"),
+                    "capabilities": if coordination {
+                        json!({"tools": {"listChanged": false}})
+                    } else {
+                        json!({"experimental": {CLAUDE_CHANNEL_CAPABILITY: {}}})
+                    },
+                    "serverInfo": {
+                        "name": if coordination { "longhouse-coordination" } else { "longhouse-channel" },
+                        "version": env!("CARGO_PKG_VERSION")
+                    },
+                    "instructions": if coordination {
+                        "Provider-neutral tools for reading and directing Longhouse sessions."
+                    } else {
+                        "Longhouse native Claude channel bridge. Claude may receive channel notifications from this local server."
                     }
-                },
-                "serverInfo": {
-                    "name": "longhouse-channel",
-                    "version": env!("CARGO_PKG_VERSION")
-                },
-                "instructions": "Longhouse native Claude channel bridge. Claude may receive channel notifications from this local server."
-            }
-        }),
+                }
+            })
+        }
         "tools/list" => {
-            json!({"jsonrpc": "2.0", "id": id, "result": {"tools": coordination_tools()}})
+            json!({"jsonrpc": "2.0", "id": id, "result": {
+                "tools": if coordination { coordination_tools() } else { Vec::new() }
+            }})
         }
         "tools/call" => {
+            if !coordination {
+                return Ok(Some(rpc_error(
+                    id,
+                    -32601,
+                    "channel transport exposes no tools",
+                )));
+            }
             return Ok(Some(
                 call_coordination_tool(id, message.get("params"), state).await,
-            ))
+            ));
         }
         "resources/list" => json!({"jsonrpc": "2.0", "id": id, "result": {"resources": []}}),
         "prompts/list" => json!({"jsonrpc": "2.0", "id": id, "result": {"prompts": []}}),
@@ -1053,8 +1085,7 @@ mod tests {
             .iter()
             .filter_map(|tool| tool["name"].as_str())
             .collect::<Vec<_>>();
-        assert!(tool_names.contains(&"peers"));
-        assert_eq!(tool_names, vec!["peers", "tail", "send", "inbox", "reply"]);
+        assert!(tool_names.is_empty());
 
         let state: Value =
             serde_json::from_slice(&std::fs::read(state_path(temp.path())).unwrap()).unwrap();
