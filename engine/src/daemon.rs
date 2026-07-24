@@ -2968,6 +2968,35 @@ fn maybe_start_managed_observation_scan(
         };
         let codex_elapsed_ms = codex_started.elapsed().as_millis() as u64;
 
+        // Republish terminal events that committed durably but never reached
+        // the outbox — the crash window between the bridge's state rename and
+        // its enqueue, plus any enqueue failure. Idempotent: the dedupe key is
+        // persisted with the stopped fact, so a republish that races the
+        // original collapses server-side.
+        //
+        // Full-reconciliation ticks only. This recovers from failures, not
+        // steady state, and the incremental tick sees only previously-known
+        // paths anyway.
+        if full_reconciliation {
+            if let Ok(outbox_dir) = crate::config::get_agent_runtime_events_outbox_dir() {
+                let stopped_state_files = codex_observations
+                    .iter()
+                    .filter(|observation| observation.status.trim().eq_ignore_ascii_case("stopped"))
+                    .map(|observation| observation.state_file.clone())
+                    .collect::<Vec<_>>();
+                let republished = crate::codex_teardown::reconcile_terminal_event_paths(
+                    &stopped_state_files,
+                    &outbox_dir,
+                );
+                if republished > 0 {
+                    tracing::info!(
+                        republished,
+                        "republished committed-but-unpublished codex terminal events"
+                    );
+                }
+            }
+        }
+
         let antigravity_started = Instant::now();
         let mut antigravity_observations = if full_reconciliation {
             managed_antigravity_scan::default_antigravity_state_dir()
@@ -3066,6 +3095,37 @@ fn maybe_start_managed_observation_scan(
             |observation| &observation.state_file,
         );
         let cursor_elapsed_ms = cursor_started.elapsed().as_millis() as u64;
+        if full_reconciliation {
+            // Sweep contracts left behind by teardown paths that exited early
+            // or by abrupt process death. Provider-neutral: Codex and Claude
+            // leak these for different reasons.
+            if let Ok(home) = crate::config::get_longhouse_home() {
+                let live_codex = codex_observations
+                    .iter()
+                    .filter(|observation| observation.bridge_alive)
+                    .map(|observation| observation.session_id.clone())
+                    .collect::<std::collections::HashSet<_>>();
+                let live_claude = claude_observations
+                    .iter()
+                    .filter(|observation| observation.claude_alive)
+                    .map(|observation| observation.session_id.clone())
+                    .collect::<std::collections::HashSet<_>>();
+                let now = std::time::SystemTime::now();
+                let swept = crate::managed_contract_janitor::sweep_orphan_contracts(
+                    &home.join("managed-local/contracts/codex"),
+                    &live_codex,
+                    now,
+                ) + crate::managed_contract_janitor::sweep_orphan_contracts(
+                    &home.join("managed-local/contracts/claude"),
+                    &live_claude,
+                    now,
+                );
+                if swept > 0 {
+                    tracing::info!(swept, "removed orphaned managed-session contracts");
+                }
+            }
+        }
+
         ManagedObservationScanResult {
             reason,
             full_reconciliation,

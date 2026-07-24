@@ -234,7 +234,7 @@ test-frontend: ## Frontend unit tests + type-check (~15s)
 test-engine: ## Rust engine tests (~20s)
 	@python3 scripts/build/generate_build_identity.py
 	cd engine && cargo build --profile $(or $(CARGO_PROFILE),release)
-	cd engine && cargo test --profile $(or $(CARGO_PROFILE),release) --bin longhouse-engine --test golden_parser_contract --test adversarial_parser --test coordination_mcp_handshake
+	cd engine && cargo test --profile $(or $(CARGO_PROFILE),release) --bin longhouse-engine --test managed_teardown --test golden_parser_contract --test adversarial_parser --test coordination_mcp_handshake
 
 test-codex-console-warm-canary: ## Real stock-Codex Console warm-path canary
 	@python3 scripts/build/generate_build_identity.py

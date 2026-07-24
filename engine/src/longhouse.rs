@@ -1029,6 +1029,11 @@ fn attach_managed_opencode(args: OpencodeAttachArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Outer bound for the OpenCode stop helper. Previously this call was a bare
+/// `.output()` with no timeout at all, so a wedged bridge hung the user's
+/// terminal indefinitely on exit.
+const OPENCODE_STOP_DEADLINE: Duration = Duration::from_secs(10);
+
 fn stop_opencode_bridge(session_id: &str, claude_dir: Option<PathBuf>) -> anyhow::Result<()> {
     validate_session_id(session_id)?;
     let mut command = Command::new(paired_engine_path()?);
@@ -1036,14 +1041,30 @@ fn stop_opencode_bridge(session_id: &str, claude_dir: Option<PathBuf>) -> anyhow
     if let Some(dir) = claude_dir {
         command.arg("--claude-dir").arg(dir);
     }
-    let output = command.output()?;
-    if !output.status.success() {
-        anyhow::bail!(
-            "failed to stop native OpenCode bridge: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
+    let mut child = command
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .context("start managed OpenCode bridge cleanup")?;
+    let deadline = std::time::Instant::now() + OPENCODE_STOP_DEADLINE;
+    loop {
+        match child.try_wait()? {
+            Some(status) if status.success() => return Ok(()),
+            Some(status) => {
+                anyhow::bail!("failed to stop native OpenCode bridge: helper exited with {status}")
+            }
+            None => {}
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            anyhow::bail!(
+                "managed OpenCode bridge did not stop within {}s",
+                OPENCODE_STOP_DEADLINE.as_secs()
+            );
+        }
+        std::thread::sleep(Duration::from_millis(25));
     }
-    Ok(())
 }
 
 fn record_claude_terminal_event(
@@ -1495,13 +1516,12 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
     );
     let stop_result = stop_codex_bridge(&response.session_id, "clean_tui_exit");
     let exit = tui_result?;
-    stop_result?;
-    if let Err(error) = remove_codex_contract(&response.session_id) {
-        eprintln!("Longhouse warning: could not remove managed-session contract: {error}");
-    }
-    if exit == 0 {
-        print_helm_closed(&machine_name);
-    }
+    let exit = finish_codex_teardown(
+        stop_result?,
+        &response.session_id,
+        Some(&machine_name),
+        exit,
+    )?;
     if exit != 0 {
         std::process::exit(exit);
     }
@@ -1724,7 +1744,31 @@ fn run_foreground_command(command: &mut Command) -> anyhow::Result<i32> {
     wait_for_child_or_signal(&mut child, &signal, None)
 }
 
-fn stop_codex_bridge(session_id: &str, reason: &str) -> anyhow::Result<()> {
+/// Outcome of managed teardown, discriminated by the durable committed fact
+/// first and process liveness second.
+///
+/// A late acknowledgement is not a failure. The old code gave the stop helper
+/// 2 seconds — less than the helper's own 3s `IPC_STOP_TIMEOUT` — and reported
+/// its impatience to the user as a teardown error while the session had in
+/// fact stopped cleanly.
+#[derive(Debug)]
+enum TeardownOutcome {
+    /// The bridge committed a terminal state. Normal close.
+    Committed,
+    /// No commit, but the bridge process is gone. The daemon's reconciliation
+    /// and lease withdrawal converge; nothing for the user to do.
+    OrphanedWillReconcile { detail: String },
+    /// No commit and the bridge is still alive, or the committed fact could
+    /// not be read at all. The only genuine error.
+    Unresponsive { detail: String },
+}
+
+/// Outer bound for the stop helper, aligned to the helper's own
+/// `IPC_STOP_TIMEOUT` (3s) plus process spawn margin rather than an
+/// independently chosen number that can silently disagree with it.
+const CODEX_STOP_DEADLINE: Duration = Duration::from_secs(4);
+
+fn stop_codex_bridge(session_id: &str, reason: &str) -> anyhow::Result<TeardownOutcome> {
     validate_session_id(session_id)?;
     let mut child = Command::new(paired_engine_path()?)
         .args([
@@ -1736,24 +1780,114 @@ fn stop_codex_bridge(session_id: &str, reason: &str) -> anyhow::Result<()> {
             reason,
             "--force",
         ])
+        // Detach the helper's stdio: teardown must not leave the user's
+        // terminal tied to a helper the facade may have to abandon at the
+        // deadline.
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
         .spawn()
         .context("start managed Codex bridge cleanup")?;
-    let deadline = std::time::Instant::now() + Duration::from_secs(2);
-    let status = loop {
-        if let Some(status) = child.try_wait()? {
-            break status;
+    let deadline = std::time::Instant::now() + CODEX_STOP_DEADLINE;
+    let mut rpc_detail: Option<String> = None;
+    loop {
+        match child.try_wait()? {
+            Some(status) if status.success() => break,
+            Some(status) => {
+                rpc_detail = Some(format!("stop helper exited with {status}"));
+                break;
+            }
+            None => {}
         }
         if std::time::Instant::now() >= deadline {
             let _ = child.kill();
             let _ = child.wait();
-            anyhow::bail!("managed Codex bridge cleanup timed out after 2 seconds");
+            rpc_detail = Some(format!(
+                "stop helper did not acknowledge within {}s",
+                CODEX_STOP_DEADLINE.as_secs()
+            ));
+            break;
         }
         std::thread::sleep(Duration::from_millis(25));
-    };
-    if !status.success() {
-        anyhow::bail!("failed to stop managed Codex bridge");
     }
-    Ok(())
+
+    // The RPC result is evidence, not authority. Re-read the durable fact.
+    Ok(classify_codex_teardown(session_id, rpc_detail))
+}
+
+fn classify_codex_teardown(session_id: &str, rpc_detail: Option<String>) -> TeardownOutcome {
+    let Some(detail) = rpc_detail else {
+        return TeardownOutcome::Committed;
+    };
+    let state_path = match codex_bridge_state_path(session_id) {
+        Ok(path) => path,
+        Err(error) => {
+            return TeardownOutcome::Unresponsive {
+                detail: format!("{detail}; state path unresolved: {error:#}"),
+            }
+        }
+    };
+    if !state_path.exists() {
+        return TeardownOutcome::OrphanedWillReconcile {
+            detail: format!("{detail}; no bridge state file remains"),
+        };
+    }
+    match read_codex_bridge_state(&state_path) {
+        Ok(state) => {
+            let status = state.status.unwrap_or_default();
+            if status.trim().eq_ignore_ascii_case("stopped") {
+                TeardownOutcome::Committed
+            } else {
+                TeardownOutcome::Unresponsive {
+                    detail: format!("{detail}; bridge state is still '{status}'"),
+                }
+            }
+        }
+        // Never downgrade an unreadable commit to "will reconcile" — that
+        // would promise convergence that cannot happen.
+        Err(error) => TeardownOutcome::Unresponsive {
+            detail: format!("{detail}; bridge state unreadable: {error:#}"),
+        },
+    }
+}
+
+fn read_codex_bridge_state(state_path: &Path) -> anyhow::Result<BridgeState> {
+    let bytes =
+        std::fs::read(state_path).with_context(|| format!("read {}", state_path.display()))?;
+    serde_json::from_slice(&bytes).with_context(|| format!("parse {}", state_path.display()))
+}
+
+/// Apply a teardown outcome to the user-visible exit: banner, warning, or
+/// error. Local residue is removed for every outcome except `Unresponsive`,
+/// where the session may still be live and its contract still meaningful.
+fn finish_codex_teardown(
+    outcome: TeardownOutcome,
+    session_id: &str,
+    banner_machine_name: Option<&str>,
+    provider_exit: i32,
+) -> anyhow::Result<i32> {
+    match outcome {
+        TeardownOutcome::Committed => {
+            remove_codex_contract_best_effort(session_id);
+            if let Some(machine_name) = banner_machine_name.filter(|_| provider_exit == 0) {
+                print_helm_closed(machine_name);
+            }
+            Ok(provider_exit)
+        }
+        TeardownOutcome::OrphanedWillReconcile { detail } => {
+            remove_codex_contract_best_effort(session_id);
+            eprintln!("Longhouse notice: {detail}. The session end will reconcile automatically.");
+            Ok(provider_exit)
+        }
+        TeardownOutcome::Unresponsive { detail } => {
+            anyhow::bail!("managed Codex session {session_id} did not stop cleanly: {detail}")
+        }
+    }
+}
+
+fn remove_codex_contract_best_effort(session_id: &str) {
+    if let Err(error) = remove_codex_contract(session_id) {
+        eprintln!("Longhouse warning: could not remove managed-session contract: {error}");
+    }
 }
 
 fn validate_session_id(session_id: &str) -> anyhow::Result<()> {
@@ -1862,13 +1996,7 @@ fn attach_managed_codex(args: CodexAttachArgs) -> anyhow::Result<()> {
     );
     let stop_result = stop_codex_bridge(&args.session_id, "clean_tui_exit");
     let exit = tui_result?;
-    stop_result?;
-    if let Err(error) = remove_codex_contract(&args.session_id) {
-        eprintln!("Longhouse warning: could not remove managed-session contract: {error}");
-    }
-    if exit == 0 {
-        print_helm_closed("this machine");
-    }
+    let exit = finish_codex_teardown(stop_result?, &args.session_id, Some("this machine"), exit)?;
     if exit != 0 {
         std::process::exit(exit);
     }
@@ -1909,12 +2037,8 @@ fn main() -> anyhow::Result<()> {
             Some(CodexCommand::Launch(args)) => launch_managed_codex(args)?,
             Some(CodexCommand::Attach(args)) => attach_managed_codex(args)?,
             Some(CodexCommand::Stop(args)) => {
-                stop_codex_bridge(&args.session_id, "bridge_stop")?;
-                if let Err(error) = remove_codex_contract(&args.session_id) {
-                    eprintln!(
-                        "Longhouse warning: could not remove managed-session contract: {error}"
-                    );
-                }
+                let outcome = stop_codex_bridge(&args.session_id, "bridge_stop")?;
+                finish_codex_teardown(outcome, &args.session_id, None, 0)?;
             }
             None => launch_managed_codex(launch)?,
         },

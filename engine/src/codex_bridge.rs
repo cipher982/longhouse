@@ -241,7 +241,7 @@ pub struct BridgeAttachConfig {
     pub codex_bin: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct BridgeStateFile {
     #[serde(default = "default_bridge_state_schema_version")]
     pub schema_version: u32,
@@ -288,6 +288,34 @@ pub struct BridgeStateFile {
     #[serde(default)]
     pub thread_subscription_last_error: Option<String>,
     pub updated_at: String,
+    /// Terminal lifecycle identity, minted once at teardown commit and
+    /// persisted so the daemon can regenerate a byte-identical terminal event
+    /// if the bridge dies between the state commit and the outbox enqueue.
+    ///
+    /// Hosted only ends a run when it receives a `terminal_signal` runtime
+    /// event; managed-lease withdrawal reports that control disappeared, not
+    /// that the run ended. So the stopped fact has to carry enough to
+    /// reconstruct that event rather than relying on lease omission.
+    #[serde(default)]
+    pub terminal_state: Option<String>,
+    #[serde(default)]
+    pub terminal_reason: Option<String>,
+    #[serde(default)]
+    pub stopped_at: Option<String>,
+    /// Stable across the original enqueue and any reconciliation republish, so
+    /// duplicate delivery collapses server-side on the existing dedupe
+    /// contract.
+    #[serde(default)]
+    pub terminal_dedupe_key: Option<String>,
+    /// The fully-formed terminal runtime event, persisted at commit. Storing
+    /// the event itself rather than its parts makes reconciliation republish a
+    /// byte-identical payload with no reconstruction logic to drift.
+    #[serde(default)]
+    pub terminal_event: Option<Value>,
+    /// `false` while the terminal event is committed but not yet handed to the
+    /// outbox. Drives daemon reconciliation.
+    #[serde(default)]
+    pub terminal_published: bool,
 }
 
 fn default_bridge_state_schema_version() -> u32 {
@@ -765,6 +793,7 @@ pub async fn cmd_codex_bridge_start(config: BridgeStartConfig) -> Result<BridgeS
         thread_subscription_attempts: 0,
         thread_subscription_last_error: None,
         updated_at: Utc::now().to_rfc3339(),
+        ..Default::default()
     };
     write_state_file(&paths.state_file, &state)?;
 
@@ -977,6 +1006,7 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
         thread_subscription_attempts: 0,
         thread_subscription_last_error: None,
         updated_at: Utc::now().to_rfc3339(),
+        ..Default::default()
     };
     write_state_file(&config.state_file, &initial_state)?;
 
@@ -1180,6 +1210,7 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
             thread_subscription_attempts: 0,
             thread_subscription_last_error: None,
             updated_at: Utc::now().to_rfc3339(),
+            ..Default::default()
         },
         runtime: BridgeRuntimeSink {
             http: runtime_http,
@@ -1332,7 +1363,64 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
                         context.state.status = "stopped".to_string();
                         context.state.active_turn_id = None;
                         context.state.last_error = None;
-                        write_state_file(&context.state_file, &context.state)?;
+                        // Commit the terminal fact durably, hand it to the
+                        // outbox, then acknowledge. No network I/O on this
+                        // path: delivery is the daemon's job, and a state file
+                        // that committed but never published is reconciled on
+                        // the managed-observation tick.
+                        context.runtime.persist_local_phase("finished", None, Utc::now());
+                        crate::codex_teardown::stamp_terminal_commit(
+                            &mut context.state,
+                            config.machine_name.as_deref(),
+                            "session_ended",
+                            &terminal_reason,
+                            BRIDGE_RUNTIME_SOURCE,
+                        );
+                        let commit = write_state_file(&context.state_file, &context.state);
+                        if let Err(error) = commit {
+                            // Nothing durable recorded this run as closed, so
+                            // do not acknowledge success. The facade surfaces
+                            // the I/O cause rather than guessing from process
+                            // liveness.
+                            let _ = reply.send(Err(anyhow!(
+                                "codex teardown could not commit terminal state: {error:#}"
+                            )));
+                            shutdown_child(&mut client).await?;
+                            break;
+                        }
+                        match crate::config::get_agent_runtime_events_outbox_dir() {
+                            Ok(outbox_dir) => {
+                                match crate::codex_teardown::publish_terminal_event(
+                                    &outbox_dir,
+                                    &context.state,
+                                ) {
+                                    Ok(()) => {
+                                        context.state.terminal_published = true;
+                                        if let Err(error) =
+                                            write_state_file(&context.state_file, &context.state)
+                                        {
+                                            // The event is durably queued; a
+                                            // failed bookkeeping write only
+                                            // costs one duplicate republish,
+                                            // which the dedupe key absorbs.
+                                            eprintln!(
+                                                "[codex-bridge] could not mark terminal event published: {error:#}"
+                                            );
+                                        }
+                                    }
+                                    Err(error) => {
+                                        eprintln!(
+                                            "[codex-bridge] terminal event enqueue failed, leaving for reconciliation: {error:#}"
+                                        );
+                                    }
+                                }
+                            }
+                            Err(error) => {
+                                eprintln!(
+                                    "[codex-bridge] could not resolve runtime-events outbox, leaving for reconciliation: {error:#}"
+                                );
+                            }
+                        }
                         if let Some(path) = context.state.thread_path.as_deref() {
                             wake_daemon_for_transcript(
                                 &config,
@@ -1342,18 +1430,6 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
                                 None,
                             );
                         }
-                        context
-                            .runtime
-                            .post_terminal(
-                                "session_ended",
-                                &terminal_reason,
-                                format!(
-                                    "bridge:terminal:{}:{}",
-                                    context.state.session_id,
-                                    Uuid::new_v4()
-                                ),
-                            )
-                            .await;
                         let _ = reply.send(Ok(json!({})));
                         shutdown_child(&mut client).await?;
                         break;
@@ -2284,11 +2360,27 @@ fn write_state_file(path: &Path, state: &BridgeStateFile) -> Result<()> {
     let mut next = state.clone();
     next.updated_at = Utc::now().to_rfc3339();
     let tmp = path.with_extension("json.tmp");
-    fs::write(&tmp, serde_json::to_vec_pretty(&next)?)
-        .with_context(|| format!("writing {}", tmp.display()))?;
+    {
+        // fsync before rename: teardown treats this file as the durable
+        // commit point for session lifecycle, so a rename that survives a
+        // crash with unflushed contents would strand the run open.
+        use std::io::Write as _;
+        let mut file =
+            fs::File::create(&tmp).with_context(|| format!("creating {}", tmp.display()))?;
+        file.write_all(&serde_json::to_vec_pretty(&next)?)
+            .with_context(|| format!("writing {}", tmp.display()))?;
+        file.sync_all()
+            .with_context(|| format!("syncing {}", tmp.display()))?;
+    }
     fs::rename(&tmp, path)
         .with_context(|| format!("renaming {} -> {}", tmp.display(), path.display()))?;
     Ok(())
+}
+
+/// Durable state write for callers outside this module (teardown
+/// reconciliation). Same atomic temp + fsync + rename commit.
+pub fn write_bridge_state_file(path: &Path, state: &BridgeStateFile) -> Result<()> {
+    write_state_file(path, state)
 }
 
 fn read_state_file(path: &Path) -> Result<BridgeStateFile> {
@@ -4778,46 +4870,6 @@ impl BridgeRuntimeSink {
         })
     }
 
-    async fn post_terminal(&self, terminal_state: &str, terminal_reason: &str, dedupe_key: String) {
-        let observed_at = Utc::now();
-        self.persist_local_phase("finished", None, observed_at);
-        self.post_runtime_events_blocking(vec![self.terminal_event(
-            terminal_state,
-            terminal_reason,
-            &dedupe_key,
-            observed_at,
-        )])
-        .await;
-    }
-
-    fn terminal_event(
-        &self,
-        terminal_state: &str,
-        terminal_reason: &str,
-        dedupe_key: &str,
-        observed_at: chrono::DateTime<Utc>,
-    ) -> Value {
-        json!({
-            "runtime_key": format!("codex:{}", self.session_id),
-            "session_id": self.session_id,
-            "provider": "codex",
-            "device_id": self.machine_name,
-            "source": BRIDGE_RUNTIME_SOURCE,
-            "kind": "terminal_signal",
-            "phase": Value::Null,
-            "tool_name": Value::Null,
-            "occurred_at": observed_at.to_rfc3339(),
-            "dedupe_key": dedupe_key,
-            "payload": {
-                "managed_transport": "codex_app_server",
-                "thread_id": self.thread_id,
-                "terminal_state": terminal_state,
-                "terminal_reason": terminal_reason,
-                "terminal_source": BRIDGE_RUNTIME_SOURCE,
-            }
-        })
-    }
-
     fn post_live_runtime_events_background(&self, events: Vec<Value>) {
         let mut events = events;
         if let Some(tx) = &self.live_runtime_tx {
@@ -5385,6 +5437,7 @@ mod tests {
                 thread_subscription_attempts: 0,
                 thread_subscription_last_error: None,
                 updated_at: Utc::now().to_rfc3339(),
+                ..Default::default()
             },
             runtime: BridgeRuntimeSink {
                 http: reqwest::Client::new(),
@@ -5478,6 +5531,7 @@ mod tests {
             thread_subscription_attempts: 0,
             thread_subscription_last_error: None,
             updated_at: Utc::now().to_rfc3339(),
+            ..Default::default()
         };
 
         write_state_file(&state_file, &state).unwrap();
@@ -5541,6 +5595,7 @@ mod tests {
             thread_subscription_attempts: 1,
             thread_subscription_last_error: None,
             updated_at: Utc::now().to_rfc3339(),
+            ..Default::default()
         };
         write_state_file(&temp.path().join(format!("{session_id}.json")), &state).unwrap();
 
@@ -5616,6 +5671,7 @@ mod tests {
             thread_subscription_attempts: 0,
             thread_subscription_last_error: None,
             updated_at: Utc::now().to_rfc3339(),
+            ..Default::default()
         };
         write_state_file(&temp.path().join(format!("{session_id}.json")), &state).unwrap();
 
@@ -5985,6 +6041,7 @@ mod tests {
             thread_subscription_attempts: 1,
             thread_subscription_last_error: None,
             updated_at: Utc::now().to_rfc3339(),
+            ..Default::default()
         };
         write_state_file(&temp.path().join(format!("{session_id}.json")), &state).unwrap();
 
@@ -6038,6 +6095,7 @@ mod tests {
             thread_subscription_attempts: 1,
             thread_subscription_last_error: None,
             updated_at: Utc::now().to_rfc3339(),
+            ..Default::default()
         };
         write_state_file(&temp.path().join(format!("{session_id}.json")), &state).unwrap();
 
@@ -6105,28 +6163,16 @@ mod tests {
     }
 
     #[test]
-    fn bridge_runtime_sink_terminal_event_carries_close_cause() {
-        let temp = tempfile::tempdir().unwrap();
-        let sink = BridgeRuntimeSink {
-            http: reqwest::Client::new(),
-            api_url: "http://127.0.0.1:9".to_string(),
-            api_token: "token".to_string(),
-            session_id: "session-123".to_string(),
-            machine_name: Some("test-box".to_string()),
-            thread_id: Some("thread-123".to_string()),
-            local_db_path: Some(resolve_bridge_agent_db_path(Some(temp.path())).unwrap()),
-            runtime_tx: None,
-            live_runtime_tx: None,
-        };
-
-        let observed_at = DateTime::parse_from_rfc3339("2026-04-19T00:00:00Z")
-            .unwrap()
-            .with_timezone(&Utc);
-        let event = sink.terminal_event(
+    fn terminal_event_carries_close_cause() {
+        let event = crate::codex_teardown::build_terminal_event(
+            "session-123",
+            Some("run-1"),
+            Some("thread-123"),
+            Some("test-box"),
             "session_ended",
             "bridge_stop",
-            "bridge:terminal:session-123:dedupe",
-            observed_at,
+            "2026-04-19T00:00:00+00:00",
+            BRIDGE_RUNTIME_SOURCE,
         );
 
         assert_eq!(event["runtime_key"], "codex:session-123");
@@ -6144,28 +6190,16 @@ mod tests {
     }
 
     #[test]
-    fn bridge_runtime_sink_terminal_event_carries_terminal_disconnected() {
-        let temp = tempfile::tempdir().unwrap();
-        let sink = BridgeRuntimeSink {
-            http: reqwest::Client::new(),
-            api_url: "http://127.0.0.1:9".to_string(),
-            api_token: "token".to_string(),
-            session_id: "session-123".to_string(),
-            machine_name: Some("test-box".to_string()),
-            thread_id: Some("thread-123".to_string()),
-            local_db_path: Some(resolve_bridge_agent_db_path(Some(temp.path())).unwrap()),
-            runtime_tx: None,
-            live_runtime_tx: None,
-        };
-
-        let observed_at = DateTime::parse_from_rfc3339("2026-04-19T00:00:00Z")
-            .unwrap()
-            .with_timezone(&Utc);
-        let event = sink.terminal_event(
+    fn terminal_event_carries_terminal_disconnected() {
+        let event = crate::codex_teardown::build_terminal_event(
+            "session-123",
+            Some("run-1"),
+            Some("thread-123"),
+            Some("test-box"),
             "session_ended",
             TERMINAL_REASON_TERMINAL_DISCONNECTED,
-            "bridge:terminal:session-123:dedupe",
-            observed_at,
+            "2026-04-19T00:00:00+00:00",
+            BRIDGE_RUNTIME_SOURCE,
         );
 
         assert_eq!(event["payload"]["terminal_state"], "session_ended");
@@ -6176,16 +6210,15 @@ mod tests {
         assert_eq!(event["payload"]["terminal_source"], BRIDGE_RUNTIME_SOURCE);
     }
 
-    #[tokio::test]
-    async fn bridge_runtime_sink_post_terminal_persists_finished_phase() {
+    /// Teardown no longer posts the terminal event over the network, but it
+    /// must still record the local finished phase that `post_terminal` used to
+    /// write alongside it.
+    #[test]
+    fn teardown_persists_finished_phase_locally() {
         let temp = tempfile::tempdir().unwrap();
         let db_path = resolve_bridge_agent_db_path(Some(temp.path())).unwrap();
-        let http = reqwest::Client::builder()
-            .timeout(Duration::from_millis(100))
-            .build()
-            .unwrap();
         let sink = BridgeRuntimeSink {
-            http,
+            http: reqwest::Client::new(),
             api_url: "http://127.0.0.1:9".to_string(),
             api_token: "token".to_string(),
             session_id: "session-123".to_string(),
@@ -6196,12 +6229,7 @@ mod tests {
             live_runtime_tx: None,
         };
 
-        sink.post_terminal(
-            "session_ended",
-            "bridge_stop",
-            "bridge:terminal:session-123:dedupe".to_string(),
-        )
-        .await;
+        sink.persist_local_phase("finished", None, Utc::now());
 
         let conn = crate::state::db::open_db(Some(&db_path)).unwrap();
         let row: (String, Option<String>, String) = conn
@@ -6997,6 +7025,7 @@ mod tests {
             thread_subscription_attempts: 0,
             thread_subscription_last_error: None,
             updated_at: Utc::now().to_rfc3339(),
+            ..Default::default()
         };
         write_state_file(&temp.path().join(format!("{session_id}.json")), &state).unwrap();
 
