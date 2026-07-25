@@ -3148,6 +3148,10 @@ export interface paths {
          *     Tail-biased: fetches the most recent events, then returns them in
          *     chronological order (oldest first). The reading agent interprets the
          *     raw log — no summary layer in between.
+         *
+         *     ``roles`` filters before the limit applies. Tool output dominates most
+         *     transcripts, so an unfiltered tail of a tool-heavy session can be almost
+         *     entirely noise; ``roles=user,assistant`` returns that many real turns.
          */
         get: operations["session_tail_agents_sessions__session_id__tail_get"];
         put?: never;
@@ -17375,6 +17379,8 @@ export interface operations {
             query?: {
                 /** @description Number of recent events to return */
                 limit?: number;
+                /** @description Comma-separated roles to include: user, assistant, tool. Defaults to all. */
+                roles?: string | null;
             };
             header?: never;
             path: {
