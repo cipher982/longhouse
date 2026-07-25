@@ -111,6 +111,30 @@ HOME="$HOME_DIR" PATH="$HOME_DIR/.local/bin:$HOME_DIR/traps:/usr/bin:/bin:/usr/s
 [[ -f "$HOME_DIR/Library/LaunchAgents/com.longhouse.shipper.plist" || "$(uname -s)" != "Darwin" ]]
 [[ ! -e "$HOME_DIR/.claude/hooks/longhouse-permission-gate.py" ]]
 
+# Cursor's installed surface is entirely native: hook installation must point
+# at the paired engine rather than leaving Python shims in the device path.
+mkdir -p "$HOME_DIR/.cursor"
+HOME="$HOME_DIR" PATH="$HOME_DIR/.local/bin:$HOME_DIR/traps:/usr/bin:/bin:/usr/sbin:/sbin" \
+  "$installed" cursor configure --cursor-dir "$HOME_DIR/.cursor" >/dev/null
+grep -q 'cursor-lifecycle-hook' "$HOME_DIR/.cursor/hooks.json"
+grep -q 'cursor-permission-hook' "$HOME_DIR/.cursor/hooks.json"
+! grep -q 'longhouse-cursor-hook.py\|longhouse-cursor-permission-hook.py' "$HOME_DIR/.cursor/hooks.json"
+
+# Exercise the native forkpty path under a real pseudo-terminal without a
+# Cursor installation. The fixture implements only Cursor's create-chat and
+# resumed TUI contracts and proves no Python fallback participates.
+cat > "$HOME_DIR/traps/cursor-agent" <<'EOF'
+#!/usr/bin/env sh
+if [ "$1" = "create-chat" ]; then
+  printf '%s\n' '00000000-0000-0000-0000-000000000001'
+  exit 0
+fi
+exit 0
+EOF
+chmod 755 "$HOME_DIR/traps/cursor-agent"
+HOME="$HOME_DIR" PATH="$HOME_DIR/.local/bin:$HOME_DIR/traps:/usr/bin:/bin:/usr/sbin:/sbin" \
+  script -q /dev/null "$installed" cursor --cwd "$HOME_DIR" --cursor-bin "$HOME_DIR/traps/cursor-agent" >/dev/null
+
 # The managed-provider seams have hermetic upstream fixtures. Keep those
 # canaries in the installer lane so a fresh native install cannot regress a
 # provider bridge without exercising its transcript/control contract.

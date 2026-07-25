@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import shlex
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -59,15 +60,37 @@ def _validate(contract: dict[str, Any]) -> list[str]:
     return errors
 
 
+def _validate_facade(contract: dict[str, Any], facade: Path) -> list[str]:
+    """Ensure the installed public binary parses every available contract route."""
+    errors: list[str] = []
+    for command in contract.get("commands", []):
+        if command.get("status") != "available":
+            continue
+        argv = shlex.split(str(command["native_target_command"]))[1:]
+        argv = ["/tmp" if value.startswith("<") else value for value in argv]
+        result = subprocess.run([str(facade), *argv, "--help"], text=True, capture_output=True, check=False)
+        if result.returncode:
+            errors.append(f"{command.get('id')}: installed facade does not parse route: {result.stderr.strip()}")
+    cursor = next((item for item in contract.get("commands", []) if item.get("id") == "cursor-managed"), None)
+    if cursor and cursor.get("status") == "available":
+        result = subprocess.run([str(facade), "cursor", "--resume-session", "00000000-0000-0000-0000-000000000000", "--help"], text=True, capture_output=True, check=False)
+        if result.returncode:
+            errors.append("cursor-managed: Runtime Host attach command does not parse against installed facade")
+    return errors
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=_root())
     parser.add_argument("--contract", type=Path)
     parser.add_argument("--json", action="store_true")
+    parser.add_argument("--facade", type=Path, help="Built installed longhouse facade to parse-check")
     args = parser.parse_args()
     path = args.contract or args.root / "config/native_device_entrypoints.json"
     contract = json.loads(path.read_text(encoding="utf-8"))
     errors = _validate(contract)
+    if args.facade:
+        errors.extend(_validate_facade(contract, args.facade))
     if args.json:
         print(json.dumps({"contract": contract, "errors": errors}, indent=2))
     else:

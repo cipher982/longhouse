@@ -5,7 +5,8 @@
 from __future__ import annotations
 
 import json
-import stat
+import os
+import shlex
 from pathlib import Path
 
 _EVENTS = (
@@ -25,6 +26,8 @@ _EVENTS = (
 )
 _MARKER = "longhouse-cursor-hook.py"
 _PERMISSION_MARKER = "longhouse-cursor-permission-hook.py"
+_NATIVE_HOOK_MARKER = "cursor-lifecycle-hook"
+_NATIVE_PERMISSION_MARKER = "cursor-permission-hook"
 
 _SCRIPT = r"""#!/usr/bin/env python3
 import json, os, socket, sys, tempfile, time
@@ -267,25 +270,22 @@ deny("No human approval was received before the Longhouse deadline; command bloc
 
 def _is_ours(entry: object) -> bool:
     command = str(entry.get("command") or "") if isinstance(entry, dict) else ""
-    return _MARKER in command or _PERMISSION_MARKER in command
+    return any(marker in command for marker in (_MARKER, _PERMISSION_MARKER, _NATIVE_HOOK_MARKER, _NATIVE_PERMISSION_MARKER))
 
 
-def install_cursor_hooks(cursor_dir: Path | None = None) -> list[str]:
+def install_cursor_hooks(
+    cursor_dir: Path | None = None,
+    *,
+    engine_path: Path | None = None,
+) -> list[str]:
     cursor_dir = cursor_dir or (Path.home() / ".cursor")
     if not cursor_dir.exists():
         return []
-    hooks_dir = cursor_dir / "hooks"
-    hooks_dir.mkdir(parents=True, exist_ok=True)
-    script = hooks_dir / _MARKER
-    permission_script = hooks_dir / _PERMISSION_MARKER
-    lifecycle_changed = not script.exists() or script.read_text(encoding="utf-8") != _SCRIPT
-    permission_changed = not permission_script.exists() or permission_script.read_text(encoding="utf-8") != _PERMISSION_SCRIPT
-    if lifecycle_changed:
-        script.write_text(_SCRIPT, encoding="utf-8")
-    if permission_changed:
-        permission_script.write_text(_PERMISSION_SCRIPT, encoding="utf-8")
-    script.chmod(stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)
-    permission_script.chmod(stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)
+    # Hooks run under Cursor's environment, which must not be assumed to have
+    # Longhouse's private bin directory on PATH. The installer owns the paired
+    # engine path, so persist that exact executable. The environment override
+    # remains useful for isolated tests and explicitly managed installations.
+    engine = shlex.quote(str(engine_path or os.environ.get("LONGHOUSE_ENGINE_BIN", "longhouse-engine")))
     config_path = cursor_dir / "hooks.json"
     try:
         config = json.loads(config_path.read_text(encoding="utf-8")) if config_path.exists() else {}
@@ -297,8 +297,8 @@ def install_cursor_hooks(cursor_dir: Path | None = None) -> list[str]:
         existing = hooks.get(event)
         entries = existing if isinstance(existing, list) else []
         permission_event = event in {"beforeShellExecution", "beforeMCPExecution"}
-        lifecycle = {"command": f"{script} {event}", "timeout": 5, "failClosed": False}
-        permission = {"command": f"{permission_script} {event}", "timeout": 125, "failClosed": True}
+        lifecycle = {"command": f"{engine} cursor-lifecycle-hook {event}", "timeout": 5, "failClosed": False}
+        permission = {"command": f"{engine} cursor-permission-hook {event}", "timeout": 125, "failClosed": True}
         hooks[event] = [item for item in entries if not _is_ours(item)]
         hooks[event].append(lifecycle)
         if permission_event:
@@ -307,5 +307,4 @@ def install_cursor_hooks(cursor_dir: Path | None = None) -> list[str]:
     config_changed = not config_path.exists() or config_path.read_text(encoding="utf-8") != rendered
     if config_changed:
         config_path.write_text(rendered, encoding="utf-8")
-    changed = lifecycle_changed or permission_changed
-    return [f"Installed Cursor hooks in {cursor_dir}"] if changed or config_changed else [f"{config_path} already up to date"]
+    return [f"Installed native Cursor hooks in {cursor_dir}"] if config_changed else [f"{config_path} already up to date"]

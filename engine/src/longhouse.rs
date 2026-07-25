@@ -72,6 +72,14 @@ enum Commands {
         #[command(flatten)]
         launch: OpencodeLaunchArgs,
     },
+    /// Launch the stock Cursor TUI through the native Helm PTY or configure its hooks.
+    #[command(args_conflicts_with_subcommands = true)]
+    Cursor {
+        #[command(subcommand)]
+        command: Option<CursorCommand>,
+        #[command(flatten)]
+        launch: CursorLaunchArgs,
+    },
 }
 
 #[derive(Subcommand)]
@@ -96,6 +104,14 @@ enum ClaudeCommand {
     Configure {
         #[arg(long)]
         claude_dir: Option<PathBuf>,
+    },
+}
+#[derive(Subcommand)]
+enum CursorCommand {
+    /// Install native evidence and fail-closed permission hook commands.
+    Configure {
+        #[arg(long)]
+        cursor_dir: Option<PathBuf>,
     },
 }
 
@@ -223,6 +239,38 @@ struct OpencodeLaunchArgs {
     opencode_bin: Option<String>,
     #[arg(long, alias = "config-dir")]
     claude_dir: Option<PathBuf>,
+}
+
+#[derive(Args)]
+#[command(trailing_var_arg = true, allow_hyphen_values = true)]
+struct CursorLaunchArgs {
+    #[arg(long, default_value = ".")]
+    cwd: PathBuf,
+    #[arg(long)]
+    project: Option<String>,
+    #[arg(long)]
+    name: Option<String>,
+    #[arg(long, default_value = "assist")]
+    loop_mode: String,
+    #[arg(long)]
+    url: Option<String>,
+    #[arg(long)]
+    token: Option<String>,
+    #[arg(long)]
+    resume_session: Option<String>,
+    #[arg(long)]
+    cursor_bin: Option<String>,
+    #[arg(long)]
+    config_dir: Option<PathBuf>,
+    /// Cursor Helm permission policy. `remote_approve` fails closed.
+    #[arg(long, default_value = "auto_approve")]
+    permission_mode: String,
+    #[arg(long)]
+    verbose: bool,
+    #[arg(long)]
+    open: bool,
+    /// Arguments passed directly to cursor-agent after `--`.
+    cursor_args: Vec<String>,
 }
 
 #[derive(Args)]
@@ -637,6 +685,122 @@ fn native_machine_repair(args: MachineRepairArgs) -> anyhow::Result<()> {
     if !status.success() {
         std::process::exit(status.code().unwrap_or(1));
     }
+    Ok(())
+}
+
+fn launch_managed_cursor(args: CursorLaunchArgs) -> anyhow::Result<()> {
+    if !interactive_stdio() {
+        anyhow::bail!("longhouse cursor Helm needs an interactive terminal. For headless launches use the Longhouse web/iOS Console.");
+    }
+    for arg in &args.cursor_args {
+        if matches!(
+            arg.split('=').next(),
+            Some("--resume" | "--continue" | "--new-session-id")
+        ) {
+            anyhow::bail!("Cursor Helm owns native session identity; resume/continue selectors are not accepted as passthrough args.");
+        }
+    }
+    let mut command = Command::new(paired_engine_path()?);
+    command
+        .args(["cursor-helm", "launch", "--cwd"])
+        .arg(args.cwd)
+        .args([
+            "--loop-mode",
+            &args.loop_mode,
+            "--permission-mode",
+            &args.permission_mode,
+        ]);
+    if let Some(value) = args.project {
+        command.args(["--project", &value]);
+    }
+    if let Some(value) = args.name {
+        command.args(["--name", &value]);
+    }
+    if let Some(value) = args.url {
+        command.args(["--url", &value]);
+    }
+    if let Some(value) = args.token {
+        command.args(["--token", &value]);
+    }
+    if let Some(value) = args.resume_session {
+        command.args(["--resume-session", &value]);
+    }
+    if let Some(value) = args.cursor_bin {
+        command.args(["--cursor-bin", &value]);
+    }
+    if let Some(value) = args.config_dir {
+        command.arg("--config-dir").arg(value);
+    }
+    if args.verbose {
+        command.arg("--verbose");
+    }
+    if args.open {
+        command.arg("--open");
+    }
+    if !args.cursor_args.is_empty() {
+        command.arg("--").args(args.cursor_args);
+    }
+    let status = command
+        .status()
+        .context("run native Cursor Helm launcher")?;
+    if !status.success() {
+        std::process::exit(status.code().unwrap_or(1));
+    }
+    Ok(())
+}
+
+fn configure_cursor_hooks(cursor_dir: Option<PathBuf>) -> anyhow::Result<()> {
+    let dir = cursor_dir.unwrap_or_else(|| {
+        PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".into())).join(".cursor")
+    });
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join("hooks.json");
+    let mut config: serde_json::Value = std::fs::read(&path)
+        .ok()
+        .and_then(|raw| serde_json::from_slice(&raw).ok())
+        .unwrap_or_else(|| json!({"version":1,"hooks":{}}));
+    let hooks = config["hooks"]
+        .as_object_mut()
+        .context("Cursor hooks must be an object")?;
+    let engine = shell_quote_path(&paired_engine_path()?);
+    for event in [
+        "sessionStart",
+        "sessionEnd",
+        "beforeSubmitPrompt",
+        "afterAgentThought",
+        "afterAgentResponse",
+        "preToolUse",
+        "postToolUse",
+        "postToolUseFailure",
+        "beforeShellExecution",
+        "afterShellExecution",
+        "beforeMCPExecution",
+        "afterMCPExecution",
+        "stop",
+    ] {
+        let entries = hooks
+            .entry(event)
+            .or_insert_with(|| json!([]))
+            .as_array_mut()
+            .context("Cursor hook entries must be arrays")?;
+        entries.retain(|entry| {
+            !entry.to_string().contains("longhouse-cursor-hook.py")
+                && !entry
+                    .to_string()
+                    .contains("longhouse-cursor-permission-hook.py")
+                && !entry.to_string().contains("cursor-lifecycle-hook")
+                && !entry.to_string().contains("cursor-permission-hook")
+        });
+        entries.push(json!({"command":format!("{engine} cursor-lifecycle-hook {event}"),"timeout":5,"failClosed":false}));
+        if matches!(event, "beforeShellExecution" | "beforeMCPExecution") {
+            entries.push(json!({"command":format!("{engine} cursor-permission-hook {event}"),"timeout":125,"failClosed":true}));
+        }
+    }
+    std::fs::write(
+        &path,
+        format!("{}\n", serde_json::to_string_pretty(&config)?),
+    )?;
+    println!("Configured native Cursor hooks in {}", path.display());
     Ok(())
 }
 
@@ -2096,6 +2260,14 @@ fn main() -> anyhow::Result<()> {
             Some(OpencodeCommand::Stop(args)) => stop_opencode_bridge(&args.session_id, None)?,
             None => launch_managed_opencode(launch)?,
         },
+        Commands::Cursor {
+            command: Some(CursorCommand::Configure { cursor_dir }),
+            ..
+        } => configure_cursor_hooks(cursor_dir)?,
+        Commands::Cursor {
+            command: None,
+            launch,
+        } => launch_managed_cursor(launch)?,
     }
     Ok(())
 }
@@ -2123,6 +2295,34 @@ mod tests {
         };
         assert!(args.fast);
         assert!(args.json);
+    }
+
+    #[test]
+    fn cursor_parser_preserves_legacy_surface_and_passthrough() {
+        let cli = Cli::try_parse_from([
+            "longhouse",
+            "cursor",
+            "--cwd",
+            ".",
+            "--permission-mode",
+            "remote_approve",
+            "--resume-session",
+            "session",
+            "--cursor-bin",
+            "/tmp/cursor-agent",
+            "--",
+            "--foo",
+        ])
+        .unwrap();
+        let Commands::Cursor {
+            command: None,
+            launch: args,
+        } = cli.command.unwrap()
+        else {
+            panic!("expected cursor command");
+        };
+        assert_eq!(args.permission_mode, "remote_approve");
+        assert_eq!(args.cursor_args, ["--foo"]);
     }
 
     #[test]

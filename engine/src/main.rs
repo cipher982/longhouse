@@ -17,6 +17,8 @@ mod config;
 mod console_prompt;
 mod control_channel;
 mod cursor_helm_control;
+mod cursor_helm_launcher;
+mod cursor_hooks;
 mod cursor_launch_binding;
 mod cursor_print;
 mod cursor_store;
@@ -582,6 +584,16 @@ enum Commands {
         #[command(subcommand)]
         command: CursorHelmCommands,
     },
+    /// Native Cursor transcript/binding evidence hook.
+    CursorLifecycleHook {
+        #[arg(default_value = "unknown")]
+        event: String,
+    },
+    /// Native fail-closed Cursor permission hook.
+    CursorPermissionHook {
+        #[arg(default_value = "unknown")]
+        event: String,
+    },
 
     /// Start or stop the native OpenCode localhost server bridge.
     OpencodeBridge {
@@ -762,6 +774,35 @@ enum ClaudeChannelCommands {
 
 #[derive(Subcommand)]
 enum CursorHelmCommands {
+    /// Launch stock cursor-agent in a native-owned PTY.
+    Launch {
+        #[arg(long, default_value = ".")]
+        cwd: PathBuf,
+        #[arg(long)]
+        project: Option<String>,
+        #[arg(long)]
+        name: Option<String>,
+        #[arg(long, default_value = "assist")]
+        loop_mode: String,
+        #[arg(long)]
+        url: Option<String>,
+        #[arg(long)]
+        token: Option<String>,
+        #[arg(long)]
+        resume_session: Option<String>,
+        #[arg(long)]
+        cursor_bin: Option<String>,
+        #[arg(long)]
+        config_dir: Option<PathBuf>,
+        #[arg(long, default_value = "auto_approve")]
+        permission_mode: String,
+        #[arg(long)]
+        verbose: bool,
+        #[arg(long)]
+        open: bool,
+        #[arg(last = true, allow_hyphen_values = true)]
+        cursor_args: Vec<String>,
+    },
     /// Terminate a live Cursor Helm session via its control socket
     Stop {
         #[arg(long)]
@@ -1155,7 +1196,10 @@ fn command_name(command: &Commands) -> &'static str {
         },
         Commands::ClaudePermissionGate => "claude-permission-gate",
         Commands::ClaudeLifecycleHook => "claude-lifecycle-hook",
+        Commands::CursorLifecycleHook { .. } => "cursor-lifecycle-hook",
+        Commands::CursorPermissionHook { .. } => "cursor-permission-hook",
         Commands::CursorHelm { command } => match command {
+            CursorHelmCommands::Launch { .. } => "cursor-helm-launch",
             CursorHelmCommands::Stop { .. } => "cursor-helm-stop",
             CursorHelmCommands::Send { .. } => "cursor-helm-send",
             CursorHelmCommands::Interrupt { .. } => "cursor-helm-interrupt",
@@ -1701,6 +1745,37 @@ fn main() -> anyhow::Result<()> {
         Commands::CursorHelm { command } => {
             let rt = tokio::runtime::Runtime::new()?;
             match command {
+                CursorHelmCommands::Launch {
+                    cwd,
+                    project,
+                    name,
+                    loop_mode,
+                    url,
+                    token,
+                    resume_session,
+                    cursor_bin,
+                    config_dir,
+                    permission_mode,
+                    verbose,
+                    open,
+                    cursor_args,
+                } => {
+                    cursor_helm_launcher::launch(cursor_helm_launcher::LaunchConfig {
+                        cwd,
+                        project,
+                        name,
+                        loop_mode,
+                        url,
+                        token,
+                        resume_session,
+                        cursor_bin,
+                        config_dir,
+                        permission_mode,
+                        verbose,
+                        open,
+                        cursor_args,
+                    })?;
+                }
                 CursorHelmCommands::Stop {
                     session_id,
                     state_root,
@@ -1765,6 +1840,8 @@ fn main() -> anyhow::Result<()> {
                 }
             }
         }
+        Commands::CursorLifecycleHook { event } => cursor_hooks::lifecycle(&event),
+        Commands::CursorPermissionHook { event } => cursor_hooks::permission(&event)?,
         Commands::CodexBridge { command } => {
             let rt = tokio::runtime::Runtime::new()?;
             match command {
