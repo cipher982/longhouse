@@ -42,7 +42,6 @@ def test_create_server_exposes_archive_and_coordination_tools_by_default():
     assert tool_names == {
         "search_sessions",
         "get_session_detail",
-        "notify_longhouse",
         "recall",
         "peers",
         "tail",
@@ -52,12 +51,19 @@ def test_create_server_exposes_archive_and_coordination_tools_by_default():
     }
 
 
-def test_managed_coordination_server_exposes_exactly_five_tools(monkeypatch):
+def test_managed_coordination_server_keeps_history_search(monkeypatch):
+    """A coordination launch must not subtract archive discovery.
+
+    The strip this replaces deleted search_sessions from exactly the sessions
+    that need it; directed-input authority is enforced per call instead.
+    """
     monkeypatch.setenv("LONGHOUSE_COORDINATION_TOKEN", "zst_coordination")
 
     server = create_server("http://example.com", None)
 
-    assert set(server._tool_manager._tools) == {"peers", "tail", "send", "inbox", "reply"}
+    tool_names = set(server._tool_manager._tools)
+    assert "search_sessions" in tool_names
+    assert tool_names == set(create_server("http://example.com", None)._tool_manager._tools)
 
 
 def test_mcp_server_carries_durable_coordination_instructions():

@@ -958,10 +958,56 @@ def get_session_graph(
     return build_session_graph_projection(db, session_id)
 
 
+_TAIL_ALL_ROLES = frozenset({"user", "assistant", "tool"})
+# A tool-heavy transcript can be ~96% tool events, so a narrowed tail scans wider.
+_TAIL_ROLE_SCAN_FACTOR = 25
+
+
+def _parse_tail_roles(raw: object) -> frozenset[str]:
+    """Parse the ``roles`` query parameter into a validated role set.
+
+    Accepts any non-string as "no filter" so the endpoint stays directly
+    callable with its declared defaults, which tests_lite does.
+    """
+
+    if not isinstance(raw, str) or not raw.strip():
+        return _TAIL_ALL_ROLES
+    requested = {part.strip().lower() for part in raw.split(",") if part.strip()}
+    unknown = requested - _TAIL_ALL_ROLES
+    if unknown:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unknown roles: {', '.join(sorted(unknown))}. Valid roles: user, assistant, tool.",
+        )
+    if not requested:
+        return _TAIL_ALL_ROLES
+    return frozenset(requested)
+
+
+def _tail_response(session_id: UUID, events: list[dict], roles: frozenset[str], scanned: int) -> dict:
+    """Build a tail payload that states what was filtered and how far it looked.
+
+    ``scanned`` lets a caller distinguish "the session has no more matching turns"
+    from "the scan window was exhausted", since tail cannot paginate.
+    """
+
+    return {
+        "session_id": str(session_id),
+        "events": events,
+        "total": len(events),
+        "roles": sorted(roles),
+        "scanned_events": scanned,
+    }
+
+
 @router.get("/sessions/{session_id}/tail")
 async def session_tail(
     session_id: UUID,
     limit: int = Query(30, ge=1, le=100, description="Number of recent events to return"),
+    roles: str | None = Query(
+        None,
+        description="Comma-separated roles to include: user, assistant, tool. Defaults to all.",
+    ),
     db: Session | None = Depends(machine_session_read_db_dependency),
     _auth: object = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
@@ -971,7 +1017,12 @@ async def session_tail(
     Tail-biased: fetches the most recent events, then returns them in
     chronological order (oldest first). The reading agent interprets the
     raw log — no summary layer in between.
+
+    ``roles`` filters before the limit applies. Tool output dominates most
+    transcripts, so an unfiltered tail of a tool-heavy session can be almost
+    entirely noise; ``roles=user,assistant`` returns that many real turns.
     """
+    requested_roles = _parse_tail_roles(roles)
     if database_module.live_catalog_enabled():
         owner_id = getattr(_auth, "owner_id", None)
         if owner_id is None:
@@ -979,11 +1030,15 @@ async def session_tail(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Storage-v2 reads require an owner-scoped token",
             )
+        # The workspace builder has no role predicate, so a narrowed request scans a
+        # bounded larger window and trims after filtering. Without this, roles= would
+        # return a handful of turns out of `limit` mostly-tool events.
+        scan_limit = limit if requested_roles == _TAIL_ALL_ROLES else min(limit * _TAIL_ROLE_SCAN_FACTOR, 1000)
         workspace = await build_storage_v2_workspace(
             session_id=session_id,
             owner_id=int(owner_id),
             branch_mode="head",
-            limit=limit,
+            limit=scan_limit,
             anchor="tail",
         )
         if workspace is None:
@@ -1000,18 +1055,20 @@ async def session_tail(
             for item in projection["items"]
             if item.get("kind") == "event"
             and isinstance((event := item.get("event")), dict)
-            and event.get("role") in {"user", "assistant", "tool"}
+            and event.get("role") in requested_roles
             and (event.get("content_text") is not None or event.get("tool_output_text") is not None)
         ]
-        return {"session_id": str(session_id), "events": events, "total": len(events)}
+        # Tail-biased: keep the newest events when the scan over-collected.
+        events = events[-limit:]
+        return _tail_response(session_id, events, requested_roles, scan_limit)
 
     assert db is not None
     try:
-        events = load_session_tail(db, session_id=session_id, limit=limit)
+        events = load_session_tail(db, session_id=session_id, limit=limit, roles=requested_roles)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-    return {"session_id": str(session_id), "events": events, "total": len(events)}
+    return _tail_response(session_id, events, requested_roles, limit)
 
 
 @router.post("/sessions", response_model=ConsoleSessionCreateResponse, status_code=status.HTTP_201_CREATED)

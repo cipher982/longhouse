@@ -48,16 +48,39 @@ fn registered_engine_command_advertises_coordination_tools() {
         "longhouse-coordination"
     );
     let tools: Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
-    let names = tools["result"]["tools"]
-        .as_array()
-        .unwrap()
+    let advertised = tools["result"]["tools"].as_array().unwrap();
+    let names = advertised
         .iter()
         .filter_map(|tool| tool["name"].as_str())
         .collect::<Vec<_>>();
-    assert_eq!(names.len(), 5);
-    for expected in ["peers", "tail", "send", "inbox", "reply"] {
+    assert_eq!(names.len(), 6);
+    // search_sessions is the history verb. This is the surface every managed
+    // provider loads, so its absence here means no agent can find prior work.
+    for expected in [
+        "search_sessions",
+        "peers",
+        "tail",
+        "send",
+        "inbox",
+        "reply",
+    ] {
         assert!(names.contains(&expected), "missing {expected}");
     }
+
+    // The archive rejects limit > 100. Advertise the bound so a caller does not
+    // have to discover it by getting a 422.
+    let tail = advertised
+        .iter()
+        .find(|tool| tool["name"] == "tail")
+        .expect("tail is advertised");
+    let tail_limit = &tail["inputSchema"]["properties"]["limit"];
+    assert_eq!(tail_limit["maximum"], 100);
+    assert_eq!(tail_limit["minimum"], 1);
+    assert!(
+        tail["inputSchema"]["properties"]["roles"].is_object(),
+        "tail must advertise the roles filter"
+    );
+
     assert!(child.wait().unwrap().success());
     assert!(!state_root.path().join("sessions").exists());
 }

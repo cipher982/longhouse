@@ -6,6 +6,7 @@ session discovery and tail semantics.
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from collections.abc import Sequence
 from datetime import datetime
 from datetime import timedelta
@@ -259,16 +260,22 @@ def load_session_tail(
     *,
     session_id: UUID,
     limit: int = 30,
+    roles: Collection[str] | None = None,
 ) -> list[dict[str, Any]]:
-    """Return the recent tail of a session in chronological order."""
+    """Return the recent tail of a session in chronological order.
+
+    ``roles`` narrows which event roles count toward ``limit``, so a caller can
+    ask for real turns instead of tool output.
+    """
     session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
     if session is None:
         raise ValueError("Session not found")
 
+    selected_roles = sorted(roles) if roles else ["user", "assistant", "tool"]
     events = (
         db.query(AgentEvent)
         .filter(AgentEvent.session_id == session_id)
-        .filter(AgentEvent.role.in_(["user", "assistant", "tool"]))
+        .filter(AgentEvent.role.in_(selected_roles))
         .filter(AgentEvent.content_text.isnot(None))
         .filter(durable_transcript_event_predicate())
         .order_by(AgentEvent.timestamp.desc(), AgentEvent.id.desc())
