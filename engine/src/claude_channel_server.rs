@@ -406,8 +406,18 @@ async fn call_coordination_tool(id: Value, params: Option<&Value>, state: &Bridg
                 .query(&[("repo", repo.as_str()), ("days", "7")])
         }
         "search_sessions" => {
-            let Some(query) = arguments.get("query").and_then(Value::as_str) else {
-                return tool_result(id, json!({"error":"search_sessions requires query"}));
+            let Some(query) = arguments
+                .get("query")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|query| !query.is_empty())
+            else {
+                // The archive matches an empty query literally and returns zero,
+                // which reads as "nothing in the corpus" rather than "bad call".
+                return tool_result(
+                    id,
+                    json!({"error":"search_sessions requires a non-empty query"}),
+                );
             };
             // The archive route is owner-scoped by the device token, the same authority
             // peers and tail already carry. Coordination authority is not involved.

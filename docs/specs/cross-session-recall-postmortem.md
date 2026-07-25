@@ -338,60 +338,90 @@ deleted or explicitly scoped to Runtime Host use.
 
 ---
 
-## 6. Plan
+## 6. What shipped
 
-### Phase 1 — Make history reachable from managed sessions
+`cb4be121a`, `d9441d7eb`, `3244f3608` (longhouse) and `d4c020b`, `1128f04` (me).
 
-1. Add `search_sessions` to `coordination_tools()` and `call_coordination_tool()` in
-   `engine/src/claude_channel_server.rs`, proxying
-   `GET /api/agents/sessions?query&project&provider&days_back&limit`.
-2. Add `search_sessions` to `LONGHOUSE_COORDINATION_TOOLS` in `engine/src/codex_bridge.rs:47`
-   so Codex auto-approves it rather than prompting mid-turn. Check the second consumption
-   site near line 5869.
-3. Clamp `tail`'s `limit` to `1..=100` in the Rust facade and declare
-   `minimum`/`maximum` in its advertised schema.
-4. Add `roles` to the `tail` tool and endpoint, applied **before** the limit so
-   `roles=user,assistant` returns real turns rather than 100 events of which four are
-   turns.
-5. Extend `COORDINATION_INSTRUCTIONS` and the Rust `initialize` instructions: search
-   history before asking the user to redo work; `peers` is live-only unless
-   `active_only=false`; if no history tool is present, say so rather than substituting a
-   mirror.
+**Managed surface — `engine/src/claude_channel_server.rs`.** `search_sessions` added to
+`coordination_tools()` and `call_coordination_tool()`, proxying
+`GET /api/agents/sessions` with the device token that `peers`/`tail` already use. `limit`
+clamped to `1..=100` and `days_back` to `1..=90`, both advertised, because the archive
+422s past either. Empty query rejected rather than forwarded, since the archive matches it
+literally and returns zero — which reads as absence. `search_sessions` added to
+`LONGHOUSE_COORDINATION_TOOLS` in `codex_bridge.rs` so Codex auto-approves it. The
+`initialize` instructions now say to search history before asking a user to redo work, and
+that `peers` is live-only unless `active_only=false`.
 
-### Phase 2 — Fix the unreachable Python surface
+**`tail` readability — `server/zerg/routers/agents_sessions.py`.** A `roles` filter applied
+before the limit, so `roles=user,assistant` returns that many real turns instead of that
+many mostly-tool events. Storage-v2 has no role predicate, so a narrowed request scans a
+bounded wider window (`limit * 25`, capped 1000) and trims after filtering; the legacy path
+filters in SQL. The response reports `scan_window` (events actually examined, `None` when
+the store filtered across the whole session) and `window_exhausted`, which is the answer
+`tail` previously could not give: a short result was ambiguous between "no more turns" and
+"the scan ran out", and with bounded scanning that distinction is real.
+`longhouse-server tail --roles` gets the same filter and surfaces the warning.
 
-6. Delete the env-keyed strip (`server.py:577-580`). Authority is enforced at call time;
-   visibility stays uniform.
-7. Remove `notify_longhouse`.
-8. Remove the `query_agents` references from the `get_session_detail` and `recall`
-   docstrings, and fix `recall`'s stale "derived search index" hint.
-9. Fix `~/git/me/registry/mcp-registry.toml` — `longhouse mcp-server` is broken config.
-   Point it at the engine facade, matching what the launchers actually write.
+**Runtime Host MCP server — `server/zerg/mcp_server/server.py`.** A separate surface that
+devices do not load (§2.2), fixed because it was wrong, not because it was load-bearing.
+The coordination-token tool strip is gone; authority is enforced per call in
+`send`/`inbox`/`reply`, so the strip protected nothing and was process-global under the
+HTTP transport. `notify_longhouse` removed — it logged and returned `delivered: false`.
+`query_agents` docstring references removed; no such tool exists.
 
-### Phase 3 — Stop the mirror lying
+**Life Hub mirror — `~/git/me/scripts/lifehub-evidence.py`.** `since`/`until` are now
+forwarded instead of parsed and discarded; `--provider`/`--project`/`--device` added and
+forwarded. Responses carry `match_mode: "exact_substring"`, and a multi-token zero-hit
+explains that the matcher is whole-query substring and names the canonical surface.
 
-10. Forward `since`/`until` on the mirror search path in `lifehub-evidence.py`; add and
-    forward `--provider`, `--project`, `--device`.
-11. Return `match_mode: "exact_substring"` from the mirror search, plus a shorten-the-query
-    hint when `count == 0` and the query has more than one token.
-12. Make mirror hits carry the canonical session id and an explicit "read via Longhouse
-    `tail`" pointer. `agent-chunk` already covers coordinate-based reads; no new read verb.
+**Registry — `~/git/me/registry/mcp-registry.toml`.** Both Longhouse entries were dead
+config: `longhouse` has neither an `mcp-server` nor a `claude-channel` subcommand, so
+unmanaged agents had no Longhouse tools at all. `servers.longhouse` now points at
+`longhouse-server mcp-server`, which is the surface that actually serves history tools off
+a Runtime Host. The `longhouse-channel` entry is removed; managed launches inject the
+native channel themselves and unmanaged sessions cannot use channel mode. The untracked
+legacy `mcp/servers.json` was corrected locally so nobody can regenerate the broken
+commands from it.
 
-### Phase 4 — Documentation
+**Guidance — global `AGENTS.md`.** `search_sessions`/`recall` named as MCP tools rather
+than backticked in prose beside shell commands, which is what sent an agent looking for a
+`recall` binary; `longhouse-server recall` named as the CLI equivalent; the mirror's
+substring semantics stated so a zero result is not read as absence.
 
-13. Fix the global `AGENTS.md` agent-log-search bullet to name MCP tools as tools and
-    `longhouse-server recall` as the CLI.
+### Verification
 
-### Validation
+`make test`: 3649 passed, 1 pre-existing failure
+(`test_managed_provider_contracts` generated-manifest digest, confirmed failing on a
+stashed clean tree and last touched by unrelated commits). `make test-engine`: clean.
+Life Hub: 40 passed. Both ships green — runs 30140127523 and 30140928388, demo and canary
+healthy on the exact SHAs.
 
-- `make test-engine` (Rust facade), `make test` (backend)
-- **Journey test, not a static parity assertion.** For each managed provider, assert
-  `search_sessions` is listed and callable, search a noisy fixture, tail with
-  `roles=user,assistant`, and recover a planted fact within two calls.
-- Drift test asserting the Rust-advertised tool set and the Codex auto-approve list agree,
-  including the `tail` schema bound.
-- Live check against hosted `david010`: `search_sessions(query="adb", project="g55")`
-  returns the four g55 sessions.
+The journey the g55 agent could not make, run against hosted `david010` on the shipped code:
+
+```
+search_sessions(query="adb", project="g55")
+  → b07da0af, 97a30378, 8bcd19ea, 6bd9fff7
+tail(97a30378, roles="user,assistant", limit=8)
+  → 8 real turns, scan_window 200, window_exhausted false
+```
+
+Two calls. The second returns decision prose; before this change the same call returned
+eight lines of `Script completed / Wall time 0.1 seconds`.
+
+### Deliberately not done
+
+- **`tail` pagination.** Storage-v2 role filtering is bounded at 1000 events, so a matching
+  turn older than that is still unreachable. `window_exhausted` makes that honest rather
+  than fixing it; the fix needs a cursor and its own design.
+- **Mirror hits do not carry a "read via Longhouse" pointer.** Only zero-hits name the
+  canonical surface. Packets already include `session_id`, and `agent-chunk` covers
+  coordinate reads, so this was not worth another field.
+- **`--strict-mcp-config` for managed Claude.** Would stop the duplicate Python/native
+  Longhouse surfaces, but would also strip docket-hub, image-hub and the rest from managed
+  sessions. The registry comment now states the duplication instead.
+- **Deleting or rescoping the Python MCP server.** It is unreachable from a device (§2.2)
+  and now reachable for unmanaged agents via the fixed registry entry. Whether it should
+  exist at all is a real question, left open.
 
 ### Out of scope
 
