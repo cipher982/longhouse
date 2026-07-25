@@ -213,8 +213,9 @@ class SearchDaemon:
                 )
                 timing = result.get("timing") if isinstance(result.get("timing"), dict) else {}
                 logger.debug(
-                    "searchd query scope=%s query_tokens=%s compiled_tokens=%s results=%s admit_ms=%s sql_ms=%s",
+                    "searchd query scope=%s ranking=%s query_tokens=%s compiled_tokens=%s results=%s admit_ms=%s sql_ms=%s",
                     result.get("search_scope"),
+                    result.get("ranking_scope"),
                     result.get("query_token_count"),
                     result.get("compiled_token_count"),
                     len(result.get("results") or []),

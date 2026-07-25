@@ -135,17 +135,41 @@ def test_publish_aggregate_uses_session_generation_index(tmp_path):
         connection.close()
 
 
-@pytest.mark.parametrize(("sql", "fts_name"), [(_SEARCH_SQL, "events_fts"), (_SEARCHABLE_SEARCH_SQL, "searchable_fts")])
-def test_search_uses_fts_rank_top_k_without_temp_sort(tmp_path, sql, fts_name):
+def test_archive_search_uses_fts_rank_top_k_without_temp_sort(tmp_path):
     connection = open_search_database(tmp_path / "search.db")
     try:
         plan = connection.execute(
-            f"EXPLAIN QUERY PLAN {sql}",
+            f"EXPLAIN QUERY PLAN {_SEARCH_SQL}",
             ("search db", "42", None, None, None, None, None, None, None, None, None, None, 10),
         ).fetchall()
         details = [str(row[3]) for row in plan]
-        assert any(fts_name in detail and "VIRTUAL TABLE INDEX 32:" in detail for detail in details)
+        assert any("events_fts" in detail and "VIRTUAL TABLE INDEX 32:" in detail for detail in details)
         assert not any("TEMP B-TREE FOR ORDER BY" in detail for detail in details)
+    finally:
+        connection.close()
+
+
+def test_searchable_search_walks_rowid_descending_and_sorts_only_candidates(tmp_path):
+    """The interactive lane must not rank the whole match set.
+
+    Rank-ordered FTS (`VIRTUAL TABLE INDEX 32:`) scores every match before the
+    limit applies, which cost seconds on broad terms. Walking rowid-descending
+    (`192:`) lets FTS5 stop early, so the temp sort that remains covers only the
+    bounded candidate window rather than the full doclist.
+    """
+
+    connection = open_search_database(tmp_path / "search.db")
+    try:
+        plan = connection.execute(
+            f"EXPLAIN QUERY PLAN {_SEARCHABLE_SEARCH_SQL}",
+            ("search db", "42", None, None, None, None, None, None, None, None, None, None, 50_000, 10),
+        ).fetchall()
+        details = [str(row[3]) for row in plan]
+        assert any("searchable_fts" in detail and "VIRTUAL TABLE INDEX 192:" in detail for detail in details)
+        assert not any("VIRTUAL TABLE INDEX 32:" in detail for detail in details)
+        # The owner/project/window predicates must be evaluated inside the walk.
+        # Applied afterwards they made narrow windows slower, not faster.
+        assert any("SEARCH e USING INTEGER PRIMARY KEY" in detail for detail in details)
     finally:
         connection.close()
 
@@ -466,6 +490,81 @@ async def test_searchd_publishes_only_complete_generations_and_serves_search_wor
         await client.close()
         await daemon.close()
         socket_parent.rmdir()
+
+
+def test_search_reports_whether_ranking_saw_every_match(tmp_path, monkeypatch):
+    """Callers must be able to tell exact ranking from a bounded recent window.
+
+    The interactive lane ranks only the most recent candidates. When the walk
+    does not saturate it has seen the whole match set, and the ranking is
+    exactly what an unbounded scan would produce. Saying so lets an agent
+    distinguish "nothing matched" from "I did not look at everything".
+    """
+
+    connection = open_search_database(tmp_path / "search.db")
+    store = SearchStore(connection)
+    now_us = int(datetime.now(UTC).timestamp() * 1_000_000)
+    session_id = str(uuid4())
+    generation_id = str(uuid4())
+    object_id = hashlib.sha256(b"ranking-scope").hexdigest()
+    records = [
+        {**record, "content_text": "recurring needle text", "order_time_us": now_us + index}
+        for index, record in enumerate(_records("recurring needle text"))
+    ]
+    store.index_object(
+        session_id=session_id,
+        generation_id=generation_id,
+        object_id=object_id,
+        desired_revision=1,
+        provider="codex",
+        machine_id="cinder",
+        project="longhouse",
+        environment="local",
+        cwd="/workspace/longhouse",
+        git_repo="cipher982/longhouse",
+        opaque_source_id="codex/session.jsonl",
+        source_epoch=str(uuid4()),
+        records=records,
+    )
+    store.publish_generation(
+        session_id=session_id,
+        generation_id=generation_id,
+        owner_id="42",
+        desired_revision=1,
+        object_count=1,
+        object_set_hash=object_set_hash([object_id]),
+        event_count=len(records),
+        project="longhouse",
+        provider="codex",
+        environment="local",
+        cwd="/workspace/longhouse",
+        git_repo="cipher982/longhouse",
+        started_at=datetime.now(UTC).isoformat(),
+    )
+
+    def search():
+        return store.search(
+            owner_id="42",
+            query="needle",
+            project=None,
+            provider=None,
+            environment=None,
+            window_start_us=now_us - 60_000_000,
+            window_end_us=None,
+            limit=1,
+        )
+
+    try:
+        exact = search()
+        assert exact["results"], "expected the published needle to match"
+        assert exact["ranking_scope"] == "exact"
+        assert "candidate_count" not in exact["results"][0], "internal bookkeeping must not leak to callers"
+
+        # A ceiling below the match count forces the honest bounded answer.
+        monkeypatch.setattr("zerg.searchd.store._CANDIDATE_CEILING", 1)
+        assert search()["ranking_scope"] == "recent_bounded"
+    finally:
+        connection.close()
 
 
 def test_searchd_searches_only_published_recent_events_and_falls_back_for_archive(tmp_path):

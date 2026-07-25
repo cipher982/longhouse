@@ -69,25 +69,56 @@ _ARCHIVE_SEARCH_SQL = """
     LIMIT ?
 """
 
+# Ranking the whole match set costs time linear in matches, not in results: a
+# term matching 2.2M rows spent 3.4s scoring rows nobody would ever see. FTS5
+# walks a doclist in rowid order with early exit, and `source_event_id` is the
+# archive `events.id`, so a reverse-rowid walk yields the most recent matches
+# without touching the rest of the doclist. bm25() evaluated during that walk
+# scores only the rows actually visited.
+#
+# Filters live inside the walk rather than after it. Applied afterwards they
+# made narrow windows *slower* — SQLite ranked everything, then scanned for
+# survivors and often could not fill the limit at all.
+#
+# The walk stops at _CANDIDATE_CEILING. When it returns fewer rows than that,
+# it provably saw every match and the ranking is exact; callers learn which
+# happened from `ranking_scope` instead of having to guess.
 _SEARCHABLE_SEARCH_SQL = """
-    SELECT e.source_event_id AS search_event_id, e.session_id, e.generation_id, e.source_object_id,
-           e.record_ordinal, e.event_id, e.order_time_us,
-           e.role, e.tool_name,
-           snippet(searchable_fts, 0, '', '', ' … ', 24) AS content_snippet,
-           snippet(searchable_fts, 1, '', '', ' … ', 24) AS tool_output_snippet,
-           e.project, e.provider, e.environment, e.indexed_through, e.event_count,
-           searchable_fts.rank AS rank
-    FROM searchable_fts
-    JOIN searchable_events e ON e.source_event_id = searchable_fts.rowid
-    WHERE searchable_fts MATCH ? AND e.owner_id = ?
-      AND (? IS NULL OR e.project = ?)
-      AND (? IS NULL OR e.provider = ?)
-      AND (? IS NULL OR e.environment = ?)
-      AND (? IS NULL OR e.order_time_us >= ?)
-      AND (? IS NULL OR e.order_time_us < ?)
-    ORDER BY searchable_fts.rank ASC
+    SELECT *, COUNT(*) OVER () AS candidate_count FROM (
+        SELECT e.source_event_id AS search_event_id, e.session_id, e.generation_id, e.source_object_id,
+               e.record_ordinal, e.event_id, e.order_time_us,
+               e.role, e.tool_name,
+               snippet(searchable_fts, 0, '', '', ' … ', 24) AS content_snippet,
+               snippet(searchable_fts, 1, '', '', ' … ', 24) AS tool_output_snippet,
+               e.project, e.provider, e.environment, e.indexed_through, e.event_count,
+               bm25(searchable_fts) AS rank
+        FROM searchable_fts
+        JOIN searchable_events e ON e.source_event_id = searchable_fts.rowid
+        WHERE searchable_fts MATCH ? AND e.owner_id = ?
+          AND (? IS NULL OR e.project = ?)
+          AND (? IS NULL OR e.provider = ?)
+          AND (? IS NULL OR e.environment = ?)
+          AND (? IS NULL OR e.order_time_us >= ?)
+          AND (? IS NULL OR e.order_time_us < ?)
+        ORDER BY searchable_fts.rowid DESC
+        LIMIT ?
+    )
+    ORDER BY rank ASC
     LIMIT ?
 """
+
+# Most recent matching events considered before ranking. Measured on a 5M-row
+# corpus, the worst case (a term matching 2.2M events) costs ~440ms against a
+# 500ms target, and ranking is exact for any term matching fewer than this many
+# events — on a real corpus, every query carrying useful signal.
+#
+# A broad term combined with a narrow window is the one shape that stays slow
+# (~2s, down from ~3.4s): the walk rejects nearly everything it visits, so it
+# never fills its quota and cannot exit early. Deriving a rowid floor from the
+# window was measured and rejected — MIN(source_event_id) over a time range is
+# not index-only, costing ~570ms on every search including the rare-term
+# queries that are otherwise sub-millisecond.
+_CANDIDATE_CEILING = 50_000
 
 # Focused plan tests and diagnostic tooling use this name for the all-history
 # correctness lane. Interactive recent recall uses _SEARCHABLE_SEARCH_SQL.
@@ -798,29 +829,44 @@ class SearchStore:
         if not fts_query:
             return {"results": [], "query_token_count": query_token_count, "compiled_token_count": compiled_token_count}
         use_searchable_corpus = window_start_us is not None and window_start_us >= _fast_scope_cutoff_us()
-        rows = self.connection.execute(
-            _SEARCHABLE_SEARCH_SQL if use_searchable_corpus else _ARCHIVE_SEARCH_SQL,
-            (
-                fts_query,
-                owner_id,
-                project,
-                project,
-                provider,
-                provider,
-                environment,
-                environment,
-                window_start_us,
-                window_start_us,
-                window_end_us,
-                window_end_us,
-                limit,
-            ),
-        ).fetchall()
+        filter_params = (
+            fts_query,
+            owner_id,
+            project,
+            project,
+            provider,
+            provider,
+            environment,
+            environment,
+            window_start_us,
+            window_start_us,
+            window_end_us,
+            window_end_us,
+        )
+        if use_searchable_corpus:
+            candidate_ceiling = max(limit, _CANDIDATE_CEILING)
+            sql = _SEARCHABLE_SEARCH_SQL
+            params = filter_params + (candidate_ceiling, limit)
+        else:
+            candidate_ceiling = None
+            sql = _ARCHIVE_SEARCH_SQL
+            params = filter_params + (limit,)
+        rows = self.connection.execute(sql, params).fetchall()
+
+        # The bounded walk saturates only when more matches existed than it was
+        # willing to look at. Short of that it saw the whole match set, so the
+        # ranking is exactly what an unbounded scan would have produced. The
+        # inner walk reports its own size, so this costs no extra query.
+        ranking_scope = "exact"
+        if candidate_ceiling is not None and rows:
+            if int(rows[0]["candidate_count"]) >= candidate_ceiling:
+                ranking_scope = "recent_bounded"
         return {
-            "results": [dict(row) for row in rows],
+            "results": [{k: v for k, v in dict(row).items() if k != "candidate_count"} for row in rows],
             "query_token_count": query_token_count,
             "compiled_token_count": compiled_token_count,
             "search_scope": "published_recent" if use_searchable_corpus else "published_archive",
+            "ranking_scope": ranking_scope,
         }
 
     def recall_context(
