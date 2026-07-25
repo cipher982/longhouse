@@ -86,11 +86,39 @@ on a real-text fixture at K=50,000. But it introduces a second table to keep
 consistent, and it is not truly fixed-width — SQLite records use varints, and
 lookups ordered by sparse archive ids are not a sequential scan.
 
-**Build the covering index first.** If it captures most of the win, the spine's
-extra consistency burden is unjustified. Decide on measured cold physical reads,
-not on `dbstat` byte ratios — the 117× figure compares row sizes, and does not
-by itself prove 119 MB of unique physical reads, since large fields use overflow
-pages.
+Measured on the real-text fixture at K=50,000:
+
+| approach | warm | vs baseline | write-path cost |
+| --- | --- | --- | --- |
+| current | 20.6 ms | — | — |
+| filter columns before text | 17.2 ms | −13% | DDL order only |
+| covering index, forced `INDEXED BY` | 13.4 ms | −35% | none |
+| narrow spine table | 12.0 ms | −40% | one more table |
+
+**Build the spine.** The covering index looked attractive until two facts
+landed:
+
+1. SQLite **never chooses it**. The plan stays `SEARCH e USING INTEGER PRIMARY
+   KEY (rowid=?)`, because `source_event_id` *is* the rowid and an IPK-constrained
+   lookup looks uniquely cheap to the cost model. It only wins when forced.
+2. `INDEXED BY` is documented as **not a planner hint** and explicitly not for
+   tuning — it exists to lock a plan against regression, and it hard-fails
+   statement preparation if the index is ever dropped
+   ([lang_indexedby](https://sqlite.org/lang_indexedby.html)). Building the hot
+   path on it means depending on an optimizer blind spot.
+
+The consistency objection that killed the *file split* does not apply here: a
+spine table living in the same database file is written inside the same
+`BEGIN IMMEDIATE` as everything else, so publication, supersession, and deletion
+stay atomic. The danger was always cross-file, never cross-table.
+
+The 117× row-size ratio should still not be quoted as physical reads — large
+fields use overflow pages, and `dbstat` measures record bytes, not pages touched.
+Decide the final shape on measured cold reads.
+
+Note we run **SQLite 3.40.1**, so `SQLITE_DIRECT_OVERFLOW_READ` (default from
+3.45, which lets large overflow content bypass the page cache) does not currently
+apply — but it strengthens this direction whenever we upgrade.
 
 ## If The File Is Ever Split, Option A Is Unsafe
 
@@ -136,6 +164,25 @@ Latency targets should be reported as measured distributions across four states 
 warm, after a controlled archive sweep, after process restart with warm kernel,
 and genuinely cold host — not as a single number.
 
+## Filtering By Attributes: The Supported Pattern
+
+SQLite's own guidance for multitenancy is to index the tenant as an **FTS column
+token** and query `owner_id:42 text:hello`, rather than
+`owner_id = 42 AND text MATCH ...`
+([forum](https://sqlite.org/forum/forumpost/c3620d964b14ffe7)). That shrinks the
+doclist before the candidate walk instead of filtering after it.
+
+This is worth trying for `owner_id` and possibly exact `project`/`environment` —
+highly selective equality filters.
+
+It is **not** the answer for time windows, and an earlier experiment here
+confirms why: encoding day buckets as tokens and OR-ing them across a range
+degraded badly with window width (12.8 s at 91 days versus 3.5 s unfiltered).
+FTS5 has no B-tree range semantics. Time ranges belong in the relational spine.
+
+The distinction is selectivity and shape: equality on a low-cardinality
+attribute helps; range predicates do not.
+
 ## Known Defects Worth Fixing Independently
 
 1. **`ranking_scope` names the wrong thing.** The bounded walk returns the
@@ -156,9 +203,10 @@ and genuinely cold host — not as a single number.
    fault counters, WAL size and checkpoint state, and per-query resident-set
    delta. The fault-vs-latency table above should be reproducible on demand
    rather than assembled by hand.
-2. **Prototype the covering index inside the existing database and
-   transaction**, and verify with `EXPLAIN QUERY PLAN` that it is actually
-   selected. Compare cold physical reads against the spine. Keep the winner.
+2. **Build the spine inside the existing database and transaction.** Add a
+   regression assertion on query shape and cold bytes faulted rather than
+   depending on `INDEXED BY`. Reorder filter columns ahead of the text columns
+   while doing it — it is free and independently worth ~13%.
 3. **Run Phase E reclaim** and repeat the identical benchmark. `search.db` is
    16.7 GiB against 9.6 GB of host cache; a smaller file raises the hit ratio for
    everything, and the owning storage spec already sequences reclaim before cache
