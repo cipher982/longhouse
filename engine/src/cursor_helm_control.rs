@@ -220,6 +220,12 @@ async fn dispatch_command(
             state.socket_path.display()
         )));
     }
+    // A missing launcher is an attachment failure, not a generation mismatch.
+    let generation = if matches!(kind, CommandKind::Interrupt) {
+        Some(active_generation_id(session_id, state_root)?)
+    } else {
+        None
+    };
 
     let mut request = json!({
         "command_id": format!("cursor-helm:{}:{}", session_id, kind.as_str()),
@@ -228,8 +234,8 @@ async fn dispatch_command(
     if let Some(text) = text {
         request["text"] = json!(text);
     }
-    if matches!(kind, CommandKind::Interrupt) {
-        request["generation_id"] = json!(active_generation_id(session_id, state_root)?);
+    if let Some(generation) = generation {
+        request["generation_id"] = json!(generation);
     }
     let mut request_bytes = serde_json::to_vec(&request).map_err(CursorHelmControlError::failed)?;
     request_bytes.push(b'\n');
@@ -357,8 +363,9 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     fn tmp_state_root() -> PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("cursor-helm-control-test-{}", std::process::id()));
+        // Unix socket paths are limited to SUN_LEN. macOS's temp directory is
+        // deliberately deep, so use /tmp for these socket-bearing fixtures.
+        let dir = PathBuf::from("/tmp").join(format!("chc-{:08x}", rand::random::<u32>()));
         let _ = fs::create_dir_all(&dir);
         dir
     }
@@ -444,7 +451,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn interrupt_rejects_stale_or_idle_phase_before_socket_dispatch() {
+    async fn interrupt_reports_missing_launcher_before_phase_mismatch() {
         let root = tmp_state_root();
         let session_id = "interrupt-idle-session";
         let socket = root.join("interrupt-idle.sock");
@@ -456,7 +463,7 @@ mod tests {
         .unwrap();
 
         let error = interrupt(session_id, Some(&root)).await.unwrap_err();
-        assert_eq!(error.code(), "command_failed");
+        assert_eq!(error.code(), "session_not_attached");
         assert!(!socket.exists());
     }
 
@@ -489,7 +496,7 @@ mod tests {
         )
         .await;
 
-        let err = interrupt(session_id, Some(&root)).await.unwrap_err();
+        let err = send_text(session_id, "x", Some(&root)).await.unwrap_err();
         assert_eq!(err.code(), "session_not_attached");
     }
 

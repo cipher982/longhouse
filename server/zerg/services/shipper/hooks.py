@@ -756,7 +756,7 @@ def install_hooks(
 
     from zerg.services.cursor_hooks import install_cursor_hooks
 
-    actions.extend(install_cursor_hooks())
+    actions.extend(install_cursor_hooks(engine_path=engine_path))
 
     return actions
 
