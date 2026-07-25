@@ -16,6 +16,7 @@ from datetime import timedelta
 from datetime import timezone
 from uuid import uuid4
 
+import pytest
 from fastapi.testclient import TestClient
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
@@ -148,6 +149,89 @@ def test_tail_roles_filter_reaches_past_the_limit_window(tmp_path):
         cleanup()
 
 
+async def _storage_v2_tail(
+    monkeypatch,
+    *,
+    event_count: int,
+    limit: int,
+    roles: str | None,
+    contentless_every: int | None = None,
+):
+    """Drive the storage-v2 tail path with a synthetic projection.
+
+    tests_lite runs on the legacy path, so the bounded-window behaviour has to be
+    exercised by standing in for catalogd.
+    """
+    from zerg.routers import agents_sessions
+
+    session_id = uuid4()
+
+    def _event(index: int) -> dict:
+        contentless = contentless_every is not None and index % contentless_every != 0
+        return {
+            "id": f"e{index}",
+            "role": "user" if index % 10 == 0 else "tool",
+            "content_text": None if contentless else f"event {index}",
+            "tool_name": None,
+            "timestamp": (_TS + timedelta(seconds=index)).isoformat(),
+        }
+
+    items = [{"kind": "event", "event": _event(index)} for index in range(event_count)]
+
+    async def _fake_workspace(*, limit: int, **_kwargs):
+        # catalogd returns at most `limit` newest events.
+        return {"projection": {"items": items[-limit:]}}
+
+    monkeypatch.setattr(agents_sessions.database_module, "live_catalog_enabled", lambda: True)
+    monkeypatch.setattr(agents_sessions, "build_storage_v2_workspace", _fake_workspace)
+
+    class _Auth:
+        owner_id = 1
+
+    return await agents_sessions.session_tail(
+        session_id=session_id,
+        limit=limit,
+        roles=roles,
+        db=None,
+        _auth=_Auth(),
+        _single=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_tail_reports_exhaustion_even_on_a_full_page(monkeypatch):
+    """A filled limit does not mean there is nothing older.
+
+    Reporting exhaustion only on a short result would answer "no more" to a page
+    that still hides history. Here the scan window saturates AND the limit fills.
+    """
+    # limit=2, roles=user -> scan_limit=50. 500 events, every 10th is a user turn,
+    # so the newest 50 scanned contain 5 user turns: limit fills, window saturates.
+    payload = await _storage_v2_tail(monkeypatch, event_count=500, limit=2, roles="user")
+
+    assert payload["total"] == 2
+    assert payload["scan_window"] == 50
+    assert payload["window_exhausted"] is True, "a full page can still hide older turns"
+
+
+@pytest.mark.asyncio
+async def test_tail_not_exhausted_when_whole_session_fits_in_window(monkeypatch):
+    payload = await _storage_v2_tail(monkeypatch, event_count=20, limit=5, roles="user")
+
+    assert payload["scan_window"] == 20
+    assert payload["window_exhausted"] is False
+
+
+@pytest.mark.asyncio
+async def test_tail_storage_v2_returns_newest_matches(monkeypatch):
+    """events[-limit:] must keep the NEWEST matches, not the oldest."""
+    payload = await _storage_v2_tail(monkeypatch, event_count=100, limit=2, roles="user")
+
+    # User turns sit at indices 0,10,...,90. The newest two in a 50-event window
+    # are events 80 and 90.
+    assert [event["content"] for event in payload["events"]] == ["event 80", "event 90"]
+
+
 def test_tail_rejects_unknown_role(tmp_path):
     factory, cleanup = _setup_app(tmp_path)
     session_id = _add_tool_heavy_session(factory)
@@ -173,3 +257,26 @@ def test_tail_blank_roles_falls_back_to_all(tmp_path):
         assert resp.json()["roles"] == ["assistant", "tool", "user"]
     finally:
         cleanup()
+
+
+@pytest.mark.asyncio
+async def test_tail_exhaustion_survives_a_contentless_page(monkeypatch):
+    """Exhaustion must key off the raw page, not what survived filtering.
+
+    A full scan page whose rows mostly lack content would otherwise look like a
+    short scan, and the response would claim nothing older exists while never
+    having looked past the window.
+    """
+    # limit=10, all roles -> scan_limit=10. Only every 4th event carries content,
+    # so the raw page is full at 10 while few rows survive the content filter.
+    payload = await _storage_v2_tail(
+        monkeypatch,
+        event_count=500,
+        limit=10,
+        roles=None,
+        contentless_every=4,
+    )
+
+    assert payload["scan_window"] == 10, "scan_window must count the raw page"
+    assert payload["window_exhausted"] is True
+    assert payload["total"] < 10, "content filtering thinned the page"

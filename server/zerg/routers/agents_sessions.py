@@ -1058,13 +1058,11 @@ async def session_tail(
         if workspace is None:
             raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
         projection = workspace["projection"]
-        candidates = [
-            event
-            for item in projection["items"]
-            if item.get("kind") == "event"
-            and isinstance((event := item.get("event")), dict)
-            and (event.get("content_text") is not None or event.get("tool_output_text") is not None)
-        ]
+        # Count the raw page before any filtering. Exhaustion has to be keyed off
+        # what the store returned, not what survived content and role filters — a
+        # full page whose rows mostly lack content would otherwise look like a
+        # short scan and wrongly report that nothing older exists.
+        scanned = [event for item in projection["items"] if item.get("kind") == "event" and isinstance((event := item.get("event")), dict)]
         events = [
             {
                 "id": event["id"],
@@ -1073,21 +1071,17 @@ async def session_tail(
                 "tool_name": event.get("tool_name"),
                 "timestamp": event["timestamp"],
             }
-            for event in candidates
-            if event.get("role") in requested_roles
+            for event in scanned
+            if event.get("role") in requested_roles and (event.get("content_text") is not None or event.get("tool_output_text") is not None)
         ]
         # Tail-biased: keep the newest events when the scan over-collected.
-        matched = len(events)
         events = events[-limit:]
-        # Report what was actually examined, not what was requested. A caller that
-        # asked for N turns and got fewer needs to know whether the window ran out
-        # or the session genuinely has no more.
         return _tail_response(
             session_id,
             events,
             requested_roles,
-            scan_window=len(candidates),
-            window_exhausted=len(candidates) >= scan_limit and matched < limit,
+            scan_window=len(scanned),
+            window_exhausted=len(scanned) >= scan_limit,
         )
 
     assert db is not None
