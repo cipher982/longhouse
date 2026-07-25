@@ -51,6 +51,41 @@ and SQL time without raw query text. A schema-generation bump rebuilds this
 disposable store cleanly; `VACUUM`, embeddings, and further worker scaling are
 not the primary latency fix.
 
+### July 25 result: bounded recent candidates, ranked
+
+Shipped. Ranking the eligible corpus directly still cost time linear in how
+common a term was: on a 5M-row corpus a term matching 2.2M events spent 3.4s
+scoring rows nobody would see, which breached the 2s hard bound and surfaced as
+a 503 claiming the index was unavailable.
+
+The interactive lane now walks the doclist rowid-descending. FTS5 exits early,
+`source_event_id` is the archive `events.id` so recent events cluster at high
+rowids, and `bm25()` evaluated during the walk scores only rows visited. Filters
+sit inside the walk; applied afterwards they made narrow windows slower, because
+SQLite ranked everything and then scanned for survivors, often without filling
+the limit at all.
+
+Measured on 5M rows: broad terms 3.1s -> 435ms, rare terms unchanged at ~1ms.
+
+This is not the global-top-K-then-filter shortcut rejected on July 20. Nothing
+is filtered after ranking and no terms are dropped. The bound is on how far back
+the walk reads, and `ranking_scope` reports which happened: `exact` when the walk
+saw every match, `recent_bounded` when it stopped early.
+
+Recall measured against full BM25 on 13,338 distinct real session events tracks
+the ratio of candidates examined to matches — recency and BM25 rank are close to
+independent, so a window keeps roughly the fraction it covers. Recall is exact
+at a ratio above ~1.2 and degrades below it. Because the loss lands on terms
+appearing in tens of percent of documents, where IDF is near zero and the top
+result is arbitrary anyway, a 50,000-candidate ceiling keeps ranking exact for
+every query carrying useful signal while holding the worst case under budget.
+
+Open: a broad term inside a narrow window still costs ~2s, because the walk
+rejects almost everything it visits and never exits early. Deriving a rowid
+floor from the window was measured and rejected — `MIN(source_event_id)` over a
+time range is not index-only and taxes every search ~570ms, including the
+rare-term queries that are otherwise sub-millisecond.
+
 ## Product Outcome
 
 A user or agent can ask a natural question, paste an exact phrase, name a file
