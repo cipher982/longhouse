@@ -174,6 +174,48 @@ def test_searchable_search_walks_rowid_descending_and_sorts_only_candidates(tmp_
         connection.close()
 
 
+def test_candidate_walk_never_touches_event_text(tmp_path):
+    """The walk must read narrow metadata rows, not rows carrying event text.
+
+    Filter columns total ~20 bytes, but when they shared a row with content_text
+    and tool_output_text the walk had to touch ~2.4 KB records to reach them. A
+    broad query faulted 36-93 MB of page cache to return 5 results, which on a
+    volume where a random read costs 600 us is seconds, not milliseconds.
+    """
+
+    connection = open_search_database(tmp_path / "search.db")
+    try:
+        metadata_columns = {
+            str(row[1]) for row in connection.execute("PRAGMA table_info(searchable_events)").fetchall()
+        }
+        assert "content_text" not in metadata_columns
+        assert "tool_output_text" not in metadata_columns
+
+        candidate_sql, _, _ = _SEARCHABLE_SEARCH_SQL.partition("), top AS (")
+        assert "searchable_text" not in candidate_sql, "candidate walk must not join the text table"
+
+        # Deleting metadata must retire the text and its FTS entry with it, so
+        # the four call sites that delete from searchable_events stay correct
+        # without knowing the tables were split.
+        connection.execute(
+            "INSERT INTO searchable_events(source_event_id, owner_id, project, provider, environment,"
+            " order_time_us, session_id, generation_id, source_object_id, record_ordinal, event_id,"
+            " role, tool_name, indexed_through, event_count)"
+            " VALUES (1, '42', NULL, 'codex', 'local', 1, 's', 'g', 'o', 0, 'e', 'user', NULL, 1, 1)"
+        )
+        connection.execute(
+            "INSERT INTO searchable_text(source_event_id, content_text, tool_output_text)"
+            " VALUES (1, 'retained needle', NULL)"
+        )
+        assert connection.execute("SELECT COUNT(*) FROM searchable_fts WHERE searchable_fts MATCH 'needle'").fetchone()[0] == 1
+
+        connection.execute("DELETE FROM searchable_events WHERE source_event_id = 1")
+        assert connection.execute("SELECT COUNT(*) FROM searchable_text").fetchone()[0] == 0
+        assert connection.execute("SELECT COUNT(*) FROM searchable_fts WHERE searchable_fts MATCH 'needle'").fetchone()[0] == 0
+    finally:
+        connection.close()
+
+
 def test_searchable_search_snippets_only_the_returned_page(tmp_path):
     """Snippet cost must not scale with the candidate window.
 

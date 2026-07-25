@@ -17,7 +17,7 @@ from uuid import UUID
 from uuid import uuid4
 
 SCHEMA_VERSION = 1
-SCHEMA_GENERATION = "searchd-v2-published-searchable-corpus"
+SCHEMA_GENERATION = "searchd-v2-published-searchable-corpus-split-text"
 SEARCHABLE_RETENTION_DAYS = 91
 SEARCHABLE_FAST_WINDOW_DAYS = 90
 SEARCHABLE_FAST_WINDOW_MARGIN_SECONDS = 300
@@ -339,24 +339,37 @@ def _initialize_schema(connection: sqlite3.Connection) -> None:
             INSERT INTO events_fts(rowid, content_text, tool_output_text)
             VALUES (new.id, new.content_text, new.tool_output_text);
         END;
+        -- Metadata and text are separate tables on purpose.
+        --
+        -- The candidate walk reads owner/project/environment/time — about 20
+        -- bytes — but when those lived on the same row as the event text it had
+        -- to touch the whole record to reach them. Rows average 2.4 KB, so a
+        -- broad query faulted 36-93 MB of page cache to answer with 5 results,
+        -- and on a volume where a random read costs 600 us that is seconds.
+        --
+        -- Splitting them keeps the walk on narrow rows. Text is read only for
+        -- the page actually returned, through the FTS index that now owns it.
         CREATE TABLE IF NOT EXISTS searchable_events (
             source_event_id INTEGER PRIMARY KEY,
+            owner_id TEXT NOT NULL,
+            project TEXT,
+            provider TEXT NOT NULL,
+            environment TEXT NOT NULL,
+            order_time_us INTEGER NOT NULL,
             session_id TEXT NOT NULL,
             generation_id TEXT NOT NULL,
             source_object_id TEXT NOT NULL,
             record_ordinal INTEGER NOT NULL,
             event_id TEXT NOT NULL,
-            order_time_us INTEGER NOT NULL,
             role TEXT NOT NULL,
             tool_name TEXT,
-            content_text TEXT,
-            tool_output_text TEXT,
-            owner_id TEXT NOT NULL,
-            project TEXT,
-            provider TEXT NOT NULL,
-            environment TEXT NOT NULL,
             indexed_through INTEGER NOT NULL,
             event_count INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS searchable_text (
+            source_event_id INTEGER PRIMARY KEY,
+            content_text TEXT,
+            tool_output_text TEXT
         );
         CREATE INDEX IF NOT EXISTS ix_searchable_events_session
             ON searchable_events(session_id, generation_id, source_object_id);
@@ -365,19 +378,25 @@ def _initialize_schema(connection: sqlite3.Connection) -> None:
         CREATE VIRTUAL TABLE IF NOT EXISTS searchable_fts USING fts5(
             content_text,
             tool_output_text,
-            content='searchable_events',
+            content='searchable_text',
             content_rowid='source_event_id',
             tokenize='unicode61 remove_diacritics 2'
         );
-        CREATE TRIGGER IF NOT EXISTS searchable_events_ai AFTER INSERT ON searchable_events BEGIN
+        -- Dropping a metadata row retires its text, which retires its FTS entry.
+        -- Keeping the cascade in the schema means the four places that delete
+        -- from searchable_events stay correct without knowing about the split.
+        CREATE TRIGGER IF NOT EXISTS searchable_events_ad AFTER DELETE ON searchable_events BEGIN
+            DELETE FROM searchable_text WHERE source_event_id = old.source_event_id;
+        END;
+        CREATE TRIGGER IF NOT EXISTS searchable_text_ai AFTER INSERT ON searchable_text BEGIN
             INSERT INTO searchable_fts(rowid, content_text, tool_output_text)
             VALUES (new.source_event_id, new.content_text, new.tool_output_text);
         END;
-        CREATE TRIGGER IF NOT EXISTS searchable_events_ad AFTER DELETE ON searchable_events BEGIN
+        CREATE TRIGGER IF NOT EXISTS searchable_text_ad AFTER DELETE ON searchable_text BEGIN
             INSERT INTO searchable_fts(searchable_fts, rowid, content_text, tool_output_text)
             VALUES ('delete', old.source_event_id, old.content_text, old.tool_output_text);
         END;
-        CREATE TRIGGER IF NOT EXISTS searchable_events_au AFTER UPDATE ON searchable_events BEGIN
+        CREATE TRIGGER IF NOT EXISTS searchable_text_au AFTER UPDATE ON searchable_text BEGIN
             INSERT INTO searchable_fts(searchable_fts, rowid, content_text, tool_output_text)
             VALUES ('delete', old.source_event_id, old.content_text, old.tool_output_text);
             INSERT INTO searchable_fts(rowid, content_text, tool_output_text)
@@ -797,14 +816,15 @@ class SearchStore:
         self.connection.execute(
             """
             INSERT INTO searchable_events(
-                source_event_id, session_id, generation_id, source_object_id,
-                record_ordinal, event_id, order_time_us, role, tool_name,
-                content_text, tool_output_text, owner_id, project, provider,
-                environment, indexed_through, event_count
+                source_event_id, owner_id, project, provider, environment,
+                order_time_us, session_id, generation_id, source_object_id,
+                record_ordinal, event_id, role, tool_name,
+                indexed_through, event_count
             )
-            SELECT e.id, e.session_id, e.generation_id, e.source_object_id,
-                   e.record_ordinal, e.event_id, e.order_time_us, e.role, e.tool_name,
-                   e.content_text, e.tool_output_text, ?, ?, ?, ?, ?, ?
+            SELECT e.id, ?, ?, ?, ?,
+                   e.order_time_us, e.session_id, e.generation_id, e.source_object_id,
+                   e.record_ordinal, e.event_id, e.role, e.tool_name,
+                   ?, ?
             FROM events e
             JOIN projection_membership m ON m.object_id = e.source_object_id
             WHERE m.session_id = ? AND m.generation_id = ? AND m.desired_revision = ?
@@ -825,6 +845,18 @@ class SearchStore:
                 generation_id,
                 _searchable_cutoff_us(),
             ),
+        )
+        # Text follows the metadata it belongs to, in the same transaction. The
+        # insert trigger on searchable_text is what populates the FTS index.
+        self.connection.execute(
+            """
+            INSERT INTO searchable_text(source_event_id, content_text, tool_output_text)
+            SELECT e.id, e.content_text, e.tool_output_text
+            FROM events e
+            JOIN searchable_events s ON s.source_event_id = e.id
+            WHERE s.session_id = ? AND e.session_id = ?
+            """,
+            (session_id, session_id),
         )
         self.connection.execute("DELETE FROM searchable_events WHERE order_time_us < ?", (_searchable_cutoff_us(),))
 
