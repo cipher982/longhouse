@@ -1,0 +1,44 @@
+// Seed set. Gold sessions were located by a distinctive exact term, evidence was
+// read to confirm the topic is really there, then the query was rewritten to omit
+// that term. Target is 80 queries; this is 26 and needs review before it gates
+// anything. See README.md.
+{"excluded_sessions": []}
+
+// --- exact: identifiers, flags, env vars, error strings. Lexical should ace
+// these, so they are the regression guard against dense retrieval replacing it.
+{"id": "exact-remote-launch-flag", "category": "exact", "query": "REMOTE_LAUNCH_SMOKE_ENABLED", "gold_sessions": ["82e9f3e8", "d5bcbf19"], "note": "repo variable gating the launch smoke workflow"}
+{"id": "exact-vacuum-into", "category": "exact", "query": "VACUUM INTO", "gold_sessions": ["2fa180da", "019f0ed2"], "note": "backup script comment explaining the choice"}
+{"id": "exact-session-chat-backend", "category": "exact", "query": "SESSION_CHAT_BACKEND", "gold_sessions": ["019d5946", "019d6406"], "note": "hosted chat backend env var"}
+{"id": "exact-quick-check", "category": "exact", "query": "quick_check", "gold_sessions": ["c39dd291", "019d3b55"], "note": "sqlite integrity check during slim db build"}
+{"id": "exact-shipper-laptop", "category": "exact", "query": "shipper-laptop device_id", "gold_sessions": ["019cce63", "019d4441"], "note": "ghost device rows before the cinder rename"}
+{"id": "exact-kopia-logs", "category": "exact", "query": "kopia snapshot list log", "gold_sessions": ["019e899d", "633a0114"], "note": "kopia backup logs"}
+
+// --- paraphrase: the postmortem failure. These deliberately omit every term
+// that would locate the session lexically.
+{"id": "para-tablet-wireless", "category": "paraphrase", "query": "how do I connect to the tablet over the network for debugging without a cable", "gold_sessions": ["28f3852e", "b07da0af", "97a30378"], "note": "adb wireless debugging; omits 'adb'"}
+{"id": "para-db-backup-cloud", "category": "paraphrase", "query": "how are the tenant databases backed up to offsite cloud storage", "gold_sessions": ["b72a6ff5", "d5bcbf19", "2fa180da"], "note": "kopia/B2; omits both product names"}
+{"id": "para-copy-hot-database", "category": "paraphrase", "query": "safe way to copy a large database that is being written to constantly", "gold_sessions": ["2fa180da", "019f0ed2"], "note": "VACUUM INTO vs online backup API; omits both"}
+{"id": "para-ci-faster-runners", "category": "paraphrase", "query": "using faster third party machines to speed up continuous integration", "gold_sessions": ["75f59493", "019da236", "9bdcb053"], "note": "WarpBuild; omits the vendor name"}
+{"id": "para-stay-logged-in", "category": "paraphrase", "query": "keeping users signed in without making them log in again every few minutes", "gold_sessions": ["df55df8c", "8941d62c", "035ad85e"], "note": "refresh token rotation; omits 'refresh token'"}
+{"id": "para-database-locked", "category": "paraphrase", "query": "fixing concurrent write contention so the database stops being locked", "gold_sessions": ["43f897ce", "5054f269", "65469543"], "note": "WriteSerializer; omits the class name"}
+{"id": "para-machine-renamed", "category": "paraphrase", "query": "the laptop showed up twice under two different names after we renamed it", "gold_sessions": ["019cce63", "019d4441"], "note": "device-id rename backfill; omits both names"}
+{"id": "para-reclaim-disk", "category": "paraphrase", "query": "getting disk space back from the oversized monolithic database", "gold_sessions": ["4a1ad237", "019ef4f7", "c39dd291"], "note": "Phase E reclaim; omits 'phase e'"}
+
+// --- causal: decisions and rejected approaches. Tests whether raw evidence
+// suffices or a derived decision layer is needed.
+{"id": "causal-why-not-backup-api", "category": "causal", "query": "why did we decide against the online backup API for the large database", "gold_sessions": ["2fa180da", "019f0ed2"], "note": "thrashes on a hot 124G db"}
+{"id": "causal-why-fork-codex", "category": "causal", "query": "why were we carrying our own build of the codex CLI instead of the released one", "gold_sessions": ["723731f5", "b66637c1", "62cb4a4c"], "note": "upstream websocket disconnect bug"}
+{"id": "causal-why-observe-only", "category": "causal", "query": "why did some managed sessions come up as observe only instead of controllable", "gold_sessions": ["019d5946", "4a2ed532", "019d6406"], "note": "Bedrock channels launch race"}
+
+// --- supersession: the current answer must beat the superseded one.
+{"id": "super-current-machine-name", "category": "supersession", "query": "what is this laptop currently called in the machine list", "gold_sessions": ["019cce63", "019d4441"], "note": "cinder, not shipper-laptop"}
+{"id": "super-codex-binary-now", "category": "supersession", "query": "which codex binary do managed sessions use now", "gold_sessions": ["723731f5", "b66637c1"], "note": "stock codex from PATH; the fork lane was removed"}
+
+// --- absent: plausible, on-topic, and answered by nothing. A retriever that
+// returns something here is manufacturing confidence.
+{"id": "absent-kubernetes-migration", "category": "absent", "query": "our migration from Kubernetes to Nomad for the runtime host", "gold_sessions": [], "note": "never happened"}
+{"id": "absent-oracle", "category": "absent", "query": "configuring the Oracle database connection pool", "gold_sessions": [], "note": "no Oracle anywhere"}
+{"id": "absent-android-app", "category": "absent", "query": "publishing the Longhouse Android app to the Play Store", "gold_sessions": [], "note": "iOS only, no Android app"}
+{"id": "absent-stripe-refund-flow", "category": "absent", "query": "implementing the automated customer refund approval workflow", "gold_sessions": [], "note": "billing exists, this flow does not"}
+{"id": "absent-graphql", "category": "absent", "query": "the GraphQL schema for the timeline API", "gold_sessions": [], "note": "REST only"}
+{"id": "absent-onprem-installer", "category": "absent", "query": "the Windows MSI installer for enterprise on-premise deployment", "gold_sessions": [], "note": "no Windows installer, no enterprise tier"}
