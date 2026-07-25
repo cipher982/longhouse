@@ -83,15 +83,15 @@ _ARCHIVE_SEARCH_SQL = """
 # The walk stops at _CANDIDATE_CEILING. When it returns fewer rows than that,
 # it provably saw every match and the ranking is exact; callers learn which
 # happened from `ranking_scope` instead of having to guess.
+#
+# Snippets are built only for the rows actually returned. Building them for
+# every candidate made cost scale with stored text rather than with results —
+# real events carry multi-KB tool output, so snippetting a full candidate window
+# cost seconds and still blew the deadline on hosted data even after the ranking
+# fix. Snippetting the final page instead keeps that cost flat.
 _SEARCHABLE_SEARCH_SQL = """
-    SELECT *, COUNT(*) OVER () AS candidate_count FROM (
-        SELECT e.source_event_id AS search_event_id, e.session_id, e.generation_id, e.source_object_id,
-               e.record_ordinal, e.event_id, e.order_time_us,
-               e.role, e.tool_name,
-               snippet(searchable_fts, 0, '', '', ' … ', 24) AS content_snippet,
-               snippet(searchable_fts, 1, '', '', ' … ', 24) AS tool_output_snippet,
-               e.project, e.provider, e.environment, e.indexed_through, e.event_count,
-               bm25(searchable_fts) AS rank
+    WITH candidates AS (
+        SELECT e.source_event_id AS search_event_id, bm25(searchable_fts) AS rank
         FROM searchable_fts
         JOIN searchable_events e ON e.source_event_id = searchable_fts.rowid
         WHERE searchable_fts MATCH ? AND e.owner_id = ?
@@ -102,13 +102,28 @@ _SEARCHABLE_SEARCH_SQL = """
           AND (? IS NULL OR e.order_time_us < ?)
         ORDER BY searchable_fts.rowid DESC
         LIMIT ?
+    ), top AS (
+        SELECT search_event_id, rank, (SELECT COUNT(*) FROM candidates) AS candidate_count
+        FROM candidates
+        ORDER BY rank ASC
+        LIMIT ?
     )
-    ORDER BY rank ASC
-    LIMIT ?
+    SELECT t.search_event_id, e.session_id, e.generation_id, e.source_object_id,
+           e.record_ordinal, e.event_id, e.order_time_us,
+           e.role, e.tool_name,
+           snippet(searchable_fts, 0, '', '', ' … ', 24) AS content_snippet,
+           snippet(searchable_fts, 1, '', '', ' … ', 24) AS tool_output_snippet,
+           e.project, e.provider, e.environment, e.indexed_through, e.event_count,
+           t.rank AS rank, t.candidate_count AS candidate_count
+    FROM top t
+    JOIN searchable_events e ON e.source_event_id = t.search_event_id
+    JOIN searchable_fts ON searchable_fts.rowid = t.search_event_id
+    WHERE searchable_fts MATCH ?
+    ORDER BY t.rank ASC
 """
 
 # Most recent matching events considered before ranking. Measured on a 5M-row
-# corpus, the worst case (a term matching 2.2M events) costs ~440ms against a
+# corpus, the worst case (a term matching 2.2M events) costs ~346ms against a
 # 500ms target, and ranking is exact for any term matching fewer than this many
 # events — on a real corpus, every query carrying useful signal.
 #
@@ -846,7 +861,7 @@ class SearchStore:
         if use_searchable_corpus:
             candidate_ceiling = max(limit, _CANDIDATE_CEILING)
             sql = _SEARCHABLE_SEARCH_SQL
-            params = filter_params + (candidate_ceiling, limit)
+            params = filter_params + (candidate_ceiling, limit, fts_query)
         else:
             candidate_ceiling = None
             sql = _ARCHIVE_SEARCH_SQL

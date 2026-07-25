@@ -162,7 +162,7 @@ def test_searchable_search_walks_rowid_descending_and_sorts_only_candidates(tmp_
     try:
         plan = connection.execute(
             f"EXPLAIN QUERY PLAN {_SEARCHABLE_SEARCH_SQL}",
-            ("search db", "42", None, None, None, None, None, None, None, None, None, None, 50_000, 10),
+            ("search db", "42", None, None, None, None, None, None, None, None, None, None, 50_000, 10, "search db"),
         ).fetchall()
         details = [str(row[3]) for row in plan]
         assert any("searchable_fts" in detail and "VIRTUAL TABLE INDEX 192:" in detail for detail in details)
@@ -172,6 +172,19 @@ def test_searchable_search_walks_rowid_descending_and_sorts_only_candidates(tmp_
         assert any("SEARCH e USING INTEGER PRIMARY KEY" in detail for detail in details)
     finally:
         connection.close()
+
+
+def test_searchable_search_snippets_only_the_returned_page(tmp_path):
+    """Snippet cost must not scale with the candidate window.
+
+    Real events carry multi-KB tool output, so building snippets for every
+    candidate made search cost track stored text rather than results — enough to
+    blow the deadline on hosted data even with ranking already bounded.
+    """
+
+    candidate_source, _, remainder = _SEARCHABLE_SEARCH_SQL.partition("), top AS (")
+    assert "snippet(" not in candidate_source, "candidate walk must not build snippets"
+    assert "snippet(" in remainder, "the returned page still needs snippets"
 
 
 @pytest.mark.asyncio
