@@ -5,6 +5,25 @@
 **Created:** 2026-07-25
 **Depends on:** `speed-of-light-recall.md`, `speed-of-light-database.md`
 
+## Terminology
+
+Two distinctions get confused because both sound like temperature. They are
+independent, and the design depends on keeping them apart.
+
+**Hot lane vs archive lane — *which data*.** A permanent property of a row.
+The hot lane is the published, current-generation, 91-day corpus
+(`searchable_events` + `searchable_fts`, 4.0 GB). The archive lane is all
+history up to 365 days (`events` + `events_fts`, 13.0 GB). Today **both live in
+the same file**, `search.db`. The split is logical, not physical.
+
+**Warm vs cold — *where the bytes are right now*.** Whether a page is in RAM or
+must be read from the volume. This changes minute to minute and is not a
+database at all.
+
+The failure being fixed is that **the hot lane goes cold**. `adb` searches only
+the 4 GB hot lane and cost 4.8 s once and 0.23 s a moment later — same data,
+same query, different residency. Cold and archive are not synonyms.
+
 ## Purpose
 
 `speed-of-light-recall.md` fixed the algorithm: recall no longer ranks the whole
@@ -131,6 +150,66 @@ Note the two largest archive segments, `events` (9.2 GB) and `events_fts_data`
 This is also the change that makes the remaining three measurable: while the hot
 set is randomly evicted, every latency number is dominated by noise.
 
+#### The atomicity problem this creates
+
+`publish_generation` currently opens one `BEGIN IMMEDIATE` and, inside it,
+writes the archive tables (`indexed_objects`, `projection_membership`, `events`,
+`session_index`) *and* calls `_replace_searchable_session` to rewrite that
+session's hot slice. One transaction, one file, atomic.
+
+SQLite in WAL mode does not provide atomic commit across `ATTACH`ed databases.
+Splitting the files therefore breaks that guarantee: a crash between the two
+writes leaves the archive published and the hot slice stale, missing, or
+half-replaced.
+
+Three ways to resolve it, and this is the main thing the design needs a decision
+on:
+
+**A. Accept a torn write and reconcile.** The hot lane is derived and
+rebuildable — that is already the stated architecture. Publish archive first,
+then the hot slice. Record the published revision as a watermark the hot lane
+must catch up to; a background reconciler republishes any session whose hot
+slice is behind. A torn write degrades to a stale hot slice, never to wrong
+archive data.
+
+*Cost:* recall can briefly miss or misreport a just-published session, and
+`ranking_scope` does not describe that gap — a new signal or an accepted
+staleness window is needed.
+
+**B. Keep one file and defend residency another way.** No atomicity change.
+But there is no OS or SQLite mechanism that pins one table's pages against
+another's in the same file, so this does not actually solve the problem. Listed
+because it is the null option and should be rejected explicitly rather than
+silently.
+
+**C. Make the hot lane a pure projection with its own writer.** The hot lane
+stops being written by `publish_generation` at all and is rebuilt from published
+archive state by a projector with its own cursor. This is the cleanest seam and
+matches how catalogd projections already work, but it is a larger change and
+makes hot-lane freshness a function of projector lag rather than publish
+success.
+
+Current preference is **A**, because the hot lane is already declared
+disposable, the watermark is small, and it does not require rewriting the
+publish path. **C** is the better end state if hot-lane lag becomes a product
+concern rather than an implementation detail.
+
+#### Implementation sketch for A
+
+1. `searchd_paths()` returns a second path, `searchable.db`, beside `search.db`.
+2. `open_search_database` opens `search.db` and `ATTACH`es `searchable.db` as
+   `hot`; hot-lane DDL moves to that schema. Read connections attach it too.
+3. `SCHEMA_GENERATION` bumps. The store is disposable, so an incompatible
+   generation already rebuilds cleanly — no migration is written. The cost is a
+   rebuild of the 4.0 GB hot lane from published archive state on first start.
+4. `publish_generation` commits the archive transaction, then writes the hot
+   slice in a second transaction, recording `published_revision` per session.
+5. A reconciler republishes sessions whose hot slice is behind the watermark.
+
+The rebuild in (3) is the operationally risky step: it is the one moment the
+tenant has no hot lane. It needs a measured duration on 1.385M rows before this
+ships, and probably a fallback that serves the archive lane meanwhile.
+
 ### 2. Separate the scan-hot columns from the fetch-cold payload
 
 Give the walk a narrow spine table clustered by rowid, holding only what the
@@ -215,14 +294,23 @@ corpus.
 
 ## Open Questions
 
-1. Does `searchable.db` want its own SQLite connection pool and admission lane,
+1. **Atomicity:** option A, B, or C above. This is the load-bearing decision.
+2. How long does the one-time hot-lane rebuild take on 1.385M rows, and what
+   serves recall during it?
+3. Does `ATTACH` actually buy separate residency, or does the OS page cache
+   treat two files on the same volume identically under pressure? The design
+   assumes eviction pressure is per-file because the archive sweep touches
+   archive pages; that assumption should be tested, not asserted.
+4. Does `searchable.db` want its own SQLite connection pool and admission lane,
    or does it inherit searchd's? Separate files argue for separate pools.
-2. Is `project` low-cardinality enough to intern safely, or does it need a
+5. Is `project` low-cardinality enough to intern safely, or does it need a
    dictionary table with eviction?
-3. Does the spine want `role` and `tool_name` too? They are small and some
+6. Does the spine want `role` and `tool_name` too? They are small and some
    callers filter on them.
-4. What rebuilds the spine — the existing publish path, or a projector?
-5. Does raising page size to 16 KiB help or hurt the FTS doclist specifically?
+7. Does raising page size to 16 KiB help or hurt the FTS doclist specifically?
+8. `retrieval.db` (511 MB, `recall_chunks`) has not been written since July 8
+   and live recall returns `chunk_id: null`. If it is genuinely dead, it is
+   cache pressure for nothing — but no one has confirmed nothing reads it.
 
 ## Sequencing
 
