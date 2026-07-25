@@ -293,7 +293,7 @@ fn coordination_tools() -> Vec<Value> {
                 "query":{"type":"string","description":"Text to match in session content"},
                 "project":{"type":"string","description":"Optional project filter, e.g. g55"},
                 "provider":{"type":"string","description":"Optional provider filter"},
-                "days_back":{"type":"integer","default":14,"minimum":1},
+                "days_back":{"type":"integer","default":14,"minimum":1,"maximum":90},
                 "limit":{"type":"integer","default":10,"minimum":1,"maximum":100},
             }),
         ),
@@ -419,9 +419,10 @@ async fn call_coordination_tool(id: Value, params: Option<&Value>, state: &Bridg
                     request = request.query(&[(key, value)]);
                 }
             }
+            // The archive caps days_back at 90; clamp rather than forwarding a 422.
             request = request.query(&[(
                 "days_back",
-                clamp_i64(arguments.get("days_back"), 14, 1, i64::MAX).to_string(),
+                clamp_i64(arguments.get("days_back"), 14, 1, 90).to_string(),
             )]);
             request.query(&[(
                 "limit",

@@ -378,6 +378,12 @@ def tail(
         "-n",
         help="Number of recent events to return.",
     ),
+    roles: str | None = typer.Option(
+        None,
+        "--roles",
+        help="Comma-separated roles to include: user, assistant, tool. Tool output "
+        "dominates most transcripts, so --roles user,assistant reads decisions.",
+    ),
     output_json: bool = typer.Option(
         False,
         "--json",
@@ -412,7 +418,7 @@ def tail(
             response = client.get(
                 f"{base_url.rstrip('/')}/api/agents/sessions/{resolved_session_id}/tail",
                 headers={"X-Agents-Token": resolved_token},
-                params={"limit": limit},
+                params={"limit": limit, **({"roles": roles} if roles else {})},
             )
     except httpx.ConnectError:
         typer.secho(f"Could not connect to {base_url}", fg=typer.colors.RED)
@@ -443,6 +449,11 @@ def tail(
 
     typer.echo(f"Session: {resolved_session_id}")
     typer.echo(f"Events: {len(events)}")
+    if payload.get("window_exhausted"):
+        typer.secho(
+            "Scan window ran out before filling --limit; older matching turns may exist.",
+            fg=typer.colors.YELLOW,
+        )
     typer.echo("")
     for event in events:
         _print_tail_event(event)

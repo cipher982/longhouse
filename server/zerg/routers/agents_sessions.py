@@ -984,11 +984,24 @@ def _parse_tail_roles(raw: object) -> frozenset[str]:
     return frozenset(requested)
 
 
-def _tail_response(session_id: UUID, events: list[dict], roles: frozenset[str], scanned: int) -> dict:
+def _tail_response(
+    session_id: UUID,
+    events: list[dict],
+    roles: frozenset[str],
+    *,
+    scan_window: int | None,
+    window_exhausted: bool,
+) -> dict:
     """Build a tail payload that states what was filtered and how far it looked.
 
-    ``scanned`` lets a caller distinguish "the session has no more matching turns"
-    from "the scan window was exhausted", since tail cannot paginate.
+    ``scan_window`` is how many events were actually examined to fill a
+    role-filtered request. ``None`` means the store filtered by role itself and
+    examined the whole session.
+
+    ``window_exhausted`` is the honest answer to "are there more?". Tail cannot
+    paginate, so a short result is otherwise ambiguous: True means the scan ran
+    out before filling the limit and older matching turns may exist that this
+    tool cannot reach.
     """
 
     return {
@@ -996,7 +1009,8 @@ def _tail_response(session_id: UUID, events: list[dict], roles: frozenset[str], 
         "events": events,
         "total": len(events),
         "roles": sorted(roles),
-        "scanned_events": scanned,
+        "scan_window": scan_window,
+        "window_exhausted": window_exhausted,
     }
 
 
@@ -1044,6 +1058,13 @@ async def session_tail(
         if workspace is None:
             raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
         projection = workspace["projection"]
+        candidates = [
+            event
+            for item in projection["items"]
+            if item.get("kind") == "event"
+            and isinstance((event := item.get("event")), dict)
+            and (event.get("content_text") is not None or event.get("tool_output_text") is not None)
+        ]
         events = [
             {
                 "id": event["id"],
@@ -1052,15 +1073,22 @@ async def session_tail(
                 "tool_name": event.get("tool_name"),
                 "timestamp": event["timestamp"],
             }
-            for item in projection["items"]
-            if item.get("kind") == "event"
-            and isinstance((event := item.get("event")), dict)
-            and event.get("role") in requested_roles
-            and (event.get("content_text") is not None or event.get("tool_output_text") is not None)
+            for event in candidates
+            if event.get("role") in requested_roles
         ]
         # Tail-biased: keep the newest events when the scan over-collected.
+        matched = len(events)
         events = events[-limit:]
-        return _tail_response(session_id, events, requested_roles, scan_limit)
+        # Report what was actually examined, not what was requested. A caller that
+        # asked for N turns and got fewer needs to know whether the window ran out
+        # or the session genuinely has no more.
+        return _tail_response(
+            session_id,
+            events,
+            requested_roles,
+            scan_window=len(candidates),
+            window_exhausted=len(candidates) >= scan_limit and matched < limit,
+        )
 
     assert db is not None
     try:
@@ -1068,7 +1096,9 @@ async def session_tail(
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-    return _tail_response(session_id, events, requested_roles, limit)
+    # The legacy path filters by role in SQL over the whole session, so there is
+    # no scan window to report and no ambiguity about why results ran out.
+    return _tail_response(session_id, events, requested_roles, scan_window=None, window_exhausted=False)
 
 
 @router.post("/sessions", response_model=ConsoleSessionCreateResponse, status_code=status.HTTP_201_CREATED)

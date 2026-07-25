@@ -9,7 +9,7 @@ DIRECTED_INPUT_PROVIDERS = frozenset({"claude", "codex", "opencode"})
 
 
 def provider_supports_coordination_tools(provider: object) -> bool:
-    """Return whether managed launches can bind the five tools to this session."""
+    """Return whether managed launches can bind the coordination tools to this session."""
 
     return str(provider or "").strip().lower() in DIRECTED_INPUT_PROVIDERS
 

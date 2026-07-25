@@ -118,6 +118,32 @@ def test_tail_roles_filter_surfaces_buried_turns(tmp_path):
         assert payload["roles"] == ["assistant", "user"]
         assert [event["role"] for event in payload["events"]] == ["user"]
         assert "wireless adb" in payload["events"][0]["content"]
+        # This path filters in SQL across the whole session, so a short result
+        # means there are genuinely no more turns, not an exhausted window.
+        assert payload["scan_window"] is None
+    finally:
+        cleanup()
+
+
+def test_tail_roles_filter_reaches_past_the_limit_window(tmp_path):
+    """The filter must apply before the limit, not after.
+
+    A post-limit filter would take the last 10 events (all tool) and then drop
+    the non-matching ones, returning nothing. This is the assertion that fails
+    if the ordering ever regresses.
+    """
+    factory, cleanup = _setup_app(tmp_path)
+    session_id = _add_tool_heavy_session(factory)
+    client = TestClient(api_app)
+    try:
+        resp = client.get(
+            f"/agents/sessions/{session_id}/tail",
+            params={"limit": 3, "roles": "user"},
+        )
+        assert resp.status_code == 200
+        payload = resp.json()
+        assert payload["total"] == 1, "the buried user turn must survive the limit window"
+        assert payload["events"][0]["role"] == "user"
     finally:
         cleanup()
 

@@ -21,7 +21,7 @@ the evidence of what the model actually perceived.
 
 V1 proves the provider-neutral kernel through every provider with a shipped
 managed Helm launch: Claude, Codex, and OpenCode. Each launch carries a
-session-scoped adapter credential and exposes the same exact five tools.
+session-scoped adapter credential and exposes the same coordination tool set.
 Cursor and Antigravity remain Shadow-only, and Gemini is not currently a
 managed Longhouse provider, so none of those sessions receive coordination
 authority. The kernel remains provider-neutral; provider support remains
@@ -203,7 +203,7 @@ Environment session IDs alone are never authority.
 Claude uses two launch-scoped MCP processes from one private temporary config.
 The `longhouse-channel` process advertises only the native channel capability
 and owns injection state. The `longhouse-coordination` process alone receives
-the session credential, advertises only the five tools, and never binds the
+the session credential, advertises only the coordination tool set, and never binds the
 channel HTTP port or writes channel state. Neither facade mutates Claude's
 global MCP configuration. Codex passes the same credential from its native
 facade through the bridge into only the coordination MCP subprocess; the
@@ -311,7 +311,7 @@ path, no implicit steer, no cold resume, and recoverable failure.
   actually durable for each provider.
 
 Gate: spawn each actually registered adapter command and complete a real MCP
-handshake with the exact five tools and trustworthy current-session identity.
+handshake with the canonical coordination tool set and trustworthy current-session identity.
 
 ### Phase 5: provider and live verification
 
@@ -348,7 +348,7 @@ reachability proof without reopening the provider-neutral kernel.
 - Sender identity is session-bound and survives negative inheritance tests.
 - No acknowledgement or peer-specific parallel delivery lifecycle remains.
 - No cold session is started implicitly.
-- Claude, Codex, and OpenCode expose the same five tools, and at least two
+- Claude, Codex, and OpenCode expose the same coordination tool set, and at least two
   different providers complete the live round trip through the hosted Runtime
   Host.
 - Physical cross-machine execution remains a visible environmental proof until
