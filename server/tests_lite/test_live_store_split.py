@@ -1758,7 +1758,16 @@ def test_live_control_lease_feeds_managed_control_overlay(tmp_path, monkeypatch)
         live_engine.dispose()
 
 
-def test_live_control_lease_adopts_pending_launch_readiness(tmp_path):
+@pytest.mark.parametrize(
+    ("initial_state", "expected_state"),
+    [
+        ("pending", "adopted"),
+        ("dispatched", "adopted"),
+        ("failed", "failed"),
+        ("abandoned", "abandoned"),
+    ],
+)
+def test_live_control_lease_only_adopts_nonterminal_launch_readiness(tmp_path, initial_state, expected_state):
     now = datetime.now(timezone.utc)
     session_id = uuid4()
     live_engine = make_live_engine(f"sqlite:///{tmp_path}/live.db")
@@ -1797,7 +1806,7 @@ def test_live_control_lease_adopts_pending_launch_readiness(tmp_path):
                 device_id="cinder",
                 provider="cursor",
                 execution_lifetime="live_control",
-                state="pending",
+                state=initial_state,
                 command_id=f"managed-local-{session_id}",
                 client_request_id=None,
                 machine_id="cinder",
@@ -1807,7 +1816,9 @@ def test_live_control_lease_adopts_pending_launch_readiness(tmp_path):
             )
             readiness = live_db.get(LiveLaunchReadiness, str(session_id))
             assert readiness is not None
-            assert readiness.state == "pending"
+            assert readiness.state == initial_state
+            readiness.error_code = "launch_failed" if initial_state in {"failed", "abandoned"} else None
+            readiness.error_message = "terminal launch failure" if readiness.error_code else None
 
             lease = SimpleNamespace(
                 session_id=session_id,
@@ -1823,8 +1834,15 @@ def test_live_control_lease_adopts_pending_launch_readiness(tmp_path):
             upsert_live_control_leases(live_db, [lease], device_id="cinder", received_at=now)
             live_db.flush()
 
-            assert readiness.state == "adopted"
-            assert readiness.expires_at is None
+            assert readiness.state == expected_state
+            if expected_state == "adopted":
+                assert readiness.expires_at is None
+                assert readiness.error_code is None
+                assert readiness.error_message is None
+            else:
+                assert readiness.expires_at is not None
+                assert readiness.error_code == "launch_failed"
+                assert readiness.error_message == "terminal launch failure"
     finally:
         live_engine.dispose()
 
