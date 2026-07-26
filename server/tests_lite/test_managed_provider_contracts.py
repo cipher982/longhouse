@@ -164,7 +164,15 @@ def test_semantic_capabilities_include_exact_coordination_and_steer_limitations(
     cursor = contract_for_provider("cursor")
     antigravity = contract_for_provider("antigravity")
     assert cursor is not None and antigravity is not None
-    assert set(cursor.capabilities) == {"session.input.steer_active"}
+    # Cursor gained coordination once its launcher wired an MCP entry that
+    # resolves per-session authority. post_compaction is absent because Cursor
+    # has no compaction hook to bootstrap from.
+    assert set(cursor.capabilities) == {
+        "coordination.awareness.create",
+        "coordination.directed_input.send",
+        "coordination.directed_input.receive",
+        "session.input.steer_active",
+    }
     assert set(antigravity.capabilities) == {
         "session.input.steer_active",
         "session.launch.helm",
@@ -288,12 +296,12 @@ def test_codex_contract_keeps_helm_and_console_controls():
     assert run_once_supported_providers() == frozenset({"codex"})
 
 
-def test_codex_and_managed_claude_advertise_remote_pause_answering():
+def test_launch_tier_providers_advertise_remote_pause_answering():
     supports_by_provider = {contract.provider: set(contract.machine_control_supports) for contract in all_managed_provider_contracts()}
 
     assert "codex.answer_pause" in supports_by_provider["codex"]
     assert "claude.answer_pause" in supports_by_provider["claude"]
-    assert "opencode.answer_pause" not in supports_by_provider["opencode"]
+    assert "opencode.answer_pause" in supports_by_provider["opencode"]
     assert "antigravity.answer_pause" not in supports_by_provider["antigravity"]
 
 
@@ -307,7 +315,9 @@ def test_claude_contract_is_first_class_channel_control_provider():
     assert claude.steer_active_turn is True
     assert claude.answer_pause is True
     assert claude.operation_evidence_for("steer_active_turn")["level"] == "live_token"
-    assert "scheduled live token canary" in claude.operation_evidence_for("steer_active_turn")["next"]
+    steer = claude.operation_evidence_for("steer_active_turn")
+    assert steer["disposition"] == "implemented"
+    assert "scheduled claude steer live-token canary" in steer["owner_action"]
     assert claude.can_resume is True
     assert claude.machine_control_supports == (
         "claude.send",
@@ -327,7 +337,7 @@ def test_opencode_contract_is_server_bridge_control_provider_without_active_turn
     assert opencode.send_input is True
     assert opencode.interrupt is True
     assert opencode.steer_active_turn is False
-    assert opencode.answer_pause is False
+    assert opencode.answer_pause is True
     assert opencode.reattach is True
     assert opencode.can_resume is False
     assert opencode.turn_start is True
@@ -335,6 +345,7 @@ def test_opencode_contract_is_server_bridge_control_provider_without_active_turn
     assert opencode.machine_control_supports == (
         "opencode.send",
         "opencode.interrupt",
+        "opencode.answer_pause",
         "opencode.terminate",
         "opencode.turn_start",
         "opencode.turn_interrupt",
@@ -425,7 +436,7 @@ def test_codex_exec_is_direct_one_shot_control_not_a_steer_alias():
         ("opencode", "session.send_text", "opencode.send"),
         ("opencode", "session.interrupt", "opencode.interrupt"),
         ("opencode", "session.steer_text", None),
-        ("opencode", "session.answer_pause", None),
+        ("opencode", "session.answer_pause", "opencode.answer_pause"),
         ("opencode", "session.terminate", "opencode.terminate"),
         ("opencode", "session.turn.start", "opencode.turn_start"),
         ("opencode", "session.turn.interrupt", "opencode.turn_interrupt"),
@@ -625,3 +636,238 @@ def test_agents_service_package_imports_without_database_url():
     )
     assert result.returncode == 0, f"agents package import failed without DATABASE_URL:\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
     assert "IMPORT_OK" in result.stdout
+
+
+def test_factory_provider_set_is_derived_from_the_contract_not_hand_maintained() -> None:
+    """A provider in the contract is automatically in the factory.
+
+    Cursor shipped as a first-tier provider while remaining invisible to the
+    release factory because four separate lanes each carried their own
+    hand-maintained provider tuple. The contract is now the single authority, so
+    a new provider cannot ship without entering every lane.
+    """
+
+    from zerg.services.managed_provider_contracts import all_managed_provider_contracts
+    from zerg.services.managed_provider_contracts import factory_provider_names
+
+    contracts = all_managed_provider_contracts()
+    every_provider = tuple(sorted(contract.provider for contract in contracts))
+    launch_only = tuple(sorted(contract.provider for contract in contracts if contract.support_tier == "launch"))
+
+    assert factory_provider_names(include_maintenance=True) == every_provider
+    assert factory_provider_names() == launch_only
+    assert "cursor" in factory_provider_names()
+    # Maintenance-tier providers stay out of control-proof lanes but keep ingest,
+    # archive, and transcript coverage.
+    assert "antigravity" not in factory_provider_names()
+    assert "antigravity" in factory_provider_names(include_maintenance=True)
+
+
+def test_every_contract_provider_resolves_a_harness_adapter() -> None:
+    from zerg.qa.universal_agent_harness import ADAPTER_CLASS_BY_PROVIDER
+    from zerg.qa.universal_agent_harness import SUPPORTED_PROVIDERS
+    from zerg.qa.universal_agent_harness import provider_configs
+    from zerg.services.managed_provider_contracts import factory_provider_names
+
+    expected = factory_provider_names(include_maintenance=True)
+    assert SUPPORTED_PROVIDERS == expected
+    missing_adapters = [provider for provider in expected if provider not in ADAPTER_CLASS_BY_PROVIDER]
+    assert missing_adapters == []
+    assert tuple(sorted(provider_configs())) == expected
+
+
+def _manifest_copy() -> dict:
+    import json
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[1] / "zerg" / "config" / "managed_provider_contracts.json"
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _cursor_entry(payload: dict) -> dict:
+    return next(item for item in payload["providers"] if item["provider"] == "cursor")
+
+
+def test_operation_disposition_rejects_a_flag_that_contradicts_it() -> None:
+    """The support flag and the disposition are two statements about one fact."""
+    import copy
+
+    import pytest
+
+    from zerg.managed_provider_contract_manifest import validate_generated_contract_manifest
+
+    payload = copy.deepcopy(_manifest_copy())
+    # steer_active_turn is false for Cursor; claiming it is implemented must fail.
+    _cursor_entry(payload)["operation_evidence"]["steer_active_turn"]["disposition"] = "implemented"
+    with pytest.raises(ValueError, match="contradicts the steer_active_turn support flag"):
+        validate_generated_contract_manifest(payload)
+
+
+def test_upstream_absent_requires_a_reason_and_an_observed_version() -> None:
+    """A stale absence must be re-checkable when the provider release changes."""
+    import copy
+
+    import pytest
+
+    from zerg.managed_provider_contract_manifest import validate_generated_contract_manifest
+
+    for missing in ("reason", "observed_provider_version"):
+        payload = copy.deepcopy(_manifest_copy())
+        _cursor_entry(payload)["operation_evidence"]["steer_active_turn"].pop(missing)
+        with pytest.raises(ValueError, match=missing):
+            validate_generated_contract_manifest(payload)
+
+
+def test_policy_disabled_requires_the_path_that_does_work() -> None:
+    import copy
+
+    import pytest
+
+    from zerg.managed_provider_contract_manifest import validate_generated_contract_manifest
+
+    payload = copy.deepcopy(_manifest_copy())
+    _cursor_entry(payload)["operation_evidence"]["answer_pause"].pop("routed_to")
+    with pytest.raises(ValueError, match="routed_to"):
+        validate_generated_contract_manifest(payload)
+
+
+def test_settled_dispositions_are_typed_facts_and_backlog_stays_a_gap() -> None:
+    """upstream_absent and policy_disabled must not read as unfinished work.
+
+    Declaring dispositions changes nothing unless the harness consumes them, and
+    a scorecard that reports permanent facts as gaps forever becomes noise.
+    """
+
+    from zerg.qa.universal_agent_harness import STATUS_NOT_APPLICABLE
+    from zerg.qa.universal_agent_harness import STATUS_UNSUPPORTED_GAP
+    from zerg.qa.universal_agent_harness import YELLOW_STATUSES
+    from zerg.qa.universal_agent_harness import _unsupported_action_status
+
+    class _Action:
+        action_id = "steer_active_turn"
+
+    absent = _unsupported_action_status(
+        action=_Action(),
+        provider="cursor",
+        support_reason="contract.steer_active_turn",
+        contract_evidence={
+            "disposition": "upstream_absent",
+            "reason": "no mid-turn injection surface",
+            "observed_provider_version": "2026.07.23-e383d2b",
+        },
+    )
+    assert absent["status"] == STATUS_NOT_APPLICABLE
+    assert absent["status"] not in YELLOW_STATUSES
+    assert absent["failure_code"] is None
+    assert absent["observed_provider_version"] == "2026.07.23-e383d2b"
+
+    routed = _unsupported_action_status(
+        action=_Action(),
+        provider="cursor",
+        support_reason="contract.answer_pause",
+        contract_evidence={
+            "disposition": "policy_disabled",
+            "reason": "ACP would replace the stock TUI",
+            "routed_to": "the pull-based pause-request API",
+        },
+    )
+    assert routed["status"] == STATUS_NOT_APPLICABLE
+    assert routed["routed_to"] == "the pull-based pause-request API"
+
+    backlog = _unsupported_action_status(
+        action=_Action(),
+        provider="opencode",
+        support_reason="contract.answer_pause",
+        contract_evidence={"disposition": "not_implemented", "owner_action": "opencode_permission_reply_canary"},
+    )
+    assert backlog["status"] == STATUS_UNSUPPORTED_GAP
+    assert backlog["status"] in YELLOW_STATUSES
+    assert "opencode_permission_reply_canary" in backlog["next"]
+
+    # A provider that has not migrated yet keeps the old behavior.
+    unmigrated = _unsupported_action_status(
+        action=_Action(),
+        provider="antigravity",
+        support_reason="contract.steer_active_turn",
+        contract_evidence={},
+    )
+    assert unmigrated["status"] == STATUS_UNSUPPORTED_GAP
+
+
+def test_every_provider_operation_cell_is_classified() -> None:
+    """No cell may be silent about whether it is work or a fact."""
+    from zerg.managed_provider_contract_manifest import _OPERATION_EVIDENCE_FIELDS
+    from zerg.services.managed_provider_contracts import all_managed_provider_contracts
+
+    unclassified = [
+        f"{contract.provider}.{operation}"
+        for contract in all_managed_provider_contracts()
+        for operation in _OPERATION_EVIDENCE_FIELDS
+        if not contract.operation_evidence_for(operation).get("disposition")
+    ]
+    assert unclassified == []
+
+
+def test_outstanding_work_excludes_settled_facts_and_names_an_owner_action() -> None:
+    """The backlog is a query, not a reading exercise over free-text hints."""
+    from zerg.services.managed_provider_contracts import outstanding_factory_work
+
+    work = outstanding_factory_work()
+    assert work, "the query itself must return something or it is not exercised"
+    for row in work:
+        assert row["owner_action"], f"{row['provider']}.{row['operation']} must name the canary that closes it"
+
+    # Settled facts are not work and must never appear here.
+    operations = {(row["provider"], row["operation"]) for row in work}
+    assert ("cursor", "steer_active_turn") not in operations  # upstream_absent
+    assert ("cursor", "answer_pause") not in operations  # policy_disabled
+    assert ("opencode", "steer_active_turn") not in operations  # upstream_absent
+    assert ("claude", "run_once") not in operations  # policy_disabled
+
+
+def test_launch_tier_control_backlog_is_empty() -> None:
+    """A tripwire, so new backlog is a deliberate decision rather than a drift.
+
+    Antigravity work is excluded by tier: it is maintenance, not an investment.
+    """
+    from zerg.services.managed_provider_contracts import outstanding_factory_work
+
+    launch_work = {(row["provider"], row["operation"]) for row in outstanding_factory_work() if row["support_tier"] == "launch"}
+    assert launch_work == set()
+
+
+def test_support_decisions_carry_no_provider_name_checks() -> None:
+    """Provider facts belong in the contract, not in the universal runner.
+
+    The epic forbids the runner accumulating `if provider == ...` behavior,
+    because each branch is a place a newly onboarded provider is silently wrong
+    rather than explicitly unsupported. Cursor hit exactly that: it defaulted to
+    no permission surface and no managed-session E2E because nobody added it to
+    the right hardcoded set.
+
+    Dispatching to a provider-specific canary implementation is mechanics and
+    stays. Deciding what a provider *supports* is a contract fact.
+    """
+    import inspect
+
+    from zerg.qa import universal_agent_harness as harness
+
+    for function in (harness._action_support, harness._provider_pause_tool_name, harness.provider_configs):
+        source = inspect.getsource(function)
+        offenders = [line.strip() for line in source.splitlines() if 'provider == "' in line]
+        assert offenders == [], f"{function.__name__} still branches on provider name: {offenders}"
+
+
+def test_contract_carries_the_facts_the_runner_used_to_hardcode() -> None:
+    from zerg.services.managed_provider_contracts import contract_for_provider
+
+    claude = contract_for_provider("claude")
+    cursor = contract_for_provider("cursor")
+    antigravity = contract_for_provider("antigravity")
+    assert claude is not None and cursor is not None and antigravity is not None
+
+    assert claude.external_event_channel == "provider_live.claude_development_channel"
+    assert cursor.external_event_channel is None
+    assert claude.pause_tool_name == "AskUserQuestion"
+    assert cursor.permission_prompt_surface is True
+    assert antigravity.permission_prompt_surface is False

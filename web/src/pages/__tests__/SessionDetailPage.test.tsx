@@ -1532,7 +1532,7 @@ describe("SessionDetailPage", () => {
     await openInfoDrawer(user);
 
     expect(screen.getByTestId("session-managed-launch-hint")).toHaveTextContent(
-      "Start the next Codex session through Longhouse",
+      "Start the next Codex CLI session through Longhouse",
     );
     expect(
       screen.getByTestId("session-managed-launch-hint-command"),

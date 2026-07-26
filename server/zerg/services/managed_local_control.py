@@ -895,6 +895,7 @@ async def answer_pause_request_on_managed_local_session(
     answers: Mapping[str, object] | None = None,
     content: object | None = None,
     message: str | None = None,
+    provider_request_id: str | None = None,
     request_id: str | None = None,
     timeout_secs: int = 30,
 ) -> ManagedLocalSendResult:
@@ -921,6 +922,8 @@ async def answer_pause_request_on_managed_local_session(
         payload["content"] = content
     if message:
         payload["message"] = message
+    if provider_request_id:
+        payload["provider_request_id"] = provider_request_id
 
     result = await dispatch_managed_control_command(
         db=db,

@@ -7,7 +7,7 @@ Related:
 
 - `turn-scoped-console-execution.md`
 - `console-turn-transcript-convergence.md`
-- `cursor-helm-launch-parity.md`
+- `cursor-native-device-parity.md`
 - `cursor-storage-v2-source-fidelity.md`
 
 ## Decision

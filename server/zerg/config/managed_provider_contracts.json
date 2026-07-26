@@ -34,6 +34,12 @@
         "release_candidate": "staged_release",
         "continuous": "privacy_safe_live_replay"
       },
+      "support_tier": "launch",
+      "permission_prompt_surface": true,
+      "external_event_channel": null,
+      "pause_tool_name": "requestUserInput",
+      "harness_safe_no_token_prompt": true,
+      "harness_real_managed_session_e2e": true,
       "launch_local": true,
       "run_once": true,
       "reattach": true,
@@ -180,59 +186,81 @@
         "launch_local": {
           "level": "live_no_token",
           "source": "scripts/qa/codex-provider-release-canary.py managed_tui_attach",
-          "next": "promote to live_token when scheduled prompt canary is budgeted"
+          "disposition": "implemented",
+          "owner_action": "codex_provider_release_canary live-token prompt attach",
+          "blocker": "budget"
         },
         "run_once": {
           "level": "hermetic",
           "source": "engine codex_exec argv/runtime terminal tests plus server one-shot launch tests",
-          "next": "promote with live token codex exec transcript canary"
+          "disposition": "implemented",
+          "owner_action": "codex exec live-token transcript canary",
+          "blocker": "budget"
         },
         "reattach": {
           "level": "live_no_token",
           "source": "scripts/qa/codex-provider-release-canary.py managed_tui_attach --remote",
-          "next": "assert resume after process restart"
+          "disposition": "implemented",
+          "owner_action": "codex resume-after-process-restart assertion"
         },
         "send_input": {
           "level": "hermetic",
           "source": "engine codex_bridge IPC turn/start tests",
-          "next": "promote with live token send transcript canary"
+          "disposition": "implemented",
+          "owner_action": "codex_bridge live-token send transcript canary",
+          "blocker": "budget"
         },
         "interrupt": {
           "level": "hermetic",
           "source": "engine codex_bridge turn/interrupt tests",
-          "next": "promote with live token interrupt canary"
+          "disposition": "implemented",
+          "owner_action": "codex_bridge live-token interrupt canary",
+          "blocker": "budget"
         },
         "steer_active_turn": {
           "level": "hermetic",
           "source": "engine codex_bridge turn/steer active-turn tests",
-          "next": "promote with live token steer transcript canary"
+          "disposition": "implemented",
+          "owner_action": "codex_bridge live-token steer transcript canary",
+          "blocker": "budget"
         },
         "answer_pause": {
           "level": "hermetic",
           "source": "engine codex_bridge pause-answer command tests",
-          "next": "promote with live token pause-answer transcript canary"
+          "disposition": "implemented",
+          "owner_action": "codex_bridge live-token pause-answer transcript canary",
+          "blocker": "budget"
         },
         "terminate": {
           "level": "hermetic",
-          "source": "engine bridge stop and process cleanup tests"
+          "source": "engine bridge stop and process cleanup tests",
+          "disposition": "implemented",
+          "owner_action": "codex bridge stop and process cleanup live canary"
         },
         "tail_output": {
           "level": "live_no_token",
-          "source": "Codex bridge rollout/transcript binding canaries"
+          "source": "Codex bridge rollout/transcript binding canaries",
+          "disposition": "implemented",
+          "owner_action": "codex rollout transcript live-token assertion",
+          "blocker": "budget"
         },
         "runtime_phase": {
           "level": "hermetic",
           "source": "engine codex_bridge runtime event reducer tests",
-          "next": "promote with live runtime phase canary"
+          "disposition": "implemented",
+          "owner_action": "codex live runtime-phase canary"
         },
         "transcript_binding": {
           "level": "hermetic",
           "source": "Codex hook and rollout ingestion tests",
-          "next": "promote with live transcript assertion"
+          "disposition": "implemented",
+          "owner_action": "codex live transcript assertion"
         },
         "turn_start": {
           "level": "hermetic",
-          "source": "codex_exec turn claims and Console dispatch tests"
+          "source": "codex_exec turn claims and Console dispatch tests",
+          "disposition": "implemented",
+          "owner_action": "codex_exec live Console dispatch canary"
         }
       },
       "machine_control_supports": [
@@ -276,6 +304,12 @@
         "release_candidate": "staged_release",
         "continuous": "privacy_safe_live_replay"
       },
+      "support_tier": "launch",
+      "permission_prompt_surface": true,
+      "external_event_channel": "provider_live.claude_development_channel",
+      "pause_tool_name": "AskUserQuestion",
+      "harness_safe_no_token_prompt": false,
+      "harness_real_managed_session_e2e": true,
       "launch_local": true,
       "run_once": false,
       "reattach": true,
@@ -474,58 +508,79 @@
         "launch_local": {
           "level": "live_no_token",
           "source": "longhouse provider-live canary --provider claude binary/auth/channel/PTY checks",
-          "next": "promote with live token channel/PTY transcript canary"
+          "disposition": "implemented",
+          "owner_action": "claude live-token channel and PTY transcript canary",
+          "blocker": "budget"
         },
         "run_once": {
           "level": "none",
-          "source": "legacy session.run_once is retired; Claude Console uses session.turn.start through claude_print"
+          "source": "legacy session.run_once is retired; Claude Console uses session.turn.start through claude_print",
+          "disposition": "policy_disabled",
+          "reason": "Legacy session.run_once is retired for Claude; Console turns are turn-scoped rather than one-shot runs.",
+          "routed_to": "session.turn.start through the claude_print adapter"
         },
         "reattach": {
           "level": "hermetic",
           "source": "Claude channel bridge session state and resume unit coverage",
-          "next": "prove launch, process restart, reattach, send against same session id"
+          "disposition": "implemented",
+          "owner_action": "claude launch, restart, reattach, and send against one session id"
         },
         "send_input": {
           "level": "hermetic",
-          "source": "scripts/qa/provider-control-e2e-canary.py Claude channel send delivery; provider-response prompt proof belongs to release canaries"
+          "source": "scripts/qa/provider-control-e2e-canary.py Claude channel send delivery; provider-response prompt proof belongs to release canaries",
+          "disposition": "implemented",
+          "owner_action": "claude live-token send transcript canary",
+          "blocker": "budget"
         },
         "interrupt": {
           "level": "hermetic",
-          "source": "scripts/qa/provider-control-e2e-canary.py Claude channel interrupt sends SIGINT"
+          "source": "scripts/qa/provider-control-e2e-canary.py Claude channel interrupt sends SIGINT",
+          "disposition": "implemented",
+          "owner_action": "claude live interrupt canary"
         },
         "steer_active_turn": {
           "level": "live_token",
           "source": "make managed-claude-poc delayed intent=steer transcript assertion",
-          "next": "promote to scheduled live token canary"
+          "disposition": "implemented",
+          "owner_action": "scheduled claude steer live-token canary",
+          "blocker": "budget"
         },
         "answer_pause": {
           "level": "hermetic",
           "source": "Claude channel bridge pause-answer command tests",
-          "next": "promote with live token pause-answer transcript canary"
+          "disposition": "implemented",
+          "owner_action": "claude live-token pause-answer transcript canary",
+          "blocker": "budget"
         },
         "terminate": {
           "level": "hermetic",
           "source": "Claude channel/process control tests",
-          "next": "prove graceful process cleanup in a live managed Helm session"
+          "disposition": "implemented",
+          "owner_action": "claude live Helm graceful process cleanup canary"
         },
         "tail_output": {
           "level": "hermetic",
-          "source": "Claude transcript ingest and channel observation tests"
+          "source": "Claude transcript ingest and channel observation tests",
+          "disposition": "implemented",
+          "owner_action": "claude live transcript tail assertion"
         },
         "runtime_phase": {
           "level": "hermetic",
           "source": "Claude hooks/channel runtime phase tests",
-          "next": "prove freshness in live active-turn canary"
+          "disposition": "implemented",
+          "owner_action": "claude live active-turn phase freshness canary"
         },
         "transcript_binding": {
           "level": "hermetic",
           "source": "Claude hook transcript binding tests",
-          "next": "promote when Claude release-canary live transcript assertion exists"
+          "disposition": "implemented",
+          "owner_action": "claude release-canary live transcript assertion"
         },
         "turn_start": {
           "level": "hermetic",
           "source": "engine production-dispatch test proves bounded fresh/resume claude_print argv, binding env, identity, and terminal evidence",
-          "next": "promote with live fresh/resume/interrupt/restart/outage transcript convergence proof"
+          "disposition": "implemented",
+          "owner_action": "claude_print fresh, resume, interrupt, and restart transcript convergence proof"
         }
       },
       "machine_control_supports": [
@@ -569,13 +624,19 @@
         "release_candidate": "staged_release",
         "continuous": "privacy_safe_live_replay"
       },
+      "support_tier": "launch",
+      "permission_prompt_surface": true,
+      "external_event_channel": null,
+      "pause_tool_name": "opencode_pause_request",
+      "harness_safe_no_token_prompt": false,
+      "harness_real_managed_session_e2e": true,
       "launch_local": true,
       "run_once": false,
       "reattach": true,
       "send_input": true,
       "interrupt": true,
       "steer_active_turn": false,
-      "answer_pause": false,
+      "answer_pause": true,
       "terminate": true,
       "tail_output": true,
       "runtime_phase": true,
@@ -641,67 +702,92 @@
         "launch_local": {
           "level": "live_no_token",
           "source": "longhouse provider-live canary --provider opencode server readiness/schema/session checks",
-          "next": "promote with release-canary prompt transcript proof"
+          "disposition": "implemented",
+          "owner_action": "opencode release-canary prompt transcript proof",
+          "blocker": "budget"
         },
         "run_once": {
           "level": "none",
-          "source": "OpenCode Console uses turn_start; session.run_once is not supported by the engine"
+          "source": "OpenCode Console uses turn_start; session.run_once is not supported by the engine",
+          "disposition": "policy_disabled",
+          "reason": "The engine has no OpenCode one-shot run path; Console work is turn-scoped.",
+          "routed_to": "session.turn.start through the opencode_run adapter"
         },
         "reattach": {
           "level": "live_no_token",
           "source": "longhouse provider-live canary OpenCode process-restart session recovery plus attach command shape",
-          "next": "promote with an explicit live-token release lane"
+          "disposition": "implemented",
+          "owner_action": "opencode live-token reattach release lane",
+          "blocker": "budget"
         },
         "send_input": {
           "level": "live_no_token",
           "source": "longhouse provider-live canary OpenCode prompt_async noReply delivery through session.messages",
-          "next": "promote with release-canary assistant response proof"
+          "disposition": "implemented",
+          "owner_action": "opencode release-canary assistant response proof",
+          "blocker": "budget"
         },
         "interrupt": {
           "level": "live_no_token",
           "source": "longhouse provider-live canary OpenCode abort endpoint against a created session",
-          "next": "promote with release-canary active-turn abort proof"
+          "disposition": "implemented",
+          "owner_action": "opencode release-canary active-turn abort proof",
+          "blocker": "budget"
         },
         "steer_active_turn": {
           "level": "none",
-          "source": "unsupported until OpenCode active-turn injection semantics are proven"
+          "source": "unsupported until OpenCode active-turn injection semantics are proven",
+          "disposition": "upstream_absent",
+          "reason": "The OpenCode server API exposes session.prompt, prompt_async, and session.abort with no steer method. The Steer/Queue pull request closed unmerged in 2026-06 and mid-run delivery remains an open upstream request.",
+          "observed_provider_version": "1.17.20"
         },
         "answer_pause": {
-          "level": "none",
-          "source": "unsupported until OpenCode pause-answer semantics are proven"
+          "level": "hermetic",
+          "source": "engine OpenCode permission reply endpoint and managed pause dispatch tests",
+          "disposition": "implemented",
+          "owner_action": "opencode_bridge permission.reply live canary"
         },
         "terminate": {
           "level": "hermetic",
-          "source": "OpenCode server bridge stop/cleanup tests"
+          "source": "OpenCode server bridge stop/cleanup tests",
+          "disposition": "implemented",
+          "owner_action": "opencode live terminate canary"
         },
         "tail_output": {
           "level": "hermetic",
           "source": "OpenCode plugin transcript observation tests",
-          "next": "promote with live transcript assertion"
+          "disposition": "implemented",
+          "owner_action": "opencode live transcript assertion"
         },
         "runtime_phase": {
           "level": "hermetic",
           "source": "OpenCode plugin runtime event tests",
-          "next": "prove freshness in live active-turn canary"
+          "disposition": "implemented",
+          "owner_action": "opencode live active-turn phase freshness canary"
         },
         "transcript_binding": {
           "level": "live_no_token",
           "source": "longhouse provider-live canary OpenCode session.messages noReply marker assertion",
-          "next": "promote with release-canary assistant transcript assertion"
+          "disposition": "implemented",
+          "owner_action": "opencode release-canary assistant transcript assertion",
+          "blocker": "budget"
         },
         "turn_start": {
           "level": "hermetic",
-          "source": "opencode_run durable claims, structured JSONL projection, native --session resume, and Console dispatch tests"
+          "source": "opencode_run durable claims, structured JSONL projection, native --session resume, and Console dispatch tests",
+          "disposition": "implemented",
+          "owner_action": "opencode_run live Console dispatch canary"
         }
       },
       "machine_control_supports": [
         "opencode.send",
         "opencode.interrupt",
+        "opencode.answer_pause",
         "opencode.terminate",
         "opencode.turn_start",
         "opencode.turn_interrupt"
       ],
-      "adapter_digest": "1e02e39b9873d3c1fd85793a6a2b04ac475460016387181931165a93e07c187b"
+      "adapter_digest": "d146351320d1771b015ae40313d5480b9e652c349a161df8b9b7587d68754ce2"
     },
     {
       "provider": "antigravity",
@@ -733,6 +819,12 @@
         "release_candidate": "staged_release",
         "continuous": "privacy_safe_live_replay"
       },
+      "support_tier": "maintenance",
+      "permission_prompt_surface": false,
+      "external_event_channel": "provider_control.antigravity_hook_inbox",
+      "pause_tool_name": "antigravity_pause_request",
+      "harness_safe_no_token_prompt": false,
+      "harness_real_managed_session_e2e": true,
       "launch_local": true,
       "run_once": false,
       "reattach": false,
@@ -830,61 +922,90 @@
         "launch_local": {
           "level": "live_no_token",
           "source": "longhouse provider-live canary --provider antigravity version/help/plugin checks",
-          "next": "prove real agy loop invocation"
+          "disposition": "implemented",
+          "owner_action": "real agy loop invocation canary"
         },
         "run_once": {
           "level": "none",
-          "source": "run-once canary not implemented yet"
+          "source": "run-once canary not implemented yet",
+          "disposition": "not_implemented",
+          "reason": "No Longhouse run-once canary exists for Antigravity.",
+          "owner_action": "antigravity run-once canary"
         },
         "reattach": {
           "level": "none",
-          "source": "unsupported until Antigravity exposes stable reattach"
+          "source": "unsupported until Antigravity exposes stable reattach",
+          "disposition": "upstream_absent",
+          "reason": "Antigravity exposes no stable reattach surface for an existing conversation.",
+          "observed_provider_version": "1.1.5"
         },
         "send_input": {
           "level": "live_token",
           "source": "scripts/qa/provider-control-e2e-canary.py --provider antigravity --antigravity-real-agy-send proves real agy PreInvocation hook-inbox injection changes the model-visible turn",
-          "next": "keep interrupt, active-turn steer, and continuation gated on separate bounded-behavior canaries"
+          "disposition": "implemented",
+          "owner_action": "antigravity real agy hook-inbox injection canary"
         },
         "interrupt": {
           "level": "none",
-          "source": "unsupported until graceful stop semantics are proven"
+          "source": "unsupported until graceful stop semantics are proven",
+          "disposition": "not_implemented",
+          "reason": "Antigravity graceful stop semantics are unproven upstream, so Longhouse has not designed an interrupt path.",
+          "owner_action": "antigravity graceful stop semantics canary",
+          "blocker": "upstream"
         },
         "steer_active_turn": {
           "level": "none",
-          "source": "unsupported until bounded active-turn injection is proven"
+          "source": "unsupported until bounded active-turn injection is proven",
+          "disposition": "not_implemented",
+          "reason": "Bounded active-turn injection is unproven upstream.",
+          "owner_action": "antigravity bounded active-turn injection canary",
+          "blocker": "upstream"
         },
         "answer_pause": {
           "level": "none",
-          "source": "unsupported until pause-answer semantics are proven"
+          "source": "unsupported until pause-answer semantics are proven",
+          "disposition": "not_implemented",
+          "reason": "Antigravity pause-answer semantics are unproven upstream.",
+          "owner_action": "antigravity pause-answer semantics canary",
+          "blocker": "upstream"
         },
         "terminate": {
           "level": "none",
-          "source": "unsupported until process termination policy is designed"
+          "source": "unsupported until process termination policy is designed",
+          "disposition": "not_implemented",
+          "reason": "Longhouse has not designed a process termination policy for Antigravity.",
+          "owner_action": "antigravity process termination policy and canary"
         },
         "tail_output": {
           "level": "hermetic",
           "source": "Antigravity hook transcript binding tests",
-          "next": "promote with real agy transcript canary"
+          "disposition": "implemented",
+          "owner_action": "real agy transcript canary"
         },
         "runtime_phase": {
           "level": "hermetic",
           "source": "Antigravity hook runtime outbox tests",
-          "next": "promote with real agy phase canary"
+          "disposition": "implemented",
+          "owner_action": "real agy phase canary"
         },
         "transcript_binding": {
           "level": "hermetic",
           "source": "Antigravity hook binding tests",
-          "next": "promote with real agy transcript assertion"
+          "disposition": "implemented",
+          "owner_action": "real agy transcript assertion"
         },
         "turn_start": {
           "level": "none",
-          "source": "Antigravity has no turn-scoped Console adapter"
+          "source": "Antigravity has no turn-scoped Console adapter",
+          "disposition": "not_implemented",
+          "reason": "Antigravity has no turn-scoped Console adapter.",
+          "owner_action": "antigravity turn-scoped Console adapter"
         }
       },
       "machine_control_supports": [
         "antigravity.send"
       ],
-      "adapter_digest": "86ff5db6a902cf3cce2097c650e72a0a5f673ed0d9083df90f387aec66574a80"
+      "adapter_digest": "b5c9fa029f8b578d0352ecbe5a2f6cc0a609a615e1213ba365ed8a1f9ce98726"
     },
     {
       "provider": "cursor",
@@ -920,6 +1041,12 @@
         "release_candidate": "staged_release",
         "continuous": "privacy_safe_live_replay"
       },
+      "support_tier": "launch",
+      "permission_prompt_surface": true,
+      "external_event_channel": null,
+      "pause_tool_name": "cursor_pause_request",
+      "harness_safe_no_token_prompt": false,
+      "harness_real_managed_session_e2e": false,
       "launch_local": true,
       "run_once": false,
       "reattach": true,
@@ -933,6 +1060,89 @@
       "transcript_binding": true,
       "startup_coordination_context": false,
       "capabilities": {
+        "coordination.awareness.create": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.cursor.coordination_awareness",
+          "action_gate": "ceiling",
+          "contexts": {
+            "modes": [
+              "helm"
+            ]
+          },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
+          "required_assertions": [
+            {
+              "id": "coordination_instructions_model_visible",
+              "scenario_id": "cursor_coordination_awareness_create",
+              "oracle_source": "server/zerg/qa/provider_coordination_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 86400,
+              "oracle_digest": "ddf0aae0c879c9b48dea816c64742d052cbd3e6ef2e832deee67b723f5e3bcee"
+            }
+          ]
+        },
+        "coordination.directed_input.send": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.cursor.coordination_directed_input",
+          "action_gate": "strict",
+          "contexts": {
+            "modes": [
+              "helm"
+            ]
+          },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
+          "required_assertions": [
+            {
+              "id": "provider_input_receipt_linked",
+              "scenario_id": "cursor_coordination_directed_input",
+              "oracle_source": "server/zerg/qa/provider_coordination_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic",
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "ddf0aae0c879c9b48dea816c64742d052cbd3e6ef2e832deee67b723f5e3bcee"
+            }
+          ]
+        },
+        "coordination.directed_input.receive": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.cursor.coordination_directed_input",
+          "action_gate": "ceiling",
+          "contexts": {
+            "modes": [
+              "helm"
+            ]
+          },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
+          "required_assertions": [
+            {
+              "id": "attributed_input_visible",
+              "scenario_id": "cursor_coordination_directed_input",
+              "oracle_source": "server/zerg/qa/provider_coordination_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic",
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "ddf0aae0c879c9b48dea816c64742d052cbd3e6ef2e832deee67b723f5e3bcee"
+            }
+          ]
+        },
         "session.input.steer_active": {
           "disposition": "upstream_absent",
           "reason_code": "upstream_unavailable",
@@ -960,57 +1170,75 @@
           ]
         }
       },
-      "can_resume": false,
+      "can_resume": true,
       "turn_start": true,
       "operation_evidence": {
         "launch_local": {
-          "level": "hermetic",
-          "source": "Cursor product-path canary must pass post-deploy before live-token promotion"
+          "level": "live_token",
+          "source": "Gate 0 create_chat_resume and new_session_id launched stock cursor-agent 2026.07.23-e383d2b and completed a real turn; the product E2E launched through the installed facade and archived it. ~/.longhouse/canaries/provider-live/cursor/20260726T020333Z/gate0.json, ~/.longhouse/canaries/provider-live/cursor-product/20260726T024725Z/product-e2e.json",
+          "disposition": "implemented"
         },
         "run_once": {
           "level": "none",
-          "source": "unavailable until stock Cursor exposes a durable headless conversation source"
+          "source": "Cursor Console mints or resumes a provider thread through cursor_print; the legacy session.run_once command is intentionally Codex-only",
+          "disposition": "policy_disabled",
+          "reason": "Cursor Console has a durable headless path; only the legacy session.run_once command is Codex-only.",
+          "routed_to": "session.turn.start via the cursor_print adapter"
         },
         "reattach": {
-          "level": "hermetic",
-          "source": "Cursor Helm Gate 0 native_resume_continuity: a new stock TUI resumes the same provider conversation and Longhouse session identity"
+          "level": "live_token",
+          "source": "Gate 0 native_resume_continuity resumed the same provider conversation and store agent id under the same Longhouse session id. ~/.longhouse/canaries/provider-live/cursor/20260726T020333Z/gate0.json",
+          "disposition": "implemented"
         },
         "send_input": {
-          "level": "hermetic",
-          "source": "Cursor Helm Gate 0 idle send: exact prompt digest, native response/stop hooks, and store continuity; active phase is rejected before PTY write"
+          "level": "live_token",
+          "source": "Gate 0 create_chat_resume matched the exact prompt digest and observed a provider response; the product E2E sent remotely from hosted while idle. ~/.longhouse/canaries/provider-live/cursor/20260726T020333Z/gate0.json, ~/.longhouse/canaries/provider-live/cursor-product/20260726T024725Z/product-e2e.json",
+          "disposition": "implemented"
         },
         "interrupt": {
-          "level": "hermetic",
-          "source": "Cursor Helm Gate 0 ctrl_c_cancel: Ctrl-C stops the active generation, emits aborted/error, preserves the TUI process, and the next turn completes"
+          "level": "live_token",
+          "source": "Gate 0 ctrl_c_cancel stopped the active generation, left the TUI process alive, and completed the next turn. ~/.longhouse/canaries/provider-live/cursor/20260726T020333Z/gate0.json",
+          "disposition": "implemented"
         },
         "steer_active_turn": {
           "level": "none",
-          "source": "unsupported until Cursor exposes a mid-turn injection API"
+          "source": "unsupported until Cursor exposes a mid-turn injection API",
+          "disposition": "upstream_absent",
+          "reason": "Stock cursor-agent exposes no mid-turn injection: ACP offers session/prompt, session/update, and session/cancel only, stream-json is output-only, and hooks do not inject into an in-flight generation. Gate 0 records that injected input did not alter the active generation.",
+          "observed_provider_version": "2026.07.23-e383d2b"
         },
         "answer_pause": {
           "level": "none",
-          "source": "Cursor permission hooks use the separate pull-based Longhouse pause-request surface; session.answer_pause machine dispatch is intentionally not advertised"
+          "source": "Cursor permission hooks use the separate pull-based Longhouse pause-request surface; session.answer_pause machine dispatch is intentionally not advertised",
+          "disposition": "policy_disabled",
+          "reason": "Cursor exposes a permission reply over ACP only, and Longhouse deliberately does not execute ACP; adopting it would replace the stock TUI and change the session mode.",
+          "routed_to": "the pull-based Longhouse pause-request API via the fail-closed permission hook"
         },
         "terminate": {
-          "level": "hermetic",
-          "source": "cursor_helm: engine forwards session.terminate; launcher sends SIGKILL to the cursor-agent child pid, unlinks socket/state, and exits.",
-          "next": "promote with live terminate canary"
+          "level": "live_token",
+          "source": "The product E2E terminated the session and verified cleanup and terminal restoration. ~/.longhouse/canaries/provider-live/cursor-product/20260726T024725Z/product-e2e.json",
+          "disposition": "implemented"
         },
         "tail_output": {
-          "level": "hermetic",
-          "source": "cursor_store exact raw storage-v2 source emits cursor-store-render-v2 text, reasoning, tool-call, and tool-result projections"
+          "level": "live_token",
+          "source": "The product E2E observed archive convergence with a 0.337s recovery lag and matching event counts. ~/.longhouse/canaries/provider-live/cursor-product/20260726T024725Z/product-e2e.json",
+          "disposition": "implemented"
         },
         "runtime_phase": {
-          "level": "hermetic",
-          "source": "Cursor user hook adapter records native lifecycle/tool events and atomic active/idle/ended phase"
+          "level": "live_token",
+          "source": "Gate 0 lifecycle hooks recorded active and idle phases; the product E2E reconverged control after a Machine Agent restart. ~/.longhouse/canaries/provider-live/cursor/20260726T020333Z/gate0.json, ~/.longhouse/canaries/provider-live/cursor-product/20260726T024725Z/product-e2e.json",
+          "disposition": "implemented"
         },
         "transcript_binding": {
-          "level": "hermetic",
-          "source": "Cursor hook conversation_id plus launcher-owned Longhouse session ID binds the matching native store without recency heuristics"
+          "level": "live_token",
+          "source": "Gate 0 observed hook conversation_id, native store agent id, and the Longhouse session id agreeing across create, resume, and cancel. ~/.longhouse/canaries/provider-live/cursor/20260726T020333Z/gate0.json",
+          "disposition": "implemented"
         },
         "turn_start": {
           "level": "hermetic",
-          "source": "cursor_print structured stream, native create-chat/resume, hooks, and process-group cancellation tests"
+          "source": "cursor_print structured stream, native create-chat/resume, hooks, and process-group cancellation tests",
+          "disposition": "implemented",
+          "owner_action": "cursor_console_live_canary create_resume"
         }
       },
       "machine_control_supports": [
@@ -1020,7 +1248,7 @@
         "cursor.turn_start",
         "cursor.turn_interrupt"
       ],
-      "adapter_digest": "d9f61dbcfe9a2d1dac23afb06ee28e279990742f03d6074d6afedcdd1bdfecb0"
+      "adapter_digest": "9bfbffe317e9ee120b3430274c13d56b0fed51610182f161ad50d8c6275cc511"
     }
   ]
 }

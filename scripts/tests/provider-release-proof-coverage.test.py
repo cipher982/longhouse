@@ -10,12 +10,13 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 COVERAGE_PATH = REPO_ROOT / "docs" / "specs" / "provider-release-proof-coverage.json"
 SPEC_PATH = REPO_ROOT / "docs" / "specs" / "provider-release-proof.md"
 
-EXPECTED_PROVIDERS = ("claude", "codex", "opencode", "antigravity")
+EXPECTED_PROVIDERS = ("claude", "codex", "opencode", "antigravity", "cursor")
 PROVIDER_LABELS = {
     "claude": "Claude Code",
     "codex": "Codex/OpenAI",
     "opencode": "OpenCode",
     "antigravity": "Antigravity",
+    "cursor": "Cursor",
 }
 EXPECTED_SURFACES = (
     "install/stage exact version",

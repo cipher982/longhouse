@@ -15,10 +15,12 @@ use std::sync::{
     Arc, Mutex,
 };
 use std::thread;
+use std::{collections::BTreeMap, time::Duration};
 
 use anyhow::Context;
 use chrono::Utc;
 use serde_json::{json, Value};
+use sha2::Digest;
 use uuid::Uuid;
 
 const STATE_DIR: &str = "managed-local/cursor-helm";
@@ -336,7 +338,266 @@ struct Registration {
     session_id: String,
     run_id: String,
     hook_token: Option<String>,
+    coordination_token: Option<String>,
 }
+
+struct CursorMcpConfig {
+    path: PathBuf,
+    state_path: PathBuf,
+    session_id: String,
+}
+
+impl Drop for CursorMcpConfig {
+    fn drop(&mut self) {
+        let Ok(lock) = mcp_config_lock(&self.state_path) else {
+            return;
+        };
+        let _lock = lock;
+        let Ok(mut state) = read_mcp_config_state(&self.state_path) else {
+            return;
+        };
+        state.sessions.remove(&self.session_id);
+        state.sessions.retain(|_, owner| owner.is_live());
+        if state.sessions.is_empty() {
+            let _ = restore_mcp_config(&self.path, state.original.as_deref());
+            let _ = fs::remove_file(&self.state_path);
+        } else {
+            let _ = write_json(
+                &self.state_path,
+                &serde_json::to_value(state).unwrap_or_default(),
+            );
+        }
+    }
+}
+
+#[derive(serde::Deserialize, serde::Serialize)]
+struct CursorMcpConfigOwner {
+    pid: libc::pid_t,
+    process_start_time: String,
+}
+
+impl CursorMcpConfigOwner {
+    fn is_live(&self) -> bool {
+        process_start_time(self.pid).as_deref() == Some(&self.process_start_time)
+    }
+}
+
+#[derive(serde::Deserialize, serde::Serialize)]
+struct CursorMcpConfigState {
+    original: Option<String>,
+    sessions: BTreeMap<String, CursorMcpConfigOwner>,
+}
+
+fn coordination_token(
+    config: &LaunchConfig,
+    registration: Option<&Registration>,
+    session_id: &str,
+) -> anyhow::Result<String> {
+    if let Some(token) = registration
+        .and_then(|value| value.coordination_token.as_deref())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return Ok(token.to_owned());
+    }
+    if config.resume_session.is_none() {
+        anyhow::bail!("Longhouse did not issue coordination authority for this session");
+    }
+    let machine = home(config.config_dir.as_deref())?.join("machine");
+    let state: Value = serde_json::from_slice(&fs::read(machine.join("state.json"))?)?;
+    let url = config
+        .url
+        .as_deref()
+        .or_else(|| state.get("runtime_url").and_then(Value::as_str))
+        .filter(|value| !value.trim().is_empty())
+        .context("No Longhouse URL configured. Run `longhouse auth` first.")?;
+    let device_token = config
+        .token
+        .as_deref()
+        .map(str::to_owned)
+        .or_else(|| {
+            fs::read_to_string(machine.join("device-token"))
+                .ok()
+                .map(|value| value.trim().to_owned())
+                .filter(|value| !value.is_empty())
+        })
+        .context("No device token found. Run `longhouse auth` first.")?;
+    let endpoint = format!(
+        "{}/api/agents/sessions/{session_id}/coordination-token",
+        url.trim_end_matches('/')
+    );
+    tokio::runtime::Runtime::new()?.block_on(async {
+        let response = reqwest::Client::new()
+            .post(endpoint)
+            .header("X-Agents-Token", device_token)
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            anyhow::bail!(
+                "Could not issue coordination authority for session {session_id}: HTTP {}",
+                response.status()
+            );
+        }
+        let payload: Value = response.json().await?;
+        payload
+            .get("coordination_token")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .context("Longhouse returned empty coordination authority")
+    })
+}
+
+fn write_cursor_mcp_config(
+    state_root: &Path,
+    cwd: &Path,
+    session_id: &str,
+) -> anyhow::Result<CursorMcpConfig> {
+    let path = cwd.join(".cursor/mcp.json");
+    let state_path = state_root.join("mcp-configs").join(format!(
+        "{:x}.json",
+        sha2::Sha256::digest(cwd.as_os_str().as_bytes())
+    ));
+    let lock = mcp_config_lock(&state_path)?;
+    let _lock = lock;
+    let mut state = match read_mcp_config_state(&state_path) {
+        Ok(mut state) => {
+            state.sessions.retain(|_, owner| owner.is_live());
+            if state.sessions.is_empty() {
+                restore_mcp_config(&path, state.original.as_deref())?;
+                fs::remove_file(&state_path)?;
+                new_mcp_config_state(&path)?
+            } else {
+                state
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => new_mcp_config_state(&path)?,
+        Err(error) => return Err(error.into()),
+    };
+    let mut config: Value = state
+        .original
+        .as_deref()
+        .map(serde_json::from_str)
+        .transpose()
+        .context("Cursor MCP config is not valid JSON")?
+        .unwrap_or_else(|| json!({}));
+    let servers = config
+        .as_object_mut()
+        .context("Cursor MCP config must be an object")?
+        .entry("mcpServers")
+        .or_insert_with(|| json!({}))
+        .as_object_mut()
+        .context("Cursor MCP servers must be an object")?;
+    servers.insert(
+        "longhouse-coordination".into(),
+        json!({
+            "command": std::env::current_exe()?,
+            "args": ["cursor-helm", "coordination-mcp"],
+        }),
+    );
+    let parent = path.parent().context("Cursor MCP config has no parent")?;
+    fs::create_dir_all(parent)?;
+    let temporary = path.with_extension(format!("tmp.{}", std::process::id()));
+    fs::write(&temporary, serde_json::to_vec_pretty(&config)?)?;
+    #[cfg(unix)]
+    fs::set_permissions(
+        &temporary,
+        std::os::unix::fs::PermissionsExt::from_mode(0o600),
+    )?;
+    fs::rename(&temporary, &path)?;
+    state.sessions.insert(
+        session_id.into(),
+        CursorMcpConfigOwner {
+            pid: std::process::id() as libc::pid_t,
+            process_start_time: process_start_time(std::process::id() as libc::pid_t)
+                .context("could not capture Cursor Helm launcher process identity")?,
+        },
+    );
+    write_json(&state_path, &serde_json::to_value(&state)?)?;
+    Ok(CursorMcpConfig {
+        path,
+        state_path,
+        session_id: session_id.into(),
+    })
+}
+
+fn mcp_config_lock(state_path: &Path) -> anyhow::Result<fs::File> {
+    let lock_path = state_path.with_extension("lock");
+    fs::create_dir_all(
+        lock_path
+            .parent()
+            .context("Cursor MCP state has no parent")?,
+    )?;
+    let lock = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .open(lock_path)?;
+    fs2_lock(&lock)?;
+    Ok(lock)
+}
+
+fn read_mcp_config_state(path: &Path) -> std::io::Result<CursorMcpConfigState> {
+    serde_json::from_slice(&fs::read(path)?)
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
+}
+
+fn new_mcp_config_state(path: &Path) -> anyhow::Result<CursorMcpConfigState> {
+    let original = match fs::read_to_string(path) {
+        Ok(contents) => Some(contents),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error.into()),
+    };
+    Ok(CursorMcpConfigState {
+        original,
+        sessions: BTreeMap::new(),
+    })
+}
+
+fn restore_mcp_config(path: &Path, original: Option<&str>) -> std::io::Result<()> {
+    match original {
+        Some(original) => fs::write(path, original),
+        None => match fs::remove_file(path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error),
+        },
+    }
+}
+
+pub fn serve_coordination_mcp() -> anyhow::Result<()> {
+    let session_id = std::env::var("LONGHOUSE_SESSION_ID")
+        .or_else(|_| std::env::var("LONGHOUSE_MANAGED_SESSION_ID"))
+        .context("Cursor MCP did not inherit a Longhouse session ID")?;
+    Uuid::parse_str(&session_id).context("Cursor MCP inherited an invalid Longhouse session ID")?;
+    let mut stream = UnixStream::connect(socket_path(&session_id)?)?;
+    stream.set_read_timeout(Some(Duration::from_secs(5)))?;
+    stream.write_all(b"{\"kind\":\"coordination-token\"}\n")?;
+    let mut response = String::new();
+    stream.read_to_string(&mut response)?;
+    let payload = serde_json::from_str::<Value>(response.trim())?;
+    let token = payload
+        .get("coordination_token")
+        .and_then(Value::as_str)
+        .filter(|token| !token.is_empty())
+        .context("Cursor Helm coordination authority is unavailable")?;
+    std::env::set_var("LONGHOUSE_COORDINATION_TOKEN", token);
+    let runtime = tokio::runtime::Runtime::new()?;
+    runtime.block_on(crate::claude_channel_server::run(
+        crate::claude_channel_server::ClaudeChannelServeConfig {
+            session_id: Some(session_id),
+            run_id: None,
+            provider_session_id: None,
+            state_root: None,
+            port: 0,
+            auth_token: None,
+            claude_pid: None,
+            cwd: None,
+        },
+    ))
+}
+
 fn register(
     config: &LaunchConfig,
     cwd: &Path,
@@ -418,6 +679,7 @@ fn serve(
     session_id: &str,
     conversation: &str,
     launch_id: &str,
+    coordination_token: Option<&str>,
 ) {
     // Accepted sockets inherit nonblocking mode on macOS. Read one bounded
     // newline-framed message with a deadline; partial reads are never commands.
@@ -458,6 +720,13 @@ fn serve(
         );
     };
     match request.get("kind").and_then(Value::as_str) {
+        Some("coordination-token") => match coordination_token {
+            Some(token) => response(&mut stream, json!({"ok":true,"coordination_token":token})),
+            None => response(
+                &mut stream,
+                json!({"ok":false,"error":{"code":"session_not_attached","message":"coordination authority is unavailable"}}),
+            ),
+        },
         Some("send")
             if request
                 .get("text")
@@ -630,6 +899,8 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
     {
         anyhow::bail!("Cursor remote approval could not be enforced; Cursor was not launched");
     }
+    let coordination_token = coordination_token(&config, registered.as_ref(), &session_id)?;
+    let _mcp_config = write_cursor_mcp_config(&dir, &cwd, &session_id)?;
     write_pending_claim(
         &dir,
         &session_id,
@@ -676,6 +947,8 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
                     | b"LONGHOUSE_PERMISSION_HOOK_ENABLED"
                     | b"LONGHOUSE_HOOK_URL"
                     | b"LONGHOUSE_HOOK_TOKEN"
+                    | b"LONGHOUSE_COORDINATION_TOKEN"
+                    | b"LONGHOUSE_MANAGED_SESSION_ID"
             ))
             .then(|| (key, value.as_os_str().as_bytes().to_vec()))
         })
@@ -814,6 +1087,7 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
     let server_session = session_id.clone();
     let server_conversation = conversation.clone();
     let server_launch = launch_id.clone();
+    let server_coordination_token = coordination_token.clone();
     let server = thread::spawn(move || {
         while !socket_stop.load(Ordering::Relaxed) {
             match listener.accept() {
@@ -827,6 +1101,7 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
                     &server_session,
                     &server_conversation,
                     &server_launch,
+                    Some(&server_coordination_token),
                 ),
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                     thread::sleep(std::time::Duration::from_millis(25))
@@ -966,6 +1241,7 @@ mod tests {
             "session-id",
             "conversation-id",
             "launch-id",
+            None,
         );
         let mut response = String::new();
         client.read_to_string(&mut response).unwrap();
@@ -987,6 +1263,113 @@ mod tests {
         }
         write_json(&claim_path(dir, &session_id), &claim).unwrap();
         session_id
+    }
+
+    #[test]
+    fn mcp_config_scopes_coordination_authority_to_the_server() {
+        let root = tempfile::tempdir().unwrap();
+        let cursor_dir = root.path().join(".cursor");
+        fs::create_dir(&cursor_dir).unwrap();
+        let path = cursor_dir.join("mcp.json");
+        let original = br#"{"mcpServers":{"existing":{"command":"existing"}}}"#;
+        fs::write(&path, original).unwrap();
+
+        let config = write_cursor_mcp_config(
+            &root.path().join("state"),
+            root.path(),
+            "11111111-1111-4111-8111-111111111111",
+        )
+        .unwrap();
+        let payload: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        let server = &payload["mcpServers"]["longhouse-coordination"];
+        assert_eq!(
+            server["command"],
+            std::env::current_exe().unwrap().display().to_string()
+        );
+        assert_eq!(server["args"], json!(["cursor-helm", "coordination-mcp"]));
+        assert!(server.get("env").is_none());
+        assert!(payload["mcpServers"]["existing"].is_object());
+
+        drop(config);
+        assert_eq!(fs::read(path).unwrap(), original);
+    }
+
+    #[test]
+    fn concurrent_mcp_configs_do_not_remove_live_authority_or_leave_tokens() {
+        let root = tempfile::tempdir().unwrap();
+        let first = write_cursor_mcp_config(
+            &root.path().join("state"),
+            root.path(),
+            "11111111-1111-4111-8111-111111111111",
+        )
+        .unwrap();
+        let second = write_cursor_mcp_config(
+            &root.path().join("state"),
+            root.path(),
+            "22222222-2222-4222-8222-222222222222",
+        )
+        .unwrap();
+        let path = root.path().join(".cursor/mcp.json");
+
+        drop(first);
+        let while_second_is_live = fs::read_to_string(&path)
+            .expect("the second session must retain its MCP configuration");
+        assert!(while_second_is_live.contains("coordination-mcp"));
+        assert!(!while_second_is_live.contains("first-session-secret"));
+        assert!(!while_second_is_live.contains("second-session-secret"));
+
+        drop(second);
+        assert!(
+            !path.exists(),
+            "the injected config must be removed after both sessions exit"
+        );
+    }
+
+    #[test]
+    fn resumed_session_requests_fresh_coordination_authority() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(std::time::Duration::from_secs(1)))
+                .unwrap();
+            let mut request = [0; 4096];
+            let count = stream.read(&mut request).unwrap();
+            let request = String::from_utf8_lossy(&request[..count]);
+            assert!(request.starts_with(
+                "POST /api/agents/sessions/11111111-1111-4111-8111-111111111111/coordination-token"
+            ));
+            assert!(request
+                .to_ascii_lowercase()
+                .contains("x-agents-token: device-token"));
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 39\r\n\r\n{\"coordination_token\":\"resumed-secret\"}",
+                )
+                .unwrap();
+        });
+        let config = LaunchConfig {
+            cwd: PathBuf::new(),
+            project: None,
+            name: None,
+            loop_mode: "interactive".into(),
+            url: Some(format!("http://{address}")),
+            token: Some("device-token".into()),
+            resume_session: Some("11111111-1111-4111-8111-111111111111".into()),
+            cursor_bin: None,
+            config_dir: None,
+            permission_mode: None,
+            verbose: false,
+            open: false,
+            cursor_args: vec![],
+        };
+
+        assert_eq!(
+            coordination_token(&config, None, "11111111-1111-4111-8111-111111111111").unwrap(),
+            "resumed-secret"
+        );
+        server.join().unwrap();
     }
 
     #[test]
@@ -1063,6 +1446,7 @@ mod tests {
             "session-id",
             "conversation-id",
             "launch-id",
+            None,
         );
         let mut malformed = String::new();
         client.read_to_string(&mut malformed).unwrap();

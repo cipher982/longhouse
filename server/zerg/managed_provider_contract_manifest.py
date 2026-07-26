@@ -38,6 +38,11 @@ _STRING_LIST_FIELDS = (
     "observation_sources",
 )
 _FACTORY_STRING_FIELDS = ("normalization_ruleset", "presentation_ruleset")
+# The factory's supported-provider set is derived from this field rather than
+# from hand-maintained tuples in each lane. ``launch`` providers run every lane;
+# ``maintenance`` providers keep ingest, archive, and transcript scenarios but
+# are excluded from control-proof lanes.
+_SUPPORT_TIERS = frozenset({"launch", "maintenance"})
 _PROOF_PROFILE_NAMES = frozenset({"pull_request", "release_candidate", "continuous"})
 _PROOF_PROFILE_VALUES = frozenset({"hermetic", "staged_release", "privacy_safe_live_replay"})
 _OPERATION_EVIDENCE_FIELDS = (
@@ -78,6 +83,27 @@ _OPERATION_EVIDENCE_LEVELS = frozenset(
     }
 )
 _CAPABILITY_DISPOSITIONS = frozenset({"implemented", "not_implemented", "upstream_absent", "policy_disabled"})
+# Operation evidence answers three independent questions, and collapsing them is
+# what made "what is left?" unanswerable. ``disposition`` is implementation truth
+# and deliberately shares the capability vocabulary above, so there is one
+# implementation vocabulary rather than two. ``level`` stays the evidence axis.
+# ``blocker`` records why a promotion has not happened, which is a property of the
+# schedule rather than of the operation.
+_OPERATION_DISPOSITIONS = _CAPABILITY_DISPOSITIONS
+_OPERATION_BLOCKERS = frozenset({"none", "budget", "upstream", "policy"})
+_OPERATION_EVIDENCE_KEYS = frozenset(
+    {
+        "level",
+        "source",
+        "next",
+        "disposition",
+        "reason",
+        "routed_to",
+        "owner_action",
+        "blocker",
+        "observed_provider_version",
+    }
+)
 _CAPABILITY_ACTION_GATES = frozenset({"ceiling", "warn", "strict"})
 _CAPABILITY_EVIDENCE_CLASSES = frozenset({"hermetic", "live_no_token", "live_token"})
 _CAPABILITY_REASON_CODES = frozenset(
@@ -140,6 +166,87 @@ def _validate_operation_evidence(item: dict[str, Any]) -> None:
             raise ValueError(f"managed provider contract {provider}: unsupported operation {field} must have evidence level none")
         if "next" in entry and (not isinstance(entry["next"], str) or not entry["next"].strip()):
             raise ValueError(f"managed provider contract {provider}: operation_evidence.{field}.next must be a non-empty string")
+        unknown_keys = sorted(key for key in entry if key not in _OPERATION_EVIDENCE_KEYS)
+        if unknown_keys:
+            raise ValueError(f"managed provider contract {provider}: operation_evidence.{field} has unknown keys {', '.join(unknown_keys)}")
+    # Dispositions validate in a second pass so a concrete per-field problem is
+    # reported before the blanket classification requirement.
+    for field in _OPERATION_EVIDENCE_FIELDS:
+        _validate_operation_disposition(
+            provider=str(provider),
+            operation=field,
+            entry=evidence[field],
+            supported=item.get(field) is True,
+        )
+
+
+def _require_operation_string(*, provider: str, operation: str, entry: dict[str, Any], key: str, because: str) -> None:
+    value = entry.get(key)
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"managed provider contract {provider}: operation_evidence.{operation}.{key} is required {because}")
+
+
+def _validate_operation_disposition(*, provider: str, operation: str, entry: dict[str, Any], supported: bool) -> None:
+    """Enforce the disposition invariants for one operation.
+
+    Every cell must be classified, and once classified it must be internally
+    consistent: the whole point is that an agent can trust a cell without
+    reading the implementation behind it.
+    """
+
+    disposition = entry.get("disposition")
+    if disposition not in _OPERATION_DISPOSITIONS:
+        raise ValueError(
+            f"managed provider contract {provider}: operation_evidence.{operation}.disposition must be one of "
+            f"{sorted(_OPERATION_DISPOSITIONS)}"
+        )
+    blocker = entry.get("blocker", "none")
+    if blocker not in _OPERATION_BLOCKERS:
+        raise ValueError(
+            f"managed provider contract {provider}: operation_evidence.{operation}.blocker must be one of {sorted(_OPERATION_BLOCKERS)}"
+        )
+    # The support flag and the disposition are two statements about the same
+    # fact, so they may not disagree.
+    if supported != (disposition == "implemented"):
+        raise ValueError(
+            f"managed provider contract {provider}: operation_evidence.{operation}.disposition "
+            f"{disposition!r} contradicts the {operation} support flag"
+        )
+    if disposition in {"upstream_absent", "policy_disabled"}:
+        _require_operation_string(
+            provider=provider,
+            operation=operation,
+            entry=entry,
+            key="reason",
+            because=f"when disposition is {disposition}",
+        )
+    if disposition == "policy_disabled":
+        # Without this a client author cannot find the path that does work.
+        _require_operation_string(
+            provider=provider,
+            operation=operation,
+            entry=entry,
+            key="routed_to",
+            because="when disposition is policy_disabled",
+        )
+    if disposition == "upstream_absent":
+        # A stale absence is re-checked when release identity changes; that is how
+        # the factory learns an upstream gap closed.
+        _require_operation_string(
+            provider=provider,
+            operation=operation,
+            entry=entry,
+            key="observed_provider_version",
+            because="when disposition is upstream_absent",
+        )
+    if disposition == "not_implemented":
+        _require_operation_string(
+            provider=provider,
+            operation=operation,
+            entry=entry,
+            key="owner_action",
+            because="so unfinished Longhouse work names the canary that would close it",
+        )
 
 
 def _validate_machine_control_supports(item: dict[str, Any]) -> None:
@@ -224,6 +331,16 @@ def _validate_factory_contract(item: dict[str, Any]) -> None:
     provider = str(item.get("provider") or "<unknown>")
     for field in _FACTORY_STRING_FIELDS:
         _validate_string_field(item, field)
+    if not isinstance(item.get("permission_prompt_surface"), bool):
+        raise ValueError(f"managed provider contract {provider}: permission_prompt_surface must be a boolean")
+    channel = item.get("external_event_channel")
+    if channel is not None and (not isinstance(channel, str) or not channel.strip()):
+        raise ValueError(f"managed provider contract {provider}: external_event_channel must be a non-empty string or null")
+    _validate_string_field(item, "pause_tool_name")
+    for field in ("harness_safe_no_token_prompt", "harness_real_managed_session_e2e"):
+        _validate_bool_field(item, field)
+    if item.get("support_tier") not in _SUPPORT_TIERS:
+        raise ValueError(f"managed provider contract {provider}: support_tier must be one of {sorted(_SUPPORT_TIERS)}")
     proof_profiles = item.get("proof_profiles")
     if not isinstance(proof_profiles, dict):
         raise ValueError(f"managed provider contract {provider}: proof_profiles must be an object")

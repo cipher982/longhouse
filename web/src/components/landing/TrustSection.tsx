@@ -29,7 +29,7 @@ const faqs: FAQ[] = [
   {
     question: "Which providers are strongest today?",
     answer:
-      "Claude Code, Codex, and OpenCode have native managed control paths. Cursor and Antigravity sessions are searchable in Shadow mode while their native control runtimes are completed. The provider table above is the exact contract.",
+      "Claude Code, Codex, Cursor, and OpenCode have native managed control paths. Antigravity can launch and send, with interrupt/steer/resume still incomplete. The provider table above is the exact contract.",
   },
   {
     question: "Where is my data stored?",

@@ -841,74 +841,6 @@ def _opencode_permission_request_id(row) -> str | None:
     return rid or None
 
 
-async def _resolve_opencode_permission_via_bridge(
-    *,
-    db: Session,
-    row,
-    decision: str,
-    response_message: str | None,
-    request_id: str,
-) -> PauseRequestResponseResponse:
-    """Deliver an OpenCode permission decision through the bridge, then resolve.
-
-    The runtime host shares the machine with the opencode bridge for managed-local
-    sessions, so we invoke opencode_bridge.permission_reply (it resolves bridge
-    state from disk and POSTs to the local opencode server's
-    /permission/{id}/reply). It does blocking I/O, so run it off the event loop.
-    answer->allow, reject|cancel->deny.
-    """
-    from zerg.cli import opencode_bridge
-
-    bridge_decision = "allow" if decision == "answer" else "deny"
-
-    def _reply() -> None:
-        opencode_bridge.permission_reply(
-            session_id=str(row.session_id),
-            request_id=request_id,
-            decision=bridge_decision,
-            state_root=None,
-            config_dir=None,
-            wait_secs=0.0,
-        )
-
-    bridge_error: str | None = None
-    try:
-        await asyncio.to_thread(_reply)
-    except SystemExit as exc:  # typer.Exit on bridge failure
-        if int(getattr(exc, "code", 0) or 0) != 0:
-            bridge_error = f"opencode bridge permission-reply failed (exit {exc.code})"
-    except Exception as exc:  # pragma: no cover - defensive
-        bridge_error = f"{type(exc).__name__}: {exc}"
-
-    if bridge_error is not None:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail={
-                "code": "opencode_permission_reply_failed",
-                "error_code": "opencode_permission_reply_failed",
-                "message": bridge_error,
-                "pause_request_id": str(row.id),
-                "retryable": True,
-                "refetch_required": True,
-            },
-        )
-
-    status_value = "resolved" if decision == "answer" else "rejected"
-    resolved_at = datetime.now(timezone.utc)
-    pause_projection = _resolve_push_pause_request_best_effort(
-        db=db,
-        row=row,
-        status_value=status_value,
-        resolved_at=resolved_at,
-        response_payload={"permissionDecision": bridge_decision, "decision": decision, "transport": "opencode_bridge"},
-        response_text=response_message,
-    )
-    return PauseRequestResponseResponse(
-        status=status_value,
-        pause_request=pause_projection,
-    )
-
-
 async def _respond_to_pause_request(
     *,
     source_session,
@@ -977,18 +909,6 @@ async def _respond_to_pause_request(
             response_message=response_message,
         )
 
-    # OpenCode permission prompts push the decision to the local opencode server
-    # via the bridge (not the engine websocket), then resolve.
-    opencode_request_id = _opencode_permission_request_id(row)
-    if opencode_request_id is not None:
-        return await _resolve_opencode_permission_via_bridge(
-            db=db,
-            row=row,
-            decision=decision,
-            response_message=response_message,
-            request_id=opencode_request_id,
-        )
-
     result = await answer_pause_request_on_managed_local_session(
         db=db,
         owner_id=owner_id,
@@ -998,6 +918,7 @@ async def _respond_to_pause_request(
         answers=body.answers,
         content=body.content,
         message=response_message,
+        provider_request_id=_opencode_permission_request_id(row),
         request_id=f"pause-{row.id}",
     )
     if not result.ok:
@@ -1116,48 +1037,6 @@ async def _respond_to_live_pause_request(
         )
         return PauseRequestResponseResponse(status=status_value, pause_request=_interaction_projection(resolved))
 
-    if interaction.get("source") == "opencode_bridge":
-        from zerg.cli import opencode_bridge
-
-        provider_request_id = str(interaction.get("provider_request_id") or "").strip()
-        if not provider_request_id:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="OpenCode request identity is unavailable")
-        bridge_decision = "allow" if decision == "answer" else "deny"
-        try:
-            await asyncio.to_thread(
-                opencode_bridge.permission_reply,
-                session_id=str(source_session.id),
-                request_id=provider_request_id,
-                decision=bridge_decision,
-                state_root=None,
-                config_dir=None,
-                wait_secs=0.0,
-            )
-        except (SystemExit, Exception) as exc:
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail={
-                    "code": "opencode_permission_reply_failed",
-                    "error_code": "opencode_permission_reply_failed",
-                    "message": f"OpenCode permission reply failed: {exc}",
-                    "pause_request_id": pause_request_id,
-                    "retryable": True,
-                    "refetch_required": True,
-                },
-            ) from exc
-        resolved = await _resolve_catalog_interaction(
-            session_id=source_session.id,
-            interaction_id=pause_request_id,
-            status_value=status_value,
-            response_payload={
-                "permissionDecision": bridge_decision,
-                "decision": decision,
-                "transport": "opencode_bridge",
-            },
-            response_text=message,
-        )
-        return PauseRequestResponseResponse(status=status_value, pause_request=_interaction_projection(resolved))
-
     result = await answer_pause_request_on_managed_local_session(
         db=db,
         owner_id=owner_id,
@@ -1167,6 +1046,9 @@ async def _respond_to_live_pause_request(
         answers=answers,
         content=body.content,
         message=message,
+        provider_request_id=(
+            str(interaction.get("provider_request_id") or "").strip() if interaction.get("source") == "opencode_bridge" else None
+        ),
         request_id=f"pause-{pause_request_id}",
     )
     if not result.ok:

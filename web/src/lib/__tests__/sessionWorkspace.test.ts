@@ -622,6 +622,9 @@ describe("getSessionInteractionCapabilities", () => {
     expect(capabilities.composerDisabledReason).toBe(
       "Longhouse can search this unmanaged Antigravity session here, but it cannot steer it.",
     );
+    // Antigravity supports launch_local in the contract, but its native device
+    // entrypoint is excluded, so there is no `longhouse antigravity` command to
+    // suggest. Naming one would send the user to a command that does not exist.
     expect(capabilities.managedLaunchSuggestion).toBeNull();
     expect(capabilities.primaryActionLabel).toBe("Unavailable");
   });

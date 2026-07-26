@@ -51,6 +51,18 @@ class ManagedProviderContract:
     normalization_ruleset: str = ""
     presentation_ruleset: str = ""
     proof_profiles: Mapping[str, str] = field(default_factory=dict)
+    # ``launch`` providers run every factory lane. ``maintenance`` providers keep
+    # ingest, archive, and transcript scenarios but are excluded from
+    # control-proof lanes. The factory derives its provider set from this field.
+    support_tier: str = "launch"
+    # Facts the universal harness used to hardcode as provider name checks.
+    permission_prompt_surface: bool = False
+    external_event_channel: str | None = None
+    pause_tool_name: str = "structured_question"
+    # Whether the universal harness can exercise the provider without spending
+    # model tokens, and whether it has a real managed-session E2E scenario.
+    harness_safe_no_token_prompt: bool = False
+    harness_real_managed_session_e2e: bool = False
     requires_longhouse_cli: bool = True
     launch_local: bool = True
     run_once: bool = False
@@ -141,6 +153,12 @@ def _contract_from_manifest_item(item: dict[str, object]) -> ManagedProviderCont
         normalization_ruleset=str(item.get("normalization_ruleset") or ""),
         presentation_ruleset=str(item.get("presentation_ruleset") or ""),
         proof_profiles={str(name): str(profile) for name, profile in dict(item.get("proof_profiles") or {}).items()},
+        support_tier=str(item.get("support_tier") or "launch"),
+        permission_prompt_surface=bool(item.get("permission_prompt_surface", False)),
+        external_event_channel=(str(item["external_event_channel"]) if item.get("external_event_channel") else None),
+        pause_tool_name=str(item.get("pause_tool_name") or "structured_question"),
+        harness_safe_no_token_prompt=bool(item.get("harness_safe_no_token_prompt", False)),
+        harness_real_managed_session_e2e=bool(item.get("harness_real_managed_session_e2e", False)),
         requires_longhouse_cli=bool(item.get("requires_longhouse_cli", True)),
         launch_local=bool(item.get("launch_local", True)),
         run_once=bool(item.get("run_once", False)),
@@ -206,6 +224,54 @@ def all_managed_provider_contracts() -> tuple[ManagedProviderContract, ...]:
 
 def managed_provider_names() -> frozenset[str]:
     return frozenset(_BY_PROVIDER)
+
+
+def factory_provider_names(*, include_maintenance: bool = False) -> tuple[str, ...]:
+    """Providers the automation factory covers, derived from the contract.
+
+    Every factory lane resolves its provider set here. Hand-maintained tuples in
+    each lane are what let Cursor ship as a first-tier provider while remaining
+    invisible to the release factory, so there is exactly one authority.
+
+    Control-proof lanes take the default. Ingest, archive, and transcript lanes
+    pass ``include_maintenance=True`` because those keep working for a provider
+    nobody is actively investing in.
+    """
+
+    return tuple(sorted(contract.provider for contract in _CONTRACTS if include_maintenance or contract.support_tier == "launch"))
+
+
+def outstanding_factory_work() -> tuple[dict[str, str], ...]:
+    """Every operation Longhouse could implement and has not.
+
+    This is the whole reason disposition exists as a field. Before it, unfinished
+    work was 30 free-text hints with no schema, so "what is left?" could only be
+    answered by reading the contract end to end and guessing which prose meant
+    backlog and which meant a provider limitation.
+
+    Operations blocked upstream or deliberately routed elsewhere are excluded:
+    they are settled facts, not work.
+    """
+
+    from zerg.managed_provider_contract_manifest import _OPERATION_EVIDENCE_FIELDS
+
+    work: list[dict[str, str]] = []
+    for contract in _CONTRACTS:
+        for operation in _OPERATION_EVIDENCE_FIELDS:
+            evidence = contract.operation_evidence_for(operation)
+            if evidence.get("disposition") != "not_implemented":
+                continue
+            work.append(
+                {
+                    "provider": contract.provider,
+                    "operation": operation,
+                    "support_tier": contract.support_tier,
+                    "owner_action": str(evidence.get("owner_action") or ""),
+                    "blocker": str(evidence.get("blocker") or "none"),
+                    "reason": str(evidence.get("reason") or ""),
+                }
+            )
+    return tuple(work)
 
 
 def contract_for_provider(provider: str | None) -> ManagedProviderContract | None:

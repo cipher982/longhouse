@@ -18,6 +18,9 @@ CLAUDE_LIVE_CONTROL_OPERATIONS = [
     "turn_start",
     "turn_interrupt",
 ]
+# Mirrors what the engine advertises for OpenCode. control_supports_for_path
+# extends this straight from the contract's machine_control_supports, so adding
+# an operation there must be reflected here or the state reads live_control_partial.
 OPENCODE_LIVE_CONTROL_OPERATIONS = [
     "send",
     "interrupt",
@@ -25,6 +28,7 @@ OPENCODE_LIVE_CONTROL_OPERATIONS = [
     "terminate",
     "turn_start",
     "turn_interrupt",
+    "answer_pause",
 ]
 
 

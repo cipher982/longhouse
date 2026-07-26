@@ -50,18 +50,42 @@ DEFAULT_SCENARIOS = (
     "managed_session_e2e",
 )
 LIVE_TOKEN_SCENARIO = "live_token_streaming"
+# Each fake version must satisfy the provider's real version_line grammar, so a
+# provider that does not use semver needs its own shape here.
 FAKE_VERSION_BY_PROVIDER = {
     "claude": "2.9.9-fake (Claude Code)",
     "codex": "codex-cli 9.9.9",
     "opencode": "opencode 9.9.9",
     "antigravity": "agy 9.9.9",
+    "cursor": "2026.07.23-e383d2b",
 }
 FAKE_BINARY_BY_PROVIDER = {
     "claude": "claude",
     "codex": "codex",
     "opencode": "opencode",
     "antigravity": "agy",
+    "cursor": "cursor-agent",
 }
+
+
+def _fake_binary_name(provider: str) -> str:
+    try:
+        return FAKE_BINARY_BY_PROVIDER[provider]
+    except KeyError:
+        raise SystemExit(
+            f"provider {provider!r} is in the managed-provider contract but has no fake binary here; "
+            "add it to FAKE_BINARY_BY_PROVIDER and FAKE_VERSION_BY_PROVIDER"
+        ) from None
+
+
+def _fake_version(provider: str) -> str:
+    try:
+        return FAKE_VERSION_BY_PROVIDER[provider]
+    except KeyError:
+        raise SystemExit(
+            f"provider {provider!r} is in the managed-provider contract but has no fake version here; "
+            "add it to FAKE_VERSION_BY_PROVIDER"
+        ) from None
 
 
 def _fake_opencode_server_script() -> str:
@@ -322,7 +346,7 @@ def write_fake_provider_bins(root: Path) -> dict[str, Path]:
     bin_root.mkdir(parents=True, exist_ok=True)
     result: dict[str, Path] = {}
     for provider in SUPPORTED_PROVIDERS:
-        path = bin_root / FAKE_BINARY_BY_PROVIDER[provider]
+        path = bin_root / _fake_binary_name(provider)
         if provider == "opencode":
             path.write_text(_fake_opencode_server_script(), encoding="utf-8")
             path.chmod(0o755)
@@ -338,7 +362,7 @@ def write_fake_provider_bins(root: Path) -> dict[str, Path]:
             path.chmod(0o755)
             result[provider] = path
             continue
-        version = FAKE_VERSION_BY_PROVIDER[provider]
+        version = _fake_version(provider)
         path.write_text(
             "\n".join(
                 [

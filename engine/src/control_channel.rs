@@ -1235,6 +1235,49 @@ async fn execute_command(
         COMMAND_ANSWER_PAUSE => {
             let provider = payload_optional_string(&payload, "provider")
                 .unwrap_or_else(|| "codex".to_string());
+            if provider == "opencode" {
+                let request_id = payload_required_string(&payload, "provider_request_id")?;
+                let decision = payload_optional_string(&payload, "decision")
+                    .unwrap_or_else(|| "answer".to_string());
+                let reply = match decision.as_str() {
+                    "answer" => "once",
+                    "reject" | "cancel" => "reject",
+                    _ => {
+                        return Err(CommandError {
+                            code: "invalid_pause_decision".to_string(),
+                            message: "OpenCode pause decision must be answer, reject, or cancel"
+                                .to_string(),
+                        });
+                    }
+                };
+                let message = payload_optional_string(&payload, "message");
+                let summary = crate::opencode_control::permission_reply(
+                    &session_id,
+                    &request_id,
+                    reply,
+                    message.as_deref(),
+                )
+                .await
+                .map_err(CommandError::command_failed)?;
+                let status = if reply == "reject" {
+                    "rejected"
+                } else {
+                    "resolved"
+                };
+                return Ok(json!({
+                    "exit_code": 0,
+                    "stdout": "",
+                    "stderr": "",
+                    "provider": "opencode",
+                    "transport": crate::opencode_control::OPENCODE_SERVER_BRIDGE_TRANSPORT,
+                    "provider_session_id": summary.provider_session_id,
+                    "pause_response": {
+                        "status": status,
+                        "response_text": message,
+                        "response_payload": {"reply": reply},
+                    },
+                }));
+            }
             if provider == "claude" {
                 let request_key = payload_required_string(&payload, "request_key")?;
                 let decision = payload_optional_string(&payload, "decision")
@@ -2445,6 +2488,7 @@ mod tests {
         ("codex", "turn_start", COMMAND_TURN_START),
         ("opencode", "turn_start", COMMAND_TURN_START),
         ("opencode", "turn_interrupt", COMMAND_TURN_INTERRUPT),
+        ("opencode", "answer_pause", COMMAND_ANSWER_PAUSE),
         ("claude", "send", COMMAND_SEND_TEXT),
         ("claude", "interrupt", COMMAND_INTERRUPT),
         ("claude", "steer", COMMAND_STEER_TEXT),
@@ -2946,7 +2990,6 @@ mod tests {
         let supports = manifest_machine_control_supports();
         for (provider, operation) in [
             ("opencode", "steer"),
-            ("opencode", "answer_pause"),
             ("opencode", "run_once"),
             ("opencode", "resume_run_once"),
             ("opencode", "launch"),
@@ -3008,6 +3051,7 @@ mod tests {
                 "archive.backlog_control.v2".to_string(),
                 "opencode.send".to_string(),
                 "opencode.interrupt".to_string(),
+                "opencode.answer_pause".to_string(),
                 "opencode.terminate".to_string(),
                 "opencode.turn_start".to_string(),
                 "opencode.turn_interrupt".to_string(),
@@ -3023,6 +3067,7 @@ mod tests {
                 "archive.backlog_control.v2".to_string(),
                 "opencode.send".to_string(),
                 "opencode.interrupt".to_string(),
+                "opencode.answer_pause".to_string(),
                 "opencode.terminate".to_string(),
                 "opencode.turn_start".to_string(),
                 "opencode.turn_interrupt".to_string(),

@@ -67,16 +67,16 @@ Machine-validated coverage map:
 
 | Metric | Count |
 | --- | ---: |
-| Providers | 4 |
+| Providers | 5 |
 | Contract surfaces per provider | 13 |
-| Total provider/surface rows | 52 |
-| Covered `yes` | 11 |
-| Covered `partial` | 38 |
+| Total provider/surface rows | 65 |
+| Covered `yes` | 19 |
+| Covered `partial` | 43 |
 | Covered `no` | 3 |
-| Rows running in Longhouse CI | 46 |
+| Rows running in Longhouse CI | 51 |
 | Rows running in Sauron release-watch | 34 |
 | Rows with accepted parser-fixture baselines | 3 |
-| Rows with accepted release-proof baselines | 28 |
+| Rows with accepted release-proof baselines | 41 |
 
 Provider shape:
 
@@ -86,6 +86,7 @@ Provider shape:
 | Codex/OpenAI | 4 | 9 | 0 | 12 | 10 | 9 |
 | OpenCode | 4 | 9 | 0 | 13 | 12 | 11 |
 | Antigravity | 1 | 9 | 3 | 9 | 5 | 5 |
+| Cursor | 8 | 5 | 0 | 5 | 0 | 13 |
 
 `Release baselines` counts rows whose current behavior is compared against an
 accepted Longhouse proof. It does not mean every adjacent setup action is fully

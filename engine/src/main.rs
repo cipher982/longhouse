@@ -838,6 +838,8 @@ enum CursorHelmCommands {
         #[arg(long)]
         state_root: Option<PathBuf>,
     },
+    /// Serve the Cursor MCP coordination tools for the inherited session.
+    CoordinationMcp,
 }
 
 #[derive(Subcommand)]
@@ -1209,6 +1211,7 @@ fn command_name(command: &Commands) -> &'static str {
             CursorHelmCommands::Stop { .. } => "cursor-helm-stop",
             CursorHelmCommands::Send { .. } => "cursor-helm-send",
             CursorHelmCommands::Interrupt { .. } => "cursor-helm-interrupt",
+            CursorHelmCommands::CoordinationMcp => "cursor-helm-coordination-mcp",
         },
     }
 }
@@ -1851,6 +1854,9 @@ fn main() -> anyhow::Result<()> {
                             "stderr": summary.stderr,
                         }))?
                     );
+                }
+                CursorHelmCommands::CoordinationMcp => {
+                    cursor_helm_launcher::serve_coordination_mcp()?;
                 }
             }
         }

@@ -35,7 +35,7 @@ from zerg.provider_cli_contract import PROVIDER_CLI_BINARY_BY_PROVIDER
 from zerg.provider_cli_contract import PROVIDER_CLI_ENV_BY_PROVIDER
 from zerg.qa.repo_root import default_repo_root
 from zerg.services.managed_provider_contracts import contract_for_provider
-from zerg.services.managed_provider_contracts import managed_provider_names
+from zerg.services.managed_provider_contracts import factory_provider_names
 from zerg.services.provider_action_coverage import derive_provider_action_coverage
 from zerg.services.provider_action_coverage import serialize_provider_action_coverage
 from zerg.services.tool_presentation import project_tool_presentation
@@ -94,7 +94,10 @@ def _project_managed_transport(db: Any, session: Any) -> str | None:
 
 SCHEMA_VERSION = 1
 ARTIFACT_KIND = "universal_agent_harness_run"
-SUPPORTED_PROVIDERS = ("claude", "codex", "opencode", "antigravity")
+# Derived from the managed-provider contract, never hand-maintained. Maintenance-tier
+# providers stay in the harness because ingest, archive, and transcript scenarios keep
+# running for them; control-proof exclusion is expressed per operation, not per lane.
+SUPPORTED_PROVIDERS = factory_provider_names(include_maintenance=True)
 SCENARIOS = (
     "probe_identity",
     "adapter_conformance",
@@ -363,7 +366,10 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         "answer_pause_request",
         "Answer Pause Request",
         "control",
-        None,
+        # Support is decided by the machine-control capability, but the action still
+        # names its contract operation so an unsupported result can carry the
+        # provider's disposition instead of reading as unfinished work.
+        "answer_pause",
         "machine_capability:answer_pause",
         "hermetic",
         "Send an answer/reject/cancel decision for a pending provider question.",
@@ -1051,7 +1057,7 @@ class UniversalProviderAdapter:
             )
             payload["operation_evidence"] = {
                 "run_once": {
-                    "status": STATUS_UNSUPPORTED_GAP,
+                    "status": payload["status"],
                     "level": "none",
                     "canary": "universal_run_prompt_once",
                     "failure_code": "run_prompt_once_not_safe_no_token",
@@ -1276,7 +1282,7 @@ class UniversalProviderAdapter:
             )
             payload["operation_evidence"] = {
                 "launch_local": {
-                    "status": STATUS_UNSUPPORTED_GAP,
+                    "status": payload["status"],
                     "level": "none",
                     "canary": "universal_launch_managed_session",
                     "failure_code": "managed_session_not_safe_no_token",
@@ -1325,7 +1331,7 @@ class UniversalProviderAdapter:
             )
             payload["operation_evidence"] = {
                 "send_input": {
-                    "status": STATUS_UNSUPPORTED_GAP,
+                    "status": payload["status"],
                     "level": "none",
                     "canary": "universal_send_receive",
                     "failure_code": "send_receive_not_safe_no_token",
@@ -1392,10 +1398,11 @@ class UniversalProviderAdapter:
                 "steer_active_turn",
                 "steer_active_turn_unsupported",
                 "This provider does not expose stable active-turn steering semantics.",
+                operation="steer_active_turn",
             )
             payload["operation_evidence"] = {
                 "steer_active_turn": {
-                    "status": STATUS_UNSUPPORTED_GAP,
+                    "status": payload["status"],
                     "level": "none",
                     "canary": "universal_steer_active_turn",
                     "failure_code": "steer_active_turn_unsupported",
@@ -1415,10 +1422,11 @@ class UniversalProviderAdapter:
                 "answer_pause_request",
                 "answer_pause_request_unsupported",
                 "This provider does not expose stable answer-pause machine-control semantics.",
+                operation="answer_pause",
             )
             payload["operation_evidence"] = {
                 "answer_pause_request": {
-                    "status": STATUS_UNSUPPORTED_GAP,
+                    "status": payload["status"],
                     "level": "none",
                     "canary": "universal_answer_pause_request",
                     "failure_code": "answer_pause_request_unsupported",
@@ -1444,10 +1452,11 @@ class UniversalProviderAdapter:
                 "interrupt_cancel",
                 "interrupt_cancel_unsupported",
                 "This provider does not expose stable interrupt/cancel semantics in the managed-provider contract.",
+                operation="interrupt",
             )
             payload["operation_evidence"] = {
                 "interrupt": {
-                    "status": STATUS_UNSUPPORTED_GAP,
+                    "status": payload["status"],
                     "level": "none",
                     "canary": "universal_interrupt_cancel",
                     "failure_code": "interrupt_cancel_unsupported",
@@ -1462,7 +1471,7 @@ class UniversalProviderAdapter:
         )
         payload["operation_evidence"] = {
             "interrupt": {
-                "status": STATUS_UNSUPPORTED_GAP,
+                "status": payload["status"],
                 "level": "none",
                 "canary": "universal_interrupt_cancel",
                 "failure_code": "interrupt_cancel_adapter_missing",
@@ -1483,7 +1492,7 @@ class UniversalProviderAdapter:
         )
         payload["operation_evidence"] = {
             "tool_call_result": {
-                "status": STATUS_UNSUPPORTED_GAP,
+                "status": payload["status"],
                 "level": "none",
                 "canary": "universal_tool_call_result",
                 "failure_code": "tool_call_result_adapter_missing",
@@ -1505,10 +1514,11 @@ class UniversalProviderAdapter:
                 "resume_reattach",
                 "resume_reattach_unsupported",
                 "This provider does not expose stable resume/reattach semantics in the managed-provider contract.",
+                operation="reattach",
             )
             payload["operation_evidence"] = {
                 "reattach": {
-                    "status": STATUS_UNSUPPORTED_GAP,
+                    "status": payload["status"],
                     "level": "none",
                     "canary": "universal_resume_reattach",
                     "failure_code": "resume_reattach_unsupported",
@@ -1523,7 +1533,7 @@ class UniversalProviderAdapter:
         )
         payload["operation_evidence"] = {
             "reattach": {
-                "status": STATUS_UNSUPPORTED_GAP,
+                "status": payload["status"],
                 "level": "none",
                 "canary": "universal_resume_reattach",
                 "failure_code": "resume_reattach_adapter_missing",
@@ -1542,7 +1552,7 @@ class UniversalProviderAdapter:
             )
             payload["operation_evidence"] = {
                 "terminate": {
-                    "status": STATUS_UNSUPPORTED_GAP,
+                    "status": payload["status"],
                     "level": "none",
                     "canary": "universal_terminate_cleanup",
                     "failure_code": "terminate_cleanup_unsupported",
@@ -1733,7 +1743,7 @@ class UniversalProviderAdapter:
             )
             payload["operation_evidence"] = {
                 "external_event_channel": {
-                    "status": STATUS_UNSUPPORTED_GAP,
+                    "status": payload["status"],
                     "level": "none",
                     "canary": "universal_external_event_channel",
                     "failure_code": "external_event_channel_unsupported",
@@ -1777,7 +1787,7 @@ class UniversalProviderAdapter:
             )
             payload["operation_evidence"] = {
                 "permission_prompt": {
-                    "status": STATUS_UNSUPPORTED_GAP,
+                    "status": payload["status"],
                     "level": "none",
                     "canary": "universal_permission_prompt",
                     "failure_code": "permission_prompt_unsupported",
@@ -2317,7 +2327,7 @@ class UniversalProviderAdapter:
         )
         payload["operation_evidence"] = {
             "send_input": {
-                "status": STATUS_UNSUPPORTED_GAP,
+                "status": payload["status"],
                 "level": "none",
                 "canary": "universal_live_token_streaming",
                 "failure_code": "live_token_streaming_adapter_missing",
@@ -2822,14 +2832,11 @@ class UniversalProviderAdapter:
         from zerg.services.session_pause_requests import serialize_pause_request_projection
         from zerg.services.session_runtime import RuntimeEventIngest
         from zerg.services.session_runtime import ingest_runtime_events
-        from zerg.session_execution_home import ManagedSessionTransport
 
         scenario = "answer_pause_request" if answer else "pause_request_detect"
         can_respond = _provider_answer_pause_supported(self.config.provider)
-        managed_transport = {
-            "claude": ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE.value,
-            "codex": ManagedSessionTransport.CODEX_APP_SERVER.value,
-        }.get(self.config.provider)
+        contract = contract_for_provider(self.config.provider)
+        managed_transport = contract.managed_transport.value if can_respond and contract is not None else None
         now = datetime(2026, 6, 19, 12, 0, tzinfo=UTC)
         db_path = package.path("longhouse", "pause-request-service.sqlite")
         db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -2852,7 +2859,6 @@ class UniversalProviderAdapter:
             db.add(session)
             db.flush()
             db.refresh(session)
-            contract = contract_for_provider(self.config.provider)
             if managed_transport and contract is not None:
                 _seed_managed_kernel_rows(db, session, control_plane=contract.control_plane)
             runtime_key = f"{self.config.provider}:{session.id}:pause-request"
@@ -2994,6 +3000,7 @@ class UniversalProviderAdapter:
                                 decision="answer",
                                 answers={"approach": "Small adapter path"},
                                 message="Use the small adapter path.",
+                                provider_request_id=(active.provider_request_id if self.config.provider == "opencode" else None),
                                 request_id=f"universal-{self.config.provider}-answer-pause",
                             )
                         )
@@ -3009,6 +3016,8 @@ class UniversalProviderAdapter:
                         "answers": {"approach": "Small adapter path"},
                         "message": "Use the small adapter path.",
                     }
+                    if self.config.provider == "opencode":
+                        expected_payload["provider_request_id"] = active.provider_request_id
                     dispatch_assertions = {
                         "command_dispatched": bool(calls),
                         "command_type_matches": request.get("command_type") == "session.answer_pause",
@@ -5008,16 +5017,65 @@ class UniversalProviderAdapter:
         package.write_json("assertions/managed_session_e2e.json", payload)
         return payload
 
-    def _unsupported_payload(self, scenario: str, failure_code: str, message: str) -> dict[str, Any]:
+    def _unsupported_payload(
+        self,
+        scenario: str,
+        failure_code: str,
+        message: str,
+        *,
+        operation: str | None = None,
+    ) -> dict[str, Any]:
+        """Report an unrunnable scenario.
+
+        When the scenario maps to a contract operation whose disposition is
+        settled, the scenario is a typed fact rather than a gap. Callers that are
+        merely token-unsafe pass no operation and stay Yellow, because those are
+        harness limitations rather than statements about the provider.
+        """
+
+        settled = self._settled_operation_disposition(operation)
+        if settled is not None:
+            disposition, evidence = settled
+            return {
+                "status": STATUS_NOT_APPLICABLE,
+                "scenario": scenario,
+                "failure_code": None,
+                "message": str(evidence.get("reason") or message),
+                "disposition": disposition,
+                "routed_to": evidence.get("routed_to"),
+                "observed_provider_version": evidence.get("observed_provider_version"),
+            }
         next_step = "Promote through a provider adapter that can run this scenario "
         next_step += "without spending tokens or mutating external state."
-        return {
+        payload = {
             "status": STATUS_UNSUPPORTED_GAP,
             "scenario": scenario,
             "failure_code": failure_code,
             "message": message,
             "next": next_step,
         }
+        if operation:
+            evidence = self._operation_evidence(operation)
+            if evidence.get("disposition"):
+                payload["disposition"] = evidence["disposition"]
+            if evidence.get("owner_action"):
+                payload["next"] = f"Close with {evidence['owner_action']}."
+        return payload
+
+    def _operation_evidence(self, operation: str | None) -> Mapping[str, Any]:
+        if not operation:
+            return {}
+        contract = contract_for_provider(self.config.provider)
+        if contract is None:
+            return {}
+        return contract.operation_evidence_for(operation)
+
+    def _settled_operation_disposition(self, operation: str | None) -> tuple[str, Mapping[str, Any]] | None:
+        evidence = self._operation_evidence(operation)
+        disposition = str(evidence.get("disposition") or "")
+        if disposition in {"upstream_absent", "policy_disabled"}:
+            return disposition, evidence
+        return None
 
     def _build_action_matrix_rows(
         self,
@@ -5252,11 +5310,16 @@ class AntigravityHarnessAdapter(UniversalProviderAdapter):
     """Antigravity concrete adapter for the universal Longhouse action contract."""
 
 
+class CursorHarnessAdapter(UniversalProviderAdapter):
+    """Cursor concrete adapter for the universal Longhouse action contract."""
+
+
 ADAPTER_CLASS_BY_PROVIDER: Mapping[str, type[UniversalProviderAdapter]] = {
     "claude": ClaudeCodeHarnessAdapter,
     "codex": CodexOpenAIHarnessAdapter,
     "opencode": OpenCodeHarnessAdapter,
     "antigravity": AntigravityHarnessAdapter,
+    "cursor": CursorHarnessAdapter,
 }
 
 
@@ -5341,13 +5404,10 @@ def _action_support(provider: str, action: ActionDefinition, contract: Any) -> t
     if action.support_kind == "tool_result":
         return bool(contract.transcript_binding), "contract.transcript_binding"
     if action.support_kind == "external_event_channel":
-        if provider == "claude":
-            return True, "provider_live.claude_development_channel"
-        if provider == "antigravity":
-            return True, "provider_control.antigravity_hook_inbox"
-        return False, "external_event_channel_unsupported"
+        channel = contract.external_event_channel
+        return bool(channel), channel or "external_event_channel_unsupported"
     if action.support_kind == "permission_prompt":
-        return provider in {"claude", "codex", "opencode"}, "provider_permission_prompt_surface"
+        return contract.permission_prompt_surface, "provider_permission_prompt_surface"
     return False, f"unknown_support_kind:{action.support_kind}"
 
 
@@ -5359,15 +5419,8 @@ def _provider_answer_pause_supported(provider: str) -> bool:
 
 
 def _provider_pause_tool_name(provider: str) -> str:
-    if provider == "claude":
-        return "AskUserQuestion"
-    if provider == "codex":
-        return "requestUserInput"
-    if provider == "opencode":
-        return "opencode_pause_request"
-    if provider == "antigravity":
-        return "antigravity_pause_request"
-    return "structured_question"
+    contract = contract_for_provider(provider)
+    return contract.pause_tool_name if contract is not None else "structured_question"
 
 
 def _action_implementation_kind(
@@ -5413,6 +5466,50 @@ def _action_implementation_kind(
     return "typed_blocked_gap"
 
 
+def _unsupported_action_status(
+    *,
+    action: ActionDefinition,
+    provider: str,
+    support_reason: str,
+    contract_evidence: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Distinguish an unfinished operation from one that will never exist.
+
+    An operation Longhouse could implement is backlog and stays a Yellow gap. An
+    operation the provider does not expose, or that Longhouse deliberately routes
+    elsewhere, is a settled fact: reporting it as a gap forever is how a
+    scorecard becomes noise nobody reads.
+    """
+
+    disposition = str(contract_evidence.get("disposition") or "").strip()
+    if disposition in {"upstream_absent", "policy_disabled"}:
+        status = {
+            "status": STATUS_NOT_APPLICABLE,
+            "failure_code": None,
+            "message": str(contract_evidence.get("reason") or f"{provider} does not support {action.action_id}."),
+            "proof_scope": support_reason,
+            "disposition": disposition,
+        }
+        if disposition == "policy_disabled":
+            status["routed_to"] = contract_evidence.get("routed_to")
+        else:
+            status["observed_provider_version"] = contract_evidence.get("observed_provider_version")
+        return status
+    unsupported = {
+        "status": STATUS_UNSUPPORTED_GAP,
+        "failure_code": f"{action.action_id}_unsupported",
+        "message": f"{provider} does not currently support {action.action_id}.",
+        "proof_scope": support_reason,
+        "next": "Leave unsupported unless the provider exposes stable semantics and Longhouse adds a contract row.",
+    }
+    if disposition:
+        unsupported["disposition"] = disposition
+    owner_action = contract_evidence.get("owner_action")
+    if owner_action:
+        unsupported["next"] = f"Close with {owner_action}."
+    return unsupported
+
+
 def _action_status(
     *,
     action: ActionDefinition,
@@ -5425,13 +5522,12 @@ def _action_status(
     package: EvidencePackage,
 ) -> dict[str, Any]:
     if not support:
-        return {
-            "status": STATUS_UNSUPPORTED_GAP,
-            "failure_code": f"{action.action_id}_unsupported",
-            "message": f"{provider} does not currently support {action.action_id}.",
-            "proof_scope": support_reason,
-            "next": "Leave unsupported unless the provider exposes stable semantics and Longhouse adds a contract row.",
-        }
+        return _unsupported_action_status(
+            action=action,
+            provider=provider,
+            support_reason=support_reason,
+            contract_evidence=contract_evidence,
+        )
 
     if action.action_id == "provider_identity":
         if probe.get("status") == STATUS_PASS:
@@ -5602,7 +5698,7 @@ def _derived_action_status(*, action: ActionDefinition, provider: str) -> dict[s
             "next": "Add a live active-turn steer canary, or keep unsupported without a stable provider semantic.",
         }
     if action.action_id == "answer_pause_request":
-        if provider in {"claude", "codex"}:
+        if _provider_answer_pause_supported(provider):
             return {
                 "status": STATUS_PASS,
                 "evidence_level": "hermetic",
@@ -7792,28 +7888,17 @@ def antigravity_control_operation_evidence(canary: Mapping[str, Any]) -> dict[st
 
 
 def provider_configs() -> dict[str, AdapterConfig]:
-    providers = set(managed_provider_names()) | set(SUPPORTED_PROVIDERS)
     configs: dict[str, AdapterConfig] = {}
     for provider in SUPPORTED_PROVIDERS:
-        if provider not in providers:
-            continue
-        binary_env = PROVIDER_CLI_ENV_BY_PROVIDER.get(provider)
-        if provider == "claude":
-            binary_env = binary_env or "LONGHOUSE_CLAUDE_BIN"
-        safe_run_prompt_once = False
-        safe_managed_session_scenarios: tuple[str, ...] = ()
-        real_managed_session_e2e = False
-        if provider == "claude":
-            real_managed_session_e2e = True
-        elif provider == "codex":
-            safe_run_prompt_once = True
-            safe_managed_session_scenarios = SAFE_MANAGED_SESSION_SCENARIOS
-            real_managed_session_e2e = True
-        elif provider == "opencode":
-            safe_managed_session_scenarios = SAFE_MANAGED_SESSION_SCENARIOS
-            real_managed_session_e2e = True
-        elif provider == "antigravity":
-            real_managed_session_e2e = True
+        contract = contract_for_provider(provider)
+        # Providers that declare no override env still accept one for test
+        # injection; the conventional name is derived rather than special-cased.
+        binary_env = PROVIDER_CLI_ENV_BY_PROVIDER.get(provider) or f"LONGHOUSE_{provider.upper()}_BIN"
+        safe_run_prompt_once = bool(contract and contract.harness_safe_no_token_prompt)
+        real_managed_session_e2e = bool(contract and contract.harness_real_managed_session_e2e)
+        # A provider that can be prompted safely, or driven through a bridge that
+        # does not spend tokens, can run the managed-session scenario set.
+        safe_managed_session_scenarios = SAFE_MANAGED_SESSION_SCENARIOS if provider in {"codex", "opencode"} else ()
         configs[provider] = AdapterConfig(
             provider=provider,
             binary_name=PROVIDER_CLI_BINARY_BY_PROVIDER.get(provider, provider),
@@ -7844,6 +7929,16 @@ def scenario_result(
     status = str(payload.get("status") or STATUS_FAIL)
     if status not in STATUSES:
         status = STATUS_FAIL
+    data = {key: value for key, value in payload.items() if key not in {"status", "message", "failure_code"}}
+    if status == STATUS_NOT_APPLICABLE:
+        # A settled fact has no failure to report. Leaving a failure code behind
+        # would keep the row reading as a defect in every downstream rollup.
+        evidence = data.get("operation_evidence")
+        if isinstance(evidence, dict):
+            data["operation_evidence"] = {
+                operation: ({key: value for key, value in entry.items() if key != "failure_code"} if isinstance(entry, dict) else entry)
+                for operation, entry in evidence.items()
+            }
     return ScenarioResult(
         provider=provider,
         scenario=scenario,
@@ -7851,7 +7946,7 @@ def scenario_result(
         evidence_root=package.root,
         message=str(payload.get("message")) if payload.get("message") else None,
         failure_code=str(payload.get("failure_code")) if payload.get("failure_code") else None,
-        data={key: value for key, value in payload.items() if key not in {"status", "message", "failure_code"}},
+        data=data,
     )
 
 

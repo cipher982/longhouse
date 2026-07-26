@@ -287,13 +287,21 @@ def test_provider_release_proof_universal_smoke_make_emits_all_provider_artifact
         payload = _read_json(artifact)
         assert payload["artifact_kind"] == "provider_release_proof_universal_smoke"
         assert payload["verdict"] == "yellow"
-        assert payload["providers"] == ["claude", "codex", "opencode", "antigravity"]
+        # Derived from the contract so onboarding a provider does not need a
+        # hand edit here; that drift is what kept Cursor out of the factory.
+        expected_providers = sorted(
+            item["provider"]
+            for item in json.loads(
+                (REPO_ROOT / "server" / "zerg" / "config" / "managed_provider_contracts.json").read_text(encoding="utf-8")
+            )["providers"]
+        )
+        assert sorted(payload["providers"]) == expected_providers
         assert payload["scenarios"] == [
             "adapter_conformance",
             "action_matrix",
             "control_surface",
         ]
-        assert payload["result_count"] == 12
+        assert payload["result_count"] == len(expected_providers) * len(payload["scenarios"])
         assert Path(payload["universal_harness_artifact"]).is_file()
         assert Path(payload["provider_support_matrix_path"]).is_file()
         assert Path(payload["maturity_rollup_path"]).is_file()

@@ -17,8 +17,9 @@ paired Machine Agent service. `longhouse local-health --fast --json` provides
 the Desktop health snapshot.
 
 Provider binaries remain user-owned. The native facade supports Claude, Codex,
-and OpenCode. A provider is either present as a complete native surface or is
-not offered; it is never routed through a second implementation.
+OpenCode, and Cursor. A provider is either present as a complete native surface
+or is not offered; it is never routed through a second implementation.
+Antigravity is deliberately excluded: see `config/native_device_entrypoints.json`.
 
 ## Installer contract
 
