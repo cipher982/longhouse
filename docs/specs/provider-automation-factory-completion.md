@@ -1,6 +1,6 @@
 # Provider Automation Factory Completion
 
-**Status:** in progress
+**Status:** implemented; one live canary outstanding
 **Owner:** Longhouse
 **Updated:** 2026-07-26
 **Extends:** `provider-automation-factory-epic.md`
@@ -181,22 +181,30 @@ real artifacts, not new proof.
 
 ### New capability — OpenCode permission answering
 
-The contract records OpenCode `answer_pause` as `none`, "unsupported until
-OpenCode pause-answer semantics are proven." That is now false. OpenCode's
-server exposes `POST /permission/:requestID/reply` with a `{reply, message?}`
-body, plus `permission.asked` and `permission.replied` events, documented as of
-2026-07-24. A deprecated alias (`POST /session/:id/permissions/:permissionID`)
-also exists.
+The contract recorded OpenCode `answer_pause` as `none`, "unsupported until
+OpenCode pause-answer semantics are proven." That was false on two counts.
 
-This is `not_implemented`, not `upstream_absent`. It closes a real parity
-difference — OpenCode is the only non-Antigravity provider where a remote
-operator cannot answer a permission prompt — and the event pair gives the
-runtime-phase reducer a precise pause signal instead of an inferred one.
+Upstream, OpenCode's server exposes `POST /permission/:requestID/reply` with a
+`{reply, message?}` body plus `permission.asked` and `permission.replied`
+events, documented as of 2026-07-24. The semantics were already proven.
 
-Scope it as its own phase: `opencode_bridge` gains a permission subscriber and a
-reply call, `answer_pause` and `opencode.answer_pause` turn true, and the
-capability lands with a live canary against a real permission request. Do not
-promote it on hermetic evidence alone.
+Inside Longhouse, a working reply path already existed:
+`session_chat._resolve_opencode_permission_via_bridge` shelled out to the Python
+`opencode_bridge.permission_reply` CLI from the Runtime Host. So this was never
+"not built" — it was built on one route, never advertised as a machine-control
+capability, and then described in the contract as an upstream limitation. That
+is exactly the failure the disposition axis exists to prevent: prose that hides
+both a working implementation and a real gap behind the same word.
+
+The fix routes it through the standard managed-control dispatch instead, which
+removes a Python CLI shellout from the Runtime Host, turns `answer_pause` and
+`opencode.answer_pause` true, and keeps the fail-closed property: a dispatch
+failure returns 502 and leaves the pause unresolved rather than reporting a
+decision that never reached the provider.
+
+Evidence stays `hermetic`. No live OpenCode permission canary has been run, and
+`owner_action` names the one that would promote it. Do not mark this
+`live_token` without running it.
 
 ## Disposition must reach the harness
 
@@ -345,6 +353,28 @@ deleted rather than left to contradict the qualified account.
 
 **Phase 8 — Cutover.** Full validation, ship, dogfood refresh, and a factory
 health report showing zero unclassified cells.
+
+## Result
+
+All 60 provider/operation cells are classified: 47 implemented, 6 Longhouse
+work, 4 routed elsewhere by design, 3 absent upstream. Every remaining piece of
+Longhouse work belongs to Antigravity, which is maintenance tier. Across the
+four launch-tier providers there is no unimplemented control operation left.
+
+`live_token` evidence went from 2 cells to 10, entirely by recording Cursor
+proof that already existed on disk and had never been written down.
+
+Two claims in this document were wrong when first written and are corrected
+above rather than quietly edited away. Cursor `run_once` is `policy_disabled`
+routed to `session.turn.start`, not `upstream_absent`; calling it upstream
+absence would have told future agents to stop looking at a path that works.
+OpenCode permission answering was not unbuilt; it existed on the hosted route
+behind a Python CLI shellout while the contract described it as an upstream
+limitation.
+
+The one outstanding item is a live OpenCode permission canary. It is recorded as
+`hermetic` with `owner_action: opencode_bridge permission.reply live canary`,
+which is the state this schema exists to express honestly.
 
 ## Definition of done
 

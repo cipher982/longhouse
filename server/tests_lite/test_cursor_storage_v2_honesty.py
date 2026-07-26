@@ -16,7 +16,10 @@ def test_cursor_contract_advertises_helm_and_native_console_turns():
     assert contract.interrupt is True
     assert contract.terminate is True
     assert contract.run_once is False
-    assert contract.can_resume is False
+    # Provider-native resume, proven by Gate 0 native_resume_continuity: a fresh
+    # stock TUI restores the same provider conversation, store agent id, and
+    # Longhouse session id. It does not enable resume_run_once, asserted below.
+    assert contract.can_resume is True
     assert contract.tail_output is True
     assert contract.runtime_phase is True
     assert contract.transcript_binding is True
