@@ -899,7 +899,6 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut offline = OfflineState::new();
     let mut last_ship_at: Option<String> = None;
     let mut last_runtime_truth_signature: Option<String> = None;
-    let mut runtime_truth_bootstrapped = false;
     let mut session_snapshot_state = SessionSnapshotState::default();
     let mut last_status_projection: Option<heartbeat::StatusFileProjection> = None;
     let mut managed_reconciliation =
@@ -1784,11 +1783,11 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             let payload = projection.payload.clone();
                             last_status_projection = Some(projection);
                             let signature = runtime_truth_signature(&payload);
-                            if !runtime_truth_bootstrapped {
-                                last_runtime_truth_signature = Some(signature);
-                                runtime_truth_bootstrapped = true;
-                            } else if !offline.is_offline
-                                && last_runtime_truth_signature.as_deref() != Some(signature.as_str())
+                            if !offline.is_offline
+                                && runtime_truth_changed(
+                                    last_runtime_truth_signature.as_deref(),
+                                    &signature,
+                                )
                             {
                                 if heartbeat_post_tasks.is_empty() {
                                     spawn_heartbeat_post(
@@ -2157,7 +2156,6 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         &status_path,
                     );
                     if !offline.is_offline {
-                        runtime_truth_bootstrapped = true;
                         if heartbeat_post_tasks.is_empty() {
                             let payload = projection.payload.clone();
                             let signature = runtime_truth_signature(&payload);
@@ -2494,6 +2492,10 @@ fn runtime_truth_signature(payload: &heartbeat::HeartbeatPayload) -> String {
         .sessions_digest
         .clone()
         .unwrap_or_else(|| heartbeat::session_snapshot_digest(payload))
+}
+
+fn runtime_truth_changed(previous: Option<&str>, current: &str) -> bool {
+    previous != Some(current)
 }
 
 #[derive(Clone, Default)]
@@ -5131,6 +5133,15 @@ mod tests {
             runtime_truth_signature(&first),
             runtime_truth_signature(&second)
         );
+    }
+
+    #[test]
+    fn test_initial_runtime_truth_requires_immediate_heartbeat() {
+        assert!(runtime_truth_changed(None, "first-snapshot"));
+        assert!(!runtime_truth_changed(
+            Some("first-snapshot"),
+            "first-snapshot"
+        ));
     }
 
     #[test]
