@@ -48,6 +48,8 @@ def _fake_bins(tmp_path: Path) -> dict[str, Path]:
         "codex": _write_exe(tmp_path / "bin" / "codex", "codex-cli 9.9.9"),
         "opencode": _write_exe(tmp_path / "bin" / "opencode", "opencode 9.9.9"),
         "antigravity": _fake_antigravity_provider_live(tmp_path / "bin" / "agy"),
+        # cursor-agent prints a bare calendar build, not semver.
+        "cursor": _write_exe(tmp_path / "bin" / "cursor-agent", "2026.07.23-e383d2b"),
     }
 
 

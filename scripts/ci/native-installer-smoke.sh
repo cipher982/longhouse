@@ -79,7 +79,50 @@ if (payload.facade?.version !== process.env.LONGHOUSE_SMOKE_EXPECTED_VERSION) th
 '
 fi
 
-node -e 'const http=require("http"); http.createServer((_,res)=>{res.writeHead(200,{"content-type":"application/json"});res.end("{\"items\":[]}")}).listen(0,"127.0.0.1",function(){console.log(this.address().port)})' >"$RUNTIME_PORT_FILE" &
+# Managed launches fail closed without coordination authority, matching the
+# Claude contract, so the fixture Runtime Host issues a session-scoped token the
+# way a real one does. Registration is only accepted when the response echoes the
+# launcher's own session id and a non-empty run id, so the fixture must read the
+# request body rather than return a constant.
+cat > "$TEST_ROOT/fake-runtime.js" <<'RUNTIME_EOF'
+const http = require("http");
+const TOKEN = "native-installer-smoke-coordination";
+http
+  .createServer((req, res) => {
+    let body = "";
+    req.on("data", (chunk) => {
+      body += chunk;
+    });
+    req.on("end", () => {
+      res.writeHead(200, { "content-type": "application/json" });
+      let payload = {};
+      try {
+        payload = JSON.parse(body || "{}");
+      } catch (_) {
+        payload = {};
+      }
+      if (/coordination-token/.test(req.url || "")) {
+        res.end(JSON.stringify({ coordination_token: TOKEN }));
+        return;
+      }
+      if (payload && payload.session_id) {
+        res.end(
+          JSON.stringify({
+            session_id: payload.session_id,
+            run_id: "native-installer-smoke-run",
+            coordination_token: TOKEN,
+          }),
+        );
+        return;
+      }
+      res.end(JSON.stringify({ items: [] }));
+    });
+  })
+  .listen(0, "127.0.0.1", function () {
+    console.log(this.address().port);
+  });
+RUNTIME_EOF
+node "$TEST_ROOT/fake-runtime.js" >"$RUNTIME_PORT_FILE" &
 RUNTIME_PID=$!
 for _ in $(seq 1 50); do [[ -s "$RUNTIME_PORT_FILE" ]] && break; sleep 0.1; done
 [[ -s "$RUNTIME_PORT_FILE" ]]
@@ -138,7 +181,12 @@ chmod 755 "$HOME_DIR/traps/cursor-agent"
 HOME="$HOME_DIR" PATH="$HOME_DIR/.local/bin:$HOME_DIR/traps:/usr/bin:/bin:/usr/sbin:/sbin" \
   "$PYTHON_BIN" "$ROOT_DIR/scripts/ci/run-in-pty.py" \
   "$installed" cursor --cwd "$HOME_DIR" --cursor-bin "$HOME_DIR/traps/cursor-agent" \
-  >"$HOME_DIR/cursor-pty.out"
+  >"$HOME_DIR/cursor-pty.out" 2>"$HOME_DIR/cursor-pty.err" || {
+    echo "native cursor PTY launch failed:" >&2
+    cat "$HOME_DIR/cursor-pty.err" >&2
+    cat "$HOME_DIR/cursor-pty.out" >&2
+    exit 1
+  }
 grep -q 'CURSOR_NATIVE_PTY_OK' "$HOME_DIR/cursor-pty.out"
 set +e
 HOME="$HOME_DIR" PATH="$HOME_DIR/.local/bin:$HOME_DIR/traps:/usr/bin:/bin:/usr/sbin:/sbin" \
