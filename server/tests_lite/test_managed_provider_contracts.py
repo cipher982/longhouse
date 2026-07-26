@@ -663,3 +663,135 @@ def test_every_contract_provider_resolves_a_harness_adapter() -> None:
     missing_adapters = [provider for provider in expected if provider not in ADAPTER_CLASS_BY_PROVIDER]
     assert missing_adapters == []
     assert tuple(sorted(provider_configs())) == expected
+
+
+def _manifest_copy() -> dict:
+    import json
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[1] / "zerg" / "config" / "managed_provider_contracts.json"
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _cursor_entry(payload: dict) -> dict:
+    return next(item for item in payload["providers"] if item["provider"] == "cursor")
+
+
+def test_operation_disposition_rejects_a_flag_that_contradicts_it() -> None:
+    """The support flag and the disposition are two statements about one fact."""
+    import copy
+
+    import pytest
+
+    from zerg.managed_provider_contract_manifest import validate_generated_contract_manifest
+
+    payload = copy.deepcopy(_manifest_copy())
+    # steer_active_turn is false for Cursor; claiming it is implemented must fail.
+    _cursor_entry(payload)["operation_evidence"]["steer_active_turn"]["disposition"] = "implemented"
+    with pytest.raises(ValueError, match="contradicts the steer_active_turn support flag"):
+        validate_generated_contract_manifest(payload)
+
+
+def test_upstream_absent_requires_a_reason_and_an_observed_version() -> None:
+    """A stale absence must be re-checkable when the provider release changes."""
+    import copy
+
+    import pytest
+
+    from zerg.managed_provider_contract_manifest import validate_generated_contract_manifest
+
+    for missing in ("reason", "observed_provider_version"):
+        payload = copy.deepcopy(_manifest_copy())
+        _cursor_entry(payload)["operation_evidence"]["steer_active_turn"].pop(missing)
+        with pytest.raises(ValueError, match=missing):
+            validate_generated_contract_manifest(payload)
+
+
+def test_policy_disabled_requires_the_path_that_does_work() -> None:
+    import copy
+
+    import pytest
+
+    from zerg.managed_provider_contract_manifest import validate_generated_contract_manifest
+
+    payload = copy.deepcopy(_manifest_copy())
+    _cursor_entry(payload)["operation_evidence"]["answer_pause"].pop("routed_to")
+    with pytest.raises(ValueError, match="routed_to"):
+        validate_generated_contract_manifest(payload)
+
+
+def test_settled_dispositions_are_typed_facts_and_backlog_stays_a_gap() -> None:
+    """upstream_absent and policy_disabled must not read as unfinished work.
+
+    Declaring dispositions changes nothing unless the harness consumes them, and
+    a scorecard that reports permanent facts as gaps forever becomes noise.
+    """
+
+    from zerg.qa.universal_agent_harness import STATUS_NOT_APPLICABLE
+    from zerg.qa.universal_agent_harness import STATUS_UNSUPPORTED_GAP
+    from zerg.qa.universal_agent_harness import YELLOW_STATUSES
+    from zerg.qa.universal_agent_harness import _unsupported_action_status
+
+    class _Action:
+        action_id = "steer_active_turn"
+
+    absent = _unsupported_action_status(
+        action=_Action(),
+        provider="cursor",
+        support_reason="contract.steer_active_turn",
+        contract_evidence={
+            "disposition": "upstream_absent",
+            "reason": "no mid-turn injection surface",
+            "observed_provider_version": "2026.07.23-e383d2b",
+        },
+    )
+    assert absent["status"] == STATUS_NOT_APPLICABLE
+    assert absent["status"] not in YELLOW_STATUSES
+    assert absent["failure_code"] is None
+    assert absent["observed_provider_version"] == "2026.07.23-e383d2b"
+
+    routed = _unsupported_action_status(
+        action=_Action(),
+        provider="cursor",
+        support_reason="contract.answer_pause",
+        contract_evidence={
+            "disposition": "policy_disabled",
+            "reason": "ACP would replace the stock TUI",
+            "routed_to": "the pull-based pause-request API",
+        },
+    )
+    assert routed["status"] == STATUS_NOT_APPLICABLE
+    assert routed["routed_to"] == "the pull-based pause-request API"
+
+    backlog = _unsupported_action_status(
+        action=_Action(),
+        provider="opencode",
+        support_reason="contract.answer_pause",
+        contract_evidence={"disposition": "not_implemented", "owner_action": "opencode_permission_reply_canary"},
+    )
+    assert backlog["status"] == STATUS_UNSUPPORTED_GAP
+    assert backlog["status"] in YELLOW_STATUSES
+    assert "opencode_permission_reply_canary" in backlog["next"]
+
+    # A provider that has not migrated yet keeps the old behavior.
+    unmigrated = _unsupported_action_status(
+        action=_Action(),
+        provider="antigravity",
+        support_reason="contract.steer_active_turn",
+        contract_evidence={},
+    )
+    assert unmigrated["status"] == STATUS_UNSUPPORTED_GAP
+
+
+def test_cursor_operations_are_fully_classified() -> None:
+    from zerg.managed_provider_contract_manifest import _OPERATION_EVIDENCE_FIELDS
+    from zerg.services.managed_provider_contracts import contract_for_provider
+
+    contract = contract_for_provider("cursor")
+    assert contract is not None
+    unclassified = [
+        operation
+        for operation in _OPERATION_EVIDENCE_FIELDS
+        if not contract.operation_evidence_for(operation).get("disposition")
+    ]
+    assert unclassified == []

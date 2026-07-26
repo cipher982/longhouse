@@ -970,52 +970,78 @@
       "operation_evidence": {
         "launch_local": {
           "level": "hermetic",
-          "source": "Cursor product-path canary must pass post-deploy before live-token promotion"
+          "source": "Cursor product-path canary must pass post-deploy before live-token promotion",
+          "disposition": "implemented",
+          "owner_action": "cursor_helm_product_e2e launch_archive"
         },
         "run_once": {
           "level": "none",
-          "source": "unavailable until stock Cursor exposes a durable headless conversation source"
+          "source": "Cursor Console mints or resumes a provider thread through cursor_print; the legacy session.run_once command is intentionally Codex-only",
+          "disposition": "policy_disabled",
+          "reason": "Cursor Console has a durable headless path; only the legacy session.run_once command is Codex-only.",
+          "routed_to": "session.turn.start via the cursor_print adapter"
         },
         "reattach": {
           "level": "hermetic",
-          "source": "Cursor Helm Gate 0 native_resume_continuity: a new stock TUI resumes the same provider conversation and Longhouse session identity"
+          "source": "Cursor Helm Gate 0 native_resume_continuity: a new stock TUI resumes the same provider conversation and Longhouse session identity",
+          "disposition": "implemented",
+          "owner_action": "cursor_helm_gate0 native_resume_continuity"
         },
         "send_input": {
           "level": "hermetic",
-          "source": "Cursor Helm Gate 0 idle send: exact prompt digest, native response/stop hooks, and store continuity; active phase is rejected before PTY write"
+          "source": "Cursor Helm Gate 0 idle send: exact prompt digest, native response/stop hooks, and store continuity; active phase is rejected before PTY write",
+          "disposition": "implemented",
+          "owner_action": "cursor_helm_gate0 idle_send"
         },
         "interrupt": {
           "level": "hermetic",
-          "source": "Cursor Helm Gate 0 ctrl_c_cancel: Ctrl-C stops the active generation, emits aborted/error, preserves the TUI process, and the next turn completes"
+          "source": "Cursor Helm Gate 0 ctrl_c_cancel: Ctrl-C stops the active generation, emits aborted/error, preserves the TUI process, and the next turn completes",
+          "disposition": "implemented",
+          "owner_action": "cursor_helm_gate0 ctrl_c_cancel"
         },
         "steer_active_turn": {
           "level": "none",
-          "source": "unsupported until Cursor exposes a mid-turn injection API"
+          "source": "unsupported until Cursor exposes a mid-turn injection API",
+          "disposition": "upstream_absent",
+          "reason": "Stock cursor-agent exposes no mid-turn injection: ACP offers session/prompt, session/update, and session/cancel only, stream-json is output-only, and hooks do not inject into an in-flight generation. Gate 0 records that injected input did not alter the active generation.",
+          "observed_provider_version": "2026.07.23-e383d2b"
         },
         "answer_pause": {
           "level": "none",
-          "source": "Cursor permission hooks use the separate pull-based Longhouse pause-request surface; session.answer_pause machine dispatch is intentionally not advertised"
+          "source": "Cursor permission hooks use the separate pull-based Longhouse pause-request surface; session.answer_pause machine dispatch is intentionally not advertised",
+          "disposition": "policy_disabled",
+          "reason": "Cursor exposes a permission reply over ACP only, and Longhouse deliberately does not execute ACP; adopting it would replace the stock TUI and change the session mode.",
+          "routed_to": "the pull-based Longhouse pause-request API via the fail-closed permission hook"
         },
         "terminate": {
           "level": "hermetic",
           "source": "cursor_helm: engine forwards session.terminate; launcher sends SIGKILL to the cursor-agent child pid, unlinks socket/state, and exits.",
-          "next": "promote with live terminate canary"
+          "disposition": "implemented",
+          "owner_action": "cursor_helm_product_e2e terminate_cleanup"
         },
         "tail_output": {
           "level": "hermetic",
-          "source": "cursor_store exact raw storage-v2 source emits cursor-store-render-v2 text, reasoning, tool-call, and tool-result projections"
+          "source": "cursor_store exact raw storage-v2 source emits cursor-store-render-v2 text, reasoning, tool-call, and tool-result projections",
+          "disposition": "implemented",
+          "owner_action": "cursor_helm_product_e2e archive_convergence"
         },
         "runtime_phase": {
           "level": "hermetic",
-          "source": "Cursor user hook adapter records native lifecycle/tool events and atomic active/idle/ended phase"
+          "source": "Cursor user hook adapter records native lifecycle/tool events and atomic active/idle/ended phase",
+          "disposition": "implemented",
+          "owner_action": "cursor_helm_gate0 lifecycle_phase"
         },
         "transcript_binding": {
           "level": "hermetic",
-          "source": "Cursor hook conversation_id plus launcher-owned Longhouse session ID binds the matching native store without recency heuristics"
+          "source": "Cursor hook conversation_id plus launcher-owned Longhouse session ID binds the matching native store without recency heuristics",
+          "disposition": "implemented",
+          "owner_action": "cursor_helm_gate0 hook_conversation_binding"
         },
         "turn_start": {
           "level": "hermetic",
-          "source": "cursor_print structured stream, native create-chat/resume, hooks, and process-group cancellation tests"
+          "source": "cursor_print structured stream, native create-chat/resume, hooks, and process-group cancellation tests",
+          "disposition": "implemented",
+          "owner_action": "cursor_console_live_canary create_resume"
         }
       },
       "machine_control_supports": [

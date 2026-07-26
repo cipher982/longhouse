@@ -366,7 +366,10 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         "answer_pause_request",
         "Answer Pause Request",
         "control",
-        None,
+        # Support is decided by the machine-control capability, but the action still
+        # names its contract operation so an unsupported result can carry the
+        # provider's disposition instead of reading as unfinished work.
+        "answer_pause",
         "machine_capability:answer_pause",
         "hermetic",
         "Send an answer/reject/cancel decision for a pending provider question.",
@@ -5423,6 +5426,50 @@ def _action_implementation_kind(
     return "typed_blocked_gap"
 
 
+def _unsupported_action_status(
+    *,
+    action: ActionDefinition,
+    provider: str,
+    support_reason: str,
+    contract_evidence: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Distinguish an unfinished operation from one that will never exist.
+
+    An operation Longhouse could implement is backlog and stays a Yellow gap. An
+    operation the provider does not expose, or that Longhouse deliberately routes
+    elsewhere, is a settled fact: reporting it as a gap forever is how a
+    scorecard becomes noise nobody reads.
+    """
+
+    disposition = str(contract_evidence.get("disposition") or "").strip()
+    if disposition in {"upstream_absent", "policy_disabled"}:
+        status = {
+            "status": STATUS_NOT_APPLICABLE,
+            "failure_code": None,
+            "message": str(contract_evidence.get("reason") or f"{provider} does not support {action.action_id}."),
+            "proof_scope": support_reason,
+            "disposition": disposition,
+        }
+        if disposition == "policy_disabled":
+            status["routed_to"] = contract_evidence.get("routed_to")
+        else:
+            status["observed_provider_version"] = contract_evidence.get("observed_provider_version")
+        return status
+    unsupported = {
+        "status": STATUS_UNSUPPORTED_GAP,
+        "failure_code": f"{action.action_id}_unsupported",
+        "message": f"{provider} does not currently support {action.action_id}.",
+        "proof_scope": support_reason,
+        "next": "Leave unsupported unless the provider exposes stable semantics and Longhouse adds a contract row.",
+    }
+    if disposition:
+        unsupported["disposition"] = disposition
+    owner_action = contract_evidence.get("owner_action")
+    if owner_action:
+        unsupported["next"] = f"Close with {owner_action}."
+    return unsupported
+
+
 def _action_status(
     *,
     action: ActionDefinition,
@@ -5435,13 +5482,12 @@ def _action_status(
     package: EvidencePackage,
 ) -> dict[str, Any]:
     if not support:
-        return {
-            "status": STATUS_UNSUPPORTED_GAP,
-            "failure_code": f"{action.action_id}_unsupported",
-            "message": f"{provider} does not currently support {action.action_id}.",
-            "proof_scope": support_reason,
-            "next": "Leave unsupported unless the provider exposes stable semantics and Longhouse adds a contract row.",
-        }
+        return _unsupported_action_status(
+            action=action,
+            provider=provider,
+            support_reason=support_reason,
+            contract_evidence=contract_evidence,
+        )
 
     if action.action_id == "provider_identity":
         if probe.get("status") == STATUS_PASS:
