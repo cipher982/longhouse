@@ -2778,12 +2778,33 @@ class CatalogStore:
                     orm.rollback()
                     return {"found": False}
                 receipt = orm.get(LiveSessionInputReceipt, turn.receipt_id)
+                expected_state = data.get("expected_state")
+                if expected_state is not None and turn.state != expected_state:
+                    thread = orm.get(LiveSessionThread, turn.thread_id)
+                    result = _live_console_turn_dto(
+                        turn,
+                        message=receipt.text if receipt is not None else None,
+                        client_request_id=receipt.client_request_id if receipt is not None else None,
+                        provider_config=thread.provider_config_json if thread is not None else None,
+                    )
+                    orm.rollback()
+                    return {
+                        "found": True,
+                        "applied": False,
+                        "stale": True,
+                        "turn": result,
+                        "next_turn": None,
+                        "commit_seq": str(_current_commit_seq(connection)),
+                    }
                 next_state = data["state"]
                 turn.state = next_state
                 turn.updated_at = now
                 turn.error = data.get("error")
                 if receipt is not None:
-                    receipt.status = "delivered" if next_state == "active" else ("failed" if next_state == "failed" else receipt.status)
+                    if next_state in {"active", "completed"}:
+                        receipt.status = "delivered"
+                    elif next_state in {"failed", "cancelled"}:
+                        receipt.status = "failed"
                     receipt.error_json = (
                         json.dumps(
                             {
@@ -2860,7 +2881,48 @@ class CatalogStore:
             finally:
                 orm.close()
             commit_seq = _advance_commit_seq(connection, now)
-            return {"found": True, "turn": result, "next_turn": next_turn_result, "commit_seq": str(commit_seq)}
+            return {
+                "found": True,
+                "applied": True,
+                "stale": False,
+                "turn": result,
+                "next_turn": next_turn_result,
+                "commit_seq": str(commit_seq),
+            }
+
+    def list_starting_console_turns_for_device(self, *, owner_id: int, device_id: str) -> dict[str, Any]:
+        """Return durable ambiguous dispatches that can be replayed by stable run_id."""
+
+        with self.engine.connect() as connection:
+            orm = Session(bind=connection)
+            try:
+                rows = (
+                    orm.query(LiveConsoleTurn, LiveSessionInputReceipt, LiveSessionThread)
+                    .join(LiveSessionInputReceipt, LiveSessionInputReceipt.id == LiveConsoleTurn.receipt_id)
+                    .join(LiveSessionThread, LiveSessionThread.id == LiveConsoleTurn.thread_id)
+                    .filter(
+                        LiveConsoleTurn.state == "starting",
+                        LiveConsoleTurn.device_id == device_id,
+                        LiveSessionInputReceipt.owner_id == owner_id,
+                    )
+                    .order_by(LiveConsoleTurn.created_at.asc(), LiveConsoleTurn.id.asc())
+                    .limit(100)
+                    .all()
+                )
+                return {
+                    "turns": [
+                        _live_console_turn_dto(
+                            turn,
+                            message=receipt.text,
+                            client_request_id=receipt.client_request_id,
+                            provider_config=thread.provider_config_json,
+                        )
+                        for turn, receipt, thread in rows
+                    ],
+                    "commit_seq": str(_current_commit_seq(connection)),
+                }
+            finally:
+                orm.close()
 
     def read_current_console_turn(self, *, session_id: str, owner_id: int) -> dict[str, Any]:
         with self.engine.connect() as connection:
