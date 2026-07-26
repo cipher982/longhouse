@@ -169,7 +169,15 @@ def _validate_operation_evidence(item: dict[str, Any]) -> None:
         unknown_keys = sorted(key for key in entry if key not in _OPERATION_EVIDENCE_KEYS)
         if unknown_keys:
             raise ValueError(f"managed provider contract {provider}: operation_evidence.{field} has unknown keys {', '.join(unknown_keys)}")
-        _validate_operation_disposition(provider=str(provider), operation=field, entry=entry, supported=item.get(field) is True)
+    # Dispositions validate in a second pass so a concrete per-field problem is
+    # reported before the blanket classification requirement.
+    for field in _OPERATION_EVIDENCE_FIELDS:
+        _validate_operation_disposition(
+            provider=str(provider),
+            operation=field,
+            entry=evidence[field],
+            supported=item.get(field) is True,
+        )
 
 
 def _require_operation_string(*, provider: str, operation: str, entry: dict[str, Any], key: str, because: str) -> None:
@@ -181,14 +189,12 @@ def _require_operation_string(*, provider: str, operation: str, entry: dict[str,
 def _validate_operation_disposition(*, provider: str, operation: str, entry: dict[str, Any], supported: bool) -> None:
     """Enforce the disposition invariants for one operation.
 
-    Disposition is optional while providers migrate onto the three-axis schema.
-    Once declared it must be internally consistent, because the whole point is
-    that an agent can trust a cell without reading the implementation.
+    Every cell must be classified, and once classified it must be internally
+    consistent: the whole point is that an agent can trust a cell without
+    reading the implementation behind it.
     """
 
     disposition = entry.get("disposition")
-    if disposition is None:
-        return
     if disposition not in _OPERATION_DISPOSITIONS:
         raise ValueError(
             f"managed provider contract {provider}: operation_evidence.{operation}.disposition must be one of "

@@ -228,6 +228,39 @@ def factory_provider_names(*, include_maintenance: bool = False) -> tuple[str, .
     return tuple(sorted(contract.provider for contract in _CONTRACTS if include_maintenance or contract.support_tier == "launch"))
 
 
+def outstanding_factory_work() -> tuple[dict[str, str], ...]:
+    """Every operation Longhouse could implement and has not.
+
+    This is the whole reason disposition exists as a field. Before it, unfinished
+    work was 30 free-text hints with no schema, so "what is left?" could only be
+    answered by reading the contract end to end and guessing which prose meant
+    backlog and which meant a provider limitation.
+
+    Operations blocked upstream or deliberately routed elsewhere are excluded:
+    they are settled facts, not work.
+    """
+
+    from zerg.managed_provider_contract_manifest import _OPERATION_EVIDENCE_FIELDS
+
+    work: list[dict[str, str]] = []
+    for contract in _CONTRACTS:
+        for operation in _OPERATION_EVIDENCE_FIELDS:
+            evidence = contract.operation_evidence_for(operation)
+            if evidence.get("disposition") != "not_implemented":
+                continue
+            work.append(
+                {
+                    "provider": contract.provider,
+                    "operation": operation,
+                    "support_tier": contract.support_tier,
+                    "owner_action": str(evidence.get("owner_action") or ""),
+                    "blocker": str(evidence.get("blocker") or "none"),
+                    "reason": str(evidence.get("reason") or ""),
+                }
+            )
+    return tuple(work)
+
+
 def contract_for_provider(provider: str | None) -> ManagedProviderContract | None:
     return _BY_PROVIDER.get(str(provider or "").strip().lower())
 

@@ -307,7 +307,9 @@ def test_claude_contract_is_first_class_channel_control_provider():
     assert claude.steer_active_turn is True
     assert claude.answer_pause is True
     assert claude.operation_evidence_for("steer_active_turn")["level"] == "live_token"
-    assert "scheduled live token canary" in claude.operation_evidence_for("steer_active_turn")["next"]
+    steer = claude.operation_evidence_for("steer_active_turn")
+    assert steer["disposition"] == "implemented"
+    assert "scheduled claude steer live-token canary" in steer["owner_action"]
     assert claude.can_resume is True
     assert claude.machine_control_supports == (
         "claude.send",
@@ -783,15 +785,43 @@ def test_settled_dispositions_are_typed_facts_and_backlog_stays_a_gap() -> None:
     assert unmigrated["status"] == STATUS_UNSUPPORTED_GAP
 
 
-def test_cursor_operations_are_fully_classified() -> None:
+def test_every_provider_operation_cell_is_classified() -> None:
+    """No cell may be silent about whether it is work or a fact."""
     from zerg.managed_provider_contract_manifest import _OPERATION_EVIDENCE_FIELDS
-    from zerg.services.managed_provider_contracts import contract_for_provider
+    from zerg.services.managed_provider_contracts import all_managed_provider_contracts
 
-    contract = contract_for_provider("cursor")
-    assert contract is not None
     unclassified = [
-        operation
+        f"{contract.provider}.{operation}"
+        for contract in all_managed_provider_contracts()
         for operation in _OPERATION_EVIDENCE_FIELDS
         if not contract.operation_evidence_for(operation).get("disposition")
     ]
     assert unclassified == []
+
+
+def test_outstanding_work_excludes_settled_facts_and_names_an_owner_action() -> None:
+    """The backlog is a query, not a reading exercise over free-text hints."""
+    from zerg.services.managed_provider_contracts import outstanding_factory_work
+
+    work = outstanding_factory_work()
+    assert work, "the query itself must return something or it is not exercised"
+    for row in work:
+        assert row["owner_action"], f"{row['provider']}.{row['operation']} must name the canary that closes it"
+
+    # Settled facts are not work and must never appear here.
+    operations = {(row["provider"], row["operation"]) for row in work}
+    assert ("cursor", "steer_active_turn") not in operations  # upstream_absent
+    assert ("cursor", "answer_pause") not in operations  # policy_disabled
+    assert ("opencode", "steer_active_turn") not in operations  # upstream_absent
+    assert ("claude", "run_once") not in operations  # policy_disabled
+
+
+def test_the_only_launch_tier_control_work_left_is_opencode_permission_answering() -> None:
+    """A tripwire, so new backlog is a deliberate decision rather than a drift.
+
+    Antigravity work is excluded by tier: it is maintenance, not an investment.
+    """
+    from zerg.services.managed_provider_contracts import outstanding_factory_work
+
+    launch_work = {(row["provider"], row["operation"]) for row in outstanding_factory_work() if row["support_tier"] == "launch"}
+    assert launch_work == {("opencode", "answer_pause")}

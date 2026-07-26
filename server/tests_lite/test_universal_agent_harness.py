@@ -968,8 +968,13 @@ def test_action_matrix_marks_provider_specific_unsupported_actions(tmp_path: Pat
     }
     assert by_provider["claude"]["external_event_channel"]["status"] == "pass"
     assert by_provider["claude"]["external_event_channel"]["canary"] == "claude_development_channels_contract"
-    assert by_provider["opencode"]["steer_active_turn"]["status"] == "unsupported_gap"
+    # OpenCode has no upstream steer method, so this is a settled fact rather than
+    # a gap. Permission answering is the opposite: OpenCode exposes a reply
+    # endpoint Longhouse has not implemented, so it stays real backlog.
+    assert by_provider["opencode"]["steer_active_turn"]["status"] == "not_applicable"
+    assert by_provider["opencode"]["steer_active_turn"]["disposition"] == "upstream_absent"
     assert by_provider["opencode"]["answer_pause_request"]["status"] == "unsupported_gap"
+    assert by_provider["opencode"]["answer_pause_request"]["disposition"] == "not_implemented"
     assert by_provider["opencode"]["external_event_channel"]["status"] == "unsupported_gap"
     assert by_provider["antigravity"]["interrupt_cancel"]["status"] == "unsupported_gap"
     assert by_provider["antigravity"]["external_event_channel"]["status"] == "pass"
@@ -1210,7 +1215,7 @@ def test_control_surface_keeps_unsupported_and_live_token_rows_explicit(tmp_path
         result["provider"]: {row["action_id"]: row for row in result["data"]["actions"]}
         for result in payload["results"]
     }
-    assert by_provider["opencode"]["steer_active_turn"]["status"] == "unsupported_gap"
+    assert by_provider["opencode"]["steer_active_turn"]["status"] == "not_applicable"
     assert by_provider["opencode"]["resume_reattach"]["status"] == "pass"
     assert by_provider["opencode"]["resume_reattach"]["evidence_level"] == "live_no_token"
     assert by_provider["antigravity"]["interrupt_cancel"]["status"] == "unsupported_gap"
@@ -1897,7 +1902,7 @@ def test_codex_resume_reattach_falls_back_to_attach_command_when_credentials_mis
     assert Path(result["data"]["raw_reattach_command_path"]).is_file()
 
 
-def test_resume_reattach_uses_claude_command_shape_and_keeps_unmigrated_gap(tmp_path: Path) -> None:
+def test_resume_reattach_uses_claude_command_shape_and_types_the_upstream_absence(tmp_path: Path) -> None:
     payload = uah.run_harness(
         uah.HarnessOptions(
             providers=("claude", "antigravity"),
@@ -1907,7 +1912,9 @@ def test_resume_reattach_uses_claude_command_shape_and_keeps_unmigrated_gap(tmp_
         )
     )
 
-    assert payload["verdict"] == "yellow"
+    # Nothing here is unfinished work: Claude passes and Antigravity's only
+    # unsupported operation is an upstream absence.
+    assert payload["verdict"] == "green"
     assert {result["provider"] for result in payload["results"]} == {"claude", "antigravity"}
     by_provider = {result["provider"]: result for result in payload["results"]}
     claude = by_provider["claude"]
@@ -1925,13 +1932,15 @@ def test_resume_reattach_uses_claude_command_shape_and_keeps_unmigrated_gap(tmp_
         "uses_resume_flag": True,
     }
     assert Path(claude["data"]["raw_resume_command_path"]).is_file()
+    # Antigravity exposes no stable reattach surface upstream, so this is a
+    # settled fact rather than Longhouse work and must not hold a verdict Yellow.
     antigravity = by_provider["antigravity"]
-    assert antigravity["status"] == "unsupported_gap"
-    assert antigravity["failure_code"] == "resume_reattach_unsupported"
-    assert antigravity["data"]["operation_evidence"]["reattach"]["failure_code"] == "resume_reattach_unsupported"
+    assert antigravity["status"] == "not_applicable"
+    assert antigravity["data"]["disposition"] == "upstream_absent"
+    assert antigravity["data"]["observed_provider_version"]
 
 
-def test_antigravity_interrupt_and_resume_are_explicit_contract_gaps(tmp_path: Path) -> None:
+def test_antigravity_separates_unfinished_interrupt_work_from_absent_reattach(tmp_path: Path) -> None:
     payload = uah.run_harness(
         uah.HarnessOptions(
             providers=("antigravity",),
@@ -1948,10 +1957,11 @@ def test_antigravity_interrupt_and_resume_are_explicit_contract_gaps(tmp_path: P
     assert interrupt["failure_code"] == "interrupt_cancel_unsupported"
     assert interrupt["data"]["operation_evidence"]["interrupt"]["failure_code"] == "interrupt_cancel_unsupported"
 
+    # Interrupt stays a gap because Longhouse could implement it once upstream
+    # semantics are proven; reattach is an upstream absence and is not work.
     resume = by_scenario["resume_reattach"]
-    assert resume["status"] == "unsupported_gap"
-    assert resume["failure_code"] == "resume_reattach_unsupported"
-    assert resume["data"]["operation_evidence"]["reattach"]["failure_code"] == "resume_reattach_unsupported"
+    assert resume["status"] == "not_applicable"
+    assert resume["data"]["disposition"] == "upstream_absent"
 
 
 def test_claude_managed_session_e2e_uses_provider_live_contract_canary(tmp_path: Path) -> None:
@@ -2358,11 +2368,17 @@ def test_steer_active_turn_reports_explicit_provider_gaps(tmp_path: Path) -> Non
         "transport_is_codex_app_server": True,
     }
     assert Path(codex["data"]["raw_steer_dispatch_path"]).is_file()
-    for provider in ("opencode", "antigravity"):
-        result = by_provider[provider]
-        assert result["status"] == "unsupported_gap"
-        assert result["failure_code"] == "steer_active_turn_unsupported"
-        assert result["data"]["operation_evidence"]["steer_active_turn"]["status"] == "unsupported_gap"
+    # OpenCode proved the absence upstream; Antigravity's is merely unproven, so
+    # one is a settled fact and the other stays Longhouse backlog.
+    opencode = by_provider["opencode"]
+    assert opencode["status"] == "not_applicable"
+    assert opencode["data"]["disposition"] == "upstream_absent"
+    assert opencode["data"]["operation_evidence"]["steer_active_turn"]["status"] == "not_applicable"
+
+    antigravity = by_provider["antigravity"]
+    assert antigravity["status"] == "unsupported_gap"
+    assert antigravity["failure_code"] == "steer_active_turn_unsupported"
+    assert antigravity["data"]["disposition"] == "not_implemented"
 
 
 def test_pause_request_detect_projects_pending_question_for_all_providers(tmp_path: Path) -> None:
@@ -3164,6 +3180,7 @@ def test_tool_call_result_is_typed_gap_for_unmigrated_providers(tmp_path: Path) 
         )
     )
 
+    # A missing harness adapter is real unfinished work, not a provider fact.
     assert payload["verdict"] == "yellow"
     assert {result["provider"] for result in payload["results"]} == {"claude", "antigravity"}
     assert {result["status"] for result in payload["results"]} == {"unsupported_gap"}
@@ -3510,7 +3527,7 @@ def test_script_entrypoint_runs_all_provider_action_e2e(tmp_path: Path) -> None:
     assert support_rows["send_message"]["providers"]["claude"]["status"] == "pass"
     assert support_rows["steer_active_turn"]["providers"]["codex"]["status"] == "pass"
     assert support_rows["steer_active_turn"]["providers"]["codex"]["canary"] == "codex_managed_local_steer_dispatch"
-    assert support_rows["steer_active_turn"]["providers"]["opencode"]["status"] == "unsupported_gap"
+    assert support_rows["steer_active_turn"]["providers"]["opencode"]["status"] == "not_applicable"
     assert support_rows["permission_prompt"]["providers"]["codex"]["status"] == "pass"
     assert (
         support_rows["permission_prompt"]["providers"]["codex"]["canary"] == "codex_fake_app_server_permission_approval"

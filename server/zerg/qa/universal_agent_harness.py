@@ -1057,7 +1057,7 @@ class UniversalProviderAdapter:
             )
             payload["operation_evidence"] = {
                 "run_once": {
-                    "status": STATUS_UNSUPPORTED_GAP,
+                    "status": payload["status"],
                     "level": "none",
                     "canary": "universal_run_prompt_once",
                     "failure_code": "run_prompt_once_not_safe_no_token",
@@ -1282,7 +1282,7 @@ class UniversalProviderAdapter:
             )
             payload["operation_evidence"] = {
                 "launch_local": {
-                    "status": STATUS_UNSUPPORTED_GAP,
+                    "status": payload["status"],
                     "level": "none",
                     "canary": "universal_launch_managed_session",
                     "failure_code": "managed_session_not_safe_no_token",
@@ -1331,7 +1331,7 @@ class UniversalProviderAdapter:
             )
             payload["operation_evidence"] = {
                 "send_input": {
-                    "status": STATUS_UNSUPPORTED_GAP,
+                    "status": payload["status"],
                     "level": "none",
                     "canary": "universal_send_receive",
                     "failure_code": "send_receive_not_safe_no_token",
@@ -1398,10 +1398,11 @@ class UniversalProviderAdapter:
                 "steer_active_turn",
                 "steer_active_turn_unsupported",
                 "This provider does not expose stable active-turn steering semantics.",
+                operation="steer_active_turn",
             )
             payload["operation_evidence"] = {
                 "steer_active_turn": {
-                    "status": STATUS_UNSUPPORTED_GAP,
+                    "status": payload["status"],
                     "level": "none",
                     "canary": "universal_steer_active_turn",
                     "failure_code": "steer_active_turn_unsupported",
@@ -1421,10 +1422,11 @@ class UniversalProviderAdapter:
                 "answer_pause_request",
                 "answer_pause_request_unsupported",
                 "This provider does not expose stable answer-pause machine-control semantics.",
+                operation="answer_pause",
             )
             payload["operation_evidence"] = {
                 "answer_pause_request": {
-                    "status": STATUS_UNSUPPORTED_GAP,
+                    "status": payload["status"],
                     "level": "none",
                     "canary": "universal_answer_pause_request",
                     "failure_code": "answer_pause_request_unsupported",
@@ -1450,10 +1452,11 @@ class UniversalProviderAdapter:
                 "interrupt_cancel",
                 "interrupt_cancel_unsupported",
                 "This provider does not expose stable interrupt/cancel semantics in the managed-provider contract.",
+                operation="interrupt",
             )
             payload["operation_evidence"] = {
                 "interrupt": {
-                    "status": STATUS_UNSUPPORTED_GAP,
+                    "status": payload["status"],
                     "level": "none",
                     "canary": "universal_interrupt_cancel",
                     "failure_code": "interrupt_cancel_unsupported",
@@ -1468,7 +1471,7 @@ class UniversalProviderAdapter:
         )
         payload["operation_evidence"] = {
             "interrupt": {
-                "status": STATUS_UNSUPPORTED_GAP,
+                "status": payload["status"],
                 "level": "none",
                 "canary": "universal_interrupt_cancel",
                 "failure_code": "interrupt_cancel_adapter_missing",
@@ -1489,7 +1492,7 @@ class UniversalProviderAdapter:
         )
         payload["operation_evidence"] = {
             "tool_call_result": {
-                "status": STATUS_UNSUPPORTED_GAP,
+                "status": payload["status"],
                 "level": "none",
                 "canary": "universal_tool_call_result",
                 "failure_code": "tool_call_result_adapter_missing",
@@ -1511,10 +1514,11 @@ class UniversalProviderAdapter:
                 "resume_reattach",
                 "resume_reattach_unsupported",
                 "This provider does not expose stable resume/reattach semantics in the managed-provider contract.",
+                operation="reattach",
             )
             payload["operation_evidence"] = {
                 "reattach": {
-                    "status": STATUS_UNSUPPORTED_GAP,
+                    "status": payload["status"],
                     "level": "none",
                     "canary": "universal_resume_reattach",
                     "failure_code": "resume_reattach_unsupported",
@@ -1529,7 +1533,7 @@ class UniversalProviderAdapter:
         )
         payload["operation_evidence"] = {
             "reattach": {
-                "status": STATUS_UNSUPPORTED_GAP,
+                "status": payload["status"],
                 "level": "none",
                 "canary": "universal_resume_reattach",
                 "failure_code": "resume_reattach_adapter_missing",
@@ -1548,7 +1552,7 @@ class UniversalProviderAdapter:
             )
             payload["operation_evidence"] = {
                 "terminate": {
-                    "status": STATUS_UNSUPPORTED_GAP,
+                    "status": payload["status"],
                     "level": "none",
                     "canary": "universal_terminate_cleanup",
                     "failure_code": "terminate_cleanup_unsupported",
@@ -1739,7 +1743,7 @@ class UniversalProviderAdapter:
             )
             payload["operation_evidence"] = {
                 "external_event_channel": {
-                    "status": STATUS_UNSUPPORTED_GAP,
+                    "status": payload["status"],
                     "level": "none",
                     "canary": "universal_external_event_channel",
                     "failure_code": "external_event_channel_unsupported",
@@ -1783,7 +1787,7 @@ class UniversalProviderAdapter:
             )
             payload["operation_evidence"] = {
                 "permission_prompt": {
-                    "status": STATUS_UNSUPPORTED_GAP,
+                    "status": payload["status"],
                     "level": "none",
                     "canary": "universal_permission_prompt",
                     "failure_code": "permission_prompt_unsupported",
@@ -2323,7 +2327,7 @@ class UniversalProviderAdapter:
         )
         payload["operation_evidence"] = {
             "send_input": {
-                "status": STATUS_UNSUPPORTED_GAP,
+                "status": payload["status"],
                 "level": "none",
                 "canary": "universal_live_token_streaming",
                 "failure_code": "live_token_streaming_adapter_missing",
@@ -5014,16 +5018,65 @@ class UniversalProviderAdapter:
         package.write_json("assertions/managed_session_e2e.json", payload)
         return payload
 
-    def _unsupported_payload(self, scenario: str, failure_code: str, message: str) -> dict[str, Any]:
+    def _unsupported_payload(
+        self,
+        scenario: str,
+        failure_code: str,
+        message: str,
+        *,
+        operation: str | None = None,
+    ) -> dict[str, Any]:
+        """Report an unrunnable scenario.
+
+        When the scenario maps to a contract operation whose disposition is
+        settled, the scenario is a typed fact rather than a gap. Callers that are
+        merely token-unsafe pass no operation and stay Yellow, because those are
+        harness limitations rather than statements about the provider.
+        """
+
+        settled = self._settled_operation_disposition(operation)
+        if settled is not None:
+            disposition, evidence = settled
+            return {
+                "status": STATUS_NOT_APPLICABLE,
+                "scenario": scenario,
+                "failure_code": None,
+                "message": str(evidence.get("reason") or message),
+                "disposition": disposition,
+                "routed_to": evidence.get("routed_to"),
+                "observed_provider_version": evidence.get("observed_provider_version"),
+            }
         next_step = "Promote through a provider adapter that can run this scenario "
         next_step += "without spending tokens or mutating external state."
-        return {
+        payload = {
             "status": STATUS_UNSUPPORTED_GAP,
             "scenario": scenario,
             "failure_code": failure_code,
             "message": message,
             "next": next_step,
         }
+        if operation:
+            evidence = self._operation_evidence(operation)
+            if evidence.get("disposition"):
+                payload["disposition"] = evidence["disposition"]
+            if evidence.get("owner_action"):
+                payload["next"] = f"Close with {evidence['owner_action']}."
+        return payload
+
+    def _operation_evidence(self, operation: str | None) -> Mapping[str, Any]:
+        if not operation:
+            return {}
+        contract = contract_for_provider(self.config.provider)
+        if contract is None:
+            return {}
+        return contract.operation_evidence_for(operation)
+
+    def _settled_operation_disposition(self, operation: str | None) -> tuple[str, Mapping[str, Any]] | None:
+        evidence = self._operation_evidence(operation)
+        disposition = str(evidence.get("disposition") or "")
+        if disposition in {"upstream_absent", "policy_disabled"}:
+            return disposition, evidence
+        return None
 
     def _build_action_matrix_rows(
         self,
@@ -7897,6 +7950,16 @@ def scenario_result(
     status = str(payload.get("status") or STATUS_FAIL)
     if status not in STATUSES:
         status = STATUS_FAIL
+    data = {key: value for key, value in payload.items() if key not in {"status", "message", "failure_code"}}
+    if status == STATUS_NOT_APPLICABLE:
+        # A settled fact has no failure to report. Leaving a failure code behind
+        # would keep the row reading as a defect in every downstream rollup.
+        evidence = data.get("operation_evidence")
+        if isinstance(evidence, dict):
+            data["operation_evidence"] = {
+                operation: ({key: value for key, value in entry.items() if key != "failure_code"} if isinstance(entry, dict) else entry)
+                for operation, entry in evidence.items()
+            }
     return ScenarioResult(
         provider=provider,
         scenario=scenario,
@@ -7904,7 +7967,7 @@ def scenario_result(
         evidence_root=package.root,
         message=str(payload.get("message")) if payload.get("message") else None,
         failure_code=str(payload.get("failure_code")) if payload.get("failure_code") else None,
-        data={key: value for key, value in payload.items() if key not in {"status", "message", "failure_code"}},
+        data=data,
     )
 
 
