@@ -16,8 +16,10 @@ from typing import Any
 from uuid import UUID
 from uuid import uuid4
 
+import numpy as np
+
 SCHEMA_VERSION = 1
-SCHEMA_GENERATION = "searchd-v2-published-searchable-corpus-split-text"
+SCHEMA_GENERATION = "searchd-v2-published-searchable-corpus-with-embeddings"
 SEARCHABLE_RETENTION_DAYS = 91
 SEARCHABLE_FAST_WINDOW_DAYS = 90
 SEARCHABLE_FAST_WINDOW_MARGIN_SECONDS = 300
@@ -425,6 +427,22 @@ def _initialize_schema(connection: sqlite3.Connection) -> None:
         );
         CREATE INDEX IF NOT EXISTS ix_session_index_owner_revision
             ON session_index(owner_id, indexed_through, session_id);
+        CREATE TABLE IF NOT EXISTS episode_embeddings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT NOT NULL,
+            generation_id TEXT NOT NULL,
+            episode_ordinal INTEGER NOT NULL,
+            event_index_start INTEGER,
+            event_index_end INTEGER,
+            model TEXT NOT NULL,
+            dims INTEGER NOT NULL,
+            content_hash TEXT NOT NULL,
+            embedding BLOB NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(session_id, episode_ordinal, model)
+        );
+        CREATE INDEX IF NOT EXISTS ix_episode_embeddings_session
+            ON episode_embeddings(session_id);
         """
     )
     now = datetime.now(UTC).isoformat()
@@ -603,6 +621,106 @@ class SearchStore:
             self.connection.execute("ROLLBACK")
             raise
         return {"created": True, "exact_replay": False, "event_count": len(records)}
+
+    def write_episode_embeddings(
+        self,
+        *,
+        session_id: str,
+        generation_id: str,
+        model: str,
+        dims: int,
+        episodes: list[dict[str, Any]],
+    ) -> dict[str, object]:
+        written = 0
+        skipped = 0
+        now = datetime.now(UTC).isoformat()
+        self.connection.execute("BEGIN IMMEDIATE")
+        try:
+            for episode in episodes:
+                existing = self.connection.execute(
+                    "SELECT content_hash FROM episode_embeddings WHERE session_id = ? AND episode_ordinal = ? AND model = ?",
+                    (session_id, episode["episode_ordinal"], model),
+                ).fetchone()
+                if existing is not None and existing["content_hash"] == episode["content_hash"]:
+                    skipped += 1
+                    continue
+                self.connection.execute(
+                    """
+                    INSERT INTO episode_embeddings(
+                        session_id, generation_id, episode_ordinal, event_index_start, event_index_end,
+                        model, dims, content_hash, embedding, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(session_id, episode_ordinal, model) DO UPDATE SET
+                        generation_id=excluded.generation_id,
+                        event_index_start=excluded.event_index_start,
+                        event_index_end=excluded.event_index_end,
+                        dims=excluded.dims,
+                        content_hash=excluded.content_hash,
+                        embedding=excluded.embedding,
+                        updated_at=excluded.updated_at
+                    """,
+                    (
+                        session_id,
+                        generation_id,
+                        episode["episode_ordinal"],
+                        episode["event_index_start"],
+                        episode["event_index_end"],
+                        model,
+                        dims,
+                        episode["content_hash"],
+                        episode["embedding"],
+                        now,
+                    ),
+                )
+                written += 1
+            self.connection.execute("COMMIT")
+        except BaseException:
+            self.connection.execute("ROLLBACK")
+            raise
+        return {"written": written, "skipped": skipped}
+
+    def read_episode_embedding_hashes(self, *, session_id: str, model: str) -> dict[str, object]:
+        rows = self.connection.execute(
+            "SELECT episode_ordinal, content_hash FROM episode_embeddings WHERE session_id = ? AND model = ?",
+            (session_id, model),
+        ).fetchall()
+        # JSON object keys are strings; the projector converts them back to ordinals.
+        return {"hashes": {str(row["episode_ordinal"]): str(row["content_hash"]) for row in rows}}
+
+    def query_episode_embeddings(
+        self,
+        *,
+        model: str,
+        dims: int,
+        query_embedding: bytes,
+        session_filter: list[str] | None,
+        limit: int,
+    ) -> dict[str, object]:
+        sql = "SELECT session_id, episode_ordinal, event_index_start, event_index_end, embedding FROM episode_embeddings WHERE model = ? AND dims = ?"
+        params: list[object] = [model, dims]
+        if session_filter:
+            sql += f" AND session_id IN ({','.join('?' for _ in session_filter)})"
+            params.extend(session_filter)
+        rows = self.connection.execute(sql, params).fetchall()
+        if not rows:
+            return {"results": []}
+        query = np.frombuffer(query_embedding, dtype=np.float32)
+        vectors = np.vstack([np.frombuffer(row["embedding"], dtype=np.float32) for row in rows])
+        norms = np.linalg.norm(vectors, axis=1) * np.linalg.norm(query)
+        scores = np.divide(vectors @ query, norms, out=np.zeros_like(norms), where=norms != 0)
+        indices = np.argsort(-scores)[:limit]
+        return {
+            "results": [
+                {
+                    "session_id": str(rows[index]["session_id"]),
+                    "episode_ordinal": int(rows[index]["episode_ordinal"]),
+                    "score": float(scores[index]),
+                    "event_index_start": rows[index]["event_index_start"],
+                    "event_index_end": rows[index]["event_index_end"],
+                }
+                for index in indices
+            ]
+        }
 
     def _stored_object_projection_hash(self, *, existing: sqlite3.Row, object_id: str) -> str | None:
         session_id = str(existing["session_id"])

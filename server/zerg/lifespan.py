@@ -205,6 +205,15 @@ async def lifespan(app: FastAPI):
                 app.state.search_v2_projector_started = False
                 logger.exception("Failed to start search-v2 projector (non-fatal)")
             try:
+                from zerg.services.embeddings_v2_projector import start_embeddings_v2_projector
+
+                app.state.embeddings_v2_projector_started = start_embeddings_v2_projector()
+                if not app.state.embeddings_v2_projector_started:
+                    logger.warning("Embeddings-v2 projector is degraded; hot Runtime Host readiness is unaffected")
+            except Exception:
+                app.state.embeddings_v2_projector_started = False
+                logger.exception("Failed to start embeddings-v2 projector (non-fatal)")
+            try:
                 from zerg.services.storage_telemetry_snapshot import run_storage_telemetry_refresh_loop
 
                 app.state.storage_telemetry_task = asyncio.create_task(run_storage_telemetry_refresh_loop())
@@ -230,8 +239,7 @@ async def lifespan(app: FastAPI):
 
             if not catalog_mode and not _settings.testing and default_engine is not None and default_engine.dialect.name == "sqlite":
                 logger.info(
-                    "SQLite mode: single-writer serializer active. "
-                    "See VISION.md (Architecture Constraints / SQLite-only core) for details."
+                    "SQLite mode: single-writer serializer active. See VISION.md (Architecture Constraints / SQLite-only core) for details."
                 )
         except Exception as _e:
             logger.error(str(_e))
@@ -503,6 +511,12 @@ async def lifespan(app: FastAPI):
             except Exception:  # noqa: BLE001
                 logger.exception("Failed to stop search-v2 projector")
             try:
+                from zerg.services.embeddings_v2_projector import stop_embeddings_v2_projector
+
+                await stop_embeddings_v2_projector()
+            except Exception:  # noqa: BLE001
+                logger.exception("Failed to stop embeddings-v2 projector")
+            try:
                 from zerg.services.raw_object_workers import close_raw_object_worker_pool
                 from zerg.services.render_object_workers import close_render_object_worker_pool
 
@@ -589,6 +603,12 @@ async def lifespan(app: FastAPI):
                 await stop_search_v2_projector()
             except Exception:  # noqa: BLE001
                 logger.exception("Failed to stop search-v2 projector")
+            try:
+                from zerg.services.embeddings_v2_projector import stop_embeddings_v2_projector
+
+                await stop_embeddings_v2_projector()
+            except Exception:  # noqa: BLE001
+                logger.exception("Failed to stop embeddings-v2 projector")
             try:
                 from zerg.services.raw_object_workers import close_raw_object_worker_pool
                 from zerg.services.render_object_workers import close_render_object_worker_pool

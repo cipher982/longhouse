@@ -171,6 +171,73 @@ async def test_semantic_recall_matches_times_out_gracefully(monkeypatch):
     assert result == []
 
 
+@pytest.mark.asyncio
+async def test_semantic_recall_matches_uses_live_catalog_embedding_rpc(monkeypatch):
+    """Candidate sessions come from the owner's full visible listing, not from
+    lexically matching the same query text.
+
+    A dense-only match -- one lexical search for this exact query text would
+    never surface, which is the entire point of having a semantic lane --
+    must still reach search.embedding.query.v2. If candidate scope were
+    derived from a lexical search on ``query``, this test's candidate session
+    would never appear in that lexical result set and the RPC would receive
+    an empty session_filter.
+    """
+    monkeypatch.setenv("TESTING", "0")
+    fake_config = type("Cfg", (), {"model": "test-model", "dims": 2})()
+    monkeypatch.setattr("zerg.models_config.get_embedding_config", lambda: fake_config)
+    monkeypatch.setattr(agents_search.database_module, "live_catalog_enabled", lambda: True)
+
+    async def fake_generate_embedding(_text, _config):
+        return np.array([1, 0], dtype=np.float32)
+
+    candidate_session_id = str(uuid4())
+
+    def fake_list_live_catalog_sessions(*, params, owner_id):
+        # Real signature is synchronous -- it's dispatched via asyncio.to_thread,
+        # not awaited directly. An async mock here silently no-ops (the coroutine
+        # is returned unawaited), which is why this test needs the real (sync)
+        # calling convention exercised, not just assumed.
+        assert params.query is None, "candidate listing must not apply a text-relevance filter"
+        assert owner_id == 42
+        fake_session = type("FakeSession", (), {"id": candidate_session_id})()
+        return type("Listing", (), {"sessions": [fake_session]})()
+
+    seen = {}
+
+    async def fake_query(**kwargs):
+        seen.update(kwargs)
+        return [
+            {
+                "session_id": kwargs["session_filter"][0],
+                "episode_ordinal": 3,
+                "score": 0.9,
+                "event_index_start": 4,
+                "event_index_end": 5,
+            }
+        ]
+
+    import zerg.services.session_processing.embeddings as embeddings_module
+
+    monkeypatch.setattr(embeddings_module, "generate_embedding", fake_generate_embedding)
+    monkeypatch.setattr("zerg.services.live_catalog_timeline.list_live_catalog_sessions", fake_list_live_catalog_sessions)
+    monkeypatch.setattr(agents_search, "search_storage_v2_episode_embeddings", fake_query)
+    result = await agents_search._semantic_recall_matches(
+        query="important answer",
+        project=None,
+        provider=None,
+        since_days=90,
+        include_test=False,
+        include_automation=False,
+        max_results=5,
+        timeout_seconds=5.0,
+        owner_id=42,
+    )
+    assert [match.chunk_index for match in result] == [3]
+    assert seen["model"] == "test-model"
+    assert seen["session_filter"] == [candidate_session_id]
+
+
 def test_fetch_episode_snippet_uses_clean_projection_index_space(tmp_path):
     """event_start/end index the clean (content-bearing) projection, not raw durable rows.
 

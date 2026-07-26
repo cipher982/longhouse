@@ -1,6 +1,7 @@
 """Agents API — semantic search and recall endpoints."""
 
 import asyncio
+import base64
 import json
 import logging
 import os
@@ -195,6 +196,27 @@ async def search_storage_v2_context(
     return result
 
 
+async def search_storage_v2_episode_embeddings(
+    *, model: str, dims: int, query_embedding: bytes, session_filter: list[str], limit: int, timeout_seconds: float
+) -> list[dict[str, object]]:
+    """Query the derived dense index through searchd, never its SQLite file."""
+    search = get_searchd_client()
+    if search is None:
+        return []
+    result = await search.call(
+        "search.embedding.query.v2",
+        {
+            "model": model,
+            "dims": dims,
+            "query_embedding": base64.b64encode(query_embedding).decode("ascii"),
+            "session_filter": session_filter,
+            "limit": min(200, max(1, limit)),
+        },
+        timeout_seconds=timeout_seconds,
+    )
+    return [row for row in (result.get("results") or []) if isinstance(row, dict)]
+
+
 async def search_storage_v2_sessions(
     *,
     owner_id: int,
@@ -367,6 +389,7 @@ async def _semantic_recall_matches(
     include_automation: bool,
     max_results: int,
     timeout_seconds: float,
+    owner_id: int | None = None,
 ) -> list[RecallMatch]:
     """Dense recall over episode-level embeddings, independent of storage-v2.
 
@@ -402,6 +425,72 @@ async def _semantic_recall_matches(
 
     async def _run() -> list[RecallMatch]:
         query_vec = await generate_embedding(query, config)
+
+        if database_module.live_catalog_enabled():
+            if owner_id is None:
+                return []
+            # Candidate sessions must be the owner's full visible set, not
+            # sessions the *lexical* search already matched for this same
+            # query text -- that would make dense search unable to find
+            # anything lexical missed, which defeats the reason it exists
+            # (paraphrase/causal queries where lexical returns nothing at
+            # all get an empty dense candidate pool too). list_live_catalog_sessions
+            # with query=None is the query-free, owner-scoped listing this
+            # router already uses elsewhere (see list_sessions()'s query-is-None
+            # branch) -- reuse that instead of deriving scope from a text search.
+            from zerg.services.live_catalog_timeline import list_live_catalog_sessions
+            from zerg.services.timeline_session_listing import TimelineSessionListParams
+
+            listing = await asyncio.to_thread(
+                list_live_catalog_sessions,
+                params=TimelineSessionListParams(
+                    project=project,
+                    provider=provider,
+                    environment=None,
+                    include_test=include_test,
+                    hide_autonomous=False,
+                    device_id=None,
+                    days_back=since_days,
+                    query=None,
+                    limit=max_results * 20,
+                    offset=0,
+                    sort=None,
+                    mode=None,
+                    context_mode="forensic",
+                    include_automation=include_automation,
+                ),
+                owner_id=owner_id,
+            )
+            valid_ids = {str(session.id) for session in listing.sessions}
+            if not valid_ids:
+                return []
+            rows = await search_storage_v2_episode_embeddings(
+                model=config.model,
+                dims=config.dims,
+                query_embedding=query_vec.astype("float32").tobytes(),
+                session_filter=sorted(valid_ids),
+                limit=max_results * 3,
+                timeout_seconds=timeout_seconds,
+            )
+            matches: list[RecallMatch] = []
+            seen: set[str] = set()
+            for row in rows:
+                session_id = str(row.get("session_id") or "")
+                if not session_id or session_id in seen:
+                    continue
+                seen.add(session_id)
+                matches.append(
+                    RecallMatch(
+                        session_id=session_id,
+                        chunk_index=int(row.get("episode_ordinal") or 0),
+                        score=float(row.get("score") or 0.0),
+                        event_index_start=row.get("event_index_start"),
+                        event_index_end=row.get("event_index_end"),
+                    )
+                )
+                if len(matches) >= max_results:
+                    break
+            return matches
 
         db = database_module.get_session_factory()()
         try:
@@ -1201,6 +1290,7 @@ async def recall_sessions(
                     include_automation=include_automation,
                     max_results=max_results,
                     timeout_seconds=remaining_budget(),
+                    owner_id=owner_id,
                 )
             matches = _rrf_merge_recall_matches(matches, semantic_matches, limit=max_results)
 

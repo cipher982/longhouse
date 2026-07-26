@@ -128,16 +128,103 @@ Deliberately not changed, with reasoning:
 Verification after fixes: 3665 passed (full backend lite suite, up from 3658 — 7 new
 tests), ruff clean.
 
-## 5. Remaining work (the actual gate)
+## 5. Pivot: the archive DB the whole pipeline above assumed is empty
 
-Nothing above has touched real data yet — it's code, not corpus.
+Section 3-4's implementation was built against `AgentSession`/`AgentEvent`/`SessionEmbedding`
+— SQLAlchemy ORM tables on the legacy archive SQLite DB (`DATABASE_URL`). Before triggering
+the hosted backfill, verified on `zerg`:
 
-1. Trigger `POST /backfill-embeddings` against hosted `david010` with the new config.
-2. Verify completeness: row counts, `needs_embedding` cleared, spot-check decoded vectors.
+```
+DATABASE_URL on david010       -> sqlite:////data/longhouse.db
+/var/.../david010/longhouse.db -> 0 bytes
+```
+
+Confirmed by attempting the actual backfill: `POST /backfill-embeddings` returned 503
+`archive_route_unavailable` — `get_db()` (`server/zerg/database.py:766-780`) unconditionally
+403s that dependency under `live_catalog_enabled()`. Legacy raw writes are disabled on
+david010 by design (see the data-plane-closeout project memory); the archive DB has been
+empty since. Real session/event data lives in the catalog system (`longhouse-live.db`,
+owned by the `searchd` sidecar, fed by `catalogd`).
+
+Everything in §3-4 remains correct and reusable (episode chunking, RRF math, Sol's fixes,
+the Qwen3 model) but the *storage layer* needed a full rebuild against the real data path.
+
+## 6. Storage-v2-backed rebuild
+
+Explored the catalogd/searchd read/write surface (`server/zerg/services/search_v2_projector.py`
+is the load-bearing precedent — an in-process `asyncio` task that reads catalogd via RPC and
+writes searchd's `search.db` via RPC, never opening either SQLite file directly). Built the
+dense-embedding equivalent the same way, extending searchd rather than standing up a new
+sidecar (decision: reuse its supervised lifecycle rather than build a second one):
+
+- **`episode_embeddings` table** added to `search.db`'s schema (`searchd/store.py`), with
+  `write_episode_embeddings` (content-hash dedup, so re-walking an unchanged episode after a
+  session's revision advances doesn't re-call the paid embedding API), `read_episode_embedding_hashes`
+  (the pre-API-call dedup check), and `query_episode_embeddings` (vectorized numpy cosine,
+  no ANN index needed at this corpus size).
+- **Three new searchd RPC methods** (`search.embedding.write/hashes/query.v2`) in
+  `searchd/server.py`, validated the same way every existing method is (`_exact_keys`,
+  bounded list/string lengths, base64-encoded vector payloads over JSON-RPC).
+- **`EmbeddingsV2Projector`** (`services/embeddings_v2_projector.py`), modeled directly on
+  `SearchV2Projector`: claims sessions via the same generic `projector.state.claim.v2` lease
+  mechanism (registered as `embeddings-v1`), pages render objects via catalogd, decodes via
+  the same `RenderObjectWorkerPool`, feeds the decoded records through the *existing, unmodified*
+  `iter_turn_chunks()` episode chunker, and writes vectors via RPC. Runs continuously
+  (`start_embeddings_v2_projector()`, wired into `lifespan.py` next to the FTS projector) —
+  this also means incremental embedding of new sessions is solved as a side effect, which the
+  §3 design never had a real answer for.
+- **`_semantic_recall_matches`** now branches on `live_catalog_enabled()`: the ORM-based §3
+  code path is preserved unchanged for non-live-catalog (self-hosted/dev) instances; a new
+  branch calls `search.embedding.query.v2` for live-catalog tenants.
+
+Implementation delegated to `hatch codex terra` with a detailed spec built from exploration
+findings; reviewed and fixed by hand before commit (see §7).
+
+## 7. Review findings on the storage-v2 rebuild
+
+One real bug found reviewing Terra's diff before running anything: the live-catalog branch
+derived its dense-search candidate session set from **calling the lexical search RPC with the
+same query text**, then restricting embeddings search to only those already-lexically-matched
+sessions. That silently defeats the entire point of a semantic lane — a paraphrase query
+lexical finds *zero* sessions for gets an empty dense candidate pool too, i.e. dense search
+could never surface anything lexical had already missed, which is exactly the failure mode
+this whole project exists to close.
+
+Fixed: candidate scope now comes from `list_live_catalog_sessions` with `query=None` — the
+same query-*free*, owner-scoped session listing `agents_sessions.py`'s `list_sessions()`
+already uses elsewhere in this codebase for its no-query branch — rather than deriving scope
+from a text-relevance search. Updated the regression test (`test_recall_semantic_lane.py`)
+to assert a dense-only match unreachable by lexical search still reaches the RPC, which is
+the exact scenario the original implementation would have silently dropped.
+
+Full backend suite: 3622 passed after the fix (one unrelated pre-existing timing flake in
+`test_session_inputs_api.py` confirmed independent by reproducing on unmodified `main`).
+
+## 8. Remaining work (the actual gate)
+
+Nothing above has touched real data yet — it's code, not corpus. The projector runs
+automatically once shipped (no manual backfill trigger the way §3's design needed one — it
+claims and embeds every session on its own, the same way the FTS projector originally
+backfilled 4.36M events), so "backfill" here means "ship, then wait for the projector to
+catch up," not a POST call.
+
+1. Ship this to hosted `david010`.
+2. Watch the projector claim/embed sessions; verify `episode_embeddings` row counts grow
+   and stabilize (compare against total session count).
 3. Live e2e: real `/api/agents/recall?mode=auto` calls against david010, confirm semantic
-   hits actually surface (not just lexical passthrough) and latency stays sane.
+   hits actually surface — specifically confirm a *paraphrase* query that the eval showed
+   lexical returning nothing for now gets a dense hit.
 4. Re-run `eval/recall/run_eval.py` against hybrid mode. Compare against the lexical
-   baseline above. This is the release gate — the point of all of this was to move that
+   baseline in §1. This is the release gate — the point of all of this was to move that
    73.7% number, not to ship code that compiles.
-5. Report before/after, scope anything deliberately deferred (no sub-chunking for
-   oversized episodes, no incremental-reembed verification) as explicit follow-ups.
+5. Report before/after, scope anything deliberately deferred as explicit follow-ups.
+   Known gap already identified, not fixed in this pass: live-catalog dense-only matches
+   (a session found by embeddings but not by lexical) currently carry no snippet text at
+   all — `context_text`/`evidence` are unset on that `RecallMatch` construction in
+   `agents_search.py`, because building one would need a live-catalog-specific event fetch
+   (episode indices here are clean-projection positions, not raw searchd `search_event_id`s
+   that `search_storage_v2_context` expects) that wasn't built in this pass. This does not
+   affect the eval gate below (it checks whether the right *session* appears, not evidence
+   text quality) but does mean an agent calling this in practice sees a session hit with no
+   supporting quote for dense-only results. Real follow-up work, not cosmetic — worth its
+   own pass once the core recall-quality number is validated.

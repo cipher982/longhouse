@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import fcntl
 import logging
 import os
@@ -205,6 +206,27 @@ class SearchDaemon:
                 params = _publish_params(request.params)
                 published = await self._run(self._store.publish_generation, **params)
                 return self._result(request, published)
+            if request.method == "search.embedding.write.v2":
+                params = _embedding_write_params(request.params)
+                return self._result(request, await self._run(self._store.write_episode_embeddings, **params))
+            if request.method == "search.embedding.hashes.v2":
+                params = _embedding_hashes_params(request.params)
+                return self._result(
+                    request,
+                    await self._run_interactive_read(
+                        lambda store: store.read_episode_embedding_hashes(**params),
+                        deadline_mono_ns=int(request.deadline_mono_ns),
+                    ),
+                )
+            if request.method == "search.embedding.query.v2":
+                params = _embedding_query_params(request.params)
+                return self._result(
+                    request,
+                    await self._run_interactive_read(
+                        lambda store: store.query_episode_embeddings(**params),
+                        deadline_mono_ns=int(request.deadline_mono_ns),
+                    ),
+                )
             if request.method == "search.query.v2":
                 params = _search_params(request.params)
                 result = await self._run_interactive_read(
@@ -543,6 +565,75 @@ def _publish_params(value: dict) -> dict:
         "cwd": _text(value["cwd"], "cwd", 4_096, optional=True),
         "git_repo": _text(value["git_repo"], "git_repo", 500, optional=True),
         "started_at": _text(value["started_at"], "started_at", 64),
+    }
+
+
+def _embedding_write_params(value: dict) -> dict:
+    _exact_keys(value, {"session_id", "generation_id", "model", "dims", "episodes"})
+    dims = value["dims"]
+    episodes = value["episodes"]
+    if type(dims) is not int or not 1 <= dims <= 16_384 or not isinstance(episodes, list) or len(episodes) > 512:
+        raise ValueError("embedding write dimensions or episodes are invalid")
+    parsed = []
+    for episode in episodes:
+        if not isinstance(episode, dict) or set(episode) != {
+            "episode_ordinal",
+            "event_index_start",
+            "event_index_end",
+            "content_hash",
+            "embedding",
+        }:
+            raise ValueError("embedding episode fields are invalid")
+        encoded = episode["embedding"]
+        if type(episode["episode_ordinal"]) is not int or episode["episode_ordinal"] < 0:
+            raise ValueError("embedding episode ordinal is invalid")
+        if not isinstance(episode["content_hash"], str) or _HASH.fullmatch(episode["content_hash"]) is None:
+            raise ValueError("embedding content hash is invalid")
+        if not isinstance(encoded, str):
+            raise ValueError("embedding must be base64")
+        try:
+            embedding = base64.b64decode(encoded, validate=True)
+        except ValueError as exc:
+            raise ValueError("embedding must be base64") from exc
+        if len(embedding) != dims * 4:
+            raise ValueError("embedding dimensions do not match payload")
+        parsed.append({**episode, "embedding": embedding})
+    return {
+        "session_id": _uuid(value["session_id"], "session_id"),
+        "generation_id": _uuid(value["generation_id"], "generation_id"),
+        "model": _text(value["model"], "model", 255),
+        "dims": dims,
+        "episodes": parsed,
+    }
+
+
+def _embedding_hashes_params(value: dict) -> dict:
+    _exact_keys(value, {"session_id", "model"})
+    return {"session_id": _uuid(value["session_id"], "session_id"), "model": _text(value["model"], "model", 255)}
+
+
+def _embedding_query_params(value: dict) -> dict:
+    _exact_keys(value, {"model", "dims", "query_embedding", "session_filter", "limit"})
+    dims = value["dims"]
+    if type(dims) is not int or not 1 <= dims <= 16_384 or type(value["limit"]) is not int or not 1 <= value["limit"] <= 200:
+        raise ValueError("embedding query dimensions or limit are invalid")
+    try:
+        query_embedding = base64.b64decode(value["query_embedding"], validate=True)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("query_embedding must be base64") from exc
+    if len(query_embedding) != dims * 4:
+        raise ValueError("query embedding dimensions do not match payload")
+    session_filter = value["session_filter"]
+    if session_filter is not None:
+        if not isinstance(session_filter, list) or len(session_filter) > 10_000:
+            raise ValueError("session_filter is invalid")
+        session_filter = [_uuid(item, "session_filter") for item in session_filter]
+    return {
+        "model": _text(value["model"], "model", 255),
+        "dims": dims,
+        "query_embedding": query_embedding,
+        "session_filter": session_filter,
+        "limit": value["limit"],
     }
 
 
