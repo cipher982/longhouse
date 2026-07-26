@@ -770,6 +770,34 @@ describe("SessionChat", () => {
     expect(screen.queryByText("Request failed (502)")).not.toBeInTheDocument();
   });
 
+  it("loads a durable input failure after the Console session has ended", async () => {
+    requestMock.mockImplementation((path: string, init?: RequestInit) => {
+      if (String(path).endsWith("/lock")) {
+        return Promise.resolve({ locked: false, fork_available: false });
+      }
+      if (String(path).endsWith("/inputs") && !init) {
+        return Promise.resolve([
+          {
+            id: null,
+            live_input_id: "ended-console-failure",
+            text: "launch from missing cwd",
+            intent: "auto",
+            status: "failed",
+            created_at: null,
+            last_error: "cwd_not_found: cwd does not exist: /missing",
+          },
+        ]);
+      }
+      return Promise.reject(new Error(`Unexpected request: ${path}`));
+    });
+
+    renderSessionChat({ chatMode: "managed_local", canQueueNextInput: false });
+
+    const failure = await screen.findByTestId("session-chat-queued-failed");
+    expect(failure).toHaveTextContent("launch from missing cwd");
+    expect(failure).toHaveTextContent("cwd_not_found: cwd does not exist: /missing");
+  });
+
   it("shows Send update primary + Queue next secondary when steer capability is on", async () => {
     const user = userEvent.setup();
     const queryClient = new QueryClient({
