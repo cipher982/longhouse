@@ -66,7 +66,7 @@ const LAUNCH_PROVIDER_SUPPORT: Record<LaunchProviderId, LaunchProviderSupport> =
   antigravity: {
     id: "antigravity",
     marketingName: "Antigravity CLI",
-    launchAndSend: false,
+    launchAndSend: true,
     interrupt: false,
     steerMidTurn: false,
     resume: false,
@@ -78,13 +78,13 @@ const LAUNCH_PROVIDER_SUPPORT: Record<LaunchProviderId, LaunchProviderSupport> =
   cursor: {
     id: "cursor",
     marketingName: "Cursor Agent",
-    launchAndSend: false,
-    interrupt: false,
+    launchAndSend: true,
+    interrupt: true,
     steerMidTurn: false,
-    resume: false,
+    resume: true,
     archiveVisibility: "live",
-    cloudSessionStart: "none",
-    hooksSupport: "none",
+    cloudSessionStart: "live",
+    hooksSupport: "live",
     telemetryQuality: "structured",
   },
 };

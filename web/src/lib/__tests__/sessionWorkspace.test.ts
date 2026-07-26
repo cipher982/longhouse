@@ -620,9 +620,9 @@ describe("getSessionInteractionCapabilities", () => {
     expect(capabilities.managementLabel).toBe("Unmanaged");
     expect(capabilities.capabilityLabel).toBe("Search only");
     expect(capabilities.composerDisabledReason).toBe(
-      "Longhouse can search this unmanaged Antigravity session here, but it cannot steer it.",
+      "This unmanaged Antigravity session is read-only in Longhouse.",
     );
-    expect(capabilities.managedLaunchSuggestion).toBeNull();
+    expect(capabilities.managedLaunchSuggestion?.command).toBe("longhouse antigravity");
     expect(capabilities.primaryActionLabel).toBe("Unavailable");
   });
 });

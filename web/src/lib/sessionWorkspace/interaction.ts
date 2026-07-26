@@ -1,25 +1,16 @@
 import type { AgentSession } from "../../services/api/agents";
-import { canonicalProvider, getProviderLabel } from "../providers";
+import { getLaunchProviderSupport, getProviderLabel } from "../providers";
 import type { ManagedLaunchSuggestion, SessionInteractionCapabilities, SessionInteractionMode } from "./types";
 import { getSessionOriginLabel } from "./formatters";
 
-function getManagedLaunchSuggestion(provider: string, providerLabel: string): ManagedLaunchSuggestion | null {
-  provider = canonicalProvider(provider);
-  if (provider === "claude") {
-    return {
-      title: "Start the next Claude session through Longhouse",
-      body: "This session stays searchable here. Use this command when you want the next Claude session to stay steerable from Longhouse.",
-      command: "longhouse claude",
-    };
-  }
-  if (provider === "codex") {
-    return {
-      title: "Start the next Codex session through Longhouse",
-      body: "This session stays searchable here. Use this command when you want the next Codex session to stay steerable from Longhouse.",
-      command: "longhouse codex",
-    };
-  }
-  return null;
+function getManagedLaunchSuggestion(provider: string): ManagedLaunchSuggestion | null {
+  const support = getLaunchProviderSupport(provider);
+  if (!support?.launchAndSend) return null;
+  return {
+    title: `Start the next ${support.marketingName} session through Longhouse`,
+    body: `This session stays searchable here. Use this command when you want the next ${support.marketingName} session to stay steerable from Longhouse.`,
+    command: `longhouse ${support.id}`,
+  };
 }
 
 export function getSessionInteractionCapabilities({
@@ -57,7 +48,7 @@ export function getSessionInteractionCapabilities({
 
   const managedLaunchSuggestion =
     mode === "unsupported" && !isManagedLocalSession
-      ? getManagedLaunchSuggestion(session.provider, providerLabel)
+      ? getManagedLaunchSuggestion(session.provider)
       : null;
   const unsupportedCapabilityDescription = managedLaunchSuggestion
     ? `Longhouse can search this unmanaged ${providerLabel} session here, but it cannot steer it.`
