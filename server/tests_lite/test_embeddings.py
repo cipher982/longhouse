@@ -215,6 +215,68 @@ def test_turn_chunks_event_indices(tmp_path):
     assert chunks[1].event_index_end == 3
 
 
+def test_turn_chunks_span_full_episode_past_first_assistant_reply(tmp_path):
+    """A chunk covers the whole episode, not just the first assistant turn.
+
+    Regression guard: the previous pairing logic stopped a chunk at the first
+    assistant reply, so a multi-round tool-call episode (assistant, tool,
+    assistant again) silently dropped everything after that first reply from
+    the embedded text -- most of what a coding agent actually does.
+    """
+    events = [
+        {
+            "role": "user",
+            "content_text": "fix the failing test",
+            "tool_name": None,
+            "tool_input_json": None,
+            "tool_output_text": None,
+            "timestamp": datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc),
+            "session_id": "test",
+        },
+        {
+            "role": "assistant",
+            "content_text": "Let me look at the test file first.",
+            "tool_name": None,
+            "tool_input_json": None,
+            "tool_output_text": None,
+            "timestamp": datetime(2026, 1, 1, 0, 1, tzinfo=timezone.utc),
+            "session_id": "test",
+        },
+        {
+            "role": "assistant",
+            "content_text": "Found it -- the fixture was stale, applying the fix now.",
+            "tool_name": None,
+            "tool_input_json": None,
+            "tool_output_text": None,
+            "timestamp": datetime(2026, 1, 1, 0, 2, tzinfo=timezone.utc),
+            "session_id": "test",
+        },
+        {
+            "role": "user",
+            "content_text": "thanks, looks good",
+            "tool_name": None,
+            "tool_input_json": None,
+            "tool_output_text": None,
+            "timestamp": datetime(2026, 1, 1, 0, 3, tzinfo=timezone.utc),
+            "session_id": "test",
+        },
+    ]
+
+    chunks = prepare_turn_chunks(events)
+    assert len(chunks) == 2
+
+    first = chunks[0]
+    assert first.event_index_start == 0
+    assert first.event_index_end == 2
+    assert "stale" in first.text.lower()
+    assert "fix now" in first.text.lower() or "fix" in first.text.lower()
+
+    second = chunks[1]
+    assert second.event_index_start == 3
+    assert second.event_index_end == 3
+    assert "thanks" in second.text.lower()
+
+
 def test_turn_chunks_break_equal_timestamps_by_event_id(tmp_path):
     """Equal event timestamps use the durable row id for stable transcript order."""
     events = [
@@ -253,26 +315,30 @@ def test_embedding_upsert(tmp_path):
 
     with SessionLocal() as db:
         # Create a session first (FK constraint)
-        db.add(AgentSession(
-            id=session_id,
-            provider="claude",
-            environment="test",
-            project="zerg",
-            started_at=datetime.now(timezone.utc),
-        ))
+        db.add(
+            AgentSession(
+                id=session_id,
+                provider="claude",
+                environment="test",
+                project="zerg",
+                started_at=datetime.now(timezone.utc),
+            )
+        )
         db.commit()
 
         # Insert an embedding
         vec = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
-        db.add(SessionEmbedding(
-            session_id=session_id,
-            kind="session",
-            chunk_index=-1,
-            model="test-model",
-            dims=4,
-            embedding=embedding_to_bytes(vec),
-            content_hash=content_hash("test content"),
-        ))
+        db.add(
+            SessionEmbedding(
+                session_id=session_id,
+                kind="session",
+                chunk_index=-1,
+                model="test-model",
+                dims=4,
+                embedding=embedding_to_bytes(vec),
+                content_hash=content_hash("test content"),
+            )
+        )
         db.commit()
 
         # Query it back
@@ -593,9 +659,7 @@ async def test_partial_turn_embeddings_are_searchable(monkeypatch, tmp_path):
         vectors = []
         for text in texts:
             vectors.append(
-                np.array([0.0, 1.0, 0.0, 0.0], dtype=np.float32)
-                if "needle" in text
-                else np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+                np.array([0.0, 1.0, 0.0, 0.0], dtype=np.float32) if "needle" in text else np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
             )
         return vectors
 

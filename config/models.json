@@ -102,7 +102,7 @@
   "embedding": {
     "default": {
       "provider": "openrouter",
-      "model": "openai/text-embedding-3-small",
+      "model": "qwen/qwen3-embedding-8b",
       "dims": 256,
       "baseUrl": "https://openrouter.ai/api/v1",
       "apiKeyEnvVar": "OPENROUTER_API_KEY"
