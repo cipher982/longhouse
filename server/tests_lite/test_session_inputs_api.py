@@ -44,23 +44,23 @@ from zerg.models.models import Runner
 from zerg.models.user import User
 from zerg.routers.session_chat import SessionInputRequest
 from zerg.routers.session_chat import _create_session_input_response
+from zerg.routers.session_chat import _live_queued_summary
 from zerg.routers.session_chat import _project_live_input_to_archive
-from zerg.services.live_archive_outbox import SESSION_INPUT_RECEIPT_KIND
-from zerg.services.live_archive_outbox import drain_live_archive_outbox
 from zerg.services.agents import AgentsStore
 from zerg.services.agents import EventIngest
 from zerg.services.agents import SessionIngest
+from zerg.services.live_archive_outbox import SESSION_INPUT_RECEIPT_KIND
+from zerg.services.live_session_inputs import LiveInputReceiptSnapshot
 from zerg.services.machine_control_channel import get_machine_control_channel_registry
 from zerg.services.runner_connection_manager import get_runner_connection_manager
-from zerg.services.session_locks import session_lock_manager
 from zerg.services.session_inputs import INPUT_STATUS_CANCELLED
 from zerg.services.session_inputs import INPUT_STATUS_DELIVERED
 from zerg.services.session_inputs import INPUT_STATUS_DELIVERING
 from zerg.services.session_inputs import INPUT_STATUS_FAILED
 from zerg.services.session_inputs import INPUT_STATUS_QUEUED
 from zerg.services.session_inputs import create_session_input
-from zerg.services.live_session_inputs import LiveInputReceiptSnapshot
 from zerg.services.session_kernel_projection import project_session_control_fields
+from zerg.services.session_locks import session_lock_manager
 from zerg.services.session_runtime import phase_freshness_ms
 from zerg.services.session_runtime import runtime_key_for_session
 
@@ -112,6 +112,30 @@ def _make_client(session_local, current_user):
     api_app.dependency_overrides[get_db] = override_get_db
     api_app.dependency_overrides[get_current_browser_route_user] = override_current_user
     return TestClient(app, backend="asyncio"), api_app
+
+
+def test_live_failed_input_summary_preserves_typed_error():
+    summary = _live_queued_summary(
+        LiveInputReceiptSnapshot(
+            id="live-failed-1",
+            owner_id=1,
+            session_id=str(uuid4()),
+            provider="claude",
+            text="start work",
+            intent="auto",
+            status=INPUT_STATUS_FAILED,
+            client_request_id="request-failed-1",
+            archive_session_input_id=None,
+            error_json=(
+                '{"code":"claude_lifecycle_hook_missing",'
+                '"message":"run `longhouse claude configure`"}'
+            ),
+        )
+    )
+
+    assert summary.last_error == (
+        "claude_lifecycle_hook_missing: run `longhouse claude configure`"
+    )
 
 
 def _seed_live_runtime_state(db, session, *, phase: str = "idle") -> None:

@@ -172,6 +172,14 @@ export function useSessionWorkspace(
       // Slow reconciliation: server flips unpaired tool calls to "dropped"
       // after 1h on demand, so we re-ask occasionally even when SSE is quiet.
       if (streamConnected) {
+        // Machine-control connect/disconnect is process-local state, not a
+        // durable workspace mutation, so it does not wake the session SSE
+        // stream. Keep a focused Console workspace polling until that state
+        // has its own fanout contract; otherwise "Control offline" can remain
+        // stale forever after the Machine Agent reconnects.
+        if (currentSession.session_state.mode === "console") {
+          return WORKSPACE_FALLBACK_REFRESH_MS;
+        }
         return workspaceHasRunningTool(query.state.data)
           ? WORKSPACE_RECONCILE_REFRESH_MS
           : false;

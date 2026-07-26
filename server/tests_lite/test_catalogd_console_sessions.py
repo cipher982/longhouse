@@ -11,7 +11,9 @@ from zerg.catalogd.schema import create_catalog_engine
 from zerg.catalogd.schema import initialize_catalog_schema
 from zerg.catalogd.store import CatalogStore
 from zerg.models.live_store import LiveArchiveOutbox
+from zerg.models.live_store import LiveConsoleTurn
 from zerg.models.live_store import LiveSessionCatalog
+from zerg.models.live_store import LiveSessionInputReceipt
 from zerg.models.live_store import LiveSessionLaunchAttempt
 from zerg.models.live_store import LiveSessionRun
 from zerg.models.live_store import LiveSessionThread
@@ -177,21 +179,50 @@ def test_catalog_console_turns_claim_and_wake_fifo(tmp_path):
     assert second["turn"]["state"] == "queued"
     assert second["turn"]["run_id"] is None
     assert second["turn"]["client_request_id"] == "request-2"
+    starting = store.list_starting_console_turns_for_device(owner_id=1, device_id="cinder")
+    assert [turn["run_id"] for turn in starting["turns"]] == [first["turn"]["run_id"]]
+    assert store.list_starting_console_turns_for_device(owner_id=42, device_id="cinder")["turns"] == []
+    assert store.list_starting_console_turns_for_device(owner_id=1, device_id="cube")["turns"] == []
     current = store.read_current_console_turn(session_id=str(session_id), owner_id=1)
     assert current["found"] is True
     assert current["turn"]["turn_id"] == first["turn"]["turn_id"]
     assert store.read_current_console_turn(session_id=str(session_id), owner_id=42) == {"found": False}
     facts = store.read_session(session_id=str(session_id), owner_id=1)["facts"]
     assert facts["latest_console_turn"]["state"] == "starting"
+    uncertain = store.update_console_turn(
+        data={
+            "turn_id": first["turn"]["turn_id"],
+            "run_id": first["turn"]["run_id"],
+            "state": "starting",
+            "expected_state": "starting",
+            "error_code": "turn_start_outcome_unknown",
+            "error": "Machine control channel disconnected",
+            "updated_at": datetime.now(UTC),
+        }
+    )
+    assert uncertain["turn"]["state"] == "starting"
+    with Session(engine) as db:
+        uncertain_turn = db.get(LiveConsoleTurn, first["turn"]["turn_id"])
+        uncertain_receipt = db.get(LiveSessionInputReceipt, uncertain_turn.receipt_id)
+        assert uncertain_receipt.status == "delivering"
+        assert json.loads(uncertain_receipt.error_json) == {
+            "code": "turn_start_outcome_unknown",
+            "message": "Machine control channel disconnected",
+        }
     active = store.update_console_turn(
         data={
             "turn_id": first["turn"]["turn_id"],
             "run_id": first["turn"]["run_id"],
             "state": "active",
+            "expected_state": "starting",
             "updated_at": datetime.now(UTC),
         }
     )
     assert active["turn"]["state"] == "active"
+    with Session(engine) as db:
+        active_turn = db.get(LiveConsoleTurn, first["turn"]["turn_id"])
+        active_receipt = db.get(LiveSessionInputReceipt, active_turn.receipt_id)
+        assert active_receipt.error_json is None
     provider_thread_id = "019f6b93-edf6-7bd0-a757-b5195a61abdd"
     store.apply_session_runtime(
         events=[
@@ -222,6 +253,39 @@ def test_catalog_console_turns_claim_and_wake_fifo(tmp_path):
     assert settled["next_turn"]["state"] == "starting"
     assert settled["next_turn"]["run_id"]
     assert settled["next_turn"]["resume_provider_thread_id"] == provider_thread_id
+    stale_replay = store.update_console_turn(
+        data={
+            "turn_id": first["turn"]["turn_id"],
+            "run_id": first["turn"]["run_id"],
+            "state": "active",
+            "expected_state": "starting",
+            "updated_at": datetime.now(UTC),
+        }
+    )
+    assert stale_replay["applied"] is False
+    assert stale_replay["stale"] is True
+    assert stale_replay["turn"]["state"] == "completed"
+
+    failed = store.update_console_turn(
+        data={
+            "turn_id": settled["next_turn"]["turn_id"],
+            "run_id": settled["next_turn"]["run_id"],
+            "state": "failed",
+            "error_code": "claude_lifecycle_hook_missing",
+            "error": "run `longhouse claude configure`",
+            "updated_at": datetime.now(UTC),
+        }
+    )
+    assert failed["turn"]["state"] == "failed"
+    with Session(engine) as db:
+        failed_turn = db.get(LiveConsoleTurn, settled["next_turn"]["turn_id"])
+        failed_run = db.get(LiveSessionRun, settled["next_turn"]["run_id"])
+        receipt = db.get(LiveSessionInputReceipt, failed_turn.receipt_id)
+        assert failed_run.exit_status == "claude_lifecycle_hook_missing"
+        assert json.loads(receipt.error_json) == {
+            "code": "claude_lifecycle_hook_missing",
+            "message": "run `longhouse claude configure`",
+        }
 
 
 @pytest.mark.asyncio

@@ -1166,7 +1166,7 @@ async def create_console_turn(
         if turn.error:
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
-                detail={"code": "provider_launch_failed", "message": turn.error},
+                detail={"code": turn.error_code or "provider_launch_failed", "message": turn.error},
             )
         return ConsoleTurnCreateResponse(
             turn_id=turn.turn_id,

@@ -11,6 +11,7 @@ from pathlib import Path
 from uuid import UUID
 from uuid import uuid4
 
+import numpy as np
 import pytest
 
 from zerg.catalogd.client import CatalogClient
@@ -92,12 +93,8 @@ def test_fts_query_preserves_compact_identifiers_as_phrases(raw, expected):
 def test_search_preserves_every_natural_query_term(tmp_path):
     connection = open_search_database(tmp_path / "search.db")
     try:
-        assert connection.execute(
-            "SELECT 1 FROM sqlite_master WHERE name = 'events_fts_vocab'"
-        ).fetchone() is None
-        query, token_count, compiled_token_count = SearchStore(connection)._compile_fts_query(
-            "please explain managed session recovery"
-        )
+        assert connection.execute("SELECT 1 FROM sqlite_master WHERE name = 'events_fts_vocab'").fetchone() is None
+        query, token_count, compiled_token_count = SearchStore(connection)._compile_fts_query("please explain managed session recovery")
         assert query == "please explain managed session recovery"
         assert (token_count, compiled_token_count) == (5, 5)
     finally:
@@ -119,6 +116,95 @@ def test_searchd_rebuilds_an_incompatible_disposable_store(tmp_path):
         assert rebuilt.execute("SELECT COUNT(*) FROM session_index").fetchone()[0] == 0
     finally:
         rebuilt.close()
+
+
+def test_episode_embeddings_dedup_and_cosine_query(tmp_path):
+    connection = open_search_database(tmp_path / "search.db")
+    store = SearchStore(connection)
+    session_id = str(uuid4())
+    owner_id = "owner-1"
+    try:
+        # query_episode_embeddings scopes via a SQL join against session_index
+        # (owner/project/provider/environment/recency), not an enumerated id
+        # list -- it needs a real row there to match against, the same way
+        # production sessions always have one by the time they're embedded.
+        connection.execute(
+            """
+            INSERT INTO session_index (
+                session_id, generation_id, owner_id, desired_revision, indexed_through,
+                object_count, object_set_hash, event_count, user_messages, assistant_messages,
+                tool_calls, is_sidechain, project, provider, environment, cwd, git_repo,
+                started_at, published_at
+            ) VALUES (?, ?, ?, 1, 1, 1, 'hash', 2, 1, 1, 0, 0, 'proj', 'codex', 'local', NULL, NULL, ?, ?)
+            """,
+            (session_id, str(uuid4()), owner_id, "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00"),
+        )
+        first = store.write_episode_embeddings(
+            session_id=session_id,
+            owner_id=owner_id,
+            generation_id=str(uuid4()),
+            revision=1,
+            model="test-model",
+            dims=2,
+            episodes=[
+                {
+                    "episode_ordinal": 0,
+                    "event_index_start": 0,
+                    "event_index_end": 1,
+                    "content_hash": "a" * 64,
+                    "embedding": np.array([1, 0], dtype=np.float32).tobytes(),
+                },
+                {
+                    "episode_ordinal": 1,
+                    "event_index_start": 2,
+                    "event_index_end": 3,
+                    "content_hash": "b" * 64,
+                    "embedding": np.array([0, 1], dtype=np.float32).tobytes(),
+                },
+            ],
+        )
+        assert first == {"written": 2, "skipped": 0}
+        assert store.read_episode_embedding_hashes(session_id=session_id, model="test-model")["hashes"] == {"0": "a" * 64, "1": "b" * 64}
+        replay = store.write_episode_embeddings(
+            session_id=session_id,
+            owner_id=owner_id,
+            generation_id=str(uuid4()),
+            revision=1,
+            model="test-model",
+            dims=2,
+            episodes=[
+                {
+                    "episode_ordinal": 0,
+                    "event_index_start": 0,
+                    "event_index_end": 1,
+                    "content_hash": "a" * 64,
+                    "embedding": np.array([1, 0], dtype=np.float32).tobytes(),
+                }
+            ],
+        )
+        assert replay == {"written": 0, "skipped": 1}
+        results = store.query_episode_embeddings(
+            model="test-model",
+            dims=2,
+            query_embedding=np.array([1, 0], dtype=np.float32).tobytes(),
+            owner_id=owner_id,
+            limit=2,
+        )["results"]
+        assert [row["episode_ordinal"] for row in results] == [0, 1]
+        assert results[0]["score"] == pytest.approx(1.0)
+
+        # A query for a different owner must see nothing, even though the
+        # embeddings exist -- this is the tenant-isolation guarantee.
+        other_owner_results = store.query_episode_embeddings(
+            model="test-model",
+            dims=2,
+            query_embedding=np.array([1, 0], dtype=np.float32).tobytes(),
+            owner_id="owner-2",
+            limit=2,
+        )["results"]
+        assert other_owner_results == []
+    finally:
+        connection.close()
 
 
 def test_publish_aggregate_uses_session_generation_index(tmp_path):
@@ -185,9 +271,7 @@ def test_candidate_walk_never_touches_event_text(tmp_path):
 
     connection = open_search_database(tmp_path / "search.db")
     try:
-        metadata_columns = {
-            str(row[1]) for row in connection.execute("PRAGMA table_info(searchable_events)").fetchall()
-        }
+        metadata_columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(searchable_events)").fetchall()}
         assert "content_text" not in metadata_columns
         assert "tool_output_text" not in metadata_columns
 
@@ -204,8 +288,7 @@ def test_candidate_walk_never_touches_event_text(tmp_path):
             " VALUES (1, '42', NULL, 'codex', 'local', 1, 's', 'g', 'o', 0, 'e', 'user', NULL, 1, 1)"
         )
         connection.execute(
-            "INSERT INTO searchable_text(source_event_id, content_text, tool_output_text)"
-            " VALUES (1, 'retained needle', NULL)"
+            "INSERT INTO searchable_text(source_event_id, content_text, tool_output_text) VALUES (1, 'retained needle', NULL)"
         )
         assert connection.execute("SELECT COUNT(*) FROM searchable_fts WHERE searchable_fts MATCH 'needle'").fetchone()[0] == 1
 
@@ -683,14 +766,17 @@ def test_searchd_searches_only_published_recent_events_and_falls_back_for_archiv
     session_id = str(uuid4())
     first_generation = str(uuid4())
     first_object = hashlib.sha256(b"published-recent").hexdigest()
-    assert publish(
-        session_id=session_id,
-        generation_id=first_generation,
-        object_id=first_object,
-        revision=1,
-        text="published recent recall needle",
-        order_time_us=now_us,
-    )["published"] is True
+    assert (
+        publish(
+            session_id=session_id,
+            generation_id=first_generation,
+            object_id=first_object,
+            revision=1,
+            text="published recent recall needle",
+            order_time_us=now_us,
+        )["published"]
+        is True
+    )
     recent = search("published recent recall needle", window_start_us=now_us - 60_000_000)
     assert recent["search_scope"] == "published_recent"
     assert [row["session_id"] for row in recent["results"]] == [session_id]
@@ -716,46 +802,55 @@ def test_searchd_searches_only_published_recent_events_and_falls_back_for_archiv
         git_repo="cipher982/longhouse",
         opaque_source_id="codex/session.jsonl",
         source_epoch=str(uuid4()),
-        records=[{**record, "content_text": "staged replacement needle", "order_time_us": now_us + index} for index, record in enumerate(_records("staged"))],
+        records=[
+            {**record, "content_text": "staged replacement needle", "order_time_us": now_us + index}
+            for index, record in enumerate(_records("staged"))
+        ],
     )
     assert search("staged replacement needle", window_start_us=now_us - 60_000_000)["results"] == []
 
-    assert store.publish_generation(
-        session_id=session_id,
-        generation_id=staged_generation,
-        owner_id="42",
-        desired_revision=2,
-        object_count=1,
-        object_set_hash=object_set_hash([staged_object]),
-        event_count=2,
-        project="longhouse",
-        provider="codex",
-        environment="local",
-        cwd="/workspace/longhouse",
-        git_repo="cipher982/longhouse",
-        started_at=datetime.now(UTC).isoformat(),
-    )["published"] is True
+    assert (
+        store.publish_generation(
+            session_id=session_id,
+            generation_id=staged_generation,
+            owner_id="42",
+            desired_revision=2,
+            object_count=1,
+            object_set_hash=object_set_hash([staged_object]),
+            event_count=2,
+            project="longhouse",
+            provider="codex",
+            environment="local",
+            cwd="/workspace/longhouse",
+            git_repo="cipher982/longhouse",
+            started_at=datetime.now(UTC).isoformat(),
+        )["published"]
+        is True
+    )
     assert search("published recent recall needle", window_start_us=now_us - 60_000_000)["results"] == []
-    assert {row["session_id"] for row in search("staged replacement needle", window_start_us=now_us - 60_000_000)["results"]} == {session_id}
+    assert {row["session_id"] for row in search("staged replacement needle", window_start_us=now_us - 60_000_000)["results"]} == {
+        session_id
+    }
 
     archived_session = str(uuid4())
     archived_generation = str(uuid4())
     archived_object = hashlib.sha256(b"archived-recall").hexdigest()
     old_us = int((datetime.now(UTC) - timedelta(days=100)).timestamp() * 1_000_000)
-    assert publish(
-        session_id=archived_session,
-        generation_id=archived_generation,
-        object_id=archived_object,
-        revision=1,
-        text="archived recall needle",
-        order_time_us=old_us,
-    )["published"] is True
+    assert (
+        publish(
+            session_id=archived_session,
+            generation_id=archived_generation,
+            object_id=archived_object,
+            revision=1,
+            text="archived recall needle",
+            order_time_us=old_us,
+        )["published"]
+        is True
+    )
     archive = search("archived recall needle", window_start_us=old_us - 60_000_000)
     assert archive["search_scope"] == "published_archive"
     assert [row["session_id"] for row in archive["results"]] == [archived_session]
-    assert connection.execute(
-        "SELECT COUNT(*) FROM searchable_events WHERE session_id = ?", (archived_session,)
-    ).fetchone()[0] == 0
+    assert connection.execute("SELECT COUNT(*) FROM searchable_events WHERE session_id = ?", (archived_session,)).fetchone()[0] == 0
     assert search("archived recall needle", window_start_us=now_us - 60_000_000)["results"] == []
 
 

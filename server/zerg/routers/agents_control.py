@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from typing import Any
 from typing import Mapping
@@ -20,6 +21,7 @@ from zerg.database import get_catalog_session_factory
 from zerg.dependencies.agents_auth import _validate_device_token_for_request
 from zerg.models.device_token import DeviceToken
 from zerg.services.catalogd_supervisor import get_catalogd_client
+from zerg.services.console_turns import reconcile_starting_console_turns_for_device
 from zerg.services.machine_control_channel import get_machine_control_channel_registry
 from zerg.services.machine_control_operations import reconcile_live_machine_control_operation_from_command_result
 from zerg.services.machine_control_operations import reconcile_machine_control_operation_from_command_result
@@ -113,6 +115,36 @@ async def _close_control_ws(websocket: WebSocket, *, code: int = 1008, reason: s
         logger.debug("Ignoring machine control websocket close race: %s", reason)
 
 
+async def _reconcile_console_turns_after_register(*, owner_id: int, device_id: str, registry) -> None:
+    db = None if database_module.live_catalog_enabled() else get_catalog_session_factory()()
+    try:
+        outcomes = await reconcile_starting_console_turns_for_device(
+            db,
+            owner_id=owner_id,
+            device_id=device_id,
+            registry=registry,
+        )
+        if outcomes:
+            logger.info(
+                "Reconciled %d starting Console turn(s) after control reconnect owner=%s device=%s states=%s",
+                len(outcomes),
+                owner_id,
+                device_id,
+                ",".join(outcome.state for outcome in outcomes),
+            )
+    except Exception:  # noqa: BLE001
+        if db is not None:
+            db.rollback()
+        logger.exception(
+            "Failed to reconcile starting Console turns after control reconnect owner=%s device=%s",
+            owner_id,
+            device_id,
+        )
+    finally:
+        if db is not None:
+            db.close()
+
+
 @router.websocket("/ws")
 async def machine_control_websocket(websocket: WebSocket) -> None:
     settings = get_settings()
@@ -120,6 +152,7 @@ async def machine_control_websocket(websocket: WebSocket) -> None:
     registry = get_machine_control_channel_registry()
     owner_id: int | None = None
     device_id: str | None = None
+    console_reconcile_task: asyncio.Task[None] | None = None
 
     await websocket.accept()
     try:
@@ -162,6 +195,13 @@ async def machine_control_websocket(websocket: WebSocket) -> None:
             engine_build=str(hello.get("engine_build") or "") or None,
             supports=supports,
             websocket=websocket,
+        )
+        console_reconcile_task = asyncio.create_task(
+            _reconcile_console_turns_after_register(
+                owner_id=owner_id,
+                device_id=device_id,
+                registry=registry,
+            )
         )
 
         while True:
@@ -213,6 +253,10 @@ async def machine_control_websocket(websocket: WebSocket) -> None:
             else:
                 logger.warning("Unknown machine control message type from %s: %s", device_id, message_type)
     finally:
+        if console_reconcile_task is not None and not console_reconcile_task.done():
+            console_reconcile_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await console_reconcile_task
         if db is not None:
             db.close()
         if owner_id is not None and device_id is not None:

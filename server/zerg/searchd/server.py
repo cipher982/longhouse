@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import fcntl
 import logging
 import os
@@ -14,6 +15,8 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from uuid import UUID
+
+import numpy as np
 
 from zerg.catalogd.protocol import CatalogRpcError
 from zerg.catalogd.protocol import CatalogRpcRequest
@@ -205,6 +208,27 @@ class SearchDaemon:
                 params = _publish_params(request.params)
                 published = await self._run(self._store.publish_generation, **params)
                 return self._result(request, published)
+            if request.method == "search.embedding.write.v2":
+                params = _embedding_write_params(request.params)
+                return self._result(request, await self._run(self._store.write_episode_embeddings, **params))
+            if request.method == "search.embedding.hashes.v2":
+                params = _embedding_hashes_params(request.params)
+                return self._result(
+                    request,
+                    await self._run_interactive_read(
+                        lambda store: store.read_episode_embedding_hashes(**params),
+                        deadline_mono_ns=int(request.deadline_mono_ns),
+                    ),
+                )
+            if request.method == "search.embedding.query.v2":
+                params = _embedding_query_params(request.params)
+                return self._result(
+                    request,
+                    await self._run_interactive_read(
+                        lambda store: store.query_episode_embeddings(**params),
+                        deadline_mono_ns=int(request.deadline_mono_ns),
+                    ),
+                )
             if request.method == "search.query.v2":
                 params = _search_params(request.params)
                 result = await self._run_interactive_read(
@@ -543,6 +567,89 @@ def _publish_params(value: dict) -> dict:
         "cwd": _text(value["cwd"], "cwd", 4_096, optional=True),
         "git_repo": _text(value["git_repo"], "git_repo", 500, optional=True),
         "started_at": _text(value["started_at"], "started_at", 64),
+    }
+
+
+def _embedding_write_params(value: dict) -> dict:
+    _exact_keys(value, {"session_id", "owner_id", "generation_id", "revision", "model", "dims", "complete", "episodes"})
+    dims = value["dims"]
+    episodes = value["episodes"]
+    if type(dims) is not int or not 1 <= dims <= 16_384 or not isinstance(episodes, list) or len(episodes) > 512:
+        raise ValueError("embedding write dimensions or episodes are invalid")
+    parsed = []
+    for episode in episodes:
+        if not isinstance(episode, dict) or set(episode) != {
+            "episode_ordinal",
+            "event_index_start",
+            "event_index_end",
+            "content_hash",
+            "embedding",
+        }:
+            raise ValueError("embedding episode fields are invalid")
+        encoded = episode["embedding"]
+        if type(episode["episode_ordinal"]) is not int or episode["episode_ordinal"] < 0:
+            raise ValueError("embedding episode ordinal is invalid")
+        if not isinstance(episode["content_hash"], str) or _HASH.fullmatch(episode["content_hash"]) is None:
+            raise ValueError("embedding content hash is invalid")
+        if not isinstance(encoded, str):
+            raise ValueError("embedding must be base64")
+        try:
+            embedding = base64.b64decode(encoded, validate=True)
+        except ValueError as exc:
+            raise ValueError("embedding must be base64") from exc
+        if len(embedding) != dims * 4:
+            raise ValueError("embedding dimensions do not match payload")
+        if not np.isfinite(np.frombuffer(embedding, dtype=np.float32)).all():
+            raise ValueError("embedding must be finite")
+        parsed.append({**episode, "embedding": embedding})
+    return {
+        "session_id": _uuid(value["session_id"], "session_id"),
+        "owner_id": _text(value["owner_id"], "owner_id", 64),
+        "generation_id": _uuid(value["generation_id"], "generation_id"),
+        "revision": _revision(value["revision"], "revision"),
+        "model": _text(value["model"], "model", 255),
+        "dims": dims,
+        "complete": value["complete"] is True,
+        "episodes": parsed,
+    }
+
+
+def _embedding_hashes_params(value: dict) -> dict:
+    _exact_keys(value, {"session_id", "model", "dims"})
+    return {"session_id": _uuid(value["session_id"], "session_id"), "model": _text(value["model"], "model", 255), "dims": value["dims"]}
+
+
+def _embedding_query_params(value: dict) -> dict:
+    _exact_keys(
+        value,
+        {"model", "owner_id", "dims", "query_embedding", "limit", "project", "provider", "exclude_environments", "since_iso"},
+    )
+    dims = value["dims"]
+    if type(dims) is not int or not 1 <= dims <= 16_384 or type(value["limit"]) is not int or not 1 <= value["limit"] <= 200:
+        raise ValueError("embedding query dimensions or limit are invalid")
+    try:
+        query_embedding = base64.b64decode(value["query_embedding"], validate=True)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("query_embedding must be base64") from exc
+    if len(query_embedding) != dims * 4:
+        raise ValueError("query embedding dimensions do not match payload")
+    if not np.isfinite(np.frombuffer(query_embedding, dtype=np.float32)).all():
+        raise ValueError("query embedding must be finite")
+    exclude_environments = value["exclude_environments"]
+    if exclude_environments is not None:
+        if not isinstance(exclude_environments, list) or len(exclude_environments) > 16:
+            raise ValueError("exclude_environments is invalid")
+        exclude_environments = [_text(item, "exclude_environments", 32) for item in exclude_environments]
+    return {
+        "model": _text(value["model"], "model", 255),
+        "owner_id": _text(value["owner_id"], "owner_id", 64),
+        "dims": dims,
+        "query_embedding": query_embedding,
+        "limit": value["limit"],
+        "project": _text(value["project"], "project", 255, optional=True),
+        "provider": _text(value["provider"], "provider", 32, optional=True),
+        "exclude_environments": exclude_environments,
+        "since_iso": _text(value["since_iso"], "since_iso", 64, optional=True),
     }
 
 

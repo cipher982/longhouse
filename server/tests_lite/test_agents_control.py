@@ -6,11 +6,29 @@ os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 
 from zerg.routers.agents_control import CONTROL_HEARTBEAT_TIMEOUT_SECS
+from zerg.routers.agents_control import _reconcile_console_turns_after_register
 from zerg.routers.agents_control import _reconcile_machine_control_operation_result
 
 
 def test_control_heartbeat_timeout_is_a_watchdog_not_a_stale_socket_lease():
     assert 30 <= CONTROL_HEARTBEAT_TIMEOUT_SECS <= 120
+
+
+@pytest.mark.asyncio
+async def test_control_register_reconciles_starting_console_turns(monkeypatch):
+    calls = []
+
+    async def fake_reconcile(db, *, owner_id, device_id, registry):
+        calls.append((db, owner_id, device_id, registry))
+        return []
+
+    registry = object()
+    monkeypatch.setattr("zerg.routers.agents_control.database_module.live_catalog_enabled", lambda: True)
+    monkeypatch.setattr("zerg.routers.agents_control.reconcile_starting_console_turns_for_device", fake_reconcile)
+
+    await _reconcile_console_turns_after_register(owner_id=7, device_id="cube", registry=registry)
+
+    assert calls == [(None, 7, "cube", registry)]
 
 
 @pytest.mark.asyncio
@@ -44,6 +62,7 @@ async def test_machine_control_result_reconcile_uses_write_serializer(monkeypatc
         ("execute", "machine-control-result", "fallback-db", False),
         ("reconcile", "serializer-db", "machine-op:test", 7, "cinder"),
     ]
+
 
 @pytest.mark.asyncio
 async def test_machine_control_result_reconcile_prefers_live_serializer(monkeypatch):

@@ -1680,7 +1680,9 @@ def _live_queued_summary(receipt: LiveInputReceiptSnapshot) -> QueuedInputSummar
         try:
             payload = json.loads(receipt.error_json)
             if isinstance(payload, dict):
-                last_error = str(payload.get("message") or "").strip() or None
+                code = str(payload.get("code") or "").strip()
+                message = str(payload.get("message") or "").strip()
+                last_error = f"{code}: {message}" if code and message else (message or code or None)
         except Exception:
             last_error = receipt.error_json
     return QueuedInputSummary(
@@ -1898,7 +1900,10 @@ async def _create_catalog_session_input_response(
         except ConsoleTurnConflict as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         if turn.error:
-            raise HTTPException(status_code=502, detail={"code": "provider_launch_failed", "message": turn.error})
+            raise HTTPException(
+                status_code=502,
+                detail={"code": turn.error_code or "provider_launch_failed", "message": turn.error},
+            )
         return SessionInputResponse(
             outcome="sent" if turn.state == "active" else "queued",
             input_id=None,
@@ -2438,7 +2443,10 @@ async def _create_session_input_response(
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         state = dispatched.state if dispatched.turn_id == queued.turn_id else queued.state
         if dispatched.turn_id == queued.turn_id and dispatched.error:
-            raise HTTPException(status_code=502, detail={"code": "provider_launch_failed", "message": dispatched.error})
+            raise HTTPException(
+                status_code=502,
+                detail={"code": dispatched.error_code or "provider_launch_failed", "message": dispatched.error},
+            )
         return SessionInputResponse(
             outcome="sent" if state == "active" else "queued",
             input_id=queued.input_id,

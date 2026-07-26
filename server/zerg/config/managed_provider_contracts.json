@@ -591,7 +591,7 @@
         "claude.turn_start",
         "claude.turn_interrupt"
       ],
-      "adapter_digest": "374c006fe9207f4f395e321c7da1a7d70cc4a6f90325bde6eabce1c629b23801"
+      "adapter_digest": "a767801eeec8e2da2824fade298a32d98807dbe13cdc941ed089c4fdf7455918"
     },
     {
       "provider": "opencode",

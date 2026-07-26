@@ -71,3 +71,30 @@ those sessions match everything about retrieval and would inflate every score.
 **Gold is a session id today.** When trace boundaries exist, gold becomes a trace
 id and recall gets stricter — a session can be 8,000 events, so finding the right
 session is a weaker claim than finding the right moment.
+
+## Results: lexical-only vs. hybrid (dense embeddings, 2026-07-26)
+
+The `mode=auto` endpoint default fuses lexical (storage-v2/searchd FTS) with dense
+episode embeddings (Qwen3-8B, 256 dims, one vector per user-request episode) via
+reciprocal rank fusion. `run_eval.py` always calls the endpoint default, so both
+rows below come from the same script — the only variable is whether the dense
+lane behind it has embeddings to draw on.
+
+|                        | lexical-only baseline | hybrid, ~93% of corpus embedded |
+| ---------------------- | ---------------------:| --------------------------------:|
+| false 'nothing found'  | 73.7%                 | 67.1%                            |
+| exact                  | 17-18/27              | 17/27                            |
+| paraphrase             | 1/24 (4%)             | 5/24 (21%)                       |
+| causal                 | 0/15                  | 1/15                             |
+| supersession           | 1/10                  | 2/10                             |
+| absent                 | 1/13                  | 1/13                             |
+
+Paraphrase recall — the failure mode in `cross-session-recall-postmortem.md` —
+improved 5x. Exact-match held steady, confirming dense search didn't regress
+lexical's strength on identifiers/flags. Causal and supersession moved off a
+0-signal floor. This is real, measured improvement, not a fix: paraphrase/causal
+recall is still under 25%. Full implementation history (chunking design, the
+storage-v2 rebuild after the legacy archive DB turned out to be empty, two Sol
+review passes, and the backfill bugs found finishing it) lived in
+`docs/specs/dense-recall-embeddings.md`, deleted per that doc's own instruction
+once this section captured the result — see git history for the working notes.

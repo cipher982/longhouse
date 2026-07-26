@@ -130,7 +130,7 @@ def count_tokens(text: str, encoding: str = "cl100k_base") -> int:
     if not text:
         return 0
     enc = _get_encoding(encoding)
-    return len(enc.encode(text))
+    return len(enc.encode(text, disallowed_special=()))
 
 
 def truncate(
@@ -160,7 +160,7 @@ def truncate(
         return text or "", 0, False
 
     enc = _get_encoding(encoding)
-    tokens = enc.encode(text)
+    tokens = enc.encode(text, disallowed_special=())
     token_count = len(tokens)
 
     if token_count <= max_tokens:
@@ -195,14 +195,14 @@ def _truncate_sandwich(
 
     # Iteratively shrink to make room for the marker text.
     marker = "\n\n[...truncated...]\n\n"
-    if len(enc.encode(marker)) >= max_tokens:
+    if len(enc.encode(marker, disallowed_special=())) >= max_tokens:
         truncated = enc.decode(tokens[:max_tokens])
         return truncated, max_tokens, True
 
     while True:
         truncated_count = max(0, len(tokens) - head_tokens - tail_tokens)
         marker = f"\n\n[...{truncated_count:,} tokens truncated...]\n\n"
-        marker_tokens = len(enc.encode(marker))
+        marker_tokens = len(enc.encode(marker, disallowed_special=()))
         total = head_tokens + tail_tokens + marker_tokens
         if total <= max_tokens:
             break
@@ -224,10 +224,10 @@ def _truncate_sandwich(
     combined = f"{head}{marker}{tail}".strip()
 
     # Safety: guarantee we never exceed max_tokens.
-    combined_tokens = enc.encode(combined)
+    combined_tokens = enc.encode(combined, disallowed_special=())
     if len(combined_tokens) > max_tokens:
         combined = enc.decode(combined_tokens[:max_tokens])
-        combined_tokens = enc.encode(combined)
+        combined_tokens = enc.encode(combined, disallowed_special=())
 
     return combined, len(combined_tokens), True
 

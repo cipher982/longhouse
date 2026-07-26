@@ -1,6 +1,7 @@
 """Agents API — semantic search and recall endpoints."""
 
 import asyncio
+import base64
 import json
 import logging
 import os
@@ -195,6 +196,49 @@ async def search_storage_v2_context(
     return result
 
 
+async def search_storage_v2_episode_embeddings(
+    *,
+    model: str,
+    owner_id: int,
+    dims: int,
+    query_embedding: bytes,
+    limit: int,
+    timeout_seconds: float,
+    project: str | None = None,
+    provider: str | None = None,
+    exclude_environments: list[str] | None = None,
+    since_iso: str | None = None,
+) -> list[dict[str, object]]:
+    """Query the derived dense index through searchd, never its SQLite file.
+
+    Scoping is a SQL predicate against searchd's own session_index (owner,
+    project, provider, environment, recency), not an enumerated session id
+    list -- a fixed-size id list caps out at real corpus scale (tens of
+    thousands of sessions) well before it covers a tenant's full visible
+    history, silently excluding exactly the older sessions a paraphrase
+    query most needs to reach.
+    """
+    search = get_searchd_client()
+    if search is None:
+        return []
+    result = await search.call(
+        "search.embedding.query.v2",
+        {
+            "model": model,
+            "owner_id": str(owner_id),
+            "dims": dims,
+            "query_embedding": base64.b64encode(query_embedding).decode("ascii"),
+            "limit": min(200, max(1, limit)),
+            "project": project,
+            "provider": provider,
+            "exclude_environments": exclude_environments,
+            "since_iso": since_iso,
+        },
+        timeout_seconds=timeout_seconds,
+    )
+    return [row for row in (result.get("results") or []) if isinstance(row, dict)]
+
+
 async def search_storage_v2_sessions(
     *,
     owner_id: int,
@@ -367,6 +411,7 @@ async def _semantic_recall_matches(
     include_automation: bool,
     max_results: int,
     timeout_seconds: float,
+    owner_id: int | None = None,
 ) -> list[RecallMatch]:
     """Dense recall over episode-level embeddings, independent of storage-v2.
 
@@ -402,6 +447,55 @@ async def _semantic_recall_matches(
 
     async def _run() -> list[RecallMatch]:
         query_vec = await generate_embedding(query, config)
+
+        if database_module.live_catalog_enabled():
+            if owner_id is None:
+                return []
+            # Scoping is a SQL predicate against searchd's own session_index
+            # (owner/project/provider/environment/recency), not an enumerated
+            # session id list -- a prior version of this paginated the owner's
+            # full visible listing client-side and passed ids as a filter,
+            # which caps out well before covering a real tenant's full
+            # history (tens of thousands of sessions), silently excluding
+            # exactly the older sessions a paraphrase query most needs to
+            # reach. See search.embedding.query.v2 / query_episode_embeddings.
+            exclude_environments: list[str] = []
+            if not include_test:
+                exclude_environments.extend(["test", "e2e"])
+            if not include_automation:
+                exclude_environments.append("automation")
+            since_iso = (datetime.now(timezone.utc) - timedelta(days=since_days)).isoformat()
+            rows = await search_storage_v2_episode_embeddings(
+                model=config.model,
+                owner_id=owner_id,
+                dims=config.dims,
+                query_embedding=query_vec.astype("float32").tobytes(),
+                limit=max_results * 3,
+                timeout_seconds=timeout_seconds,
+                project=project,
+                provider=provider,
+                exclude_environments=exclude_environments or None,
+                since_iso=since_iso,
+            )
+            matches: list[RecallMatch] = []
+            seen: set[str] = set()
+            for row in rows:
+                session_id = str(row.get("session_id") or "")
+                if not session_id or session_id in seen:
+                    continue
+                seen.add(session_id)
+                matches.append(
+                    RecallMatch(
+                        session_id=session_id,
+                        chunk_index=int(row.get("episode_ordinal") or 0),
+                        score=float(row.get("score") or 0.0),
+                        event_index_start=row.get("event_index_start"),
+                        event_index_end=row.get("event_index_end"),
+                    )
+                )
+                if len(matches) >= max_results:
+                    break
+            return matches
 
         db = database_module.get_session_factory()()
         try:
@@ -1201,6 +1295,7 @@ async def recall_sessions(
                     include_automation=include_automation,
                     max_results=max_results,
                     timeout_seconds=remaining_budget(),
+                    owner_id=owner_id,
                 )
             matches = _rrf_merge_recall_matches(matches, semantic_matches, limit=max_results)
 

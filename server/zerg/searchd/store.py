@@ -16,8 +16,10 @@ from typing import Any
 from uuid import UUID
 from uuid import uuid4
 
+import numpy as np
+
 SCHEMA_VERSION = 1
-SCHEMA_GENERATION = "searchd-v2-published-searchable-corpus-split-text"
+SCHEMA_GENERATION = "searchd-v2-published-searchable-corpus-with-fenced-embeddings"
 SEARCHABLE_RETENTION_DAYS = 91
 SEARCHABLE_FAST_WINDOW_DAYS = 90
 SEARCHABLE_FAST_WINDOW_MARGIN_SECONDS = 300
@@ -425,6 +427,24 @@ def _initialize_schema(connection: sqlite3.Connection) -> None:
         );
         CREATE INDEX IF NOT EXISTS ix_session_index_owner_revision
             ON session_index(owner_id, indexed_through, session_id);
+        CREATE TABLE IF NOT EXISTS episode_embeddings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT NOT NULL,
+            owner_id TEXT NOT NULL,
+            generation_id TEXT NOT NULL,
+            revision INTEGER NOT NULL,
+            episode_ordinal INTEGER NOT NULL,
+            event_index_start INTEGER,
+            event_index_end INTEGER,
+            model TEXT NOT NULL,
+            dims INTEGER NOT NULL,
+            content_hash TEXT NOT NULL,
+            embedding BLOB NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(session_id, episode_ordinal, model)
+        );
+        CREATE INDEX IF NOT EXISTS ix_episode_embeddings_session
+            ON episode_embeddings(session_id);
         """
     )
     now = datetime.now(UTC).isoformat()
@@ -603,6 +623,152 @@ class SearchStore:
             self.connection.execute("ROLLBACK")
             raise
         return {"created": True, "exact_replay": False, "event_count": len(records)}
+
+    def write_episode_embeddings(
+        self,
+        *,
+        session_id: str,
+        generation_id: str,
+        model: str,
+        dims: int,
+        episodes: list[dict[str, Any]],
+        owner_id: str = "",
+        revision: int = 0,
+        complete: bool = False,
+    ) -> dict[str, object]:
+        written = 0
+        skipped = 0
+        now = datetime.now(UTC).isoformat()
+        self.connection.execute("BEGIN IMMEDIATE")
+        try:
+            for episode in episodes:
+                existing = self.connection.execute(
+                    "SELECT content_hash, dims, revision FROM episode_embeddings WHERE session_id = ? AND episode_ordinal = ? AND model = ?",
+                    (session_id, episode["episode_ordinal"], model),
+                ).fetchone()
+                if existing is not None and int(existing["revision"]) > revision:
+                    skipped += 1
+                    continue
+                if existing is not None and existing["content_hash"] == episode["content_hash"] and int(existing["dims"]) == dims:
+                    skipped += 1
+                    continue
+                self.connection.execute(
+                    """
+                    INSERT INTO episode_embeddings(
+                        session_id, owner_id, generation_id, revision, episode_ordinal, event_index_start, event_index_end,
+                        model, dims, content_hash, embedding, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(session_id, episode_ordinal, model) DO UPDATE SET
+                        owner_id=excluded.owner_id, generation_id=excluded.generation_id, revision=excluded.revision,
+                        event_index_start=excluded.event_index_start,
+                        event_index_end=excluded.event_index_end,
+                        dims=excluded.dims,
+                        content_hash=excluded.content_hash,
+                        embedding=excluded.embedding,
+                        updated_at=excluded.updated_at
+                    """,
+                    (
+                        session_id,
+                        owner_id,
+                        generation_id,
+                        revision,
+                        episode["episode_ordinal"],
+                        episode["event_index_start"],
+                        episode["event_index_end"],
+                        model,
+                        dims,
+                        episode["content_hash"],
+                        episode["embedding"],
+                        now,
+                    ),
+                )
+                written += 1
+            if complete:
+                ordinals = [episode["episode_ordinal"] for episode in episodes]
+                suffix = f" AND episode_ordinal NOT IN ({','.join('?' for _ in ordinals)})" if ordinals else ""
+                self.connection.execute(
+                    f"DELETE FROM episode_embeddings WHERE session_id = ? AND model = ?{suffix}", (session_id, model, *ordinals)
+                )
+            self.connection.execute("COMMIT")
+        except BaseException:
+            self.connection.execute("ROLLBACK")
+            raise
+        return {"written": written, "skipped": skipped}
+
+    def read_episode_embedding_hashes(self, *, session_id: str, model: str, dims: int | None = None) -> dict[str, object]:
+        sql = "SELECT episode_ordinal, content_hash FROM episode_embeddings WHERE session_id = ? AND model = ?"
+        params: tuple[object, ...] = (session_id, model)
+        if dims is not None:
+            sql += " AND dims = ?"
+            params += (dims,)
+        rows = self.connection.execute(sql, params).fetchall()
+        # JSON object keys are strings; the projector converts them back to ordinals.
+        return {"hashes": {str(row["episode_ordinal"]): str(row["content_hash"]) for row in rows}}
+
+    def query_episode_embeddings(
+        self,
+        *,
+        model: str,
+        dims: int,
+        query_embedding: bytes,
+        owner_id: str,
+        limit: int,
+        project: str | None = None,
+        provider: str | None = None,
+        exclude_environments: list[str] | None = None,
+        since_iso: str | None = None,
+    ) -> dict[str, object]:
+        """Scope by SQL predicate against session_index, not an enumerated id list.
+
+        The earlier design required the caller to page through every visible
+        session id client-side and pass them as session_filter -- correct but
+        unbounded: at real corpus scale (tens of thousands of sessions) any
+        fixed page-count cap silently excludes older sessions from dense
+        search, exactly the sessions a paraphrase/causal query most needs to
+        reach. session_index already carries owner_id/project/provider/
+        environment/started_at (it's built for exactly this), so push the
+        same filters SQL has always used for lexical search here too --
+        no enumeration, no cap, scales with an index instead of a page limit.
+        """
+        sql = (
+            "SELECT e.session_id, e.episode_ordinal, e.event_index_start, e.event_index_end, e.embedding "
+            "FROM episode_embeddings e "
+            "JOIN session_index si ON si.session_id = e.session_id "
+            "WHERE e.model = ? AND e.dims = ? AND e.owner_id = ? AND si.owner_id = ?"
+        )
+        params: list[object] = [model, dims, owner_id, owner_id]
+        if project:
+            sql += " AND si.project = ?"
+            params.append(project)
+        if provider:
+            sql += " AND si.provider = ?"
+            params.append(provider)
+        if exclude_environments:
+            sql += f" AND si.environment NOT IN ({','.join('?' for _ in exclude_environments)})"
+            params.extend(exclude_environments)
+        if since_iso:
+            sql += " AND si.started_at >= ?"
+            params.append(since_iso)
+        rows = self.connection.execute(sql, params).fetchall()
+        if not rows:
+            return {"results": []}
+        query = np.frombuffer(query_embedding, dtype=np.float32)
+        vectors = np.vstack([np.frombuffer(row["embedding"], dtype=np.float32) for row in rows])
+        norms = np.linalg.norm(vectors, axis=1) * np.linalg.norm(query)
+        scores = np.divide(vectors @ query, norms, out=np.zeros_like(norms), where=norms != 0)
+        indices = np.argsort(-scores)[:limit]
+        return {
+            "results": [
+                {
+                    "session_id": str(rows[index]["session_id"]),
+                    "episode_ordinal": int(rows[index]["episode_ordinal"]),
+                    "score": float(scores[index]),
+                    "event_index_start": rows[index]["event_index_start"],
+                    "event_index_end": rows[index]["event_index_end"],
+                }
+                for index in indices
+            ]
+        }
 
     def _stored_object_projection_hash(self, *, existing: sqlite3.Row, object_id: str) -> str | None:
         session_id = str(existing["session_id"])
@@ -1216,6 +1382,7 @@ class SearchStore:
             self.connection.execute("DELETE FROM projection_membership WHERE session_id = ?", (session_id,))
             self.connection.execute("DELETE FROM events WHERE session_id = ?", (session_id,))
             self.connection.execute("DELETE FROM indexed_objects WHERE session_id = ?", (session_id,))
+            self.connection.execute("DELETE FROM episode_embeddings WHERE session_id = ?", (session_id,))
             self.connection.execute("COMMIT")
         except BaseException:
             self.connection.execute("ROLLBACK")

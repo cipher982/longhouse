@@ -171,6 +171,64 @@ async def test_semantic_recall_matches_times_out_gracefully(monkeypatch):
     assert result == []
 
 
+@pytest.mark.asyncio
+async def test_semantic_recall_matches_uses_live_catalog_embedding_rpc(monkeypatch):
+    """Scoping is a SQL predicate (owner/project/provider/environment/recency)
+    against searchd's session_index, not an enumerated session id list.
+
+    A dense-only match -- one lexical search for this exact query text would
+    never surface, which is the entire point of having a semantic lane --
+    must still reach search.embedding.query.v2 with real scoping filters, not
+    an empty or capped session_filter. An earlier version of this code
+    enumerated the owner's visible sessions client-side and passed ids
+    directly; that capped out well before covering a real tenant's full
+    history, which is exactly the regression this test guards against.
+    """
+    monkeypatch.setenv("TESTING", "0")
+    fake_config = type("Cfg", (), {"model": "test-model", "dims": 2})()
+    monkeypatch.setattr("zerg.models_config.get_embedding_config", lambda: fake_config)
+    monkeypatch.setattr(agents_search.database_module, "live_catalog_enabled", lambda: True)
+
+    async def fake_generate_embedding(_text, _config):
+        return np.array([1, 0], dtype=np.float32)
+
+    candidate_session_id = str(uuid4())
+    seen = {}
+
+    async def fake_query(**kwargs):
+        seen.update(kwargs)
+        return [
+            {
+                "session_id": candidate_session_id,
+                "episode_ordinal": 3,
+                "score": 0.9,
+                "event_index_start": 4,
+                "event_index_end": 5,
+            }
+        ]
+
+    import zerg.services.session_processing.embeddings as embeddings_module
+
+    monkeypatch.setattr(embeddings_module, "generate_embedding", fake_generate_embedding)
+    monkeypatch.setattr(agents_search, "search_storage_v2_episode_embeddings", fake_query)
+    result = await agents_search._semantic_recall_matches(
+        query="important answer",
+        project=None,
+        provider=None,
+        since_days=90,
+        include_test=False,
+        include_automation=False,
+        max_results=5,
+        timeout_seconds=5.0,
+        owner_id=42,
+    )
+    assert [match.chunk_index for match in result] == [3]
+    assert seen["model"] == "test-model"
+    assert seen["owner_id"] == 42
+    assert seen["exclude_environments"] == ["test", "e2e", "automation"]
+    assert seen["since_iso"] is not None
+
+
 def test_fetch_episode_snippet_uses_clean_projection_index_space(tmp_path):
     """event_start/end index the clean (content-bearing) projection, not raw durable rows.
 

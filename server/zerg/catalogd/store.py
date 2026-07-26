@@ -441,6 +441,9 @@ def _directed_input_dto(row: Any, receipt: Any | None = None) -> dict[str, Any]:
     }
 
 
+KNOWN_PROJECTORS = ("search-v2", "embeddings-v1")
+
+
 def _machine_operation_dto(operation: LiveMachineControlOperation) -> dict[str, Any]:
     from zerg.services.machine_control_operations import machine_control_operation_to_response
 
@@ -2778,13 +2781,45 @@ class CatalogStore:
                     orm.rollback()
                     return {"found": False}
                 receipt = orm.get(LiveSessionInputReceipt, turn.receipt_id)
+                expected_state = data.get("expected_state")
+                if expected_state is not None and turn.state != expected_state:
+                    thread = orm.get(LiveSessionThread, turn.thread_id)
+                    result = _live_console_turn_dto(
+                        turn,
+                        message=receipt.text if receipt is not None else None,
+                        client_request_id=receipt.client_request_id if receipt is not None else None,
+                        provider_config=thread.provider_config_json if thread is not None else None,
+                    )
+                    orm.rollback()
+                    return {
+                        "found": True,
+                        "applied": False,
+                        "stale": True,
+                        "turn": result,
+                        "next_turn": None,
+                        "commit_seq": str(_current_commit_seq(connection)),
+                    }
                 next_state = data["state"]
                 turn.state = next_state
                 turn.updated_at = now
                 turn.error = data.get("error")
                 if receipt is not None:
-                    receipt.status = "delivered" if next_state == "active" else ("failed" if next_state == "failed" else receipt.status)
-                    receipt.error_json = json.dumps({"message": data["error"]}) if data.get("error") else None
+                    if next_state in {"active", "completed"}:
+                        receipt.status = "delivered"
+                    elif next_state in {"failed", "cancelled"}:
+                        receipt.status = "failed"
+                    receipt.error_json = (
+                        json.dumps(
+                            {
+                                "code": data.get("error_code"),
+                                "message": data["error"],
+                            },
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        )
+                        if data.get("error")
+                        else None
+                    )
                     receipt.updated_at = now
                 next_turn_result = None
                 if next_state in {"completed", "failed", "cancelled"}:
@@ -2792,7 +2827,7 @@ class CatalogStore:
                     run = orm.get(LiveSessionRun, turn.run_id)
                     if run is not None:
                         run.ended_at = now
-                        run.exit_status = next_state
+                        run.exit_status = data.get("error_code") or next_state
                     next_turn = (
                         orm.query(LiveConsoleTurn)
                         .filter(LiveConsoleTurn.thread_id == turn.thread_id, LiveConsoleTurn.state == "queued")
@@ -2849,7 +2884,48 @@ class CatalogStore:
             finally:
                 orm.close()
             commit_seq = _advance_commit_seq(connection, now)
-            return {"found": True, "turn": result, "next_turn": next_turn_result, "commit_seq": str(commit_seq)}
+            return {
+                "found": True,
+                "applied": True,
+                "stale": False,
+                "turn": result,
+                "next_turn": next_turn_result,
+                "commit_seq": str(commit_seq),
+            }
+
+    def list_starting_console_turns_for_device(self, *, owner_id: int, device_id: str) -> dict[str, Any]:
+        """Return durable ambiguous dispatches that can be replayed by stable run_id."""
+
+        with self.engine.connect() as connection:
+            orm = Session(bind=connection)
+            try:
+                rows = (
+                    orm.query(LiveConsoleTurn, LiveSessionInputReceipt, LiveSessionThread)
+                    .join(LiveSessionInputReceipt, LiveSessionInputReceipt.id == LiveConsoleTurn.receipt_id)
+                    .join(LiveSessionThread, LiveSessionThread.id == LiveConsoleTurn.thread_id)
+                    .filter(
+                        LiveConsoleTurn.state == "starting",
+                        LiveConsoleTurn.device_id == device_id,
+                        LiveSessionInputReceipt.owner_id == owner_id,
+                    )
+                    .order_by(LiveConsoleTurn.created_at.asc(), LiveConsoleTurn.id.asc())
+                    .limit(100)
+                    .all()
+                )
+                return {
+                    "turns": [
+                        _live_console_turn_dto(
+                            turn,
+                            message=receipt.text,
+                            client_request_id=receipt.client_request_id,
+                            provider_config=thread.provider_config_json,
+                        )
+                        for turn, receipt, thread in rows
+                    ],
+                    "commit_seq": str(_current_commit_seq(connection)),
+                }
+            finally:
+                orm.close()
 
     def read_current_console_turn(self, *, session_id: str, owner_id: int) -> dict[str, Any]:
         with self.engine.connect() as connection:
@@ -5535,49 +5611,49 @@ class CatalogStore:
                     commit_seq=commit_seq,
                 )
             )
-            search_state = (
-                connection.execute(
-                    select(projector_state).where(
-                        projector_state.c.projector == "search-v2",
-                        projector_state.c.session_id == session_key,
+            for projector_name in KNOWN_PROJECTORS:
+                search_state = (
+                    connection.execute(
+                        select(projector_state).where(
+                            projector_state.c.projector == projector_name, projector_state.c.session_id == session_key
+                        )
                     )
+                    .mappings()
+                    .first()
                 )
-                .mappings()
-                .first()
-            )
-            if search_state is None:
-                connection.execute(
-                    insert(projector_state).values(
-                        projector="search-v2",
-                        session_id=session_key,
-                        desired_revision=commit_seq,
-                        completed_revision=0,
-                        status="idle",
-                        failure_count=0,
-                        commit_seq=commit_seq,
-                        created_at=deleted_at,
-                        updated_at=deleted_at,
+                if search_state is None:
+                    connection.execute(
+                        insert(projector_state).values(
+                            projector=projector_name,
+                            session_id=session_key,
+                            desired_revision=commit_seq,
+                            completed_revision=0,
+                            status="idle",
+                            failure_count=0,
+                            commit_seq=commit_seq,
+                            created_at=deleted_at,
+                            updated_at=deleted_at,
+                        )
                     )
-                )
-            else:
-                connection.execute(
-                    update(projector_state)
-                    .where(
-                        projector_state.c.projector == "search-v2",
-                        projector_state.c.session_id == session_key,
+                else:
+                    connection.execute(
+                        update(projector_state)
+                        .where(
+                            projector_state.c.projector == projector_name,
+                            projector_state.c.session_id == session_key,
+                        )
+                        .values(
+                            desired_revision=commit_seq,
+                            claimed_revision=None,
+                            claim_token=None,
+                            worker_id=None,
+                            claim_expires_at=None,
+                            status="idle",
+                            retry_at=None,
+                            commit_seq=commit_seq,
+                            updated_at=deleted_at,
+                        )
                     )
-                    .values(
-                        desired_revision=commit_seq,
-                        claimed_revision=None,
-                        claim_token=None,
-                        worker_id=None,
-                        claim_expires_at=None,
-                        status="idle",
-                        retry_at=None,
-                        commit_seq=commit_seq,
-                        updated_at=deleted_at,
-                    )
-                )
             live_deleted = _delete_bounded_live_session_state(connection, session_key=session_key, deleted_at=deleted_at)
             return {
                 "changed": True,
@@ -7141,36 +7217,37 @@ class CatalogStore:
                     .values(render_state="ready", commit_seq=commit_seq, updated_at=completed_at)
                 )
                 projector = ProjectorState.__table__
-                projector_row = (
-                    connection.execute(
-                        select(projector).where(
-                            projector.c.projector == "search-v2",
-                            projector.c.session_id == session_key,
+                for projector_name in KNOWN_PROJECTORS:
+                    projector_row = (
+                        connection.execute(
+                            select(projector).where(
+                                projector.c.projector == projector_name,
+                                projector.c.session_id == session_key,
+                            )
                         )
+                        .mappings()
+                        .first()
                     )
-                    .mappings()
-                    .first()
-                )
-                if projector_row is None:
-                    connection.execute(
-                        insert(projector).values(
-                            projector="search-v2",
-                            session_id=session_key,
-                            desired_revision=commit_seq,
-                            completed_revision=0,
-                            status="idle",
-                            failure_count=0,
-                            commit_seq=commit_seq,
-                            created_at=completed_at,
-                            updated_at=completed_at,
+                    if projector_row is None:
+                        connection.execute(
+                            insert(projector).values(
+                                projector=projector_name,
+                                session_id=session_key,
+                                desired_revision=commit_seq,
+                                completed_revision=0,
+                                status="idle",
+                                failure_count=0,
+                                commit_seq=commit_seq,
+                                created_at=completed_at,
+                                updated_at=completed_at,
+                            )
                         )
-                    )
-                else:
-                    connection.execute(
-                        update(projector)
-                        .where(projector.c.projector == "search-v2", projector.c.session_id == session_key)
-                        .values(desired_revision=commit_seq, commit_seq=commit_seq, updated_at=completed_at)
-                    )
+                    else:
+                        connection.execute(
+                            update(projector)
+                            .where(projector.c.projector == projector_name, projector.c.session_id == session_key)
+                            .values(desired_revision=commit_seq, commit_seq=commit_seq, updated_at=completed_at)
+                        )
             connection.execute(
                 update(rows)
                 .where(rows.c.run_id == run_key, rows.c.session_id == session_key)
@@ -7372,32 +7449,33 @@ class CatalogStore:
                 )
             )
             for session_key in session_keys:
-                projector_row = connection.execute(
-                    select(projectors).where(
-                        projectors.c.projector == "search-v2",
-                        projectors.c.session_id == session_key,
-                    )
-                ).first()
-                if projector_row is None:
-                    connection.execute(
-                        insert(projectors).values(
-                            projector="search-v2",
-                            session_id=session_key,
-                            desired_revision=commit_seq,
-                            completed_revision=0,
-                            status="idle",
-                            failure_count=0,
-                            commit_seq=commit_seq,
-                            created_at=observed_at,
-                            updated_at=observed_at,
+                for projector_name in KNOWN_PROJECTORS:
+                    projector_row = connection.execute(
+                        select(projectors).where(
+                            projectors.c.projector == projector_name,
+                            projectors.c.session_id == session_key,
                         )
-                    )
-                else:
-                    connection.execute(
-                        update(projectors)
-                        .where(projectors.c.projector == "search-v2", projectors.c.session_id == session_key)
-                        .values(desired_revision=commit_seq, commit_seq=commit_seq, updated_at=observed_at)
-                    )
+                    ).first()
+                    if projector_row is None:
+                        connection.execute(
+                            insert(projectors).values(
+                                projector=projector_name,
+                                session_id=session_key,
+                                desired_revision=commit_seq,
+                                completed_revision=0,
+                                status="idle",
+                                failure_count=0,
+                                commit_seq=commit_seq,
+                                created_at=observed_at,
+                                updated_at=observed_at,
+                            )
+                        )
+                    else:
+                        connection.execute(
+                            update(projectors)
+                            .where(projectors.c.projector == projector_name, projectors.c.session_id == session_key)
+                            .values(desired_revision=commit_seq, commit_seq=commit_seq, updated_at=observed_at)
+                        )
             _refresh_legacy_migration_run(connection, run_key, commit_seq, observed_at)
             return {
                 "repaired": len(session_keys),

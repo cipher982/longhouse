@@ -384,7 +384,7 @@ export function SessionChat({
         return [];
       }
     },
-    enabled: Boolean(session.id) && isManagedLocal && canQueueNextInput,
+    enabled: Boolean(session.id) && isManagedLocal,
     retry: false,
     refetchOnWindowFocus: false,
     // Poll while any row is queued/delivering so the UI sees drain progress.
@@ -478,13 +478,34 @@ export function SessionChat({
         }
         return true;
       } catch (e) {
+        // Console turn-start failures are durable input receipts. Refresh them
+        // immediately so the failed message stays attached to the turn instead
+        // of being represented only by a transient request error.
+        let persistedFailure = false;
+        try {
+          const refreshedInputs = await fetchSessionInputs(session.id);
+          queryClient.setQueryData<QueuedInputSummary[]>(
+            ["session-inputs", session.id],
+            refreshedInputs,
+          );
+          persistedFailure = refreshedInputs.some(
+            (row) => row.status === "failed" && row.text === message,
+          );
+        } catch {
+          // Preserve the request error when the receipt cannot be refreshed.
+        }
+
         // Parse structured backend errors so turn_ended on steer surfaces
         // as an actionable prompt, not a mystery failure.
-        const errorBody = (e as { body?: { detail?: { error_code?: string; message?: string } } })?.body;
-        const errorCode = errorBody?.detail?.error_code;
+        const errorBody = (e as {
+          body?: { detail?: { code?: string; error_code?: string; message?: string } };
+        })?.body;
+        const errorCode = errorBody?.detail?.error_code ?? errorBody?.detail?.code;
         if (intent === "steer" && errorCode === "turn_ended") {
           setTurnEndedDraft(message);
           setError(errorBody?.detail?.message ?? "Active turn ended before your update arrived.");
+        } else if (persistedFailure) {
+          setError(null);
         } else {
           setError(e instanceof Error ? e.message : "Unknown error");
         }
@@ -912,7 +933,7 @@ export function SessionChat({
                 <span
                   className={`session-chat-queued__status session-chat-queued__status--${row.status}`}
                 >
-                  {row.status === "delivering" ? "Sending…" : "Queued"}
+                  {row.status === "delivering" ? row.last_error || "Sending…" : "Queued"}
                 </span>
                 {row.status === "queued" ? (
                   <button

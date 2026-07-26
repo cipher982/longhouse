@@ -42,6 +42,20 @@ EMBEDDING_BATCH_SIZE = int(os.getenv("EMBEDDING_BATCH_SIZE", "32"))
 EMBEDDING_MAX_CHUNKS_PER_PASS = int(os.getenv("EMBEDDING_MAX_CHUNKS_PER_PASS", "128"))
 
 
+class PermanentEmbeddingConfigError(ValueError):
+    """A misconfiguration that retrying will never fix on its own.
+
+    Distinct from other ValueErrors this module raises (a batch returning the
+    wrong item count, a missing embedding in one response) which are more
+    likely transient API flakiness worth retrying soon. Callers with a
+    retry/backoff loop should treat this specifically as "stop hammering the
+    API and surface it," not fold it into the same fast-retry bucket as every
+    other ValueError -- including callers elsewhere in this codebase (e.g. the
+    catalog-side ValueErrors in embeddings_v2_projector.py) that are genuinely
+    transient and should keep retrying quickly.
+    """
+
+
 @dataclass
 class EmbeddingChunk:
     """A chunk of text ready for embedding."""
@@ -110,7 +124,7 @@ async def generate_embeddings(texts: Sequence[str], config: "EmbeddingConfig") -
         return []
 
     if config.provider not in ("openai", "openrouter"):
-        raise ValueError(f"Unsupported embedding provider: {config.provider}. Use 'openai' or 'openrouter'.")
+        raise PermanentEmbeddingConfigError(f"Unsupported embedding provider: {config.provider}. Use 'openai' or 'openrouter'.")
 
     kwargs = build_openai_compatible_client_kwargs(
         provider=config.provider, api_key=config.api_key, base_url=getattr(config, "base_url", None)
@@ -143,8 +157,11 @@ async def generate_embeddings(texts: Sequence[str], config: "EmbeddingConfig") -
                 # instead of truncating. Stored under the configured dims it
                 # would later be silently skipped by the cache loader's shape
                 # check -- fail loudly here instead, at the one point that
-                # knows both the expected and actual size.
-                raise ValueError(f"Embedding dims mismatch: expected {config.dims}, got {vector.shape[0]} from model {config.model}")
+                # knows both the expected and actual size. Permanent: retrying
+                # the same model/config will produce the same mismatch forever.
+                raise PermanentEmbeddingConfigError(
+                    f"Embedding dims mismatch: expected {config.dims}, got {vector.shape[0]} from model {config.model}"
+                )
             vectors.append(vector)
         return vectors
     finally:

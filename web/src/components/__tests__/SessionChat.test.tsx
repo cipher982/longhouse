@@ -691,6 +691,113 @@ describe("SessionChat", () => {
     expect(screen.getByRole("button", { name: /cancel queued message/i })).toBeEnabled();
   });
 
+  it("shows an uncertain Console dispatch instead of leaving it silently sending", async () => {
+    requestMock.mockImplementation((path: string, init?: RequestInit) => {
+      if (String(path).endsWith("/lock")) {
+        return Promise.resolve({ locked: false, fork_available: false });
+      }
+      if (String(path).endsWith("/inputs") && !init) {
+        return Promise.resolve([
+          {
+            id: 43,
+            text: "survive the reconnect",
+            intent: "auto",
+            status: "delivering",
+            created_at: null,
+            last_error: "turn_start_outcome_unknown: Machine control channel disconnected",
+          },
+        ]);
+      }
+      return Promise.reject(new Error(`Unexpected request: ${path}`));
+    });
+
+    renderSessionChat({ chatMode: "managed_local", canQueueNextInput: true });
+
+    const chip = await screen.findByTestId("session-chat-queued");
+    expect(chip).toHaveTextContent("survive the reconnect");
+    expect(chip).toHaveTextContent("turn_start_outcome_unknown: Machine control channel disconnected");
+    expect(chip).not.toHaveTextContent("Sending…");
+  });
+
+  it("shows a persisted Console launch failure on the input instead of a request banner", async () => {
+    const user = userEvent.setup();
+    let inputReads = 0;
+    requestMock.mockImplementation((path: string, init?: RequestInit) => {
+      if (String(path).endsWith("/lock")) {
+        return Promise.resolve({ locked: false, fork_available: false });
+      }
+      if (String(path).endsWith("/inputs") && !init) {
+        inputReads += 1;
+        return Promise.resolve(
+          inputReads === 1
+            ? []
+            : [
+                {
+                  id: null,
+                  live_input_id: "failed-console-input",
+                  text: "launch from missing cwd",
+                  intent: "auto",
+                  status: "failed",
+                  created_at: null,
+                  last_error: "cwd_not_found: cwd does not exist: /missing",
+                },
+              ],
+        );
+      }
+      if (String(path).endsWith("/input") && init?.method === "POST") {
+        return Promise.reject(
+          Object.assign(new Error("Request failed (502)"), {
+            body: {
+              detail: {
+                code: "cwd_not_found",
+                message: "cwd does not exist: /missing",
+              },
+            },
+          }),
+        );
+      }
+      return Promise.reject(new Error(`Unexpected request: ${path}`));
+    });
+
+    renderSessionChat({ chatMode: "managed_local", canQueueNextInput: true });
+
+    await user.type(screen.getByRole("textbox"), "launch from missing cwd");
+    await user.click(screen.getByRole("button", { name: /send/i }));
+
+    const failure = await screen.findByTestId("session-chat-queued-failed");
+    expect(failure).toHaveTextContent("launch from missing cwd");
+    expect(failure).toHaveTextContent("cwd_not_found: cwd does not exist: /missing");
+    expect(screen.queryByText("Request failed (502)")).not.toBeInTheDocument();
+  });
+
+  it("loads a durable input failure after the Console session has ended", async () => {
+    requestMock.mockImplementation((path: string, init?: RequestInit) => {
+      if (String(path).endsWith("/lock")) {
+        return Promise.resolve({ locked: false, fork_available: false });
+      }
+      if (String(path).endsWith("/inputs") && !init) {
+        return Promise.resolve([
+          {
+            id: null,
+            live_input_id: "ended-console-failure",
+            text: "launch from missing cwd",
+            intent: "auto",
+            status: "failed",
+            created_at: null,
+            last_error: "cwd_not_found: cwd does not exist: /missing",
+          },
+        ]);
+      }
+      return Promise.reject(new Error(`Unexpected request: ${path}`));
+    });
+
+    renderSessionChat({ chatMode: "managed_local", canQueueNextInput: false });
+
+    const failure = await screen.findByTestId("session-chat-queued-failed");
+    expect(failure).toHaveTextContent("launch from missing cwd");
+    expect(failure).toHaveTextContent("cwd_not_found: cwd does not exist: /missing");
+  });
+
   it("shows Send update primary + Queue next secondary when steer capability is on", async () => {
     const user = userEvent.setup();
     const queryClient = new QueryClient({

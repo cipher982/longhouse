@@ -25,6 +25,7 @@ from fastapi import status
 
 from zerg.catalogd.client import CatalogRemoteError
 from zerg.catalogd.client import CatalogUnavailable
+from zerg.catalogd.store import KNOWN_PROJECTORS
 from zerg.config import get_settings
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
@@ -958,7 +959,14 @@ async def _commit_admitted_envelope(
                 "provenance_kind": spec.provenance_kind,
                 "render_state": "ready" if render_manifest is not None else "pending",
                 "media_refs": parsed["media_refs"],
-                "projectors": ["search-v2"] if render_manifest is not None else ["render-v2"],
+                # Every registered downstream projector (FTS, dense embeddings, ...)
+                # needs its own projector_state row created/advanced here -- this is
+                # the actual per-ingest write path, distinct from the deletion/
+                # render-generation-completion/migration paths in catalogd/store.py
+                # that also loop over the same registry. Missing a name here means
+                # that projector never becomes claimable for ordinarily-ingested
+                # sessions, which is exactly the bug that shipped once already.
+                "projectors": list(KNOWN_PROJECTORS) if render_manifest is not None else ["render-v2"],
                 "render_manifest": render_manifest,
                 "session_facts": parsed["session_facts"],
                 "sealed_at": datetime.now(UTC).isoformat(),
