@@ -24,6 +24,7 @@ def test_machine_agent_restart_uses_reconnected_status_after_kickstart_timeout(t
         status_path.write_text(json.dumps({"daemon_pid": 202, "control_channel": {"status": "connected"}}))
         raise subprocess.TimeoutExpired(cmd="launchctl kickstart", timeout=15)
 
+    monkeypatch.setattr(product_e2e.sys, "platform", "darwin")
     monkeypatch.setattr(product_e2e.subprocess, "run", timed_out_kickstart)
 
     assert product_e2e._restart_machine_agent(status_path, timeout=0.1) == {
