@@ -291,18 +291,19 @@ def _managed_local_launch_response(db: Session, result, *, owner_id: int | None 
     # reject durable device tokens). Bypass launches never get one.
     hook_token: str | None = None
     coordination_token: str | None = None
-    if owner_id is not None and provider_supports_coordination_tools(session.provider):
+    if owner_id is not None:
         from zerg.auth.managed_session_tokens import MANAGED_SESSION_SCOPE_COORDINATION
         from zerg.auth.managed_session_tokens import MANAGED_SESSION_SCOPE_HOOK
         from zerg.auth.managed_session_tokens import issue_managed_session_token
 
-        coordination_token = issue_managed_session_token(
-            owner_id=owner_id,
-            session_id=str(session.id),
-            project=getattr(session, "project", None),
-            device_id=getattr(session, "device_id", None),
-            scope=MANAGED_SESSION_SCOPE_COORDINATION,
-        )
+        if provider_supports_coordination_tools(session.provider):
+            coordination_token = issue_managed_session_token(
+                owner_id=owner_id,
+                session_id=str(session.id),
+                project=getattr(session, "project", None),
+                device_id=getattr(session, "device_id", None),
+                scope=MANAGED_SESSION_SCOPE_COORDINATION,
+            )
         if permission_mode == "remote_approve":
             hook_token = issue_managed_session_token(
                 owner_id=owner_id,
@@ -346,18 +347,19 @@ def _managed_local_launch_response_from_plan(
 
     hook_token: str | None = None
     coordination_token: str | None = None
-    if owner_id is not None and provider_supports_coordination_tools(plan.provider):
+    if owner_id is not None:
         from zerg.auth.managed_session_tokens import MANAGED_SESSION_SCOPE_COORDINATION
         from zerg.auth.managed_session_tokens import MANAGED_SESSION_SCOPE_HOOK
         from zerg.auth.managed_session_tokens import issue_managed_session_token
 
-        coordination_token = issue_managed_session_token(
-            owner_id=owner_id,
-            session_id=str(plan.session_id),
-            project=plan.project,
-            device_id=plan.source_name,
-            scope=MANAGED_SESSION_SCOPE_COORDINATION,
-        )
+        if provider_supports_coordination_tools(plan.provider):
+            coordination_token = issue_managed_session_token(
+                owner_id=owner_id,
+                session_id=str(plan.session_id),
+                project=plan.project,
+                device_id=plan.source_name,
+                scope=MANAGED_SESSION_SCOPE_COORDINATION,
+            )
         if plan.permission_mode == "remote_approve":
             hook_token = issue_managed_session_token(
                 owner_id=owner_id,
