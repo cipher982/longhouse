@@ -554,6 +554,7 @@ EXPECTED_ADAPTER_CLASS_BY_PROVIDER = {
     "codex": "CodexOpenAIHarnessAdapter",
     "opencode": "OpenCodeHarnessAdapter",
     "antigravity": "AntigravityHarnessAdapter",
+    "cursor": "CursorHarnessAdapter",
 }
 
 
@@ -926,6 +927,12 @@ def test_action_matrix_emits_same_longhouse_actions_for_all_providers(tmp_path: 
         elif result["provider"] == "antigravity":
             assert actions["permission_prompt"]["status"] == "unsupported_gap"
             assert actions["permission_prompt"]["failure_code"] == "permission_prompt_unsupported"
+        elif result["provider"] == "cursor":
+            # Cursor has a real permission surface: the fail-closed remote-permission
+            # hook proved allow/ask/deny in Gate 0. That proof still lives in the
+            # bespoke Gate 0 script rather than a harness canary, so the honest
+            # status is blocked (supported, no wired evidence) rather than a gap.
+            assert actions["permission_prompt"]["status"] == "blocked"
         else:
             assert actions["permission_prompt"]["status"] == "pass"
             assert actions["permission_prompt"]["canary"] == "claude_permission_gate_reply"
@@ -2558,6 +2565,10 @@ def test_remaining_surface_scenarios_emit_honest_results_for_all_providers(tmp_p
             assert permission["status"] == "unsupported_gap"
             assert permission["failure_code"] == "permission_prompt_unsupported"
             assert permission["data"]["operation_evidence"]["permission_prompt"]["status"] == "unsupported_gap"
+        elif provider == "cursor":
+            # Supported surface, proof not yet wired as a harness canary. See the
+            # action-matrix test for the full reasoning.
+            assert permission["status"] == "blocked"
         else:
             assert permission["status"] == "pass"
             assert permission["data"]["operation_evidence"]["permission_prompt"]["status"] == "pass"
@@ -3594,6 +3605,12 @@ def test_script_entrypoint_runs_all_provider_fake_no_token_release_surface(tmp_p
         ("opencode", "run_prompt_once"): "run_prompt_once_not_safe_no_token",
         ("antigravity", "run_prompt_once"): "run_prompt_once_not_safe_no_token",
         ("antigravity", "send_receive"): "send_receive_not_safe_no_token",
+        # Cursor's managed-session and send proofs still live in the bespoke Gate 0
+        # and product E2E scripts rather than harness scenarios. Folding those in is
+        # what flips these to pass.
+        ("cursor", "run_prompt_once"): "run_prompt_once_not_safe_no_token",
+        ("cursor", "send_receive"): "send_receive_not_safe_no_token",
+        ("cursor", "launch_managed_session"): "managed_session_not_safe_no_token",
     }
     for provider in uah.SUPPORTED_PROVIDERS:
         for scenario in scenarios:

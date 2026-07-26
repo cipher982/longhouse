@@ -625,3 +625,41 @@ def test_agents_service_package_imports_without_database_url():
     )
     assert result.returncode == 0, f"agents package import failed without DATABASE_URL:\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
     assert "IMPORT_OK" in result.stdout
+
+
+def test_factory_provider_set_is_derived_from_the_contract_not_hand_maintained() -> None:
+    """A provider in the contract is automatically in the factory.
+
+    Cursor shipped as a first-tier provider while remaining invisible to the
+    release factory because four separate lanes each carried their own
+    hand-maintained provider tuple. The contract is now the single authority, so
+    a new provider cannot ship without entering every lane.
+    """
+
+    from zerg.services.managed_provider_contracts import all_managed_provider_contracts
+    from zerg.services.managed_provider_contracts import factory_provider_names
+
+    contracts = all_managed_provider_contracts()
+    every_provider = tuple(sorted(contract.provider for contract in contracts))
+    launch_only = tuple(sorted(contract.provider for contract in contracts if contract.support_tier == "launch"))
+
+    assert factory_provider_names(include_maintenance=True) == every_provider
+    assert factory_provider_names() == launch_only
+    assert "cursor" in factory_provider_names()
+    # Maintenance-tier providers stay out of control-proof lanes but keep ingest,
+    # archive, and transcript coverage.
+    assert "antigravity" not in factory_provider_names()
+    assert "antigravity" in factory_provider_names(include_maintenance=True)
+
+
+def test_every_contract_provider_resolves_a_harness_adapter() -> None:
+    from zerg.qa.universal_agent_harness import ADAPTER_CLASS_BY_PROVIDER
+    from zerg.qa.universal_agent_harness import SUPPORTED_PROVIDERS
+    from zerg.qa.universal_agent_harness import provider_configs
+    from zerg.services.managed_provider_contracts import factory_provider_names
+
+    expected = factory_provider_names(include_maintenance=True)
+    assert SUPPORTED_PROVIDERS == expected
+    missing_adapters = [provider for provider in expected if provider not in ADAPTER_CLASS_BY_PROVIDER]
+    assert missing_adapters == []
+    assert tuple(sorted(provider_configs())) == expected

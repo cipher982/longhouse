@@ -34,6 +34,7 @@
         "release_candidate": "staged_release",
         "continuous": "privacy_safe_live_replay"
       },
+      "support_tier": "launch",
       "launch_local": true,
       "run_once": true,
       "reattach": true,
@@ -276,6 +277,7 @@
         "release_candidate": "staged_release",
         "continuous": "privacy_safe_live_replay"
       },
+      "support_tier": "launch",
       "launch_local": true,
       "run_once": false,
       "reattach": true,
@@ -569,6 +571,7 @@
         "release_candidate": "staged_release",
         "continuous": "privacy_safe_live_replay"
       },
+      "support_tier": "launch",
       "launch_local": true,
       "run_once": false,
       "reattach": true,
@@ -733,6 +736,7 @@
         "release_candidate": "staged_release",
         "continuous": "privacy_safe_live_replay"
       },
+      "support_tier": "maintenance",
       "launch_local": true,
       "run_once": false,
       "reattach": false,
@@ -920,6 +924,7 @@
         "release_candidate": "staged_release",
         "continuous": "privacy_safe_live_replay"
       },
+      "support_tier": "launch",
       "launch_local": true,
       "run_once": false,
       "reattach": true,

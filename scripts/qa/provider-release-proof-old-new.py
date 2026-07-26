@@ -19,8 +19,15 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+_SERVER_PATH = str(Path(__file__).resolve().parents[2] / "server")
+if _SERVER_PATH not in sys.path:
+    sys.path.insert(0, _SERVER_PATH)
+
+from zerg.services.managed_provider_contracts import factory_provider_names  # noqa: E402
+
 SCHEMA_VERSION = 1
-SUPPORTED_PROVIDERS = ("claude", "codex", "opencode", "antigravity")
+# Derived from the managed-provider contract; see provider-release-proof.py.
+SUPPORTED_PROVIDERS = factory_provider_names(include_maintenance=True)
 YELLOW_VERDICTS = {"yellow"}
 
 

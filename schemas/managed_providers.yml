@@ -27,6 +27,7 @@ providers:
     pull_request: hermetic
     release_candidate: staged_release
     continuous: privacy_safe_live_replay
+  support_tier: launch
   launch_local: true
   run_once: true
   reattach: true
@@ -182,6 +183,7 @@ providers:
   normalization_ruleset: claude
   presentation_ruleset: shared_tool_presentation
   proof_profiles: *factory_proof_profiles
+  support_tier: launch
   launch_local: true
   run_once: false
   reattach: true
@@ -371,6 +373,7 @@ providers:
   normalization_ruleset: opencode
   presentation_ruleset: shared_tool_presentation
   proof_profiles: *factory_proof_profiles
+  support_tier: launch
   launch_local: true
   run_once: false
   reattach: true
@@ -490,6 +493,7 @@ providers:
   normalization_ruleset: antigravity
   presentation_ruleset: shared_tool_presentation
   proof_profiles: *factory_proof_profiles
+  support_tier: maintenance
   launch_local: true
   run_once: false
   reattach: false
@@ -625,6 +629,7 @@ providers:
   normalization_ruleset: cursor
   presentation_ruleset: shared_tool_presentation
   proof_profiles: *factory_proof_profiles
+  support_tier: launch
   launch_local: true
   # Console launch is represented by turn_start.
   run_once: false

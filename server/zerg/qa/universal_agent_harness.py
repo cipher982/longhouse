@@ -35,7 +35,7 @@ from zerg.provider_cli_contract import PROVIDER_CLI_BINARY_BY_PROVIDER
 from zerg.provider_cli_contract import PROVIDER_CLI_ENV_BY_PROVIDER
 from zerg.qa.repo_root import default_repo_root
 from zerg.services.managed_provider_contracts import contract_for_provider
-from zerg.services.managed_provider_contracts import managed_provider_names
+from zerg.services.managed_provider_contracts import factory_provider_names
 from zerg.services.provider_action_coverage import derive_provider_action_coverage
 from zerg.services.provider_action_coverage import serialize_provider_action_coverage
 from zerg.services.tool_presentation import project_tool_presentation
@@ -94,7 +94,10 @@ def _project_managed_transport(db: Any, session: Any) -> str | None:
 
 SCHEMA_VERSION = 1
 ARTIFACT_KIND = "universal_agent_harness_run"
-SUPPORTED_PROVIDERS = ("claude", "codex", "opencode", "antigravity")
+# Derived from the managed-provider contract, never hand-maintained. Maintenance-tier
+# providers stay in the harness because ingest, archive, and transcript scenarios keep
+# running for them; control-proof exclusion is expressed per operation, not per lane.
+SUPPORTED_PROVIDERS = factory_provider_names(include_maintenance=True)
 SCENARIOS = (
     "probe_identity",
     "adapter_conformance",
@@ -5252,11 +5255,16 @@ class AntigravityHarnessAdapter(UniversalProviderAdapter):
     """Antigravity concrete adapter for the universal Longhouse action contract."""
 
 
+class CursorHarnessAdapter(UniversalProviderAdapter):
+    """Cursor concrete adapter for the universal Longhouse action contract."""
+
+
 ADAPTER_CLASS_BY_PROVIDER: Mapping[str, type[UniversalProviderAdapter]] = {
     "claude": ClaudeCodeHarnessAdapter,
     "codex": CodexOpenAIHarnessAdapter,
     "opencode": OpenCodeHarnessAdapter,
     "antigravity": AntigravityHarnessAdapter,
+    "cursor": CursorHarnessAdapter,
 }
 
 
@@ -5347,7 +5355,9 @@ def _action_support(provider: str, action: ActionDefinition, contract: Any) -> t
             return True, "provider_control.antigravity_hook_inbox"
         return False, "external_event_channel_unsupported"
     if action.support_kind == "permission_prompt":
-        return provider in {"claude", "codex", "opencode"}, "provider_permission_prompt_surface"
+        # Cursor's fail-closed remote-permission hook proved allow/ask/deny in Gate 0.
+        # This set moves into the contract when the provider branches are deleted.
+        return provider in {"claude", "codex", "opencode", "cursor"}, "provider_permission_prompt_surface"
     return False, f"unknown_support_kind:{action.support_kind}"
 
 
@@ -7792,11 +7802,8 @@ def antigravity_control_operation_evidence(canary: Mapping[str, Any]) -> dict[st
 
 
 def provider_configs() -> dict[str, AdapterConfig]:
-    providers = set(managed_provider_names()) | set(SUPPORTED_PROVIDERS)
     configs: dict[str, AdapterConfig] = {}
     for provider in SUPPORTED_PROVIDERS:
-        if provider not in providers:
-            continue
         binary_env = PROVIDER_CLI_ENV_BY_PROVIDER.get(provider)
         if provider == "claude":
             binary_env = binary_env or "LONGHOUSE_CLAUDE_BIN"

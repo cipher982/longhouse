@@ -51,6 +51,10 @@ class ManagedProviderContract:
     normalization_ruleset: str = ""
     presentation_ruleset: str = ""
     proof_profiles: Mapping[str, str] = field(default_factory=dict)
+    # ``launch`` providers run every factory lane. ``maintenance`` providers keep
+    # ingest, archive, and transcript scenarios but are excluded from
+    # control-proof lanes. The factory derives its provider set from this field.
+    support_tier: str = "launch"
     requires_longhouse_cli: bool = True
     launch_local: bool = True
     run_once: bool = False
@@ -141,6 +145,7 @@ def _contract_from_manifest_item(item: dict[str, object]) -> ManagedProviderCont
         normalization_ruleset=str(item.get("normalization_ruleset") or ""),
         presentation_ruleset=str(item.get("presentation_ruleset") or ""),
         proof_profiles={str(name): str(profile) for name, profile in dict(item.get("proof_profiles") or {}).items()},
+        support_tier=str(item.get("support_tier") or "launch"),
         requires_longhouse_cli=bool(item.get("requires_longhouse_cli", True)),
         launch_local=bool(item.get("launch_local", True)),
         run_once=bool(item.get("run_once", False)),
@@ -206,6 +211,21 @@ def all_managed_provider_contracts() -> tuple[ManagedProviderContract, ...]:
 
 def managed_provider_names() -> frozenset[str]:
     return frozenset(_BY_PROVIDER)
+
+
+def factory_provider_names(*, include_maintenance: bool = False) -> tuple[str, ...]:
+    """Providers the automation factory covers, derived from the contract.
+
+    Every factory lane resolves its provider set here. Hand-maintained tuples in
+    each lane are what let Cursor ship as a first-tier provider while remaining
+    invisible to the release factory, so there is exactly one authority.
+
+    Control-proof lanes take the default. Ingest, archive, and transcript lanes
+    pass ``include_maintenance=True`` because those keep working for a provider
+    nobody is actively investing in.
+    """
+
+    return tuple(sorted(contract.provider for contract in _CONTRACTS if include_maintenance or contract.support_tier == "launch"))
 
 
 def contract_for_provider(provider: str | None) -> ManagedProviderContract | None:

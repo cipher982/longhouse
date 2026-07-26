@@ -38,6 +38,11 @@ _STRING_LIST_FIELDS = (
     "observation_sources",
 )
 _FACTORY_STRING_FIELDS = ("normalization_ruleset", "presentation_ruleset")
+# The factory's supported-provider set is derived from this field rather than
+# from hand-maintained tuples in each lane. ``launch`` providers run every lane;
+# ``maintenance`` providers keep ingest, archive, and transcript scenarios but
+# are excluded from control-proof lanes.
+_SUPPORT_TIERS = frozenset({"launch", "maintenance"})
 _PROOF_PROFILE_NAMES = frozenset({"pull_request", "release_candidate", "continuous"})
 _PROOF_PROFILE_VALUES = frozenset({"hermetic", "staged_release", "privacy_safe_live_replay"})
 _OPERATION_EVIDENCE_FIELDS = (
@@ -224,6 +229,8 @@ def _validate_factory_contract(item: dict[str, Any]) -> None:
     provider = str(item.get("provider") or "<unknown>")
     for field in _FACTORY_STRING_FIELDS:
         _validate_string_field(item, field)
+    if item.get("support_tier") not in _SUPPORT_TIERS:
+        raise ValueError(f"managed provider contract {provider}: support_tier must be one of {sorted(_SUPPORT_TIERS)}")
     proof_profiles = item.get("proof_profiles")
     if not isinstance(proof_profiles, dict):
         raise ValueError(f"managed provider contract {provider}: proof_profiles must be an object")

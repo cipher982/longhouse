@@ -31,11 +31,17 @@ _SERVER_PATH = str(_SCRIPT_REPO_ROOT / "server")
 if _SERVER_PATH not in sys.path:
     sys.path.insert(0, _SERVER_PATH)
 
+from zerg.provider_live_proof import SUPPORTED_LIVE_PROOF_PROVIDERS  # noqa: E402
+from zerg.services.managed_provider_contracts import factory_provider_names  # noqa: E402
 from zerg.services.provider_action_coverage import derive_provider_action_coverage_from_artifact  # noqa: E402
 
 SCHEMA_VERSION = 1
-SUPPORTED_PROVIDERS = ("claude", "codex", "opencode", "antigravity")
-LIVE_CANARY_PROVIDERS = frozenset({"claude", "opencode", "antigravity"})
+# Derived from the managed-provider contract so a new provider cannot ship without
+# entering the release factory.
+SUPPORTED_PROVIDERS = factory_provider_names(include_maintenance=True)
+# Which providers have a live canary implementation is a different question from
+# which providers exist; provider_live_proof owns that answer.
+LIVE_CANARY_PROVIDERS = frozenset(SUPPORTED_LIVE_PROOF_PROVIDERS)
 CODEX_API_URL_ENV = "CODEX_API_URL"
 CODEX_AGENTS_TOKEN_ENV = "CODEX_AGENTS_TOKEN"
 CLAUDE_API_URL_ENV = "CLAUDE_API_URL"
