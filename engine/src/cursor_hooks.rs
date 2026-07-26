@@ -91,7 +91,9 @@ fn atomic_write(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
     std::fs::create_dir_all(parent)?;
     let temporary = parent.join(format!(
         ".{}.{}.tmp",
-        path.file_name().and_then(|value| value.to_str()).unwrap_or("cursor-hook"),
+        path.file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("cursor-hook"),
         Uuid::new_v4()
     ));
     std::fs::write(&temporary, bytes)?;
@@ -105,6 +107,17 @@ fn atomic_write(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
 fn write(path: PathBuf, value: &Value) -> bool {
     atomic_write(&path, value.to_string().as_bytes()).is_ok()
 }
+
+fn append_json_line(path: &std::path::Path, value: &Value) -> std::io::Result<()> {
+    let mut line = serde_json::to_vec(value).map_err(std::io::Error::other)?;
+    line.push(b'\n');
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?;
+    file.write_all(&line)
+}
+
 pub fn lifecycle(event: &str) {
     let Ok(payload) = input() else {
         println!("{{}}");
@@ -174,17 +187,10 @@ pub fn lifecycle(event: &str) {
     if let Some(parent) = event_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    if let Ok(mut file) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(event_path)
-    {
-        let _ = writeln!(
-            file,
-            "{}",
-            json!({"event":event,"observed_at":now,"session_id":session_id,"conversation_id":conversation,"payload":payload})
-        );
-    }
+    let _ = append_json_line(
+        &event_path,
+        &json!({"event":event,"observed_at":now,"session_id":session_id,"conversation_id":conversation,"payload":payload}),
+    );
     if let Some(phase) = phase {
         let _ = write(
             root.join(format!("{session_id}.phase.json")),
