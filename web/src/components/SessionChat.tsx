@@ -384,7 +384,7 @@ export function SessionChat({
         return [];
       }
     },
-    enabled: Boolean(session.id) && isManagedLocal && canQueueNextInput,
+    enabled: Boolean(session.id) && isManagedLocal,
     retry: false,
     refetchOnWindowFocus: false,
     // Poll while any row is queued/delivering so the UI sees drain progress.
