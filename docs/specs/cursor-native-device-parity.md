@@ -1,6 +1,24 @@
 # Cursor Native Device Parity
 
-Status: shipped incomplete; native release blocked pending remediation
+Status: qualified; native release gates passed
+
+## Qualification evidence
+
+The native cutover passed on macOS with stock Cursor Agent
+`2026.07.23-e383d2b` on 2026-07-25:
+
+- Gate 0 passed create, stable native resume, new identity, workspace trust,
+  interrupt/recovery, permission allow/ask/deny, and the explicit unsupported
+  mid-turn-steer contract. Evidence:
+  `~/.longhouse/canaries/provider-live/cursor/20260726T020333Z`.
+- The installed-facade product E2E passed launch/archive, hosted idle send,
+  Machine Agent restart and hosted lease reconvergence, permission allow/deny
+  side effects, interrupt/recovery without TUI exit, terminate cleanup, and
+  terminal recovery. Evidence:
+  `~/.longhouse/canaries/provider-live/cursor-product/20260726T020203Z`.
+- The hermetic Gate 0 unit slice passed 111 tests. Native hook integration also
+  covers concurrent lifecycle hook writes so one Cursor generation cannot
+  corrupt another generation's evidence.
 
 ## Problem
 
