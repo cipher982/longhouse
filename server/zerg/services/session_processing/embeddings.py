@@ -137,7 +137,15 @@ async def generate_embeddings(texts: Sequence[str], config: "EmbeddingConfig") -
             embedding = getattr(item, "embedding", None)
             if not embedding:
                 raise ValueError("No embedding data received")
-            vectors.append(np.array(embedding, dtype=np.float32))
+            vector = np.array(embedding, dtype=np.float32)
+            if vector.shape[0] != config.dims:
+                # A provider that ignores `dimensions` returns its native size
+                # instead of truncating. Stored under the configured dims it
+                # would later be silently skipped by the cache loader's shape
+                # check -- fail loudly here instead, at the one point that
+                # knows both the expected and actual size.
+                raise ValueError(f"Embedding dims mismatch: expected {config.dims}, got {vector.shape[0]} from model {config.model}")
+            vectors.append(vector)
         return vectors
     finally:
         await client.close()
@@ -330,7 +338,7 @@ def iter_turn_chunks(events: list[dict]) -> Iterator[EmbeddingChunk]:
         combined, _, _was_truncated = truncate(
             combined,
             MAX_EMBEDDING_TOKENS,
-            strategy="head",
+            strategy="sandwich",
         )
         if not combined.strip():
             return None
