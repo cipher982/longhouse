@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 HOSTED_INSTANCE_HELPER="${HOSTED_INSTANCE_HELPER:-$ROOT_DIR/scripts/lib/hosted-instance.sh}"
-SSH_TARGET="${HOSTED_SESSION_DEBUG_SSH_TARGET:-runtime-host}"
+SSH_TARGET="${HOSTED_SESSION_DEBUG_SSH_TARGET:-zerg}"
 
 if [[ ! -f "$HOSTED_INSTANCE_HELPER" ]]; then
   echo "Hosted instance helper missing: $HOSTED_INSTANCE_HELPER" >&2
@@ -33,7 +33,7 @@ What it does:
 
 Requirements:
   - CONTROL_PLANE_ADMIN_TOKEN (or ADMIN_TOKEN)
-  - SSH access to host alias "runtime-host" (override with HOSTED_SESSION_DEBUG_SSH_TARGET)
+  - SSH access to host alias "zerg" (override with HOSTED_SESSION_DEBUG_SSH_TARGET)
 
 Options:
   --subdomain <name>   Hosted instance subdomain (default: $LONGHOUSE_DEFAULT_SUBDOMAIN or demo)
