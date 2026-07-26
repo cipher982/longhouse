@@ -15,6 +15,7 @@ from zerg.qa import claude_release_identity
 from zerg.qa import codex_helm_interrupt
 from zerg.qa import codex_release_identity
 from zerg.qa import codex_tool_call_result
+from zerg.qa import cursor_release_identity
 from zerg.qa import opencode_release_identity
 from zerg.qa import opencode_server_qualification
 
@@ -26,6 +27,7 @@ _PROFILES = {
     ("codex", codex_release_identity.PROFILE): codex_release_identity.run,
     ("codex", codex_helm_interrupt.PROFILE): codex_helm_interrupt.run,
     ("codex", codex_tool_call_result.PROFILE): codex_tool_call_result.run,
+    ("cursor", cursor_release_identity.PROFILE): cursor_release_identity.run,
     ("opencode", opencode_release_identity.PROFILE): opencode_release_identity.run,
     ("opencode", opencode_server_qualification.PROFILE): opencode_server_qualification.run,
 }

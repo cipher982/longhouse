@@ -336,7 +336,139 @@ struct Registration {
     session_id: String,
     run_id: String,
     hook_token: Option<String>,
+    coordination_token: Option<String>,
 }
+
+struct CursorMcpConfig {
+    path: PathBuf,
+    original: Option<Vec<u8>>,
+}
+
+impl Drop for CursorMcpConfig {
+    fn drop(&mut self) {
+        match &self.original {
+            Some(original) => {
+                let _ = fs::write(&self.path, original);
+            }
+            None => {
+                let _ = fs::remove_file(&self.path);
+            }
+        }
+    }
+}
+
+fn coordination_token(
+    config: &LaunchConfig,
+    registration: Option<&Registration>,
+    session_id: &str,
+) -> anyhow::Result<String> {
+    if let Some(token) = registration
+        .and_then(|value| value.coordination_token.as_deref())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return Ok(token.to_owned());
+    }
+    if config.resume_session.is_none() {
+        anyhow::bail!("Longhouse did not issue coordination authority for this session");
+    }
+    let machine = home(config.config_dir.as_deref())?.join("machine");
+    let state: Value = serde_json::from_slice(&fs::read(machine.join("state.json"))?)?;
+    let url = config
+        .url
+        .as_deref()
+        .or_else(|| state.get("runtime_url").and_then(Value::as_str))
+        .filter(|value| !value.trim().is_empty())
+        .context("No Longhouse URL configured. Run `longhouse auth` first.")?;
+    let device_token = config
+        .token
+        .as_deref()
+        .map(str::to_owned)
+        .or_else(|| {
+            fs::read_to_string(machine.join("device-token"))
+                .ok()
+                .map(|value| value.trim().to_owned())
+                .filter(|value| !value.is_empty())
+        })
+        .context("No device token found. Run `longhouse auth` first.")?;
+    let endpoint = format!(
+        "{}/api/agents/sessions/{session_id}/coordination-token",
+        url.trim_end_matches('/')
+    );
+    tokio::runtime::Runtime::new()?.block_on(async {
+        let response = reqwest::Client::new()
+            .post(endpoint)
+            .header("X-Agents-Token", device_token)
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            anyhow::bail!(
+                "Could not issue coordination authority for session {session_id}: HTTP {}",
+                response.status()
+            );
+        }
+        let payload: Value = response.json().await?;
+        payload
+            .get("coordination_token")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .context("Longhouse returned empty coordination authority")
+    })
+}
+
+fn write_cursor_mcp_config(
+    cwd: &Path,
+    session_id: &str,
+    coordination_token: &str,
+) -> anyhow::Result<CursorMcpConfig> {
+    if coordination_token.trim().is_empty() {
+        anyhow::bail!("Longhouse did not issue coordination authority for this session");
+    }
+    let path = cwd.join(".cursor/mcp.json");
+    let original = match fs::read(&path) {
+        Ok(contents) => Some(contents),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error.into()),
+    };
+    let mut config = original
+        .as_deref()
+        .map(serde_json::from_slice)
+        .transpose()
+        .context("Cursor MCP config is not valid JSON")?
+        .unwrap_or_else(|| json!({}));
+    let servers = config
+        .as_object_mut()
+        .context("Cursor MCP config must be an object")?
+        .entry("mcpServers")
+        .or_insert_with(|| json!({}))
+        .as_object_mut()
+        .context("Cursor MCP servers must be an object")?;
+    servers.insert(
+        "longhouse-coordination".into(),
+        json!({
+            "command": std::env::current_exe()?,
+            "args": ["claude-channel", "serve"],
+            "env": {
+                "LONGHOUSE_COORDINATION_TOKEN": coordination_token,
+                "LONGHOUSE_MANAGED_SESSION_ID": session_id,
+            },
+        }),
+    );
+    let parent = path.parent().context("Cursor MCP config has no parent")?;
+    fs::create_dir_all(parent)?;
+    let temporary = path.with_extension(format!("tmp.{}", std::process::id()));
+    fs::write(&temporary, serde_json::to_vec_pretty(&config)?)?;
+    #[cfg(unix)]
+    fs::set_permissions(
+        &temporary,
+        std::os::unix::fs::PermissionsExt::from_mode(0o600),
+    )?;
+    fs::rename(&temporary, &path)?;
+    Ok(CursorMcpConfig { path, original })
+}
+
 fn register(
     config: &LaunchConfig,
     cwd: &Path,
@@ -630,6 +762,8 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
     {
         anyhow::bail!("Cursor remote approval could not be enforced; Cursor was not launched");
     }
+    let coordination_token = coordination_token(&config, registered.as_ref(), &session_id)?;
+    let _mcp_config = write_cursor_mcp_config(&cwd, &session_id, &coordination_token)?;
     write_pending_claim(
         &dir,
         &session_id,
@@ -676,6 +810,8 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
                     | b"LONGHOUSE_PERMISSION_HOOK_ENABLED"
                     | b"LONGHOUSE_HOOK_URL"
                     | b"LONGHOUSE_HOOK_TOKEN"
+                    | b"LONGHOUSE_COORDINATION_TOKEN"
+                    | b"LONGHOUSE_MANAGED_SESSION_ID"
             ))
             .then(|| (key, value.as_os_str().as_bytes().to_vec()))
         })
@@ -987,6 +1123,42 @@ mod tests {
         }
         write_json(&claim_path(dir, &session_id), &claim).unwrap();
         session_id
+    }
+
+    #[test]
+    fn mcp_config_scopes_coordination_authority_to_the_server() {
+        let root = tempfile::tempdir().unwrap();
+        let cursor_dir = root.path().join(".cursor");
+        fs::create_dir(&cursor_dir).unwrap();
+        let path = cursor_dir.join("mcp.json");
+        let original = br#"{"mcpServers":{"existing":{"command":"existing"}}}"#;
+        fs::write(&path, original).unwrap();
+
+        let config = write_cursor_mcp_config(
+            root.path(),
+            "11111111-1111-4111-8111-111111111111",
+            "session-secret",
+        )
+        .unwrap();
+        let payload: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        let server = &payload["mcpServers"]["longhouse-coordination"];
+        assert_eq!(
+            server["command"],
+            std::env::current_exe().unwrap().display().to_string()
+        );
+        assert_eq!(server["args"], json!(["claude-channel", "serve"]));
+        assert_eq!(
+            server["env"]["LONGHOUSE_COORDINATION_TOKEN"],
+            "session-secret"
+        );
+        assert_eq!(
+            server["env"]["LONGHOUSE_MANAGED_SESSION_ID"],
+            "11111111-1111-4111-8111-111111111111"
+        );
+        assert!(payload["mcpServers"]["existing"].is_object());
+
+        drop(config);
+        assert_eq!(fs::read(path).unwrap(), original);
     }
 
     #[test]

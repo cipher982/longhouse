@@ -31,6 +31,11 @@ SEMVER = (
     r"(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)" r"(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?" r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?"
 )
 STRICT_SEMVER = re.compile(rf"^{SEMVER}$")
+# Not every provider versions with semver. cursor-agent reports a calendar build
+# such as 2026.07.23-e383d2b, whose zero-padded month cannot match SEMVER. A
+# profile may therefore declare its own grammar; the default keeps the four
+# semver providers strict.
+CALENDAR_BUILD = re.compile(r"^(?P<version>\d{4}\.\d{2}\.\d{2}(?:-[0-9A-Za-z.-]+)?)$")
 IDENTITY = re.compile(r"^sha256:[0-9a-f]{64}$")
 REQUEST_KEYS = frozenset(
     {
@@ -69,6 +74,8 @@ class IdentityProfile:
     scenario_id: str
     version_line: Pattern[str]
     oracle_source: Path
+    # Grammar the requested expected_provider_version must satisfy.
+    version_grammar: Pattern[str] = STRICT_SEMVER
 
 
 def redact_text(value: str) -> str:
@@ -106,7 +113,13 @@ def atomic_json(path: Path, payload: Any) -> None:
         Path(name).unlink(missing_ok=True)
 
 
-def load_request(path: Path, *, provider: str, profile: str) -> dict[str, Any]:
+def load_request(
+    path: Path,
+    *,
+    provider: str,
+    profile: str,
+    version_grammar: Pattern[str] = STRICT_SEMVER,
+) -> dict[str, Any]:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
@@ -132,8 +145,8 @@ def load_request(path: Path, *, provider: str, profile: str) -> dict[str, Any]:
         raise RequestError("provider_bin must be absolute")
     if not IDENTITY.fullmatch(payload["expected_executable_identity"]):
         raise RequestError("expected_executable_identity must be sha256:<64 lowercase hex>")
-    if not STRICT_SEMVER.fullmatch(payload["expected_provider_version"]):
-        raise RequestError("expected_provider_version must be strict semver")
+    if not version_grammar.fullmatch(payload["expected_provider_version"]):
+        raise RequestError(f"expected_provider_version must match {version_grammar.pattern}")
     if payload["producer_class"] not in {"local_diagnostic", "release_factory"}:
         raise RequestError("producer_class must be local_diagnostic or release_factory")
     run_reference = payload.get("run_reference")
@@ -249,7 +262,12 @@ def run_identity_profile(
     git_sha_fn: Callable[[Path], str | None] = git_sha,
     git_dirty_fn: Callable[[Path], bool] = git_dirty,
 ) -> dict[str, Any]:
-    request = load_request(request_path, provider=profile.provider, profile=profile.profile)
+    request = load_request(
+        request_path,
+        provider=profile.provider,
+        profile=profile.profile,
+        version_grammar=profile.version_grammar,
+    )
     output_root = output_root.expanduser().resolve()
     binary, actual_identity, runner_sha = preflight(
         request,

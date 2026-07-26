@@ -9,6 +9,7 @@ import pytest
 
 from zerg.qa import antigravity_release_identity
 from zerg.qa import claude_release_identity
+from zerg.qa import cursor_release_identity
 from zerg.qa import opencode_release_identity
 from zerg.qa import provider_qualification
 from zerg.qa import provider_release_identity as identity
@@ -19,6 +20,8 @@ PROFILES = {
     "claude": (claude_release_identity.PROFILE, "2.1.198 (Claude Code)", "2.1.198"),
     "opencode": (opencode_release_identity.PROFILE, "1.17.20", "1.17.20"),
     "antigravity": (antigravity_release_identity.PROFILE, "1.0.13", "1.0.13"),
+    # cursor-agent versions by calendar build, not semver.
+    "cursor": (cursor_release_identity.PROFILE, "2026.07.23-e383d2b", "2026.07.23-e383d2b"),
 }
 
 
@@ -239,3 +242,34 @@ def test_release_factory_records_preserve_run_reference(tmp_path: Path) -> None:
     records = json.loads((output / "proof-bundle.json").read_text())["records"]
     assert {record["producer_class"] for record in records} == {"release_factory"}
     assert {record["run_reference"] for record in records} == {"github-actions:run/123/job/456"}
+
+
+def test_calendar_versioned_providers_need_their_own_grammar(tmp_path: Path) -> None:
+    """cursor-agent cannot be onboarded under the semver assumption.
+
+    Its build string 2026.07.23-e383d2b has a zero-padded month, which strict
+    semver rejects, so the request would have been refused before the binary was
+    ever probed. Each identity profile therefore declares its own grammar.
+    """
+
+    assert not identity.STRICT_SEMVER.fullmatch("2026.07.23-e383d2b")
+    assert identity.CALENDAR_BUILD.fullmatch("2026.07.23-e383d2b")
+    assert cursor_release_identity._PROFILE.version_grammar is identity.CALENDAR_BUILD
+
+    # The four semver providers keep the strict default.
+    for module in (claude_release_identity, opencode_release_identity, antigravity_release_identity):
+        assert module._PROFILE.version_grammar is identity.STRICT_SEMVER
+
+    binary, executable_identity, _marker = _fake_binary(tmp_path, "cursor", "2026.07.23-e383d2b")
+    request = _request(tmp_path, provider="cursor", binary=binary, executable_identity=executable_identity)
+    result = provider_qualification.run(request, tmp_path / "out")
+    assert result["valid"] is True
+    assert result["assertions"]["reported_version_matches_expected"] == "pass"
+    assert result["assertions"]["exact_executable_identity_observed"] == "pass"
+
+
+def test_cursor_is_reachable_through_the_shared_qualification_dispatcher() -> None:
+    """Cursor's proof is driven like every other provider's, not by hand."""
+    from zerg.qa.provider_qualification import _PROFILES
+
+    assert ("cursor", cursor_release_identity.PROFILE) in _PROFILES
