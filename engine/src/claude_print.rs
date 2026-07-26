@@ -883,7 +883,7 @@ fn claude_provider_home() -> Result<PathBuf> {
     Ok(PathBuf::from(std::env::var("HOME").context("HOME not set")?).join(".claude"))
 }
 
-fn require_claude_lifecycle_hook() -> Result<()> {
+pub(crate) fn require_claude_lifecycle_hook() -> Result<()> {
     require_claude_lifecycle_hook_at(&claude_provider_home()?)
 }
 
@@ -914,7 +914,7 @@ fn require_claude_lifecycle_hook_at(provider_home: &Path) -> Result<()> {
     });
     if !registered {
         anyhow::bail!(
-            "Claude Console requires the Longhouse SessionStart hook in {}; run `longhouse machine repair`",
+            "Claude Console requires the Longhouse SessionStart hook in {}; run `longhouse claude configure`",
             settings_path.display()
         );
     }

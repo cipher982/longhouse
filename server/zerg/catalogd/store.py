@@ -2784,7 +2784,18 @@ class CatalogStore:
                 turn.error = data.get("error")
                 if receipt is not None:
                     receipt.status = "delivered" if next_state == "active" else ("failed" if next_state == "failed" else receipt.status)
-                    receipt.error_json = json.dumps({"message": data["error"]}) if data.get("error") else None
+                    receipt.error_json = (
+                        json.dumps(
+                            {
+                                "code": data.get("error_code"),
+                                "message": data["error"],
+                            },
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        )
+                        if data.get("error")
+                        else None
+                    )
                     receipt.updated_at = now
                 next_turn_result = None
                 if next_state in {"completed", "failed", "cancelled"}:
@@ -2792,7 +2803,7 @@ class CatalogStore:
                     run = orm.get(LiveSessionRun, turn.run_id)
                     if run is not None:
                         run.ended_at = now
-                        run.exit_status = next_state
+                        run.exit_status = data.get("error_code") or next_state
                     next_turn = (
                         orm.query(LiveConsoleTurn)
                         .filter(LiveConsoleTurn.thread_id == turn.thread_id, LiveConsoleTurn.state == "queued")

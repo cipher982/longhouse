@@ -89,6 +89,7 @@ class ConsoleTurnDispatch:
     turn_id: int | None
     run_id: UUID | None
     state: str
+    error_code: str | None = None
     error: str | None = None
 
 
@@ -98,6 +99,7 @@ class CatalogConsoleTurn:
     run_id: UUID | None
     state: str
     created: bool
+    error_code: str | None = None
     error: str | None = None
 
 
@@ -422,12 +424,14 @@ async def dispatch_next_console_turn(
         _fail_starting_console_turn(
             db,
             turn_id=claimed.turn_id,
+            error_code="adapter_unavailable",
             error=f"Machine Agent does not advertise {capability}",
         )
         return ConsoleTurnDispatch(
             turn_id=claimed.turn_id,
             run_id=claimed.run_id,
             state=SESSION_TURN_STATE_FAILED,
+            error_code="adapter_unavailable",
             error=f"Machine Agent does not advertise {capability}",
         )
 
@@ -469,12 +473,14 @@ async def dispatch_next_console_turn(
         )
     if message.get("ok") is not True:
         detail = message.get("error") if isinstance(message.get("error"), dict) else {}
+        error_code = str(detail.get("code") or "provider_launch_failed")
         error = str(detail.get("message") or response.error or "Console turn dispatch failed")
-        _fail_starting_console_turn(db, turn_id=claimed.turn_id, error=error)
+        _fail_starting_console_turn(db, turn_id=claimed.turn_id, error_code=error_code, error=error)
         return ConsoleTurnDispatch(
             turn_id=claimed.turn_id,
             run_id=claimed.run_id,
             state=SESSION_TURN_STATE_FAILED,
+            error_code=error_code,
             error=error,
         )
 
@@ -533,8 +539,10 @@ async def enqueue_catalog_console_turn(
     provider = str(turn["provider"])
     device_id = str(turn["device_id"])
     capability = f"{provider}.turn_start"
+    error_code = None
     error = None
     if not control.supports(owner_id=owner_id, device_id=device_id, capability=capability):
+        error_code = "adapter_unavailable"
         error = f"Machine Agent does not advertise {capability}"
     else:
         dispatch_wall_ms = int(time.time() * 1000)
@@ -575,13 +583,17 @@ async def enqueue_catalog_console_turn(
             timeout_secs=15,
         )
         response_message = dict(response.message or {})
+        detail = response_message.get("error") if isinstance(response_message.get("error"), dict) else {}
+        response_error_code = str(detail.get("code") or "").strip() or None
         logger.info(
-            "console_latency stage=command_response session=%s turn=%s run=%s request=%s transport_ok=%s command_ms=%d total_ms=%d",
+            "console_latency stage=command_response session=%s turn=%s run=%s request=%s transport_ok=%s command_ok=%s error_code=%s command_ms=%d total_ms=%d",
             session_id,
             turn_id,
             run_id,
             payload["client_request_id"],
             response.transport_ok,
+            response_message.get("ok"),
+            response_error_code,
             int((time.monotonic() - command_started) * 1000),
             int((time.monotonic() - accepted_mono) * 1000),
         )
@@ -594,7 +606,7 @@ async def enqueue_catalog_console_turn(
                 error=str(response.error or "Console turn dispatch outcome is unknown"),
             )
         if response_message.get("ok") is not True:
-            detail = response_message.get("error") if isinstance(response_message.get("error"), dict) else {}
+            error_code = response_error_code or "provider_launch_failed"
             error = str(detail.get("message") or response.error or "Console turn dispatch failed")
 
     state = SESSION_TURN_STATE_FAILED if error else SESSION_TURN_STATE_ACTIVE
@@ -605,6 +617,7 @@ async def enqueue_catalog_console_turn(
                 "turn_id": str(turn_id),
                 "run_id": str(run_id),
                 "state": state,
+                "error_code": error_code,
                 "error": error,
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             }
@@ -623,6 +636,7 @@ async def enqueue_catalog_console_turn(
         run_id=run_id,
         state=state,
         created=bool(result.get("created")),
+        error_code=error_code,
         error=error,
     )
 
@@ -649,8 +663,10 @@ async def dispatch_catalog_claimed_turn(
     if catalog is None:
         raise ConsoleTurnUnavailable("catalog_unavailable", "Console turn catalog is unavailable")
     capability = f"{provider}.turn_start"
+    error_code = None
     error = None
     if not control.supports(owner_id=owner_id, device_id=device_id, capability=capability):
+        error_code = "adapter_unavailable"
         error = f"Machine Agent does not advertise {capability}"
     else:
         payload = {
@@ -687,6 +703,7 @@ async def dispatch_catalog_claimed_turn(
             )
         if message.get("ok") is not True:
             detail = message.get("error") if isinstance(message.get("error"), dict) else {}
+            error_code = str(detail.get("code") or "provider_launch_failed")
             error = str(detail.get("message") or response.error or "Console turn dispatch failed")
     state = SESSION_TURN_STATE_FAILED if error else SESSION_TURN_STATE_ACTIVE
     update_result = await catalog.call(
@@ -696,6 +713,7 @@ async def dispatch_catalog_claimed_turn(
                 "turn_id": str(turn_id),
                 "run_id": str(run_id),
                 "state": state,
+                "error_code": error_code,
                 "error": error,
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             }
@@ -709,21 +727,29 @@ async def dispatch_catalog_claimed_turn(
             client=catalog,
             registry=control,
         )
-    return CatalogConsoleTurn(turn_id=turn_id, run_id=run_id, state=state, created=True, error=error)
+    return CatalogConsoleTurn(
+        turn_id=turn_id,
+        run_id=run_id,
+        state=state,
+        created=True,
+        error_code=error_code,
+        error=error,
+    )
 
 
-def _fail_starting_console_turn(db: Session, *, turn_id: int, error: str) -> None:
+def _fail_starting_console_turn(db: Session, *, turn_id: int, error_code: str, error: str) -> None:
     turn, input_row, run = _load_turn_lifecycle(db, turn_id)
     if turn.state != SESSION_TURN_STATE_STARTING:
         raise ConsoleTurnConflict(f"turn {turn_id} cannot fail from {turn.state}")
     now = datetime.now(timezone.utc)
     turn.state = SESSION_TURN_STATE_FAILED
+    turn.error_code = error_code[:64]
     turn.terminal_at = now
     turn.durable_at = now
     input_row.status = INPUT_STATUS_FAILED
-    input_row.last_error = error[:1000]
+    input_row.last_error = f"{error_code}: {error}"[:1000]
     run.ended_at = now
-    run.exit_status = "dispatch_failed"
+    run.exit_status = error_code[:64]
     db.commit()
 
 

@@ -15,17 +15,17 @@ from zerg.models.agents import SessionTurn
 from zerg.services.agents.kernel_writes import ensure_primary_thread
 from zerg.services.agents.kernel_writes import record_thread_alias
 from zerg.services.agents.kernel_writes import set_thread_execution_target
-from zerg.services.console_turns import begin_console_turn_drain
-from zerg.services.console_turns import claim_next_console_turn
+from zerg.services.console_sessions import create_empty_console_session
 from zerg.services.console_turns import ConsoleTurnConflict
 from zerg.services.console_turns import ConsoleTurnUnavailable
-from zerg.services.console_turns import enqueue_console_turn
-from zerg.services.console_turns import dispatch_next_console_turn
+from zerg.services.console_turns import begin_console_turn_drain
+from zerg.services.console_turns import claim_next_console_turn
 from zerg.services.console_turns import dispatch_catalog_claimed_turn
-from zerg.services.console_turns import mark_console_turn_active
+from zerg.services.console_turns import dispatch_next_console_turn
+from zerg.services.console_turns import enqueue_console_turn
 from zerg.services.console_turns import interrupt_console_turn
+from zerg.services.console_turns import mark_console_turn_active
 from zerg.services.console_turns import settle_console_turn
-from zerg.services.console_sessions import create_empty_console_session
 from zerg.services.session_inputs import INPUT_STATUS_DELIVERED
 from zerg.services.session_inputs import INPUT_STATUS_DELIVERING
 from zerg.services.session_runtime import RuntimeEventIngest
@@ -417,9 +417,61 @@ async def test_dispatch_next_console_turn_fails_typed_when_adapter_is_missing(tm
     result = await dispatch_next_console_turn(db, owner_id=1, thread_id=thread.id, registry=Registry())
 
     assert result.state == SESSION_TURN_STATE_FAILED
+    assert result.error_code == "adapter_unavailable"
     assert "does not advertise" in result.error
-    assert db.get(SessionTurn, queued.turn_id).state == SESSION_TURN_STATE_FAILED
-    assert db.get(SessionRun, result.run_id).ended_at is not None
+    failed_turn = db.get(SessionTurn, queued.turn_id)
+    assert failed_turn.state == SESSION_TURN_STATE_FAILED
+    assert failed_turn.error_code == "adapter_unavailable"
+    failed_input = db.get(SessionInput, queued.input_id)
+    assert failed_input.last_error.startswith("adapter_unavailable: Machine Agent does not advertise")
+    failed_run = db.get(SessionRun, result.run_id)
+    assert failed_run.ended_at is not None
+    assert failed_run.exit_status == "adapter_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_next_console_turn_preserves_engine_failure_code(tmp_path):
+    db = _db(tmp_path)
+    session = _session(db)
+    session.provider = "claude"
+    thread = ensure_primary_thread(db, session)
+    thread.provider = "claude"
+    set_thread_execution_target(thread, device_id="cube", cwd="/tmp/longhouse")
+    db.commit()
+    queued = enqueue_console_turn(
+        db,
+        session=session,
+        owner_id=1,
+        message="Start Claude",
+        client_request_id="request-hook-missing",
+    )
+
+    class Registry:
+        def supports(self, **_kwargs):
+            return True
+
+        async def send_command(self, **_kwargs):
+            return SimpleNamespace(
+                transport_ok=True,
+                message={
+                    "ok": False,
+                    "error": {
+                        "code": "claude_lifecycle_hook_missing",
+                        "message": "run `longhouse claude configure`",
+                    },
+                },
+                error=None,
+            )
+
+    result = await dispatch_next_console_turn(db, owner_id=1, thread_id=thread.id, registry=Registry())
+
+    assert result.state == SESSION_TURN_STATE_FAILED
+    assert result.error_code == "claude_lifecycle_hook_missing"
+    assert db.get(SessionTurn, queued.turn_id).error_code == "claude_lifecycle_hook_missing"
+    assert db.get(SessionRun, result.run_id).exit_status == "claude_lifecycle_hook_missing"
+    assert db.get(SessionInput, queued.input_id).last_error == (
+        "claude_lifecycle_hook_missing: run `longhouse claude configure`"
+    )
 
 
 def test_run_terminal_event_settles_console_turn_after_output_drain(tmp_path):

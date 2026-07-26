@@ -11,7 +11,9 @@ from zerg.catalogd.schema import create_catalog_engine
 from zerg.catalogd.schema import initialize_catalog_schema
 from zerg.catalogd.store import CatalogStore
 from zerg.models.live_store import LiveArchiveOutbox
+from zerg.models.live_store import LiveConsoleTurn
 from zerg.models.live_store import LiveSessionCatalog
+from zerg.models.live_store import LiveSessionInputReceipt
 from zerg.models.live_store import LiveSessionLaunchAttempt
 from zerg.models.live_store import LiveSessionRun
 from zerg.models.live_store import LiveSessionThread
@@ -222,6 +224,27 @@ def test_catalog_console_turns_claim_and_wake_fifo(tmp_path):
     assert settled["next_turn"]["state"] == "starting"
     assert settled["next_turn"]["run_id"]
     assert settled["next_turn"]["resume_provider_thread_id"] == provider_thread_id
+
+    failed = store.update_console_turn(
+        data={
+            "turn_id": settled["next_turn"]["turn_id"],
+            "run_id": settled["next_turn"]["run_id"],
+            "state": "failed",
+            "error_code": "claude_lifecycle_hook_missing",
+            "error": "run `longhouse claude configure`",
+            "updated_at": datetime.now(UTC),
+        }
+    )
+    assert failed["turn"]["state"] == "failed"
+    with Session(engine) as db:
+        failed_turn = db.get(LiveConsoleTurn, settled["next_turn"]["turn_id"])
+        failed_run = db.get(LiveSessionRun, settled["next_turn"]["run_id"])
+        receipt = db.get(LiveSessionInputReceipt, failed_turn.receipt_id)
+        assert failed_run.exit_status == "claude_lifecycle_hook_missing"
+        assert json.loads(receipt.error_json) == {
+            "code": "claude_lifecycle_hook_missing",
+            "message": "run `longhouse claude configure`",
+        }
 
 
 @pytest.mark.asyncio

@@ -1316,6 +1316,10 @@ class CatalogDaemon:
             return self._error(request, "invalid_request", str(exc))
         if data["state"] not in {"active", "completed", "failed", "cancelled"}:
             return self._error(request, "invalid_request", "console turn state is invalid")
+        if data.get("error_code") is not None and (
+            not isinstance(data["error_code"], str) or not data["error_code"].strip() or len(data["error_code"]) > 64
+        ):
+            return self._error(request, "invalid_request", "console turn error_code is invalid")
         assert self._store is not None
         return CatalogRpcResponse(id=request.id, result=await self._run_store(self._store.update_console_turn, data=data))
 
