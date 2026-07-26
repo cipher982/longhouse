@@ -32,6 +32,13 @@ def check(project_root: Path) -> list[str]:
     dogfood = (project_root / "scripts/dev/dogfood-runtime.sh").read_text(encoding="utf-8")
     if "zerg.cli.main" in dogfood or "connect --install" in dogfood or "provider-live publish" in dogfood:
         errors.append("dogfood refresh still invokes the retired Python device CLI")
+    for retired in ("server/zerg/cli/cursor.py", "server/zerg/cli/cursor_helm.py"):
+        if (project_root / retired).exists():
+            errors.append(f"retired Python Cursor device implementation returned: {retired}")
+    cursor_hooks = (project_root / "server/zerg/services/cursor_hooks.py").read_text(encoding="utf-8")
+    for marker in ("_SCRIPT =", "_PERMISSION_SCRIPT =", "longhouse-cursor-hook.py"):
+        if marker in cursor_hooks:
+            errors.append(f"embedded Python Cursor hook implementation returned: {marker}")
     return errors
 
 

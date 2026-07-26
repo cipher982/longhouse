@@ -123,3 +123,29 @@ def test_launch_response_mints_scoped_hook_token_only_for_remote_approve():
         assert resp_bypass.hook_token is None
     finally:
         impl.project_session_kernel_fields = saved
+
+
+def test_cursor_remote_approval_token_does_not_require_coordination_tools():
+    from uuid import uuid4
+
+    from zerg.services.session_chat_impl import _managed_local_launch_response_from_plan
+
+    session_id = uuid4()
+    plan = SimpleNamespace(
+        session_id=session_id,
+        provider="cursor",
+        provider_session_id=str(uuid4()),
+        project="proj",
+        source_name="cinder",
+        source_runner_id=None,
+        managed_session_name="lh-cursor",
+        managed_transport="cursor_helm",
+        loop_mode="assist",
+        permission_mode="remote_approve",
+        attach_command=f"longhouse cursor --resume-session {session_id}",
+    )
+
+    response = _managed_local_launch_response_from_plan(plan, run_id=str(uuid4()), owner_id=42)
+
+    assert response.hook_token and response.hook_token.startswith("zst_")
+    assert response.coordination_token is None

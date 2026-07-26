@@ -774,6 +774,11 @@ enum ClaudeChannelCommands {
 
 #[derive(Subcommand)]
 enum CursorHelmCommands {
+    /// Install the native Cursor lifecycle and permission hooks.
+    ConfigureHooks {
+        #[arg(long)]
+        cursor_dir: Option<PathBuf>,
+    },
     /// Launch stock cursor-agent in a native-owned PTY.
     Launch {
         #[arg(long, default_value = ".")]
@@ -794,8 +799,8 @@ enum CursorHelmCommands {
         cursor_bin: Option<String>,
         #[arg(long)]
         config_dir: Option<PathBuf>,
-        #[arg(long, default_value = "auto_approve")]
-        permission_mode: String,
+        #[arg(long, alias = "permission-policy")]
+        permission_mode: Option<String>,
         #[arg(long)]
         verbose: bool,
         #[arg(long)]
@@ -1199,6 +1204,7 @@ fn command_name(command: &Commands) -> &'static str {
         Commands::CursorLifecycleHook { .. } => "cursor-lifecycle-hook",
         Commands::CursorPermissionHook { .. } => "cursor-permission-hook",
         Commands::CursorHelm { command } => match command {
+            CursorHelmCommands::ConfigureHooks { .. } => "cursor-helm-configure-hooks",
             CursorHelmCommands::Launch { .. } => "cursor-helm-launch",
             CursorHelmCommands::Stop { .. } => "cursor-helm-stop",
             CursorHelmCommands::Send { .. } => "cursor-helm-send",
@@ -1745,6 +1751,10 @@ fn main() -> anyhow::Result<()> {
         Commands::CursorHelm { command } => {
             let rt = tokio::runtime::Runtime::new()?;
             match command {
+                CursorHelmCommands::ConfigureHooks { cursor_dir } => {
+                    let path = cursor_hooks::configure(cursor_dir)?;
+                    println!("Configured native Cursor hooks in {}", path.display());
+                }
                 CursorHelmCommands::Launch {
                     cwd,
                     project,
@@ -1760,21 +1770,25 @@ fn main() -> anyhow::Result<()> {
                     open,
                     cursor_args,
                 } => {
-                    cursor_helm_launcher::launch(cursor_helm_launcher::LaunchConfig {
-                        cwd,
-                        project,
-                        name,
-                        loop_mode,
-                        url,
-                        token,
-                        resume_session,
-                        cursor_bin,
-                        config_dir,
-                        permission_mode,
-                        verbose,
-                        open,
-                        cursor_args,
-                    })?;
+                    let exit_code =
+                        cursor_helm_launcher::launch(cursor_helm_launcher::LaunchConfig {
+                            cwd,
+                            project,
+                            name,
+                            loop_mode,
+                            url,
+                            token,
+                            resume_session,
+                            cursor_bin,
+                            config_dir,
+                            permission_mode,
+                            verbose,
+                            open,
+                            cursor_args,
+                        })?;
+                    if exit_code != 0 {
+                        std::process::exit(exit_code);
+                    }
                 }
                 CursorHelmCommands::Stop {
                     session_id,

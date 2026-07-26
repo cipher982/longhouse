@@ -4,9 +4,13 @@ hook on PreToolUse, dormant by default, and idempotently across re-runs."""
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 
 from zerg.services.shipper.hooks import install_hooks
+
+TRUE_BIN = shutil.which("true")
+assert TRUE_BIN is not None
 
 
 def _pre_tool_use_commands(claude_dir: Path) -> list[str]:
@@ -20,7 +24,7 @@ def _pre_tool_use_commands(claude_dir: Path) -> list[str]:
 
 def test_install_writes_permission_gate_and_registers_pretooluse(tmp_path):
     claude_dir = tmp_path / ".claude"
-    install_hooks("http://localhost:8080", token="zdt_x", claude_dir=str(claude_dir), engine_path="/bin/true")
+    install_hooks("http://localhost:8080", token="zdt_x", claude_dir=str(claude_dir), engine_path=TRUE_BIN)
 
     gate = claude_dir / "hooks" / "longhouse-permission-gate.py"
     assert gate.is_file(), "permission gate script must be installed"
@@ -34,8 +38,8 @@ def test_install_writes_permission_gate_and_registers_pretooluse(tmp_path):
 
 def test_install_is_idempotent_keeps_both_pretooluse_hooks(tmp_path):
     claude_dir = tmp_path / ".claude"
-    install_hooks("http://localhost:8080", token="zdt_x", claude_dir=str(claude_dir), engine_path="/bin/true")
-    install_hooks("http://localhost:8080", token="zdt_x", claude_dir=str(claude_dir), engine_path="/bin/true")
+    install_hooks("http://localhost:8080", token="zdt_x", claude_dir=str(claude_dir), engine_path=TRUE_BIN)
+    install_hooks("http://localhost:8080", token="zdt_x", claude_dir=str(claude_dir), engine_path=TRUE_BIN)
 
     cmds = _pre_tool_use_commands(claude_dir)
     lifecycle = [c for c in cmds if "longhouse-hook.sh" in c]

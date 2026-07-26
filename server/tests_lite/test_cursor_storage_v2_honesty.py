@@ -28,13 +28,10 @@ def test_cursor_contract_advertises_helm_and_native_console_turns():
     assert "cursor.resume_run_once" not in contract.machine_control_supports
 
 
-def test_cursor_cli_and_helm_do_not_produce_legacy_ingest_payloads():
+def test_python_cursor_cli_and_helm_are_removed():
     repo_root = Path(__file__).resolve().parents[2]
     for relative_path in (
         "server/zerg/cli/cursor.py",
         "server/zerg/cli/cursor_helm.py",
-        "server/zerg/services/cursor_transcript.py",
     ):
-        source = (repo_root / relative_path).read_text(encoding="utf-8")
-        assert "/api/agents/ingest" not in source
-        assert "AgentsStore" not in source
+        assert not (repo_root / relative_path).exists()

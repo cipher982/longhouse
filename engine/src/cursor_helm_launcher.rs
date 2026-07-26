@@ -33,7 +33,7 @@ pub struct LaunchConfig {
     pub resume_session: Option<String>,
     pub cursor_bin: Option<String>,
     pub config_dir: Option<PathBuf>,
-    pub permission_mode: String,
+    pub permission_mode: Option<String>,
     pub verbose: bool,
     pub open: bool,
     pub cursor_args: Vec<String>,
@@ -86,7 +86,33 @@ fn phase(dir: &Path, session_id: &str, conversation: &str, launch_id: &str) -> O
         && value.get("launch_id")?.as_str()? == launch_id)
         .then_some(value)
 }
-fn read_claim(dir: &Path, session_id: &str) -> anyhow::Result<String> {
+struct ResumeClaim {
+    conversation: String,
+    permission_mode: String,
+}
+
+fn normalize_permission_mode(value: &str) -> anyhow::Result<String> {
+    match value.trim().to_ascii_lowercase().replace('-', "_").as_str() {
+        "auto_approve" => Ok("auto_approve".into()),
+        "provider_local" | "bypass" => Ok("provider_local".into()),
+        "remote_approve" | "remote_human" => Ok("remote_human".into()),
+        _ => anyhow::bail!("invalid --permission-mode"),
+    }
+}
+
+fn permission_wire_mode(value: &str) -> &'static str {
+    if value == "remote_human" {
+        "remote_approve"
+    } else {
+        "bypass"
+    }
+}
+
+fn read_claim(
+    dir: &Path,
+    session_id: &str,
+    requested_permission_mode: Option<&str>,
+) -> anyhow::Result<ResumeClaim> {
     Uuid::parse_str(session_id).context("--resume-session must be a Longhouse session UUID")?;
     let value: Value = serde_json::from_slice(&fs::read(
         dir.join("binding-probes")
@@ -99,12 +125,118 @@ fn read_claim(dir: &Path, session_id: &str) -> anyhow::Result<String> {
     {
         anyhow::bail!("no observed native Cursor identity claim exists for this Longhouse session");
     }
-    value
+    let conversation = value
         .get("conversation_uuid")
         .and_then(Value::as_str)
         .filter(|s| Uuid::parse_str(s).is_ok())
         .map(str::to_owned)
-        .context("no valid Cursor identity claim exists for this Longhouse session")
+        .context("no valid Cursor identity claim exists for this Longhouse session")?;
+    let recorded = match value.get("permission_policy").and_then(Value::as_str) {
+        Some(value) => normalize_permission_mode(value)?,
+        None => "provider_local".into(),
+    };
+    if let Some(requested) = requested_permission_mode {
+        let requested = normalize_permission_mode(requested)?;
+        if requested != recorded {
+            anyhow::bail!("resume policy conflict: session uses {recorded}, requested {requested}");
+        }
+    }
+    Ok(ResumeClaim {
+        conversation,
+        permission_mode: recorded,
+    })
+}
+
+fn claim_path(dir: &Path, session_id: &str) -> PathBuf {
+    dir.join("binding-probes")
+        .join(format!("{session_id}.json"))
+}
+
+fn claim_backup_path(dir: &Path, session_id: &str) -> PathBuf {
+    dir.join("binding-probes")
+        .join(format!("{session_id}.observed-backup.json"))
+}
+
+fn write_pending_claim(
+    dir: &Path,
+    session_id: &str,
+    conversation: &str,
+    launch_id: &str,
+    permission_mode: &str,
+    registration: Option<&Registration>,
+) -> anyhow::Result<()> {
+    let target = claim_path(dir, session_id);
+    let backup = claim_backup_path(dir, session_id);
+    if fs::read(&target)
+        .ok()
+        .and_then(|raw| serde_json::from_slice::<Value>(&raw).ok())
+        .and_then(|value| {
+            value
+                .get("status")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        })
+        .as_deref()
+        == Some("observed")
+    {
+        let current: Value = serde_json::from_slice(&fs::read(&target)?)?;
+        write_json(&backup, &current)?;
+    }
+    write_json(
+        &target,
+        &json!({
+            "schema_version": 2,
+            "provider": "cursor",
+            "status": "pending",
+            "session_id": session_id,
+            "conversation_uuid": conversation,
+            "launch_id": launch_id,
+            "permission_policy": permission_mode,
+            "run_id": registration.map(|value| value.run_id.as_str()),
+            "expires_at": (Utc::now() + chrono::Duration::minutes(10)).to_rfc3339(),
+        }),
+    )
+}
+
+fn rollback_pending_claim(dir: &Path, session_id: &str, launch_id: &str) {
+    let target = claim_path(dir, session_id);
+    let backup = claim_backup_path(dir, session_id);
+    let pending_matches = fs::read(&target)
+        .ok()
+        .and_then(|raw| serde_json::from_slice::<Value>(&raw).ok())
+        .is_some_and(|claim| {
+            claim.get("status").and_then(Value::as_str) == Some("pending")
+                && claim.get("launch_id").and_then(Value::as_str) == Some(launch_id)
+        });
+    if !pending_matches {
+        return;
+    }
+    let observed_backup = fs::read(&backup)
+        .ok()
+        .and_then(|raw| serde_json::from_slice::<Value>(&raw).ok())
+        .is_some_and(|claim| claim.get("status").and_then(Value::as_str) == Some("observed"));
+    if observed_backup {
+        let _ = fs::rename(&backup, &target);
+    } else {
+        let _ = fs::remove_file(&target);
+        let _ = fs::remove_file(&backup);
+    }
+}
+
+struct LaunchArtifacts {
+    dir: PathBuf,
+    socket: PathBuf,
+    session_id: String,
+    launch_id: String,
+}
+
+impl Drop for LaunchArtifacts {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.socket);
+        let _ = fs::remove_file(self.dir.join(format!("{}.json", self.session_id)));
+        let _ = fs::remove_file(self.dir.join(format!("{}.phase.json", self.session_id)));
+        rollback_pending_claim(&self.dir, &self.session_id, &self.launch_id);
+    }
 }
 fn resolve_bin(explicit: Option<String>) -> anyhow::Result<String> {
     let value = explicit
@@ -162,11 +294,26 @@ impl Drop for Terminal {
     }
 }
 fn sync_winsize(master: RawFd) {
+    copy_winsize(1, master);
+}
+fn copy_winsize(source: RawFd, target: RawFd) -> bool {
     unsafe {
         let mut size: libc::winsize = std::mem::zeroed();
-        if libc::ioctl(1, libc::TIOCGWINSZ, &mut size) == 0 {
-            let _ = libc::ioctl(master, libc::TIOCSWINSZ, &size);
+        if libc::ioctl(source, libc::TIOCGWINSZ, &mut size) == 0 {
+            return libc::ioctl(target, libc::TIOCSWINSZ, &size) == 0;
         }
+    }
+    false
+}
+fn terminal_winsize(fd: RawFd) -> libc::winsize {
+    unsafe {
+        let mut size: libc::winsize = std::mem::zeroed();
+        if libc::ioctl(fd, libc::TIOCGWINSZ, &mut size) != 0 || size.ws_row == 0 || size.ws_col == 0
+        {
+            size.ws_row = 24;
+            size.ws_col = 80;
+        }
+        size
     }
 }
 fn write_all(fd: RawFd, mut bytes: &[u8]) -> std::io::Result<()> {
@@ -186,11 +333,16 @@ fn write_all(fd: RawFd, mut bytes: &[u8]) -> std::io::Result<()> {
 }
 #[derive(serde::Deserialize)]
 struct Registration {
-    session_id: Option<String>,
-    run_id: Option<String>,
+    session_id: String,
+    run_id: String,
     hook_token: Option<String>,
 }
-fn register(config: &LaunchConfig, cwd: &Path, session_id: &str) -> Option<Registration> {
+fn register(
+    config: &LaunchConfig,
+    cwd: &Path,
+    session_id: &str,
+    permission_mode: &str,
+) -> Option<Registration> {
     let machine = home(config.config_dir.as_deref()).ok()?.join("machine");
     let state: Value = fs::read(machine.join("state.json"))
         .ok()
@@ -217,7 +369,7 @@ fn register(config: &LaunchConfig, cwd: &Path, session_id: &str) -> Option<Regis
         .filter(|value| !value.trim().is_empty())
         .map(str::to_owned)
         .unwrap_or_else(|| std::env::var("HOSTNAME").unwrap_or_else(|_| "unknown".into()));
-    let payload = json!({"cwd":cwd,"provider":"cursor","project":config.project,"display_name":config.name,"loop_mode":config.loop_mode,"permission_mode":config.permission_mode,"session_id":session_id,"machine_name":machine_name});
+    let payload = json!({"cwd":cwd,"provider":"cursor","project":config.project,"display_name":config.name,"loop_mode":config.loop_mode,"permission_mode":permission_wire_mode(permission_mode),"session_id":session_id,"machine_name":machine_name});
     tokio::runtime::Runtime::new()
         .ok()?
         .block_on(async {
@@ -238,7 +390,7 @@ fn register(config: &LaunchConfig, cwd: &Path, session_id: &str) -> Option<Regis
                 .await
                 .ok()
         })
-        .filter(|value| value.session_id.as_deref().unwrap_or(session_id) == session_id)
+        .filter(|value| value.session_id == session_id && !value.run_id.trim().is_empty())
 }
 fn enqueue_terminal_event(config: &LaunchConfig, session_id: &str, exit_code: i32) {
     let Ok(root) = home(config.config_dir.as_deref()) else {
@@ -294,7 +446,7 @@ fn serve(
                 return response(
                     &mut stream,
                     json!({"ok":false,"error":{"code":"bad_request","message":"incomplete request"}}),
-                )
+                );
             }
         }
     }
@@ -394,7 +546,7 @@ fn serve(
         }
         Some("terminate") => {
             unsafe {
-                libc::kill(child, libc::SIGTERM);
+                libc::kill(child, libc::SIGKILL);
             }
             stop.store(true, Ordering::Relaxed);
             response(
@@ -413,15 +565,9 @@ fn serve(
     }
 }
 
-pub fn launch(config: LaunchConfig) -> anyhow::Result<()> {
+pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
     if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
         anyhow::bail!("longhouse cursor Helm needs an interactive terminal");
-    }
-    if !matches!(
-        config.permission_mode.as_str(),
-        "auto_approve" | "provider_local" | "remote_approve" | "remote_human"
-    ) {
-        anyhow::bail!("invalid --permission-mode");
     }
     let cwd = fs::canonicalize(&config.cwd)
         .with_context(|| format!("resolve {}", config.cwd.display()))?;
@@ -431,10 +577,14 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<()> {
         .resume_session
         .clone()
         .unwrap_or_else(|| Uuid::new_v4().to_string());
-    let conversation = if config.resume_session.is_some() {
-        read_claim(&dir, &session_id)?
+    let (conversation, permission_mode) = if config.resume_session.is_some() {
+        let claim = read_claim(&dir, &session_id, config.permission_mode.as_deref())?;
+        (claim.conversation, claim.permission_mode)
     } else {
-        cursor_chat(&bin, &cwd)?
+        (
+            cursor_chat(&bin, &cwd)?,
+            normalize_permission_mode(config.permission_mode.as_deref().unwrap_or("auto_approve"))?,
+        )
     };
     fs::create_dir_all(&dir)?;
     let lock = fs::OpenOptions::new()
@@ -448,7 +598,7 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<()> {
     let launch_id = Uuid::new_v4().to_string();
     // Runtime/control failure is deliberately soft. Permission authority is not:
     // a remote approval session never starts without a hook token to fail closed.
-    let registered = register(&config, &cwd, &session_id);
+    let registered = register(&config, &cwd, &session_id, &permission_mode);
     let hook_url = config.url.clone().or_else(|| {
         home(config.config_dir.as_deref()).ok().and_then(|root| {
             fs::read(root.join("machine/state.json"))
@@ -471,30 +621,43 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<()> {
             );
         }
     }
-    if matches!(
-        config.permission_mode.as_str(),
-        "remote_approve" | "remote_human"
-    ) && registered
-        .as_ref()
-        .and_then(|value| value.hook_token.as_deref())
-        .filter(|value| !value.is_empty())
-        .is_none()
+    if matches!(permission_mode.as_str(), "remote_human")
+        && registered
+            .as_ref()
+            .and_then(|value| value.hook_token.as_deref())
+            .filter(|value| !value.is_empty())
+            .is_none()
     {
         anyhow::bail!("Cursor remote approval could not be enforced; Cursor was not launched");
     }
-    write_json(
-        &dir.join("binding-probes")
-            .join(format!("{session_id}.json")),
-        &json!({"schema_version":2,"provider":"cursor","status":"pending","session_id":session_id,"conversation_uuid":conversation,"launch_id":launch_id,"permission_policy":config.permission_mode,"expires_at":(Utc::now()+chrono::Duration::minutes(10)).to_rfc3339()}),
+    write_pending_claim(
+        &dir,
+        &session_id,
+        &conversation,
+        &launch_id,
+        &permission_mode,
+        registered.as_ref(),
     )?;
-    let socket = socket_path(&session_id)?;
+    let socket = match socket_path(&session_id) {
+        Ok(socket) => socket,
+        Err(error) => {
+            rollback_pending_claim(&dir, &session_id, &launch_id);
+            return Err(error);
+        }
+    };
+    let _artifacts = LaunchArtifacts {
+        dir: dir.clone(),
+        socket: socket.clone(),
+        session_id: session_id.clone(),
+        launch_id: launch_id.clone(),
+    };
     let _ = fs::remove_file(&socket);
     let listener = UnixListener::bind(&socket)?;
     fs::set_permissions(&socket, std::os::unix::fs::PermissionsExt::from_mode(0o600))?;
     // Build all exec data before forkpty. The parent is multi-threaded by this
     // point, so the child may only call async-signal-safe libc functions.
     let mut argv = vec![bin.clone(), "--resume".into(), conversation.clone()];
-    if config.permission_mode == "auto_approve" {
+    if permission_mode == "auto_approve" {
         argv.extend(["--force".into(), "--approve-mcps".into()]);
     }
     argv.extend(config.cursor_args.clone());
@@ -528,16 +691,46 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<()> {
         ),
         (
             b"LONGHOUSE_PERMISSION_HOOK_ENABLED".to_vec(),
-            if matches!(
-                config.permission_mode.as_str(),
-                "remote_approve" | "remote_human"
-            ) {
+            if matches!(permission_mode.as_str(), "remote_human") {
                 b"1".to_vec()
             } else {
                 b"0".to_vec()
             },
         ),
     ]);
+    if registered.is_some() {
+        env_pairs.push((
+            b"LONGHOUSE_CURSOR_REGISTRATION_READY".to_vec(),
+            b"1".to_vec(),
+        ));
+    }
+    for key in [
+        b"CI".as_slice(),
+        b"CONTINUOUS_INTEGRATION",
+        b"GITHUB_ACTIONS",
+        b"GITLAB_CI",
+        b"CIRCLECI",
+        b"TRAVIS",
+        b"BUILDKITE",
+        b"TEAMCITY_VERSION",
+        b"BUILD_NUMBER",
+        b"BUILD_ID",
+        b"BITBUCKET_BUILD_NUMBER",
+        b"JENKINS_URL",
+    ] {
+        env_pairs.retain(|(name, _)| name.as_slice() != key);
+    }
+    let mut size = terminal_winsize(1);
+    env_pairs.retain(|(name, _)| !matches!(name.as_slice(), b"LINES" | b"COLUMNS"));
+    env_pairs.push((b"LINES".to_vec(), size.ws_row.to_string().into_bytes()));
+    env_pairs.push((b"COLUMNS".to_vec(), size.ws_col.to_string().into_bytes()));
+    let term_is_usable = env_pairs.iter().any(|(name, value)| {
+        name.as_slice() == b"TERM" && !value.is_empty() && value.as_slice() != b"dumb"
+    });
+    if !term_is_usable {
+        env_pairs.retain(|(name, _)| name.as_slice() != b"TERM");
+        env_pairs.push((b"TERM".to_vec(), b"xterm-256color".to_vec()));
+    }
     if let Some(url) = hook_url.as_deref() {
         env_pairs.push((b"LONGHOUSE_HOOK_URL".to_vec(), url.as_bytes().to_vec()));
     }
@@ -569,7 +762,7 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<()> {
             &mut master,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
-            std::ptr::null_mut(),
+            &mut size,
         )
     };
     if pid < 0 {
@@ -582,22 +775,37 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<()> {
             libc::_exit(127)
         }
     }
-    let launcher_pid = std::process::id();
-    let launcher_start = process_start_time(launcher_pid as libc::pid_t)
-        .context("could not capture Cursor Helm launcher process identity")?;
-    let cursor_start =
-        process_start_time(pid).context("could not capture cursor-agent process identity")?;
-    let now = Utc::now().to_rfc3339();
-    write_json(
-        &dir.join(format!("{session_id}.json")),
-        &json!({"schema_version":1,"session_id":session_id,"run_id":registered.as_ref().and_then(|value| value.run_id.as_deref()),"connection_id":Uuid::new_v4().to_string(),"lease_generation":Uuid::new_v4().to_string(),"provider":"cursor","control_plane":"cursor_helm","socket_path":socket,"launcher_pid":launcher_pid,"launcher_process_start_time":launcher_start,"cursor_pid":pid,"cursor_process_start_time":cursor_start,"cwd":cwd,"ready":true,"registration":if registered.is_some() {"registered"} else {"degraded"},"started_at":now,"updated_at":now}),
-    )?;
-    let terminal = Terminal(0, raw(0)?);
     let stop = Arc::new(AtomicBool::new(false));
     let resized = Arc::new(AtomicBool::new(true));
-    signal_hook::flag::register(libc::SIGWINCH, resized.clone())?;
-    signal_hook::flag::register(libc::SIGTERM, stop.clone())?;
-    signal_hook::flag::register(libc::SIGHUP, stop.clone())?;
+    let setup = (|| -> anyhow::Result<Terminal> {
+        let launcher_pid = std::process::id();
+        let launcher_start = process_start_time(launcher_pid as libc::pid_t)
+            .context("could not capture Cursor Helm launcher process identity")?;
+        let cursor_start =
+            process_start_time(pid).context("could not capture cursor-agent process identity")?;
+        let now = Utc::now().to_rfc3339();
+        write_json(
+            &dir.join(format!("{session_id}.json")),
+            &json!({"schema_version":1,"session_id":session_id,"run_id":registered.as_ref().map(|value| value.run_id.as_str()),"connection_id":Uuid::new_v4().to_string(),"lease_generation":Uuid::new_v4().to_string(),"provider":"cursor","control_plane":"cursor_helm","socket_path":socket,"launcher_pid":launcher_pid,"launcher_process_start_time":launcher_start,"cursor_pid":pid,"cursor_process_start_time":cursor_start,"cwd":cwd,"ready":true,"registration":if registered.is_some() {"registered"} else {"degraded"},"started_at":now,"updated_at":now}),
+        )?;
+        let terminal = Terminal(0, raw(0)?);
+        signal_hook::flag::register(libc::SIGWINCH, resized.clone())?;
+        signal_hook::flag::register(libc::SIGTERM, stop.clone())?;
+        signal_hook::flag::register(libc::SIGHUP, stop.clone())?;
+        listener.set_nonblocking(true)?;
+        Ok(terminal)
+    })();
+    let terminal = match setup {
+        Ok(terminal) => terminal,
+        Err(error) => {
+            unsafe {
+                libc::kill(pid, libc::SIGKILL);
+                libc::waitpid(pid, std::ptr::null_mut(), 0);
+                libc::close(master);
+            }
+            return Err(error);
+        }
+    };
     sync_winsize(master);
     let socket_stop = stop.clone();
     let guard = Arc::new(Mutex::new(()));
@@ -606,7 +814,6 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<()> {
     let server_session = session_id.clone();
     let server_conversation = conversation.clone();
     let server_launch = launch_id.clone();
-    listener.set_nonblocking(true)?;
     let server = thread::spawn(move || {
         while !socket_stop.load(Ordering::Relaxed) {
             match listener.accept() {
@@ -674,13 +881,32 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<()> {
                 break;
             }
         }
+        if fds[1].revents & (libc::POLLHUP | libc::POLLERR | libc::POLLNVAL) != 0 {
+            break;
+        }
     }
+    let launcher_requested_stop = stop.load(Ordering::Relaxed);
     drop(terminal);
     stop.store(true, Ordering::Relaxed);
     let _ = server.join();
     let exit_code = unsafe {
         let mut status = 0;
-        libc::waitpid(pid, &mut status, 0);
+        if launcher_requested_stop {
+            let mut observed = libc::waitpid(pid, &mut status, libc::WNOHANG);
+            for _ in 0..25 {
+                if observed != 0 {
+                    break;
+                }
+                thread::sleep(std::time::Duration::from_millis(10));
+                observed = libc::waitpid(pid, &mut status, libc::WNOHANG);
+            }
+            if observed == 0 {
+                libc::kill(pid, libc::SIGKILL);
+                libc::waitpid(pid, &mut status, 0);
+            }
+        } else {
+            libc::waitpid(pid, &mut status, 0);
+        }
         if libc::WIFEXITED(status) {
             libc::WEXITSTATUS(status)
         } else {
@@ -688,9 +914,9 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<()> {
         }
     };
     enqueue_terminal_event(&config, &session_id, exit_code);
-    let _ = fs::remove_file(&socket);
-    let _ = fs::remove_file(dir.join(format!("{session_id}.json")));
-    let _ = fs::remove_file(dir.join(format!("{session_id}.phase.json")));
+    unsafe {
+        libc::close(master);
+    }
     if config.open {
         if let Some(url) = hook_url.as_deref() {
             println!(
@@ -699,7 +925,7 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<()> {
             );
         }
     }
-    Ok(())
+    Ok(exit_code)
 }
 
 fn fs2_lock(file: &fs::File) -> std::io::Result<()> {
@@ -712,6 +938,286 @@ fn fs2_lock(file: &fs::File) -> std::io::Result<()> {
             Ok(())
         } else {
             Err(std::io::Error::last_os_error())
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::fd::FromRawFd;
+
+    fn serve_request(
+        dir: &Path,
+        master: RawFd,
+        child: libc::pid_t,
+        request: Value,
+    ) -> (Value, Arc<AtomicBool>) {
+        let (mut client, server) = UnixStream::pair().unwrap();
+        client.write_all(format!("{request}\n").as_bytes()).unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        serve(
+            server,
+            master,
+            child,
+            &stop,
+            &Mutex::new(()),
+            dir,
+            "session-id",
+            "conversation-id",
+            "launch-id",
+        );
+        let mut response = String::new();
+        client.read_to_string(&mut response).unwrap();
+        (serde_json::from_str(response.trim()).unwrap(), stop)
+    }
+
+    fn observed_claim(dir: &Path, policy: Option<&str>) -> String {
+        let session_id = Uuid::new_v4().to_string();
+        let mut claim = json!({
+            "schema_version": 2,
+            "provider": "cursor",
+            "status": "observed",
+            "session_id": session_id,
+            "conversation_uuid": Uuid::new_v4().to_string(),
+            "hook_observed_at": Utc::now().to_rfc3339(),
+        });
+        if let Some(policy) = policy {
+            claim["permission_policy"] = json!(policy);
+        }
+        write_json(&claim_path(dir, &session_id), &claim).unwrap();
+        session_id
+    }
+
+    #[test]
+    fn resume_retains_recorded_policy_and_rejects_conflicts() {
+        let root = tempfile::tempdir().unwrap();
+        let session_id = observed_claim(root.path(), Some("remote_human"));
+        let claim = read_claim(root.path(), &session_id, None).unwrap();
+        assert_eq!(claim.permission_mode, "remote_human");
+        assert!(read_claim(root.path(), &session_id, Some("auto_approve")).is_err());
+        assert!(read_claim(root.path(), &session_id, Some("remote_approve")).is_ok());
+    }
+
+    #[test]
+    fn legacy_resume_defaults_to_provider_local() {
+        let root = tempfile::tempdir().unwrap();
+        let session_id = observed_claim(root.path(), None);
+        assert_eq!(
+            read_claim(root.path(), &session_id, None)
+                .unwrap()
+                .permission_mode,
+            "provider_local"
+        );
+    }
+
+    #[test]
+    fn failed_resume_restores_observed_claim_and_new_launch_removes_pending() {
+        let root = tempfile::tempdir().unwrap();
+        let session_id = observed_claim(root.path(), Some("provider_local"));
+        let original = fs::read(claim_path(root.path(), &session_id)).unwrap();
+        write_pending_claim(
+            root.path(),
+            &session_id,
+            &Uuid::new_v4().to_string(),
+            "resume-launch",
+            "provider_local",
+            None,
+        )
+        .unwrap();
+        rollback_pending_claim(root.path(), &session_id, "resume-launch");
+        assert_eq!(
+            fs::read(claim_path(root.path(), &session_id)).unwrap(),
+            original
+        );
+
+        let new_session = Uuid::new_v4().to_string();
+        write_pending_claim(
+            root.path(),
+            &new_session,
+            &Uuid::new_v4().to_string(),
+            "new-launch",
+            "auto_approve",
+            None,
+        )
+        .unwrap();
+        rollback_pending_claim(root.path(), &new_session, "new-launch");
+        assert!(!claim_path(root.path(), &new_session).exists());
+    }
+
+    #[test]
+    fn socket_rejects_malformed_and_stale_send_then_relays_idle_send() {
+        let root = tempfile::tempdir().unwrap();
+        let mut pipe = [0; 2];
+        assert_eq!(unsafe { libc::pipe(pipe.as_mut_ptr()) }, 0);
+        let (mut client, server) = UnixStream::pair().unwrap();
+        client.write_all(b"not-json\n").unwrap();
+        let stop = AtomicBool::new(false);
+        serve(
+            server,
+            pipe[1],
+            -1,
+            &stop,
+            &Mutex::new(()),
+            root.path(),
+            "session-id",
+            "conversation-id",
+            "launch-id",
+        );
+        let mut malformed = String::new();
+        client.read_to_string(&mut malformed).unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(malformed.trim()).unwrap()["error"]["code"],
+            "bad_request"
+        );
+
+        let (stale, _) = serve_request(
+            root.path(),
+            pipe[1],
+            -1,
+            json!({"kind":"send","text":"hello"}),
+        );
+        assert_eq!(stale["error"]["code"], "provider_not_idle");
+        write_json(
+            &root.path().join("session-id.phase.json"),
+            &json!({"session_id":"session-id","conversation_id":"conversation-id","launch_id":"launch-id","phase":"idle"}),
+        )
+        .unwrap();
+        let (sent, _) = serve_request(
+            root.path(),
+            pipe[1],
+            -1,
+            json!({"kind":"send","text":"hello"}),
+        );
+        assert_eq!(sent["ok"], true);
+        unsafe { libc::close(pipe[1]) };
+        let mut reader = unsafe { fs::File::from_raw_fd(pipe[0]) };
+        let mut relayed = Vec::new();
+        reader.read_to_end(&mut relayed).unwrap();
+        assert_eq!(relayed, b"hello\x1b\r");
+    }
+
+    #[test]
+    fn socket_interrupt_checks_generation_and_terminate_kills_child() {
+        let root = tempfile::tempdir().unwrap();
+        let mut pipe = [0; 2];
+        assert_eq!(unsafe { libc::pipe(pipe.as_mut_ptr()) }, 0);
+        write_json(
+            &root.path().join("session-id.phase.json"),
+            &json!({"session_id":"session-id","conversation_id":"conversation-id","launch_id":"launch-id","phase":"active","generation_id":"turn-1"}),
+        )
+        .unwrap();
+        let (mismatch, _) = serve_request(
+            root.path(),
+            pipe[1],
+            -1,
+            json!({"kind":"interrupt","generation_id":"other"}),
+        );
+        assert_eq!(mismatch["error"]["code"], "provider_generation_mismatch");
+        let (interrupted, _) = serve_request(
+            root.path(),
+            pipe[1],
+            -1,
+            json!({"kind":"interrupt","generation_id":"turn-1"}),
+        );
+        assert_eq!(interrupted["ok"], true);
+        unsafe { libc::close(pipe[1]) };
+        let mut reader = unsafe { fs::File::from_raw_fd(pipe[0]) };
+        let mut relayed = Vec::new();
+        reader.read_to_end(&mut relayed).unwrap();
+        assert_eq!(relayed, b"\x03");
+
+        let child = unsafe { libc::fork() };
+        assert!(child >= 0);
+        if child == 0 {
+            unsafe { libc::pause() };
+            unsafe { libc::_exit(0) };
+        }
+        let (terminated, stop) = serve_request(root.path(), -1, child, json!({"kind":"terminate"}));
+        assert_eq!(terminated["ok"], true);
+        assert!(stop.load(Ordering::Relaxed));
+        let mut status = 0;
+        assert_eq!(unsafe { libc::waitpid(child, &mut status, 0) }, child);
+        assert!(libc::WIFSIGNALED(status));
+        assert_eq!(libc::WTERMSIG(status), libc::SIGKILL);
+    }
+
+    #[test]
+    fn launch_lock_resize_and_terminal_restoration_are_real_os_contracts() {
+        let root = tempfile::tempdir().unwrap();
+        let lock_path = root.path().join("launch.lock");
+        let first = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .open(&lock_path)
+            .unwrap();
+        let second = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&lock_path)
+            .unwrap();
+        fs2_lock(&first).unwrap();
+        assert!(fs2_lock(&second).is_err());
+
+        let mut source_master = 0;
+        let mut source_slave = 0;
+        let mut target_master = 0;
+        let mut target_slave = 0;
+        assert_eq!(
+            unsafe {
+                libc::openpty(
+                    &mut source_master,
+                    &mut source_slave,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                )
+            },
+            0
+        );
+        assert_eq!(
+            unsafe {
+                libc::openpty(
+                    &mut target_master,
+                    &mut target_slave,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                )
+            },
+            0
+        );
+        let expected = libc::winsize {
+            ws_row: 41,
+            ws_col: 133,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        };
+        assert_eq!(
+            unsafe { libc::ioctl(source_slave, libc::TIOCSWINSZ, &expected) },
+            0
+        );
+        assert!(copy_winsize(source_slave, target_slave));
+        let actual = terminal_winsize(target_slave);
+        assert_eq!((actual.ws_row, actual.ws_col), (41, 133));
+
+        let mut before: libc::termios = unsafe { std::mem::zeroed() };
+        assert_eq!(unsafe { libc::tcgetattr(target_slave, &mut before) }, 0);
+        let guard = Terminal(target_slave, raw(target_slave).unwrap());
+        drop(guard);
+        let mut after: libc::termios = unsafe { std::mem::zeroed() };
+        assert_eq!(unsafe { libc::tcgetattr(target_slave, &mut after) }, 0);
+        assert_eq!(before.c_iflag, after.c_iflag);
+        assert_eq!(before.c_oflag, after.c_oflag);
+        assert_eq!(before.c_cflag, after.c_cflag);
+        let user_mode_flags = libc::ECHO | libc::ICANON | libc::IEXTEN | libc::ISIG;
+        assert_eq!(
+            before.c_lflag & user_mode_flags,
+            after.c_lflag & user_mode_flags
+        );
+        for fd in [source_master, source_slave, target_master, target_slave] {
+            unsafe { libc::close(fd) };
         }
     }
 }
