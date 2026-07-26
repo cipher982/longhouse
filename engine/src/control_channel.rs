@@ -455,6 +455,7 @@ fn provider_binary_available(
 fn control_supports_for_path_with_env(
     path_value: Option<&OsStr>,
     env_lookup: &dyn Fn(&str) -> Option<OsString>,
+    claude_turn_start_ready: bool,
 ) -> Vec<String> {
     let mut supports = Vec::new();
     supports.push(COMMAND_ARCHIVE_BACKLOG_CONTROL.to_string());
@@ -475,7 +476,13 @@ fn control_supports_for_path_with_env(
             .get("machine_control_supports")
             .and_then(Value::as_array)
         {
-            supports.extend(items.iter().filter_map(Value::as_str).map(str::to_string));
+            supports.extend(
+                items
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .filter(|support| *support != "claude.turn_start" || claude_turn_start_ready)
+                    .map(str::to_string),
+            );
         }
         if longhouse_available {
             if let Some(provider) = contract.get("provider").and_then(Value::as_str) {
@@ -493,7 +500,11 @@ fn provider_live_proof_supported_provider(provider: &str) -> bool {
 }
 
 fn control_supports_for_path(path_value: Option<&OsStr>) -> Vec<String> {
-    control_supports_for_path_with_env(path_value, &|name| std::env::var_os(name))
+    control_supports_for_path_with_env(
+        path_value,
+        &|name| std::env::var_os(name),
+        crate::claude_print::require_claude_lifecycle_hook().is_ok(),
+    )
 }
 
 fn control_supports() -> Vec<String> {
@@ -843,7 +854,15 @@ async fn handle_command_frame(
             "ok": true,
             "result": result,
         }),
-        Err(CommandError { code, message }) => command_error(&command_id, &code, &message),
+        Err(CommandError { code, message }) => {
+            tracing::warn!(
+                command_id = %command_id,
+                error_code = %code,
+                error_message = %message,
+                "Machine control command failed"
+            );
+            command_error(&command_id, &code, &message)
+        }
     };
     completed_commands.insert(command_id, response.clone());
     response
@@ -1394,6 +1413,12 @@ async fn execute_turn_start(
             message: "Cursor Console currently supports auto_approve permission policy only"
                 .to_string(),
         });
+    }
+    if provider == "claude" {
+        crate::claude_print::require_claude_lifecycle_hook().map_err(|error| CommandError {
+            code: "claude_lifecycle_hook_missing".to_string(),
+            message: error.to_string(),
+        })?;
     }
     let launch_actor = payload_optional_string(payload, "launch_actor");
     let launch_surface = payload_optional_string(payload, "launch_surface");
@@ -2975,7 +3000,7 @@ mod tests {
         }
 
         write_executable(&dir, "opencode");
-        let supports = control_supports_for_path_with_env(Some(dir.as_os_str()), &|_| None);
+        let supports = control_supports_for_path_with_env(Some(dir.as_os_str()), &|_| None, true);
         assert_eq!(
             supports,
             vec![
@@ -2990,7 +3015,7 @@ mod tests {
         );
 
         write_executable(&dir, "longhouse");
-        let supports = control_supports_for_path_with_env(Some(dir.as_os_str()), &|_| None);
+        let supports = control_supports_for_path_with_env(Some(dir.as_os_str()), &|_| None, true);
         assert_eq!(
             supports,
             vec![
@@ -3006,13 +3031,17 @@ mod tests {
         );
 
         write_executable(&dir, "custom-codex");
-        let supports = control_supports_for_path_with_env(Some(dir.as_os_str()), &|name| {
-            if name == "LONGHOUSE_CODEX_BIN" {
-                Some(dir.join("custom-codex").into_os_string())
-            } else {
-                None
-            }
-        });
+        let supports = control_supports_for_path_with_env(
+            Some(dir.as_os_str()),
+            &|name| {
+                if name == "LONGHOUSE_CODEX_BIN" {
+                    Some(dir.join("custom-codex").into_os_string())
+                } else {
+                    None
+                }
+            },
+            true,
+        );
         assert!(!supports.contains(&"codex.launch".to_string()));
         assert!(!supports.contains(&"codex.continue".to_string()));
         assert!(supports.contains(&"codex.run_once".to_string()));
@@ -3024,7 +3053,7 @@ mod tests {
         write_executable(&dir, "claude");
         write_executable(&dir, "agy");
         write_executable(&dir, "cursor-agent");
-        let supports = control_supports_for_path_with_env(Some(dir.as_os_str()), &|_| None);
+        let supports = control_supports_for_path_with_env(Some(dir.as_os_str()), &|_| None, true);
         let mut expected = vec![
             "archive.backlog_control".to_string(),
             "archive.backlog_control.v2".to_string(),
@@ -3053,6 +3082,12 @@ mod tests {
         assert!(!supports.contains(&"claude.launch".to_string()));
         assert!(!supports.contains(&"claude.continue".to_string()));
         assert!(supports.contains(&"claude.send".to_string()));
+        assert!(supports.contains(&"claude.turn_start".to_string()));
+
+        let not_ready = control_supports_for_path_with_env(Some(dir.as_os_str()), &|_| None, false);
+        assert!(not_ready.contains(&"claude.send".to_string()));
+        assert!(not_ready.contains(&"claude.turn_interrupt".to_string()));
+        assert!(!not_ready.contains(&"claude.turn_start".to_string()));
         assert!(!supports.contains(&"opencode.launch".to_string()));
         assert!(supports.contains(&"opencode.terminate".to_string()));
         assert!(supports.contains(&"opencode.turn_start".to_string()));

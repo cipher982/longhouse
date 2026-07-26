@@ -15,17 +15,18 @@ from zerg.models.agents import SessionTurn
 from zerg.services.agents.kernel_writes import ensure_primary_thread
 from zerg.services.agents.kernel_writes import record_thread_alias
 from zerg.services.agents.kernel_writes import set_thread_execution_target
-from zerg.services.console_turns import begin_console_turn_drain
-from zerg.services.console_turns import claim_next_console_turn
+from zerg.services.console_sessions import create_empty_console_session
 from zerg.services.console_turns import ConsoleTurnConflict
 from zerg.services.console_turns import ConsoleTurnUnavailable
-from zerg.services.console_turns import enqueue_console_turn
-from zerg.services.console_turns import dispatch_next_console_turn
+from zerg.services.console_turns import begin_console_turn_drain
+from zerg.services.console_turns import claim_next_console_turn
 from zerg.services.console_turns import dispatch_catalog_claimed_turn
-from zerg.services.console_turns import mark_console_turn_active
+from zerg.services.console_turns import dispatch_next_console_turn
+from zerg.services.console_turns import enqueue_console_turn
 from zerg.services.console_turns import interrupt_console_turn
+from zerg.services.console_turns import mark_console_turn_active
+from zerg.services.console_turns import reconcile_starting_console_turns_for_device
 from zerg.services.console_turns import settle_console_turn
-from zerg.services.console_sessions import create_empty_console_session
 from zerg.services.session_inputs import INPUT_STATUS_DELIVERED
 from zerg.services.session_inputs import INPUT_STATUS_DELIVERING
 from zerg.services.session_runtime import RuntimeEventIngest
@@ -390,9 +391,125 @@ async def test_dispatch_timeout_keeps_durable_claim_starting_and_fifo_blocked(tm
 
     assert result.turn_id == first.turn_id
     assert result.state == SESSION_TURN_STATE_STARTING
-    assert db.get(SessionTurn, first.turn_id).state == SESSION_TURN_STATE_STARTING
+    assert result.error_code == "turn_start_outcome_unknown"
+    first_turn = db.get(SessionTurn, first.turn_id)
+    assert first_turn.state == SESSION_TURN_STATE_STARTING
+    assert first_turn.error_code == "turn_start_outcome_unknown"
+    assert db.get(SessionInput, first.input_id).last_error == "turn_start_outcome_unknown: reply timeout"
     assert db.get(SessionTurn, second.turn_id).state == SESSION_TURN_STATE_QUEUED
     assert claim_next_console_turn(db, thread_id=thread.id) is None
+
+
+@pytest.mark.asyncio
+async def test_control_reconnect_replays_starting_turn_with_same_run_id(tmp_path, monkeypatch):
+    db = _db(tmp_path)
+    session = _session(db)
+    thread = ensure_primary_thread(db, session)
+    set_thread_execution_target(thread, device_id="cube", cwd="/tmp/longhouse")
+    db.commit()
+    enqueue_console_turn(
+        db,
+        session=session,
+        owner_id=1,
+        message="Continue after reconnect",
+        client_request_id="reconnect-request",
+    )
+    claimed = claim_next_console_turn(db, thread_id=thread.id)
+    assert claimed is not None
+
+    class Registry:
+        command = None
+
+        def supports(self, **_kwargs):
+            return True
+
+        async def send_command(self, **kwargs):
+            self.command = kwargs
+            return SimpleNamespace(transport_ok=True, message={"ok": True, "result": {}}, error=None)
+
+    registry = Registry()
+    monkeypatch.setattr("zerg.database.live_catalog_enabled", lambda: False)
+    outcomes = await reconcile_starting_console_turns_for_device(
+        db,
+        owner_id=1,
+        device_id="cube",
+        registry=registry,
+    )
+
+    assert [outcome.state for outcome in outcomes] == [SESSION_TURN_STATE_ACTIVE]
+    assert registry.command["command_id"] == str(claimed.run_id)
+    assert registry.command["payload"]["run_id"] == str(claimed.run_id)
+    assert db.get(SessionTurn, claimed.turn_id).state == SESSION_TURN_STATE_ACTIVE
+
+
+@pytest.mark.asyncio
+async def test_control_reconnect_replays_live_catalog_turn_with_same_run_id(monkeypatch):
+    session_id = uuid4()
+    thread_id = uuid4()
+    turn_id = uuid4()
+    run_id = uuid4()
+    calls = []
+    turn = {
+        "turn_id": str(turn_id),
+        "session_id": str(session_id),
+        "thread_id": str(thread_id),
+        "run_id": str(run_id),
+        "state": SESSION_TURN_STATE_STARTING,
+        "provider": "claude",
+        "device_id": "cube",
+        "cwd": "/tmp/longhouse",
+        "message": "Continue after catalog reconnect",
+        "client_request_id": "catalog-reconnect-request",
+        "provider_config": {"permission_mode": "bypass"},
+        "resume_provider_thread_id": None,
+    }
+
+    class Catalog:
+        async def call(self, method, params):
+            calls.append((method, params))
+            if method == "session.console.turn.starting_for_device.v2":
+                return {"turns": [turn], "commit_seq": "7"}
+            assert method == "session.console.turn.update.v2"
+            assert params["turn"]["run_id"] == str(run_id)
+            assert params["turn"]["expected_state"] == SESSION_TURN_STATE_STARTING
+            return {
+                "found": True,
+                "applied": True,
+                "stale": False,
+                "turn": {**turn, "state": SESSION_TURN_STATE_ACTIVE},
+                "next_turn": None,
+                "commit_seq": "8",
+            }
+
+    class Registry:
+        command = None
+
+        def supports(self, **_kwargs):
+            return True
+
+        async def send_command(self, **kwargs):
+            self.command = kwargs
+            return SimpleNamespace(transport_ok=True, message={"ok": True, "result": {}}, error=None)
+
+    catalog = Catalog()
+    registry = Registry()
+    monkeypatch.setattr("zerg.database.live_catalog_enabled", lambda: True)
+    monkeypatch.setattr("zerg.services.catalogd_supervisor.get_catalogd_client", lambda: catalog)
+
+    outcomes = await reconcile_starting_console_turns_for_device(
+        None,
+        owner_id=1,
+        device_id="cube",
+        registry=registry,
+    )
+
+    assert [outcome.state for outcome in outcomes] == [SESSION_TURN_STATE_ACTIVE]
+    assert registry.command["command_id"] == str(run_id)
+    assert registry.command["payload"]["run_id"] == str(run_id)
+    assert [method for method, _params in calls] == [
+        "session.console.turn.starting_for_device.v2",
+        "session.console.turn.update.v2",
+    ]
 
 
 @pytest.mark.asyncio
@@ -417,9 +534,59 @@ async def test_dispatch_next_console_turn_fails_typed_when_adapter_is_missing(tm
     result = await dispatch_next_console_turn(db, owner_id=1, thread_id=thread.id, registry=Registry())
 
     assert result.state == SESSION_TURN_STATE_FAILED
+    assert result.error_code == "adapter_unavailable"
     assert "does not advertise" in result.error
-    assert db.get(SessionTurn, queued.turn_id).state == SESSION_TURN_STATE_FAILED
-    assert db.get(SessionRun, result.run_id).ended_at is not None
+    failed_turn = db.get(SessionTurn, queued.turn_id)
+    assert failed_turn.state == SESSION_TURN_STATE_FAILED
+    assert failed_turn.error_code == "adapter_unavailable"
+    failed_input = db.get(SessionInput, queued.input_id)
+    assert failed_input.last_error.startswith("adapter_unavailable: Machine Agent does not advertise")
+    failed_run = db.get(SessionRun, result.run_id)
+    assert failed_run.ended_at is not None
+    assert failed_run.exit_status == "adapter_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_next_console_turn_preserves_engine_failure_code(tmp_path):
+    db = _db(tmp_path)
+    session = _session(db)
+    session.provider = "claude"
+    thread = ensure_primary_thread(db, session)
+    thread.provider = "claude"
+    set_thread_execution_target(thread, device_id="cube", cwd="/tmp/longhouse")
+    db.commit()
+    queued = enqueue_console_turn(
+        db,
+        session=session,
+        owner_id=1,
+        message="Start Claude",
+        client_request_id="request-hook-missing",
+    )
+
+    class Registry:
+        def supports(self, **_kwargs):
+            return True
+
+        async def send_command(self, **_kwargs):
+            return SimpleNamespace(
+                transport_ok=True,
+                message={
+                    "ok": False,
+                    "error": {
+                        "code": "claude_lifecycle_hook_missing",
+                        "message": "run `longhouse claude configure`",
+                    },
+                },
+                error=None,
+            )
+
+    result = await dispatch_next_console_turn(db, owner_id=1, thread_id=thread.id, registry=Registry())
+
+    assert result.state == SESSION_TURN_STATE_FAILED
+    assert result.error_code == "claude_lifecycle_hook_missing"
+    assert db.get(SessionTurn, queued.turn_id).error_code == "claude_lifecycle_hook_missing"
+    assert db.get(SessionRun, result.run_id).exit_status == "claude_lifecycle_hook_missing"
+    assert db.get(SessionInput, queued.input_id).last_error == ("claude_lifecycle_hook_missing: run `longhouse claude configure`")
 
 
 def test_run_terminal_event_settles_console_turn_after_output_drain(tmp_path):

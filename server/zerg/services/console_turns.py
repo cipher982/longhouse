@@ -89,6 +89,7 @@ class ConsoleTurnDispatch:
     turn_id: int | None
     run_id: UUID | None
     state: str
+    error_code: str | None = None
     error: str | None = None
 
 
@@ -98,6 +99,7 @@ class CatalogConsoleTurn:
     run_id: UUID | None
     state: str
     created: bool
+    error_code: str | None = None
     error: str | None = None
 
 
@@ -351,9 +353,11 @@ def mark_console_turn_active(db: Session, *, turn_id: int) -> None:
         raise ConsoleTurnConflict(f"turn {turn_id} cannot become active from {turn.state}")
     now = datetime.now(timezone.utc)
     turn.state = SESSION_TURN_STATE_ACTIVE
+    turn.error_code = None
     turn.send_accepted_at = turn.send_accepted_at or now
     turn.active_phase_observed_at = turn.active_phase_observed_at or now
     input_row.status = INPUT_STATUS_DELIVERED
+    input_row.last_error = None
     input_row.delivered_at = input_row.delivered_at or now
     db.commit()
 
@@ -393,6 +397,10 @@ def settle_console_turn(
     if outcome != SESSION_TURN_STATE_COMPLETED:
         input_row.status = INPUT_STATUS_FAILED
         input_row.last_error = outcome
+    else:
+        input_row.status = INPUT_STATUS_DELIVERED
+        input_row.last_error = None
+        input_row.delivered_at = input_row.delivered_at or now
     db.commit()
 
 
@@ -413,21 +421,41 @@ async def dispatch_next_console_turn(
         return ConsoleTurnDispatch(turn_id=None, run_id=None, state="idle")
 
     control = registry or get_machine_control_channel_registry()
+    return await _dispatch_claimed_console_turn(
+        db,
+        owner_id=owner_id,
+        claimed=claimed,
+        control=control,
+    )
+
+
+async def _dispatch_claimed_console_turn(
+    db: Session,
+    *,
+    owner_id: int,
+    claimed: ClaimedConsoleTurn,
+    control,
+) -> ConsoleTurnDispatch:
     capability = f"{claimed.provider}.turn_start"
     if not control.supports(
         owner_id=owner_id,
         device_id=claimed.device_id,
         capability=capability,
     ):
-        _fail_starting_console_turn(
-            db,
-            turn_id=claimed.turn_id,
-            error=f"Machine Agent does not advertise {capability}",
-        )
+        try:
+            _fail_starting_console_turn(
+                db,
+                turn_id=claimed.turn_id,
+                error_code="adapter_unavailable",
+                error=f"Machine Agent does not advertise {capability}",
+            )
+        except ConsoleTurnConflict:
+            return _current_cold_dispatch(db, claimed)
         return ConsoleTurnDispatch(
             turn_id=claimed.turn_id,
             run_id=claimed.run_id,
             state=SESSION_TURN_STATE_FAILED,
+            error_code="adapter_unavailable",
             error=f"Machine Agent does not advertise {capability}",
         )
 
@@ -461,29 +489,97 @@ async def dispatch_next_console_turn(
         # may already own the durable run claim and have spawned the provider.
         # Keep the FIFO blocked until runtime truth or an idempotent retry of
         # this same run_id resolves the outcome.
+        error = str(response.error or "Console turn dispatch outcome is unknown")
+        try:
+            _mark_starting_console_turn_unknown(db, turn_id=claimed.turn_id, error=error)
+        except ConsoleTurnConflict:
+            return _current_cold_dispatch(db, claimed)
         return ConsoleTurnDispatch(
             turn_id=claimed.turn_id,
             run_id=claimed.run_id,
             state=SESSION_TURN_STATE_STARTING,
-            error=str(response.error or "Console turn dispatch outcome is unknown"),
+            error_code="turn_start_outcome_unknown",
+            error=error,
         )
     if message.get("ok") is not True:
         detail = message.get("error") if isinstance(message.get("error"), dict) else {}
+        error_code = str(detail.get("code") or "provider_launch_failed")
         error = str(detail.get("message") or response.error or "Console turn dispatch failed")
-        _fail_starting_console_turn(db, turn_id=claimed.turn_id, error=error)
+        try:
+            _fail_starting_console_turn(db, turn_id=claimed.turn_id, error_code=error_code, error=error)
+        except ConsoleTurnConflict:
+            return _current_cold_dispatch(db, claimed)
         return ConsoleTurnDispatch(
             turn_id=claimed.turn_id,
             run_id=claimed.run_id,
             state=SESSION_TURN_STATE_FAILED,
+            error_code=error_code,
             error=error,
         )
 
-    mark_console_turn_active(db, turn_id=claimed.turn_id)
+    try:
+        mark_console_turn_active(db, turn_id=claimed.turn_id)
+    except ConsoleTurnConflict:
+        return _current_cold_dispatch(db, claimed)
     return ConsoleTurnDispatch(
         turn_id=claimed.turn_id,
         run_id=claimed.run_id,
         state=SESSION_TURN_STATE_ACTIVE,
     )
+
+
+def _current_cold_dispatch(db: Session, claimed: ClaimedConsoleTurn) -> ConsoleTurnDispatch:
+    db.expire_all()
+    turn = db.get(SessionTurn, claimed.turn_id)
+    return ConsoleTurnDispatch(
+        turn_id=claimed.turn_id,
+        run_id=claimed.run_id,
+        state=str(turn.state) if turn is not None else "unknown",
+        error_code=str(turn.error_code) if turn is not None and turn.error_code else None,
+    )
+
+
+def _starting_cold_console_turns_for_device(
+    db: Session,
+    *,
+    owner_id: int,
+    device_id: str,
+) -> list[ClaimedConsoleTurn]:
+    rows = (
+        db.query(SessionTurn, SessionThread, SessionInput)
+        .join(SessionThread, SessionThread.id == SessionTurn.thread_id)
+        .join(SessionInput, SessionInput.id == SessionTurn.session_input_id)
+        .filter(
+            SessionTurn.source_kind == SESSION_TURN_SOURCE_CONSOLE,
+            SessionTurn.state == SESSION_TURN_STATE_STARTING,
+            SessionThread.device_id == device_id,
+            SessionInput.owner_id == owner_id,
+        )
+        .order_by(SessionTurn.created_at.asc(), SessionTurn.id.asc())
+        .limit(100)
+        .all()
+    )
+    claimed: list[ClaimedConsoleTurn] = []
+    for turn, thread, input_row in rows:
+        if turn.run_id is None:
+            continue
+        claimed.append(
+            ClaimedConsoleTurn(
+                input_id=int(input_row.id),
+                turn_id=int(turn.id),
+                run_id=UUID(str(turn.run_id)),
+                session_id=UUID(str(turn.session_id)),
+                thread_id=UUID(str(thread.id)),
+                provider=str(thread.provider),
+                device_id=str(thread.device_id),
+                cwd=str(thread.cwd),
+                message=str(input_row.body),
+                client_request_id=str(input_row.client_request_id or turn.request_id or ""),
+                provider_config=dict(thread.provider_config_json or {}),
+                resume_provider_thread_id=_provider_resume_identity(db, thread),
+            )
+        )
+    return claimed
 
 
 async def enqueue_catalog_console_turn(
@@ -533,8 +629,10 @@ async def enqueue_catalog_console_turn(
     provider = str(turn["provider"])
     device_id = str(turn["device_id"])
     capability = f"{provider}.turn_start"
+    error_code = None
     error = None
     if not control.supports(owner_id=owner_id, device_id=device_id, capability=capability):
+        error_code = "adapter_unavailable"
         error = f"Machine Agent does not advertise {capability}"
     else:
         dispatch_wall_ms = int(time.time() * 1000)
@@ -575,26 +673,48 @@ async def enqueue_catalog_console_turn(
             timeout_secs=15,
         )
         response_message = dict(response.message or {})
+        detail = response_message.get("error") if isinstance(response_message.get("error"), dict) else {}
+        response_error_code = str(detail.get("code") or "").strip() or None
         logger.info(
-            "console_latency stage=command_response session=%s turn=%s run=%s request=%s transport_ok=%s command_ms=%d total_ms=%d",
+            "console_latency stage=command_response session=%s turn=%s run=%s request=%s transport_ok=%s command_ok=%s error_code=%s command_ms=%d total_ms=%d",
             session_id,
             turn_id,
             run_id,
             payload["client_request_id"],
             response.transport_ok,
+            response_message.get("ok"),
+            response_error_code,
             int((time.monotonic() - command_started) * 1000),
             int((time.monotonic() - accepted_mono) * 1000),
         )
         if not response.transport_ok:
+            error = str(response.error or "Console turn dispatch outcome is unknown")
+            update_result = await _mark_catalog_start_outcome_unknown(
+                client,
+                turn_id=turn_id,
+                run_id=run_id,
+                error=error,
+            )
+            persisted_turn = dict(update_result.get("turn") or {})
+            persisted_state = str(persisted_turn.get("state") or SESSION_TURN_STATE_STARTING)
+            if update_result.get("applied") is False:
+                return CatalogConsoleTurn(
+                    turn_id=turn_id,
+                    run_id=run_id,
+                    state=persisted_state,
+                    created=bool(result.get("created")),
+                    error=str(persisted_turn.get("error") or "") or None,
+                )
             return CatalogConsoleTurn(
                 turn_id=turn_id,
                 run_id=run_id,
-                state=SESSION_TURN_STATE_STARTING,
+                state=persisted_state,
                 created=bool(result.get("created")),
-                error=str(response.error or "Console turn dispatch outcome is unknown"),
+                error_code="turn_start_outcome_unknown",
+                error=error,
             )
         if response_message.get("ok") is not True:
-            detail = response_message.get("error") if isinstance(response_message.get("error"), dict) else {}
+            error_code = response_error_code or "provider_launch_failed"
             error = str(detail.get("message") or response.error or "Console turn dispatch failed")
 
     state = SESSION_TURN_STATE_FAILED if error else SESSION_TURN_STATE_ACTIVE
@@ -605,11 +725,23 @@ async def enqueue_catalog_console_turn(
                 "turn_id": str(turn_id),
                 "run_id": str(run_id),
                 "state": state,
+                "expected_state": SESSION_TURN_STATE_STARTING,
+                "error_code": error_code,
                 "error": error,
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             }
         },
     )
+    persisted_turn = dict(update_result.get("turn") or {})
+    state = str(persisted_turn.get("state") or state)
+    if update_result.get("applied") is False:
+        return CatalogConsoleTurn(
+            turn_id=turn_id,
+            run_id=run_id,
+            state=state,
+            created=bool(result.get("created")),
+            error=str(persisted_turn.get("error") or "") or None,
+        )
     next_turn = update_result.get("next_turn")
     if isinstance(next_turn, dict):
         await dispatch_catalog_claimed_turn(
@@ -623,6 +755,7 @@ async def enqueue_catalog_console_turn(
         run_id=run_id,
         state=state,
         created=bool(result.get("created")),
+        error_code=error_code,
         error=error,
     )
 
@@ -649,8 +782,10 @@ async def dispatch_catalog_claimed_turn(
     if catalog is None:
         raise ConsoleTurnUnavailable("catalog_unavailable", "Console turn catalog is unavailable")
     capability = f"{provider}.turn_start"
+    error_code = None
     error = None
     if not control.supports(owner_id=owner_id, device_id=device_id, capability=capability):
+        error_code = "adapter_unavailable"
         error = f"Machine Agent does not advertise {capability}"
     else:
         payload = {
@@ -678,15 +813,34 @@ async def dispatch_catalog_claimed_turn(
         )
         message = dict(response.message or {})
         if not response.transport_ok:
+            error = str(response.error or "Console turn dispatch outcome is unknown")
+            update_result = await _mark_catalog_start_outcome_unknown(
+                catalog,
+                turn_id=turn_id,
+                run_id=run_id,
+                error=error,
+            )
+            persisted_turn = dict(update_result.get("turn") or {})
+            persisted_state = str(persisted_turn.get("state") or SESSION_TURN_STATE_STARTING)
+            if update_result.get("applied") is False:
+                return CatalogConsoleTurn(
+                    turn_id=turn_id,
+                    run_id=run_id,
+                    state=persisted_state,
+                    created=True,
+                    error=str(persisted_turn.get("error") or "") or None,
+                )
             return CatalogConsoleTurn(
                 turn_id=turn_id,
                 run_id=run_id,
-                state=SESSION_TURN_STATE_STARTING,
+                state=persisted_state,
                 created=True,
-                error=str(response.error or "Console turn dispatch outcome is unknown"),
+                error_code="turn_start_outcome_unknown",
+                error=error,
             )
         if message.get("ok") is not True:
             detail = message.get("error") if isinstance(message.get("error"), dict) else {}
+            error_code = str(detail.get("code") or "provider_launch_failed")
             error = str(detail.get("message") or response.error or "Console turn dispatch failed")
     state = SESSION_TURN_STATE_FAILED if error else SESSION_TURN_STATE_ACTIVE
     update_result = await catalog.call(
@@ -696,11 +850,23 @@ async def dispatch_catalog_claimed_turn(
                 "turn_id": str(turn_id),
                 "run_id": str(run_id),
                 "state": state,
+                "expected_state": SESSION_TURN_STATE_STARTING,
+                "error_code": error_code,
                 "error": error,
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             }
         },
     )
+    persisted_turn = dict(update_result.get("turn") or {})
+    state = str(persisted_turn.get("state") or state)
+    if update_result.get("applied") is False:
+        return CatalogConsoleTurn(
+            turn_id=turn_id,
+            run_id=run_id,
+            state=state,
+            created=True,
+            error=str(persisted_turn.get("error") or "") or None,
+        )
     next_turn = update_result.get("next_turn")
     if isinstance(next_turn, dict):
         await dispatch_catalog_claimed_turn(
@@ -709,21 +875,162 @@ async def dispatch_catalog_claimed_turn(
             client=catalog,
             registry=control,
         )
-    return CatalogConsoleTurn(turn_id=turn_id, run_id=run_id, state=state, created=True, error=error)
+    return CatalogConsoleTurn(
+        turn_id=turn_id,
+        run_id=run_id,
+        state=state,
+        created=True,
+        error_code=error_code,
+        error=error,
+    )
 
 
-def _fail_starting_console_turn(db: Session, *, turn_id: int, error: str) -> None:
+async def reconcile_starting_console_turns_for_device(
+    db: Session | None,
+    *,
+    owner_id: int,
+    device_id: str,
+    registry=None,
+) -> list[CatalogConsoleTurn | ConsoleTurnDispatch]:
+    """Replay ambiguous dispatches after a Machine Agent reconnects.
+
+    The stable run_id is also the machine command_id. The Machine Agent's
+    durable claim registry therefore returns the existing launch outcome
+    instead of spawning a second provider invocation.
+    """
+
+    from zerg import database as database_module
+    from zerg.services.catalogd_supervisor import get_catalogd_client
+    from zerg.services.machine_control_channel import get_machine_control_channel_registry
+
+    control = registry or get_machine_control_channel_registry()
+    if database_module.live_catalog_enabled():
+        catalog = get_catalogd_client()
+        if catalog is None:
+            raise ConsoleTurnUnavailable("catalog_unavailable", "Console turn catalog is unavailable")
+        result = await catalog.call(
+            "session.console.turn.starting_for_device.v2",
+            {"owner_id": owner_id, "device_id": device_id},
+        )
+        turns = result.get("turns") if isinstance(result.get("turns"), list) else []
+        reconciled: list[CatalogConsoleTurn | ConsoleTurnDispatch] = []
+        for turn in turns:
+            if not isinstance(turn, dict):
+                continue
+            capability = f"{turn.get('provider')}.turn_start"
+            if not control.supports(owner_id=owner_id, device_id=device_id, capability=capability):
+                error = f"Machine Agent reconnected without advertising {capability}; launch outcome remains unknown"
+                update_result = await _mark_catalog_start_outcome_unknown(
+                    catalog,
+                    turn_id=UUID(str(turn["turn_id"])),
+                    run_id=UUID(str(turn["run_id"])),
+                    error=error,
+                )
+                persisted_turn = dict(update_result.get("turn") or {})
+                applied = update_result.get("applied") is not False
+                reconciled.append(
+                    CatalogConsoleTurn(
+                        turn_id=UUID(str(turn["turn_id"])),
+                        run_id=UUID(str(turn["run_id"])),
+                        state=str(persisted_turn.get("state") or SESSION_TURN_STATE_STARTING),
+                        created=False,
+                        error_code="turn_start_outcome_unknown" if applied else None,
+                        error=error if applied else (str(persisted_turn.get("error") or "") or None),
+                    )
+                )
+                continue
+            reconciled.append(
+                await dispatch_catalog_claimed_turn(
+                    owner_id=owner_id,
+                    turn=turn,
+                    client=catalog,
+                    registry=control,
+                )
+            )
+        return reconciled
+
+    if db is None:
+        raise ConsoleTurnUnavailable("catalog_unavailable", "Console turn store is unavailable")
+    reconciled = []
+    for claimed in _starting_cold_console_turns_for_device(
+        db,
+        owner_id=owner_id,
+        device_id=device_id,
+    ):
+        capability = f"{claimed.provider}.turn_start"
+        if not control.supports(owner_id=owner_id, device_id=device_id, capability=capability):
+            error = f"Machine Agent reconnected without advertising {capability}; launch outcome remains unknown"
+            try:
+                _mark_starting_console_turn_unknown(db, turn_id=claimed.turn_id, error=error)
+            except ConsoleTurnConflict:
+                reconciled.append(_current_cold_dispatch(db, claimed))
+            else:
+                reconciled.append(
+                    ConsoleTurnDispatch(
+                        turn_id=claimed.turn_id,
+                        run_id=claimed.run_id,
+                        state=SESSION_TURN_STATE_STARTING,
+                        error_code="turn_start_outcome_unknown",
+                        error=error,
+                    )
+                )
+            continue
+        reconciled.append(
+            await _dispatch_claimed_console_turn(
+                db,
+                owner_id=owner_id,
+                claimed=claimed,
+                control=control,
+            )
+        )
+    return reconciled
+
+
+async def _mark_catalog_start_outcome_unknown(
+    catalog,
+    *,
+    turn_id: UUID,
+    run_id: UUID,
+    error: str,
+) -> dict[str, object]:
+    return await catalog.call(
+        "session.console.turn.update.v2",
+        {
+            "turn": {
+                "turn_id": str(turn_id),
+                "run_id": str(run_id),
+                "state": SESSION_TURN_STATE_STARTING,
+                "expected_state": SESSION_TURN_STATE_STARTING,
+                "error_code": "turn_start_outcome_unknown",
+                "error": error,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+        },
+    )
+
+
+def _fail_starting_console_turn(db: Session, *, turn_id: int, error_code: str, error: str) -> None:
     turn, input_row, run = _load_turn_lifecycle(db, turn_id)
     if turn.state != SESSION_TURN_STATE_STARTING:
         raise ConsoleTurnConflict(f"turn {turn_id} cannot fail from {turn.state}")
     now = datetime.now(timezone.utc)
     turn.state = SESSION_TURN_STATE_FAILED
+    turn.error_code = error_code[:64]
     turn.terminal_at = now
     turn.durable_at = now
     input_row.status = INPUT_STATUS_FAILED
-    input_row.last_error = error[:1000]
+    input_row.last_error = f"{error_code}: {error}"[:1000]
     run.ended_at = now
-    run.exit_status = "dispatch_failed"
+    run.exit_status = error_code[:64]
+    db.commit()
+
+
+def _mark_starting_console_turn_unknown(db: Session, *, turn_id: int, error: str) -> None:
+    turn, input_row, _run = _load_turn_lifecycle(db, turn_id)
+    if turn.state != SESSION_TURN_STATE_STARTING:
+        raise ConsoleTurnConflict(f"turn {turn_id} cannot become uncertain from {turn.state}")
+    turn.error_code = "turn_start_outcome_unknown"
+    input_row.last_error = f"turn_start_outcome_unknown: {error}"[:1000]
     db.commit()
 
 

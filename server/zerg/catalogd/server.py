@@ -279,6 +279,8 @@ class CatalogDaemon:
             return await self._enqueue_console_turn(request)
         if request.method == "session.console.turn.current.v2":
             return await self._read_current_console_turn(request)
+        if request.method == "session.console.turn.starting_for_device.v2":
+            return await self._list_starting_console_turns_for_device(request)
         if request.method == "session.console.turn.update.v2":
             return await self._update_console_turn(request)
         if request.method == "session.launch.local.create.v2":
@@ -1300,6 +1302,30 @@ class CatalogDaemon:
             ),
         )
 
+    async def _list_starting_console_turns_for_device(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"owner_id", "device_id"}:
+            return self._error(
+                request,
+                "invalid_request",
+                "session.console.turn.starting_for_device.v2 requires owner_id and device_id",
+            )
+        try:
+            owner_id = int(request.params["owner_id"])
+        except (TypeError, ValueError):
+            return self._error(request, "invalid_request", "console turn owner_id is invalid")
+        device_id = request.params["device_id"]
+        if owner_id <= 0 or not _is_string(device_id, maximum=255):
+            return self._error(request, "invalid_request", "console turn device identity is invalid")
+        assert self._store is not None
+        return CatalogRpcResponse(
+            id=request.id,
+            result=await self._run_store(
+                self._store.list_starting_console_turns_for_device,
+                owner_id=owner_id,
+                device_id=str(device_id),
+            ),
+        )
+
     async def _update_console_turn(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
         if set(request.params) != {"turn"} or not isinstance(request.params["turn"], dict):
             return self._error(request, "invalid_request", "session.console.turn.update.v2 requires turn")
@@ -1314,8 +1340,18 @@ class CatalogDaemon:
             data["updated_at"] = _parse_datetime(data["updated_at"], "console turn.updated_at")
         except ValueError as exc:
             return self._error(request, "invalid_request", str(exc))
-        if data["state"] not in {"active", "completed", "failed", "cancelled"}:
+        if data["state"] not in {"starting", "active", "completed", "failed", "cancelled"}:
             return self._error(request, "invalid_request", "console turn state is invalid")
+        if data.get("expected_state") is not None and data["expected_state"] not in {
+            "starting",
+            "active",
+            "draining",
+        }:
+            return self._error(request, "invalid_request", "console turn expected_state is invalid")
+        if data.get("error_code") is not None and (
+            not isinstance(data["error_code"], str) or not data["error_code"].strip() or len(data["error_code"]) > 64
+        ):
+            return self._error(request, "invalid_request", "console turn error_code is invalid")
         assert self._store is not None
         return CatalogRpcResponse(id=request.id, result=await self._run_store(self._store.update_console_turn, data=data))
 
