@@ -60,6 +60,7 @@ from zerg.services.live_archive_outbox import enqueue_heartbeat_stamp_outbox
 from zerg.services.live_archive_outbox import enqueue_managed_local_launch_outbox
 from zerg.services.live_archive_outbox import enqueue_runtime_events_outbox
 from zerg.services.live_archive_outbox import enqueue_session_input_receipt_outbox
+from zerg.services.live_catalog_launch import create_live_launch_catalog_shell
 from zerg.services.live_catalog_timeline import project_catalog_timeline_snapshot
 from zerg.services.live_launch_readiness import get_live_launch_readiness_by_client_request
 from zerg.services.live_launch_readiness import get_live_launch_readiness_by_session_id
@@ -1754,6 +1755,77 @@ def test_live_control_lease_feeds_managed_control_overlay(tmp_path, monkeypatch)
         assert overlay.sequence == 42
     finally:
         archive_engine.dispose()
+        live_engine.dispose()
+
+
+def test_live_control_lease_adopts_pending_launch_readiness(tmp_path):
+    now = datetime.now(timezone.utc)
+    session_id = uuid4()
+    live_engine = make_live_engine(f"sqlite:///{tmp_path}/live.db")
+    initialize_live_database(live_engine)
+    LiveSession = sessionmaker(bind=live_engine)
+
+    try:
+        with LiveSession() as live_db:
+            create_live_launch_catalog_shell(
+                live_db,
+                session_id=session_id,
+                thread_id=uuid4(),
+                run_id=None,
+                owner_id=1,
+                provider="cursor",
+                device_id="cinder",
+                device_name="cinder",
+                cwd="/tmp/cursor",
+                project="cursor",
+                git_repo=None,
+                git_branch=None,
+                display_name="Cursor",
+                initial_prompt=None,
+                execution_lifetime="live_control",
+                client_request_id=None,
+                command_id=f"managed-local-{session_id}",
+                started_at=now,
+                expires_at=now + timedelta(minutes=5),
+                launch_actor="user",
+                launch_surface="cli",
+            )
+            upsert_live_launch_readiness(
+                live_db,
+                session_id=session_id,
+                owner_id=1,
+                device_id="cinder",
+                provider="cursor",
+                execution_lifetime="live_control",
+                state="pending",
+                command_id=f"managed-local-{session_id}",
+                client_request_id=None,
+                machine_id="cinder",
+                project="cursor",
+                expires_at=now + timedelta(minutes=5),
+                now=now,
+            )
+            readiness = live_db.get(LiveLaunchReadiness, str(session_id))
+            assert readiness is not None
+            assert readiness.state == "pending"
+
+            lease = SimpleNamespace(
+                session_id=session_id,
+                provider="cursor",
+                machine_id="cinder",
+                state="attached",
+                sequence=42,
+                bridge_status="ready",
+                thread_subscription_status=None,
+                observed_at=now,
+                lease_ttl_ms=60_000,
+            )
+            upsert_live_control_leases(live_db, [lease], device_id="cinder", received_at=now)
+            live_db.flush()
+
+            assert readiness.state == "adopted"
+            assert readiness.expires_at is None
+    finally:
         live_engine.dispose()
 
 
