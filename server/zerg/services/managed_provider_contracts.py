@@ -55,6 +55,14 @@ class ManagedProviderContract:
     # ingest, archive, and transcript scenarios but are excluded from
     # control-proof lanes. The factory derives its provider set from this field.
     support_tier: str = "launch"
+    # Facts the universal harness used to hardcode as provider name checks.
+    permission_prompt_surface: bool = False
+    external_event_channel: str | None = None
+    pause_tool_name: str = "structured_question"
+    # Whether the universal harness can exercise the provider without spending
+    # model tokens, and whether it has a real managed-session E2E scenario.
+    harness_safe_no_token_prompt: bool = False
+    harness_real_managed_session_e2e: bool = False
     requires_longhouse_cli: bool = True
     launch_local: bool = True
     run_once: bool = False
@@ -146,6 +154,11 @@ def _contract_from_manifest_item(item: dict[str, object]) -> ManagedProviderCont
         presentation_ruleset=str(item.get("presentation_ruleset") or ""),
         proof_profiles={str(name): str(profile) for name, profile in dict(item.get("proof_profiles") or {}).items()},
         support_tier=str(item.get("support_tier") or "launch"),
+        permission_prompt_surface=bool(item.get("permission_prompt_surface", False)),
+        external_event_channel=(str(item["external_event_channel"]) if item.get("external_event_channel") else None),
+        pause_tool_name=str(item.get("pause_tool_name") or "structured_question"),
+        harness_safe_no_token_prompt=bool(item.get("harness_safe_no_token_prompt", False)),
+        harness_real_managed_session_e2e=bool(item.get("harness_real_managed_session_e2e", False)),
         requires_longhouse_cli=bool(item.get("requires_longhouse_cli", True)),
         launch_local=bool(item.get("launch_local", True)),
         run_once=bool(item.get("run_once", False)),

@@ -242,9 +242,18 @@ the contract:
 | `permission_prompt` hardcodes three providers | `permission_prompt_surface: bool` |
 | `external_event_channel` special-cases Claude and Antigravity | `external_event_channel: <name>\|null` |
 | `_provider_pause_tool_name` if-ladder | `pause_tool_name: <string>` |
+| `provider_configs()` hardcodes harness safety flags | `harness_safe_no_token_prompt`, `harness_real_managed_session_e2e` |
 
-The bar is `grep 'provider == "' server/zerg/qa/universal_agent_harness.py`
-returning nothing inside the adapter body.
+The bar is not "no provider name appears anywhere." Dispatching to a
+provider-specific canary implementation is mechanics and belongs in the adapter.
+The bar is that no function which *decides what a provider supports* branches on
+a provider name: `_action_support`, `_provider_pause_tool_name`, and
+`provider_configs` must be free of them, enforced by a test.
+
+`provider_configs()` is the concrete reason this matters. Cursor silently got
+`real_managed_session_e2e=False` and no permission surface because nobody added
+it to the right hardcoded set — the failure mode is a new provider being quietly
+wrong rather than explicitly unsupported.
 
 ## Cursor onboarding
 

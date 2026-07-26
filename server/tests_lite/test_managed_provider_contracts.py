@@ -833,3 +833,40 @@ def test_the_only_launch_tier_control_work_left_is_opencode_permission_answering
 
     launch_work = {(row["provider"], row["operation"]) for row in outstanding_factory_work() if row["support_tier"] == "launch"}
     assert launch_work == {("opencode", "answer_pause")}
+
+
+def test_support_decisions_carry_no_provider_name_checks() -> None:
+    """Provider facts belong in the contract, not in the universal runner.
+
+    The epic forbids the runner accumulating `if provider == ...` behavior,
+    because each branch is a place a newly onboarded provider is silently wrong
+    rather than explicitly unsupported. Cursor hit exactly that: it defaulted to
+    no permission surface and no managed-session E2E because nobody added it to
+    the right hardcoded set.
+
+    Dispatching to a provider-specific canary implementation is mechanics and
+    stays. Deciding what a provider *supports* is a contract fact.
+    """
+    import inspect
+
+    from zerg.qa import universal_agent_harness as harness
+
+    for function in (harness._action_support, harness._provider_pause_tool_name, harness.provider_configs):
+        source = inspect.getsource(function)
+        offenders = [line.strip() for line in source.splitlines() if 'provider == "' in line]
+        assert offenders == [], f"{function.__name__} still branches on provider name: {offenders}"
+
+
+def test_contract_carries_the_facts_the_runner_used_to_hardcode() -> None:
+    from zerg.services.managed_provider_contracts import contract_for_provider
+
+    claude = contract_for_provider("claude")
+    cursor = contract_for_provider("cursor")
+    antigravity = contract_for_provider("antigravity")
+    assert claude is not None and cursor is not None and antigravity is not None
+
+    assert claude.external_event_channel == "provider_live.claude_development_channel"
+    assert cursor.external_event_channel is None
+    assert claude.pause_tool_name == "AskUserQuestion"
+    assert cursor.permission_prompt_surface is True
+    assert antigravity.permission_prompt_surface is False

@@ -331,6 +331,14 @@ def _validate_factory_contract(item: dict[str, Any]) -> None:
     provider = str(item.get("provider") or "<unknown>")
     for field in _FACTORY_STRING_FIELDS:
         _validate_string_field(item, field)
+    if not isinstance(item.get("permission_prompt_surface"), bool):
+        raise ValueError(f"managed provider contract {provider}: permission_prompt_surface must be a boolean")
+    channel = item.get("external_event_channel")
+    if channel is not None and (not isinstance(channel, str) or not channel.strip()):
+        raise ValueError(f"managed provider contract {provider}: external_event_channel must be a non-empty string or null")
+    _validate_string_field(item, "pause_tool_name")
+    for field in ("harness_safe_no_token_prompt", "harness_real_managed_session_e2e"):
+        _validate_bool_field(item, field)
     if item.get("support_tier") not in _SUPPORT_TIERS:
         raise ValueError(f"managed provider contract {provider}: support_tier must be one of {sorted(_SUPPORT_TIERS)}")
     proof_profiles = item.get("proof_profiles")

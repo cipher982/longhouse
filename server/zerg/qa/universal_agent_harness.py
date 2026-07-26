@@ -5405,15 +5405,10 @@ def _action_support(provider: str, action: ActionDefinition, contract: Any) -> t
     if action.support_kind == "tool_result":
         return bool(contract.transcript_binding), "contract.transcript_binding"
     if action.support_kind == "external_event_channel":
-        if provider == "claude":
-            return True, "provider_live.claude_development_channel"
-        if provider == "antigravity":
-            return True, "provider_control.antigravity_hook_inbox"
-        return False, "external_event_channel_unsupported"
+        channel = contract.external_event_channel
+        return bool(channel), channel or "external_event_channel_unsupported"
     if action.support_kind == "permission_prompt":
-        # Cursor's fail-closed remote-permission hook proved allow/ask/deny in Gate 0.
-        # This set moves into the contract when the provider branches are deleted.
-        return provider in {"claude", "codex", "opencode", "cursor"}, "provider_permission_prompt_surface"
+        return contract.permission_prompt_surface, "provider_permission_prompt_surface"
     return False, f"unknown_support_kind:{action.support_kind}"
 
 
@@ -5425,15 +5420,8 @@ def _provider_answer_pause_supported(provider: str) -> bool:
 
 
 def _provider_pause_tool_name(provider: str) -> str:
-    if provider == "claude":
-        return "AskUserQuestion"
-    if provider == "codex":
-        return "requestUserInput"
-    if provider == "opencode":
-        return "opencode_pause_request"
-    if provider == "antigravity":
-        return "antigravity_pause_request"
-    return "structured_question"
+    contract = contract_for_provider(provider)
+    return contract.pause_tool_name if contract is not None else "structured_question"
 
 
 def _action_implementation_kind(
@@ -7903,23 +7891,15 @@ def antigravity_control_operation_evidence(canary: Mapping[str, Any]) -> dict[st
 def provider_configs() -> dict[str, AdapterConfig]:
     configs: dict[str, AdapterConfig] = {}
     for provider in SUPPORTED_PROVIDERS:
-        binary_env = PROVIDER_CLI_ENV_BY_PROVIDER.get(provider)
-        if provider == "claude":
-            binary_env = binary_env or "LONGHOUSE_CLAUDE_BIN"
-        safe_run_prompt_once = False
-        safe_managed_session_scenarios: tuple[str, ...] = ()
-        real_managed_session_e2e = False
-        if provider == "claude":
-            real_managed_session_e2e = True
-        elif provider == "codex":
-            safe_run_prompt_once = True
-            safe_managed_session_scenarios = SAFE_MANAGED_SESSION_SCENARIOS
-            real_managed_session_e2e = True
-        elif provider == "opencode":
-            safe_managed_session_scenarios = SAFE_MANAGED_SESSION_SCENARIOS
-            real_managed_session_e2e = True
-        elif provider == "antigravity":
-            real_managed_session_e2e = True
+        contract = contract_for_provider(provider)
+        # Providers that declare no override env still accept one for test
+        # injection; the conventional name is derived rather than special-cased.
+        binary_env = PROVIDER_CLI_ENV_BY_PROVIDER.get(provider) or f"LONGHOUSE_{provider.upper()}_BIN"
+        safe_run_prompt_once = bool(contract and contract.harness_safe_no_token_prompt)
+        real_managed_session_e2e = bool(contract and contract.harness_real_managed_session_e2e)
+        # A provider that can be prompted safely, or driven through a bridge that
+        # does not spend tokens, can run the managed-session scenario set.
+        safe_managed_session_scenarios = SAFE_MANAGED_SESSION_SCENARIOS if provider in {"codex", "opencode"} else ()
         configs[provider] = AdapterConfig(
             provider=provider,
             binary_name=PROVIDER_CLI_BINARY_BY_PROVIDER.get(provider, provider),
