@@ -357,6 +357,145 @@ def _embedding_corpus_unavailable_response(kind: str) -> HTTPException:
     )
 
 
+async def _semantic_recall_matches(
+    *,
+    query: str,
+    project: Optional[str],
+    provider: Optional[str],
+    since_days: int,
+    include_test: bool,
+    include_automation: bool,
+    max_results: int,
+    known_session_ids: set[str],
+) -> list[RecallMatch]:
+    """Dense recall over episode-level embeddings, independent of storage-v2.
+
+    Session embeddings live on the primary app DB regardless of catalog mode,
+    so this augments the storage-v2 lexical branch with a semantic lane that
+    was previously only reachable when live-catalog mode was disabled. Best
+    effort: any failure here (no config, no embeddings yet, etc.) degrades to
+    an empty list rather than failing the request -- lexical recall already
+    returned above this call.
+    """
+    from zerg.models_config import get_embedding_config
+    from zerg.services.embedding_cache import EmbeddingCache
+    from zerg.services.session_processing.embeddings import generate_embedding
+
+    if os.getenv("TESTING") == "1":
+        # Embedding generation always makes a live API call; unit tests never
+        # mock this path, so skip it deterministically rather than let a
+        # stray real API key make a test flaky or network-dependent.
+        return []
+
+    config = get_embedding_config()
+    if not config or not query:
+        return []
+
+    try:
+        query_vec = await generate_embedding(query, config)
+    except Exception:
+        return []
+
+    db = database_module.get_session_factory()()
+    try:
+        cache = EmbeddingCache()
+        if not cache._turn_loaded:
+            cache.load_turn_embeddings(db, config.model, config.dims)
+        if cache.turn_embedding_count == 0:
+            return []
+
+        since = datetime.now(timezone.utc) - timedelta(days=since_days)
+        filter_query = db.query(AgentSession.id).filter(AgentSession.started_at >= since)
+        if project:
+            filter_query = filter_query.filter(AgentSession.project == project)
+        if provider:
+            filter_query = filter_query.filter(AgentSession.provider == provider)
+        if not is_internal_canary_provider_filter(provider):
+            filter_query = filter_query.filter(~internal_canary_session_clause(AgentSession))
+        if not include_test:
+            filter_query = filter_query.filter(AgentSession.environment.notin_(["test", "e2e"]))
+            filter_query = filter_query.filter(~provider_proof_session_clause(AgentSession))
+        if not include_automation:
+            filter_query = filter_query.filter(
+                or_(AgentSession.hidden_from_default_timeline.is_(None), AgentSession.hidden_from_default_timeline == 0)
+            )
+        valid_ids = {str(row[0]) for row in filter_query.all()}
+        if not valid_ids:
+            return []
+
+        results = cache.search_turns(query_vec, limit=max_results * 3, session_filter=valid_ids)
+
+        matches: list[RecallMatch] = []
+        seen: set[str] = set()
+        for session_id, chunk_index, score, event_start, event_end in results:
+            sid = str(session_id)
+            if sid in known_session_ids or sid in seen:
+                continue
+            seen.add(sid)
+            snippet = _fetch_episode_snippet(db, sid, event_start, event_end)
+            matches.append(
+                RecallMatch(
+                    session_id=sid,
+                    chunk_index=chunk_index,
+                    score=float(score),
+                    context_text=snippet or None,
+                    evidence=snippet or None,
+                    event_index_start=event_start,
+                    event_index_end=event_end,
+                )
+            )
+            if len(matches) >= max_results:
+                break
+        return matches
+    except Exception:
+        return []
+    finally:
+        db.close()
+
+
+def _fetch_episode_snippet(db: "Session", session_id: str, event_start: int | None, event_end: int | None) -> str:
+    """Best-effort snippet for a dense hit: first substantial clean event in its episode range."""
+    if event_start is None:
+        return ""
+    count = max(1, (event_end or event_start) - event_start + 1)
+    events = (
+        db.query(AgentEvent)
+        .filter(AgentEvent.session_id == session_id)
+        .filter(durable_transcript_event_predicate())
+        .order_by(AgentEvent.timestamp, AgentEvent.id)
+        .offset(event_start)
+        .limit(count)
+        .all()
+    )
+    for event in events:
+        content_text = (event.content_text or "").strip()
+        if len(content_text) > 20:
+            return content_text[:500]
+    return ""
+
+
+def _rrf_merge_recall_matches(
+    lexical: list[RecallMatch],
+    semantic: list[RecallMatch],
+    *,
+    limit: int,
+) -> list[RecallMatch]:
+    """Reciprocal rank fusion over two ranked RecallMatch lists, keyed by session_id."""
+    k = 60
+    scores: dict[str, float] = {}
+    by_session: dict[str, RecallMatch] = {}
+
+    for rank, match in enumerate(lexical):
+        scores[match.session_id] = scores.get(match.session_id, 0.0) + 1.0 / (k + rank + 1)
+        by_session.setdefault(match.session_id, match)
+    for rank, match in enumerate(semantic):
+        scores[match.session_id] = scores.get(match.session_id, 0.0) + 1.0 / (k + rank + 1)
+        by_session.setdefault(match.session_id, match)
+
+    ordered_ids = sorted(scores, key=lambda sid: scores[sid], reverse=True)
+    return [by_session[sid] for sid in ordered_ids[:limit]]
+
+
 def _try_retrieval_index_recall(
     database_url: str,
     *,
@@ -1017,6 +1156,21 @@ async def recall_sessions(
 
         with timing.span("hydrate"):
             await asyncio.gather(*(hydrate(match) for match in matches))
+
+        if mode in {"auto", "semantic"}:
+            with timing.span("semantic"):
+                semantic_only = await _semantic_recall_matches(
+                    query=query,
+                    project=project,
+                    provider=provider,
+                    since_days=since_days,
+                    include_test=include_test,
+                    include_automation=include_automation,
+                    max_results=max_results,
+                    known_session_ids={m.session_id for m in matches},
+                )
+            matches = _rrf_merge_recall_matches(matches, semantic_only, limit=max_results)
+
         timing.apply(response)
         return RecallResponse(matches=matches, total=len(matches))
 

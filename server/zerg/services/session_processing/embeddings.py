@@ -307,18 +307,26 @@ def _iter_clean_turns(events: list[Mapping[str, object]]) -> Iterator[_Transcrip
 
 
 def iter_turn_chunks(events: list[dict]) -> Iterator[EmbeddingChunk]:
-    """Yield turn-level embedding chunks without provider or DB work."""
+    """Yield episode-level embedding chunks without provider or DB work.
+
+    An episode spans one user event through everything up to (but not
+    including) the next user event -- the full work an agent did in response
+    to one request, not just the first assistant reply. LongMemEval (ICLR
+    2025) found this "round" boundary beats both fixed windows and whole
+    sessions for conversational recall; stopping at the first assistant turn
+    silently dropped everything after a multi-round tool-call episode, which
+    is most of a coding-agent transcript.
+    """
     chunk_idx = 0
-    pending_user: _TranscriptTurn | None = None
+    pending_texts: list[str] = []
+    pending_start: int | None = None
+    pending_end: int | None = None
 
-    def _make_chunk(user_turn: _TranscriptTurn, assistant_turn: _TranscriptTurn | None = None) -> EmbeddingChunk | None:
-        text_parts = [user_turn.combined_text]
-        event_end = user_turn.event_index_end
-        if assistant_turn is not None:
-            text_parts.append(assistant_turn.combined_text)
-            event_end = assistant_turn.event_index_end
-
-        combined = "\n".join(text_parts)
+    def _flush() -> EmbeddingChunk | None:
+        nonlocal chunk_idx
+        if not pending_texts or pending_start is None:
+            return None
+        combined = "\n".join(pending_texts)
         combined, _, _was_truncated = truncate(
             combined,
             MAX_EMBEDDING_TOKENS,
@@ -326,37 +334,33 @@ def iter_turn_chunks(events: list[dict]) -> Iterator[EmbeddingChunk]:
         )
         if not combined.strip():
             return None
-        return EmbeddingChunk(
+        chunk = EmbeddingChunk(
             kind="turn",
             chunk_index=chunk_idx,
             text=combined,
             content_hash=content_hash(combined),
-            event_index_start=user_turn.event_index_start,
-            event_index_end=event_end,
+            event_index_start=pending_start,
+            event_index_end=pending_end,
         )
+        chunk_idx += 1
+        return chunk
 
     for turn in _iter_clean_turns(events):
-        if pending_user is not None:
-            if turn.role == "assistant":
-                chunk = _make_chunk(pending_user, turn)
-                if chunk is not None:
-                    yield chunk
-                    chunk_idx += 1
-                pending_user = None
-                continue
-            chunk = _make_chunk(pending_user)
+        if turn.role == "user" and pending_start is not None:
+            chunk = _flush()
             if chunk is not None:
                 yield chunk
-                chunk_idx += 1
-            pending_user = None
+            pending_texts = []
+            pending_start = None
 
-        if turn.role == "user":
-            pending_user = turn
+        if pending_start is None:
+            pending_start = turn.event_index_start
+        pending_texts.append(turn.combined_text)
+        pending_end = turn.event_index_end
 
-    if pending_user is not None:
-        chunk = _make_chunk(pending_user)
-        if chunk is not None:
-            yield chunk
+    chunk = _flush()
+    if chunk is not None:
+        yield chunk
 
 
 def _load_existing_embeddings(
