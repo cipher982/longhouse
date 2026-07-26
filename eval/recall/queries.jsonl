@@ -1,7 +1,6 @@
 // Seed set. Gold sessions were located by a distinctive exact term, evidence was
 // read to confirm the topic is really there, then the query was rewritten to omit
-// that term. Target is 80 queries; this is 61 and needs review before it gates
-// anything. See README.md.
+// that term. This is 89 queries across three mining passes; see README.md.
 //
 // 5595c356 excluded: it surfaced as a top match for nearly every unrelated mining
 // query during this expansion pass (the retrieval-work session discussing recall
@@ -94,3 +93,49 @@
 {"id": "absent-tenant-switch-ui", "category": "absent", "query": "a self-service admin UI for switching between hosted billing tenants", "gold_sessions": [], "note": "no such UI exists"}
 {"id": "absent-rust-frontend", "category": "absent", "query": "rewriting the web frontend in Rust", "gold_sessions": [], "note": "frontend is TypeScript, only the engine is Rust"}
 {"id": "absent-vector-database", "category": "absent", "query": "standing up a dedicated vector database service for embeddings", "gold_sessions": [], "note": "explicit decision against a separate vector DB; brute-force in sqlite instead"}
+
+// --- third pass, added to reach the 80+ target. Mined from launch/companion/
+// provider-proof/data-plane project memories, verified against real working
+// content (code, specs, PR/CI output) rather than sessions that merely quote
+// the memory file in full — several early hits for these topics resolved to
+// sessions that had MEMORY.md open and matched on unrelated adjacent bullets,
+// which is a weaker label than a session actually working the topic.
+
+// exact
+{"id": "exact-session-chat-ambient", "category": "exact", "query": "SESSION_CHAT_BACKEND ambient default claude on PATH", "gold_sessions": ["6670e7ee", "2ed279bd", "019e14d0"], "note": "hosted session-chat backend config requirement"}
+{"id": "exact-auth-refresh-interceptor", "category": "exact", "query": "single-flight 401 interceptor auth-refresh.ts", "gold_sessions": ["b8561294", "1544f61f", "019ecca6"], "note": "frontend fetchWithRefresh implementation"}
+{"id": "exact-refresh-cookie-90day", "category": "exact", "query": "longhouse_refresh cookie 90-day max-age", "gold_sessions": ["b8561294", "a01ea7af", "019eccbf"], "note": "rotating refresh token cookie lifetime"}
+{"id": "exact-claude-print-adapter", "category": "exact", "query": "claude_print adapter worktree-companion-claude-print", "gold_sessions": ["d5bcbf19", "dd2be65e", "d5bef45d"], "note": "companion spec's dormant adapter branch"}
+{"id": "exact-continue-button-condition", "category": "exact", "query": "can_continue and not lifecycle_closed", "gold_sessions": ["d8565009", "019f3edf", "3762772a"], "note": "the exact line that gates the resume button"}
+{"id": "exact-release-proof-maturity-rollup", "category": "exact", "query": "provider-release-proof-make.test.py maturity_rollup universal_harness", "gold_sessions": ["aa87f4eb", "a8d878fc", "58611950"], "note": "release-proof harness assertion"}
+{"id": "exact-live-proof-env-flag", "category": "exact", "query": "AGENT_RELEASE_LONGHOUSE_LIVE_PROOF default off", "gold_sessions": ["eb0a7f7c", "a8d878fc"], "note": "live old/new binary differential gate"}
+{"id": "exact-legacy-raw-writes-flag", "category": "exact", "query": "LONGHOUSE_DISABLE_LEGACY_RAW_WRITES custom-env", "gold_sessions": ["a818f9bb", "5bc48e4d"], "note": "per-instance legacy write disable for david010"}
+
+// paraphrase
+{"id": "para-session-chat-needs-cli", "category": "paraphrase", "query": "hosted chat continuation breaks if the CLI binary the backend expects isn't installed on the machine", "gold_sessions": ["6670e7ee", "2ed279bd", "019e14d0"], "note": "omits SESSION_CHAT_BACKEND/ambient"}
+{"id": "para-401-single-retry", "category": "paraphrase", "query": "when a request comes back unauthorized, only attempt one silent token refresh even if several requests fail around the same time", "gold_sessions": ["b8561294", "1544f61f", "019ecca6"], "note": "omits 'single-flight'/'401 interceptor'"}
+{"id": "para-companion-voice-existing-resume", "category": "paraphrase", "query": "the assistant's chat thread rides on an existing provider session-resume mechanism rather than a bespoke one", "gold_sessions": ["d5bcbf19", "dd2be65e", "89fc0ba7"], "note": "omits 'claude_print'"}
+{"id": "para-resume-button-vanished", "category": "paraphrase", "query": "a resume button on a finished session disappeared the moment the session actually closed, breaking the feature", "gold_sessions": ["d8565009", "019f3edf", "3762772a"], "note": "omits 'Continue'/'lifecycle_closed'"}
+{"id": "para-fork-not-resume", "category": "paraphrase", "query": "using the provider CLI's normal resume flag outside our wrapper creates a brand new session instead of continuing the old one", "gold_sessions": ["d8565009", "019f0c6b", "a7f07089"], "note": "omits '--resume'/'forked'"}
+{"id": "para-release-proof-mostly-simulated", "category": "paraphrase", "query": "most of the passing release verification runs against simulated behavior rather than a real running binary", "gold_sessions": ["ecc37b8b", "f502517d"], "note": "omits 'hermetic'"}
+{"id": "para-raw-writes-off-one-customer", "category": "paraphrase", "query": "the old direct-write path into the big database got turned off for one specific hosted customer through a config override", "gold_sessions": ["a818f9bb", "5bc48e4d"], "note": "omits the env var names"}
+{"id": "para-ios-captures-preexisting", "category": "paraphrase", "query": "screenshots for the phone app marketing didn't need building from scratch because disabled test captures already did the work", "gold_sessions": ["82e9f3e8", "618e4715", "a8d878fc"], "note": "omits 'XCUITest'/'dormant'"}
+
+// causal
+{"id": "causal-why-continue-button-vanished", "category": "causal", "query": "why did a resume button disappear as soon as a managed session closed", "gold_sessions": ["d8565009", "019f3edf"], "note": "wrongly gated on lifecycle_closed"}
+{"id": "causal-why-voice-demoted", "category": "causal", "query": "why was a native voice input path downgraded from a planned feature to something needing more proof first", "gold_sessions": ["eb11c7d4", "c3336106", "d5bef45d"], "note": "measurement-gated hypothesis behind v0 stickiness"}
+{"id": "causal-why-live-differential-off", "category": "causal", "query": "why keep the live old-vs-new binary comparison disabled by default in a normal scheduled run", "gold_sessions": ["eb0a7f7c", "a8d878fc"], "note": "production default kept off"}
+{"id": "causal-why-gc-email-ignored", "category": "causal", "query": "why not bother responding to a GitHub email warning about repo size or garbage collection after a history rewrite", "gold_sessions": ["94dcbd45", "2be36d05"], "note": "no real secrets ever committed, not worth chasing"}
+{"id": "causal-why-raw-writes-one-instance-first", "category": "causal", "query": "why turn off the legacy direct database write path for only one specific hosted customer first", "gold_sessions": ["a818f9bb", "5bc48e4d"], "note": "staged rollout via per-instance custom-env"}
+{"id": "causal-why-harden-capture-first", "category": "causal", "query": "why was improving one screenshot tool treated as the single highest priority step in a marketing pipeline", "gold_sessions": ["fd5783da", "a8d878fc"], "note": "unblocks all downstream capture work"}
+
+// supersession
+{"id": "super-raw-writes-now", "category": "supersession", "query": "is the legacy direct write path into the monolith database still active anywhere", "gold_sessions": ["a818f9bb", "5bc48e4d", "605bed2a"], "note": "disabled via custom-env for david010"}
+{"id": "super-live-differential-now", "category": "supersession", "query": "is the live binary comparison check currently running by default", "gold_sessions": ["eb0a7f7c", "a8d878fc"], "note": "still off by default"}
+{"id": "super-continue-button-condition-now", "category": "supersession", "query": "what condition currently controls whether the resume button shows on a closed session", "gold_sessions": ["019f3edf", "3762772a"], "note": "must not gate on lifecycle_closed"}
+{"id": "super-companion-voice-status", "category": "supersession", "query": "is voice input shipped in the companion feature yet", "gold_sessions": ["eb11c7d4", "d5bef45d", "c3336106"], "note": "no, gated hypothesis, phase 2"}
+
+// absent
+{"id": "absent-video-calling", "category": "absent", "query": "adding live video calling between the phone app and a running session", "gold_sessions": [], "note": "never proposed or built"}
+{"id": "absent-multiplayer-editing", "category": "absent", "query": "real-time collaborative multi-cursor editing of the same session transcript", "gold_sessions": [], "note": "no such feature"}
+{"id": "absent-on-device-llm", "category": "absent", "query": "running the LLM inference itself on the iOS device instead of calling out to a backend", "gold_sessions": [], "note": "iOS only reads/steers, never runs inference locally"}
