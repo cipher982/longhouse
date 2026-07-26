@@ -27,6 +27,7 @@ from sqlalchemy.orm import Session
 
 import zerg.database as database_module
 import zerg.services.live_session_dispatch as live_session_dispatch
+from zerg.catalogd.client import CatalogUnavailable
 from zerg.metrics import managed_turn_dispatch_seconds
 from zerg.metrics import managed_turn_phase_seconds
 from zerg.metrics import managed_turn_requests_total
@@ -1217,11 +1218,15 @@ async def _release_catalog_lock_after_terminal(
         return
     deadline = asyncio.get_running_loop().time() + MANAGED_LOCAL_LOCK_RELEASE_TIMEOUT_SECS
     while asyncio.get_running_loop().time() < deadline:
-        snapshot = await catalogd.call(
-            "session.read.v2",
-            {"session_id": str(session_id)},
-            timeout_seconds=1.0,
-        )
+        try:
+            snapshot = await catalogd.call(
+                "session.read.v2",
+                {"session_id": str(session_id)},
+                timeout_seconds=1.0,
+            )
+        except CatalogUnavailable:
+            await asyncio.sleep(MANAGED_LOCAL_POLL_INTERVAL_SECS)
+            continue
         facts = snapshot.get("facts")
         state = facts.get("runtime") if isinstance(facts, dict) else None
         if isinstance(state, dict):

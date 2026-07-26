@@ -359,6 +359,14 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
             machine_agent_restart = _restart_machine_agent(status_path, timeout=args.timeout)
             if session.process.poll() is not None:
                 raise RuntimeError("Cursor TUI exited during Machine Agent restart")
+            _wait_until(
+                lambda: (payload if _can_send_live(payload) else None)
+                if (payload := api_get(f"/api/agents/sessions/{session_id}"))
+                else None,
+                timeout=args.timeout,
+                description="Cursor live-control lease after Machine Agent restart",
+            )
+            machine_agent_restart["server_control_status"] = "connected"
             send_live(f"Reply with exactly {restart_marker}")
             _wait_until(
                 lambda: (payload if restart_marker in _assistant_texts(payload) else None) if (payload := hosted_events()) else None,

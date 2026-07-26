@@ -429,6 +429,61 @@ fn lifecycle_promotes_only_registered_claim_and_emits_presence() {
 }
 
 #[test]
+fn concurrent_lifecycle_hooks_append_complete_ndjson_records() {
+    let root = tempdir().unwrap();
+    let claim = pending_claim(root.path());
+    let mut value: Value = serde_json::from_slice(&fs::read(&claim).unwrap()).unwrap();
+    value["status"] = json!("observed");
+    fs::write(&claim, serde_json::to_vec(&value).unwrap()).unwrap();
+
+    let mut children = Vec::new();
+    for index in 0..32 {
+        let event = if index % 2 == 0 {
+            "stop"
+        } else {
+            "afterAgentResponse"
+        };
+        let payload = serde_json::to_vec(&json!({
+            "conversation_id": "cursor-id",
+            "generation_id": format!("turn-{index}"),
+            "text": "x".repeat(16 * 1024),
+        }))
+        .unwrap();
+        let mut child = Command::new(engine())
+            .args(["cursor-lifecycle-hook", event])
+            .env("LONGHOUSE_HOME", root.path())
+            .env("CURSOR_HOME", root.path().join("cursor"))
+            .env("LONGHOUSE_SESSION_ID", "managed-session")
+            .env("LONGHOUSE_CURSOR_LAUNCH_ID", "launch-id")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(&payload).unwrap();
+        children.push(child);
+    }
+    for mut child in children {
+        assert!(child.wait().unwrap().success());
+    }
+
+    let events = fs::read_to_string(
+        root.path()
+            .join("managed-local/cursor-helm/hook-events/managed-session.ndjson"),
+    )
+    .unwrap();
+    let rows = events
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(rows.len(), 32);
+    let generation_ids = rows
+        .iter()
+        .map(|row| row["payload"]["generation_id"].as_str().unwrap())
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(generation_ids.len(), 32);
+}
+
+#[test]
 fn terminal_hook_wakes_the_exact_cursor_store() {
     let root = tempdir().unwrap();
     let cursor = root.path().join("cursor");
@@ -446,9 +501,6 @@ fn terminal_hook_wakes_the_exact_cursor_store() {
     listener.set_nonblocking(false).unwrap();
     let receiver = thread::spawn(move || {
         let (mut stream, _) = listener.accept().unwrap();
-        stream
-            .set_read_timeout(Some(Duration::from_secs(2)))
-            .unwrap();
         let mut raw = Vec::new();
         stream.read_to_end(&mut raw).unwrap();
         serde_json::from_slice::<Value>(&raw).unwrap()

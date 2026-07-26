@@ -222,9 +222,7 @@ pub(crate) fn parse_cursor_visibility_evidence(
                     .and_then(|payload| payload.get("status"))
                     .and_then(Value::as_str)
                     .map(str::to_owned);
-                if let (Some(existing), Some(next)) = (&turn.stop_status, &stop_status) {
-                    ambiguous |= existing != next;
-                } else if turn.stop_status.is_none() {
+                if stop_status.is_some() {
                     turn.stop_status = stop_status;
                     turn.stop_observed_at = row
                         .get("observed_at")
@@ -309,6 +307,24 @@ mod tests {
             "conversation",
         )
         .unwrap();
+        assert_eq!(evidence.unsettled_reason(), None);
+    }
+
+    #[test]
+    fn interrupt_stop_transition_does_not_hide_a_later_recovery() {
+        let evidence = parse_cursor_visibility_evidence(
+            r#"{"event":"beforeSubmitPrompt","conversation_id":"conversation","payload":{"generation_id":"g1","prompt":"sleep"}}
+{"event":"stop","observed_at":"2026-07-21T12:00:00Z","conversation_id":"conversation","payload":{"generation_id":"g1","status":"aborted"}}
+{"event":"stop","observed_at":"2026-07-21T12:00:01Z","conversation_id":"conversation","payload":{"generation_id":"g1","status":"error"}}
+{"event":"beforeSubmitPrompt","conversation_id":"conversation","payload":{"generation_id":"g2","prompt":"recover"}}
+{"event":"afterAgentResponse","conversation_id":"conversation","payload":{"generation_id":"g2","text":"done"}}
+{"event":"stop","conversation_id":"conversation","payload":{"generation_id":"g2","status":"completed"}}"#,
+            "conversation",
+        )
+        .unwrap();
+        assert!(!evidence.ambiguous);
+        assert_eq!(evidence.turns[0].stop_status.as_deref(), Some("error"));
+        assert_eq!(evidence.turns[1].response_text.as_deref(), Some("done"));
         assert_eq!(evidence.unsettled_reason(), None);
     }
 
