@@ -165,15 +165,23 @@ def _restart_machine_agent(status_path: Path, *, timeout: float) -> dict[str, An
     except (OSError, ValueError) as exc:
         raise RuntimeError(f"Machine Agent status unavailable at {status_path}") from exc
     old_pid = int(before.get("daemon_pid") or 0)
-    result = subprocess.run(
-        ["launchctl", "kickstart", "-k", f"gui/{os.getuid()}/com.longhouse.shipper"],
-        text=True,
-        capture_output=True,
-        timeout=15,
-        check=False,
-    )
-    if result.returncode != 0:
-        raise RuntimeError((result.stderr or result.stdout or "Machine Agent restart failed").strip())
+    kickstart_timed_out = False
+    try:
+        result = subprocess.run(
+            ["launchctl", "kickstart", "-k", f"gui/{os.getuid()}/com.longhouse.shipper"],
+            text=True,
+            capture_output=True,
+            timeout=15,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        # launchctl can wait after launchd has already replaced the process.
+        # The status PID and hosted control reconnect below are the product
+        # outcome; keep waiting for them instead of trusting the client lifetime.
+        kickstart_timed_out = True
+    else:
+        if result.returncode != 0:
+            raise RuntimeError((result.stderr or result.stdout or "Machine Agent restart failed").strip())
 
     def reconnected() -> dict[str, Any] | None:
         try:
@@ -187,7 +195,12 @@ def _restart_machine_agent(status_path: Path, *, timeout: float) -> dict[str, An
         return None
 
     current = _wait_until(reconnected, timeout=timeout, description="Machine Agent restart and control reconnect")
-    return {"old_pid": old_pid, "new_pid": int(current["daemon_pid"]), "control_status": "connected"}
+    return {
+        "old_pid": old_pid,
+        "new_pid": int(current["daemon_pid"]),
+        "control_status": "connected",
+        "kickstart_timed_out": kickstart_timed_out,
+    }
 
 
 def _can_send_live(payload: dict[str, Any]) -> bool:
