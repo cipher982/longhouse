@@ -317,7 +317,7 @@ fn managed_provider_contract_items() -> &'static Vec<Value> {
 }
 
 pub(crate) fn granted_control_operations(provider: &str, attached: bool) -> Vec<String> {
-    if !attached {
+    if !attached || provider == "antigravity" {
         return Vec::new();
     }
     let Some(contract) = managed_provider_contract_items()
@@ -1297,7 +1297,7 @@ fn reject_excluded_provider(payload: &Value) -> std::result::Result<(), CommandE
     let Some(provider) = payload.get("provider").and_then(Value::as_str) else {
         return Ok(());
     };
-    if matches!(provider, "cursor" | "antigravity") {
+    if provider == "antigravity" {
         return Err(CommandError {
             code: "provider_shadow_only".to_string(),
             message: format!(
@@ -2429,6 +2429,11 @@ mod tests {
         ("opencode", "send", COMMAND_SEND_TEXT),
         ("opencode", "interrupt", COMMAND_INTERRUPT),
         ("opencode", "terminate", COMMAND_TERMINATE),
+        ("cursor", "send", COMMAND_SEND_TEXT),
+        ("cursor", "interrupt", COMMAND_INTERRUPT),
+        ("cursor", "terminate", COMMAND_TERMINATE),
+        ("cursor", "turn_start", COMMAND_TURN_START),
+        ("cursor", "turn_interrupt", COMMAND_TURN_INTERRUPT),
     ];
 
     fn support_dispatch_command(provider: &str, operation: &str) -> Option<&'static str> {
@@ -2874,6 +2879,9 @@ mod tests {
             let (provider, operation) = support
                 .split_once('.')
                 .unwrap_or_else(|| panic!("support {support} must be provider.operation"));
+            if provider == "antigravity" {
+                continue;
+            }
             assert!(
                 support_dispatch_command(provider, operation).is_some(),
                 "manifest advertises {support}, but engine dispatch has no provider operation path"
@@ -2883,7 +2891,10 @@ mod tests {
 
     #[test]
     fn reducer_control_grants_follow_dispatch_manifest_and_connection_state() {
-        assert!(granted_control_operations("cursor", true).is_empty());
+        assert_eq!(
+            granted_control_operations("cursor", true),
+            ["interrupt", "send_input", "terminate"]
+        );
         assert!(granted_control_operations("antigravity", true).is_empty());
         assert!(granted_control_operations("cursor", false).is_empty());
         assert!(granted_control_operations("unknown", true).is_empty());
@@ -3048,7 +3059,7 @@ mod tests {
         assert!(supports.contains(&"antigravity.send".to_string()));
         assert!(supports.contains(&"claude.live_proof".to_string()));
         assert!(supports.contains(&"opencode.live_proof".to_string()));
-        assert!(supports.contains(&"antigravity.live_proof".to_string()));
+        assert!(!supports.contains(&"antigravity.live_proof".to_string()));
         assert!(!supports.contains(&"codex.live_proof".to_string()));
         assert!(!supports.contains(&"antigravity.interrupt".to_string()));
         assert!(!supports.contains(&"antigravity.steer".to_string()));
@@ -4225,7 +4236,7 @@ printf '{{"type":"result","subtype":"success","is_error":false}}\n'
 
             assert_eq!(response["ok"], false, "{permission_mode}: {response}");
             assert_eq!(
-                response["error"]["code"], "provider_shadow_only",
+                response["error"]["code"], "permission_policy_unsupported",
                 "{permission_mode}: {response}"
             );
         }
@@ -4287,12 +4298,12 @@ printf '{{"type":"result","subtype":"success","is_error":false}}\n'
     }
 
     #[test]
-    fn excluded_providers_are_rejected_before_dispatch() {
-        for provider in ["cursor", "antigravity"] {
-            let error = reject_excluded_provider(&json!({"provider": provider})).unwrap_err();
-            assert_eq!(error.code, "provider_shadow_only");
-            assert!(error.message.contains("Shadow-only"));
-        }
+    fn only_shadow_provider_is_rejected_before_dispatch() {
+        let error = reject_excluded_provider(&json!({"provider": "antigravity"})).unwrap_err();
+        assert_eq!(error.code, "provider_shadow_only");
+        assert!(error.message.contains("Shadow-only"));
+
+        assert!(reject_excluded_provider(&json!({"provider": "cursor"})).is_ok());
         assert!(reject_excluded_provider(&json!({"provider": "codex"})).is_ok());
     }
 }

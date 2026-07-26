@@ -25,6 +25,8 @@ from zerg.models.agents import SessionConnection
 from zerg.models.agents import SessionRun
 from zerg.models.agents import SessionThread
 from zerg.models.live_store import LiveControlLease
+from zerg.models.live_store import LiveLaunchReadiness
+from zerg.services.live_launch_readiness import update_live_launch_readiness_state
 from zerg.services.managed_provider_contracts import contract_for_provider
 from zerg.services.managed_provider_contracts import control_plane_for_provider
 from zerg.services.managed_provider_contracts import provider_for_control_plane
@@ -374,6 +376,16 @@ def upsert_live_control_leases(
                 external_name=row.machine_id,
                 observed_at=seen_at,
             )
+            if control_state in {"online", "degraded"}:
+                readiness = db.get(LiveLaunchReadiness, str(session_id))
+                if readiness is not None and readiness.state in {"pending", "dispatched"}:
+                    update_live_launch_readiness_state(
+                        db,
+                        session_id=UUID(str(session_id)),
+                        state="adopted",
+                        clear_expires=True,
+                        now=seen_at,
+                    )
         except RuntimeError:
             # Heartbeats may precede catalog ingest for a newly discovered
             # Shadow session. The next catalog sync/heartbeat converges it.
