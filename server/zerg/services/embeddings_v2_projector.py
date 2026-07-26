@@ -162,6 +162,15 @@ class EmbeddingsV2Projector:
                 return True
             if page.get("found") is not True or str(page.get("snapshot_revision")) != str(claimed_revision):
                 raise ValueError("catalog render snapshot is unavailable or drifted")
+            if page.get("generation_id") is None:
+                # Session exists but has never been rendered (render_state
+                # 'pending', no current_render_generation) -- seen on
+                # zero-message CI/benchmark artifacts. There is nothing to
+                # embed, and this is permanent for this revision, not a
+                # transient catalog hiccup: calling _uuid(None) here raised
+                # "badly formed hexadecimal UUID string" and got retried
+                # forever at real cost, since it can never resolve on retry.
+                return True
             page_generation = _uuid(page.get("generation_id"))
             if owner_id is None:
                 session = page.get("session")

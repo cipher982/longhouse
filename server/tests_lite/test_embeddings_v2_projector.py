@@ -207,3 +207,42 @@ async def test_transient_error_keeps_fast_backoff(monkeypatch):
     failed_at = datetime.fromisoformat(fail_params["failed_at"])
     retry_at = datetime.fromisoformat(fail_params["retry_at"])
     assert (retry_at - failed_at).total_seconds() <= 300
+
+
+@pytest.mark.asyncio
+async def test_embeddings_projector_completes_cleanly_for_never_rendered_session(monkeypatch):
+    """A session that exists but has never been rendered (render_state
+    'pending', no current_render_generation -- seen on zero-message CI/
+    benchmark artifacts) must complete as a no-op, not crash.
+
+    Regression guard: page.get("generation_id") is None here, and passing
+    that straight into _uuid() raised "badly formed hexadecimal UUID
+    string" -- a deterministic failure for this session that retried
+    forever at real cost since it could never succeed.
+    """
+    session_id, store_id = (str(uuid4()) for _ in range(2))
+    catalog = FakeClient(
+        {
+            "projector.store.bind.v2": {},
+            "projector.state.claim.v2": {"claimed": [{"session_id": session_id, "claimed_revision": "1", "failure_count": 0}]},
+            "storage.session.render_objects.list.v2": {
+                "found": True,
+                "deleted": False,
+                "snapshot_revision": "1",
+                "generation_id": None,
+                "objects": [],
+                "has_more": False,
+            },
+            "projector.state.complete.v2": {},
+            "projector.state.fail.v2": {},
+        }
+    )
+    search = FakeClient({"search.ping.v2": {"store_id": store_id, "schema_generation": "test"}})
+    config = SimpleNamespace(model="test-model", dims=2)
+    monkeypatch.setattr("zerg.models_config.get_embedding_config", lambda: config)
+
+    projector = EmbeddingsV2Projector(catalog=catalog, search=search, render_workers=FakeWorkers(None), worker_id="test")
+    assert await projector.run_once(now=datetime.now(UTC)) == 1
+
+    assert any(method == "projector.state.complete.v2" for method, _ in catalog.calls)
+    assert not any(method == "projector.state.fail.v2" for method, _ in catalog.calls)
