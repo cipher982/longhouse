@@ -129,9 +129,7 @@ async def test_production_live_catalog_lifespan_delegates_schema_to_catalogd(mon
     monkeypatch.setattr("zerg.services.search_v2_projector.stop_search_v2_projector", stop_search_projector)
     monkeypatch.setattr("zerg.services.raw_object_workers.get_raw_object_worker_pool", lambda: StorageWorkers("raw"))
     monkeypatch.setattr("zerg.services.raw_object_workers.close_raw_object_worker_pool", stop_raw_workers)
-    monkeypatch.setattr(
-        "zerg.services.render_object_workers.get_render_object_worker_pool", lambda: StorageWorkers("render")
-    )
+    monkeypatch.setattr("zerg.services.render_object_workers.get_render_object_worker_pool", lambda: StorageWorkers("render"))
     monkeypatch.setattr("zerg.services.render_object_workers.close_render_object_worker_pool", stop_render_workers)
     monkeypatch.setattr("zerg.services.live_control_catalog.run_live_catalog_input_recovery_loop", completed_loop)
     monkeypatch.setattr("zerg.services.storage_session_titles.run_storage_title_reconciler", title_loop)
@@ -140,7 +138,6 @@ async def test_production_live_catalog_lifespan_delegates_schema_to_catalogd(mon
         telemetry_loop,
     )
     monkeypatch.setattr("zerg.services.maintenance.stop_maintenance_loop", noop_async)
-    monkeypatch.setattr("zerg.services.retrieval_index_jobs.stop_recall_index_worker", noop_async)
     monkeypatch.setattr("zerg.utils.async_runner.get_shared_runner", lambda: Runner())
     monkeypatch.setattr("zerg.websocket.manager.topic_manager.shutdown", noop_async)
     monkeypatch.setattr(lifespan_module.ops_events_bridge, "stop", lambda: None)

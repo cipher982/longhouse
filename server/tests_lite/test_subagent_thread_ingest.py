@@ -14,8 +14,8 @@ os.environ.setdefault("TESTING", "1")
 
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import sessionmaker
-from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
 
+from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
 from zerg.database import Base
 from zerg.database import get_db
 from zerg.database import make_engine
@@ -28,7 +28,6 @@ from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import AgentSourceLine
 from zerg.models.agents import SessionEdge
-from zerg.models.agents import SessionEmbedding
 from zerg.models.agents import SessionObservation
 from zerg.models.agents import SessionRuntimeState
 from zerg.models.agents import SessionTask
@@ -96,8 +95,7 @@ def _claude_child_payload(
     source_path: str | None = None,
 ) -> SessionIngest:
     source_path = source_path or (
-        "/Users/davidrose/.claude/projects/-Users-davidrose-git-cipher982/"
-        f"{parent_id}/subagents/agent-a0325d64b2dc7300f.jsonl"
+        f"/Users/davidrose/.claude/projects/-Users-davidrose-git-cipher982/{parent_id}/subagents/agent-a0325d64b2dc7300f.jsonl"
     )
     return SessionIngest(
         id=child_id,
@@ -133,8 +131,7 @@ def _claude_child_payload(
 
 def _thread_alias_values(db, thread_id):
     return {
-        (row.alias_kind, row.alias_value)
-        for row in db.query(SessionThreadAlias).filter(SessionThreadAlias.thread_id == thread_id).all()
+        (row.alias_kind, row.alias_value) for row in db.query(SessionThreadAlias).filter(SessionThreadAlias.thread_id == thread_id).all()
     }
 
 
@@ -169,9 +166,7 @@ def test_root_ingest_without_provider_session_id_does_not_create_provider_alias(
             )
         )
 
-        primary = (
-            db.query(SessionThread).filter(SessionThread.session_id == PARENT_ID, SessionThread.is_primary == 1).one()
-        )
+        primary = db.query(SessionThread).filter(SessionThread.session_id == PARENT_ID, SessionThread.is_primary == 1).one()
         aliases = _thread_alias_values(db, primary.id)
         assert ("longhouse_session_id", str(PARENT_ID)) in aliases
         assert ("provider_session_id", str(PARENT_ID)) not in aliases
@@ -188,9 +183,7 @@ def test_claude_child_ingest_creates_child_thread_not_session(tmp_path):
         assert result.session_id == PARENT_ID
         assert db.query(AgentSession).count() == 1
 
-        root_thread = (
-            db.query(SessionThread).filter(SessionThread.session_id == PARENT_ID, SessionThread.is_primary == 1).one()
-        )
+        root_thread = db.query(SessionThread).filter(SessionThread.session_id == PARENT_ID, SessionThread.is_primary == 1).one()
         child_thread = (
             db.query(SessionThread)
             .filter(SessionThread.session_id == PARENT_ID, SessionThread.branch_kind == "subagent")
@@ -230,14 +223,10 @@ def test_claude_child_ingest_creates_child_thread_not_session(tmp_path):
 
         projection = store.get_session_projection_page(PARENT_ID)
         assert projection.total == 1
-        assert [item.event.content_text for item in projection.items if item.event is not None] == [
-            "Profile README redesign"
-        ]
+        assert [item.event.content_text for item in projection.items if item.event is not None] == ["Profile README redesign"]
         child_projection = store.get_session_projection_page(PARENT_ID, thread_id=child_thread.id)
         assert child_projection.total == 1
-        assert [item.event.content_text for item in child_projection.items if item.event is not None] == [
-            "Deploy crims on drose.io"
-        ]
+        assert [item.event.content_text for item in child_projection.items if item.event is not None] == ["Deploy crims on drose.io"]
 
 
 def test_replaying_same_claude_child_reuses_child_thread(tmp_path):
@@ -490,11 +479,7 @@ def test_unresolved_opencode_task_child_is_hidden_from_default_timeline(tmp_path
         )
 
         assert result.session_id == OPENCODE_CHILD_ID
-        primary = (
-            db.query(SessionThread)
-            .filter(SessionThread.session_id == OPENCODE_CHILD_ID, SessionThread.is_primary == 1)
-            .one()
-        )
+        primary = db.query(SessionThread).filter(SessionThread.session_id == OPENCODE_CHILD_ID, SessionThread.is_primary == 1).one()
         assert primary.branch_kind == "subagent"
         aliases = _thread_alias_values(db, primary.id)
         assert ("forked_from_provider_session_id", "ses_parent") in aliases
@@ -805,11 +790,7 @@ def test_opencode_fork_parentage_stays_visible_with_fork_thread_alias(tmp_path):
         )
 
         assert result.session_id == OPENCODE_FORK_ID
-        primary = (
-            db.query(SessionThread)
-            .filter(SessionThread.session_id == OPENCODE_FORK_ID, SessionThread.is_primary == 1)
-            .one()
-        )
+        primary = db.query(SessionThread).filter(SessionThread.session_id == OPENCODE_FORK_ID, SessionThread.is_primary == 1).one()
         assert primary.branch_kind == "fork"
         aliases = _thread_alias_values(db, primary.id)
         assert ("provider_session_id", "ses_fork") in aliases
@@ -853,11 +834,7 @@ def test_opencode_unknown_parentage_stays_visible_without_fork_label(tmp_path):
         )
 
         assert result.session_id == OPENCODE_FORK_ID
-        primary = (
-            db.query(SessionThread)
-            .filter(SessionThread.session_id == OPENCODE_FORK_ID, SessionThread.is_primary == 1)
-            .one()
-        )
+        primary = db.query(SessionThread).filter(SessionThread.session_id == OPENCODE_FORK_ID, SessionThread.is_primary == 1).one()
         assert primary.branch_kind == "root"
         aliases = _thread_alias_values(db, primary.id)
         assert ("provider_session_id", "ses_linked") in aliases
@@ -1002,9 +979,7 @@ def test_unresolved_child_file_is_hidden_from_default_timeline(tmp_path):
         result = store.ingest_session(_claude_child_payload(parent_id=UUID("aaaaaaaa-0000-0000-0000-000000000001")))
 
         assert result.session_id == CHILD_ID
-        primary = (
-            db.query(SessionThread).filter(SessionThread.session_id == CHILD_ID, SessionThread.is_primary == 1).one()
-        )
+        primary = db.query(SessionThread).filter(SessionThread.session_id == CHILD_ID, SessionThread.is_primary == 1).one()
         assert primary.branch_kind == "subagent"
         assert primary.parent_thread_id is None
 
@@ -1044,11 +1019,7 @@ def test_env_style_sidechain_without_child_path_remains_timeline_visible(tmp_pat
         )
 
         assert result.session_id == sidechain_id
-        primary = (
-            db.query(SessionThread)
-            .filter(SessionThread.session_id == sidechain_id, SessionThread.is_primary == 1)
-            .one()
-        )
+        primary = db.query(SessionThread).filter(SessionThread.session_id == sidechain_id, SessionThread.is_primary == 1).one()
         assert primary.branch_kind == "root"
         total, rows = store.list_timeline_thread_page(hide_autonomous=True, include_test=True)
         assert total == 1
@@ -1066,16 +1037,6 @@ def test_backfill_moves_existing_leaked_child_session_under_parent(tmp_path):
         assert leaked.session_id == CHILD_ID
         assert db.query(AgentSession).count() == 2
         db.add(SessionTask(session_id=str(CHILD_ID), task_type="summary", status="pending"))
-        db.add(
-            SessionEmbedding(
-                session_id=CHILD_ID,
-                kind="session",
-                chunk_index=-1,
-                model="test-embedding",
-                dims=1,
-                embedding=b"\x00\x00\x00\x00",
-            )
-        )
         db.flush()
 
         report = backfill_subagent_child_threads(db)
@@ -1083,12 +1044,10 @@ def test_backfill_moves_existing_leaked_child_session_under_parent(tmp_path):
         assert report["candidates_resolved"] == 1
         assert report["sessions_removed"] == 1
         assert report["legacy_tasks_deleted"] == 1
-        assert report["embeddings_deleted"] == 1
         assert report["parent_counts_refreshed"] == 1
         assert db.query(AgentSession).count() == 1
         assert db.query(AgentSession).filter(AgentSession.id == CHILD_ID).first() is None
         assert db.query(SessionTask).filter(SessionTask.session_id == str(CHILD_ID)).count() == 0
-        assert db.query(SessionEmbedding).filter(SessionEmbedding.session_id == CHILD_ID).count() == 0
 
         child_thread = db.query(SessionThread).filter(SessionThread.branch_kind == "subagent").one()
         assert child_thread.session_id == PARENT_ID
@@ -1099,9 +1058,7 @@ def test_backfill_moves_existing_leaked_child_session_under_parent(tmp_path):
         assert child_source_line.session_id == PARENT_ID
         assert child_source_line.thread_id == child_thread.id
         parent_session = db.query(AgentSession).filter(AgentSession.id == PARENT_ID).one()
-        parent_user_events = (
-            db.query(AgentEvent).filter(AgentEvent.session_id == PARENT_ID, AgentEvent.role == "user").count()
-        )
+        parent_user_events = db.query(AgentEvent).filter(AgentEvent.session_id == PARENT_ID, AgentEvent.role == "user").count()
         assert parent_user_events == 2
         assert parent_session.user_messages == 1
         assert bool(parent_session.needs_embedding) is True
@@ -1125,8 +1082,7 @@ def test_timeline_sessions_api_collapses_parent_with_children(tmp_path):
                 _claude_child_payload(
                     child_id=child_id,
                     source_path=(
-                        "/Users/davidrose/.claude/projects/-Users-davidrose-git-cipher982/"
-                        f"{PARENT_ID}/subagents/agent-{idx}.jsonl"
+                        f"/Users/davidrose/.claude/projects/-Users-davidrose-git-cipher982/{PARENT_ID}/subagents/agent-{idx}.jsonl"
                     ),
                 )
             )

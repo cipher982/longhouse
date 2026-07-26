@@ -34,7 +34,6 @@ from zerg.models.agents import AgentSessionBranch
 from zerg.models.agents import AgentSourceLine
 from zerg.models.agents import SessionConnection
 from zerg.models.agents import SessionEdge
-from zerg.models.agents import SessionEmbedding
 from zerg.models.agents import SessionInput
 from zerg.models.agents import SessionLaunchAttempt
 from zerg.models.agents import SessionObservation
@@ -311,7 +310,6 @@ def cleanup_workflow_journal_sessions(db: Session) -> dict[str, int]:
         # journal session is gone.
         db.query(SessionObservation).filter(SessionObservation.session_id == session_id).delete(synchronize_session=False)
         db.query(SessionTask).filter(SessionTask.session_id == str(session_id)).delete(synchronize_session=False)
-        db.query(SessionEmbedding).filter(SessionEmbedding.session_id == session_id).delete(synchronize_session=False)
         db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == session_id).delete(synchronize_session=False)
         if thread_ids:
             db.query(SessionThreadAlias).filter(SessionThreadAlias.thread_id.in_(thread_ids)).delete(synchronize_session=False)
@@ -362,7 +360,6 @@ def _move_subagent_session_under_parent(
         "runtime_rows_moved": 0,
         "runs_moved": 0,
         "legacy_tasks_deleted": 0,
-        "embeddings_deleted": 0,
         "sessions_removed": 0,
     }
     old_thread_ids = [row.id for row in db.query(SessionThread.id).filter(SessionThread.session_id == child_session_id).all()]
@@ -583,9 +580,6 @@ def _move_subagent_session_under_parent(
         counts["legacy_tasks_deleted"] += (
             db.query(SessionTask).filter(SessionTask.session_id == str(child_session_id)).delete(synchronize_session=False)
         )
-        counts["embeddings_deleted"] += (
-            db.query(SessionEmbedding).filter(SessionEmbedding.session_id == child_session_id).delete(synchronize_session=False)
-        )
         if old_thread_ids:
             db.query(SessionEdge).filter(SessionEdge.source_thread_id.in_(old_thread_ids)).delete(synchronize_session=False)
             db.query(SessionEdge).filter(SessionEdge.target_thread_id.in_(old_thread_ids)).delete(synchronize_session=False)
@@ -749,7 +743,6 @@ def backfill_subagent_child_threads(db: Session) -> dict[str, int]:
         "runtime_rows_moved": 0,
         "runs_moved": 0,
         "legacy_tasks_deleted": 0,
-        "embeddings_deleted": 0,
     }
     parent_sessions_touched: set[UUID] = set()
 

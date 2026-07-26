@@ -1,13 +1,9 @@
 from __future__ import annotations
 
-import asyncio
 import os
 from datetime import datetime
 from datetime import timezone
-from types import SimpleNamespace
 from uuid import uuid4
-
-import pytest
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
@@ -15,13 +11,9 @@ os.environ.setdefault("TESTING", "1")
 from zerg.database import Base
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
-from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
-from zerg.routers.agents_search import recall_sessions
 from zerg.services.agents import AgentsStore
 from zerg.services.session_hot_cards import upsert_timeline_card_from_session
-from zerg.services.session_hybrid_search import _hybrid_semantic_candidate_ids
-from zerg.services.session_listing_types import SessionListParams
 from zerg.services.session_response_projection import has_real_sessions
 
 
@@ -30,14 +22,6 @@ def _make_db(tmp_path):
     engine = make_engine(f"sqlite:///{db_path}")
     Base.metadata.create_all(bind=engine)
     return make_sessionmaker(engine)
-
-
-def _database_url(factory) -> str:
-    return str(factory.kw["bind"].url)
-
-
-def _request():
-    return SimpleNamespace(state=SimpleNamespace())
 
 
 def _seed_session(
@@ -148,218 +132,3 @@ def test_canary_sessions_do_not_make_demo_data_count_as_real(tmp_path):
 
         _seed_session(db, provider="codex", project="zerg", device_id="cinder", user_messages=1)
         assert has_real_sessions(db, default_when_empty=False) is True
-
-
-def test_hybrid_semantic_candidates_hide_test_and_provider_proof_by_default(tmp_path):
-    factory = _make_db(tmp_path)
-    with factory() as db:
-        visible = _seed_session(db, provider="codex", project="zerg", device_id="cinder", user_messages=1)
-        test_session = _seed_session(
-            db,
-            provider="opencode",
-            project="zerg",
-            device_id="cinder",
-            environment="test",
-            first_user_message_preview="LONGHOUSE_OPENCODE_NOREPLY_hidden",
-            user_messages=1,
-        )
-        cwd_proof = _seed_session(
-            db,
-            provider="opencode",
-            project="zerg",
-            device_id="cinder",
-            cwd="/Users/david/.longhouse/canaries/provider-live/opencode/proof/workspace",
-            user_messages=1,
-        )
-        build_cwd_proof = _seed_session(
-            db,
-            provider="claude",
-            project="zerg",
-            device_id="cinder",
-            cwd="/Users/david/git/zerg/longhouse/.build/canaries/provider-live/claude/20260701T210350Z/claude-live-token-contract/workspace",
-            user_messages=1,
-        )
-        reviewed_worktree_proof = _seed_session(
-            db,
-            provider="claude",
-            project="zerg",
-            device_id="cinder",
-            cwd="/Users/david/git/_wt/longhouse-provider-live-proof-owner",
-            user_messages=1,
-        )
-        params = SessionListParams(
-            project=None,
-            provider=None,
-            environment=None,
-            include_test=False,
-            hide_autonomous=False,
-            device_id=None,
-            days_back=14,
-            query="proof",
-            limit=10,
-            offset=0,
-            sort=None,
-            mode="hybrid",
-            context_mode="forensic",
-        )
-
-        assert _hybrid_semantic_candidate_ids(db, params) == {str(visible.id)}
-
-        include_test_params = SessionListParams(
-            project=None,
-            provider=None,
-            environment=None,
-            include_test=True,
-            hide_autonomous=False,
-            device_id=None,
-            days_back=14,
-            query="proof",
-            limit=10,
-            offset=0,
-            sort=None,
-            mode="hybrid",
-            context_mode="forensic",
-        )
-        assert _hybrid_semantic_candidate_ids(db, include_test_params) == {
-            str(visible.id),
-            str(test_session.id),
-            str(cwd_proof.id),
-            str(build_cwd_proof.id),
-            str(reviewed_worktree_proof.id),
-        }
-
-
-def test_recall_hides_internal_canary_sessions(monkeypatch, tmp_path):
-    factory = _make_db(tmp_path)
-
-    class FakeEmbeddingCache:
-        def __init__(self):
-            self._session_loaded = True
-            self._turn_loaded = True
-
-        def load_session_embeddings(self, db, model, dims):
-            return 0
-
-        def load_turn_embeddings(self, db, model, dims):
-            return 0
-
-        @property
-        def turn_embedding_count(self):
-            return 1
-
-        def search_turns(self, query_vec, limit, session_filter):
-            return [(session_id, 0, 0.9, 0, 0) for session_id in sorted(session_filter)]
-
-    async def fake_generate_embedding(query, config):
-        return [1.0]
-
-    monkeypatch.setattr("zerg.models_config.get_embedding_config", lambda: SimpleNamespace(model="test", dims=1))
-    monkeypatch.setattr("zerg.services.embedding_cache.EmbeddingCache", FakeEmbeddingCache)
-    monkeypatch.setattr("zerg.services.session_processing.embeddings.generate_embedding", fake_generate_embedding)
-
-    with factory() as db:
-        canary = _seed_session(db, provider="canary", project="canary", device_id="demo-machine-canary", user_messages=1)
-        typo = _seed_session(db, provider="cnary", project="cnary", device_id="demo-machine-cnary", user_messages=1)
-        mislabeled = _seed_session(db, provider="codex", project="canary-stress", device_id="demo-machine-canary", user_messages=1)
-        proof = _seed_session(
-            db,
-            provider="opencode",
-            project="zerg",
-            device_id="cinder",
-            environment="test",
-            first_user_message_preview="LONGHOUSE_OPENCODE_NOREPLY_recall",
-            user_messages=1,
-        )
-        visible = _seed_session(db, provider="codex", project="zerg", device_id="cinder", user_messages=1)
-        for session in (canary, typo, mislabeled, proof, visible):
-            db.add(
-                AgentEvent(
-                    session_id=session.id,
-                    role="user",
-                    content_text="launch review",
-                    timestamp=datetime.now(timezone.utc),
-                )
-            )
-        db.commit()
-
-        response = asyncio.run(
-            recall_sessions(
-                request=_request(),
-                query="launch review",
-                project=None,
-                provider=None,
-                include_test=False,
-                max_results=10,
-                since_days=14,
-                context_turns=2,
-                context_mode="forensic",
-                database_url=_database_url(factory),
-                session_factory=factory,
-                _auth=None,
-                _single=None,
-            )
-        )
-
-    assert [match.session_id for match in response.matches] == [str(visible.id)]
-
-
-@pytest.mark.parametrize("provider", ["canary", "cnary"])
-def test_recall_allows_explicit_internal_canary_provider(monkeypatch, tmp_path, provider):
-    factory = _make_db(tmp_path)
-
-    class FakeEmbeddingCache:
-        def __init__(self):
-            self._session_loaded = True
-            self._turn_loaded = True
-
-        def load_session_embeddings(self, db, model, dims):
-            return 0
-
-        def load_turn_embeddings(self, db, model, dims):
-            return 0
-
-        @property
-        def turn_embedding_count(self):
-            return 1
-
-        def search_turns(self, query_vec, limit, session_filter):
-            return [(session_id, 0, 0.9, 0, 0) for session_id in sorted(session_filter)]
-
-    async def fake_generate_embedding(query, config):
-        return [1.0]
-
-    monkeypatch.setattr("zerg.models_config.get_embedding_config", lambda: SimpleNamespace(model="test", dims=1))
-    monkeypatch.setattr("zerg.services.embedding_cache.EmbeddingCache", FakeEmbeddingCache)
-    monkeypatch.setattr("zerg.services.session_processing.embeddings.generate_embedding", fake_generate_embedding)
-
-    with factory() as db:
-        visible = _seed_session(db, provider=provider, project=provider, device_id=f"demo-machine-{provider}", user_messages=1)
-        db.add(
-            AgentEvent(
-                session_id=visible.id,
-                role="user",
-                content_text="launch review",
-                timestamp=datetime.now(timezone.utc),
-            )
-        )
-        db.commit()
-
-        response = asyncio.run(
-            recall_sessions(
-                request=_request(),
-                query="launch review",
-                project=None,
-                provider=provider,
-                include_test=False,
-                max_results=10,
-                since_days=14,
-                context_turns=2,
-                context_mode="forensic",
-                database_url=_database_url(factory),
-                session_factory=factory,
-                _auth=None,
-                _single=None,
-            )
-        )
-
-    assert [match.session_id for match in response.matches] == [str(visible.id)]

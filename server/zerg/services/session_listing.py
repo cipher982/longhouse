@@ -15,7 +15,6 @@ from sqlalchemy.orm import Session
 
 from zerg.auth.managed_session_tokens import ManagedSessionToken
 from zerg.services.agents import AgentsStore
-from zerg.services.session_hybrid_search import list_hybrid_sessions
 from zerg.services.session_listing_types import SessionListingError
 from zerg.services.session_listing_types import SessionListParams
 from zerg.services.session_listing_types import SessionListResult
@@ -36,13 +35,6 @@ async def list_agent_sessions(
     _validate_managed_hook_scope(auth, params)
     _validate_context_mode(params.context_mode)
     effective_sort = _resolve_effective_sort(params)
-
-    if params.mode == "hybrid":
-        return await list_hybrid_sessions(
-            db=db,
-            params=params,
-            owner_id=owner_id,
-        )
 
     return await asyncio.to_thread(
         _list_lexical_sessions,

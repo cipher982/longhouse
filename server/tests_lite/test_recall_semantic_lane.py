@@ -14,28 +14,13 @@ from __future__ import annotations
 
 import asyncio
 import os
-from datetime import datetime
-from datetime import timezone
 from uuid import uuid4
 
 import numpy as np
 import pytest
-from sqlalchemy.orm import sessionmaker
 
-from zerg.database import Base
-from zerg.database import make_engine
-from zerg.models.agents import AgentEvent
-from zerg.models.agents import AgentSession
 from zerg.routers import agents_search
 from zerg.services.session_views import RecallMatch
-
-
-def _make_db(tmp_path):
-    db_path = tmp_path / "test_semantic_recall.db"
-    engine = make_engine(f"sqlite:///{db_path}")
-    engine = engine.execution_options(schema_translate_map={"agents": None})
-    Base.metadata.create_all(bind=engine)
-    return sessionmaker(bind=engine)
 
 
 def _match(session_id: str, score: float) -> RecallMatch:
@@ -99,48 +84,6 @@ async def test_semantic_recall_matches_short_circuits_under_testing_env():
 
 
 @pytest.mark.asyncio
-async def test_semantic_recall_matches_degrades_when_session_factory_unavailable(monkeypatch):
-    """Live-catalog mode does not guarantee get_session_factory() works; this must not raise.
-
-    This is the exact crash Sol's review flagged: get_session_factory() was
-    previously called outside the function's try/except, so an unavailable
-    factory in live-catalog mode would propagate as a 500 instead of
-    degrading to lexical-only.
-    """
-    monkeypatch.setenv("TESTING", "0")
-
-    fake_config = type("Cfg", (), {"model": "test-model", "dims": 4})()
-
-    import zerg.models_config as models_config_module
-
-    monkeypatch.setattr(models_config_module, "get_embedding_config", lambda: fake_config)
-
-    async def fake_generate_embedding(_text, _config):
-        return np.zeros(4, dtype=np.float32)
-
-    import zerg.services.session_processing.embeddings as embeddings_module
-
-    monkeypatch.setattr(embeddings_module, "generate_embedding", fake_generate_embedding)
-
-    def _raise_unavailable():
-        raise RuntimeError("get_session_factory unavailable in live-catalog mode")
-
-    monkeypatch.setattr(agents_search.database_module, "get_session_factory", _raise_unavailable)
-
-    result = await agents_search._semantic_recall_matches(
-        query="does this crash",
-        project=None,
-        provider=None,
-        since_days=90,
-        include_test=False,
-        include_automation=False,
-        max_results=5,
-        timeout_seconds=5.0,
-    )
-    assert result == []
-
-
-@pytest.mark.asyncio
 async def test_semantic_recall_matches_times_out_gracefully(monkeypatch):
     """A slow embedding call must degrade within the caller's remaining budget, not hang."""
     monkeypatch.setenv("TESTING", "0")
@@ -187,7 +130,6 @@ async def test_semantic_recall_matches_uses_live_catalog_embedding_rpc(monkeypat
     monkeypatch.setenv("TESTING", "0")
     fake_config = type("Cfg", (), {"model": "test-model", "dims": 2})()
     monkeypatch.setattr("zerg.models_config.get_embedding_config", lambda: fake_config)
-    monkeypatch.setattr(agents_search.database_module, "live_catalog_enabled", lambda: True)
 
     async def fake_generate_embedding(_text, _config):
         return np.array([1, 0], dtype=np.float32)
@@ -227,56 +169,3 @@ async def test_semantic_recall_matches_uses_live_catalog_embedding_rpc(monkeypat
     assert seen["owner_id"] == 42
     assert seen["exclude_environments"] == ["test", "e2e", "automation"]
     assert seen["since_iso"] is not None
-
-
-def test_fetch_episode_snippet_uses_clean_projection_index_space(tmp_path):
-    """event_start/end index the clean (content-bearing) projection, not raw durable rows.
-
-    A tool-output-only row sits between two content-bearing events at raw
-    positions 0 and 2, but clean-projection positions 0 and 1. Requesting
-    the episode at clean indices [0, 1] must return the second *content*
-    event, not whatever raw row happens to sit at a naive offset.
-    """
-    SessionLocal = _make_db(tmp_path)
-    session_id = str(uuid4())
-
-    with SessionLocal() as db:
-        db.add(
-            AgentSession(
-                id=session_id,
-                provider="claude",
-                environment="test",
-                project="zerg",
-                started_at=datetime.now(timezone.utc),
-            )
-        )
-        db.add(
-            AgentEvent(
-                session_id=session_id,
-                role="user",
-                content_text="please run the tests",
-                timestamp=datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc),
-            )
-        )
-        db.add(
-            AgentEvent(
-                session_id=session_id,
-                role="tool",
-                tool_name="bash",
-                tool_output_text="....... 40 passed",
-                timestamp=datetime(2026, 1, 1, 0, 1, tzinfo=timezone.utc),
-            )
-        )
-        db.add(
-            AgentEvent(
-                session_id=session_id,
-                role="assistant",
-                content_text="All forty tests pass, the fix is confirmed working end to end.",
-                timestamp=datetime(2026, 1, 1, 0, 2, tzinfo=timezone.utc),
-            )
-        )
-        db.commit()
-
-        snippet = agents_search._fetch_episode_snippet(db, session_id, event_start=0, event_end=1)
-
-    assert "forty tests pass" in snippet

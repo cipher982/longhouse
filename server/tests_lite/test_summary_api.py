@@ -15,12 +15,12 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
+from zerg.database import Base
 from zerg.database import get_db
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentEvent
-from zerg.database import Base
 from zerg.models.agents import AgentSession
 from zerg.services.agents import AgentsStore
 from zerg.services.session_hot_cards import upsert_timeline_card_from_session
@@ -179,48 +179,6 @@ def test_list_sessions_uses_batched_thread_meta(tmp_path):
     assert set(batch_calls[0]) == {str(first.id), str(second.id)}
 
 
-def test_list_sessions_hybrid_mode_serializes_datetimes(tmp_path):
-    """Hybrid-mode JSON responses should render datetimes without a manual JSONResponse crash."""
-    factory = _make_db(tmp_path)
-    db = factory()
-    try:
-        _seed_session(
-            db,
-            summary="Hybrid-mode serialization check.",
-            summary_title="Hybrid Response",
-            environment="work-macbook",
-        )
-    finally:
-        db.close()
-
-    for client in _get_client(factory):
-        resp = client.get("/agents/sessions?mode=hybrid&days_back=1&limit=5")
-        assert resp.status_code == 200, resp.text
-        assert resp.headers.get("x-search-mode") == "lexical-fallback"
-        payload = resp.json()
-        assert isinstance(payload["sessions"][0]["started_at"], str)
-
-
-def test_list_sessions_hybrid_active_context_emits_search_mode_header(tmp_path):
-    """Active-context hybrid search advertises the lexical-only fallback mode."""
-    factory = _make_db(tmp_path)
-    db = factory()
-    try:
-        _seed_session(
-            db,
-            summary="Active-context hybrid header check.",
-            summary_title="Active Context Header",
-            environment="work-macbook",
-        )
-    finally:
-        db.close()
-
-    for client in _get_client(factory):
-        resp = client.get("/agents/sessions?mode=hybrid&context_mode=active_context&days_back=1&limit=5")
-        assert resp.status_code == 200, resp.text
-        assert resp.headers.get("x-search-mode") == "active-context-lexical"
-
-
 def test_list_sessions_rejects_balanced_sort_without_query(tmp_path):
     """sort=balanced is only defined for query-backed listing."""
     factory = _make_db(tmp_path)
@@ -229,128 +187,6 @@ def test_list_sessions_rejects_balanced_sort_without_query(tmp_path):
         resp = client.get("/agents/sessions?sort=balanced&days_back=1")
         assert resp.status_code == 400
         assert resp.json()["detail"] == "sort=balanced requires a search query (q param)"
-
-
-def test_list_sessions_rejects_hybrid_offset(tmp_path):
-    """Hybrid fusion does not support offset pagination."""
-    factory = _make_db(tmp_path)
-
-    for client in _get_client(factory):
-        resp = client.get("/agents/sessions?mode=hybrid&offset=1&days_back=1")
-        assert resp.status_code == 400
-        assert resp.json()["detail"] == "Pagination (offset) is not supported for mode=hybrid"
-
-
-def test_list_sessions_hybrid_mode_batches_semantic_session_loads(tmp_path):
-    """Hybrid mode bulk-loads semantic hits instead of fetching each matched session by ID."""
-    factory = _make_db(tmp_path)
-    db = factory()
-    try:
-        first = _seed_session(
-            db,
-            summary="First hybrid batch session.",
-            summary_title="First Hybrid Batch",
-            environment="work-macbook",
-        )
-        second = _seed_session(
-            db,
-            summary="Second hybrid batch session.",
-            summary_title="Second Hybrid Batch",
-            environment="work-macbook",
-        )
-    finally:
-        db.close()
-
-    async def fake_generate_embedding(_query, _config):
-        return [1.0, 0.0, 0.0, 0.0]
-
-    def fake_load_session_embeddings(self, _db, _model, _dims):
-        self._session_loaded = True
-
-    def fake_load_turn_embeddings(self, _db, _model, _dims):
-        self._turn_loaded = True
-
-    batch_calls: list[list[str]] = []
-    original_get_sessions_ordered = AgentsStore.get_sessions_ordered
-
-    def record_get_sessions_ordered(self, session_ids):
-        batch_calls.append([str(session_id) for session_id in session_ids])
-        return original_get_sessions_ordered(self, session_ids)
-
-    with (
-        patch(
-            "zerg.models_config.get_embedding_config",
-            return_value=SimpleNamespace(model="test-model", dims=4),
-        ),
-        patch("zerg.services.session_processing.embeddings.generate_embedding", fake_generate_embedding),
-        patch("zerg.services.search.lexical_search", return_value=[]),
-        patch("zerg.services.embedding_cache.EmbeddingCache.load_session_embeddings", fake_load_session_embeddings),
-        patch(
-            "zerg.services.embedding_cache.EmbeddingCache.search_sessions",
-            return_value=[(first.id, 0.9), (second.id, 0.8)],
-        ),
-        patch("zerg.services.embedding_cache.EmbeddingCache.load_turn_embeddings", fake_load_turn_embeddings),
-        patch("zerg.services.embedding_cache.EmbeddingCache.search_turns", return_value=[]),
-        patch.object(AgentsStore, "get_sessions_ordered", record_get_sessions_ordered),
-    ):
-        for client in _get_client(factory):
-            resp = client.get("/agents/sessions?mode=hybrid&days_back=1&limit=5&query=batch")
-            assert resp.status_code == 200, resp.text
-
-    assert batch_calls == [[str(first.id), str(second.id)]]
-
-
-def test_list_sessions_hybrid_mode_uses_semantic_snippet_fallback(tmp_path):
-    """Hybrid mode surfaces semantic snippet text when lexical matching contributes nothing."""
-    factory = _make_db(tmp_path)
-    db = factory()
-    try:
-        session = _seed_session(
-            db,
-            summary="Semantic snippet fallback session.",
-            summary_title="Semantic Snippet Fallback",
-            environment="work-macbook",
-        )
-        _seed_session_event(
-            db,
-            session,
-            content_text="Semantic snippet fallback survives the hybrid search path.",
-        )
-    finally:
-        db.close()
-
-    async def fake_generate_embedding(_query, _config):
-        return [1.0, 0.0, 0.0, 0.0]
-
-    def fake_load_session_embeddings(self, _db, _model, _dims):
-        self._session_loaded = True
-
-    def fake_load_turn_embeddings(self, _db, _model, _dims):
-        self._turn_loaded = True
-
-    with (
-        patch(
-            "zerg.models_config.get_embedding_config",
-            return_value=SimpleNamespace(model="test-model", dims=4),
-        ),
-        patch("zerg.services.session_processing.embeddings.generate_embedding", fake_generate_embedding),
-        patch("zerg.services.search.lexical_search", return_value=[]),
-        patch("zerg.services.embedding_cache.EmbeddingCache.load_session_embeddings", fake_load_session_embeddings),
-        patch("zerg.services.embedding_cache.EmbeddingCache.search_sessions", return_value=[(session.id, 0.9)]),
-        patch("zerg.services.embedding_cache.EmbeddingCache.load_turn_embeddings", fake_load_turn_embeddings),
-        patch(
-            "zerg.services.embedding_cache.EmbeddingCache.search_turns",
-            return_value=[(str(session.id), 0, 0.8, 0, 0)],
-        ),
-    ):
-        for client in _get_client(factory):
-            resp = client.get("/agents/sessions?mode=hybrid&days_back=1&limit=5&query=semantic")
-            assert resp.status_code == 200, resp.text
-            payload = resp.json()
-            assert (
-                payload["sessions"][0]["match_snippet"]
-                == "Semantic snippet fallback survives the hybrid search path."
-            )
 
 
 def test_get_session_includes_summary(tmp_path):

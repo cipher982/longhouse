@@ -15,10 +15,8 @@ from .content import is_tool_result
 from .content import redact_secrets
 from .content import strip_noise
 from .embeddings import bytes_to_embedding
-from .embeddings import embed_session
 from .embeddings import embedding_to_bytes
 from .embeddings import generate_embedding
-from .embeddings import prepare_session_chunk
 from .embeddings import prepare_turn_chunks
 from .embeddings import sanitize_for_embedding
 from .summarize import DEFAULT_CONTEXT_BUDGET
@@ -61,7 +59,5 @@ __all__ = [
     "generate_embedding",
     "embedding_to_bytes",
     "bytes_to_embedding",
-    "prepare_session_chunk",
     "prepare_turn_chunks",
-    "embed_session",
 ]

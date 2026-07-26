@@ -197,7 +197,6 @@ def _pool_metrics_for(pool_id: int) -> dict[str, Any]:
 
 # Import all models at module level to ensure they are registered with Base
 try:
-    from zerg.models.agents import SessionEmbedding  # noqa: F401
     from zerg.models.apns_device_registration import APNSDeviceRegistration  # noqa: F401
     from zerg.models.apns_live_activity_registration import APNSLiveActivityRegistration  # noqa: F401
     from zerg.models.apns_widget_push_state import APNSWidgetPushState  # noqa: F401
@@ -912,7 +911,6 @@ def initialize_database(engine: Engine = None) -> None:
     init_started = time.monotonic()
 
     # Import all models to ensure they are registered with Base
-    from zerg.models.agents import SessionEmbedding  # noqa: F401
     from zerg.models.apns_device_registration import APNSDeviceRegistration  # noqa: F401
     from zerg.models.apns_live_activity_registration import APNSLiveActivityRegistration  # noqa: F401
     from zerg.models.apns_widget_push_state import APNSWidgetPushState  # noqa: F401

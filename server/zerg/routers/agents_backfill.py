@@ -31,8 +31,6 @@ from zerg.models.device_token import DeviceToken
 from zerg.services.catalogd_supervisor import get_catalogd_client
 from zerg.services.provisional_events import durable_transcript_event_predicate
 from zerg.services.session_summaries import summarize_and_persist
-from zerg.services.session_views import BackfillEmbeddingsProgressResponse
-from zerg.services.session_views import BackfillEmbeddingsResponse
 from zerg.services.session_views import BackfillProgressResponse
 from zerg.services.session_views import BackfillSummariesResponse
 from zerg.services.session_views import CursorRoleBackfillResponse
@@ -56,15 +54,6 @@ _ingest_health_db_dependency = get_db if _settings.testing or not live_store_con
 _backfill_state: dict[str, Any] = {
     "running": False,
     "backfilled": 0,
-    "skipped": 0,
-    "errors": 0,
-    "remaining": 0,
-    "total": 0,
-}
-
-_embedding_backfill_state: dict[str, Any] = {
-    "running": False,
-    "embedded": 0,
     "skipped": 0,
     "errors": 0,
     "remaining": 0,
@@ -226,179 +215,6 @@ async def _run_backfill(
             _backfill_state["backfilled"],
             _backfill_state["skipped"],
             _backfill_state["errors"],
-        )
-
-
-@router.post("/backfill-embeddings", response_model=BackfillEmbeddingsResponse)
-async def backfill_embeddings(
-    concurrency: int = Query(5, ge=1, le=200, description="Max concurrent embedding requests"),
-    project: Optional[str] = Query(None, description="Optional project filter"),
-    force: bool = Query(False, description="Re-embed sessions that already have embeddings"),
-    db: Session = Depends(get_db),
-    _auth: None = Depends(verify_agents_token),
-    _single: None = Depends(require_single_tenant),
-) -> BackfillEmbeddingsResponse:
-    """Start backfilling missing embeddings as a background task."""
-    from zerg.models_config import get_embedding_config
-
-    if _embedding_backfill_state["running"]:
-        embedded = _embedding_backfill_state["embedded"]
-        total_running = _embedding_backfill_state["total"]
-        message = f"Embedding backfill in progress: {embedded}/{total_running} done"
-        return BackfillEmbeddingsResponse(
-            status="already_running",
-            total=_embedding_backfill_state["total"],
-            message=message,
-        )
-
-    config = get_embedding_config()
-    if not config:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="No embedding provider configured",
-        )
-
-    query = db.query(AgentSession)
-    if not force:
-        query = query.filter(AgentSession.needs_embedding == 1)
-    if project:
-        query = query.filter(AgentSession.project == project)
-    total = query.count()
-
-    if total == 0:
-        return BackfillEmbeddingsResponse(status="nothing_to_do", total=0, message="No sessions need embedding")
-
-    asyncio.create_task(
-        _run_embedding_backfill(
-            concurrency=concurrency,
-            project=project,
-            force=force,
-            config=config,
-            total=total,
-        )
-    )
-
-    return BackfillEmbeddingsResponse(
-        status="started",
-        total=total,
-        message=f"Embedding backfill started for {total} sessions at concurrency {concurrency}",
-    )
-
-
-@router.get("/backfill-embeddings", response_model=BackfillEmbeddingsProgressResponse)
-async def backfill_embeddings_progress(
-    _auth: None = Depends(verify_agents_token),
-    _single: None = Depends(require_single_tenant),
-) -> BackfillEmbeddingsProgressResponse:
-    """Check embedding backfill progress."""
-    return BackfillEmbeddingsProgressResponse(**_embedding_backfill_state)
-
-
-async def _run_embedding_backfill(
-    *,
-    concurrency: int,
-    project: str | None,
-    force: bool,
-    config: Any,
-    total: int,
-) -> None:
-    """Background embedding backfill."""
-    from sqlalchemy.pool import NullPool
-
-    from zerg.database import make_engine
-    from zerg.services.session_processing.embeddings import embed_session
-    from zerg.services.session_processing.embeddings import mark_session_embedding_complete
-
-    _embedding_backfill_state.update(running=True, embedded=0, skipped=0, errors=0, remaining=total, total=total)
-    semaphore = asyncio.Semaphore(concurrency)
-
-    settings = get_settings()
-    backfill_engine = make_engine(settings.database_url, poolclass=NullPool)
-    SessionFactory = _sessionmaker(bind=backfill_engine)
-
-    try:
-        with SessionFactory() as db:
-            query = db.query(AgentSession)
-            if not force:
-                query = query.filter(AgentSession.needs_embedding == 1)
-            if project:
-                query = query.filter(AgentSession.project == project)
-            session_ids = [s.id for s in query.order_by(AgentSession.started_at.desc()).all()]
-
-        async def _process_one(session_id: UUID) -> None:
-            async with semaphore:
-                try:
-                    with SessionFactory() as db:
-                        sess = db.get(AgentSession, session_id)
-                        if not sess:
-                            _embedding_backfill_state["skipped"] += 1
-                            return
-
-                        events = (
-                            db.query(AgentEvent)
-                            .filter(AgentEvent.session_id == session_id)
-                            .filter(durable_transcript_event_predicate())
-                            .order_by(AgentEvent.timestamp, AgentEvent.id)
-                            .all()
-                        )
-                        if not events:
-                            _embedding_backfill_state["skipped"] += 1
-                            return
-
-                        session_written = 0
-                        while True:
-                            written, remaining = await embed_session(
-                                str(session_id),
-                                sess,
-                                events,
-                                config,
-                                db,
-                                transcript_revision=int(getattr(sess, "transcript_revision", 0) or 0),
-                            )
-                            session_written += written
-                            if remaining == 0:
-                                await mark_session_embedding_complete(
-                                    str(session_id),
-                                    transcript_revision=int(getattr(sess, "transcript_revision", 0) or 0),
-                                    db=db,
-                                )
-                                break
-                            if written == 0:
-                                raise RuntimeError("Embedding reconciliation made no progress")
-                        if session_written > 0:
-                            _embedding_backfill_state["embedded"] += 1
-                        else:
-                            _embedding_backfill_state["skipped"] += 1
-
-                except Exception as exc:
-                    logger.error("Embedding failed for session %s: %s: %s", session_id, type(exc).__name__, exc)
-                    _embedding_backfill_state["errors"] += 1
-                finally:
-                    _embedding_backfill_state["remaining"] = max(0, _embedding_backfill_state["remaining"] - 1)
-
-        tasks = [_process_one(sid) for sid in session_ids]
-        await asyncio.gather(*tasks)
-
-    except Exception:
-        logger.exception("Embedding backfill crashed")
-    finally:
-        _embedding_backfill_state["running"] = False
-        if _embedding_backfill_state["embedded"] > 0:
-            try:
-                from zerg.services.embedding_cache import EmbeddingCache
-
-                EmbeddingCache().invalidate()
-            except Exception:
-                logger.warning("Failed to invalidate embedding cache after backfill")
-        try:
-            backfill_engine.dispose()
-        except Exception:
-            pass
-        logger.info(
-            "Embedding backfill complete: %d embedded, %d skipped, %d errors",
-            _embedding_backfill_state["embedded"],
-            _embedding_backfill_state["skipped"],
-            _embedding_backfill_state["errors"],
         )
 
 

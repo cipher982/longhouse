@@ -3,8 +3,6 @@ from __future__ import annotations
 import asyncio
 from types import SimpleNamespace
 
-import pytest
-from fastapi import HTTPException
 from starlette.requests import Request
 
 from zerg.routers import agents_search
@@ -26,8 +24,6 @@ def test_semantic_machine_search_uses_searchd_without_legacy_db(monkeypatch):
         observed.update(kwargs)
         return []
 
-    monkeypatch.setattr(agents_search.database_module, "live_catalog_enabled", lambda: True)
-    monkeypatch.setattr(agents_search.database_module, "get_session_factory", _fail_legacy_factory)
     monkeypatch.setattr(agents_search, "search_storage_v2_sessions", search_v2)
 
     response = asyncio.run(
@@ -40,7 +36,6 @@ def test_semantic_machine_search_uses_searchd_without_legacy_db(monkeypatch):
             days_back=14,
             limit=10,
             context_mode="forensic",
-            db=None,
             _auth=SimpleNamespace(owner_id=7),
             _single=None,
         )
@@ -97,8 +92,6 @@ def test_recall_machine_search_uses_searchd_without_legacy_db(monkeypatch):
             }
         ]
 
-    monkeypatch.setattr(agents_search.database_module, "live_catalog_enabled", lambda: True)
-    monkeypatch.setattr(agents_search.database_module, "get_session_factory", _fail_legacy_factory)
     monkeypatch.setattr(agents_search, "search_storage_v2_rows", search_v2)
 
     async def context_v2(**kwargs):
@@ -125,8 +118,6 @@ def test_recall_machine_search_uses_searchd_without_legacy_db(monkeypatch):
             context_mode="forensic",
             include_automation=False,
             mode="auto",
-            database_url=None,
-            session_factory=None,
             _auth=SimpleNamespace(owner_id=7),
             _single=None,
         )
@@ -173,26 +164,3 @@ def test_machine_session_list_query_uses_searchd_without_legacy_db(monkeypatch):
 
     assert response.total == 0
     assert observed["owner_id"] == 9
-
-
-def test_retired_recall_index_is_typed_in_catalog_mode(monkeypatch):
-    monkeypatch.setattr(agents_search.database_module, "live_catalog_enabled", lambda: True)
-    monkeypatch.setattr(agents_search.database_module, "get_session_factory", _fail_legacy_factory)
-
-    status = asyncio.run(agents_search.recall_index_status(database_url=None, _auth=None, _single=None))
-    assert status == {"status": "retired", "reason": "storage_v2_search_owned"}
-
-    with pytest.raises(HTTPException) as error:
-        asyncio.run(
-            agents_search.index_recall_sessions(
-                project=None,
-                provider=None,
-                since_days=90,
-                limit=100,
-                database_url=None,
-                _auth=None,
-                _single=None,
-            )
-        )
-    assert error.value.status_code == 410
-    assert error.value.detail["code"] == "recall_index_retired"
