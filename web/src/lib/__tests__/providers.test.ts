@@ -22,6 +22,26 @@ type ManagedProviderContracts = {
   providers: ContractProvider[];
 };
 
+type DeviceEntrypoint = {
+  id: string;
+  status: string;
+  native_target_command: string;
+  providers: string[] | string;
+};
+
+type DeviceEntrypoints = {
+  commands: DeviceEntrypoint[];
+};
+
+function loadDeviceEntrypoints(): DeviceEntrypoints {
+  return JSON.parse(
+    readFileSync(
+      resolve(__dirname, "../../../../config/native_device_entrypoints.json"),
+      "utf-8",
+    ),
+  ) as DeviceEntrypoints;
+}
+
 const contractsPath = resolve(
   process.cwd(),
   "../server/zerg/config/managed_provider_contracts.json",
@@ -133,6 +153,22 @@ describe("providers launch support", () => {
       expect(support!.steerMidTurn).toBe(contract.steer_active_turn);
       expect(support!.resume).toBe(contract.can_resume);
       expect(support!.cloudSessionStart).toBe(contract.turn_start ? "live" : "none");
+    }
+
+    // The launch command is gated by the device entrypoint, not by the contract
+    // capability flags. Antigravity supports launch_local while its entrypoint is
+    // excluded, so the table must not offer a command the facade does not have.
+    const entrypoints = loadDeviceEntrypoints();
+    for (const id of launchIds) {
+      const entry = entrypoints.commands.find(
+        (command) => command.id === `${id}-managed`,
+      );
+      const offered = entry?.status === "available";
+      const support = getLaunchProviderSupport(id)!;
+      expect(
+        support.nativeLaunchCommand,
+        `${id}: nativeLaunchCommand must match device entrypoint availability`,
+      ).toBe(offered ? entry!.native_target_command : null);
     }
 
     expect(contracts.providers.map((provider) => provider.provider).sort()).toEqual(

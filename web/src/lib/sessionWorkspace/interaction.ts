@@ -5,11 +5,15 @@ import { getSessionOriginLabel } from "./formatters";
 
 function getManagedLaunchSuggestion(provider: string): ManagedLaunchSuggestion | null {
   const support = getLaunchProviderSupport(provider);
-  if (!support?.launchAndSend) return null;
+  // Gate on the device entrypoint, not on the capability flags. Antigravity
+  // supports launch_local in the contract while its native entrypoint stays
+  // excluded, so suggesting `longhouse antigravity` would name a command the
+  // installed facade does not have.
+  if (!support?.launchAndSend || !support.nativeLaunchCommand) return null;
   return {
     title: `Start the next ${support.marketingName} session through Longhouse`,
     body: `This session stays searchable here. Use this command when you want the next ${support.marketingName} session to stay steerable from Longhouse.`,
-    command: `longhouse ${support.id}`,
+    command: support.nativeLaunchCommand,
   };
 }
 

@@ -20,6 +20,14 @@ export type LaunchProviderSupport = {
   interrupt: boolean;
   steerMidTurn: boolean;
   resume: boolean;
+  /**
+   * The `longhouse <id>` command, when the native device facade actually offers
+   * one. Sourced from config/native_device_entrypoints.json, NOT from the
+   * contract capability flags: a provider can support launch_local while its
+   * device entrypoint stays excluded, and telling a user to run a command that
+   * does not exist is worse than saying nothing.
+   */
+  nativeLaunchCommand: string | null;
   archiveVisibility: "live";
   cloudSessionStart: "live" | "none";
   hooksSupport: "live" | "none";
@@ -29,6 +37,7 @@ export type LaunchProviderSupport = {
 const LAUNCH_PROVIDER_SUPPORT: Record<LaunchProviderId, LaunchProviderSupport> = {
   claude: {
     id: "claude",
+    nativeLaunchCommand: "longhouse claude",
     marketingName: "Claude Code",
     launchAndSend: true,
     interrupt: true,
@@ -41,6 +50,7 @@ const LAUNCH_PROVIDER_SUPPORT: Record<LaunchProviderId, LaunchProviderSupport> =
   },
   codex: {
     id: "codex",
+    nativeLaunchCommand: "longhouse codex",
     marketingName: "Codex CLI",
     launchAndSend: true,
     interrupt: true,
@@ -53,6 +63,7 @@ const LAUNCH_PROVIDER_SUPPORT: Record<LaunchProviderId, LaunchProviderSupport> =
   },
   opencode: {
     id: "opencode",
+    nativeLaunchCommand: "longhouse opencode",
     marketingName: "OpenCode",
     launchAndSend: true,
     interrupt: true,
@@ -65,6 +76,7 @@ const LAUNCH_PROVIDER_SUPPORT: Record<LaunchProviderId, LaunchProviderSupport> =
   },
   antigravity: {
     id: "antigravity",
+    nativeLaunchCommand: null,
     marketingName: "Antigravity CLI",
     launchAndSend: true,
     interrupt: false,
@@ -77,6 +89,7 @@ const LAUNCH_PROVIDER_SUPPORT: Record<LaunchProviderId, LaunchProviderSupport> =
   },
   cursor: {
     id: "cursor",
+    nativeLaunchCommand: "longhouse cursor",
     marketingName: "Cursor Agent",
     launchAndSend: true,
     interrupt: true,
