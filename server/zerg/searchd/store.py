@@ -19,7 +19,7 @@ from uuid import uuid4
 import numpy as np
 
 SCHEMA_VERSION = 1
-SCHEMA_GENERATION = "searchd-v2-published-searchable-corpus-with-embeddings"
+SCHEMA_GENERATION = "searchd-v2-published-searchable-corpus-with-fenced-embeddings"
 SEARCHABLE_RETENTION_DAYS = 91
 SEARCHABLE_FAST_WINDOW_DAYS = 90
 SEARCHABLE_FAST_WINDOW_MARGIN_SECONDS = 300
@@ -430,7 +430,9 @@ def _initialize_schema(connection: sqlite3.Connection) -> None:
         CREATE TABLE IF NOT EXISTS episode_embeddings (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             session_id TEXT NOT NULL,
+            owner_id TEXT NOT NULL,
             generation_id TEXT NOT NULL,
+            revision INTEGER NOT NULL,
             episode_ordinal INTEGER NOT NULL,
             event_index_start INTEGER,
             event_index_end INTEGER,
@@ -630,6 +632,9 @@ class SearchStore:
         model: str,
         dims: int,
         episodes: list[dict[str, Any]],
+        owner_id: str = "",
+        revision: int = 0,
+        complete: bool = False,
     ) -> dict[str, object]:
         written = 0
         skipped = 0
@@ -638,20 +643,23 @@ class SearchStore:
         try:
             for episode in episodes:
                 existing = self.connection.execute(
-                    "SELECT content_hash FROM episode_embeddings WHERE session_id = ? AND episode_ordinal = ? AND model = ?",
+                    "SELECT content_hash, dims, revision FROM episode_embeddings WHERE session_id = ? AND episode_ordinal = ? AND model = ?",
                     (session_id, episode["episode_ordinal"], model),
                 ).fetchone()
-                if existing is not None and existing["content_hash"] == episode["content_hash"]:
+                if existing is not None and int(existing["revision"]) > revision:
+                    skipped += 1
+                    continue
+                if existing is not None and existing["content_hash"] == episode["content_hash"] and int(existing["dims"]) == dims:
                     skipped += 1
                     continue
                 self.connection.execute(
                     """
                     INSERT INTO episode_embeddings(
-                        session_id, generation_id, episode_ordinal, event_index_start, event_index_end,
+                        session_id, owner_id, generation_id, revision, episode_ordinal, event_index_start, event_index_end,
                         model, dims, content_hash, embedding, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(session_id, episode_ordinal, model) DO UPDATE SET
-                        generation_id=excluded.generation_id,
+                        owner_id=excluded.owner_id, generation_id=excluded.generation_id, revision=excluded.revision,
                         event_index_start=excluded.event_index_start,
                         event_index_end=excluded.event_index_end,
                         dims=excluded.dims,
@@ -661,7 +669,9 @@ class SearchStore:
                     """,
                     (
                         session_id,
+                        owner_id,
                         generation_id,
+                        revision,
                         episode["episode_ordinal"],
                         episode["event_index_start"],
                         episode["event_index_end"],
@@ -673,17 +683,25 @@ class SearchStore:
                     ),
                 )
                 written += 1
+            if complete:
+                ordinals = [episode["episode_ordinal"] for episode in episodes]
+                suffix = f" AND episode_ordinal NOT IN ({','.join('?' for _ in ordinals)})" if ordinals else ""
+                self.connection.execute(
+                    f"DELETE FROM episode_embeddings WHERE session_id = ? AND model = ?{suffix}", (session_id, model, *ordinals)
+                )
             self.connection.execute("COMMIT")
         except BaseException:
             self.connection.execute("ROLLBACK")
             raise
         return {"written": written, "skipped": skipped}
 
-    def read_episode_embedding_hashes(self, *, session_id: str, model: str) -> dict[str, object]:
-        rows = self.connection.execute(
-            "SELECT episode_ordinal, content_hash FROM episode_embeddings WHERE session_id = ? AND model = ?",
-            (session_id, model),
-        ).fetchall()
+    def read_episode_embedding_hashes(self, *, session_id: str, model: str, dims: int | None = None) -> dict[str, object]:
+        sql = "SELECT episode_ordinal, content_hash FROM episode_embeddings WHERE session_id = ? AND model = ?"
+        params: tuple[object, ...] = (session_id, model)
+        if dims is not None:
+            sql += " AND dims = ?"
+            params += (dims,)
+        rows = self.connection.execute(sql, params).fetchall()
         # JSON object keys are strings; the projector converts them back to ordinals.
         return {"hashes": {str(row["episode_ordinal"]): str(row["content_hash"]) for row in rows}}
 
@@ -693,14 +711,12 @@ class SearchStore:
         model: str,
         dims: int,
         query_embedding: bytes,
-        session_filter: list[str] | None,
+        session_filter: list[str],
         limit: int,
+        owner_id: str = "",
     ) -> dict[str, object]:
-        sql = "SELECT session_id, episode_ordinal, event_index_start, event_index_end, embedding FROM episode_embeddings WHERE model = ? AND dims = ?"
-        params: list[object] = [model, dims]
-        if session_filter:
-            sql += f" AND session_id IN ({','.join('?' for _ in session_filter)})"
-            params.extend(session_filter)
+        sql = f"SELECT session_id, episode_ordinal, event_index_start, event_index_end, embedding FROM episode_embeddings WHERE model = ? AND dims = ? AND owner_id = ? AND session_id IN ({','.join('?' for _ in session_filter)})"
+        params: list[object] = [model, dims, owner_id, *session_filter]
         rows = self.connection.execute(sql, params).fetchall()
         if not rows:
             return {"results": []}
@@ -1334,6 +1350,7 @@ class SearchStore:
             self.connection.execute("DELETE FROM projection_membership WHERE session_id = ?", (session_id,))
             self.connection.execute("DELETE FROM events WHERE session_id = ?", (session_id,))
             self.connection.execute("DELETE FROM indexed_objects WHERE session_id = ?", (session_id,))
+            self.connection.execute("DELETE FROM episode_embeddings WHERE session_id = ?", (session_id,))
             self.connection.execute("COMMIT")
         except BaseException:
             self.connection.execute("ROLLBACK")

@@ -200,7 +200,59 @@ the exact scenario the original implementation would have silently dropped.
 Full backend suite: 3622 passed after the fix (one unrelated pre-existing timing flake in
 `test_session_inputs_api.py` confirmed independent by reproducing on unmodified `main`).
 
-## 8. Remaining work (the actual gate)
+## 8. Second Sol review: 9 more findings, all fixed
+
+Given the scope of §6 (new schema, RPC surface, and service — not a small patch), ran a
+second `hatch codex sol` review before shipping. It found 9 real issues (1 critical, 4 high,
+4 medium). Sent back to `hatch codex terra` with each finding's exact fix requirement; Terra
+completed 2, 3, 4, 5, 6, 7, and 9 correctly but self-reported finding #1 and #8 incomplete
+rather than claiming false success — both finished by hand:
+
+- **#1 (critical, finished by hand) — the projector could never claim any work at all.**
+  `projector.state.claim.v2` itself is generic across projector names, but nothing ever
+  *created* a `projector_state` row for any name besides the hardcoded literal `"search-v2"`.
+  Terra generalized one of four sites (session deletion) to loop over a new
+  `KNOWN_PROJECTORS` registry; the other three were still hardcoded, including the one that
+  matters for ordinary session activity (`commit_raw_object`'s caller-supplied `projectors`
+  list, set in `agents_storage_v2.py`, not in `catalogd/store.py` at all — a fourth site Sol's
+  line references didn't point at directly). Fixed all four sites and added a real
+  integration test (`test_catalogd_storage_v2.py`) that runs an actual `CatalogDaemon` +
+  `CatalogClient` over a real socket, commits a real render object, and asserts
+  `embeddings-v1` gets a genuinely claimable row with the correct revision — not a mocked
+  claim response, which is exactly what let this ship broken the first time.
+- **#2 — partial passes now release quickly (`error_code: "partial_progress"`, 1s retry,
+  no failure-count penalty) instead of falsely marking a >128-episode session complete.**
+- **#3 — reconciliation on shrink/delete/dims-change**: a `complete` flag drives a delete of
+  stale ordinals when a full pass finishes; `delete_session` now cleans up
+  `episode_embeddings`; dedup checks `dims`, not just `content_hash`.
+- **#4 — candidate scoping now paginates** the owner-scoped session listing (up to 5,000
+  sessions, 200 per page matching catalogd's real limit) instead of capping at
+  `max_results * 20`, and batches the embedding query into ≤500-id chunks.
+- **#5 — canonical cross-object ordering**: records now sort by the same
+  `(order_time_us, machine_id, provider, opaque_source_id, source_epoch, source_position,
+  event_subordinal)` tuple used elsewhere for render-object ordering, not object-pagination
+  order, so equal-timestamp records from different render objects can't flip episode
+  boundaries.
+- **#6 — tenant scoping on the table itself**: `episode_embeddings` gained an `owner_id`
+  column, both RPCs require it, and `session_filter` is now a mandatory non-empty list (an
+  empty or missing filter is rejected outright, not silently treated as "search everyone").
+- **#7 — revision fencing**: `write_episode_embeddings` now rejects a write whose revision is
+  older than what's already stored for that `(session_id, episode_ordinal, model)`, closing
+  the window where a stale worker could overwrite a newer one's vectors.
+- **#8 (finished by hand) — failure classification was wrong, not just incomplete.** Terra's
+  partial fix treated *any* `ValueError` as a permanent, 24-hour-retry failure — but this
+  file itself raises plain `ValueError` for several genuinely transient catalog conditions
+  (revision drift, a corrupt render page), which would have wrongly parked those for 24
+  hours instead of retrying in seconds. Added a dedicated `PermanentEmbeddingConfigError`
+  subclass in `embeddings.py`, raised only for the two truly deterministic cases (unsupported
+  provider, persistent dims mismatch); the projector now checks that specific subclass, not
+  `ValueError` broadly. Two new tests prove each path gets the right treatment.
+- **#9 — bounded query safety**: `session_filter` tightened from 10,000 to 500, non-finite
+  (`NaN`/`inf`) vectors rejected at both write and query RPC validation.
+
+Full backend suite after all fixes: 3625 passed, ruff clean.
+
+## 9. Remaining work (the actual gate)
 
 Nothing above has touched real data yet — it's code, not corpus. The projector runs
 automatically once shipped (no manual backfill trigger the way §3's design needed one — it

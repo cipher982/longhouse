@@ -17,6 +17,7 @@ from zerg.services.render_object_workers import RenderObjectWorkerPool
 from zerg.services.render_object_workers import get_render_object_worker_pool
 from zerg.services.session_processing.embeddings import EMBEDDING_BATCH_SIZE
 from zerg.services.session_processing.embeddings import EMBEDDING_MAX_CHUNKS_PER_PASS
+from zerg.services.session_processing.embeddings import PermanentEmbeddingConfigError
 from zerg.services.session_processing.embeddings import embedding_to_bytes
 from zerg.services.session_processing.embeddings import generate_embeddings
 from zerg.services.session_processing.embeddings import iter_turn_chunks
@@ -78,7 +79,23 @@ class EmbeddingsV2Projector:
                 raise ValueError("catalog returned invalid embedding claim")
             session_id = _uuid(session_id)
             revision = int(str(state["claimed_revision"]))
-            await self._project(session_id=session_id, claimed_revision=revision)
+            complete = await self._project(session_id=session_id, claimed_revision=revision)
+            if not complete:
+                failed_at = datetime.now(UTC)
+                # Partial work is released promptly without increasing failure_count.
+                await self.catalog.call(
+                    "projector.state.fail.v2",
+                    {
+                        "projector": PROJECTOR,
+                        "session_id": session_id,
+                        "claim_token": claim_token,
+                        "error_code": "partial_progress",
+                        "error_message": "embedding pass reached chunk limit",
+                        "failed_at": failed_at.isoformat(),
+                        "retry_at": (failed_at + timedelta(seconds=1)).isoformat(),
+                    },
+                )
+                return
             await self.catalog.call(
                 "projector.state.complete.v2",
                 {
@@ -92,32 +109,43 @@ class EmbeddingsV2Projector:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
+            # PermanentEmbeddingConfigError (bad provider/model config, a
+            # persistent dims mismatch) will produce the identical failure on
+            # every retry -- fast exponential backoff just burns API calls on
+            # something a human has to fix. Every other exception here
+            # (including this file's own ValueErrors for catalog-side
+            # conditions like revision drift or a corrupt render page) is
+            # genuinely transient and should keep retrying quickly, so this
+            # must check the specific subclass, not ValueError broadly.
+            is_permanent = isinstance(exc, PermanentEmbeddingConfigError)
             if isinstance(session_id, str):
                 failures = int(state.get("failure_count", 0)) if isinstance(state, dict) else 0
                 failed_at = datetime.now(UTC)
+                retry_delay = timedelta(hours=24) if is_permanent else timedelta(seconds=min(300, 5 * 2 ** min(failures, 6)))
                 await self.catalog.call(
                     "projector.state.fail.v2",
                     {
                         "projector": PROJECTOR,
                         "session_id": session_id,
                         "claim_token": claim_token,
-                        "error_code": "embedding_projection_failed",
+                        "error_code": "embedding_config_permanent" if is_permanent else "embedding_projection_failed",
                         "error_message": str(exc)[:2048] or type(exc).__name__,
                         "failed_at": failed_at.isoformat(),
-                        "retry_at": (failed_at + timedelta(seconds=min(300, 5 * 2 ** min(failures, 6)))).isoformat(),
+                        "retry_at": (failed_at + retry_delay).isoformat(),
                     },
                 )
-            logger.warning("Embedding projection failed session=%s error=%s", session_id, exc)
+            (logger.error if is_permanent else logger.warning)("Embedding projection failed session=%s error=%s", session_id, exc)
 
-    async def _project(self, *, session_id: str, claimed_revision: int) -> None:
+    async def _project(self, *, session_id: str, claimed_revision: int) -> bool:
         from zerg.models_config import get_embedding_config
 
         config = get_embedding_config()
         if config is None:
-            return
+            return True
         generation_id: str | None = None
         after_object_id: str | None = None
         records: list[dict[str, object]] = []
+        owner_id: str | None = None
         while True:
             page = await self.catalog.call(
                 "storage.session.render_objects.list.v2",
@@ -130,10 +158,16 @@ class EmbeddingsV2Projector:
                 },
             )
             if page.get("deleted") is True:
-                return
+                await self.search.call("search.session.delete.v2", {"session_id": session_id})
+                return True
             if page.get("found") is not True or str(page.get("snapshot_revision")) != str(claimed_revision):
                 raise ValueError("catalog render snapshot is unavailable or drifted")
             page_generation = _uuid(page.get("generation_id"))
+            if owner_id is None:
+                session = page.get("session")
+                if not isinstance(session, dict) or session.get("owner_id") is None:
+                    raise ValueError("catalog omitted embedding session owner")
+                owner_id = str(session["owner_id"])
             generation_id = generation_id or page_generation
             if page_generation != generation_id:
                 raise ValueError("render generation drifted")
@@ -161,9 +195,14 @@ class EmbeddingsV2Projector:
                         "tool_name": record.tool_name,
                         "tool_output_text": record.tool_output_text,
                         "timestamp": record.order_time_us,
-                        "id": ordinal,
+                        "machine_id": decoded.spec.machine_id,
+                        "provider": decoded.spec.provider,
+                        "opaque_source_id": decoded.spec.opaque_source_id,
+                        "source_epoch": str(decoded.spec.source_epoch),
+                        "source_position": record.source_position,
+                        "event_subordinal": record.event_subordinal,
                     }
-                    for ordinal, record in enumerate(decoded.spec.records, start=len(records))
+                    for record in decoded.spec.records
                 )
             if page.get("has_more") is not True:
                 break
@@ -171,18 +210,30 @@ class EmbeddingsV2Projector:
                 raise ValueError("catalog returned empty truncated page")
             after_object_id = _hash(objects[-1].get("object_id"))
         if generation_id is None:
-            return
+            return True
         # The shared chunker sorts datetime timestamps only. Order records here and
         # assign monotonic ids so its stable fallback preserves catalog ordering.
-        records.sort(key=lambda record: (int(record["timestamp"]), int(record["id"])))
+        records.sort(
+            key=lambda record: (
+                int(record["timestamp"]),
+                str(record["machine_id"]),
+                str(record["provider"]),
+                str(record["opaque_source_id"]),
+                str(record["source_epoch"]),
+                int(record["source_position"]),
+                int(record["event_subordinal"]),
+            )
+        )
         for index, record in enumerate(records):
             record["id"] = index
         chunks = list(iter_turn_chunks(records))
-        hashes_result = await self.search.call("search.embedding.hashes.v2", {"session_id": session_id, "model": config.model})
+        hashes_result = await self.search.call(
+            "search.embedding.hashes.v2", {"session_id": session_id, "model": config.model, "dims": config.dims}
+        )
         hashes = {int(key): value for key, value in (hashes_result.get("hashes") or {}).items() if isinstance(value, str)}
-        missing = [chunk for chunk in chunks if hashes.get(chunk.chunk_index) != chunk.content_hash][
-            : max(1, EMBEDDING_MAX_CHUNKS_PER_PASS)
-        ]
+        all_missing = [chunk for chunk in chunks if hashes.get(chunk.chunk_index) != chunk.content_hash]
+        missing = all_missing[: max(1, EMBEDDING_MAX_CHUNKS_PER_PASS)]
+        complete = len(all_missing) == len(missing)
         for start in range(0, len(missing), max(1, EMBEDDING_BATCH_SIZE)):
             batch = missing[start : start + max(1, EMBEDDING_BATCH_SIZE)]
             vectors = await generate_embeddings([chunk.text for chunk in batch], config)
@@ -190,9 +241,12 @@ class EmbeddingsV2Projector:
                 "search.embedding.write.v2",
                 {
                     "session_id": session_id,
+                    "owner_id": owner_id,
                     "generation_id": generation_id,
+                    "revision": str(claimed_revision),
                     "model": config.model,
                     "dims": config.dims,
+                    "complete": complete,
                     "episodes": [
                         {
                             "episode_ordinal": chunk.chunk_index,
@@ -205,6 +259,21 @@ class EmbeddingsV2Projector:
                     ],
                 },
             )
+        if complete and not missing:
+            await self.search.call(
+                "search.embedding.write.v2",
+                {
+                    "session_id": session_id,
+                    "owner_id": owner_id,
+                    "generation_id": generation_id,
+                    "revision": str(claimed_revision),
+                    "model": config.model,
+                    "dims": config.dims,
+                    "complete": True,
+                    "episodes": [],
+                },
+            )
+        return complete
 
 
 def _uuid(value: object) -> str:

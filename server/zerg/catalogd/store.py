@@ -441,6 +441,9 @@ def _directed_input_dto(row: Any, receipt: Any | None = None) -> dict[str, Any]:
     }
 
 
+KNOWN_PROJECTORS = ("search-v2", "embeddings-v1")
+
+
 def _machine_operation_dto(operation: LiveMachineControlOperation) -> dict[str, Any]:
     from zerg.services.machine_control_operations import machine_control_operation_to_response
 
@@ -5608,49 +5611,49 @@ class CatalogStore:
                     commit_seq=commit_seq,
                 )
             )
-            search_state = (
-                connection.execute(
-                    select(projector_state).where(
-                        projector_state.c.projector == "search-v2",
-                        projector_state.c.session_id == session_key,
+            for projector_name in KNOWN_PROJECTORS:
+                search_state = (
+                    connection.execute(
+                        select(projector_state).where(
+                            projector_state.c.projector == projector_name, projector_state.c.session_id == session_key
+                        )
                     )
+                    .mappings()
+                    .first()
                 )
-                .mappings()
-                .first()
-            )
-            if search_state is None:
-                connection.execute(
-                    insert(projector_state).values(
-                        projector="search-v2",
-                        session_id=session_key,
-                        desired_revision=commit_seq,
-                        completed_revision=0,
-                        status="idle",
-                        failure_count=0,
-                        commit_seq=commit_seq,
-                        created_at=deleted_at,
-                        updated_at=deleted_at,
+                if search_state is None:
+                    connection.execute(
+                        insert(projector_state).values(
+                            projector=projector_name,
+                            session_id=session_key,
+                            desired_revision=commit_seq,
+                            completed_revision=0,
+                            status="idle",
+                            failure_count=0,
+                            commit_seq=commit_seq,
+                            created_at=deleted_at,
+                            updated_at=deleted_at,
+                        )
                     )
-                )
-            else:
-                connection.execute(
-                    update(projector_state)
-                    .where(
-                        projector_state.c.projector == "search-v2",
-                        projector_state.c.session_id == session_key,
+                else:
+                    connection.execute(
+                        update(projector_state)
+                        .where(
+                            projector_state.c.projector == projector_name,
+                            projector_state.c.session_id == session_key,
+                        )
+                        .values(
+                            desired_revision=commit_seq,
+                            claimed_revision=None,
+                            claim_token=None,
+                            worker_id=None,
+                            claim_expires_at=None,
+                            status="idle",
+                            retry_at=None,
+                            commit_seq=commit_seq,
+                            updated_at=deleted_at,
+                        )
                     )
-                    .values(
-                        desired_revision=commit_seq,
-                        claimed_revision=None,
-                        claim_token=None,
-                        worker_id=None,
-                        claim_expires_at=None,
-                        status="idle",
-                        retry_at=None,
-                        commit_seq=commit_seq,
-                        updated_at=deleted_at,
-                    )
-                )
             live_deleted = _delete_bounded_live_session_state(connection, session_key=session_key, deleted_at=deleted_at)
             return {
                 "changed": True,
@@ -7214,36 +7217,37 @@ class CatalogStore:
                     .values(render_state="ready", commit_seq=commit_seq, updated_at=completed_at)
                 )
                 projector = ProjectorState.__table__
-                projector_row = (
-                    connection.execute(
-                        select(projector).where(
-                            projector.c.projector == "search-v2",
-                            projector.c.session_id == session_key,
+                for projector_name in KNOWN_PROJECTORS:
+                    projector_row = (
+                        connection.execute(
+                            select(projector).where(
+                                projector.c.projector == projector_name,
+                                projector.c.session_id == session_key,
+                            )
                         )
+                        .mappings()
+                        .first()
                     )
-                    .mappings()
-                    .first()
-                )
-                if projector_row is None:
-                    connection.execute(
-                        insert(projector).values(
-                            projector="search-v2",
-                            session_id=session_key,
-                            desired_revision=commit_seq,
-                            completed_revision=0,
-                            status="idle",
-                            failure_count=0,
-                            commit_seq=commit_seq,
-                            created_at=completed_at,
-                            updated_at=completed_at,
+                    if projector_row is None:
+                        connection.execute(
+                            insert(projector).values(
+                                projector=projector_name,
+                                session_id=session_key,
+                                desired_revision=commit_seq,
+                                completed_revision=0,
+                                status="idle",
+                                failure_count=0,
+                                commit_seq=commit_seq,
+                                created_at=completed_at,
+                                updated_at=completed_at,
+                            )
                         )
-                    )
-                else:
-                    connection.execute(
-                        update(projector)
-                        .where(projector.c.projector == "search-v2", projector.c.session_id == session_key)
-                        .values(desired_revision=commit_seq, commit_seq=commit_seq, updated_at=completed_at)
-                    )
+                    else:
+                        connection.execute(
+                            update(projector)
+                            .where(projector.c.projector == projector_name, projector.c.session_id == session_key)
+                            .values(desired_revision=commit_seq, commit_seq=commit_seq, updated_at=completed_at)
+                        )
             connection.execute(
                 update(rows)
                 .where(rows.c.run_id == run_key, rows.c.session_id == session_key)
@@ -7445,32 +7449,33 @@ class CatalogStore:
                 )
             )
             for session_key in session_keys:
-                projector_row = connection.execute(
-                    select(projectors).where(
-                        projectors.c.projector == "search-v2",
-                        projectors.c.session_id == session_key,
-                    )
-                ).first()
-                if projector_row is None:
-                    connection.execute(
-                        insert(projectors).values(
-                            projector="search-v2",
-                            session_id=session_key,
-                            desired_revision=commit_seq,
-                            completed_revision=0,
-                            status="idle",
-                            failure_count=0,
-                            commit_seq=commit_seq,
-                            created_at=observed_at,
-                            updated_at=observed_at,
+                for projector_name in KNOWN_PROJECTORS:
+                    projector_row = connection.execute(
+                        select(projectors).where(
+                            projectors.c.projector == projector_name,
+                            projectors.c.session_id == session_key,
                         )
-                    )
-                else:
-                    connection.execute(
-                        update(projectors)
-                        .where(projectors.c.projector == "search-v2", projectors.c.session_id == session_key)
-                        .values(desired_revision=commit_seq, commit_seq=commit_seq, updated_at=observed_at)
-                    )
+                    ).first()
+                    if projector_row is None:
+                        connection.execute(
+                            insert(projectors).values(
+                                projector=projector_name,
+                                session_id=session_key,
+                                desired_revision=commit_seq,
+                                completed_revision=0,
+                                status="idle",
+                                failure_count=0,
+                                commit_seq=commit_seq,
+                                created_at=observed_at,
+                                updated_at=observed_at,
+                            )
+                        )
+                    else:
+                        connection.execute(
+                            update(projectors)
+                            .where(projectors.c.projector == projector_name, projectors.c.session_id == session_key)
+                            .values(desired_revision=commit_seq, commit_seq=commit_seq, updated_at=observed_at)
+                        )
             _refresh_legacy_migration_run(connection, run_key, commit_seq, observed_at)
             return {
                 "repaired": len(session_keys),

@@ -361,9 +361,7 @@ async def test_revision_generation_drift_returns_conflict_instead_of_catalog_fai
     try:
         existing_generation_id = uuid4()
         first = _raw_params(epoch=epoch, session_id=session_id, start=0, end=6, records=(b"hello\n",), sealed_at=now)
-        first.update(
-            render_state="ready", render_manifest=_render_manifest(existing_generation_id), projectors=["search-v2"]
-        )
+        first.update(render_state="ready", render_manifest=_render_manifest(existing_generation_id), projectors=["search-v2"])
         await client.call("storage.raw_object.commit.v2", first)
 
         requested_generation_id = uuid4()
@@ -455,9 +453,7 @@ async def test_storage_title_fallback_is_immediate_and_ai_completion_is_write_on
     try:
         first = _raw_params(epoch=epoch, session_id=session_id, start=0, end=6, records=(b"first\n",), sealed_at=now)
         first_manifest = _render_manifest(generation_id)
-        first_manifest["first_user_message_preview"] = (
-            "[Image #1]\n\nWhy is OpenCode stuck on naming sessions and how do we fix it?"
-        )
+        first_manifest["first_user_message_preview"] = "[Image #1]\n\nWhy is OpenCode stuck on naming sessions and how do we fix it?"
         first.update(render_state="ready", render_manifest=first_manifest)
         await client.call("storage.raw_object.commit.v2", first)
 
@@ -1348,9 +1344,7 @@ def test_storage_v2_tables_are_catalog_schema_owned(daemon_paths):
         "sessions",
     }.issubset(set(CatalogBase.metadata.tables))
     with engine.connect() as connection:
-        table_names = {
-            row[0] for row in connection.exec_driver_sql("SELECT name FROM sqlite_master WHERE type='table'")
-        }
+        table_names = {row[0] for row in connection.exec_driver_sql("SELECT name FROM sqlite_master WHERE type='table'")}
     engine.dispose()
     assert set(CatalogBase.metadata.tables).issubset(table_names)
 
@@ -1368,10 +1362,64 @@ def test_existing_v1_catalog_additively_creates_storage_v2_tables(daemon_paths):
 
     metadata = initialize_catalog_schema(engine)
     with engine.connect() as connection:
-        table_names = {
-            row[0] for row in connection.exec_driver_sql("SELECT name FROM sqlite_master WHERE type='table'")
-        }
+        table_names = {row[0] for row in connection.exec_driver_sql("SELECT name FROM sqlite_master WHERE type='table'")}
     engine.dispose()
 
     assert metadata.schema_version == CATALOG_SCHEMA_VERSION
     assert set(CatalogBase.metadata.tables).issubset(table_names)
+
+
+@pytest.mark.asyncio
+async def test_embeddings_v1_projector_state_becomes_claimable_on_render_completion(daemon_paths):
+    """Regression guard for a real bug: embeddings-v1 previously never got a
+    projector_state row at all, because every site that creates/advances one
+    was hardcoded to the literal string "search-v2". claim.v2 itself is
+    generic across projector names, so a test that only mocks a claim
+    response proves nothing about this -- it has to go through a real
+    CatalogDaemon and the actual render-generation-completion write path.
+    """
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    epoch = UUID("018f0c3a-7b2d-7f10-8a11-123456789abc")
+    session_id = uuid4()
+    generation_id = uuid4()
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        raw = _raw_params(epoch=epoch, session_id=session_id, start=0, end=6, records=(b"hello\n",), sealed_at=now)
+        raw.update(render_state="ready", render_manifest=_render_manifest(generation_id), projectors=["search-v2", "embeddings-v1"])
+        committed = await client.call("storage.raw_object.commit.v2", raw)
+        revision = committed["receipt"]["commit_seq"]
+
+        search_claim = await client.call(
+            "projector.state.claim.v2",
+            {
+                "projector": "search-v2",
+                "worker_id": "search-worker",
+                "claim_token": str(uuid4()),
+                "now": (now + timedelta(seconds=1)).isoformat(),
+                "lease_seconds": 60,
+                "limit": 10,
+            },
+        )
+        assert search_claim["claimed"][0]["session_id"] == str(session_id)
+        assert search_claim["claimed"][0]["claimed_revision"] == revision
+
+        embeddings_claim = await client.call(
+            "projector.state.claim.v2",
+            {
+                "projector": "embeddings-v1",
+                "worker_id": "embeddings-worker",
+                "claim_token": str(uuid4()),
+                "now": (now + timedelta(seconds=1)).isoformat(),
+                "lease_seconds": 60,
+                "limit": 10,
+            },
+        )
+        assert embeddings_claim["claimed"], "embeddings-v1 must get its own claimable projector_state row"
+        assert embeddings_claim["claimed"][0]["session_id"] == str(session_id)
+        assert embeddings_claim["claimed"][0]["claimed_revision"] == revision
+    finally:
+        await client.close()
+        await daemon.close()

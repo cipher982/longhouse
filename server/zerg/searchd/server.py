@@ -16,6 +16,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from uuid import UUID
 
+import numpy as np
+
 from zerg.catalogd.protocol import CatalogRpcError
 from zerg.catalogd.protocol import CatalogRpcRequest
 from zerg.catalogd.protocol import CatalogRpcResponse
@@ -569,7 +571,7 @@ def _publish_params(value: dict) -> dict:
 
 
 def _embedding_write_params(value: dict) -> dict:
-    _exact_keys(value, {"session_id", "generation_id", "model", "dims", "episodes"})
+    _exact_keys(value, {"session_id", "owner_id", "generation_id", "revision", "model", "dims", "complete", "episodes"})
     dims = value["dims"]
     episodes = value["episodes"]
     if type(dims) is not int or not 1 <= dims <= 16_384 or not isinstance(episodes, list) or len(episodes) > 512:
@@ -597,23 +599,28 @@ def _embedding_write_params(value: dict) -> dict:
             raise ValueError("embedding must be base64") from exc
         if len(embedding) != dims * 4:
             raise ValueError("embedding dimensions do not match payload")
+        if not np.isfinite(np.frombuffer(embedding, dtype=np.float32)).all():
+            raise ValueError("embedding must be finite")
         parsed.append({**episode, "embedding": embedding})
     return {
         "session_id": _uuid(value["session_id"], "session_id"),
+        "owner_id": _text(value["owner_id"], "owner_id", 64),
         "generation_id": _uuid(value["generation_id"], "generation_id"),
+        "revision": _revision(value["revision"], "revision"),
         "model": _text(value["model"], "model", 255),
         "dims": dims,
+        "complete": value["complete"] is True,
         "episodes": parsed,
     }
 
 
 def _embedding_hashes_params(value: dict) -> dict:
-    _exact_keys(value, {"session_id", "model"})
-    return {"session_id": _uuid(value["session_id"], "session_id"), "model": _text(value["model"], "model", 255)}
+    _exact_keys(value, {"session_id", "model", "dims"})
+    return {"session_id": _uuid(value["session_id"], "session_id"), "model": _text(value["model"], "model", 255), "dims": value["dims"]}
 
 
 def _embedding_query_params(value: dict) -> dict:
-    _exact_keys(value, {"model", "dims", "query_embedding", "session_filter", "limit"})
+    _exact_keys(value, {"model", "owner_id", "dims", "query_embedding", "session_filter", "limit"})
     dims = value["dims"]
     if type(dims) is not int or not 1 <= dims <= 16_384 or type(value["limit"]) is not int or not 1 <= value["limit"] <= 200:
         raise ValueError("embedding query dimensions or limit are invalid")
@@ -623,13 +630,15 @@ def _embedding_query_params(value: dict) -> dict:
         raise ValueError("query_embedding must be base64") from exc
     if len(query_embedding) != dims * 4:
         raise ValueError("query embedding dimensions do not match payload")
+    if not np.isfinite(np.frombuffer(query_embedding, dtype=np.float32)).all():
+        raise ValueError("query embedding must be finite")
     session_filter = value["session_filter"]
-    if session_filter is not None:
-        if not isinstance(session_filter, list) or len(session_filter) > 10_000:
-            raise ValueError("session_filter is invalid")
-        session_filter = [_uuid(item, "session_filter") for item in session_filter]
+    if not isinstance(session_filter, list) or not session_filter or len(session_filter) > 500:
+        raise ValueError("session_filter is invalid")
+    session_filter = [_uuid(item, "session_filter") for item in session_filter]
     return {
         "model": _text(value["model"], "model", 255),
+        "owner_id": _text(value["owner_id"], "owner_id", 64),
         "dims": dims,
         "query_embedding": query_embedding,
         "session_filter": session_filter,

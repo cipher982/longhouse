@@ -197,7 +197,7 @@ async def search_storage_v2_context(
 
 
 async def search_storage_v2_episode_embeddings(
-    *, model: str, dims: int, query_embedding: bytes, session_filter: list[str], limit: int, timeout_seconds: float
+    *, model: str, owner_id: int, dims: int, query_embedding: bytes, session_filter: list[str], limit: int, timeout_seconds: float
 ) -> list[dict[str, object]]:
     """Query the derived dense index through searchd, never its SQLite file."""
     search = get_searchd_client()
@@ -207,6 +207,7 @@ async def search_storage_v2_episode_embeddings(
         "search.embedding.query.v2",
         {
             "model": model,
+            "owner_id": str(owner_id),
             "dims": dims,
             "query_embedding": base64.b64encode(query_embedding).decode("ascii"),
             "session_filter": session_filter,
@@ -441,37 +442,47 @@ async def _semantic_recall_matches(
             from zerg.services.live_catalog_timeline import list_live_catalog_sessions
             from zerg.services.timeline_session_listing import TimelineSessionListParams
 
-            listing = await asyncio.to_thread(
-                list_live_catalog_sessions,
-                params=TimelineSessionListParams(
-                    project=project,
-                    provider=provider,
-                    environment=None,
-                    include_test=include_test,
-                    hide_autonomous=False,
-                    device_id=None,
-                    days_back=since_days,
-                    query=None,
-                    limit=max_results * 20,
-                    offset=0,
-                    sort=None,
-                    mode=None,
-                    context_mode="forensic",
-                    include_automation=include_automation,
-                ),
-                owner_id=owner_id,
-            )
-            valid_ids = {str(session.id) for session in listing.sessions}
+            valid_ids: set[str] = set()
+            for offset in range(0, 5_000, 200):
+                listing = await asyncio.to_thread(
+                    list_live_catalog_sessions,
+                    params=TimelineSessionListParams(
+                        project=project,
+                        provider=provider,
+                        environment=None,
+                        include_test=include_test,
+                        hide_autonomous=False,
+                        device_id=None,
+                        days_back=since_days,
+                        query=None,
+                        limit=200,
+                        offset=offset,
+                        sort=None,
+                        mode=None,
+                        context_mode="forensic",
+                        include_automation=include_automation,
+                    ),
+                    owner_id=owner_id,
+                )
+                valid_ids.update(str(session.id) for session in listing.sessions)
+                if len(listing.sessions) < 200:
+                    break
             if not valid_ids:
                 return []
-            rows = await search_storage_v2_episode_embeddings(
-                model=config.model,
-                dims=config.dims,
-                query_embedding=query_vec.astype("float32").tobytes(),
-                session_filter=sorted(valid_ids),
-                limit=max_results * 3,
-                timeout_seconds=timeout_seconds,
-            )
+            rows = []
+            for start in range(0, len(valid_ids), 500):
+                rows.extend(
+                    await search_storage_v2_episode_embeddings(
+                        model=config.model,
+                        owner_id=owner_id,
+                        dims=config.dims,
+                        query_embedding=query_vec.astype("float32").tobytes(),
+                        session_filter=sorted(valid_ids)[start : start + 500],
+                        limit=max_results * 3,
+                        timeout_seconds=timeout_seconds,
+                    )
+                )
+            rows.sort(key=lambda row: float(row.get("score") or 0.0), reverse=True)
             matches: list[RecallMatch] = []
             seen: set[str] = set()
             for row in rows:
