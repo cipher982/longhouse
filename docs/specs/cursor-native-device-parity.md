@@ -26,8 +26,8 @@ PR #62 exposed `cursor` on the installed native `longhouse` facade, while the
 Runtime Host already emitted `longhouse cursor --resume-session <id>` for
 managed Cursor Helm sessions. The initial port did not preserve the qualified
 Python launch, identity, permission, hook, terminal, and test contracts. Python
-is deliberately absent from the installed device product, so native Cursor must
-remain release-blocked until this document's remediation gates pass.
+is deliberately absent from the installed device product, so native Cursor was
+release-blocked until the remediation and qualification recorded here passed.
 
 ## Product contract
 
@@ -93,7 +93,7 @@ commands (`longhouse-engine cursor-helm send|interrupt|stop`) remain the single
 control implementation for the first slice; façade aliases are not required.
 No public Cursor command may fall back to Python or `uv`.
 
-## Delivery plan
+## Delivery plan (completed)
 
 1. Document the exact on-disk state/phase fields and socket request/reply wire
    schema shared by `cursor_helm.py` and `cursor_helm_control.rs`; native
@@ -125,8 +125,9 @@ No public Cursor command may fall back to Python or `uv`.
 ## Native cutover remediation
 
 PR #62 exposed the native command but did not preserve the complete Python
-launcher and hook contracts. The native entrypoint remains unavailable for
-release until every item below is implemented and proved.
+launcher and hook contracts. The follow-up restored and proved every
+release-blocking item below before returning the native entrypoint to
+`available`.
 
 ### 1. Fail-closed permission authority
 
