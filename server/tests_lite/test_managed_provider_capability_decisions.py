@@ -28,14 +28,24 @@ def test_undeclared_opencode_coordination_awareness_remains_unavailable() -> Non
     )
 
 
-def test_undeclared_cursor_coordination_awareness_remains_unavailable() -> None:
-    assert (
-        evaluate_managed_provider_capability(
-            capability_id="coordination.awareness.create",
-            context=_context("cursor"),
-        )
-        is None
+def test_cursor_coordination_awareness_is_declared_and_gated_on_proof() -> None:
+    """Cursor sessions now get the same coordination surface as the others.
+
+    The launcher writes an MCP entry that resolves per-session authority over the
+    session socket, so the capability is declared rather than absent. It still
+    needs live proof before it is enabled, like Claude's and Codex's.
+    """
+    cursor = evaluate_managed_provider_capability(
+        capability_id="coordination.awareness.create",
+        context=_context("cursor"),
     )
+    claude = evaluate_managed_provider_capability(
+        capability_id="coordination.awareness.create",
+        context=_context("claude"),
+    )
+
+    assert cursor is not None
+    assert (cursor.action, cursor.reason_codes) == (claude.action, claude.reason_codes)
 
 
 def test_upstream_absent_cursor_steer_is_disabled_even_with_ready_runtime() -> None:

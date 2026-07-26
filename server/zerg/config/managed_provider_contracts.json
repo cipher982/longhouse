@@ -1035,6 +1035,89 @@
       "transcript_binding": true,
       "startup_coordination_context": false,
       "capabilities": {
+        "coordination.awareness.create": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.cursor.coordination_awareness",
+          "action_gate": "ceiling",
+          "contexts": {
+            "modes": [
+              "helm"
+            ]
+          },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
+          "required_assertions": [
+            {
+              "id": "coordination_instructions_model_visible",
+              "scenario_id": "cursor_coordination_awareness_create",
+              "oracle_source": "server/zerg/qa/provider_coordination_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 86400,
+              "oracle_digest": "ddf0aae0c879c9b48dea816c64742d052cbd3e6ef2e832deee67b723f5e3bcee"
+            }
+          ]
+        },
+        "coordination.directed_input.send": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.cursor.coordination_directed_input",
+          "action_gate": "strict",
+          "contexts": {
+            "modes": [
+              "helm"
+            ]
+          },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
+          "required_assertions": [
+            {
+              "id": "provider_input_receipt_linked",
+              "scenario_id": "cursor_coordination_directed_input",
+              "oracle_source": "server/zerg/qa/provider_coordination_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic",
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "ddf0aae0c879c9b48dea816c64742d052cbd3e6ef2e832deee67b723f5e3bcee"
+            }
+          ]
+        },
+        "coordination.directed_input.receive": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.cursor.coordination_directed_input",
+          "action_gate": "ceiling",
+          "contexts": {
+            "modes": [
+              "helm"
+            ]
+          },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
+          "required_assertions": [
+            {
+              "id": "attributed_input_visible",
+              "scenario_id": "cursor_coordination_directed_input",
+              "oracle_source": "server/zerg/qa/provider_coordination_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "hermetic",
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "ddf0aae0c879c9b48dea816c64742d052cbd3e6ef2e832deee67b723f5e3bcee"
+            }
+          ]
+        },
         "session.input.steer_active": {
           "disposition": "upstream_absent",
           "reason_code": "upstream_unavailable",
@@ -1062,14 +1145,13 @@
           ]
         }
       },
-      "can_resume": false,
+      "can_resume": true,
       "turn_start": true,
       "operation_evidence": {
         "launch_local": {
-          "level": "hermetic",
-          "source": "Cursor product-path canary must pass post-deploy before live-token promotion",
-          "disposition": "implemented",
-          "owner_action": "cursor_helm_product_e2e launch_archive"
+          "level": "live_token",
+          "source": "Gate 0 create_chat_resume and new_session_id launched stock cursor-agent 2026.07.23-e383d2b and completed a real turn; the product E2E launched through the installed facade and archived it. ~/.longhouse/canaries/provider-live/cursor/20260726T020333Z/gate0.json, ~/.longhouse/canaries/provider-live/cursor-product/20260726T024725Z/product-e2e.json",
+          "disposition": "implemented"
         },
         "run_once": {
           "level": "none",
@@ -1079,22 +1161,19 @@
           "routed_to": "session.turn.start via the cursor_print adapter"
         },
         "reattach": {
-          "level": "hermetic",
-          "source": "Cursor Helm Gate 0 native_resume_continuity: a new stock TUI resumes the same provider conversation and Longhouse session identity",
-          "disposition": "implemented",
-          "owner_action": "cursor_helm_gate0 native_resume_continuity"
+          "level": "live_token",
+          "source": "Gate 0 native_resume_continuity resumed the same provider conversation and store agent id under the same Longhouse session id. ~/.longhouse/canaries/provider-live/cursor/20260726T020333Z/gate0.json",
+          "disposition": "implemented"
         },
         "send_input": {
-          "level": "hermetic",
-          "source": "Cursor Helm Gate 0 idle send: exact prompt digest, native response/stop hooks, and store continuity; active phase is rejected before PTY write",
-          "disposition": "implemented",
-          "owner_action": "cursor_helm_gate0 idle_send"
+          "level": "live_token",
+          "source": "Gate 0 create_chat_resume matched the exact prompt digest and observed a provider response; the product E2E sent remotely from hosted while idle. ~/.longhouse/canaries/provider-live/cursor/20260726T020333Z/gate0.json, ~/.longhouse/canaries/provider-live/cursor-product/20260726T024725Z/product-e2e.json",
+          "disposition": "implemented"
         },
         "interrupt": {
-          "level": "hermetic",
-          "source": "Cursor Helm Gate 0 ctrl_c_cancel: Ctrl-C stops the active generation, emits aborted/error, preserves the TUI process, and the next turn completes",
-          "disposition": "implemented",
-          "owner_action": "cursor_helm_gate0 ctrl_c_cancel"
+          "level": "live_token",
+          "source": "Gate 0 ctrl_c_cancel stopped the active generation, left the TUI process alive, and completed the next turn. ~/.longhouse/canaries/provider-live/cursor/20260726T020333Z/gate0.json",
+          "disposition": "implemented"
         },
         "steer_active_turn": {
           "level": "none",
@@ -1111,28 +1190,24 @@
           "routed_to": "the pull-based Longhouse pause-request API via the fail-closed permission hook"
         },
         "terminate": {
-          "level": "hermetic",
-          "source": "cursor_helm: engine forwards session.terminate; launcher sends SIGKILL to the cursor-agent child pid, unlinks socket/state, and exits.",
-          "disposition": "implemented",
-          "owner_action": "cursor_helm_product_e2e terminate_cleanup"
+          "level": "live_token",
+          "source": "The product E2E terminated the session and verified cleanup and terminal restoration. ~/.longhouse/canaries/provider-live/cursor-product/20260726T024725Z/product-e2e.json",
+          "disposition": "implemented"
         },
         "tail_output": {
-          "level": "hermetic",
-          "source": "cursor_store exact raw storage-v2 source emits cursor-store-render-v2 text, reasoning, tool-call, and tool-result projections",
-          "disposition": "implemented",
-          "owner_action": "cursor_helm_product_e2e archive_convergence"
+          "level": "live_token",
+          "source": "The product E2E observed archive convergence with a 0.337s recovery lag and matching event counts. ~/.longhouse/canaries/provider-live/cursor-product/20260726T024725Z/product-e2e.json",
+          "disposition": "implemented"
         },
         "runtime_phase": {
-          "level": "hermetic",
-          "source": "Cursor user hook adapter records native lifecycle/tool events and atomic active/idle/ended phase",
-          "disposition": "implemented",
-          "owner_action": "cursor_helm_gate0 lifecycle_phase"
+          "level": "live_token",
+          "source": "Gate 0 lifecycle hooks recorded active and idle phases; the product E2E reconverged control after a Machine Agent restart. ~/.longhouse/canaries/provider-live/cursor/20260726T020333Z/gate0.json, ~/.longhouse/canaries/provider-live/cursor-product/20260726T024725Z/product-e2e.json",
+          "disposition": "implemented"
         },
         "transcript_binding": {
-          "level": "hermetic",
-          "source": "Cursor hook conversation_id plus launcher-owned Longhouse session ID binds the matching native store without recency heuristics",
-          "disposition": "implemented",
-          "owner_action": "cursor_helm_gate0 hook_conversation_binding"
+          "level": "live_token",
+          "source": "Gate 0 observed hook conversation_id, native store agent id, and the Longhouse session id agreeing across create, resume, and cancel. ~/.longhouse/canaries/provider-live/cursor/20260726T020333Z/gate0.json",
+          "disposition": "implemented"
         },
         "turn_start": {
           "level": "hermetic",
@@ -1148,7 +1223,7 @@
         "cursor.turn_start",
         "cursor.turn_interrupt"
       ],
-      "adapter_digest": "d9f61dbcfe9a2d1dac23afb06ee28e279990742f03d6074d6afedcdd1bdfecb0"
+      "adapter_digest": "cc979dd5f63aacf1e41f5eaadb47f97cdd0d6767a88b79f0920351ad35a44883"
     }
   ]
 }

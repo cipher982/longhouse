@@ -240,6 +240,32 @@ release-blocking item below before returning the native entrypoint to
   lock contention, resize forwarding, and terminal restoration after failure.
 - Mid-turn steer is explicitly represented as unsupported.
 
+## Remaining qualification
+
+Machine Agent restart is proven by the product canary through the real Runtime
+Host control path. Runtime Host outage and recovery is a separate qualification
+and is not implied by a canary run against a healthy host. It is the only
+Cursor Helm launch requirement without a green live artifact.
+
+## Capability projection
+
+Capabilities belong to a control plane and its current proof, never to a
+provider name.
+
+- `cursor_helm` receives only operations proven for the live PTY and hook session.
+- `cursor_acp` receives only operations proven for Console ACP, and the Machine
+  Agent no longer executes ACP; it is a read alias for archived sessions.
+- `cursor_store` is durable and search-only, and only after a render generation
+  exists.
+
+`can_tail_output` requires readable current output rather than durable raw
+bytes. `can_interrupt` requires graceful active-turn cancellation. No
+`cursor_helm` capability may cite `cursor_acp` evidence.
+
+Per-operation disposition and evidence now live in
+`schemas/managed_providers.yml`; see
+`provider-automation-factory-completion.md` for how those are classified.
+
 ## Non-goals
 
 - Adding mid-turn steering to Cursor.

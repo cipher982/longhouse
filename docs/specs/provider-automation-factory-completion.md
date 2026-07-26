@@ -328,9 +328,11 @@ coordination MCP, declare the capabilities.
 **Phase 6 — OpenCode permission answering.** New capability with a live canary.
 
 **Phase 7 — Antigravity maintenance and doc reconciliation.** Support tier,
-dispositions, AGENTS.md line. Collapse `cursor-helm-launch-parity.md` into the
-qualified account and fix `native-device-runtime.md`, which still claims the
-facade supports only Claude, Codex, and OpenCode.
+dispositions, AGENTS.md line. `cursor-helm-launch-parity.md` is superseded: its
+capability-projection rules and the one outstanding Runtime Host outage
+qualification move into `cursor-native-device-parity.md`, and the file is
+deleted rather than left to contradict the qualified account.
+`native-device-runtime.md` gains Cursor in the facade list.
 
 **Phase 8 — Cutover.** Full validation, ship, dogfood refresh, and a factory
 health report showing zero unclassified cells.

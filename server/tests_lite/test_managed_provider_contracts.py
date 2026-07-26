@@ -164,7 +164,15 @@ def test_semantic_capabilities_include_exact_coordination_and_steer_limitations(
     cursor = contract_for_provider("cursor")
     antigravity = contract_for_provider("antigravity")
     assert cursor is not None and antigravity is not None
-    assert set(cursor.capabilities) == {"session.input.steer_active"}
+    # Cursor gained coordination once its launcher wired an MCP entry that
+    # resolves per-session authority. post_compaction is absent because Cursor
+    # has no compaction hook to bootstrap from.
+    assert set(cursor.capabilities) == {
+        "coordination.awareness.create",
+        "coordination.directed_input.send",
+        "coordination.directed_input.receive",
+        "session.input.steer_active",
+    }
     assert set(antigravity.capabilities) == {
         "session.input.steer_active",
         "session.launch.helm",
