@@ -1,8 +1,12 @@
 // Seed set. Gold sessions were located by a distinctive exact term, evidence was
 // read to confirm the topic is really there, then the query was rewritten to omit
-// that term. Target is 80 queries; this is 26 and needs review before it gates
+// that term. Target is 80 queries; this is 61 and needs review before it gates
 // anything. See README.md.
-{"excluded_sessions": []}
+//
+// 5595c356 excluded: it surfaced as a top match for nearly every unrelated mining
+// query during this expansion pass (the retrieval-work session discussing recall
+// itself, same self-contamination the README already calls out).
+{"excluded_sessions": ["5595c356"]}
 
 // --- exact: identifiers, flags, env vars, error strings. Lexical should ace
 // these, so they are the regression guard against dense retrieval replacing it.
@@ -42,3 +46,51 @@
 {"id": "absent-stripe-refund-flow", "category": "absent", "query": "implementing the automated customer refund approval workflow", "gold_sessions": [], "note": "billing exists, this flow does not"}
 {"id": "absent-graphql", "category": "absent", "query": "the GraphQL schema for the timeline API", "gold_sessions": [], "note": "REST only"}
 {"id": "absent-onprem-installer", "category": "absent", "query": "the Windows MSI installer for enterprise on-premise deployment", "gold_sessions": [], "note": "no Windows installer, no enterprise tier"}
+
+// --- second pass, added after reviewing the rebuild/eval-baseline session.
+// Same mechanical method: mine a distinctive term, verify evidence, paraphrase.
+
+// exact
+{"id": "exact-coverage-overlay", "category": "exact", "query": "Gate release action-coverage overlay on artifact applicability", "gold_sessions": ["04757373", "019ef4f7", "4a1ad237"], "note": "epic2a coverage-truthfulness gate, commit 44ff6b1ec"}
+{"id": "exact-continuation-readiness", "category": "exact", "query": "continuation-readiness endpoint", "gold_sessions": ["e1937a7f", "b3b7d55a", "43c019ae"], "note": "session-chat preflight readiness check"}
+{"id": "exact-custom-env-field", "category": "exact", "query": "custom_env payload field name", "gold_sessions": ["a3bbe963", "a4bcc4f2", "3fbfc798"], "note": "control-plane custom-env payload key is custom_env not env"}
+{"id": "exact-device-token-debounce", "category": "exact", "query": "device token last_used_at debounce once per hour", "gold_sessions": ["93a49016", "5f3ffff2", "019f4a24"], "note": "device_tokens.py:527 debounce comment"}
+{"id": "exact-launchctl-kickstart", "category": "exact", "query": "launchctl kickstart gui ai.longhouse.app", "gold_sessions": ["4af8499b", "9595ed25", "cd28581e"], "note": "manual menu bar restart command"}
+{"id": "exact-waitforexistence", "category": "exact", "query": "waitForExistence pixel-luminance keyboard test", "gold_sessions": ["9595ed25", "c39dd291", "2ed279bd"], "note": "chat UI keyboard-open test asymmetry"}
+{"id": "exact-phase-e-reclaim-61gb", "category": "exact", "query": "Phase E reclaim 61GB disk", "gold_sessions": ["c39dd291", "019ef4f7", "4a1ad237"], "note": "one-time disk reclaim off the 117GB monolith"}
+{"id": "exact-bundle-ssh-env-pin", "category": "exact", "query": "bundle-over-SSH .env image pin clifford", "gold_sessions": ["f045b6ce", "fef1ba04", "593a6b9b"], "note": "provider factory deploy mechanism"}
+{"id": "exact-fts-disable-bulk", "category": "exact", "query": "_disable_fts_triggers bulk ingest", "gold_sessions": ["b3b7d55a", "6312343e", "019f3edf"], "note": "FTS triggers dropped during bulk ingest, batch-backfilled after"}
+{"id": "exact-presence-cache-flush", "category": "exact", "query": "PresenceCache in-memory periodic DB flush", "gold_sessions": ["729be19a", "6670e7ee", "2ed279bd"], "note": "presence_cache.py process-singleton"}
+{"id": "exact-agents-md-symlink", "category": "exact", "query": "AGENTS.md CLAUDE.md symlink migration", "gold_sessions": ["1fcbc98e", "5be4aadc", "5ea9e20c"], "note": "converting repos to symlink CLAUDE.md -> AGENTS.md"}
+{"id": "exact-b2-provision", "category": "exact", "query": "b2-provision.py scoped key Infisical", "gold_sessions": ["24d558a6", "b72a6ff5", "6107b43e"], "note": "self-service B2 bucket + scoped key provisioning"}
+{"id": "exact-filter-repo-forcepush", "category": "exact", "query": "filter-repo purged blobs force-pushed main single-user repo", "gold_sessions": ["7851415d", "82e9f3e8"], "note": "history rewrite to strip large blobs"}
+
+// paraphrase
+{"id": "para-mcp-rename-broke", "category": "paraphrase", "query": "why did the tools for finding peers and sending messages between sessions stop working after we renamed something", "gold_sessions": ["eb11c7d4", "a50bcf3a"], "note": "python->longhouse-server rename broke coordination tools; omits MCP/python/rust"}
+{"id": "para-runner-send-rejected", "category": "paraphrase", "query": "is there a path where the on-machine executor sends the steer command instead of going through the engine channel", "gold_sessions": ["019ef4f7", "4a1ad237", "eb11c7d4"], "note": "runner-backed send obsolete/rejected; omits those exact words"}
+{"id": "para-ci-polling-annoyance", "category": "paraphrase", "query": "why shouldn't an agent keep checking on a long CI workflow in a tight loop", "gold_sessions": ["a7a659e0", "9e907a7a"], "note": "gh run watch fragility under rate limits; omits the command name"}
+{"id": "para-picker-empty-after-rename", "category": "paraphrase", "query": "the workspace selector showed nothing for a device right after it was renamed until something ran in the background", "gold_sessions": ["019e8e61", "d0854d40"], "note": "device-id rename backfill self-heals ghost rows; omits 'backfill'"}
+{"id": "para-env-filter-removed", "category": "paraphrase", "query": "confirm the old fallback that matched sessions by an environment string instead of the device identifier is really gone from the code", "gold_sessions": ["a57093d9", "9595ed25"], "note": "OR environment == device_id fallback dropped"}
+{"id": "para-agents-symlink-loop", "category": "paraphrase", "query": "we accidentally created a circular symlink between the two agent instruction file conventions used across repos", "gold_sessions": ["5ea9e20c", "1fcbc98e"], "note": "CLAUDE.md -> AGENTS.md -> CLAUDE.md loop; omits the filenames"}
+{"id": "para-history-purge-private-code", "category": "paraphrase", "query": "removing sensitive internal code from the entire git history without breaking the public repo", "gold_sessions": ["7851415d", "82e9f3e8"], "note": "omits 'filter-repo'"}
+{"id": "para-token-write-cost", "category": "paraphrase", "query": "avoiding a database write on every single authenticated request just to record when a credential was last used", "gold_sessions": ["93a49016", "5f3ffff2"], "note": "device token last_used_at debounce; omits the field name"}
+
+// causal
+{"id": "causal-why-mcp-broke", "category": "causal", "query": "why did engine coordination tools like finding peers and sending messages stop working across every provider", "gold_sessions": ["eb11c7d4", "a50bcf3a"], "note": "the longhouse name moved to the Rust facade while config still pointed at Python"}
+{"id": "causal-why-runner-send-rejected", "category": "causal", "query": "why was sending a steer command through the on-machine runner rejected as a design", "gold_sessions": ["019ef4f7", "4a1ad237"], "note": "engine-channel only; runner-backed send obsolete"}
+{"id": "causal-why-drop-python-coordination", "category": "causal", "query": "why would the python coordination server implementation get deleted entirely", "gold_sessions": ["a50bcf3a"], "note": "parallel tool implementations once Rust facade is managed-provider default"}
+{"id": "causal-why-env-fallback-unsafe", "category": "causal", "query": "why was matching sessions by an environment string instead of device id considered unsafe", "gold_sessions": ["a57093d9", "9595ed25"], "note": "risk of cross-device collision on shared environment names"}
+{"id": "causal-why-fts-disabled-bulk", "category": "causal", "query": "why turn off full text search indexing while a large batch of history is being loaded", "gold_sessions": ["b3b7d55a", "6312343e"], "note": "avoids per-row trigger overhead; batch-backfilled after"}
+{"id": "causal-why-debounce-token-writes", "category": "causal", "query": "why not update a token's last-used timestamp on every single request that uses it", "gold_sessions": ["93a49016", "5f3ffff2"], "note": "write cost at high request volume; hourly debounce instead"}
+
+// supersession
+{"id": "super-mcp-facade-now", "category": "supersession", "query": "which implementation actually serves the peers and message coordination tools today", "gold_sessions": ["eb11c7d4", "a50bcf3a"], "note": "Rust facade, not the Python MCP server"}
+{"id": "super-send-path-now", "category": "supersession", "query": "what is the current path for sending a steer command into a running session", "gold_sessions": ["019ef4f7", "4a1ad237"], "note": "engine-channel only; runner path rejected"}
+{"id": "super-fts-state-now", "category": "supersession", "query": "are full text search triggers currently on or off while a bulk ingest runs", "gold_sessions": ["b3b7d55a", "6312343e"], "note": "off during ingest, backfilled after"}
+{"id": "super-env-filter-now", "category": "supersession", "query": "does session filtering still ever fall back to matching on an environment string", "gold_sessions": ["a57093d9", "9595ed25"], "note": "already dropped, device_id only"}
+
+// absent
+{"id": "absent-graph-db", "category": "absent", "query": "using a graph database like Neo4j to store session relationships", "gold_sessions": [], "note": "no graph database anywhere in the stack"}
+{"id": "absent-tenant-switch-ui", "category": "absent", "query": "a self-service admin UI for switching between hosted billing tenants", "gold_sessions": [], "note": "no such UI exists"}
+{"id": "absent-rust-frontend", "category": "absent", "query": "rewriting the web frontend in Rust", "gold_sessions": [], "note": "frontend is TypeScript, only the engine is Rust"}
+{"id": "absent-vector-database", "category": "absent", "query": "standing up a dedicated vector database service for embeddings", "gold_sessions": [], "note": "explicit decision against a separate vector DB; brute-force in sqlite instead"}
