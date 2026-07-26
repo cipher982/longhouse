@@ -343,6 +343,29 @@ describe("useSessionWorkspace", () => {
     );
   });
 
+  it("keeps Console control state polling after the workspace stream connects", () => {
+    let handlers: { onConnected?: () => void } | undefined;
+    const consoleSession = {
+      ...baseSession,
+      session_state: makeSessionStateFacts({ mode: "console", startTurnAvailable: true }),
+    };
+    seedHookMocks(0, { session_state: consoleSession.session_state });
+    streamMocks.connectSessionWorkspaceStream.mockImplementation((_sessionId, nextHandlers) => {
+      handlers = nextHandlers;
+      return vi.fn();
+    });
+
+    renderHook(() => useSessionWorkspace(baseSession.id));
+    act(() => handlers?.onConnected?.());
+
+    const options = agentSessionMocks.useAgentSessionWorkspace.mock.calls.at(-1)?.[1];
+    expect(
+      options?.refetchInterval({
+        state: { data: { session: consoleSession }, error: null },
+      } as never),
+    ).toBe(5_000);
+  });
+
   it("invalidates the workspace query itself when the SSE stream reports a change", () => {
     let handlers:
       | {
