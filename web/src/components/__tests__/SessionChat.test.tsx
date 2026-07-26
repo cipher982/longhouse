@@ -691,6 +691,34 @@ describe("SessionChat", () => {
     expect(screen.getByRole("button", { name: /cancel queued message/i })).toBeEnabled();
   });
 
+  it("shows an uncertain Console dispatch instead of leaving it silently sending", async () => {
+    requestMock.mockImplementation((path: string, init?: RequestInit) => {
+      if (String(path).endsWith("/lock")) {
+        return Promise.resolve({ locked: false, fork_available: false });
+      }
+      if (String(path).endsWith("/inputs") && !init) {
+        return Promise.resolve([
+          {
+            id: 43,
+            text: "survive the reconnect",
+            intent: "auto",
+            status: "delivering",
+            created_at: null,
+            last_error: "turn_start_outcome_unknown: Machine control channel disconnected",
+          },
+        ]);
+      }
+      return Promise.reject(new Error(`Unexpected request: ${path}`));
+    });
+
+    renderSessionChat({ chatMode: "managed_local", canQueueNextInput: true });
+
+    const chip = await screen.findByTestId("session-chat-queued");
+    expect(chip).toHaveTextContent("survive the reconnect");
+    expect(chip).toHaveTextContent("turn_start_outcome_unknown: Machine control channel disconnected");
+    expect(chip).not.toHaveTextContent("Sending…");
+  });
+
   it("shows Send update primary + Queue next secondary when steer capability is on", async () => {
     const user = userEvent.setup();
     const queryClient = new QueryClient({

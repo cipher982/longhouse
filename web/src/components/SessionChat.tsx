@@ -912,7 +912,7 @@ export function SessionChat({
                 <span
                   className={`session-chat-queued__status session-chat-queued__status--${row.status}`}
                 >
-                  {row.status === "delivering" ? "Sending…" : "Queued"}
+                  {row.status === "delivering" ? row.last_error || "Sending…" : "Queued"}
                 </span>
                 {row.status === "queued" ? (
                   <button
