@@ -173,15 +173,16 @@ async def test_semantic_recall_matches_times_out_gracefully(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_semantic_recall_matches_uses_live_catalog_embedding_rpc(monkeypatch):
-    """Candidate sessions come from the owner's full visible listing, not from
-    lexically matching the same query text.
+    """Scoping is a SQL predicate (owner/project/provider/environment/recency)
+    against searchd's session_index, not an enumerated session id list.
 
     A dense-only match -- one lexical search for this exact query text would
     never surface, which is the entire point of having a semantic lane --
-    must still reach search.embedding.query.v2. If candidate scope were
-    derived from a lexical search on ``query``, this test's candidate session
-    would never appear in that lexical result set and the RPC would receive
-    an empty session_filter.
+    must still reach search.embedding.query.v2 with real scoping filters, not
+    an empty or capped session_filter. An earlier version of this code
+    enumerated the owner's visible sessions client-side and passed ids
+    directly; that capped out well before covering a real tenant's full
+    history, which is exactly the regression this test guards against.
     """
     monkeypatch.setenv("TESTING", "0")
     fake_config = type("Cfg", (), {"model": "test-model", "dims": 2})()
@@ -192,24 +193,13 @@ async def test_semantic_recall_matches_uses_live_catalog_embedding_rpc(monkeypat
         return np.array([1, 0], dtype=np.float32)
 
     candidate_session_id = str(uuid4())
-
-    def fake_list_live_catalog_sessions(*, params, owner_id):
-        # Real signature is synchronous -- it's dispatched via asyncio.to_thread,
-        # not awaited directly. An async mock here silently no-ops (the coroutine
-        # is returned unawaited), which is why this test needs the real (sync)
-        # calling convention exercised, not just assumed.
-        assert params.query is None, "candidate listing must not apply a text-relevance filter"
-        assert owner_id == 42
-        fake_session = type("FakeSession", (), {"id": candidate_session_id})()
-        return type("Listing", (), {"sessions": [fake_session]})()
-
     seen = {}
 
     async def fake_query(**kwargs):
         seen.update(kwargs)
         return [
             {
-                "session_id": kwargs["session_filter"][0],
+                "session_id": candidate_session_id,
                 "episode_ordinal": 3,
                 "score": 0.9,
                 "event_index_start": 4,
@@ -220,7 +210,6 @@ async def test_semantic_recall_matches_uses_live_catalog_embedding_rpc(monkeypat
     import zerg.services.session_processing.embeddings as embeddings_module
 
     monkeypatch.setattr(embeddings_module, "generate_embedding", fake_generate_embedding)
-    monkeypatch.setattr("zerg.services.live_catalog_timeline.list_live_catalog_sessions", fake_list_live_catalog_sessions)
     monkeypatch.setattr(agents_search, "search_storage_v2_episode_embeddings", fake_query)
     result = await agents_search._semantic_recall_matches(
         query="important answer",
@@ -235,7 +224,9 @@ async def test_semantic_recall_matches_uses_live_catalog_embedding_rpc(monkeypat
     )
     assert [match.chunk_index for match in result] == [3]
     assert seen["model"] == "test-model"
-    assert seen["session_filter"] == [candidate_session_id]
+    assert seen["owner_id"] == 42
+    assert seen["exclude_environments"] == ["test", "e2e", "automation"]
+    assert seen["since_iso"] is not None
 
 
 def test_fetch_episode_snippet_uses_clean_projection_index_space(tmp_path):

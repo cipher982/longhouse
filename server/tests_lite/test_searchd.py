@@ -122,10 +122,28 @@ def test_episode_embeddings_dedup_and_cosine_query(tmp_path):
     connection = open_search_database(tmp_path / "search.db")
     store = SearchStore(connection)
     session_id = str(uuid4())
+    owner_id = "owner-1"
     try:
+        # query_episode_embeddings scopes via a SQL join against session_index
+        # (owner/project/provider/environment/recency), not an enumerated id
+        # list -- it needs a real row there to match against, the same way
+        # production sessions always have one by the time they're embedded.
+        connection.execute(
+            """
+            INSERT INTO session_index (
+                session_id, generation_id, owner_id, desired_revision, indexed_through,
+                object_count, object_set_hash, event_count, user_messages, assistant_messages,
+                tool_calls, is_sidechain, project, provider, environment, cwd, git_repo,
+                started_at, published_at
+            ) VALUES (?, ?, ?, 1, 1, 1, 'hash', 2, 1, 1, 0, 0, 'proj', 'codex', 'local', NULL, NULL, ?, ?)
+            """,
+            (session_id, str(uuid4()), owner_id, "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00"),
+        )
         first = store.write_episode_embeddings(
             session_id=session_id,
+            owner_id=owner_id,
             generation_id=str(uuid4()),
+            revision=1,
             model="test-model",
             dims=2,
             episodes=[
@@ -149,7 +167,9 @@ def test_episode_embeddings_dedup_and_cosine_query(tmp_path):
         assert store.read_episode_embedding_hashes(session_id=session_id, model="test-model")["hashes"] == {"0": "a" * 64, "1": "b" * 64}
         replay = store.write_episode_embeddings(
             session_id=session_id,
+            owner_id=owner_id,
             generation_id=str(uuid4()),
+            revision=1,
             model="test-model",
             dims=2,
             episodes=[
@@ -164,10 +184,25 @@ def test_episode_embeddings_dedup_and_cosine_query(tmp_path):
         )
         assert replay == {"written": 0, "skipped": 1}
         results = store.query_episode_embeddings(
-            model="test-model", dims=2, query_embedding=np.array([1, 0], dtype=np.float32).tobytes(), session_filter=[session_id], limit=2
+            model="test-model",
+            dims=2,
+            query_embedding=np.array([1, 0], dtype=np.float32).tobytes(),
+            owner_id=owner_id,
+            limit=2,
         )["results"]
         assert [row["episode_ordinal"] for row in results] == [0, 1]
         assert results[0]["score"] == pytest.approx(1.0)
+
+        # A query for a different owner must see nothing, even though the
+        # embeddings exist -- this is the tenant-isolation guarantee.
+        other_owner_results = store.query_episode_embeddings(
+            model="test-model",
+            dims=2,
+            query_embedding=np.array([1, 0], dtype=np.float32).tobytes(),
+            owner_id="owner-2",
+            limit=2,
+        )["results"]
+        assert other_owner_results == []
     finally:
         connection.close()
 

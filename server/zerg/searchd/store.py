@@ -711,12 +711,44 @@ class SearchStore:
         model: str,
         dims: int,
         query_embedding: bytes,
-        session_filter: list[str],
+        owner_id: str,
         limit: int,
-        owner_id: str = "",
+        project: str | None = None,
+        provider: str | None = None,
+        exclude_environments: list[str] | None = None,
+        since_iso: str | None = None,
     ) -> dict[str, object]:
-        sql = f"SELECT session_id, episode_ordinal, event_index_start, event_index_end, embedding FROM episode_embeddings WHERE model = ? AND dims = ? AND owner_id = ? AND session_id IN ({','.join('?' for _ in session_filter)})"
-        params: list[object] = [model, dims, owner_id, *session_filter]
+        """Scope by SQL predicate against session_index, not an enumerated id list.
+
+        The earlier design required the caller to page through every visible
+        session id client-side and pass them as session_filter -- correct but
+        unbounded: at real corpus scale (tens of thousands of sessions) any
+        fixed page-count cap silently excludes older sessions from dense
+        search, exactly the sessions a paraphrase/causal query most needs to
+        reach. session_index already carries owner_id/project/provider/
+        environment/started_at (it's built for exactly this), so push the
+        same filters SQL has always used for lexical search here too --
+        no enumeration, no cap, scales with an index instead of a page limit.
+        """
+        sql = (
+            "SELECT e.session_id, e.episode_ordinal, e.event_index_start, e.event_index_end, e.embedding "
+            "FROM episode_embeddings e "
+            "JOIN session_index si ON si.session_id = e.session_id "
+            "WHERE e.model = ? AND e.dims = ? AND e.owner_id = ? AND si.owner_id = ?"
+        )
+        params: list[object] = [model, dims, owner_id, owner_id]
+        if project:
+            sql += " AND si.project = ?"
+            params.append(project)
+        if provider:
+            sql += " AND si.provider = ?"
+            params.append(provider)
+        if exclude_environments:
+            sql += f" AND si.environment NOT IN ({','.join('?' for _ in exclude_environments)})"
+            params.extend(exclude_environments)
+        if since_iso:
+            sql += " AND si.started_at >= ?"
+            params.append(since_iso)
         rows = self.connection.execute(sql, params).fetchall()
         if not rows:
             return {"results": []}

@@ -252,24 +252,59 @@ rather than claiming false success — both finished by hand:
 
 Full backend suite after all fixes: 3625 passed, ruff clean.
 
-## 9. Remaining work (the actual gate)
+## 9. Shipped, backfilled, and one more real bug found running against production
 
-Nothing above has touched real data yet — it's code, not corpus. The projector runs
-automatically once shipped (no manual backfill trigger the way §3's design needed one — it
-claims and embeds every session on its own, the same way the FTS projector originally
-backfilled 4.36M events), so "backfill" here means "ship, then wait for the projector to
-catch up," not a POST call.
+Shipped (`4e71aa7d74`), healthy on demo + canary. First real problem: `episode_embeddings`
+stayed at 0 rows after deploy. Root cause — `projector_state` rows are only ever
+created/advanced by write-path code (session ingest, deletion, migration). `search-v2` never
+hit this because it existed *before* the corpus did; `embeddings-v1` is the first projector
+ever added *after* ~21,410 sessions already existed, so none of them had a claimable row —
+the projector would only ever see brand-new activity, never history.
 
-1. Ship this to hosted `david010`.
-2. Watch the projector claim/embed sessions; verify `episode_embeddings` row counts grow
-   and stabilize (compare against total session count).
-3. Live e2e: real `/api/agents/recall?mode=auto` calls against david010, confirm semantic
-   hits actually surface — specifically confirm a *paraphrase* query that the eval showed
-   lexical returning nothing for now gets a dense hit.
-4. Re-run `eval/recall/run_eval.py` against hybrid mode. Compare against the lexical
-   baseline in §1. This is the release gate — the point of all of this was to move that
-   73.7% number, not to ship code that compiles.
-5. Report before/after, scope anything deliberately deferred as explicit follow-ups.
+Fix: a one-time script using the existing, already-production-proven `projector.state.advance.v2`
+RPC (idempotent — creates or bumps a row, no-op otherwise) to seed all 21,410 sessions'
+real current `commit_seq`. Given this runs against a network-attached volume David flagged as
+slow and lock-prone, ran a focused `hatch codex sol` pre-flight check on the script itself
+before touching production: confirmed catalogd serializes all mutations through one worker
+regardless of client concurrency (so a fake concurrency knob would do nothing — removed),
+the real risk is sustained load on that worker rather than lock-wait pileup, and a small
+per-call sleep creates scheduling room for real traffic. Ran a 100-session canary first (0
+errors, produced 113 real embedding rows, proving the whole pipeline works end to end), then
+the full 21,410-session run: 0 errors, ~21,310 rows actually changed.
+
+Second real problem, found while proving semantic recall on a real paraphrase query: a known
+session (asking about verifying a new model release, without using the model's name) wasn't
+surfacing in `mode=auto` at all. Cause — the candidate-scoping fix from §8 (finding #4) paged
+the owner's visible session listing client-side up to a 5,000-session cap. This tenant has
+21,410 sessions; if the listing is recency-ordered (it is), a session from ~59 days ago sits
+well outside the first 5,000. The cap "fix" for finding #4 was still a cap, just a bigger
+one — it doesn't scale with the corpus and was quietly excluding the exact older sessions a
+paraphrase query most needs to reach.
+
+Real fix: `session_index` (already in `search.db`, already carries
+owner_id/project/provider/environment/started_at for lexical search) lets scoping happen as
+a SQL predicate — `query_episode_embeddings` now `JOIN`s `episode_embeddings` to
+`session_index` and filters there, no enumeration, no cap, scales with an index instead of a
+page limit. `search.embedding.query.v2`'s contract changed from a mandatory `session_filter`
+id list to `project`/`provider`/`exclude_environments`/`since_iso` filter parameters — owner
+scoping is still mandatory and still enforced twice (once on `episode_embeddings.owner_id`,
+once via the `session_index` join), so this is not a regression of finding #6's tenant-safety
+fix, just a different (and now unbounded-safe) way of expressing the same scope. Added a
+test proving a query for a different owner sees nothing even when the embeddings exist.
+
+Full backend suite after this fix: 3631 passed, ruff clean.
+
+## 10. Remaining work (the actual gate)
+
+1. Re-run the live e2e paraphrase-query check against hosted `david010` now that scoping is
+   unbounded, confirm the semantic hit actually surfaces.
+2. Let the projector continue working through the full 21,410-session backlog (embedding
+   generation is one API call per session; this takes real wall-clock time even with 0
+   errors) — check `episode_embeddings` distinct-session count periodically.
+3. Re-run `eval/recall/run_eval.py` against hybrid mode once a meaningful fraction of the
+   corpus is embedded. Compare against the lexical baseline in §1. This is the release gate
+   — the point of all of this was to move that 73.7% number, not to ship code that compiles.
+4. Report before/after, scope anything deliberately deferred as explicit follow-ups.
    Known gap already identified, not fixed in this pass: live-catalog dense-only matches
    (a session found by embeddings but not by lexical) currently carry no snippet text at
    all — `context_text`/`evidence` are unset on that `RecallMatch` construction in

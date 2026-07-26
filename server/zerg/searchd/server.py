@@ -620,7 +620,10 @@ def _embedding_hashes_params(value: dict) -> dict:
 
 
 def _embedding_query_params(value: dict) -> dict:
-    _exact_keys(value, {"model", "owner_id", "dims", "query_embedding", "session_filter", "limit"})
+    _exact_keys(
+        value,
+        {"model", "owner_id", "dims", "query_embedding", "limit", "project", "provider", "exclude_environments", "since_iso"},
+    )
     dims = value["dims"]
     if type(dims) is not int or not 1 <= dims <= 16_384 or type(value["limit"]) is not int or not 1 <= value["limit"] <= 200:
         raise ValueError("embedding query dimensions or limit are invalid")
@@ -632,17 +635,21 @@ def _embedding_query_params(value: dict) -> dict:
         raise ValueError("query embedding dimensions do not match payload")
     if not np.isfinite(np.frombuffer(query_embedding, dtype=np.float32)).all():
         raise ValueError("query embedding must be finite")
-    session_filter = value["session_filter"]
-    if not isinstance(session_filter, list) or not session_filter or len(session_filter) > 500:
-        raise ValueError("session_filter is invalid")
-    session_filter = [_uuid(item, "session_filter") for item in session_filter]
+    exclude_environments = value["exclude_environments"]
+    if exclude_environments is not None:
+        if not isinstance(exclude_environments, list) or len(exclude_environments) > 16:
+            raise ValueError("exclude_environments is invalid")
+        exclude_environments = [_text(item, "exclude_environments", 32) for item in exclude_environments]
     return {
         "model": _text(value["model"], "model", 255),
         "owner_id": _text(value["owner_id"], "owner_id", 64),
         "dims": dims,
         "query_embedding": query_embedding,
-        "session_filter": session_filter,
         "limit": value["limit"],
+        "project": _text(value["project"], "project", 255, optional=True),
+        "provider": _text(value["provider"], "provider", 32, optional=True),
+        "exclude_environments": exclude_environments,
+        "since_iso": _text(value["since_iso"], "since_iso", 64, optional=True),
     }
 
 
