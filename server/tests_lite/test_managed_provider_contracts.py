@@ -566,7 +566,6 @@ _MANAGED_LAUNCHER_MODULES = {
     "codex": "codex.py",
     "opencode": "opencode.py",
     "antigravity": "antigravity.py",
-    "cursor": "cursor_helm.py",
 }
 _SHARED_LAUNCH_UI_HELPERS = (
     "launch_ui.launch_panel(",

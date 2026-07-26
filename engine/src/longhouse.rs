@@ -262,9 +262,9 @@ struct CursorLaunchArgs {
     cursor_bin: Option<String>,
     #[arg(long)]
     config_dir: Option<PathBuf>,
-    /// Cursor Helm permission policy. `remote_approve` fails closed.
-    #[arg(long, default_value = "auto_approve")]
-    permission_mode: String,
+    /// Cursor Helm permission policy. Omitted resumes retain their recorded policy.
+    #[arg(long, alias = "permission-policy")]
+    permission_mode: Option<String>,
     #[arg(long)]
     verbose: bool,
     #[arg(long)]
@@ -704,12 +704,10 @@ fn launch_managed_cursor(args: CursorLaunchArgs) -> anyhow::Result<()> {
     command
         .args(["cursor-helm", "launch", "--cwd"])
         .arg(args.cwd)
-        .args([
-            "--loop-mode",
-            &args.loop_mode,
-            "--permission-mode",
-            &args.permission_mode,
-        ]);
+        .args(["--loop-mode", &args.loop_mode]);
+    if let Some(value) = args.permission_mode {
+        command.args(["--permission-mode", &value]);
+    }
     if let Some(value) = args.project {
         command.args(["--project", &value]);
     }
@@ -750,57 +748,15 @@ fn launch_managed_cursor(args: CursorLaunchArgs) -> anyhow::Result<()> {
 }
 
 fn configure_cursor_hooks(cursor_dir: Option<PathBuf>) -> anyhow::Result<()> {
-    let dir = cursor_dir.unwrap_or_else(|| {
-        PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".into())).join(".cursor")
-    });
-    std::fs::create_dir_all(&dir)?;
-    let path = dir.join("hooks.json");
-    let mut config: serde_json::Value = std::fs::read(&path)
-        .ok()
-        .and_then(|raw| serde_json::from_slice(&raw).ok())
-        .unwrap_or_else(|| json!({"version":1,"hooks":{}}));
-    let hooks = config["hooks"]
-        .as_object_mut()
-        .context("Cursor hooks must be an object")?;
-    let engine = shell_quote_path(&paired_engine_path()?);
-    for event in [
-        "sessionStart",
-        "sessionEnd",
-        "beforeSubmitPrompt",
-        "afterAgentThought",
-        "afterAgentResponse",
-        "preToolUse",
-        "postToolUse",
-        "postToolUseFailure",
-        "beforeShellExecution",
-        "afterShellExecution",
-        "beforeMCPExecution",
-        "afterMCPExecution",
-        "stop",
-    ] {
-        let entries = hooks
-            .entry(event)
-            .or_insert_with(|| json!([]))
-            .as_array_mut()
-            .context("Cursor hook entries must be arrays")?;
-        entries.retain(|entry| {
-            !entry.to_string().contains("longhouse-cursor-hook.py")
-                && !entry
-                    .to_string()
-                    .contains("longhouse-cursor-permission-hook.py")
-                && !entry.to_string().contains("cursor-lifecycle-hook")
-                && !entry.to_string().contains("cursor-permission-hook")
-        });
-        entries.push(json!({"command":format!("{engine} cursor-lifecycle-hook {event}"),"timeout":5,"failClosed":false}));
-        if matches!(event, "beforeShellExecution" | "beforeMCPExecution") {
-            entries.push(json!({"command":format!("{engine} cursor-permission-hook {event}"),"timeout":125,"failClosed":true}));
-        }
+    let mut command = Command::new(paired_engine_path()?);
+    command.args(["cursor-helm", "configure-hooks"]);
+    if let Some(dir) = cursor_dir {
+        command.arg("--cursor-dir").arg(dir);
     }
-    std::fs::write(
-        &path,
-        format!("{}\n", serde_json::to_string_pretty(&config)?),
-    )?;
-    println!("Configured native Cursor hooks in {}", path.display());
+    let status = command.status().context("configure native Cursor hooks")?;
+    if !status.success() {
+        anyhow::bail!("native Cursor hook configuration failed");
+    }
     Ok(())
 }
 
@@ -2321,7 +2277,7 @@ mod tests {
         else {
             panic!("expected cursor command");
         };
-        assert_eq!(args.permission_mode, "remote_approve");
+        assert_eq!(args.permission_mode.as_deref(), Some("remote_approve"));
         assert_eq!(args.cursor_args, ["--foo"]);
     }
 

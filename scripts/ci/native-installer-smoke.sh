@@ -5,6 +5,7 @@ set -euo pipefail
 
 ROOT_DIR="$(git rev-parse --show-toplevel)"
 NODE_BIN="$(command -v node)"
+PYTHON_BIN="$(command -v python3)"
 TEST_ROOT="$(mktemp -d)"
 PAIR_DIR="$TEST_ROOT/pair"
 HOME_DIR="$TEST_ROOT/home"
@@ -129,11 +130,24 @@ if [ "$1" = "create-chat" ]; then
   printf '%s\n' '00000000-0000-0000-0000-000000000001'
   exit 0
 fi
-exit 0
+printf '%s\n' 'CURSOR_NATIVE_PTY_OK'
+sleep 1
+exit "${LONGHOUSE_FAKE_CURSOR_EXIT:-0}"
 EOF
 chmod 755 "$HOME_DIR/traps/cursor-agent"
 HOME="$HOME_DIR" PATH="$HOME_DIR/.local/bin:$HOME_DIR/traps:/usr/bin:/bin:/usr/sbin:/sbin" \
-  script -q /dev/null "$installed" cursor --cwd "$HOME_DIR" --cursor-bin "$HOME_DIR/traps/cursor-agent" >/dev/null
+  "$PYTHON_BIN" "$ROOT_DIR/scripts/ci/run-in-pty.py" \
+  "$installed" cursor --cwd "$HOME_DIR" --cursor-bin "$HOME_DIR/traps/cursor-agent" \
+  >"$HOME_DIR/cursor-pty.out"
+grep -q 'CURSOR_NATIVE_PTY_OK' "$HOME_DIR/cursor-pty.out"
+set +e
+HOME="$HOME_DIR" PATH="$HOME_DIR/.local/bin:$HOME_DIR/traps:/usr/bin:/bin:/usr/sbin:/sbin" \
+  LONGHOUSE_FAKE_CURSOR_EXIT=7 "$PYTHON_BIN" "$ROOT_DIR/scripts/ci/run-in-pty.py" \
+  "$installed" cursor --cwd "$HOME_DIR" --cursor-bin "$HOME_DIR/traps/cursor-agent" \
+  >/dev/null
+cursor_exit=$?
+set -e
+[[ "$cursor_exit" == "7" ]]
 
 # The managed-provider seams have hermetic upstream fixtures. Keep those
 # canaries in the installer lane so a fresh native install cannot regress a

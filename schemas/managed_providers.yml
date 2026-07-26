@@ -615,8 +615,8 @@ providers:
   - cursor_acp
   - cursor_exec
   adapter_sources:
-  - server/zerg/cli/cursor.py
-  - server/zerg/cli/cursor_helm.py
+  - engine/src/cursor_helm_launcher.rs
+  - engine/src/cursor_hooks.rs
   - server/zerg/services/managed_local_control.py
   - engine/src/cursor_helm_control.rs
   - engine/src/cursor_print.rs
