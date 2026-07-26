@@ -1140,7 +1140,11 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                         discovery_tasks.is_empty(),
                                     );
                                 }
-                                if previous_inventory_generation != Some(snapshot.generation) {
+                                if inventory_change_requires_projection(
+                                    previous_inventory_generation,
+                                    snapshot.generation,
+                                    last_unmanaged_session_bindings.is_some(),
+                                ) {
                                     projection_generation = projection_generation.saturating_add(1);
                                     let input = ProjectionBuildInput {
                                         generation: projection_generation,
@@ -2496,6 +2500,14 @@ fn runtime_truth_signature(payload: &heartbeat::HeartbeatPayload) -> String {
 
 fn runtime_truth_changed(previous: Option<&str>, current: &str) -> bool {
     previous != Some(current)
+}
+
+fn inventory_change_requires_projection(
+    previous_generation: Option<u64>,
+    current_generation: u64,
+    managed_pair_ready: bool,
+) -> bool {
+    managed_pair_ready && previous_generation != Some(current_generation)
 }
 
 #[derive(Clone, Default)]
@@ -5142,6 +5154,14 @@ mod tests {
             Some("first-snapshot"),
             "first-snapshot"
         ));
+    }
+
+    #[test]
+    fn test_startup_inventory_waits_for_managed_projection_pair() {
+        assert!(!inventory_change_requires_projection(None, 1, false));
+        assert!(inventory_change_requires_projection(None, 1, true));
+        assert!(!inventory_change_requires_projection(Some(1), 1, true));
+        assert!(inventory_change_requires_projection(Some(1), 2, true));
     }
 
     #[test]
