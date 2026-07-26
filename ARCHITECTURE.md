@@ -21,8 +21,10 @@ the laptop sleeps. For durability you run the Runtime Host on an always-on box
 
 ```
   dev laptop ─┐
-              ├─ Machine Agent ──ships events──▶ Runtime Host ──▶ web / CLI / iOS
+              ├─ Machine Agent ◀─events / commands─▶ Runtime Host ◀─▶ web / CLI / iOS
   dev box ────┘                                  (SQLite, durable)
+       │
+       └─ installed provider clients own execution, auth, tools, and billing
 ```
 
 ## Core principles
@@ -34,6 +36,9 @@ the laptop sleeps. For durability you run the Runtime Host on an always-on box
   and provisioning state lives outside this repo.
 - **One session, one execution owner.** A session runs somewhere real;
   Longhouse observes or controls it but never silently moves it.
+- **Normalize control, not provider execution.** Longhouse exposes a common
+  session and capability model while the installed provider client retains its
+  own agent loop, authentication, subscription or API billing, and tools.
 - **Capability over type.** Every item in the timeline is a session. Some have
   live control, some need host reattach, some are search-only. Rely on
   `session.capabilities`, not a session "species".
@@ -88,8 +93,9 @@ no-terminal processes are not a fourth mode or a valid Helm launch surface.
 The project uses some shorthand nouns. The important ones:
 
 - **Provider CLI** — an upstream binary you install yourself (`claude`, `codex`,
-  Antigravity, `opencode`). Longhouse launches it through a control
-  path but does not vendor, pin, or update it.
+  Antigravity, `opencode`). It retains its native authentication, account
+  entitlement, agent loop, and tools. Longhouse launches it through a control
+  path but does not vendor, pin, proxy, or update it.
 - **Wall** — a live overview of current sessions across your machines.
 - **Recall** — semantic/full-text retrieval over past session history.
 - **Tail** — stream the recent events of a session.

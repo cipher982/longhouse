@@ -41,11 +41,25 @@ Use Longhouse in product copy. Keep Zerg internal.
 4. **Hosted is a convenience path, not the core truth.**
    If a user wants durability, they should be able to run on a VPS, Mac mini, homelab box, or other always-on machine they control.
 
+5. **Provider clients remain the execution layer.**
+   Longhouse standardizes discovery, history, control, and remote access. The
+   installed Claude Code, Codex, Cursor, or other provider client still owns its
+   agent loop, authentication, subscription or API billing, tools, and provider
+   semantics. Longhouse should not flatten those clients into a generic model
+   API or require users to buy the same model access again.
+
 ## Launch Story
 
 The launch story should fit in one paragraph:
 
-Install the Longhouse agent on each machine where you run coding sessions. Point it at an always-on box where your Longhouse server lives — a VPS, homelab, or Mac mini. Import existing sessions or start new ones through Longhouse. Find old work fast, inspect the raw session, and steer live work later from the web UI, CLI, or HTTP.
+Install the Longhouse agent on each machine where you run coding sessions. Point
+it at an always-on box where your Longhouse server lives — a VPS, homelab, or Mac
+mini. Longhouse imports sessions started directly in provider terminals. From
+the web or iOS interface, users can also choose a provider and connected machine
+and launch Console work there; from a terminal, `longhouse <provider>` launches
+Helm with the provider's normal TUI. The installed provider client performs the
+work with its existing account and local environment while Longhouse keeps the
+session available from every client.
 
 That means the product should make these truths obvious:
 
@@ -116,6 +130,7 @@ The product should never make users understand shell bootstrap, launchd, or help
 - one searchable timeline for agent sessions
 - raw session detail, search, and recall
 - remote control for sessions launched through Longhouse
+- one remote interface over installed provider clients and their existing accounts
 - coordination primitives such as wall, peers, tail, message, and continue
 - runner-backed execution on user-owned machines
 - a bundled human UI over the same machine contract
@@ -126,6 +141,8 @@ The product should never make users understand shell bootstrap, launchd, or help
 Longhouse is not:
 
 - an AI dashboard
+- a replacement coding-agent runtime or model proxy
+- a reseller for provider subscriptions users already have
 - silently moving a running session between machines
 - a generic remote shell manager
 - a mailbox product before launch

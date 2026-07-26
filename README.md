@@ -1,8 +1,15 @@
 # Longhouse
 
-Keep using your coding agents like normal. Longhouse watches their native session data and puts Claude Code, Codex, Antigravity, OpenCode, and Cursor sessions into one searchable timeline across the machines you own.
+Longhouse gives you one web, iOS, and CLI interface for the coding agents you
+already use. It puts real Claude Code, Codex, Antigravity, OpenCode, and Cursor
+sessions into one searchable timeline across the machines you own.
 
-Launch a provider through Longhouse when you want its supported remote-control path. Longhouse keeps the upstream CLI and its terminal UI; the available controls depend on the provider's native seam rather than a pretend one-size-fits-all wrapper.
+When Longhouse launches work, the installed provider client still executes on
+the selected machine with its existing authentication, subscription, tools,
+configuration, and repository access. Longhouse adds a shared control and
+observation layer; it does not replace those clients with another agent runtime.
+The available controls follow each provider's native seams rather than a
+pretend one-size-fits-all wrapper.
 
 ![Longhouse timeline — one searchable view of your coding-agent sessions across providers and machines](web/public/images/landing/timeline-preview.png)
 
@@ -14,7 +21,8 @@ Longhouse fixes that:
 
 - **Find any past session in seconds** — one timeline + full-text search across every provider and machine.
 - **Control live work remotely** — launch a session through Longhouse, then send, interrupt, steer, or resume it later when that provider supports the operation.
-- **Own your history** — runs on machines you control, SQLite at the core, nothing uploaded to a vendor cloud.
+- **Own your history** — Longhouse stores its archive in SQLite on your Runtime
+  Host. The provider client still makes its normal requests to its provider.
 
 Longhouse does not replace a provider with its own agent runtime or terminal UI. A bare provider CLI stays observable through its native archive. A managed launch such as `longhouse claude` keeps the stock terminal experience while adding Longhouse's provider-specific control path. The timeline exposes the controls a session can actually perform instead of assuming every provider can steer a live turn.
 
@@ -45,6 +53,11 @@ longhouse opencode     # managed server session: send, interrupt, reattach (not 
 OpenCode Helm supports send, interrupt, and terminate but not active-turn steer or pause-answer.
 
 Bare provider CLI sessions still get ingested into the timeline — they stay unmanaged: searchable and observable, but without Longhouse-owned remote control.
+
+Console is the no-terminal path. From the web or iOS interface, choose an
+installed provider and a connected machine. Longhouse dispatches each turn to
+that machine, where the real provider client runs with the same local identity
+and project state it would have from a terminal.
 
 The web UI lives at `http://localhost:8080`. Runtime Host administration is a
 separate server lane and uses `longhouse-server`:
@@ -100,7 +113,11 @@ On a laptop both run together for trial use. But you will want a VPS you self ho
 
 ## How It Compares
 
-There are great tools for spinning up sandboxed cloud agents, and the model labs now ship their own single-vendor dashboards. Longhouse sits in a different spot: the sessions you *already run*, on hardware you own, across every provider.
+There are great tools for spinning up sandboxed cloud agents, and the model labs
+ship their own single-vendor dashboards. Longhouse unifies the sessions you
+already run, on hardware you own, across providers. You keep using the official
+clients and provider plans you already have instead of buying access to another
+model-backed coding agent.
 
 ## Self-host (free) vs Hosted (paid)
 
