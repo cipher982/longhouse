@@ -437,7 +437,7 @@ providers:
   send_input: true
   interrupt: true
   steer_active_turn: false
-  answer_pause: false
+  answer_pause: true
   terminate: true
   tail_output: true
   runtime_phase: true
@@ -518,10 +518,9 @@ providers:
       reason: "The OpenCode server API exposes session.prompt, prompt_async, and session.abort with no steer method. The Steer/Queue pull request closed unmerged in 2026-06 and mid-run delivery remains an open upstream request."
       observed_provider_version: "1.17.20"
     answer_pause:
-      level: none
-      source: unsupported until OpenCode pause-answer semantics are proven
-      disposition: "not_implemented"
-      reason: "OpenCode exposes POST /permission/:requestID/reply plus permission.asked and permission.replied events. Longhouse has not subscribed or replied, so a remote operator cannot answer an OpenCode permission prompt."
+      level: hermetic
+      source: engine OpenCode permission reply endpoint and managed pause dispatch tests
+      disposition: "implemented"
       owner_action: "opencode_bridge permission.reply live canary"
     terminate:
       level: hermetic
@@ -554,6 +553,7 @@ providers:
   machine_control_supports:
   - opencode.send
   - opencode.interrupt
+  - opencode.answer_pause
   - opencode.terminate
   - opencode.turn_start
   - opencode.turn_interrupt

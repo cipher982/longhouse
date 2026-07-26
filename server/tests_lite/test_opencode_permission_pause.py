@@ -137,13 +137,11 @@ def _seed_opencode_session(db, *, request_id="perm-xyz"):
     return sid, user.id, row.id
 
 
-def test_opencode_permission_answer_pushes_via_bridge(monkeypatch, tmp_path):
-    """Answering an opencode permission prompt delivers the decision through the
-    bridge permission_reply (not the engine websocket) and resolves the row."""
+def test_opencode_permission_answer_dispatches_exact_provider_request(monkeypatch, tmp_path):
+    """The pause row resolves only after managed control accepts its request id."""
     from types import SimpleNamespace
 
     from fastapi.testclient import TestClient
-    from zerg.cli import opencode_bridge
     from zerg.database import get_db
     from zerg.dependencies.agents_auth import require_single_tenant
     from zerg.dependencies.browser_route_auth import get_current_browser_route_user
@@ -155,10 +153,13 @@ def test_opencode_permission_answer_pushes_via_bridge(monkeypatch, tmp_path):
 
     calls: list[dict] = []
 
-    def _fake_reply(*, session_id, request_id, decision, state_root, config_dir, wait_secs):
-        calls.append({"session_id": session_id, "request_id": request_id, "decision": decision})
+    from zerg.routers import session_chat
 
-    monkeypatch.setattr(opencode_bridge, "permission_reply", _fake_reply)
+    async def _fake_answer(**kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(ok=True, exit_code=0, response_data={"status": "resolved"})
+
+    monkeypatch.setattr(session_chat, "answer_pause_request_on_managed_local_session", _fake_answer)
 
     from zerg.main import api_app
     from zerg.main import app
@@ -183,17 +184,17 @@ def test_opencode_permission_answer_pushes_via_bridge(monkeypatch, tmp_path):
         )
         assert resp.status_code == 200, resp.text
         assert resp.json()["status"] == "resolved"
-        # The decision went out over the bridge as allow.
-        assert calls == [{"session_id": str(sid), "request_id": "perm-xyz", "decision": "allow"}]
+        assert len(calls) == 1
+        assert calls[0]["provider_request_id"] == "perm-xyz"
+        assert calls[0]["decision"] == "answer"
     finally:
         api_app.dependency_overrides.clear()
 
 
-def test_opencode_permission_deny_pushes_deny(monkeypatch, tmp_path):
+def test_opencode_permission_deny_dispatches_exact_provider_request(monkeypatch, tmp_path):
     from types import SimpleNamespace
 
     from fastapi.testclient import TestClient
-    from zerg.cli import opencode_bridge
     from zerg.database import get_db
     from zerg.dependencies.agents_auth import require_single_tenant
     from zerg.dependencies.browser_route_auth import get_current_browser_route_user
@@ -204,11 +205,13 @@ def test_opencode_permission_deny_pushes_deny(monkeypatch, tmp_path):
         sid, owner_id, pause_id = _seed_opencode_session(db, request_id="perm-deny")
 
     calls: list[dict] = []
-    monkeypatch.setattr(
-        opencode_bridge,
-        "permission_reply",
-        lambda **kw: calls.append({"request_id": kw["request_id"], "decision": kw["decision"]}),
-    )
+    from zerg.routers import session_chat
+
+    async def _fake_answer(**kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(ok=True, exit_code=0, response_data={"status": "rejected"})
+
+    monkeypatch.setattr(session_chat, "answer_pause_request_on_managed_local_session", _fake_answer)
 
     from zerg.main import api_app
     from zerg.main import app
@@ -233,6 +236,8 @@ def test_opencode_permission_deny_pushes_deny(monkeypatch, tmp_path):
         )
         assert resp.status_code == 200, resp.text
         assert resp.json()["status"] == "rejected"
-        assert calls == [{"request_id": "perm-deny", "decision": "deny"}]
+        assert len(calls) == 1
+        assert calls[0]["provider_request_id"] == "perm-deny"
+        assert calls[0]["decision"] == "reject"
     finally:
         api_app.dependency_overrides.clear()

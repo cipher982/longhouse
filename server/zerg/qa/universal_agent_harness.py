@@ -2832,14 +2832,11 @@ class UniversalProviderAdapter:
         from zerg.services.session_pause_requests import serialize_pause_request_projection
         from zerg.services.session_runtime import RuntimeEventIngest
         from zerg.services.session_runtime import ingest_runtime_events
-        from zerg.session_execution_home import ManagedSessionTransport
 
         scenario = "answer_pause_request" if answer else "pause_request_detect"
         can_respond = _provider_answer_pause_supported(self.config.provider)
-        managed_transport = {
-            "claude": ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE.value,
-            "codex": ManagedSessionTransport.CODEX_APP_SERVER.value,
-        }.get(self.config.provider)
+        contract = contract_for_provider(self.config.provider)
+        managed_transport = contract.managed_transport.value if can_respond and contract is not None else None
         now = datetime(2026, 6, 19, 12, 0, tzinfo=UTC)
         db_path = package.path("longhouse", "pause-request-service.sqlite")
         db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -2862,7 +2859,6 @@ class UniversalProviderAdapter:
             db.add(session)
             db.flush()
             db.refresh(session)
-            contract = contract_for_provider(self.config.provider)
             if managed_transport and contract is not None:
                 _seed_managed_kernel_rows(db, session, control_plane=contract.control_plane)
             runtime_key = f"{self.config.provider}:{session.id}:pause-request"
@@ -3004,6 +3000,7 @@ class UniversalProviderAdapter:
                                 decision="answer",
                                 answers={"approach": "Small adapter path"},
                                 message="Use the small adapter path.",
+                                provider_request_id=(active.provider_request_id if self.config.provider == "opencode" else None),
                                 request_id=f"universal-{self.config.provider}-answer-pause",
                             )
                         )
@@ -3019,6 +3016,8 @@ class UniversalProviderAdapter:
                         "answers": {"approach": "Small adapter path"},
                         "message": "Use the small adapter path.",
                     }
+                    if self.config.provider == "opencode":
+                        expected_payload["provider_request_id"] = active.provider_request_id
                     dispatch_assertions = {
                         "command_dispatched": bool(calls),
                         "command_type_matches": request.get("command_type") == "session.answer_pause",
@@ -5699,7 +5698,7 @@ def _derived_action_status(*, action: ActionDefinition, provider: str) -> dict[s
             "next": "Add a live active-turn steer canary, or keep unsupported without a stable provider semantic.",
         }
     if action.action_id == "answer_pause_request":
-        if provider in {"claude", "codex"}:
+        if _provider_answer_pause_supported(provider):
             return {
                 "status": STATUS_PASS,
                 "evidence_level": "hermetic",

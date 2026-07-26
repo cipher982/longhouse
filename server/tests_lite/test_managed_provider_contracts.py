@@ -296,12 +296,12 @@ def test_codex_contract_keeps_helm_and_console_controls():
     assert run_once_supported_providers() == frozenset({"codex"})
 
 
-def test_codex_and_managed_claude_advertise_remote_pause_answering():
+def test_launch_tier_providers_advertise_remote_pause_answering():
     supports_by_provider = {contract.provider: set(contract.machine_control_supports) for contract in all_managed_provider_contracts()}
 
     assert "codex.answer_pause" in supports_by_provider["codex"]
     assert "claude.answer_pause" in supports_by_provider["claude"]
-    assert "opencode.answer_pause" not in supports_by_provider["opencode"]
+    assert "opencode.answer_pause" in supports_by_provider["opencode"]
     assert "antigravity.answer_pause" not in supports_by_provider["antigravity"]
 
 
@@ -337,7 +337,7 @@ def test_opencode_contract_is_server_bridge_control_provider_without_active_turn
     assert opencode.send_input is True
     assert opencode.interrupt is True
     assert opencode.steer_active_turn is False
-    assert opencode.answer_pause is False
+    assert opencode.answer_pause is True
     assert opencode.reattach is True
     assert opencode.can_resume is False
     assert opencode.turn_start is True
@@ -345,6 +345,7 @@ def test_opencode_contract_is_server_bridge_control_provider_without_active_turn
     assert opencode.machine_control_supports == (
         "opencode.send",
         "opencode.interrupt",
+        "opencode.answer_pause",
         "opencode.terminate",
         "opencode.turn_start",
         "opencode.turn_interrupt",
@@ -435,7 +436,7 @@ def test_codex_exec_is_direct_one_shot_control_not_a_steer_alias():
         ("opencode", "session.send_text", "opencode.send"),
         ("opencode", "session.interrupt", "opencode.interrupt"),
         ("opencode", "session.steer_text", None),
-        ("opencode", "session.answer_pause", None),
+        ("opencode", "session.answer_pause", "opencode.answer_pause"),
         ("opencode", "session.terminate", "opencode.terminate"),
         ("opencode", "session.turn.start", "opencode.turn_start"),
         ("opencode", "session.turn.interrupt", "opencode.turn_interrupt"),
@@ -824,7 +825,7 @@ def test_outstanding_work_excludes_settled_facts_and_names_an_owner_action() -> 
     assert ("claude", "run_once") not in operations  # policy_disabled
 
 
-def test_the_only_launch_tier_control_work_left_is_opencode_permission_answering() -> None:
+def test_launch_tier_control_backlog_is_empty() -> None:
     """A tripwire, so new backlog is a deliberate decision rather than a drift.
 
     Antigravity work is excluded by tier: it is maintenance, not an investment.
@@ -832,7 +833,7 @@ def test_the_only_launch_tier_control_work_left_is_opencode_permission_answering
     from zerg.services.managed_provider_contracts import outstanding_factory_work
 
     launch_work = {(row["provider"], row["operation"]) for row in outstanding_factory_work() if row["support_tier"] == "launch"}
-    assert launch_work == {("opencode", "answer_pause")}
+    assert launch_work == set()
 
 
 def test_support_decisions_carry_no_provider_name_checks() -> None:

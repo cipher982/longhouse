@@ -636,7 +636,7 @@
       "send_input": true,
       "interrupt": true,
       "steer_active_turn": false,
-      "answer_pause": false,
+      "answer_pause": true,
       "terminate": true,
       "tail_output": true,
       "runtime_phase": true,
@@ -742,10 +742,9 @@
           "observed_provider_version": "1.17.20"
         },
         "answer_pause": {
-          "level": "none",
-          "source": "unsupported until OpenCode pause-answer semantics are proven",
-          "disposition": "not_implemented",
-          "reason": "OpenCode exposes POST /permission/:requestID/reply plus permission.asked and permission.replied events. Longhouse has not subscribed or replied, so a remote operator cannot answer an OpenCode permission prompt.",
+          "level": "hermetic",
+          "source": "engine OpenCode permission reply endpoint and managed pause dispatch tests",
+          "disposition": "implemented",
           "owner_action": "opencode_bridge permission.reply live canary"
         },
         "terminate": {
@@ -783,11 +782,12 @@
       "machine_control_supports": [
         "opencode.send",
         "opencode.interrupt",
+        "opencode.answer_pause",
         "opencode.terminate",
         "opencode.turn_start",
         "opencode.turn_interrupt"
       ],
-      "adapter_digest": "1e02e39b9873d3c1fd85793a6a2b04ac475460016387181931165a93e07c187b"
+      "adapter_digest": "d146351320d1771b015ae40313d5480b9e652c349a161df8b9b7587d68754ce2"
     },
     {
       "provider": "antigravity",
@@ -1005,7 +1005,7 @@
       "machine_control_supports": [
         "antigravity.send"
       ],
-      "adapter_digest": "86ff5db6a902cf3cce2097c650e72a0a5f673ed0d9083df90f387aec66574a80"
+      "adapter_digest": "b5c9fa029f8b578d0352ecbe5a2f6cc0a609a615e1213ba365ed8a1f9ce98726"
     },
     {
       "provider": "cursor",
@@ -1248,7 +1248,7 @@
         "cursor.turn_start",
         "cursor.turn_interrupt"
       ],
-      "adapter_digest": "cc979dd5f63aacf1e41f5eaadb47f97cdd0d6767a88b79f0920351ad35a44883"
+      "adapter_digest": "9bfbffe317e9ee120b3430274c13d56b0fed51610182f161ad50d8c6275cc511"
     }
   ]
 }

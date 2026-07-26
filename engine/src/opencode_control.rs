@@ -99,6 +99,31 @@ pub async fn interrupt(session_id: &str) -> Result<OpenCodeControlResult> {
     })
 }
 
+pub async fn permission_reply(
+    session_id: &str,
+    request_id: &str,
+    reply: &str,
+    message: Option<&str>,
+) -> Result<OpenCodeControlResult> {
+    let state = read_bridge_state(session_id, None)?;
+    let request_id = request_id.trim();
+    if request_id.is_empty() {
+        bail!("OpenCode permission request id is required");
+    }
+    let reply = match reply.trim() {
+        "once" | "always" | "reject" => reply.trim(),
+        other => bail!("unsupported OpenCode permission reply: {other}"),
+    };
+    let mut payload = json!({"reply": reply});
+    if let Some(message) = message.map(str::trim).filter(|value| !value.is_empty()) {
+        payload["message"] = Value::String(message.to_string());
+    }
+    request_opencode_permission_reply(&state, request_id, payload).await?;
+    Ok(OpenCodeControlResult {
+        provider_session_id: state.provider_session_id,
+    })
+}
+
 pub fn stop_server_bridge(session_id: &str) -> Result<OpenCodeStopResult> {
     stop_server_bridge_at(session_id, None)
 }
@@ -376,6 +401,43 @@ async fn post_abort(state: &OpenCodeControlState) -> Result<()> {
     request_opencode_json(state, Method::POST, "abort", None).await
 }
 
+async fn request_opencode_permission_reply(
+    state: &OpenCodeControlState,
+    request_id: &str,
+    payload: Value,
+) -> Result<()> {
+    let url = opencode_permission_reply_url(state, request_id)?;
+    let client = Client::builder()
+        .timeout(REQUEST_TIMEOUT)
+        .build()
+        .context("failed to build OpenCode control HTTP client")?;
+    let response = client
+        .post(url)
+        .basic_auth(&state.username, Some(&state.password))
+        .header("Accept", "application/json")
+        .json(&payload)
+        .send()
+        .await
+        .with_context(|| {
+            format!(
+                "OpenCode permission reply failed for session {}",
+                state.session_id
+            )
+        })?;
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .context("OpenCode permission reply response body could not be read")?;
+    if !status.is_success() {
+        bail!("OpenCode permission reply failed: HTTP {status}; body={body}");
+    }
+    if !body.trim().is_empty() {
+        serde_json::from_str::<Value>(&body).context("OpenCode server returned invalid JSON")?;
+    }
+    Ok(())
+}
+
 async fn request_opencode_json(
     state: &OpenCodeControlState,
     method: Method,
@@ -433,6 +495,25 @@ fn opencode_action_url(state: &OpenCodeControlState, action: &str) -> Result<Url
     if let Some(cwd) = state.cwd.as_deref() {
         url.query_pairs_mut().append_pair("directory", cwd);
     }
+    Ok(url)
+}
+
+fn opencode_permission_reply_url(state: &OpenCodeControlState, request_id: &str) -> Result<Url> {
+    let mut url = Url::parse(state.server_url.trim())
+        .with_context(|| format!("OpenCode server URL is invalid: {}", state.server_url))?;
+    validate_local_server_url(&url)?;
+    {
+        let mut segments = url
+            .path_segments_mut()
+            .map_err(|_| anyhow!("OpenCode server URL cannot be used as a base URL"))?;
+        segments
+            .clear()
+            .push("permission")
+            .push(request_id)
+            .push("reply");
+    }
+    url.set_fragment(None);
+    url.set_query(None);
     Ok(url)
 }
 
@@ -533,6 +614,37 @@ mod tests {
             )
         );
         assert!(request.body.is_empty());
+    }
+
+    #[tokio::test]
+    async fn permission_reply_posts_exact_request_with_auth() {
+        let (server_url, request_rx) = spawn_single_request_server().await;
+        let temp = TempDir::new().unwrap();
+        write_state(temp.path(), &server_url, Some("/tmp/project"));
+        let state = read_bridge_state(SESSION_ID, Some(temp.path())).unwrap();
+
+        request_opencode_permission_reply(
+            &state,
+            "perm/test 123",
+            json!({"reply": "once", "message": "Approved by Longhouse"}),
+        )
+        .await
+        .unwrap();
+        let request = request_rx.await.unwrap();
+
+        assert_eq!(request.method, "POST");
+        assert_eq!(request.target, "/permission/perm%2Ftest%20123/reply");
+        assert_eq!(
+            request.headers.get("authorization").unwrap(),
+            &format!(
+                "Basic {}",
+                general_purpose::STANDARD.encode("opencode:secret-password")
+            )
+        );
+        assert_eq!(
+            serde_json::from_str::<Value>(&request.body).unwrap(),
+            json!({"reply": "once", "message": "Approved by Longhouse"})
+        );
     }
 
     #[tokio::test]

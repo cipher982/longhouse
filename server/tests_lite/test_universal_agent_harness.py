@@ -969,12 +969,10 @@ def test_action_matrix_marks_provider_specific_unsupported_actions(tmp_path: Pat
     assert by_provider["claude"]["external_event_channel"]["status"] == "pass"
     assert by_provider["claude"]["external_event_channel"]["canary"] == "claude_development_channels_contract"
     # OpenCode has no upstream steer method, so this is a settled fact rather than
-    # a gap. Permission answering is the opposite: OpenCode exposes a reply
-    # endpoint Longhouse has not implemented, so it stays real backlog.
+    # a gap. Permission answering is a supported managed control operation.
     assert by_provider["opencode"]["steer_active_turn"]["status"] == "not_applicable"
     assert by_provider["opencode"]["steer_active_turn"]["disposition"] == "upstream_absent"
-    assert by_provider["opencode"]["answer_pause_request"]["status"] == "unsupported_gap"
-    assert by_provider["opencode"]["answer_pause_request"]["disposition"] == "not_implemented"
+    assert by_provider["opencode"]["answer_pause_request"]["status"] == "pass"
     assert by_provider["opencode"]["external_event_channel"]["status"] == "unsupported_gap"
     assert by_provider["antigravity"]["interrupt_cancel"]["status"] == "unsupported_gap"
     assert by_provider["antigravity"]["external_event_channel"]["status"] == "pass"
@@ -2407,7 +2405,7 @@ def test_pause_request_detect_projects_pending_question_for_all_providers(tmp_pa
         }
         assert data["pause_request"]["status"] == "pending"
         assert data["pause_request"]["questions"][0]["id"] == "approach"
-        assert data["pause_request"]["can_respond"] is (result["provider"] in {"claude", "codex"})
+        assert data["pause_request"]["can_respond"] is (result["provider"] in {"claude", "codex", "opencode"})
         evidence_root = Path(result["evidence_root"])
         assert (evidence_root / "longhouse" / "pause-request-service.json").is_file()
         assert (evidence_root / "longhouse" / "runtime-state.json").is_file()
@@ -2417,7 +2415,7 @@ def test_pause_request_detect_projects_pending_question_for_all_providers(tmp_pa
 def test_answer_pause_request_resolves_service_and_dispatches_managed_answer(tmp_path: Path) -> None:
     payload = uah.run_harness(
         uah.HarnessOptions(
-            providers=("claude", "codex"),
+            providers=("claude", "codex", "opencode"),
             scenarios=("answer_pause_request",),
             evidence_root=tmp_path / "evidence",
         )
@@ -2456,7 +2454,7 @@ def test_answer_pause_request_resolves_service_and_dispatches_managed_answer(tmp
 def test_answer_pause_request_reports_explicit_provider_gaps(tmp_path: Path) -> None:
     payload = uah.run_harness(
         uah.HarnessOptions(
-            providers=("opencode", "antigravity"),
+            providers=("antigravity",),
             scenarios=("answer_pause_request",),
             evidence_root=tmp_path / "evidence",
         )
