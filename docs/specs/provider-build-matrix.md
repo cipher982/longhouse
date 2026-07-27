@@ -1,6 +1,6 @@
 # Provider Build Matrix
 
-**Status:** step 1 implemented; steps 2–4 proposed
+**Status:** steps 1–2 implemented; steps 3–4 proposed
 **Owner:** Longhouse
 **Updated:** 2026-07-27
 **Extends:** `provider-automation-factory-epic.md`, `provider-automation-factory-completion.md`
@@ -242,10 +242,20 @@ The live smoke entry point now owns that distinction explicitly:
 the source of every provider input, and injects the resolved paths. Direct
 harness callers never inspect ambient environment or `PATH`.
 
-**2. Build store, fakes only.** Generate fakes into the store with closure
-digests recorded in evidence. No network, no credentials, offline-safe. Buys
-reproducible hermetic evidence and proves the store abstraction before anything
-external depends on it.
+**2. Build store, fakes only — implemented 2026-07-27.** Generated fakes are
+materialized under a human-readable provider/version/platform path. A versioned
+closure manifest hashes relative paths, content, executable bits, and symlink
+targets; `provider-builds.lock` refuses identity rewrites. The smoke verifies
+every closure before and after the harness and records the build identities in
+both artifacts. The store root defaults inside the evidence root and can be made
+persistent with `--provider-build-root`. There is no network, credential,
+upstream acquisition, or token dependency.
+
+Step 2 also closes the declaration-level gap found during review of step 1. A
+requested provider with no declared file now produces a red
+`undeclared_provider_build` row before any scenario runs; a nonexistent file is
+`provider_binary_not_found`. Opt-in real acquisition refuses partial provider
+sets instead of labelling a mixed or empty run as real-provider proof.
 
 **3. Channel declarations and staging for npm-shaped providers.** Declare
 `channel` / `coordinate` / `version_discovery` / `verification`. Generalize

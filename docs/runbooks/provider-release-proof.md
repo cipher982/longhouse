@@ -24,15 +24,20 @@ make provider-release-proof-universal-smoke \
   EVIDENCE_ROOT=/tmp/provider-release-proof-universal-smoke-evidence
 ```
 
-This generates disposable fake binaries and runs the universal harness across
-the managed-provider contract. Yellow is valid when the artifact contains only
-typed unsupported operations or stronger-evidence gaps. Red means the harness,
-projection, or executable scenario regressed.
+This generates disposable fake binaries, materializes them into an artifact-local
+build store, verifies their closures before and after execution, and runs the
+universal harness across the managed-provider contract. Pass
+`--provider-build-root /path` directly to the smoke script when a persistent
+store is useful. Yellow is valid when the artifact contains only typed
+unsupported operations or stronger-evidence gaps. Red means the harness,
+projection, build identity, or executable scenario regressed.
 
 The smoke writes:
 
 - `universal-agent-harness.json`;
 - provider support and execution coverage matrices;
+- `provider-builds.lock` plus per-provider closure directories;
+- `provider_builds` identity and pre/post verification records;
 - raw scenario evidence; and
 - `provider-release-proof-maturity.json`.
 
@@ -114,8 +119,9 @@ scripts/qa/provider-release-proof-universal-smoke.py \
 ```
 
 The entry point resolves each provider once, passes the resulting map into the
-fail-closed harness, and records `provider_bin_sources`. Missing providers stay
-missing; the harness does not retry against PATH.
+fail-closed harness, and records `provider_bin_sources`. If any requested
+provider is missing, acquisition stops before the harness; it never produces a
+partially real proof and never retries inside the harness.
 
 Add `--include-live-token-streaming` only when token spend is intended.
 

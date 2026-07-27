@@ -1,6 +1,6 @@
 # Provider Release Proof
 
-**Status:** active evidence contract; build identity hardening is proposed
+**Status:** active evidence contract; fake closure identity implemented
 **Owner:** Longhouse
 **Last updated:** 2026-07-27
 
@@ -15,6 +15,8 @@ The public boundary consists of:
 
 - `schemas/managed_providers.yml`, the authored provider and operation contract;
 - `server/zerg/qa/universal_agent_harness.py`, the shared scenario runner;
+- `server/zerg/qa/provider_build_store.py`, the fake-build closure and lock
+  authority;
 - provider qualification profiles and deterministic oracles under
   `server/zerg/qa/`;
 - `docs/specs/provider-release-proof-coverage.json`, the auditable coverage
@@ -68,9 +70,11 @@ absence and policy-disabled routes are typed facts rather than Yellow gaps.
 ### Hermetic pull-request lane
 
 CI uses generated fake providers, fixtures, isolated SQLite databases, and
-deterministic oracles. Every binary path is injected explicitly. An omitted
-provider build fails closed; the harness never searches the runner's ambient
-`PATH`.
+deterministic oracles. Fakes are materialized into a versioned closure store,
+verified before and after execution, and identified in evidence by digest,
+platform, architecture, provenance, and entrypoint. Every binary path is
+injected explicitly. An omitted or nonexistent provider build fails before any
+scenario runs; the harness never searches the runner's ambient `PATH`.
 
 This lane proves Longhouse behavior. It does not prove that the current
 upstream provider still behaves the same way.
@@ -82,9 +86,10 @@ identity, and passes its explicit path and expected version into the public
 qualification runner. Provider credentials are supplied only to profiles that
 require them and are never serialized into requests or retained evidence.
 
-The current identity profile hashes the selected executable. The planned build
-matrix widens this to the full execution closure and verifies that closure
-before and after execution.
+The staged-release identity profile still hashes the selected executable. The
+fake lane now proves the full-closure model and verifies it before and after
+execution; widening real staged releases to provider-specific closures is step
+3 of the build matrix.
 
 ### Manual live lane
 
@@ -95,7 +100,8 @@ inference.
 
 ## Fail-Closed Rules
 
-- A harness scenario receives an explicit provider path or reports
+- Every requested provider receives an explicit existing path before scenarios
+  run. Omission reports `undeclared_provider_build`; a nonexistent path reports
   `provider_binary_not_found`.
 - Operator/debug environment overrides are named inputs. Omission never means
   “whatever this machine has installed.”

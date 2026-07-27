@@ -159,7 +159,8 @@ the current invocation spent tokens or drove a live model turn. The row's
 `old_new_release_diff` is now a first-class executable artifact-diff scenario:
 it is `blocked` without explicit proof artifacts and `pass` or `fail` when the
 release-proof baseline tool compares old/new proof artifacts. Run it directly
-with `scripts/qa/universal-agent-harness.py --scenario old_new_release_diff
+with `scripts/qa/universal-agent-harness.py --provider PROVIDER --provider-bin
+/absolute/path/to/provider --scenario old_new_release_diff
 --old-proof-artifact OLD --new-proof-artifact NEW`, or attach it to
 `provider-release-proof.py --run-universal-harness` with
 `--universal-old-proof-artifact` and `--universal-new-proof-artifact`.
