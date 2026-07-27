@@ -520,9 +520,7 @@ def _write_release_proof(
     session_projection.write_text(json.dumps(session_projection_payload), encoding="utf-8")
     action_matrix.write_text(json.dumps(action_matrix_payload), encoding="utf-8")
     control_surface.write_text(json.dumps(control_surface_payload), encoding="utf-8")
-    provider_execution_coverage_matrix.write_text(
-        json.dumps(provider_execution_coverage_matrix_payload), encoding="utf-8"
-    )
+    provider_execution_coverage_matrix.write_text(json.dumps(provider_execution_coverage_matrix_payload), encoding="utf-8")
     proof = {
         "schema_version": 1,
         "artifact_kind": "provider_release_proof",
@@ -964,10 +962,7 @@ def test_action_matrix_marks_provider_specific_unsupported_actions(tmp_path: Pat
         )
     )
 
-    by_provider = {
-        result["provider"]: {row["action_id"]: row for row in result["data"]["actions"]}
-        for result in payload["results"]
-    }
+    by_provider = {result["provider"]: {row["action_id"]: row for row in result["data"]["actions"]} for result in payload["results"]}
     assert by_provider["claude"]["external_event_channel"]["status"] == "pass"
     assert by_provider["claude"]["external_event_channel"]["canary"] == "claude_development_channels_contract"
     # OpenCode has no upstream steer method, so this is a settled fact rather than
@@ -1214,10 +1209,7 @@ def test_control_surface_keeps_unsupported_and_live_token_rows_explicit(tmp_path
         )
     )
 
-    by_provider = {
-        result["provider"]: {row["action_id"]: row for row in result["data"]["actions"]}
-        for result in payload["results"]
-    }
+    by_provider = {result["provider"]: {row["action_id"]: row for row in result["data"]["actions"]} for result in payload["results"]}
     assert by_provider["opencode"]["steer_active_turn"]["status"] == "not_applicable"
     assert by_provider["opencode"]["resume_reattach"]["status"] == "pass"
     assert by_provider["opencode"]["resume_reattach"]["evidence_level"] == "live_no_token"
@@ -1315,9 +1307,7 @@ def test_full_action_suite_runs_same_abstract_surface_for_all_providers(tmp_path
     assert execution_rows["baseline_compare"]["providers"]["opencode"]["coverage_status"] == "pass"
     assert execution_rows["tool_call_result"]["providers"]["antigravity"]["coverage_kind"] == "executable_scenario"
     assert execution_rows["tool_call_result"]["providers"]["antigravity"]["coverage_status"] == "pass"
-    assert execution_rows["tool_call_result"]["providers"]["antigravity"]["scenario_ids"] == [
-        "tool_call_result_projection"
-    ]
+    assert execution_rows["tool_call_result"]["providers"]["antigravity"]["scenario_ids"] == ["tool_call_result_projection"]
     assert execution_rows["permission_prompt"]["providers"]["claude"]["coverage_status"] == "pass"
     assert execution_rows["permission_prompt"]["providers"]["claude"]["coverage_gap_kind"] == "passed"
     assert execution_rows["permission_prompt"]["providers"]["codex"]["coverage_status"] == "pass"
@@ -1446,9 +1436,7 @@ def test_opencode_lineage_projection_uses_real_longhouse_sqlite(tmp_path: Path) 
     assert all(result["data"]["assertions"].values())
 
     evidence_root = Path(result["evidence_root"])
-    projection = json.loads(
-        (evidence_root / "longhouse" / "opencode-lineage-projection.json").read_text(encoding="utf-8")
-    )
+    projection = json.loads((evidence_root / "longhouse" / "opencode-lineage-projection.json").read_text(encoding="utf-8"))
     branch_kinds = [row["branch_kind"] for row in projection["thread_rows"]]
     assert branch_kinds.count("subagent") == 2
     assert "fork" in branch_kinds
@@ -1486,14 +1474,11 @@ def test_opencode_orchestration_projection_uses_real_longhouse_sqlite(tmp_path: 
         == "provider_background_status_unproven"
     )
     assert (
-        result["data"]["operation_evidence"]["opencode_rich_gap_manifest"]["switch_actor_reason_code"]
-        == "provider_actor_switch_unmapped"
+        result["data"]["operation_evidence"]["opencode_rich_gap_manifest"]["switch_actor_reason_code"] == "provider_actor_switch_unmapped"
     )
 
     evidence_root = Path(result["evidence_root"])
-    projection = json.loads(
-        (evidence_root / "longhouse" / "opencode-orchestration-projection.json").read_text(encoding="utf-8")
-    )
+    projection = json.loads((evidence_root / "longhouse" / "opencode-orchestration-projection.json").read_text(encoding="utf-8"))
     edge_rows = projection["edge_rows"]
     assert [row["edge_kind"] for row in edge_rows].count("task_child") == 2
     nested_edges = [row for row in edge_rows if row["provider_edge_id"] == "task_nested"]
@@ -1524,13 +1509,8 @@ def test_orchestration_capability_matrix_emits_per_capability_evidence(tmp_path:
         assert all("verdict" in item for item in operation_evidence.values())
         assert all("reason_code" in item for item in operation_evidence.values())
         assert all(item["canary"] == "provider_action_coverage" for item in operation_evidence.values())
-        assert (
-            operation_evidence["orchestration_background_task_status"]["reason_code"]
-            == "provider_background_status_unproven"
-        )
-        background_rows = [
-            row for row in result["data"]["capabilities"] if row["capability"] == "background_task_status"
-        ]
+        assert operation_evidence["orchestration_background_task_status"]["reason_code"] == "provider_background_status_unproven"
+        background_rows = [row for row in result["data"]["capabilities"] if row["capability"] == "background_task_status"]
         assert background_rows[0]["reason_code"] == "provider_background_status_unproven"
         summary = result["data"]["summary"]
         assert summary["green"] + summary["yellow"] + summary["red"] == len(operation_evidence)
@@ -2572,10 +2552,7 @@ def test_remaining_surface_scenarios_emit_honest_results_for_all_providers(tmp_p
             assert permission["status"] == "pass"
             assert permission["data"]["operation_evidence"]["permission_prompt"]["status"] == "pass"
             assert permission["data"]["operation_evidence"]["permission_prompt"]["level"] == "hermetic"
-            assert (
-                permission["data"]["operation_evidence"]["permission_prompt"]["canary"]
-                == "codex_fake_app_server_permission_approval"
-            )
+            assert permission["data"]["operation_evidence"]["permission_prompt"]["canary"] == "codex_fake_app_server_permission_approval"
             assert Path(permission["data"]["codex_canary_artifact_path"]).is_file()
         elif provider == "opencode":
             assert permission["status"] == "pass"
@@ -2601,10 +2578,7 @@ def test_remaining_surface_scenarios_emit_honest_results_for_all_providers(tmp_p
             assert permission["status"] == "pass"
             assert permission["data"]["operation_evidence"]["permission_prompt"]["status"] == "pass"
             assert permission["data"]["operation_evidence"]["permission_prompt"]["level"] == "hermetic"
-            assert (
-                permission["data"]["operation_evidence"]["permission_prompt"]["canary"]
-                == "claude_permission_gate_reply"
-            )
+            assert permission["data"]["operation_evidence"]["permission_prompt"]["canary"] == "claude_permission_gate_reply"
             assert permission["data"]["assertions"] == {
                 "request_registered_via_real_endpoint": True,
                 "hook_polled_for_decision": True,
@@ -2619,6 +2593,7 @@ def test_remaining_surface_scenarios_emit_honest_results_for_all_providers(tmp_p
         assert crash["data"]["operation_evidence"]["crash_timeout_cleanup"]["status"] == "pass"
         assert crash["data"]["cleanup_assertions"]["diagnostics_written"] is True
         assert Path(crash["data"]["diagnostics_path"]).is_file()
+
 
 def test_opencode_interrupt_cancel_uses_session_abort_canary(tmp_path: Path) -> None:
     fake_opencode = _fake_opencode_server(tmp_path / "bin" / "opencode")
@@ -3292,9 +3267,7 @@ def test_antigravity_managed_session_e2e_uses_hook_inbox_canary(tmp_path: Path, 
     assert result["data"]["synthetic"] is False
     assert result["data"]["operation_evidence"]["external_event_channel"]["status"] == "pass"
     assert result["data"]["operation_evidence"]["send_input"]["level"] == "hermetic"
-    assert result["data"]["operation_evidence"]["runtime_phase"]["canary"] == (
-        "provider_control_e2e_antigravity_hook_inbox"
-    )
+    assert result["data"]["operation_evidence"]["runtime_phase"]["canary"] == ("provider_control_e2e_antigravity_hook_inbox")
     assert result["data"]["operation_evidence"]["db_ingest"]["status"] == "pass"
 
     evidence_root = Path(result["evidence_root"])
@@ -3387,7 +3360,7 @@ def test_collect_raw_evidence_runs_for_all_providers_without_launching(tmp_path:
         assert (evidence_root / "assertions" / "collect_raw_evidence.json").is_file()
 
 
-def test_probe_failure_writes_raw_and_assertion_evidence(tmp_path: Path) -> None:
+def test_invalid_declared_build_fails_before_scenarios(tmp_path: Path) -> None:
     missing = tmp_path / "missing" / "codex"
     payload = uah.run_harness(
         uah.HarnessOptions(
@@ -3402,10 +3375,25 @@ def test_probe_failure_writes_raw_and_assertion_evidence(tmp_path: Path) -> None
     assert payload["verdict"] == "red"
     assert result["status"] == "fail"
     assert result["failure_code"] == "provider_binary_not_found"
+    assert result["scenario"] == "build_declaration"
     evidence_root = Path(result["evidence_root"])
     assert (evidence_root / "manifest.json").is_file()
-    assert (evidence_root / "raw" / "version-command.json").is_file()
-    assert (evidence_root / "assertions" / "probe.json").is_file()
+    assert (evidence_root / "assertions" / "build-declaration.json").is_file()
+
+
+def test_undeclared_build_fails_even_for_non_executing_scenario(tmp_path: Path) -> None:
+    payload = uah.run_harness(
+        uah.HarnessOptions(
+            providers=("codex",),
+            scenarios=("runtime_phase",),
+            evidence_root=tmp_path / "evidence",
+            provider_bins={},
+        )
+    )
+
+    assert payload["verdict"] == "red"
+    assert payload["results"][0]["scenario"] == "build_declaration"
+    assert payload["results"][0]["failure_code"] == "undeclared_provider_build"
 
 
 def test_adapter_binary_resolution_ignores_ambient_discovery(tmp_path: Path, monkeypatch) -> None:
@@ -3437,7 +3425,7 @@ def test_parse_ingest_project_replays_fixture_without_launching_provider(tmp_pat
             providers=("opencode",),
             scenarios=("parse_ingest_project",),
             evidence_root=tmp_path / "evidence",
-            provider_bins={"opencode": tmp_path / "not-used"},
+            provider_bins={"opencode": _fake_bins(tmp_path)["opencode"]},
             fixture_path=fixture,
         )
     )
@@ -3554,17 +3542,13 @@ def test_script_entrypoint_runs_all_provider_action_e2e(tmp_path: Path) -> None:
     assert support_rows["steer_active_turn"]["providers"]["codex"]["canary"] == "codex_managed_local_steer_dispatch"
     assert support_rows["steer_active_turn"]["providers"]["opencode"]["status"] == "not_applicable"
     assert support_rows["permission_prompt"]["providers"]["codex"]["status"] == "pass"
-    assert (
-        support_rows["permission_prompt"]["providers"]["codex"]["canary"] == "codex_fake_app_server_permission_approval"
-    )
+    assert support_rows["permission_prompt"]["providers"]["codex"]["canary"] == "codex_fake_app_server_permission_approval"
     assert support_rows["permission_prompt"]["providers"]["opencode"]["status"] == "pass"
     assert support_rows["permission_prompt"]["providers"]["opencode"]["canary"] == "opencode_bridge_permission_reply"
     assert support_rows["permission_prompt"]["providers"]["claude"]["status"] == "pass"
     assert support_rows["permission_prompt"]["providers"]["claude"]["canary"] == "claude_permission_gate_reply"
     assert support_rows["permission_prompt"]["providers"]["antigravity"]["status"] == "unsupported_gap"
-    assert (
-        support_rows["permission_prompt"]["providers"]["antigravity"]["failure_code"] == "permission_prompt_unsupported"
-    )
+    assert support_rows["permission_prompt"]["providers"]["antigravity"]["failure_code"] == "permission_prompt_unsupported"
     assert support_matrix["provider_status_counts"]["claude"]["blocked"] >= 1
     assert support_matrix["provider_status_counts"]["opencode"]["unsupported_gap"] >= 1
 
@@ -3717,9 +3701,7 @@ def test_universal_smoke_rejects_live_token_without_real_provider_bins(tmp_path:
     assert "live_token_streaming requires --use-real-provider-bins" in result.stderr
 
 
-def test_universal_smoke_resolves_live_bins_at_the_acquisition_boundary(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_universal_smoke_resolves_live_bins_at_the_acquisition_boundary(tmp_path: Path, monkeypatch) -> None:
     smoke = _load_universal_smoke_module()
     codex = _write_exe(tmp_path / "configured" / "codex", "codex-cli 9.9.9")
     cursor = _write_exe(tmp_path / "path" / "cursor-agent", "2026.07.23-e383d2b")
@@ -3740,6 +3722,60 @@ def test_universal_smoke_resolves_live_bins_at_the_acquisition_boundary(
     }
 
 
+def test_universal_smoke_rejects_partial_real_provider_acquisition(tmp_path: Path, monkeypatch) -> None:
+    smoke = _load_universal_smoke_module()
+    codex = _write_exe(tmp_path / "codex", "codex-cli 9.9.9")
+    monkeypatch.setattr(
+        smoke,
+        "resolve_installed_provider_bins",
+        lambda providers: (
+            {"codex": codex},
+            {provider: ("PATH" if provider == "codex" else "missing") for provider in providers},
+        ),
+    )
+    args = smoke.build_parser().parse_args(
+        [
+            "--evidence-root",
+            str(tmp_path / "evidence"),
+            "--use-real-provider-bins",
+        ]
+    )
+
+    with pytest.raises(ValueError, match="real provider acquisition is incomplete"):
+        smoke.run_smoke(args)
+
+
+def test_universal_smoke_fake_lane_records_verified_provider_builds(tmp_path: Path) -> None:
+    smoke = _load_universal_smoke_module()
+    args = smoke.build_parser().parse_args(
+        [
+            "--evidence-root",
+            str(tmp_path / "evidence"),
+            "--artifact",
+            str(tmp_path / "smoke.json"),
+            "--scenario",
+            "probe_identity",
+        ]
+    )
+
+    artifact = smoke.run_smoke(args)
+
+    assert artifact["provider_bin_sources"] == {provider: "generated_fake" for provider in uah.SUPPORTED_PROVIDERS}
+    assert set(artifact["provider_builds"]) == set(uah.SUPPORTED_PROVIDERS)
+    assert artifact["provider_build_verification"] == {
+        "before_harness": "pass",
+        "after_harness": "pass",
+    }
+    for build in artifact["provider_builds"].values():
+        assert build["version"].startswith("fake-")
+        assert len(build["closure_digest"]) == 64
+        assert build["artifact_provenance"] == "generated_fake"
+    harness_artifact = json.loads(
+        (tmp_path / "evidence" / "universal-agent-harness" / "universal-agent-harness.json").read_text(encoding="utf-8")
+    )
+    assert harness_artifact["provider_builds"] == artifact["provider_builds"]
+
+
 def test_universal_smoke_can_select_real_provider_live_token_mode(tmp_path: Path, monkeypatch) -> None:
     smoke = _load_universal_smoke_module()
     calls: list[object] = []
@@ -3754,9 +3790,7 @@ def test_universal_smoke_can_select_real_provider_live_token_mode(tmp_path: Path
             "results": [],
             "provider_support_matrix_path": str(options.evidence_root / "provider-support-matrix.json"),
             "provider_support_matrix": {"artifact_kind": "fake_support"},
-            "provider_execution_coverage_matrix_path": str(
-                options.evidence_root / "provider-execution-coverage-matrix.json"
-            ),
+            "provider_execution_coverage_matrix_path": str(options.evidence_root / "provider-execution-coverage-matrix.json"),
             "provider_execution_coverage_matrix": {"artifact_kind": "fake_execution"},
         }
 
@@ -3790,6 +3824,4 @@ def test_universal_smoke_can_select_real_provider_live_token_mode(tmp_path: Path
     assert artifact["artifact_path"] == str((tmp_path / "smoke.json").resolve())
     assert Path(artifact["maturity_rollup_path"]).is_file()
     assert artifact["maturity_rollup"]["status"] == "pass"
-    assert artifact["maturity_rollup"]["universal_harness"]["run_modes"]["token_spending_scenarios"] == [
-        "live_token_streaming"
-    ]
+    assert artifact["maturity_rollup"]["universal_harness"]["run_modes"]["token_spending_scenarios"] == ["live_token_streaming"]

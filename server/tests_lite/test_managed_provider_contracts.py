@@ -86,9 +86,7 @@ def test_managed_provider_contract_manifest_is_generated_from_schema():
 
 def test_managed_provider_contract_rejects_unknown_safe_managed_session_scenario():
     repo_root = Path(__file__).resolve().parents[2]
-    schema_payload = yaml.safe_load(
-        (repo_root / "schemas" / "managed_providers.yml").read_text(encoding="utf-8")
-    )
+    schema_payload = yaml.safe_load((repo_root / "schemas" / "managed_providers.yml").read_text(encoding="utf-8"))
     schema_payload["providers"][0]["harness_safe_managed_session_scenarios"] = ["unknown_scenario"]
 
     with pytest.raises(ValueError, match="harness_safe_managed_session_scenarios"):
@@ -866,15 +864,12 @@ def test_support_decisions_carry_no_provider_name_checks() -> None:
 
     for function in (harness._action_support, harness._provider_pause_tool_name, harness.provider_configs):
         source = inspect.getsource(function)
-        offenders = [
-            provider
-            for provider in managed_provider_names()
-            if f'"{provider}"' in source or f"'{provider}'" in source
-        ]
+        offenders = [provider for provider in managed_provider_names() if f'"{provider}"' in source or f"'{provider}'" in source]
         assert offenders == [], f"{function.__name__} still branches on provider name: {offenders}"
 
 
 def test_contract_carries_the_facts_the_runner_used_to_hardcode() -> None:
+    from zerg.qa.universal_agent_harness import SCENARIOS
     from zerg.services.managed_provider_contracts import contract_for_provider
 
     claude = contract_for_provider("claude")
@@ -894,3 +889,5 @@ def test_contract_carries_the_facts_the_runner_used_to_hardcode() -> None:
     assert claude.harness_safe_managed_session_scenarios == ()
     assert cursor.harness_safe_managed_session_scenarios == ()
     assert antigravity.harness_safe_managed_session_scenarios == ()
+    for contract in (claude, codex, cursor, opencode, antigravity):
+        assert set(contract.harness_safe_managed_session_scenarios) <= set(SCENARIOS)

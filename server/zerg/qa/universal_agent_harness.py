@@ -32,6 +32,7 @@ from uuid import uuid5
 
 from zerg.provider_cli_contract import PROVIDER_CLI_BINARY_BY_PROVIDER
 from zerg.provider_cli_contract import PROVIDER_CLI_ENV_BY_PROVIDER
+from zerg.qa.provider_build_store import ProviderBuildRef
 from zerg.qa.repo_root import default_repo_root
 from zerg.services.managed_provider_contracts import contract_for_provider
 from zerg.services.managed_provider_contracts import factory_provider_names
@@ -682,7 +683,8 @@ class HarnessOptions:
     providers: tuple[str, ...]
     scenarios: tuple[str, ...]
     evidence_root: Path
-    provider_bins: Mapping[str, Path] | None = None
+    provider_bins: Mapping[str, Path]
+    provider_builds: Mapping[str, ProviderBuildRef] | None = None
     fixture_path: Path | None = None
     prompt: str | None = None
     old_proof_path: Path | None = None
@@ -3635,6 +3637,10 @@ class UniversalProviderAdapter:
         from zerg.services.claude_channel_bridge import CLAUDE_CHANNEL_SERVER_NAME
         from zerg.services.claude_channel_bridge import build_claude_channel_exec_command
 
+        binary, failure = self._require_binary(package, "resume_reattach")
+        if failure is not None:
+            return failure
+        assert binary is not None
         provider_session_id = "11111111-1111-1111-1111-111111111111"
         longhouse_session_id = "22222222-2222-4222-8222-222222222222"
         cwd = str(package.path("workspace"))
@@ -3643,7 +3649,7 @@ class UniversalProviderAdapter:
             longhouse_session_id=longhouse_session_id,
             cwd=cwd,
             resume=True,
-            claude_command=str(self.provider_bin or self.config.binary_name),
+            claude_command=str(binary),
         )
         assertions = {
             "uses_resume_flag": f"--resume {provider_session_id}" in command,
@@ -9046,6 +9052,61 @@ def run_harness(options: HarnessOptions) -> dict[str, Any]:
     registry = adapter_registry(options.provider_bins)
     results: list[ScenarioResult] = []
     for provider in options.providers:
+        declared_binary = options.provider_bins.get(provider)
+        if declared_binary is None or not declared_binary.expanduser().is_file():
+            package = EvidencePackage(
+                root=options.evidence_root,
+                provider=provider,
+                scenario="build_declaration",
+            )
+            declaration_adapter = registry.get(provider)
+            if declaration_adapter is not None:
+                package.initialize(adapter=declaration_adapter.config)
+            payload = {
+                "status": STATUS_FAIL,
+                "failure_code": ("undeclared_provider_build" if declared_binary is None else "provider_binary_not_found"),
+                "message": (
+                    f"No provider build was declared for {provider}."
+                    if declared_binary is None
+                    else f"Declared provider build does not exist for {provider}: {declared_binary}"
+                ),
+            }
+            package.write_json("assertions/build-declaration.json", payload)
+            results.append(
+                scenario_result(
+                    provider=provider,
+                    scenario="build_declaration",
+                    package=package,
+                    payload=payload,
+                )
+            )
+            continue
+        if options.provider_builds is not None:
+            build = options.provider_builds.get(provider)
+            if build is None or build.entrypoint.resolve() != declared_binary.expanduser().resolve():
+                package = EvidencePackage(
+                    root=options.evidence_root,
+                    provider=provider,
+                    scenario="build_declaration",
+                )
+                declaration_adapter = registry.get(provider)
+                if declaration_adapter is not None:
+                    package.initialize(adapter=declaration_adapter.config)
+                payload = {
+                    "status": STATUS_FAIL,
+                    "failure_code": ("undeclared_provider_build_identity" if build is None else "provider_build_entrypoint_mismatch"),
+                    "message": f"Provider build identity does not match the declared binary for {provider}.",
+                }
+                package.write_json("assertions/build-declaration.json", payload)
+                results.append(
+                    scenario_result(
+                        provider=provider,
+                        scenario="build_declaration",
+                        package=package,
+                        payload=payload,
+                    )
+                )
+                continue
         adapter = registry.get(provider)
         if adapter is None:
             package = EvidencePackage(root=options.evidence_root, provider=provider, scenario="adapter_load")
@@ -9104,6 +9165,10 @@ def run_harness(options: HarnessOptions) -> dict[str, Any]:
         "verdict": verdict_for_results(results),
         "results": [result.to_json() for result in results],
     }
+    if options.provider_builds is not None:
+        payload["provider_builds"] = {
+            provider: build.to_evidence() for provider, build in sorted(options.provider_builds.items()) if provider in options.providers
+        }
     if support_matrix is not None:
         matrix_path = options.evidence_root / "provider-support-matrix.json"
         write_json(matrix_path, support_matrix)

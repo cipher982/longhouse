@@ -27,6 +27,8 @@ from zerg.qa.universal_agent_harness import SUPPORTED_PROVIDERS
 from zerg.qa.universal_agent_harness import HarnessOptions
 from zerg.qa.universal_agent_harness import provider_configs
 from zerg.qa.universal_agent_harness import run_harness
+from zerg.qa.provider_build_store import materialize_generated_fake_builds
+from zerg.qa.provider_build_store import verify_provider_builds
 
 DEFAULT_SCENARIOS = (
     "probe_identity",
@@ -711,21 +713,50 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
         .resolve()
     )
     scenarios = _selected_scenarios(args)
+    providers = SUPPORTED_PROVIDERS
+    provider_builds = None
+    provider_build_store_root: Path | None = None
     if args.use_real_provider_bins:
-        provider_bins, provider_bin_sources = resolve_installed_provider_bins(SUPPORTED_PROVIDERS)
+        provider_bins, provider_bin_sources = resolve_installed_provider_bins(providers)
+        missing_providers = [
+            provider for provider in providers if provider not in provider_bins
+        ]
+        if missing_providers:
+            details = ", ".join(
+                f"{provider}={provider_bin_sources.get(provider, 'missing')}"
+                for provider in missing_providers
+            )
+            raise ValueError(f"real provider acquisition is incomplete: {details}")
     else:
-        provider_bins = write_fake_provider_bins(evidence_root)
-        provider_bin_sources = {provider: "generated_fake" for provider in SUPPORTED_PROVIDERS}
+        generated_bins = write_fake_provider_bins(evidence_root)
+        provider_build_store_root = (
+            (args.provider_build_root or (evidence_root / "provider-builds"))
+            .expanduser()
+            .resolve()
+        )
+        provider_builds = materialize_generated_fake_builds(
+            generated_bins,
+            store_root=provider_build_store_root,
+        )
+        verify_provider_builds(provider_builds)
+        provider_bins = {
+            provider: build.entrypoint for provider, build in provider_builds.items()
+        }
+        provider_bin_sources = {
+            provider: build.artifact_provenance
+            for provider, build in provider_builds.items()
+        }
     fixture_path = write_parse_fixture(evidence_root)
     old_proof_paths, new_proof_paths = write_synthetic_old_new_release_proofs(
         evidence_root
     )
     harness = run_harness(
         HarnessOptions(
-            providers=SUPPORTED_PROVIDERS,
+            providers=providers,
             scenarios=scenarios,
             evidence_root=evidence_root / "universal-agent-harness",
             provider_bins=provider_bins,
+            provider_builds=provider_builds,
             fixture_path=fixture_path,
             prompt=_smoke_prompt(args),
             old_proof_paths=old_proof_paths,
@@ -733,15 +764,35 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
             baseline_root=evidence_root / "baselines",
         )
     )
+    if provider_builds is not None:
+        verify_provider_builds(provider_builds)
     artifact = {
         "schema_version": 1,
         "artifact_kind": "provider_release_proof_universal_smoke",
         "generated_at": utc_now(),
         "verdict": harness.get("verdict"),
-        "providers": list(SUPPORTED_PROVIDERS),
+        "providers": list(providers),
         "scenarios": list(scenarios),
         "provider_bin_mode": "path_or_env" if args.use_real_provider_bins else "fake",
         "provider_bin_sources": provider_bin_sources,
+        "provider_builds": (
+            {
+                provider: build.to_evidence()
+                for provider, build in sorted(provider_builds.items())
+            }
+            if provider_builds is not None
+            else {}
+        ),
+        "provider_build_store_root": (
+            str(provider_build_store_root)
+            if provider_build_store_root is not None
+            else None
+        ),
+        "provider_build_verification": (
+            {"before_harness": "pass", "after_harness": "pass"}
+            if provider_builds is not None
+            else {"status": "not_applicable"}
+        ),
         "token_spending_scenarios": [LIVE_TOKEN_SCENARIO]
         if LIVE_TOKEN_SCENARIO in scenarios
         else [],
@@ -834,6 +885,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--artifact", type=Path)
     parser.add_argument("--evidence-root", type=Path)
     parser.add_argument(
+        "--provider-build-root",
+        type=Path,
+        help="Fake provider build store root. Defaults inside the evidence root.",
+    )
+    parser.add_argument(
         "--scenario",
         action="append",
         help="Universal scenario to run. Repeatable; defaults to fake/no-token smoke surface.",
@@ -866,7 +922,10 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(
             "live_token_streaming requires --use-real-provider-bins because it may spend provider tokens"
         )
-    artifact = run_smoke(args)
+    try:
+        artifact = run_smoke(args)
+    except ValueError as exc:
+        parser.error(str(exc))
     if args.json:
         print(json.dumps(artifact, indent=2, sort_keys=True))
     else:
