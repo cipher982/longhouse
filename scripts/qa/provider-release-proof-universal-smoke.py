@@ -713,7 +713,12 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
         .resolve()
     )
     scenarios = _selected_scenarios(args)
-    providers = SUPPORTED_PROVIDERS
+    providers = tuple(args.provider or SUPPORTED_PROVIDERS)
+    if len(providers) != len(set(providers)):
+        raise ValueError("providers must be unique")
+    unknown_providers = set(providers) - set(SUPPORTED_PROVIDERS)
+    if unknown_providers:
+        raise ValueError(f"unsupported providers: {sorted(unknown_providers)}")
     provider_builds = None
     provider_build_store_root: Path | None = None
     if args.use_real_provider_bins:
@@ -728,7 +733,11 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
             )
             raise ValueError(f"real provider acquisition is incomplete: {details}")
     else:
-        generated_bins = write_fake_provider_bins(evidence_root)
+        generated_bins = {
+            provider: binary
+            for provider, binary in write_fake_provider_bins(evidence_root).items()
+            if provider in providers
+        }
         provider_build_store_root = (
             (args.provider_build_root or (evidence_root / "provider-builds"))
             .expanduser()
@@ -884,6 +893,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--artifact", type=Path)
     parser.add_argument("--evidence-root", type=Path)
+    parser.add_argument(
+        "--provider",
+        action="append",
+        help="Provider column to run. Repeatable; defaults to every contract provider.",
+    )
     parser.add_argument(
         "--provider-build-root",
         type=Path,

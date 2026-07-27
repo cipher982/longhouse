@@ -33,6 +33,7 @@ from uuid import uuid5
 from zerg.provider_cli_contract import PROVIDER_CLI_BINARY_BY_PROVIDER
 from zerg.provider_cli_contract import PROVIDER_CLI_ENV_BY_PROVIDER
 from zerg.qa.provider_build_store import ProviderBuildRef
+from zerg.qa.provider_evidence_measurement import measure_evidence_package
 from zerg.qa.repo_root import default_repo_root
 from zerg.services.managed_provider_contracts import contract_for_provider
 from zerg.services.managed_provider_contracts import factory_provider_names
@@ -842,6 +843,9 @@ class EvidencePackage:
                 "generated_at": utc_now(),
             },
         )
+
+    def finalize_measurement(self) -> None:
+        self.write_json("measurement.json", measure_evidence_package(self.root))
 
 
 class UniversalProviderAdapter:
@@ -7924,6 +7928,7 @@ def scenario_result(
     package: EvidencePackage,
     payload: Mapping[str, Any],
 ) -> ScenarioResult:
+    package.finalize_measurement()
     status = str(payload.get("status") or STATUS_FAIL)
     if status not in STATUSES:
         status = STATUS_FAIL
@@ -8796,20 +8801,20 @@ def run_scenario(
     package = EvidencePackage(root=evidence_root, provider=adapter.config.provider, scenario=scenario)
     runner = SCENARIO_RUNNERS[scenario]
     if scenario == "parse_ingest_project":
-        return runner(adapter, package, fixture_path)  # type: ignore[misc]
-    if scenario == "db_ingest_project":
-        return runner(adapter, package, fixture_path)  # type: ignore[misc]
-    if scenario == "run_prompt_once":
-        return runner(adapter, package, prompt)  # type: ignore[misc]
-    if scenario == "send_receive":
-        return runner(adapter, package, prompt)  # type: ignore[misc]
-    if scenario == "baseline_compare":
-        return runner(adapter, package, baseline_root)  # type: ignore[misc]
-    if scenario == "old_new_release_diff":
-        return runner(adapter, package, old_proof_path, new_proof_path, baseline_root)  # type: ignore[misc]
-    if scenario == "full_action_suite":
-        return runner(adapter, package, old_proof_path, new_proof_path, baseline_root)  # type: ignore[misc]
-    return runner(adapter, package)  # type: ignore[misc]
+        result = runner(adapter, package, fixture_path)  # type: ignore[misc]
+    elif scenario == "db_ingest_project":
+        result = runner(adapter, package, fixture_path)  # type: ignore[misc]
+    elif scenario == "run_prompt_once":
+        result = runner(adapter, package, prompt)  # type: ignore[misc]
+    elif scenario == "send_receive":
+        result = runner(adapter, package, prompt)  # type: ignore[misc]
+    elif scenario == "baseline_compare":
+        result = runner(adapter, package, baseline_root)  # type: ignore[misc]
+    elif scenario in {"old_new_release_diff", "full_action_suite"}:
+        result = runner(adapter, package, old_proof_path, new_proof_path, baseline_root)  # type: ignore[misc]
+    else:
+        result = runner(adapter, package)  # type: ignore[misc]
+    return result
 
 
 def _proof_path_for_provider(

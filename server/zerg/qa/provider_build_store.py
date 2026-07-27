@@ -7,11 +7,13 @@ import platform
 import re
 import shutil
 from dataclasses import dataclass
+from datetime import UTC
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from typing import Mapping
 
-CLOSURE_MANIFEST_VERSION = 1
+CLOSURE_MANIFEST_VERSION = 2
 LOCK_SCHEMA_VERSION = 1
 GENERATED_FAKE_PROVENANCE = "generated_fake"
 STAGED_RELEASE_PROVENANCE = "staged_release"
@@ -30,6 +32,7 @@ class ProviderBuildRef:
     architecture: str
     artifact_provenance: str
     closure_manifest_version: int
+    closure_granularity: str
     closure_digest: str
     build_root: Path
     entrypoint_relative: str
@@ -46,6 +49,7 @@ class ProviderBuildRef:
             "architecture": self.architecture,
             "artifact_provenance": self.artifact_provenance,
             "closure_manifest_version": self.closure_manifest_version,
+            "closure_granularity": self.closure_granularity,
             "closure_digest": self.closure_digest,
             "entrypoint": self.entrypoint_relative,
         }
@@ -73,7 +77,7 @@ def _file_entry(path: Path, relative_path: str) -> dict[str, Any]:
     }
 
 
-def closure_manifest(root: Path) -> dict[str, Any]:
+def closure_manifest(root: Path, *, granularity: str = "full_installed_tree") -> dict[str, Any]:
     root = root.expanduser()
     if not root.is_dir():
         raise ProviderBuildStoreError(f"provider build root is not a directory: {root}")
@@ -84,19 +88,23 @@ def closure_manifest(root: Path) -> dict[str, Any]:
     ]
     if not entries:
         raise ProviderBuildStoreError(f"provider build root is empty: {root}")
+    if granularity not in {"full_installed_tree", "single_asset"}:
+        raise ProviderBuildStoreError(f"unsupported provider build closure granularity: {granularity}")
     return {
         "closure_manifest_version": CLOSURE_MANIFEST_VERSION,
+        "closure_granularity": granularity,
         "entries": entries,
     }
 
 
-def closure_digest(root: Path) -> str:
-    return hashlib.sha256(_canonical_json(closure_manifest(root))).hexdigest()
+def closure_digest(root: Path, *, granularity: str = "full_installed_tree") -> str:
+    return hashlib.sha256(_canonical_json(closure_manifest(root, granularity=granularity))).hexdigest()
 
 
 def _single_entrypoint_identity(source: Path, relative_path: str) -> tuple[dict[str, Any], str]:
     manifest = {
         "closure_manifest_version": CLOSURE_MANIFEST_VERSION,
+        "closure_granularity": "single_asset",
         "entries": [_file_entry(source, relative_path)],
     }
     return manifest, hashlib.sha256(_canonical_json(manifest)).hexdigest()
@@ -121,12 +129,35 @@ def _write_lock(lock_path: Path, payload: Mapping[str, Any]) -> None:
     temporary.replace(lock_path)
 
 
-def _platform_identity() -> tuple[str, str]:
-    architecture = platform.machine().lower()
+def _captured_at() -> str:
+    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+
+def _lock_entry_matches(existing: Any, expected: Mapping[str, Any]) -> bool:
+    return isinstance(existing, dict) and all(existing.get(key) == value for key, value in expected.items())
+
+
+def _identity_rewrite_error(
+    provider: str, version: str, platform_key: str, existing: Any, expected: Mapping[str, Any]
+) -> ProviderBuildStoreError:
+    existing_digest = existing.get("closure_digest") if isinstance(existing, dict) else None
+    return ProviderBuildStoreError(
+        f"provider build lock would rewrite {provider}/{version}/{platform_key}: "
+        f"existing={existing_digest}, candidate={expected.get('closure_digest')}"
+    )
+
+
+def _normalize_architecture(value: str) -> str:
+    architecture = value.lower()
     if architecture == "amd64":
         architecture = "x86_64"
     elif architecture == "arm64":
         architecture = "aarch64"
+    return architecture
+
+
+def _platform_identity() -> tuple[str, str]:
+    architecture = _normalize_architecture(platform.machine())
     return platform.system().lower(), architecture
 
 
@@ -184,11 +215,11 @@ def materialize_generated_fake_builds(
         provider_builds = builds.setdefault(provider, {})
         version_builds = provider_builds.setdefault(version, {})
         existing_lock_entry = version_builds.get(platform_key)
-        if existing_lock_entry is not None and existing_lock_entry != expected_lock_entry:
-            raise ProviderBuildStoreError(f"provider build lock would rewrite {provider}/{version}/{platform_key}")
+        if existing_lock_entry is not None and not _lock_entry_matches(existing_lock_entry, expected_lock_entry):
+            raise _identity_rewrite_error(provider, version, platform_key, existing_lock_entry, expected_lock_entry)
 
         if build_root.exists():
-            actual_digest = closure_digest(build_root)
+            actual_digest = closure_digest(build_root, granularity="single_asset")
             if actual_digest != expected_digest:
                 raise ProviderBuildStoreError(
                     f"provider build store is tampered for {provider}/{version}/{platform_key}: "
@@ -198,13 +229,13 @@ def materialize_generated_fake_builds(
             entrypoint.parent.mkdir(parents=True, exist_ok=False)
             shutil.copyfile(source, entrypoint)
             entrypoint.chmod(0o755 if source.stat().st_mode & 0o111 else 0o644)
-            actual_digest = closure_digest(build_root)
+            actual_digest = closure_digest(build_root, granularity="single_asset")
             if actual_digest != expected_digest:
                 raise ProviderBuildStoreError(
                     f"materialized provider build digest mismatch for {provider}: expected {expected_digest}, got {actual_digest}"
                 )
 
-        version_builds[platform_key] = expected_lock_entry
+        version_builds[platform_key] = existing_lock_entry or {**expected_lock_entry, "first_captured_at": _captured_at()}
         refs[provider] = ProviderBuildRef(
             provider=provider,
             version=version,
@@ -212,6 +243,7 @@ def materialize_generated_fake_builds(
             architecture=architecture,
             artifact_provenance=GENERATED_FAKE_PROVENANCE,
             closure_manifest_version=CLOSURE_MANIFEST_VERSION,
+            closure_granularity="single_asset",
             closure_digest=expected_digest,
             build_root=build_root,
             entrypoint_relative=relative_entrypoint,
@@ -230,6 +262,7 @@ def materialize_staged_provider_build(
     store_root: Path,
     platform_name: str | None = None,
     architecture: str | None = None,
+    closure_granularity: str = "full_installed_tree",
 ) -> ProviderBuildRef:
     """Snapshot an already acquired real provider closure into the build store.
 
@@ -253,11 +286,11 @@ def materialize_staged_provider_build(
 
     detected_platform, detected_architecture = _platform_identity()
     platform_name = platform_name or detected_platform
-    architecture = architecture or detected_architecture
+    architecture = _normalize_architecture(architecture or detected_architecture)
     _validate_segment("platform", platform_name)
     _validate_segment("architecture", architecture)
     platform_key = f"{platform_name}-{architecture}"
-    manifest = closure_manifest(source_root)
+    manifest = closure_manifest(source_root, granularity=closure_granularity)
     expected_digest = hashlib.sha256(_canonical_json(manifest)).hexdigest()
     expected_lock_entry = {
         "artifact_provenance": STAGED_RELEASE_PROVENANCE,
@@ -272,12 +305,12 @@ def materialize_staged_provider_build(
     lock = _read_lock(lock_path)
     version_builds = lock["builds"].setdefault(provider, {}).setdefault(version, {})
     existing_lock_entry = version_builds.get(platform_key)
-    if existing_lock_entry is not None and existing_lock_entry != expected_lock_entry:
-        raise ProviderBuildStoreError(f"provider build lock would rewrite {provider}/{version}/{platform_key}")
+    if existing_lock_entry is not None and not _lock_entry_matches(existing_lock_entry, expected_lock_entry):
+        raise _identity_rewrite_error(provider, version, platform_key, existing_lock_entry, expected_lock_entry)
 
     build_root = store_root / provider / version / platform_key
     if build_root.exists():
-        actual_digest = closure_digest(build_root)
+        actual_digest = closure_digest(build_root, granularity=closure_granularity)
         if actual_digest != expected_digest:
             raise ProviderBuildStoreError(
                 f"provider build store is tampered for {provider}/{version}/{platform_key}: "
@@ -286,13 +319,13 @@ def materialize_staged_provider_build(
     else:
         build_root.parent.mkdir(parents=True, exist_ok=True)
         shutil.copytree(source_root, build_root, symlinks=True)
-        actual_digest = closure_digest(build_root)
+        actual_digest = closure_digest(build_root, granularity=closure_granularity)
         if actual_digest != expected_digest:
             raise ProviderBuildStoreError(
                 f"materialized provider build digest mismatch for {provider}: expected {expected_digest}, got {actual_digest}"
             )
 
-    version_builds[platform_key] = expected_lock_entry
+    version_builds[platform_key] = existing_lock_entry or {**expected_lock_entry, "first_captured_at": _captured_at()}
     _write_lock(lock_path, lock)
     return ProviderBuildRef(
         provider=provider,
@@ -301,6 +334,7 @@ def materialize_staged_provider_build(
         architecture=architecture,
         artifact_provenance=STAGED_RELEASE_PROVENANCE,
         closure_manifest_version=CLOSURE_MANIFEST_VERSION,
+        closure_granularity=closure_granularity,
         closure_digest=expected_digest,
         build_root=build_root,
         entrypoint_relative=relative_entrypoint.as_posix(),
@@ -309,6 +343,6 @@ def materialize_staged_provider_build(
 
 def verify_provider_builds(builds: Mapping[str, ProviderBuildRef]) -> None:
     for provider, build in sorted(builds.items()):
-        actual_digest = closure_digest(build.build_root)
+        actual_digest = closure_digest(build.build_root, granularity=build.closure_granularity)
         if actual_digest != build.closure_digest:
             raise ProviderBuildStoreError(f"provider build mutated for {provider}: expected {build.closure_digest}, got {actual_digest}")

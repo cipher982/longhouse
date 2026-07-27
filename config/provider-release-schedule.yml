@@ -1,0 +1,39 @@
+schema_version: 1
+weekly_cron: "37 8 * * 1"
+scheduled_evidence: generated_fake_unconditional_full_column
+staleness_measurement_started_at: "2026-07-27T00:00:00Z"
+providers:
+  - provider: codex
+    release_cadence: release_event
+    release_executor: private_factory
+    weekly_unconditional: true
+    allow_failure: false
+    max_build_age_seconds: 3888000
+  - provider: claude
+    release_cadence: release_event
+    release_executor: private_factory
+    weekly_unconditional: true
+    allow_failure: false
+    max_build_age_seconds: 3888000
+  - provider: opencode
+    release_cadence: release_event
+    release_executor: private_factory
+    weekly_unconditional: true
+    allow_failure: false
+    max_build_age_seconds: 3888000
+  - provider: antigravity
+    release_cadence: maintenance_manual
+    release_executor: manual
+    weekly_unconditional: true
+    allow_failure: true
+    max_build_age_seconds: null
+  - provider: cursor
+    release_cadence: observed_only
+    release_executor: manual_snapshot
+    weekly_unconditional: true
+    allow_failure: true
+    max_build_age_seconds: 2592000
+live_token:
+  cadence: manual
+  executor: manual
+  scheduled: false

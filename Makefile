@@ -601,6 +601,7 @@ provider-release-proof-universal-smoke: ## Run all-provider fake/no-token univer
 	set -- scripts/qa/provider-release-proof-universal-smoke.py; \
 	if [ -n "$(ARTIFACT)" ]; then set -- "$$@" --artifact "$(ARTIFACT)"; fi; \
 	if [ -n "$(EVIDENCE_ROOT)" ]; then set -- "$$@" --evidence-root "$(EVIDENCE_ROOT)"; fi; \
+	if [ -n "$(UNIVERSAL_PROVIDER)" ]; then for provider in $(UNIVERSAL_PROVIDER); do set -- "$$@" --provider "$$provider"; done; fi; \
 	if [ -n "$(JSON)" ]; then set -- "$$@" --json; fi; \
 	if [ -n "$(UNIVERSAL_SCENARIO)" ]; then for scenario in $(UNIVERSAL_SCENARIO); do set -- "$$@" --scenario "$$scenario"; done; fi; \
 	uv run --project server python "$$@"

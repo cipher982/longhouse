@@ -178,14 +178,10 @@ Measured on this branch:
   Provider references are glyphs, brand labels, previews, and picker enumeration.
   It receives `controlOperationsByProvider` from the server at runtime and never
   encodes what a provider can do.
-- Web is mostly server-driven but **not literally provider-agnostic**.
-  `web/src/lib/sessionWorkspace/interaction.ts:6` hardcodes managed-launch copy
-  and commands for Claude and Codex only — Cursor and OpenCode fall through to
-  `null`, so the UI never suggests `longhouse cursor` despite Cursor shipping as
-  first-tier. Line 45 exports a Codex-specific interaction fact.
-
-That Cursor omission is a live product bug and the seventh hand-maintained
-per-provider list found while onboarding one provider.
+- Web is mostly server-driven but **not literally provider-agnostic**. Managed
+  launch copy is now derived from `getLaunchProviderSupport`; the earlier Cursor
+  omission is fixed. `isManagedLocalCodex` remains a deliberately Codex-specific
+  interaction fact rather than a provider-support list.
 
 **Derive invalidation from declared component dependencies, not from
 provider-name searches.** A grep for provider names finds branding; it does not
@@ -279,13 +275,45 @@ CI. The already-deployed factory is the real-build lane and invokes Longhouse's
 public qualification runner; duplicating acquisition in GitHub Actions would
 create two implementations of archive selection and integrity verification.
 No provider credentials or token-bearing proof entered this step.
-Persistent ingestion of private factory closures into the append-only store is
-part of step 4 scheduling; step 3 evidence remains immutable per factory run.
-Cursor observations can already enter through the store seam, but no automatic
-Cursor observer is scheduled yet.
+Persistent ingestion of private factory closures into the append-only store was
+deferred to step 4; step 3 evidence remains immutable per factory run. Cursor
+observations can enter through the store seam, but no automatic Cursor observer
+is scheduled.
 
-**4. Sparse live scheduling, and only then skip logic.** Requires measurement of
-hash stability first.
+The final Phase 3 review tightened three identities before scheduling existed.
+Proof requests must declare a closure identity; binary and archive lanes record
+whether the closure is a full installed tree or a single asset; and the version
+probe runs against the staged artifact. Adding granularity advanced the closure
+manifest to version 2. A single-file closure can no longer be silently presented
+as a full execution closure.
+
+**4. Sparse live scheduling and hash measurement — implemented 2026-07-27.**
+There is still no skip logic.
+
+Qualified private-factory closures are ingested through Longhouse's public
+snapshot-only store seam after proof validation and before the release cursor
+advances. Historical completed runs with explicit closure granularity backfill
+the store on first use; older ambiguous artifacts are not upgraded by
+inference. Repeating the same provider/version/platform is idempotent; a moved
+digest under that identity fails with both digests named.
+
+Every universal-harness evidence package records two observation-only values:
+`canonical_digest_v1`, which removes package-root, clock, and volatile-metric
+noise, and `structural_fingerprint_v1`, which normalizes values while retaining
+event/tool discriminators and collection shape. Tests prove the canonical
+digest is root-independent. Live ID/path/marker churn still changes the
+canonical digest while leaving the structural fingerprint stable, and a
+different tool call changes the structural fingerprint. Neither value has skip
+authority or is consumed by a release decision.
+
+`config/provider-release-schedule.yml` is the committed table. Its provider set
+must equal the managed-provider contract. One weekly workflow runs independent,
+unconditional fake/no-token full columns with `fail-fast: false`; live release
+qualification remains event-driven in the private factory; live-token cells
+remain manual. The persistent store records first-capture time and the factory
+reports an alert when an enabled provider exceeds its declared maximum build
+age. Antigravity has no staleness threshold, and Cursor remains manual,
+`observed_only`, and forward-only.
 
 Cursor enters at step 3 as `observed_only`: snapshot each observed install into
 its own versioned archive. After two observations it becomes diffable going
@@ -393,13 +421,15 @@ declarations into the contract is what makes staging runnable identically on a
 laptop, on a CI runner, and from a scheduled trigger — with only the credentials
 and the spend decision remaining private.
 
-## Open questions
+## Resolved Phase 4 questions
 
-1. Can Cursor builds be requested by version, or only observed? Determines
-   whether it is ever diffable backwards. Expected answer: observed only.
-2. Does the canonical stream normalize stably enough to drive skipping? Gates
-   step 4 and must be answered by measurement, not argument.
-3. Which closure manifest granularity is right per channel — full installed tree
-   for npm, single asset plus interpreter for release binaries?
-4. What is the staleness threshold per provider for the version-discovery-death
-   alert?
+1. Cursor is observed-only and forward-diffable after two snapshots. Backward
+   acquisition is not a supported goal.
+2. Root normalization is stable, but live value churn still moves the canonical
+   digest. Structural fingerprints are useful measurement; they do not yet
+   justify skip logic.
+3. npm/package closures use `full_installed_tree`; standalone release assets use
+   `single_asset`, explicitly recorded in the proof.
+4. Staleness thresholds live in the committed schedule. Launch-provider release
+   lanes use 45 days, Cursor uses 30 days as a manual snapshot reminder, and
+   maintenance-tier Antigravity is not monitored.

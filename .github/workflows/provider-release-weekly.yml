@@ -1,0 +1,51 @@
+name: Provider release weekly full columns
+
+on:
+  schedule:
+    - cron: '37 8 * * 1'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      providers: ${{ steps.matrix.outputs.providers }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v7
+      - id: matrix
+        run: |
+          matrix=$(uv run --project server python scripts/qa/provider-release-schedule.py matrix)
+          echo "providers=$(printf '%s' "$matrix" | jq -c .)" >> "$GITHUB_OUTPUT"
+
+  full-column:
+    needs: matrix
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.matrix.outputs.providers) }}
+    runs-on: ubuntu-latest
+    continue-on-error: ${{ matrix.allow_failure }}
+    name: ${{ matrix.provider }} unconditional full column
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v7
+      - name: Run unconditional provider column
+        run: make provider-release-proof-universal-smoke UNIVERSAL_PROVIDER=${{ matrix.provider }}
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: provider-release-${{ matrix.provider }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .build/canaries/provider-release-proof-universal-smoke/**
+          if-no-files-found: error
+          retention-days: 14
