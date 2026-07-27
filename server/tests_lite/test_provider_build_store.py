@@ -8,6 +8,7 @@ import pytest
 from zerg.qa.provider_build_store import ProviderBuildStoreError
 from zerg.qa.provider_build_store import closure_digest
 from zerg.qa.provider_build_store import materialize_generated_fake_builds
+from zerg.qa.provider_build_store import materialize_staged_provider_build
 from zerg.qa.provider_build_store import verify_provider_builds
 
 
@@ -89,3 +90,68 @@ def test_provider_build_lock_is_append_only_for_existing_identity(tmp_path: Path
 
     with pytest.raises(ProviderBuildStoreError, match="lock would rewrite"):
         materialize_generated_fake_builds({"codex": source}, store_root=store_root)
+
+
+def test_staged_release_materializes_a_real_closure_without_acquiring_it(tmp_path: Path) -> None:
+    source_root = tmp_path / "extracted"
+    _write_executable(source_root / "bin" / "codex", "#!/bin/sh\necho codex-cli 1.2.3\n")
+    (source_root / "resources").mkdir()
+    (source_root / "resources" / "policy.json").write_text('{"mode":"proof"}\n', encoding="utf-8")
+
+    build = materialize_staged_provider_build(
+        provider="codex",
+        version="1.2.3",
+        source_root=source_root,
+        entrypoint_relative="bin/codex",
+        store_root=tmp_path / "store",
+        platform_name="linux",
+        architecture="x86_64",
+    )
+
+    assert build.artifact_provenance == "staged_release"
+    assert build.closure_digest == closure_digest(source_root) == closure_digest(build.build_root)
+    assert build.entrypoint.read_text(encoding="utf-8").startswith("#!/bin/sh")
+    assert (build.build_root / "resources" / "policy.json").is_file()
+
+
+def test_staged_release_refuses_a_version_identity_rewrite(tmp_path: Path) -> None:
+    source_root = tmp_path / "extracted"
+    entrypoint = _write_executable(source_root / "codex")
+    arguments = {
+        "provider": "codex",
+        "version": "1.2.3",
+        "source_root": source_root,
+        "entrypoint_relative": "codex",
+        "store_root": tmp_path / "store",
+        "platform_name": "linux",
+        "architecture": "x86_64",
+    }
+    materialize_staged_provider_build(**arguments)
+    entrypoint.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+
+    with pytest.raises(ProviderBuildStoreError, match="lock would rewrite"):
+        materialize_staged_provider_build(**arguments)
+
+
+def test_staged_release_refuses_path_traversal_and_open_symlinks(tmp_path: Path) -> None:
+    source_root = tmp_path / "extracted"
+    _write_executable(source_root / "codex")
+
+    with pytest.raises(ProviderBuildStoreError, match="invalid version"):
+        materialize_staged_provider_build(
+            provider="codex",
+            version="..",
+            source_root=source_root,
+            entrypoint_relative="codex",
+            store_root=tmp_path / "store",
+        )
+
+    (source_root / "outside").symlink_to(tmp_path / "host-provider")
+    with pytest.raises(ProviderBuildStoreError, match="escapes or is dangling"):
+        materialize_staged_provider_build(
+            provider="codex",
+            version="1.2.3",
+            source_root=source_root,
+            entrypoint_relative="codex",
+            store_root=tmp_path / "store",
+        )

@@ -53,6 +53,7 @@ def _request(
     profile: str | None = None,
     producer_class: str = "local_diagnostic",
     run_reference: str | None = None,
+    provider_build_identity: str | None = None,
 ) -> Path:
     registered_profile, _output, registered_version = PROFILES[provider]
     payload = {
@@ -67,6 +68,8 @@ def _request(
         "producer_version": "test",
         "longhouse_git_sha": TEST_SHA,
     }
+    if provider_build_identity is not None:
+        payload["expected_provider_build_identity"] = provider_build_identity
     if run_reference is not None:
         payload["run_reference"] = run_reference
     path = tmp_path / f"{provider}-request.json"
@@ -102,12 +105,36 @@ def test_registered_identity_profiles_emit_provider_scoped_v2_records(tmp_path: 
     assert {record["provider"] for record in bundle["records"]} == {provider}
     assert {record["provider_version"] for record in bundle["records"]} == {expected_version}
     assert {record["provider_executable_identity"] for record in bundle["records"]} == {executable_identity}
+    assert {record["provider_build_identity"] for record in bundle["records"]} == {executable_identity}
     assert {record["provider_contract_digest"] for record in bundle["records"]} == {contract.contract_entry_digest}
     assert {record["adapter_digest"] for record in bundle["records"]} == {contract.adapter_digest}
     raw = (output / "raw-observation.json").read_bytes()
     raw_digest = f"sha256:{hashlib.sha256(raw).hexdigest()}"
     assert bundle["execution_metadata"]["raw_evidence_digest"] == raw_digest
     assert all(record["raw_reference_digests"] == [raw_digest] for record in bundle["records"])
+
+
+def test_release_factory_records_closure_identity_separately_from_entrypoint(tmp_path: Path) -> None:
+    binary, executable_identity, _marker = _fake_binary(tmp_path, "claude", "2.1.198 (Claude Code)")
+    build_identity = "sha256:" + "b" * 64
+    output = tmp_path / "codex-factory-output"
+
+    provider_qualification.run(
+        _request(
+            tmp_path,
+            provider="claude",
+            binary=binary,
+            executable_identity=executable_identity,
+            provider_build_identity=build_identity,
+            producer_class="release_factory",
+            run_reference="provider-factory://claude/test",
+        ),
+        output,
+    )
+
+    bundle = json.loads((output / "proof-bundle.json").read_text())
+    assert {record["provider_executable_identity"] for record in bundle["records"]} == {executable_identity}
+    assert {record["provider_build_identity"] for record in bundle["records"]} == {build_identity}
 
 
 def test_profile_oracle_and_contract_digests_are_provider_scoped(tmp_path: Path) -> None:

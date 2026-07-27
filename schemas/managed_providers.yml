@@ -28,6 +28,22 @@ providers:
     release_candidate: staged_release
     continuous: privacy_safe_live_replay
   support_tier: launch
+  release_channel:
+    channel: github_releases
+    coordinate: openai/codex
+    version_discovery: stable_github_releases
+    verification: sha256_asset_digest_and_version
+    platform_artifacts:
+      linux-x86_64:
+      - codex-x86_64-unknown-linux-musl.tar.gz
+      - codex-package-x86_64-unknown-linux-musl.tar.gz
+      linux-aarch64:
+      - codex-aarch64-unknown-linux-musl.tar.gz
+      - codex-package-aarch64-unknown-linux-musl.tar.gz
+      darwin-x86_64: codex-x86_64-apple-darwin.tar.gz
+      darwin-aarch64: codex-aarch64-apple-darwin.tar.gz
+      windows-x86_64: codex-x86_64-pc-windows-msvc.exe.zip
+      windows-aarch64: codex-aarch64-pc-windows-msvc.exe.zip
   permission_prompt_surface: true
   external_event_channel: null
   pause_tool_name: "requestUserInput"
@@ -212,6 +228,18 @@ providers:
   presentation_ruleset: shared_tool_presentation
   proof_profiles: *factory_proof_profiles
   support_tier: launch
+  release_channel:
+    channel: npm_registry
+    coordinate: "@anthropic-ai/claude-code"
+    version_discovery: npm_latest_dist_tag
+    verification: npm_sha512_integrity_and_version
+    platform_artifacts:
+      linux-x86_64: "@anthropic-ai/claude-code-linux-x64"
+      linux-aarch64: "@anthropic-ai/claude-code-linux-arm64"
+      darwin-x86_64: "@anthropic-ai/claude-code-darwin-x64"
+      darwin-aarch64: "@anthropic-ai/claude-code-darwin-arm64"
+      windows-x86_64: "@anthropic-ai/claude-code-win32-x64"
+      windows-aarch64: "@anthropic-ai/claude-code-win32-arm64"
   permission_prompt_surface: true
   external_event_channel: "provider_live.claude_development_channel"
   pause_tool_name: "AskUserQuestion"
@@ -428,6 +456,16 @@ providers:
   presentation_ruleset: shared_tool_presentation
   proof_profiles: *factory_proof_profiles
   support_tier: launch
+  release_channel:
+    channel: github_releases
+    coordinate: anomalyco/opencode
+    version_discovery: stable_github_releases
+    verification: sha256_asset_digest_and_version
+    platform_artifacts:
+      linux-x86_64: opencode-linux-x64-baseline.tar.gz
+      linux-aarch64: opencode-linux-arm64.tar.gz
+      darwin-x86_64: opencode-darwin-x64-baseline.zip
+      darwin-aarch64: opencode-darwin-arm64.zip
   permission_prompt_surface: true
   external_event_channel: null
   pause_tool_name: "opencode_pause_request"
@@ -579,6 +617,18 @@ providers:
   presentation_ruleset: shared_tool_presentation
   proof_profiles: *factory_proof_profiles
   support_tier: maintenance
+  release_channel:
+    channel: github_releases
+    coordinate: google-antigravity/antigravity-cli
+    version_discovery: stable_github_releases
+    verification: sha256_asset_digest_and_version
+    platform_artifacts:
+      linux-x86_64: agy_cli_linux_x64.tar.gz
+      linux-aarch64: agy_cli_linux_arm64.tar.gz
+      darwin-x86_64: agy_cli_mac_x64.tar.gz
+      darwin-aarch64: agy_cli_mac_arm64.tar.gz
+      windows-x86_64: agy_cli_windows_x64.zip
+      windows-aarch64: agy_cli_windows_arm64.zip
   permission_prompt_surface: false
   external_event_channel: "provider_control.antigravity_hook_inbox"
   pause_tool_name: "antigravity_pause_request"
@@ -749,6 +799,12 @@ providers:
   presentation_ruleset: shared_tool_presentation
   proof_profiles: *factory_proof_profiles
   support_tier: launch
+  release_channel:
+    channel: observed_only
+    coordinate: cursor-agent
+    version_discovery: observed_install
+    verification: closure_digest_and_version
+    platform_artifacts: {}
   permission_prompt_surface: true
   external_event_channel: null
   pause_tool_name: "cursor_pause_request"

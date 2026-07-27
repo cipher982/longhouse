@@ -93,6 +93,30 @@ def test_managed_provider_contract_rejects_unknown_safe_managed_session_scenario
         normalize_contract_manifest(schema_payload)
 
 
+def test_release_channels_are_typed_and_cover_every_provider() -> None:
+    channels = {contract.provider: contract.release_channel for contract in all_managed_provider_contracts()}
+
+    assert channels["claude"].channel == "npm_registry"
+    assert channels["claude"].coordinate == "@anthropic-ai/claude-code"
+    assert channels["codex"].platform_artifacts["darwin-aarch64"] == "codex-aarch64-apple-darwin.tar.gz"
+    assert channels["codex"].platform_artifacts["linux-x86_64"] == (
+        "codex-x86_64-unknown-linux-musl.tar.gz",
+        "codex-package-x86_64-unknown-linux-musl.tar.gz",
+    )
+    assert channels["opencode"].version_discovery == "stable_github_releases"
+    assert channels["cursor"].channel == "observed_only"
+    assert channels["cursor"].platform_artifacts == {}
+
+
+def test_release_channel_rejects_an_inconsistent_discovery_policy() -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    schema_payload = yaml.safe_load((repo_root / "schemas/managed_providers.yml").read_text(encoding="utf-8"))
+    schema_payload["providers"][0]["release_channel"]["version_discovery"] = "npm_latest_dist_tag"
+
+    with pytest.raises(ValueError, match="internally inconsistent"):
+        normalize_contract_manifest(schema_payload)
+
+
 def test_generated_runtime_manifest_does_not_require_repository_sources(monkeypatch):
     manifest_path = Path(__file__).resolve().parents[1] / "zerg" / "config" / "managed_provider_contracts.json"
     payload = json.loads(manifest_path.read_text())

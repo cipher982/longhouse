@@ -46,6 +46,24 @@ _FACTORY_STRING_FIELDS = ("normalization_ruleset", "presentation_ruleset")
 _SUPPORT_TIERS = frozenset({"launch", "maintenance"})
 _PROOF_PROFILE_NAMES = frozenset({"pull_request", "release_candidate", "continuous"})
 _PROOF_PROFILE_VALUES = frozenset({"hermetic", "staged_release", "privacy_safe_live_replay"})
+_RELEASE_CHANNELS = frozenset({"github_releases", "npm_registry", "observed_only"})
+_RELEASE_VERSION_DISCOVERY = frozenset({"stable_github_releases", "npm_latest_dist_tag", "observed_install"})
+_RELEASE_VERIFICATION = frozenset({"sha256_asset_digest_and_version", "npm_sha512_integrity_and_version", "closure_digest_and_version"})
+_RELEASE_CHANNEL_POLICY = {
+    "github_releases": ("stable_github_releases", "sha256_asset_digest_and_version"),
+    "npm_registry": ("npm_latest_dist_tag", "npm_sha512_integrity_and_version"),
+    "observed_only": ("observed_install", "closure_digest_and_version"),
+}
+_PLATFORM_ARTIFACT_KEYS = frozenset(
+    {
+        "linux-x86_64",
+        "linux-aarch64",
+        "darwin-x86_64",
+        "darwin-aarch64",
+        "windows-x86_64",
+        "windows-aarch64",
+    }
+)
 _HARNESS_SAFE_MANAGED_SESSION_SCENARIOS = frozenset({"launch_managed_session", "send_receive"})
 _OPERATION_EVIDENCE_FIELDS = (
     "launch_local",
@@ -359,6 +377,62 @@ def _validate_factory_contract(item: dict[str, Any]) -> None:
             raise ValueError(
                 f"managed provider contract {provider}: proof_profiles.{name} must be one of " f"{sorted(_PROOF_PROFILE_VALUES)}"
             )
+    _validate_release_channel(item)
+
+
+def _validate_release_channel(item: dict[str, Any]) -> None:
+    provider = str(item.get("provider") or "<unknown>")
+    release = item.get("release_channel")
+    if not isinstance(release, dict):
+        raise ValueError(f"managed provider contract {provider}: release_channel must be an object")
+    expected_keys = {"channel", "coordinate", "version_discovery", "verification", "platform_artifacts"}
+    if set(release) != expected_keys:
+        raise ValueError(f"managed provider contract {provider}: release_channel must contain exactly {sorted(expected_keys)}")
+    channel = release.get("channel")
+    if channel not in _RELEASE_CHANNELS:
+        raise ValueError(f"managed provider contract {provider}: release_channel.channel must be one of {sorted(_RELEASE_CHANNELS)}")
+    for field in ("coordinate", "version_discovery", "verification"):
+        if not isinstance(release.get(field), str) or not str(release[field]).strip():
+            raise ValueError(f"managed provider contract {provider}: release_channel.{field} must be a non-empty string")
+    if release["version_discovery"] not in _RELEASE_VERSION_DISCOVERY:
+        raise ValueError(
+            f"managed provider contract {provider}: release_channel.version_discovery must be one of "
+            f"{sorted(_RELEASE_VERSION_DISCOVERY)}"
+        )
+    if release["verification"] not in _RELEASE_VERIFICATION:
+        raise ValueError(
+            f"managed provider contract {provider}: release_channel.verification must be one of " f"{sorted(_RELEASE_VERIFICATION)}"
+        )
+    expected_discovery, expected_verification = _RELEASE_CHANNEL_POLICY[channel]
+    if (release["version_discovery"], release["verification"]) != (expected_discovery, expected_verification):
+        raise ValueError(f"managed provider contract {provider}: release_channel policy is internally inconsistent")
+    artifacts = release.get("platform_artifacts")
+    if not isinstance(artifacts, dict):
+        raise ValueError(f"managed provider contract {provider}: release_channel.platform_artifacts must be an object")
+    unknown_platforms = set(artifacts) - _PLATFORM_ARTIFACT_KEYS
+    if unknown_platforms:
+        raise ValueError(
+            f"managed provider contract {provider}: release_channel.platform_artifacts has unknown platforms "
+            f"{sorted(unknown_platforms)}"
+        )
+    if not all(
+        (isinstance(value, str) and value.strip())
+        or (
+            isinstance(value, list)
+            and value
+            and len(value) == len(set(value))
+            and all(isinstance(entry, str) and entry.strip() for entry in value)
+        )
+        for value in artifacts.values()
+    ):
+        raise ValueError(
+            f"managed provider contract {provider}: release_channel.platform_artifacts values must be "
+            "non-empty strings or unique non-empty string lists"
+        )
+    if channel == "observed_only" and artifacts:
+        raise ValueError(f"managed provider contract {provider}: observed_only release channels cannot declare platform artifacts")
+    if channel != "observed_only" and not artifacts:
+        raise ValueError(f"managed provider contract {provider}: staged release channels require platform artifacts")
 
 
 def _validate_capability_string(prefix: str, payload: dict[str, Any], field: str) -> None:

@@ -53,6 +53,7 @@ class ProviderCapabilityProofRecord:
     producer_class: str
     producer_version: str
     invocation_id: str
+    provider_build_identity: str | None = None
     mode: str | None = None
     permission_mode: str | None = None
     platform: str | None = None
@@ -66,6 +67,8 @@ class ProviderCapabilityProofRecord:
 
     def canonical_payload(self) -> dict[str, Any]:
         payload = asdict(self)
+        if self.provider_build_identity is None:
+            payload.pop("provider_build_identity")
         payload["outcome"] = self.outcome.value
         payload["evidence_class"] = self.evidence_class.value
         payload["raw_reference_digests"] = list(self.raw_reference_digests)
@@ -183,6 +186,7 @@ def proof_record_from_mapping(payload: Mapping[str, Any]) -> ProviderCapabilityP
         producer_class=_required_string(payload, "producer_class"),
         producer_version=_required_string(payload, "producer_version"),
         invocation_id=_required_string(payload, "invocation_id"),
+        provider_build_identity=_optional_string(payload, "provider_build_identity"),
         mode=_optional_string(payload, "mode"),
         permission_mode=_optional_string(payload, "permission_mode"),
         platform=_optional_string(payload, "platform"),

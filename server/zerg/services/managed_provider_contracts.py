@@ -39,10 +39,20 @@ _MACHINE_CONTROL_SUFFIX_BY_COMMAND = {
 
 
 @dataclass(frozen=True)
+class ProviderReleaseChannel:
+    channel: str
+    coordinate: str
+    version_discovery: str
+    verification: str
+    platform_artifacts: Mapping[str, str | tuple[str, ...]] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class ManagedProviderContract:
     provider: str
     managed_transport: ManagedSessionTransport
     control_plane: str
+    release_channel: ProviderReleaseChannel
     control_plane_aliases: tuple[str, ...] = ()
     adapter_digest: str = ""
     adapter_sources: tuple[str, ...] = ()
@@ -142,6 +152,7 @@ class ManagedProviderContract:
 
 
 def _contract_from_manifest_item(item: dict[str, object]) -> ManagedProviderContract:
+    release_item = dict(item.get("release_channel") or {})
     return ManagedProviderContract(
         provider=str(item["provider"]),
         managed_transport=ManagedSessionTransport(str(item["managed_transport"])),
@@ -155,6 +166,16 @@ def _contract_from_manifest_item(item: dict[str, object]) -> ManagedProviderCont
         presentation_ruleset=str(item.get("presentation_ruleset") or ""),
         proof_profiles={str(name): str(profile) for name, profile in dict(item.get("proof_profiles") or {}).items()},
         support_tier=str(item.get("support_tier") or "launch"),
+        release_channel=ProviderReleaseChannel(
+            channel=str(release_item["channel"]),
+            coordinate=str(release_item["coordinate"]),
+            version_discovery=str(release_item["version_discovery"]),
+            verification=str(release_item["verification"]),
+            platform_artifacts={
+                str(platform_name): (tuple(str(value) for value in artifact) if isinstance(artifact, list) else str(artifact))
+                for platform_name, artifact in dict(release_item.get("platform_artifacts") or {}).items()
+            },
+        ),
         permission_prompt_surface=bool(item.get("permission_prompt_surface", False)),
         external_event_channel=(str(item["external_event_channel"]) if item.get("external_event_channel") else None),
         pause_tool_name=str(item.get("pause_tool_name") or "structured_question"),

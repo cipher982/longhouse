@@ -268,6 +268,7 @@ def _record(
         provider="codex",
         provider_version=provider_version,
         provider_executable_identity=provider_identity,
+        provider_build_identity=request.get("expected_provider_build_identity") or provider_identity,
         provider_contract_digest=contract_digest,
         adapter_digest=adapter_digest,
         scenario_id=SCENARIO_ID,

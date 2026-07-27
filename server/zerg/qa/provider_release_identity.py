@@ -45,6 +45,7 @@ REQUEST_KEYS = frozenset(
         "provider_bin",
         "expected_provider_version",
         "expected_executable_identity",
+        "expected_provider_build_identity",
         "invocation_id",
         "producer_class",
         "producer_version",
@@ -138,6 +139,7 @@ def load_request(
         "provider",
         "profile",
         "run_reference",
+        "expected_provider_build_identity",
     }:
         if not isinstance(payload.get(key), str) or not payload[key].strip():
             raise RequestError(f"{key} must be a non-empty string")
@@ -145,6 +147,9 @@ def load_request(
         raise RequestError("provider_bin must be absolute")
     if not IDENTITY.fullmatch(payload["expected_executable_identity"]):
         raise RequestError("expected_executable_identity must be sha256:<64 lowercase hex>")
+    build_identity = payload.get("expected_provider_build_identity")
+    if build_identity is not None and not IDENTITY.fullmatch(build_identity):
+        raise RequestError("expected_provider_build_identity must be sha256:<64 lowercase hex> when provided")
     if not version_grammar.fullmatch(payload["expected_provider_version"]):
         raise RequestError(f"expected_provider_version must match {version_grammar.pattern}")
     if payload["producer_class"] not in {"local_diagnostic", "release_factory"}:
@@ -232,6 +237,7 @@ def _record(
         provider=profile.provider,
         provider_version=provider_version,
         provider_executable_identity=identity,
+        provider_build_identity=request.get("expected_provider_build_identity") or identity,
         provider_contract_digest=contract_digest,
         adapter_digest=adapter_digest,
         scenario_id=profile.scenario_id,
