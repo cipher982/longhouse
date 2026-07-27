@@ -243,8 +243,17 @@ class EmbeddingsV2Projector:
         all_missing = [chunk for chunk in chunks if hashes.get(chunk.chunk_index) != chunk.content_hash]
         missing = all_missing[: max(1, EMBEDDING_MAX_CHUNKS_PER_PASS)]
         complete = len(all_missing) == len(missing)
-        for start in range(0, len(missing), max(1, EMBEDDING_BATCH_SIZE)):
-            batch = missing[start : start + max(1, EMBEDDING_BATCH_SIZE)]
+        # `desired_ordinals` is every episode this session should currently have,
+        # including ones whose hash already matched and were therefore never
+        # sent as `episodes` in any batch below. The searchd write handler only
+        # deletes stale episode_embeddings rows on a `complete=True` call, using
+        # this list (not the batch's own `episodes`) to decide what to keep --
+        # otherwise "complete" on a partial batch would delete every chunk not
+        # rewritten in that exact call, including already-current ones.
+        desired_ordinals = [chunk.chunk_index for chunk in chunks]
+        batches = [missing[start : start + max(1, EMBEDDING_BATCH_SIZE)] for start in range(0, len(missing), max(1, EMBEDDING_BATCH_SIZE))]
+        for index, batch in enumerate(batches):
+            is_last_batch = complete and index == len(batches) - 1
             vectors = await generate_embeddings([chunk.text for chunk in batch], config)
             await self.search.call(
                 "search.embedding.write.v2",
@@ -255,7 +264,8 @@ class EmbeddingsV2Projector:
                     "revision": str(claimed_revision),
                     "model": config.model,
                     "dims": config.dims,
-                    "complete": complete,
+                    "complete": is_last_batch,
+                    "desired_episode_ordinals": desired_ordinals if is_last_batch else None,
                     "episodes": [
                         {
                             "episode_ordinal": chunk.chunk_index,
@@ -279,6 +289,7 @@ class EmbeddingsV2Projector:
                     "model": config.model,
                     "dims": config.dims,
                     "complete": True,
+                    "desired_episode_ordinals": desired_ordinals,
                     "episodes": [],
                 },
             )

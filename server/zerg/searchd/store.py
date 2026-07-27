@@ -635,6 +635,7 @@ class SearchStore:
         owner_id: str = "",
         revision: int = 0,
         complete: bool = False,
+        desired_episode_ordinals: list[int] | None = None,
     ) -> dict[str, object]:
         written = 0
         skipped = 0
@@ -684,7 +685,18 @@ class SearchStore:
                 )
                 written += 1
             if complete:
-                ordinals = [episode["episode_ordinal"] for episode in episodes]
+                # `desired_episode_ordinals` is the caller's full current chunk set,
+                # not just the ordinals rewritten in this call -- a completion pass
+                # can span multiple write_episode_embeddings calls, and chunks whose
+                # hash already matched are never sent as `episodes` at all. Without
+                # this, a "complete" write for a partial batch (or an unchanged
+                # session sending zero episodes) would delete every episode not in
+                # that one call, including still-current ones.
+                ordinals = (
+                    desired_episode_ordinals
+                    if desired_episode_ordinals is not None
+                    else [episode["episode_ordinal"] for episode in episodes]
+                )
                 suffix = f" AND episode_ordinal NOT IN ({','.join('?' for _ in ordinals)})" if ordinals else ""
                 self.connection.execute(
                     f"DELETE FROM episode_embeddings WHERE session_id = ? AND model = ?{suffix}", (session_id, model, *ordinals)

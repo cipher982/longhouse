@@ -103,7 +103,89 @@ async def test_embeddings_projector_chunks_dedups_writes_and_completes(monkeypat
     assert await projector.run_once(now=datetime.now(UTC)) == 1
     write = next(params for method, params in search.calls if method == "search.embedding.write.v2")
     assert write["episodes"][0]["episode_ordinal"] == 0
+    assert write["complete"] is True
+    assert write["desired_episode_ordinals"] == [0]
     assert any(method == "projector.state.complete.v2" for method, _ in catalog.calls)
+
+
+@pytest.mark.asyncio
+async def test_embeddings_projector_marks_complete_only_on_final_batch(monkeypatch):
+    """Regression guard: a multi-batch completion pass must not tell searchd to
+    delete episodes that weren't rewritten in an earlier, non-final batch.
+
+    searchd's write_episode_embeddings only prunes stale episode_embeddings rows
+    when a call arrives with complete=True, using that call's ordinals (or the
+    ordinals explicitly passed as desired_episode_ordinals) as the keep-set. If
+    every batch in a multi-batch pass claimed complete=True with only its own
+    chunk in `episodes`, the first batch's write would immediately delete the
+    second batch's not-yet-written chunk.
+    """
+    session_id, generation_id, store_id = (str(uuid4()) for _ in range(3))
+    object_id = hashlib.sha256(b"render").hexdigest()
+    records = tuple(
+        SimpleNamespace(
+            role="user" if i % 2 == 0 else "assistant",
+            content_text=f"turn {i}",
+            tool_name=None,
+            tool_output_text=None,
+            order_time_us=i,
+            source_position=i,
+            event_subordinal=0,
+        )
+        for i in range(4)
+    )
+    decoded = SimpleNamespace(
+        object_hash=object_id,
+        spec=SimpleNamespace(
+            session_id=UUID(session_id),
+            render_generation=UUID(generation_id),
+            records=records,
+            machine_id="machine",
+            provider="codex",
+            opaque_source_id="source",
+            source_epoch=uuid4(),
+        ),
+    )
+    catalog = FakeClient(
+        {
+            "projector.store.bind.v2": {},
+            "projector.state.claim.v2": {"claimed": [{"session_id": session_id, "claimed_revision": "1", "failure_count": 0}]},
+            "storage.session.render_objects.list.v2": {
+                "found": True,
+                "deleted": False,
+                "snapshot_revision": "1",
+                "generation_id": generation_id,
+                "session": {"owner_id": "1"},
+                "objects": [{"object_id": object_id, "object_hash": object_id, "object_path": "render.zst"}],
+                "has_more": False,
+            },
+            "projector.state.complete.v2": {},
+            "projector.state.fail.v2": {},
+        }
+    )
+    search = FakeClient(
+        {
+            "search.ping.v2": {"store_id": store_id, "schema_generation": "test"},
+            "search.embedding.hashes.v2": {"hashes": {}},
+            "search.embedding.write.v2": {"written": 1, "skipped": 0},
+        }
+    )
+    config = SimpleNamespace(model="test-model", dims=2)
+    monkeypatch.setattr("zerg.models_config.get_embedding_config", lambda: config)
+    monkeypatch.setattr("zerg.services.embeddings_v2_projector.EMBEDDING_BATCH_SIZE", 1)
+
+    async def vectors(texts, _config):
+        return [np.array([1, 0], dtype=np.float32) for _ in texts]
+
+    monkeypatch.setattr("zerg.services.embeddings_v2_projector.generate_embeddings", vectors)
+    projector = EmbeddingsV2Projector(catalog=catalog, search=search, render_workers=FakeWorkers(decoded), worker_id="test")
+    assert await projector.run_once(now=datetime.now(UTC)) == 1
+
+    writes = [params for method, params in search.calls if method == "search.embedding.write.v2"]
+    assert len(writes) == 2, "two turn chunks with EMBEDDING_BATCH_SIZE=1 must produce two batches"
+    assert [w["complete"] for w in writes] == [False, True]
+    assert writes[0]["desired_episode_ordinals"] is None
+    assert writes[1]["desired_episode_ordinals"] == [0, 1]
 
 
 def _minimal_claim_setup(session_id, generation_id, store_id):

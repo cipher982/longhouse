@@ -207,6 +207,154 @@ def test_episode_embeddings_dedup_and_cosine_query(tmp_path):
         connection.close()
 
 
+def test_complete_write_preserves_untouched_episodes_via_desired_ordinals(tmp_path):
+    """Regression guard: a `complete=True` write must not delete episodes that
+    are still current but weren't rewritten in this call. Before
+    desired_episode_ordinals existed, `complete=True` pruned episode_embeddings
+    down to just this call's own `episodes`, so any chunk whose hash already
+    matched (and was therefore never re-sent) got silently deleted.
+    """
+    connection = open_search_database(tmp_path / "search.db")
+    store = SearchStore(connection)
+    session_id = str(uuid4())
+    owner_id = "owner-1"
+    try:
+        connection.execute(
+            """
+            INSERT INTO session_index (
+                session_id, generation_id, owner_id, desired_revision, indexed_through,
+                object_count, object_set_hash, event_count, user_messages, assistant_messages,
+                tool_calls, is_sidechain, project, provider, environment, cwd, git_repo,
+                started_at, published_at
+            ) VALUES (?, ?, ?, 1, 1, 1, 'hash', 2, 1, 1, 0, 0, 'proj', 'codex', 'local', NULL, NULL, ?, ?)
+            """,
+            (session_id, str(uuid4()), owner_id, "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00"),
+        )
+        # Seed two already-current episodes, as if a prior pass embedded them.
+        store.write_episode_embeddings(
+            session_id=session_id,
+            owner_id=owner_id,
+            generation_id=str(uuid4()),
+            revision=1,
+            model="test-model",
+            dims=2,
+            episodes=[
+                {
+                    "episode_ordinal": 0,
+                    "event_index_start": 0,
+                    "event_index_end": 1,
+                    "content_hash": "a" * 64,
+                    "embedding": np.array([1, 0], dtype=np.float32).tobytes(),
+                },
+                {
+                    "episode_ordinal": 1,
+                    "event_index_start": 2,
+                    "event_index_end": 3,
+                    "content_hash": "b" * 64,
+                    "embedding": np.array([0, 1], dtype=np.float32).tobytes(),
+                },
+            ],
+        )
+
+        # A later batch only rewrites ordinal 2 (a genuinely new chunk), but marks
+        # the pass complete and declares the full desired set as [0, 1, 2].
+        store.write_episode_embeddings(
+            session_id=session_id,
+            owner_id=owner_id,
+            generation_id=str(uuid4()),
+            revision=1,
+            model="test-model",
+            dims=2,
+            complete=True,
+            desired_episode_ordinals=[0, 1, 2],
+            episodes=[
+                {
+                    "episode_ordinal": 2,
+                    "event_index_start": 4,
+                    "event_index_end": 5,
+                    "content_hash": "c" * 64,
+                    "embedding": np.array([0, 0], dtype=np.float32).tobytes(),
+                }
+            ],
+        )
+
+        hashes = store.read_episode_embedding_hashes(session_id=session_id, model="test-model")["hashes"]
+        assert hashes == {"0": "a" * 64, "1": "b" * 64, "2": "c" * 64}
+    finally:
+        connection.close()
+
+
+def test_complete_write_without_desired_ordinals_still_prunes_stale_rows(tmp_path):
+    """A truly final, single-call completion (no desired_episode_ordinals) must
+    still delete a genuinely stale episode (one that no longer exists in the
+    session), preserving the original prune behavior for the simple case.
+    """
+    connection = open_search_database(tmp_path / "search.db")
+    store = SearchStore(connection)
+    session_id = str(uuid4())
+    owner_id = "owner-1"
+    try:
+        connection.execute(
+            """
+            INSERT INTO session_index (
+                session_id, generation_id, owner_id, desired_revision, indexed_through,
+                object_count, object_set_hash, event_count, user_messages, assistant_messages,
+                tool_calls, is_sidechain, project, provider, environment, cwd, git_repo,
+                started_at, published_at
+            ) VALUES (?, ?, ?, 1, 1, 1, 'hash', 2, 1, 1, 0, 0, 'proj', 'codex', 'local', NULL, NULL, ?, ?)
+            """,
+            (session_id, str(uuid4()), owner_id, "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00"),
+        )
+        store.write_episode_embeddings(
+            session_id=session_id,
+            owner_id=owner_id,
+            generation_id=str(uuid4()),
+            revision=1,
+            model="test-model",
+            dims=2,
+            episodes=[
+                {
+                    "episode_ordinal": 0,
+                    "event_index_start": 0,
+                    "event_index_end": 1,
+                    "content_hash": "a" * 64,
+                    "embedding": np.array([1, 0], dtype=np.float32).tobytes(),
+                },
+                {
+                    "episode_ordinal": 1,
+                    "event_index_start": 2,
+                    "event_index_end": 3,
+                    "content_hash": "b" * 64,
+                    "embedding": np.array([0, 1], dtype=np.float32).tobytes(),
+                },
+            ],
+        )
+
+        store.write_episode_embeddings(
+            session_id=session_id,
+            owner_id=owner_id,
+            generation_id=str(uuid4()),
+            revision=1,
+            model="test-model",
+            dims=2,
+            complete=True,
+            episodes=[
+                {
+                    "episode_ordinal": 0,
+                    "event_index_start": 0,
+                    "event_index_end": 1,
+                    "content_hash": "a" * 64,
+                    "embedding": np.array([1, 0], dtype=np.float32).tobytes(),
+                }
+            ],
+        )
+
+        hashes = store.read_episode_embedding_hashes(session_id=session_id, model="test-model")["hashes"]
+        assert hashes == {"0": "a" * 64}
+    finally:
+        connection.close()
+
+
 def test_publish_aggregate_uses_session_generation_index(tmp_path):
     connection = open_search_database(tmp_path / "search.db")
     try:
