@@ -28,18 +28,15 @@
       "surface": "install/stage exact version",
       "covered": "partial",
       "test_evidence": [
-        "Sauron:jobs/agents/release_triage/provider_status.py",
-        "Sauron:jobs/agents/release_envelope/__init__.py",
-        "Sauron:tests/test_agent_release_provider_status.py",
-        "Sauron:tests/test_agent_release_envelope.py"
+        "private release lane"
       ],
       "proof_boundary": "isolated_npm_package",
       "fake_or_real": "mixed",
       "runs_in_ci": false,
-      "runs_in_sauron_release_watch": true,
       "accepted_baseline": "none",
       "failure_actionable": true,
-      "baseline_scenarios": []
+      "baseline_scenarios": [],
+      "runs_in_private_release_lane": true
     },
     {
       "provider": "claude",
@@ -52,12 +49,12 @@
       "proof_boundary": "live_no_token_or_fake",
       "fake_or_real": "mixed",
       "runs_in_ci": true,
-      "runs_in_sauron_release_watch": true,
       "accepted_baseline": "release_proof",
       "failure_actionable": true,
       "baseline_scenarios": [
         "claude-release-proof-v1"
-      ]
+      ],
+      "runs_in_private_release_lane": true
     },
     {
       "provider": "claude",
@@ -73,12 +70,12 @@
       "proof_boundary": "live_no_token",
       "fake_or_real": "mixed",
       "runs_in_ci": true,
-      "runs_in_sauron_release_watch": true,
       "accepted_baseline": "release_proof",
       "failure_actionable": true,
       "baseline_scenarios": [
         "claude-release-proof-v1"
-      ]
+      ],
+      "runs_in_private_release_lane": true
     },
     {
       "provider": "claude",
@@ -88,18 +85,17 @@
         "scripts/tests/provider-release-proof.test.py",
         "scripts/tests/provider-control-e2e-canary.test.py",
         "server/tests_lite/test_claude_channel_launch_cli.py",
-        "Sauron:jobs/agents/release_triage/provider_status.py",
-        "Sauron:tests/test_agent_release_provider_status.py"
+        "private release lane"
       ],
       "proof_boundary": "hermetic_or_launch_flag_shape_or_machine_live",
       "fake_or_real": "mixed",
       "runs_in_ci": true,
-      "runs_in_sauron_release_watch": true,
       "accepted_baseline": "release_proof",
       "failure_actionable": true,
       "baseline_scenarios": [
         "claude-release-proof-v1"
-      ]
+      ],
+      "runs_in_private_release_lane": true
     },
     {
       "provider": "claude",
@@ -112,10 +108,10 @@
       "proof_boundary": "hermetic",
       "fake_or_real": "fake",
       "runs_in_ci": true,
-      "runs_in_sauron_release_watch": false,
       "accepted_baseline": "none",
       "failure_actionable": true,
-      "baseline_scenarios": []
+      "baseline_scenarios": [],
+      "runs_in_private_release_lane": false
     },
     {
       "provider": "claude",
@@ -128,10 +124,10 @@
       "proof_boundary": "fixture",
       "fake_or_real": "fake",
       "runs_in_ci": true,
-      "runs_in_sauron_release_watch": false,
       "accepted_baseline": "parser_fixture",
       "failure_actionable": true,
-      "baseline_scenarios": []
+      "baseline_scenarios": [],
+      "runs_in_private_release_lane": false
     },
     {
       "provider": "claude",
@@ -144,10 +140,10 @@
       "proof_boundary": "fixture_or_hermetic",
       "fake_or_real": "fake",
       "runs_in_ci": true,
-      "runs_in_sauron_release_watch": false,
       "accepted_baseline": "none",
       "failure_actionable": true,
-      "baseline_scenarios": []
+      "baseline_scenarios": [],
+      "runs_in_private_release_lane": false
     },
     {
       "provider": "claude",
@@ -162,10 +158,10 @@
       "proof_boundary": "hermetic",
       "fake_or_real": "fake",
       "runs_in_ci": true,
-      "runs_in_sauron_release_watch": false,
       "accepted_baseline": "none",
       "failure_actionable": true,
-      "baseline_scenarios": []
+      "baseline_scenarios": [],
+      "runs_in_private_release_lane": false
     },
     {
       "provider": "claude",
@@ -179,10 +175,10 @@
       "proof_boundary": "hermetic_or_machine_live_token",
       "fake_or_real": "mixed",
       "runs_in_ci": true,
-      "runs_in_sauron_release_watch": true,
       "accepted_baseline": "none",
       "failure_actionable": true,
-      "baseline_scenarios": []
+      "baseline_scenarios": [],
+      "runs_in_private_release_lane": true
     },
     {
       "provider": "claude",
@@ -196,10 +192,10 @@
       "proof_boundary": "hermetic_plus_manual_live_token_or_machine_live_token",
       "fake_or_real": "mixed",
       "runs_in_ci": true,
-      "runs_in_sauron_release_watch": true,
       "accepted_baseline": "none",
       "failure_actionable": true,
-      "baseline_scenarios": []
+      "baseline_scenarios": [],
+      "runs_in_private_release_lane": true
     },
     {
       "provider": "claude",
@@ -211,10 +207,10 @@
       "proof_boundary": "hermetic",
       "fake_or_real": "fake",
       "runs_in_ci": true,
-      "runs_in_sauron_release_watch": false,
       "accepted_baseline": "none",
       "failure_actionable": true,
-      "baseline_scenarios": []
+      "baseline_scenarios": [],
+      "runs_in_private_release_lane": false
     },
     {
       "provider": "claude",
@@ -227,10 +223,10 @@
       "proof_boundary": "fixture_or_hermetic",
       "fake_or_real": "fake",
       "runs_in_ci": true,
-      "runs_in_sauron_release_watch": false,
       "accepted_baseline": "parser_fixture",
       "failure_actionable": true,
-      "baseline_scenarios": []
+      "baseline_scenarios": [],
+      "runs_in_private_release_lane": false
     },
     {
       "provider": "claude",
@@ -245,10 +241,10 @@
       "proof_boundary": "manual_live_token_or_machine_live_token",
       "fake_or_real": "mixed",
       "runs_in_ci": true,
-      "runs_in_sauron_release_watch": true,
       "accepted_baseline": "none",
       "failure_actionable": true,
-      "baseline_scenarios": []
+      "baseline_scenarios": [],
+      "runs_in_private_release_lane": true
     },
     {
       "provider": "codex",
@@ -256,20 +252,17 @@
       "covered": "partial",
       "test_evidence": [
         "scripts/tests/codex-provider-release-canary.test.py",
-        "Sauron:jobs/agents/release_triage/provider_status.py",
-        "Sauron:tests/test_agent_release_provider_status.py",
-        "Sauron:jobs/agents/release_envelope/__init__.py",
-        "Sauron:tests/test_agent_release_envelope.py"
+        "private release lane"
       ],
       "proof_boundary": "real_release_asset",
       "fake_or_real": "mixed",
       "runs_in_ci": false,
-      "runs_in_sauron_release_watch": true,
       "accepted_baseline": "release_proof",
       "failure_actionable": true,
       "baseline_scenarios": [
         "codex-release-proof-v1"
-      ]
+      ],
+      "runs_in_private_release_lane": true
     },
     {
       "provider": "codex",
@@ -277,18 +270,17 @@
       "covered": "yes",
       "test_evidence": [
         "scripts/tests/codex-provider-release-canary.test.py",
-        "Sauron:jobs/agents/release_envelope/__init__.py",
-        "Sauron:tests/test_agent_release_envelope.py"
+        "private release lane"
       ],
       "proof_boundary": "live_no_token_or_fake",
       "fake_or_real": "mixed",
       "runs_in_ci": true,
-      "runs_in_sauron_release_watch": true,
       "accepted_baseline": "release_proof",
       "failure_actionable": true,
       "baseline_scenarios": [
         "codex-release-proof-v1"
-      ]
+      ],
+      "runs_in_private_release_lane": true
     },
     {
       "provider": "codex",
@@ -301,12 +293,12 @@
       "proof_boundary": "hermetic_or_live_no_token",
       "fake_or_real": "mixed",
       "runs_in_ci": true,
-      "runs_in_sauron_release_watch": true,
       "accepted_baseline": "release_proof",
       "failure_actionable": true,
       "baseline_scenarios": [
         "codex-release-proof-v1"
-      ]
+      ],
+      "runs_in_private_release_lane": true
     },
     {
       "provider": "codex",
@@ -315,18 +307,17 @@
       "test_evidence": [
         "scripts/tests/codex-provider-release-canary.test.py",
         "server/tests_lite/test_codex_cli.py",
-        "Sauron:jobs/agents/release_envelope/__init__.py",
-        "Sauron:tests/test_agent_release_envelope.py"
+        "private release lane"
       ],
       "proof_boundary": "hermetic_or_live_no_token",
       "fake_or_real": "mixed",
       "runs_in_ci": true,
-      "runs_in_sauron_release_watch": true,
       "accepted_baseline": "release_proof",
       "failure_actionable": true,
       "baseline_scenarios": [
         "codex-release-proof-v1"
-      ]
+      ],
+      "runs_in_private_release_lane": true
     },
     {
       "provider": "codex",
@@ -339,10 +330,10 @@
       "proof_boundary": "hermetic",
       "fake_or_real": "fake",
       "runs_in_ci": true,
-      "runs_in_sauron_release_watch": true,
       "accepted_baseline": "none",
       "failure_actionable": true,
-      "baseline_scenarios": []
+      "baseline_scenarios": [],
+      "runs_in_private_release_lane": true
     },
     {
       "provider": "codex",
@@ -355,10 +346,10 @@
       "proof_boundary": "fixture",
       "fake_or_real": "fake",
       "runs_in_ci": true,
-      "runs_in_sauron_release_watch": false,
       "accepted_baseline": "parser_fixture",
       "failure_actionable": true,
-      "baseline_scenarios": []
+      "baseline_scenarios": [],
+      "runs_in_private_release_lane": false
     },
     {
       "provider": "codex",
@@ -371,10 +362,10 @@
       "proof_boundary": "fixture_or_hermetic",
       "fake_or_real": "fake",
       "runs_in_ci": true,
-      "runs_in_sauron_release_watch": false,
       "accepted_baseline": "none",
       "failure_actionable": true,
-      "baseline_scenarios": []
+      "baseline_scenarios": [],
+      "runs_in_private_release_lane": false
     },
     {
       "provider": "codex",
@@ -389,10 +380,10 @@
       "proof_boundary": "hermetic",
       "fake_or_real": "fake",
       "runs_in_ci": true,
-      "runs_in_sauron_release_watch": false,
       "accepted_baseline": "none",
       "failure_actionable": true,
-      "baseline_scenarios": []
+      "baseline_scenarios": [],
+      "runs_in_private_release_lane": false
     },
     {
       "provider": "codex",
@@ -407,12 +398,12 @@
       "proof_boundary": "hermetic_or_live_token",
       "fake_or_real": "mixed",
       "runs_in_ci": true,
-      "runs_in_sauron_release_watch": true,
       "accepted_baseline": "release_proof",
       "failure_actionable": true,
       "baseline_scenarios": [
         "codex-managed-live-send-release-proof-v1"
-      ]
+      ],
+      "runs_in_private_release_lane": true
     },
     {
       "provider": "codex",
@@ -429,12 +420,12 @@
       "proof_boundary": "hermetic_or_live_token",
       "fake_or_real": "mixed",
       "runs_in_ci": true,
-      "runs_in_sauron_release_watch": true,
       "accepted_baseline": "release_proof",
       "failure_actionable": true,
       "baseline_scenarios": [
         "codex-managed-live-interrupt-release-proof-v1"
-      ]
+      ],
+      "runs_in_private_release_lane": true
     },
     {
       "provider": "codex",
@@ -443,18 +434,17 @@
       "test_evidence": [
         "scripts/tests/codex-provider-release-canary.test.py",
         "server/tests_lite/test_codex_cli.py",
-        "Sauron:jobs/agents/release_envelope/__init__.py",
-        "Sauron:tests/test_agent_release_envelope.py"
+        "private release lane"
       ],
       "proof_boundary": "hermetic_or_live_no_token",
       "fake_or_real": "mixed",
       "runs_in_ci": true,
-      "runs_in_sauron_release_watch": true,
       "accepted_baseline": "release_proof",
       "failure_actionable": true,
       "baseline_scenarios": [
         "codex-release-proof-v1"
-      ]
+      ],
+      "runs_in_private_release_lane": true
     },
     {
       "provider": "codex",
@@ -465,20 +455,17 @@
         "server/tests_lite/test_session_processing.py",
         "scripts/tests/codex-provider-release-canary.test.py",
         "scripts/tests/provider-release-proof.test.py",
-        "Sauron:jobs/agents/release_triage/provider_status.py",
-        "Sauron:jobs/agents/release_envelope/__init__.py",
-        "Sauron:tests/test_agent_release_provider_status.py",
-        "Sauron:tests/test_agent_release_envelope.py"
+        "private release lane"
       ],
       "proof_boundary": "manual_live_token_or_fake",
       "fake_or_real": "mixed",
       "runs_in_ci": true,
-      "runs_in_sauron_release_watch": true,
       "accepted_baseline": "release_proof",
       "failure_actionable": true,
       "baseline_scenarios": [
         "codex-real-tool-release-proof-v1"
-      ]
+      ],
+      "runs_in_private_release_lane": true
     },
     {
       "provider": "codex",
@@ -487,33 +474,32 @@
       "test_evidence": [
         "scripts/tests/codex-provider-release-canary.test.py",
         "scripts/tests/provider-release-proof.test.py",
-        "Sauron:jobs/agents/release_triage/provider_status.py"
+        "private release lane"
       ],
       "proof_boundary": "managed_runtime_live_token_or_fake",
       "fake_or_real": "mixed",
       "runs_in_ci": true,
-      "runs_in_sauron_release_watch": true,
       "accepted_baseline": "release_proof",
       "failure_actionable": true,
       "baseline_scenarios": [
         "codex-managed-live-send-release-proof-v1"
-      ]
+      ],
+      "runs_in_private_release_lane": true
     },
     {
       "provider": "opencode",
       "surface": "install/stage exact version",
       "covered": "partial",
       "test_evidence": [
-        "Sauron:jobs/agents/release_triage/provider_status.py",
-        "Sauron:tests/test_agent_release_provider_status.py"
+        "private release lane"
       ],
       "proof_boundary": "real_release_asset",
       "fake_or_real": "real",
       "runs_in_ci": true,
-      "runs_in_sauron_release_watch": true,
       "accepted_baseline": "none",
       "failure_actionable": true,
-      "baseline_scenarios": []
+      "baseline_scenarios": [],
+      "runs_in_private_release_lane": true
     },
     {
       "provider": "opencode",
@@ -526,12 +512,12 @@
       "proof_boundary": "live_no_token_or_fake",
       "fake_or_real": "mixed",
       "runs_in_ci": true,
-      "runs_in_sauron_release_watch": true,
       "accepted_baseline": "release_proof",
       "failure_actionable": true,
       "baseline_scenarios": [
         "opencode-release-proof-v1"
-      ]
+      ],
+      "runs_in_private_release_lane": true
     },
     {
       "provider": "opencode",
@@ -543,12 +529,12 @@
       "proof_boundary": "live_no_token",
       "fake_or_real": "mixed",
       "runs_in_ci": true,
-      "runs_in_sauron_release_watch": true,
       "accepted_baseline": "release_proof",
       "failure_actionable": true,
       "baseline_scenarios": [
         "opencode-release-proof-v1"
-      ]
+      ],
+      "runs_in_private_release_lane": true
     },
     {
       "provider": "opencode",
@@ -561,12 +547,12 @@
       "proof_boundary": "hermetic_or_live_no_token",
       "fake_or_real": "mixed",
       "runs_in_ci": true,
-      "runs_in_sauron_release_watch": true,
       "accepted_baseline": "release_proof",
       "failure_actionable": true,
       "baseline_scenarios": [
         "opencode-release-proof-v1"
-      ]
+      ],
+      "runs_in_private_release_lane": true
     },
     {
       "provider": "opencode",
@@ -579,12 +565,12 @@
       "proof_boundary": "hermetic_or_live_no_token",
       "fake_or_real": "mixed",
       "runs_in_ci": true,
-      "runs_in_sauron_release_watch": true,
       "accepted_baseline": "release_proof",
       "failure_actionable": true,
       "baseline_scenarios": [
         "opencode-release-proof-v1"
-      ]
+      ],
+      "runs_in_private_release_lane": true
     },
     {
       "provider": "opencode",
@@ -596,12 +582,12 @@
       "proof_boundary": "live_no_token",
       "fake_or_real": "mixed",
       "runs_in_ci": true,
-      "runs_in_sauron_release_watch": true,
       "accepted_baseline": "release_proof",
       "failure_actionable": true,
       "baseline_scenarios": [
         "opencode-release-proof-v1"
-      ]
+      ],
+      "runs_in_private_release_lane": true
     },
     {
       "provider": "opencode",
@@ -614,10 +600,10 @@
       "proof_boundary": "hermetic_or_live_no_token",
       "fake_or_real": "mixed",
       "runs_in_ci": true,
-      "runs_in_sauron_release_watch": true,
       "accepted_baseline": "none",
       "failure_actionable": true,
-      "baseline_scenarios": []
+      "baseline_scenarios": [],
+      "runs_in_private_release_lane": true
     },
     {
       "provider": "opencode",
@@ -632,12 +618,12 @@
       "proof_boundary": "hermetic_or_live_no_token",
       "fake_or_real": "mixed",
       "runs_in_ci": true,
-      "runs_in_sauron_release_watch": true,
       "accepted_baseline": "release_proof",
       "failure_actionable": true,
       "baseline_scenarios": [
         "opencode-release-proof-v1"
-      ]
+      ],
+      "runs_in_private_release_lane": true
     },
     {
       "provider": "opencode",
@@ -650,12 +636,12 @@
       "proof_boundary": "live_no_token",
       "fake_or_real": "mixed",
       "runs_in_ci": true,
-      "runs_in_sauron_release_watch": true,
       "accepted_baseline": "release_proof",
       "failure_actionable": true,
       "baseline_scenarios": [
         "opencode-release-proof-v1"
-      ]
+      ],
+      "runs_in_private_release_lane": true
     },
     {
       "provider": "opencode",
@@ -667,12 +653,12 @@
       "proof_boundary": "live_no_token",
       "fake_or_real": "mixed",
       "runs_in_ci": true,
-      "runs_in_sauron_release_watch": true,
       "accepted_baseline": "release_proof",
       "failure_actionable": true,
       "baseline_scenarios": [
         "opencode-release-proof-v1"
-      ]
+      ],
+      "runs_in_private_release_lane": true
     },
     {
       "provider": "opencode",
@@ -684,12 +670,12 @@
       "proof_boundary": "live_no_token",
       "fake_or_real": "mixed",
       "runs_in_ci": true,
-      "runs_in_sauron_release_watch": true,
       "accepted_baseline": "release_proof",
       "failure_actionable": true,
       "baseline_scenarios": [
         "opencode-release-proof-v1"
-      ]
+      ],
+      "runs_in_private_release_lane": true
     },
     {
       "provider": "opencode",
@@ -699,20 +685,17 @@
         "engine/src/opencode_db.rs::parse_opencode_session_projects_sqlite_rows_into_events",
         "scripts/tests/provider-control-e2e-canary.test.py",
         "scripts/tests/provider-release-proof.test.py",
-        "Sauron:jobs/agents/release_triage/provider_status.py",
-        "Sauron:jobs/agents/release_envelope/__init__.py",
-        "Sauron:tests/test_agent_release_provider_status.py",
-        "Sauron:tests/test_agent_release_envelope.py"
+        "private release lane"
       ],
       "proof_boundary": "manual_live_token_or_fake",
       "fake_or_real": "mixed",
       "runs_in_ci": true,
-      "runs_in_sauron_release_watch": true,
       "accepted_baseline": "release_proof",
       "failure_actionable": true,
       "baseline_scenarios": [
         "opencode-real-tool-release-proof-v1"
-      ]
+      ],
+      "runs_in_private_release_lane": true
     },
     {
       "provider": "opencode",
@@ -721,38 +704,32 @@
       "test_evidence": [
         "scripts/tests/provider-control-e2e-canary.test.py",
         "scripts/tests/provider-release-proof.test.py",
-        "Sauron:jobs/agents/release_triage/provider_status.py",
-        "Sauron:jobs/agents/release_envelope/__init__.py",
-        "Sauron:tests/test_agent_release_provider_status.py",
-        "Sauron:tests/test_agent_release_envelope.py"
+        "private release lane"
       ],
       "proof_boundary": "manual_live_token_or_fake",
       "fake_or_real": "mixed",
       "runs_in_ci": true,
-      "runs_in_sauron_release_watch": false,
       "accepted_baseline": "release_proof",
       "failure_actionable": true,
       "baseline_scenarios": [
         "opencode-real-tool-release-proof-v1"
-      ]
+      ],
+      "runs_in_private_release_lane": false
     },
     {
       "provider": "antigravity",
       "surface": "install/stage exact version",
       "covered": "partial",
       "test_evidence": [
-        "Sauron:jobs/agents/release_triage/provider_status.py",
-        "Sauron:jobs/agents/release_envelope/__init__.py",
-        "Sauron:tests/test_agent_release_provider_status.py",
-        "Sauron:tests/test_agent_release_envelope.py"
+        "private release lane"
       ],
       "proof_boundary": "real_release_asset",
       "fake_or_real": "mixed",
       "runs_in_ci": false,
-      "runs_in_sauron_release_watch": true,
       "accepted_baseline": "none",
       "failure_actionable": true,
-      "baseline_scenarios": []
+      "baseline_scenarios": [],
+      "runs_in_private_release_lane": true
     },
     {
       "provider": "antigravity",
@@ -765,12 +742,12 @@
       "proof_boundary": "live_no_token_or_fake",
       "fake_or_real": "mixed",
       "runs_in_ci": true,
-      "runs_in_sauron_release_watch": true,
       "accepted_baseline": "release_proof",
       "failure_actionable": true,
       "baseline_scenarios": [
         "antigravity-release-proof-v1"
-      ]
+      ],
+      "runs_in_private_release_lane": true
     },
     {
       "provider": "antigravity",
@@ -782,12 +759,12 @@
       "proof_boundary": "live_no_token",
       "fake_or_real": "mixed",
       "runs_in_ci": true,
-      "runs_in_sauron_release_watch": true,
       "accepted_baseline": "release_proof",
       "failure_actionable": true,
       "baseline_scenarios": [
         "antigravity-release-proof-v1"
-      ]
+      ],
+      "runs_in_private_release_lane": true
     },
     {
       "provider": "antigravity",
@@ -800,12 +777,12 @@
       "proof_boundary": "hermetic_or_live_no_token",
       "fake_or_real": "mixed",
       "runs_in_ci": true,
-      "runs_in_sauron_release_watch": true,
       "accepted_baseline": "release_proof",
       "failure_actionable": true,
       "baseline_scenarios": [
         "antigravity-release-proof-v1"
-      ]
+      ],
+      "runs_in_private_release_lane": true
     },
     {
       "provider": "antigravity",
@@ -817,10 +794,10 @@
       "proof_boundary": "hermetic",
       "fake_or_real": "fake",
       "runs_in_ci": true,
-      "runs_in_sauron_release_watch": false,
       "accepted_baseline": "none",
       "failure_actionable": true,
-      "baseline_scenarios": []
+      "baseline_scenarios": [],
+      "runs_in_private_release_lane": false
     },
     {
       "provider": "antigravity",
@@ -832,10 +809,10 @@
       "proof_boundary": "hermetic",
       "fake_or_real": "fake",
       "runs_in_ci": true,
-      "runs_in_sauron_release_watch": false,
       "accepted_baseline": "none",
       "failure_actionable": true,
-      "baseline_scenarios": []
+      "baseline_scenarios": [],
+      "runs_in_private_release_lane": false
     },
     {
       "provider": "antigravity",
@@ -847,10 +824,10 @@
       "proof_boundary": "hermetic",
       "fake_or_real": "fake",
       "runs_in_ci": true,
-      "runs_in_sauron_release_watch": false,
       "accepted_baseline": "none",
       "failure_actionable": true,
-      "baseline_scenarios": []
+      "baseline_scenarios": [],
+      "runs_in_private_release_lane": false
     },
     {
       "provider": "antigravity",
@@ -864,10 +841,10 @@
       "proof_boundary": "hermetic",
       "fake_or_real": "fake",
       "runs_in_ci": true,
-      "runs_in_sauron_release_watch": false,
       "accepted_baseline": "none",
       "failure_actionable": true,
-      "baseline_scenarios": []
+      "baseline_scenarios": [],
+      "runs_in_private_release_lane": false
     },
     {
       "provider": "antigravity",
@@ -876,19 +853,17 @@
       "test_evidence": [
         "scripts/tests/provider-control-e2e-canary.test.py",
         "scripts/tests/provider-release-proof.test.py",
-        "Sauron:jobs/agents/release_triage/provider_status.py",
-        "Sauron:jobs/agents/release_envelope/__init__.py",
-        "Sauron:tests/test_agent_release_provider_status.py"
+        "private release lane"
       ],
       "proof_boundary": "manual_live_token_or_fake",
       "fake_or_real": "mixed",
       "runs_in_ci": true,
-      "runs_in_sauron_release_watch": true,
       "accepted_baseline": "release_proof",
       "failure_actionable": true,
       "baseline_scenarios": [
         "antigravity-real-agy-send-release-proof-v1"
-      ]
+      ],
+      "runs_in_private_release_lane": true
     },
     {
       "provider": "antigravity",
@@ -898,10 +873,10 @@
       "proof_boundary": "unsupported",
       "fake_or_real": "none",
       "runs_in_ci": false,
-      "runs_in_sauron_release_watch": false,
       "accepted_baseline": "none",
       "failure_actionable": false,
-      "baseline_scenarios": []
+      "baseline_scenarios": [],
+      "runs_in_private_release_lane": false
     },
     {
       "provider": "antigravity",
@@ -911,10 +886,10 @@
       "proof_boundary": "unsupported",
       "fake_or_real": "none",
       "runs_in_ci": false,
-      "runs_in_sauron_release_watch": false,
       "accepted_baseline": "none",
       "failure_actionable": false,
-      "baseline_scenarios": []
+      "baseline_scenarios": [],
+      "runs_in_private_release_lane": false
     },
     {
       "provider": "antigravity",
@@ -924,10 +899,10 @@
       "proof_boundary": "none",
       "fake_or_real": "none",
       "runs_in_ci": false,
-      "runs_in_sauron_release_watch": false,
       "accepted_baseline": "none",
       "failure_actionable": false,
-      "baseline_scenarios": []
+      "baseline_scenarios": [],
+      "runs_in_private_release_lane": false
     },
     {
       "provider": "antigravity",
@@ -936,20 +911,17 @@
       "test_evidence": [
         "scripts/tests/provider-control-e2e-canary.test.py",
         "scripts/tests/provider-release-proof.test.py",
-        "Sauron:jobs/agents/release_triage/provider_status.py",
-        "Sauron:jobs/agents/release_envelope/__init__.py",
-        "Sauron:tests/test_agent_release_provider_status.py",
-        "Sauron:tests/test_agent_release_envelope.py"
+        "private release lane"
       ],
       "proof_boundary": "manual_live_token_or_fake",
       "fake_or_real": "mixed",
       "runs_in_ci": true,
-      "runs_in_sauron_release_watch": false,
       "accepted_baseline": "release_proof",
       "failure_actionable": true,
       "baseline_scenarios": [
         "antigravity-real-agy-send-release-proof-v1"
-      ]
+      ],
+      "runs_in_private_release_lane": false
     },
     {
       "provider": "cursor",
@@ -961,12 +933,12 @@
       "proof_boundary": "live_no_token_or_fake",
       "fake_or_real": "mixed",
       "runs_in_ci": true,
-      "runs_in_sauron_release_watch": false,
       "accepted_baseline": "release_proof",
       "failure_actionable": true,
       "baseline_scenarios": [
         "cursor-release-proof-v1"
-      ]
+      ],
+      "runs_in_private_release_lane": false
     },
     {
       "provider": "cursor",
@@ -978,12 +950,12 @@
       "proof_boundary": "live_no_token_or_fake",
       "fake_or_real": "mixed",
       "runs_in_ci": true,
-      "runs_in_sauron_release_watch": false,
       "accepted_baseline": "release_proof",
       "failure_actionable": true,
       "baseline_scenarios": [
         "cursor-release-proof-v1"
-      ]
+      ],
+      "runs_in_private_release_lane": false
     },
     {
       "provider": "cursor",
@@ -995,12 +967,12 @@
       "proof_boundary": "manual_live_token",
       "fake_or_real": "mixed",
       "runs_in_ci": false,
-      "runs_in_sauron_release_watch": false,
       "accepted_baseline": "release_proof",
       "failure_actionable": true,
       "baseline_scenarios": [
         "cursor-release-proof-v1"
-      ]
+      ],
+      "runs_in_private_release_lane": false
     },
     {
       "provider": "cursor",
@@ -1013,12 +985,12 @@
       "proof_boundary": "manual_live_token",
       "fake_or_real": "mixed",
       "runs_in_ci": false,
-      "runs_in_sauron_release_watch": false,
       "accepted_baseline": "release_proof",
       "failure_actionable": true,
       "baseline_scenarios": [
         "cursor-release-proof-v1"
-      ]
+      ],
+      "runs_in_private_release_lane": false
     },
     {
       "provider": "cursor",
@@ -1030,12 +1002,12 @@
       "proof_boundary": "manual_live_token",
       "fake_or_real": "mixed",
       "runs_in_ci": false,
-      "runs_in_sauron_release_watch": false,
       "accepted_baseline": "release_proof",
       "failure_actionable": true,
       "baseline_scenarios": [
         "cursor-release-proof-v1"
-      ]
+      ],
+      "runs_in_private_release_lane": false
     },
     {
       "provider": "cursor",
@@ -1048,12 +1020,12 @@
       "proof_boundary": "manual_live_token",
       "fake_or_real": "mixed",
       "runs_in_ci": true,
-      "runs_in_sauron_release_watch": false,
       "accepted_baseline": "release_proof",
       "failure_actionable": true,
       "baseline_scenarios": [
         "cursor-release-proof-v1"
-      ]
+      ],
+      "runs_in_private_release_lane": false
     },
     {
       "provider": "cursor",
@@ -1065,12 +1037,12 @@
       "proof_boundary": "manual_live_token",
       "fake_or_real": "mixed",
       "runs_in_ci": false,
-      "runs_in_sauron_release_watch": false,
       "accepted_baseline": "release_proof",
       "failure_actionable": true,
       "baseline_scenarios": [
         "cursor-release-proof-v1"
-      ]
+      ],
+      "runs_in_private_release_lane": false
     },
     {
       "provider": "cursor",
@@ -1082,12 +1054,12 @@
       "proof_boundary": "hermetic",
       "fake_or_real": "mixed",
       "runs_in_ci": true,
-      "runs_in_sauron_release_watch": false,
       "accepted_baseline": "release_proof",
       "failure_actionable": true,
       "baseline_scenarios": [
         "cursor-release-proof-v1"
-      ]
+      ],
+      "runs_in_private_release_lane": false
     },
     {
       "provider": "cursor",
@@ -1100,12 +1072,12 @@
       "proof_boundary": "manual_live_token",
       "fake_or_real": "mixed",
       "runs_in_ci": false,
-      "runs_in_sauron_release_watch": false,
       "accepted_baseline": "release_proof",
       "failure_actionable": true,
       "baseline_scenarios": [
         "cursor-release-proof-v1"
-      ]
+      ],
+      "runs_in_private_release_lane": false
     },
     {
       "provider": "cursor",
@@ -1117,12 +1089,12 @@
       "proof_boundary": "manual_live_token",
       "fake_or_real": "mixed",
       "runs_in_ci": false,
-      "runs_in_sauron_release_watch": false,
       "accepted_baseline": "release_proof",
       "failure_actionable": true,
       "baseline_scenarios": [
         "cursor-release-proof-v1"
-      ]
+      ],
+      "runs_in_private_release_lane": false
     },
     {
       "provider": "cursor",
@@ -1134,12 +1106,12 @@
       "proof_boundary": "manual_live_token",
       "fake_or_real": "mixed",
       "runs_in_ci": false,
-      "runs_in_sauron_release_watch": false,
       "accepted_baseline": "release_proof",
       "failure_actionable": true,
       "baseline_scenarios": [
         "cursor-release-proof-v1"
-      ]
+      ],
+      "runs_in_private_release_lane": false
     },
     {
       "provider": "cursor",
@@ -1151,12 +1123,12 @@
       "proof_boundary": "hermetic",
       "fake_or_real": "mixed",
       "runs_in_ci": true,
-      "runs_in_sauron_release_watch": false,
       "accepted_baseline": "release_proof",
       "failure_actionable": true,
       "baseline_scenarios": [
         "cursor-release-proof-v1"
-      ]
+      ],
+      "runs_in_private_release_lane": false
     },
     {
       "provider": "cursor",
@@ -1169,12 +1141,12 @@
       "proof_boundary": "manual_live_token",
       "fake_or_real": "mixed",
       "runs_in_ci": false,
-      "runs_in_sauron_release_watch": false,
       "accepted_baseline": "release_proof",
       "failure_actionable": true,
       "baseline_scenarios": [
         "cursor-release-proof-v1"
-      ]
+      ],
+      "runs_in_private_release_lane": false
     }
   ],
   "accepted_release_proof_scenarios": [
@@ -1184,7 +1156,7 @@
       "provider_version": "claude 2.1.161",
       "baseline_scope": "scoped_no_token_cli_identity_channel_status_launch_shape",
       "baseline_boundary": "live_no_token_or_fake",
-      "promoted_to_sauron": true
+      "promoted_to_private_lane": true
     },
     {
       "provider": "codex",
@@ -1192,7 +1164,7 @@
       "provider_version": "codex-cli 0.139.0",
       "baseline_scope": "no_token_managed_protocol_launch_reattach_shape",
       "baseline_boundary": "live_no_token_or_fake",
-      "promoted_to_sauron": true
+      "promoted_to_private_lane": true
     },
     {
       "provider": "codex",
@@ -1200,7 +1172,7 @@
       "provider_version": "codex-cli 0.139.0",
       "baseline_scope": "managed_runtime_live_send_marker",
       "baseline_boundary": "managed_runtime_live_token_or_fake",
-      "promoted_to_sauron": true
+      "promoted_to_private_lane": true
     },
     {
       "provider": "codex",
@@ -1208,7 +1180,7 @@
       "provider_version": "codex-cli 0.139.0",
       "baseline_scope": "managed_runtime_live_interrupt_marker",
       "baseline_boundary": "managed_runtime_live_token_or_fake",
-      "promoted_to_sauron": true
+      "promoted_to_private_lane": true
     },
     {
       "provider": "codex",
@@ -1216,7 +1188,7 @@
       "provider_version": "codex-cli 0.139.0",
       "baseline_scope": "real_codex_exec_command_execution_shape",
       "baseline_boundary": "manual_live_token",
-      "promoted_to_sauron": true
+      "promoted_to_private_lane": true
     },
     {
       "provider": "opencode",
@@ -1224,7 +1196,7 @@
       "provider_version": "opencode 1.16.2",
       "baseline_scope": "no_token_server_api_control_shape",
       "baseline_boundary": "live_no_token",
-      "promoted_to_sauron": true
+      "promoted_to_private_lane": true
     },
     {
       "provider": "opencode",
@@ -1232,7 +1204,7 @@
       "provider_version": "opencode 1.16.2",
       "baseline_scope": "real_opencode_tool_call_result_shape",
       "baseline_boundary": "manual_live_token",
-      "promoted_to_sauron": true
+      "promoted_to_private_lane": true
     },
     {
       "provider": "antigravity",
@@ -1240,7 +1212,7 @@
       "provider_version": "agy 1.0.8",
       "baseline_scope": "scoped_no_token_binary_plugin_hook_inbox_shape",
       "baseline_boundary": "live_no_token_or_fake",
-      "promoted_to_sauron": true
+      "promoted_to_private_lane": true
     },
     {
       "provider": "antigravity",
@@ -1248,7 +1220,7 @@
       "provider_version": "agy 1.0.10",
       "baseline_scope": "real_agy_model_visible_send_marker",
       "baseline_boundary": "manual_live_token",
-      "promoted_to_sauron": true
+      "promoted_to_private_lane": true
     },
     {
       "provider": "cursor",
@@ -1256,7 +1228,7 @@
       "provider_version": "cursor-agent 2026.07.23-e383d2b",
       "baseline_scope": "gate0_identity_send_interrupt_resume_permission_plus_installed_facade_product_e2e",
       "baseline_boundary": "live_token",
-      "promoted_to_sauron": false
+      "promoted_to_private_lane": false
     }
   ]
 }

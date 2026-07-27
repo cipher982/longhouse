@@ -39,7 +39,7 @@ REQUIRED_SCENARIO_FIELDS = {
     "provider_version",
     "baseline_scope",
     "baseline_boundary",
-    "promoted_to_sauron",
+    "promoted_to_private_lane",
 }
 REQUIRED_ROW_FIELDS = {
     "provider",
@@ -49,7 +49,7 @@ REQUIRED_ROW_FIELDS = {
     "proof_boundary",
     "fake_or_real",
     "runs_in_ci",
-    "runs_in_sauron_release_watch",
+    "runs_in_private_release_lane",
     "accepted_baseline",
     "baseline_scenarios",
     "failure_actionable",
@@ -111,7 +111,7 @@ def _provider_shape_table(markdown: str) -> dict[str, dict[str, int]]:
     in_table = False
     rows: dict[str, dict[str, int]] = {}
     for line in markdown.splitlines():
-        if line == "| Provider | Yes | Partial | No | CI rows | Sauron rows | Release baselines |":
+        if line == "| Provider | Yes | Partial | No | CI rows | Private lane rows | Release baselines |":
             in_table = True
             continue
         if not in_table:
@@ -123,13 +123,13 @@ def _provider_shape_table(markdown: str) -> dict[str, dict[str, int]]:
         cells = [cell.strip() for cell in line.strip("|").split("|")]
         if len(cells) != 7:
             continue
-        provider, yes, partial, no, ci, sauron, release_baselines = cells
+        provider, yes, partial, no, ci, private_lane, release_baselines = cells
         rows[provider] = {
             "yes": int(yes),
             "partial": int(partial),
             "no": int(no),
             "ci": int(ci),
-            "sauron": int(sauron),
+            "private_lane": int(private_lane),
             "release_baselines": int(release_baselines),
         }
     return rows
@@ -176,7 +176,7 @@ def test_accepted_release_proof_scenarios_are_explicit() -> None:
         assert scenario["provider_version"], scenario
         assert scenario["baseline_scope"], scenario
         assert scenario["baseline_boundary"], scenario
-        assert isinstance(scenario["promoted_to_sauron"], bool), scenario
+        assert isinstance(scenario["promoted_to_private_lane"], bool), scenario
         key = (scenario["provider"], scenario["scenario_id"])
         assert key not in seen, scenario
         seen.add(key)
@@ -199,10 +199,10 @@ def test_coverage_rows_are_auditable() -> None:
         assert isinstance(row["test_evidence"], list), row
         assert isinstance(row["baseline_scenarios"], list), row
         assert isinstance(row["runs_in_ci"], bool), row
-        assert isinstance(row["runs_in_sauron_release_watch"], bool), row
+        assert isinstance(row["runs_in_private_release_lane"], bool), row
         assert isinstance(row["failure_actionable"], bool), row
 
-        if row["covered"] != "no" or row["runs_in_ci"] or row["runs_in_sauron_release_watch"]:
+        if row["covered"] != "no" or row["runs_in_ci"] or row["runs_in_private_release_lane"]:
             assert row["test_evidence"], f"{row['provider']} {row['surface']} needs evidence"
         if row["covered"] != "no":
             assert row["fake_or_real"] != "none", row
@@ -211,7 +211,7 @@ def test_coverage_rows_are_auditable() -> None:
             assert row["accepted_baseline"] == "none", row
             assert row["baseline_scenarios"] == [], row
             assert not row["runs_in_ci"], row
-            assert not row["runs_in_sauron_release_watch"], row
+            assert not row["runs_in_private_release_lane"], row
             assert row["proof_boundary"] in {"none", "unsupported"}, row
         if row["accepted_baseline"] == "release_proof":
             assert row["baseline_scenarios"], row
@@ -219,8 +219,8 @@ def test_coverage_rows_are_auditable() -> None:
                 assert (row["provider"], scenario_id) in accepted_scenarios, row
         else:
             assert row["baseline_scenarios"] == [], row
-        has_sauron_evidence = any(str(item).startswith("Sauron:") for item in row["test_evidence"])
-        if row["runs_in_sauron_release_watch"] and not has_sauron_evidence:
+        has_private_lane_evidence = any(str(item) == "private release lane" for item in row["test_evidence"])
+        if row["runs_in_private_release_lane"] and not has_private_lane_evidence:
             assert row["runs_in_ci"], row
 
 
@@ -238,8 +238,8 @@ def test_spec_snapshot_tables_match_coverage_json() -> None:
         "Covered `partial`": _count(rows, covered="partial"),
         "Covered `no`": _count(rows, covered="no"),
         "Rows running in Longhouse CI": sum(1 for row in rows if row["runs_in_ci"]),
-        "Rows running in Sauron release-watch": sum(
-            1 for row in rows if row["runs_in_sauron_release_watch"]
+        "Rows running in the private release lane": sum(
+            1 for row in rows if row["runs_in_private_release_lane"]
         ),
         "Rows with accepted parser-fixture baselines": _count(
             rows, accepted_baseline="parser_fixture"
@@ -258,8 +258,8 @@ def test_spec_snapshot_tables_match_coverage_json() -> None:
             "partial": _count(provider_rows, covered="partial"),
             "no": _count(provider_rows, covered="no"),
             "ci": sum(1 for row in provider_rows if row["runs_in_ci"]),
-            "sauron": sum(
-                1 for row in provider_rows if row["runs_in_sauron_release_watch"]
+            "private_lane": sum(
+                1 for row in provider_rows if row["runs_in_private_release_lane"]
             ),
             "release_baselines": _count(
                 provider_rows, accepted_baseline="release_proof"

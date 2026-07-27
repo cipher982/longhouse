@@ -12,7 +12,7 @@ what has to re-run when either side changes.
 Longhouse and its providers are two independent change streams writing into one
 body of evidence. Today only one is wired into CI: our commits are tested against
 fake or ambient binaries, while provider releases are tested elsewhere, on a
-schedule, by Sauron. The two never meet, so we cannot answer the question the
+schedule, by a private operations lane. The two never meet, so we cannot answer the question the
 factory exists to answer — *does Longhouse still work against the Codex that
 shipped this morning?*
 
@@ -240,7 +240,7 @@ external depends on it.
 
 **3. Channel declarations and staging for npm-shaped providers.** Declare
 `channel` / `coordinate` / `version_discovery` / `verification`. Generalize
-Sauron's existing Claude staging to Codex and OpenCode. Defers Cursor and every
+the existing Claude staging to Codex and OpenCode. Defers Cursor and every
 credential question. At the end of this step at least one provider column has
 real-build evidence inside Longhouse CI.
 
@@ -313,7 +313,7 @@ forward, which is how Chrome-for-Testing solved the same problem.
 
 ## Do not rebuild what exists
 
-- **Sauron already stages exact npm versions** of `@anthropic-ai/claude-code`
+- **The private lane already stages exact npm versions** of `@anthropic-ai/claude-code`
   into an isolated artifact root and runs proof and differential envelopes. Step
   3 is generalizing something already working.
 - **`native-installer-smoke.sh` already implements a real cleanroom** — fresh
@@ -325,16 +325,33 @@ forward, which is how Chrome-for-Testing solved the same problem.
 - **The managed-provider contract** is already the single authority for provider
   sets and support facts.
 
-## Where the Sauron boundary moves
+## Where the public/private boundary sits
 
-Release watching, schedules, credentials, notifications, and adoption policy stay
-with Sauron. But *staging* drifted there too, which is why Longhouse CI cannot
-test against a real pinned build at all.
+The factory splits along one line: **the public repo defines what a proof means;
+a private operations lane decides when to spend money to get one.**
 
-Staging moves into the factory: declarative, in-repo, runnable identically on a
-laptop, on a GitHub runner, and from a Sauron trigger. Sauron keeps what only it
-can do — knowing a release happened, holding credentials, and deciding when to
-spend money.
+Public — everything a self-hoster needs to run the factory against fakes and get
+real answers:
+
+- the managed-provider contract and its dispositions
+- the universal harness, scenarios, and oracles
+- release-identity profiles and evidence formats
+- staging **declarations**: which channel, which coordinate, how to verify
+
+Private — everything that costs money or holds credentials:
+
+- release watching and version discovery
+- credential custody and staging execution against real channels
+- scheduling and the decision to spend tokens
+- the baseline-guard store and the accumulated evidence corpus
+
+Staging declarations are public; staging execution with credentials is not.
+
+Note that *staging* currently sits entirely on the private side, which is why
+Longhouse CI cannot test against a real pinned build at all. Moving the
+declarations into the contract is what makes staging runnable identically on a
+laptop, on a CI runner, and from a scheduled trigger — with only the credentials
+and the spend decision remaining private.
 
 ## Open questions
 

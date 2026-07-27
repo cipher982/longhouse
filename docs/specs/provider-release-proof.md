@@ -74,13 +74,13 @@ Machine-validated coverage map:
 | Covered `partial` | 43 |
 | Covered `no` | 3 |
 | Rows running in Longhouse CI | 51 |
-| Rows running in Sauron release-watch | 34 |
+| Rows running in the private release lane | 34 |
 | Rows with accepted parser-fixture baselines | 3 |
 | Rows with accepted release-proof baselines | 41 |
 
 Provider shape:
 
-| Provider | Yes | Partial | No | CI rows | Sauron rows | Release baselines |
+| Provider | Yes | Partial | No | CI rows | Private lane rows | Release baselines |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | Claude Code | 2 | 11 | 0 | 12 | 7 | 3 |
 | Codex/OpenAI | 4 | 9 | 0 | 12 | 10 | 9 |
