@@ -140,7 +140,6 @@ async def test_production_live_catalog_lifespan_delegates_schema_to_catalogd(mon
     monkeypatch.setattr("zerg.services.maintenance.stop_maintenance_loop", noop_async)
     monkeypatch.setattr("zerg.utils.async_runner.get_shared_runner", lambda: Runner())
     monkeypatch.setattr("zerg.websocket.manager.topic_manager.shutdown", noop_async)
-    monkeypatch.setattr(lifespan_module.ops_events_bridge, "stop", lambda: None)
     monkeypatch.setattr("zerg.tools.mcp_adapter.MCPManager.shutdown_stdio_processes", noop_async)
 
     app = FastAPI()

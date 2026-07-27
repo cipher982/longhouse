@@ -81,7 +81,6 @@ NOISY_MODULES = (
     "zerg.routers.websocket",
     "zerg.websocket.manager",
     "zerg.events.event_bus",
-    "zerg.services.ops_events",
     "zerg.services.auto_seed",
     # Third-party libraries
     "openai",

@@ -19,21 +19,31 @@ from zerg.database import live_store_configured
 from zerg.database import refresh_database_settings_from_env
 from zerg.observability import configure_observability
 from zerg.observability import shutdown_observability
-from zerg.services.ops_events import ops_events_bridge
 
 _settings = get_settings()
 logger = logging.getLogger(__name__)
 
 
-async def _reap_stale_machine_control_operations_once() -> int:
-    from zerg.services.machine_control_operations import reap_stale_machine_control_operations
-    from zerg.services.write_serializer import get_write_serializer
+async def _reap_stale_live_machine_control_operations_once() -> int:
+    from zerg.services.machine_control_operations import reap_stale_live_machine_control_operations
+    from zerg.services.write_serializer import get_live_write_serializer
 
-    return await get_write_serializer().execute(
-        reap_stale_machine_control_operations,
+    return await get_live_write_serializer().execute(
+        reap_stale_live_machine_control_operations,
         auto_commit=False,
-        label="machine-control-reaper",
+        label="live-machine-control-reaper",
     )
+
+
+async def _live_machine_control_operation_reaper_loop() -> None:
+    while True:
+        try:
+            await asyncio.sleep(60)
+            await _reap_stale_live_machine_control_operations_once()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Live machine control operation reaper tick failed")
 
 
 @contextmanager
@@ -335,107 +345,25 @@ async def lifespan(app: FastAPI):
             except Exception:
                 logger.exception("Failed to start storage-v2 AI title reconciler")
 
-        # Core background services
-        if not catalog_mode and not _settings.testing:
-            started: list[str] = []
-            failed: list[str] = []
-
-            try:
-                with _timed_startup_step("ops_events_bridge_start"):
-                    ops_events_bridge.start()
-                started.append("ops_events_bridge")
-            except Exception as e:  # noqa: BLE001
-                failed.append(f"ops_events_bridge ({e})")
-                logger.exception("Failed to start ops_events_bridge")
-
             # Machine-control operation reaper: expire commands whose result
             # did not return before their operation lease.
             try:
+                asyncio.create_task(_live_machine_control_operation_reaper_loop())
+                logger.info("Live machine control operation reaper started")
+            except Exception:
+                logger.exception("Failed to start live machine control operation reaper")
 
-                async def _machine_control_operation_reaper_loop() -> None:
-                    while True:
-                        try:
-                            await asyncio.sleep(60)
-                            await _reap_stale_machine_control_operations_once()
-                        except asyncio.CancelledError:
-                            raise
-                        except Exception:  # noqa: BLE001
-                            logger.exception("Machine control operation reaper tick failed")
-
-                asyncio.create_task(_machine_control_operation_reaper_loop())
-                started.append("machine_control_operation_reaper")
-            except Exception as e:  # noqa: BLE001
-                failed.append(f"machine_control_operation_reaper ({e})")
-                logger.exception("Failed to start machine_control_operation_reaper")
-
-            # Image attachment blob reaper: drops blobs whose parent session_input
-            # is in a terminal state and older than the retention window.
+        # Periodic runtime maintenance (runner-health reconcile, etc.). The
+        # loop's own body branches on live_catalog_enabled() internally, so it
+        # must start in every non-test process, not only the legacy cold-db lane.
+        if not _settings.testing:
             try:
-                from zerg.database import get_session_factory as _get_sf_attach
-                from zerg.services.session_input_attachments import cleanup_stale_blobs
+                from zerg.services.maintenance import start_maintenance_loop
 
-                async def _attachment_cleanup_loop() -> None:
-                    while True:
-                        try:
-                            await asyncio.sleep(3600)
-                            db = _get_sf_attach()()
-                            try:
-                                cleanup_stale_blobs(db)
-                            finally:
-                                db.close()
-                        except asyncio.CancelledError:
-                            raise
-                        except Exception:  # noqa: BLE001
-                            logger.exception("attachment cleanup tick failed")
-
-                asyncio.create_task(_attachment_cleanup_loop())
-                started.append("attachment_cleanup")
-            except Exception as e:  # noqa: BLE001
-                failed.append(f"attachment_cleanup ({e})")
-                logger.exception("Failed to start attachment_cleanup")
-
-            # Live session summary/title enrichment. This scans session revision
-            # lag directly; it is intentionally separate from the legacy ingest
-            # task workers.
-            try:
-                from zerg.services.session_enrichment_reconciler import run_summary_reconciler
-
-                asyncio.create_task(run_summary_reconciler())
-                started.append("summary_reconciler")
-            except Exception as e:  # noqa: BLE001
-                failed.append(f"summary_reconciler ({e})")
-                logger.exception("Failed to start summary_reconciler")
-
-            # Archive ingest can skip expensive derived projections on the hot
-            # shipping path; this reconciler catches those sessions up later.
-            try:
-                from zerg.services.session_projection_reconciler import run_projection_reconciler
-
-                asyncio.create_task(run_projection_reconciler())
-                started.append("projection_reconciler")
-            except Exception as e:  # noqa: BLE001
-                failed.append(f"projection_reconciler ({e})")
-                logger.exception("Failed to start projection_reconciler")
-
-            # Periodic runtime maintenance (runner-health reconcile, etc.)
-            if not _settings.testing:
-                try:
-                    from zerg.services.maintenance import start_maintenance_loop
-
-                    start_maintenance_loop()
-                    started.append("maintenance_loop")
-                except Exception as e:  # noqa: BLE001
-                    failed.append(f"maintenance_loop ({e})")
-                    logger.exception("Failed to start maintenance loop")
-
-            if failed:
-                logger.warning(
-                    "Background services partial startup: started=%s failed=%s",
-                    started,
-                    failed,
-                )
-            else:
-                logger.info("Background services started: %s", started)
+                start_maintenance_loop()
+                logger.info("Maintenance loop started")
+            except Exception:
+                logger.exception("Failed to start maintenance loop")
 
         # Telegram channel
         if not catalog_mode and not _settings.testing and _settings.telegram_bot_token:
@@ -536,11 +464,6 @@ async def lifespan(app: FastAPI):
     # Shutdown
     try:
         if not _settings.testing:
-            try:
-                ops_events_bridge.stop()
-            except Exception:  # noqa: BLE001
-                logger.exception("Failed to stop ops_events_bridge")
-
             try:
                 if hasattr(app.state, "telegram_channel"):
                     await app.state.telegram_channel.stop()

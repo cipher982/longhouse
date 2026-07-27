@@ -9,17 +9,14 @@ from datetime import timezone
 from unittest.mock import patch
 from uuid import uuid4
 
-import pytest
 from sqlalchemy.orm import sessionmaker
 
 from zerg.database import initialize_database
 from zerg.database import make_engine
 from zerg.routers.health import _session_enrichment_lag_check
-from zerg.routers.health import _session_projection_lag_check
 from zerg.services.agents import AgentsStore
 from zerg.services.agents import EventIngest
 from zerg.services.agents import SessionIngest
-from zerg.services.session_projection_reconciler import reconcile_projection_lag_once
 from zerg.services.write_serializer import get_write_serializer
 
 
@@ -241,9 +238,7 @@ def test_multiple_tool_calls_per_turn(tmp_path):
             cwd="/tmp",
             started_at=ts,
             events=[
-                EventIngest(
-                    role="user", content_text="do stuff", timestamp=ts, source_path="/s.jsonl", source_offset=0
-                ),
+                EventIngest(role="user", content_text="do stuff", timestamp=ts, source_path="/s.jsonl", source_offset=0),
                 # 3 tool calls
                 EventIngest(
                     role="assistant",
@@ -294,9 +289,7 @@ def test_multiple_tool_calls_per_turn(tmp_path):
                     source_offset=6,
                 ),
                 # 1 final text
-                EventIngest(
-                    role="assistant", content_text="All done.", timestamp=ts, source_path="/s.jsonl", source_offset=7
-                ),
+                EventIngest(role="assistant", content_text="All done.", timestamp=ts, source_path="/s.jsonl", source_offset=7),
             ],
         )
     )
@@ -327,12 +320,8 @@ def test_compaction_only_append_does_not_inflate_turn_counts(tmp_path):
             cwd="/tmp",
             started_at=ts,
             events=[
-                EventIngest(
-                    role="user", content_text="remember yellow", timestamp=ts, source_path=source_path, source_offset=0
-                ),
-                EventIngest(
-                    role="assistant", content_text="noted", timestamp=ts, source_path=source_path, source_offset=1
-                ),
+                EventIngest(role="user", content_text="remember yellow", timestamp=ts, source_path=source_path, source_offset=0),
+                EventIngest(role="assistant", content_text="noted", timestamp=ts, source_path=source_path, source_offset=1),
             ],
         )
     )
@@ -376,68 +365,6 @@ def test_compaction_only_append_does_not_inflate_turn_counts(tmp_path):
     assert session.user_messages == 1
     assert session.assistant_messages == 1
     assert session.tool_calls == 0
-
-
-@pytest.mark.asyncio
-async def test_archive_ingest_marks_projection_for_async_catchup(tmp_path):
-    store, db, factory = _make_store(tmp_path)
-    ts = _ts()
-    session_id = uuid4()
-
-    result = store.ingest_session(
-        SessionIngest(
-            id=session_id,
-            provider="codex",
-            environment="test",
-            project="test",
-            device_id="dev",
-            cwd="/tmp",
-            started_at=ts,
-            events=[
-                EventIngest(
-                    role="user", content_text="hi", timestamp=ts, source_path="/archive.jsonl", source_offset=0
-                ),
-                EventIngest(
-                    role="assistant", content_text="done", timestamp=ts, source_path="/archive.jsonl", source_offset=1
-                ),
-            ],
-        ),
-        synchronous_projections=False,
-    )
-
-    assert result.events_inserted == 2
-
-    from zerg.models.agents import AgentSession
-
-    session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
-    assert session is not None
-    assert session.needs_projection == 1
-    assert session.user_messages == 0
-    assert session.assistant_messages == 0
-
-    lag = _session_projection_lag_check(factory)
-    assert lag["status"] == "warn"
-    assert lag["pending_sessions"] == 1
-
-    db.close()
-    catchup = await reconcile_projection_lag_once(session_factory=factory, limit=10)
-    assert catchup.selected == 1
-    assert catchup.reconciled == 1
-    assert catchup.errors == 0
-
-    verify = factory()
-    try:
-        refreshed = verify.query(AgentSession).filter(AgentSession.id == session_id).first()
-        assert refreshed is not None
-        assert refreshed.needs_projection == 0
-        assert refreshed.user_messages == 1
-        assert refreshed.assistant_messages == 1
-    finally:
-        verify.close()
-
-    lag_after = _session_projection_lag_check(factory)
-    assert lag_after["status"] == "pass"
-    assert lag_after["pending_sessions"] == 0
 
 
 def test_session_enrichment_lag_surfaces_embedding_backlog(tmp_path):

@@ -70,7 +70,6 @@ async def test_generate_summary_impl_skips_provider_when_summary_revision_curren
 
 @pytest.mark.asyncio
 async def test_generate_summary_impl_marks_summary_current_when_llm_disabled(tmp_path):
-    from zerg.services.session_enrichment_reconciler import select_stale_summary_session_ids
     from zerg.services.session_summaries import generate_summary_impl
 
     factory = _make_db(tmp_path, "summary_llm_disabled.db")
@@ -107,14 +106,12 @@ async def test_generate_summary_impl_marks_summary_current_when_llm_disabled(tmp
         refreshed = verify.query(AgentSession).filter(AgentSession.id == session_id).one()
         assert refreshed.summary_revision == 2
         assert refreshed.summary_title is None
-        assert select_stale_summary_session_ids(verify, limit=10) == []
     finally:
         verify.close()
 
 
 @pytest.mark.asyncio
 async def test_generate_summary_impl_marks_summary_current_when_llm_misconfigured(tmp_path):
-    from zerg.services.session_enrichment_reconciler import select_stale_summary_session_ids
     from zerg.services.session_summaries import generate_summary_impl
 
     factory = _make_db(tmp_path, "summary_llm_misconfigured.db")
@@ -168,7 +165,6 @@ async def test_generate_summary_impl_marks_summary_current_when_llm_misconfigure
         refreshed = verify.query(AgentSession).filter(AgentSession.id == session_id).one()
         assert refreshed.summary_revision == 2
         assert refreshed.summary_title is None
-        assert select_stale_summary_session_ids(verify, limit=10) == []
     finally:
         verify.close()
 

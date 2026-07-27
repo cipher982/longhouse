@@ -1,10 +1,10 @@
 import pytest
 
-from zerg.lifespan import _reap_stale_machine_control_operations_once
+from zerg.lifespan import _reap_stale_live_machine_control_operations_once
 
 
 @pytest.mark.asyncio
-async def test_machine_control_reaper_uses_write_serializer(monkeypatch):
+async def test_live_machine_control_reaper_uses_write_serializer(monkeypatch):
     calls = []
 
     def fake_reap(db):
@@ -17,16 +17,16 @@ async def test_machine_control_reaper_uses_write_serializer(monkeypatch):
             return fn("serializer-db")
 
     monkeypatch.setattr(
-        "zerg.services.machine_control_operations.reap_stale_machine_control_operations",
+        "zerg.services.machine_control_operations.reap_stale_live_machine_control_operations",
         fake_reap,
     )
     monkeypatch.setattr(
-        "zerg.services.write_serializer.get_write_serializer",
+        "zerg.services.write_serializer.get_live_write_serializer",
         lambda: FakeSerializer(),
     )
 
-    assert await _reap_stale_machine_control_operations_once() == 3
+    assert await _reap_stale_live_machine_control_operations_once() == 3
     assert calls == [
-        ("execute", "machine-control-reaper", False),
+        ("execute", "live-machine-control-reaper", False),
         ("reap", "serializer-db"),
     ]
