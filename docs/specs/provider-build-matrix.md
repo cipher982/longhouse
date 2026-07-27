@@ -227,11 +227,27 @@ Until then the full column runs. At four providers it is cheap.
 
 Four steps. Each is useful if the next never happens.
 
-**1. Fail-closed runner.** Delete tier-3 `shutil.which()` from `_resolve_binary`;
-fix the fifteen call sites; the runner requires a build reference or fails.
-`which()` survives only inside acquisition, which stages what it finds and records
-it. Existing tests keep working via injected fakes. Alone, this permanently kills
-the "green suite testing a laptop" bug class.
+**1. Fail-closed runner.** Delete tier-3 `shutil.which()` from `_resolve_binary`
+(~5284); fix the fifteen `HarnessOptions` call sites that omit `provider_bins`;
+the runner requires a build reference or fails. `which()` survives only inside
+acquisition, which stages what it finds and records it. Alone, this permanently
+kills the "green suite testing a laptop" bug class.
+
+**Do not delete tier 3 before reading this.** It is currently the *live* lane's
+mechanism, not just an accident. `provider-release-proof-universal-smoke.py:682`
+passes `provider_bins=None` when `--use-real-provider-bins` is set, precisely so
+tier 3 resolves the operator's installed binaries. Deleting it without replacing
+that path breaks real-provider smoke.
+
+The problem is not that the fallback exists; it is that one code path serves two
+opposite intents, and which one you get is decided by an *omission* rather than a
+declaration. Forgetting to inject a fake is indistinguishable from asking for a
+real binary. So the live lane must resolve explicitly at its entry point and pass
+a build reference down, rather than letting an adapter guess three layers deep.
+
+To reproduce the CI environment locally, rebuild `PATH` without `~/.local/bin`;
+otherwise an installed provider silently satisfies the probe and the suite goes
+green against your laptop.
 
 **2. Build store, fakes only.** Generate fakes into the store with closure
 digests recorded in evidence. No network, no credentials, offline-safe. Buys
