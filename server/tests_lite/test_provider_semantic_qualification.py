@@ -58,6 +58,8 @@ def _request(tmp_path: Path, provider: str, binary: Path, executable_identity: s
         "provider_bin": str(binary),
         "expected_provider_version": version,
         "expected_executable_identity": executable_identity,
+        "expected_provider_build_identity": executable_identity,
+        "expected_provider_build_granularity": "single_asset",
         "invocation_id": f"{provider}-semantic-1",
         "producer_class": "local_diagnostic",
         "producer_version": "test",

@@ -54,6 +54,7 @@ def _request(
     producer_class: str = "local_diagnostic",
     run_reference: str | None = None,
     provider_build_identity: str | None = None,
+    provider_build_granularity: str = "single_asset",
 ) -> Path:
     registered_profile, _output, registered_version = PROFILES[provider]
     payload = {
@@ -63,13 +64,13 @@ def _request(
         "provider_bin": str(binary),
         "expected_provider_version": expected_version or registered_version,
         "expected_executable_identity": executable_identity,
+        "expected_provider_build_identity": provider_build_identity or executable_identity,
+        "expected_provider_build_granularity": provider_build_granularity,
         "invocation_id": f"{provider}-identity-1",
         "producer_class": producer_class,
         "producer_version": "test",
         "longhouse_git_sha": TEST_SHA,
     }
-    if provider_build_identity is not None:
-        payload["expected_provider_build_identity"] = provider_build_identity
     if run_reference is not None:
         payload["run_reference"] = run_reference
     path = tmp_path / f"{provider}-request.json"
@@ -106,6 +107,7 @@ def test_registered_identity_profiles_emit_provider_scoped_v2_records(tmp_path: 
     assert {record["provider_version"] for record in bundle["records"]} == {expected_version}
     assert {record["provider_executable_identity"] for record in bundle["records"]} == {executable_identity}
     assert {record["provider_build_identity"] for record in bundle["records"]} == {executable_identity}
+    assert {record["provider_build_granularity"] for record in bundle["records"]} == {"single_asset"}
     assert {record["provider_contract_digest"] for record in bundle["records"]} == {contract.contract_entry_digest}
     assert {record["adapter_digest"] for record in bundle["records"]} == {contract.adapter_digest}
     raw = (output / "raw-observation.json").read_bytes()
@@ -248,6 +250,35 @@ def test_release_factory_request_requires_run_reference_before_execution(tmp_pat
 
     assert not marker.exists()
     assert not output.exists()
+
+
+@pytest.mark.parametrize(
+    ("missing_key", "message"),
+    [
+        ("expected_provider_build_identity", "expected_provider_build_identity must be a non-empty string"),
+        ("expected_provider_build_granularity", "expected_provider_build_granularity must be a non-empty string"),
+    ],
+)
+def test_requests_require_explicit_build_closure_identity(
+    tmp_path: Path,
+    missing_key: str,
+    message: str,
+) -> None:
+    binary, executable_identity, marker = _fake_binary(tmp_path, "claude", "2.1.198 (Claude Code)")
+    request = _request(
+        tmp_path,
+        provider="claude",
+        binary=binary,
+        executable_identity=executable_identity,
+    )
+    payload = json.loads(request.read_text())
+    payload.pop(missing_key)
+    request.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(identity.RequestError, match=message):
+        provider_qualification.run(request, tmp_path / "output")
+
+    assert not marker.exists()
 
 
 def test_release_factory_records_preserve_run_reference(tmp_path: Path) -> None:

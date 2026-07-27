@@ -199,6 +199,7 @@ def run_semantic_profile(
             provider_version=template.provider_version,
             provider_executable_identity=expected_identity,
             provider_build_identity=template.provider_build_identity,
+            provider_build_granularity=template.provider_build_granularity,
             provider_contract_digest=template.provider_contract_digest,
             adapter_digest=template.adapter_digest,
             scenario_id=profile.scenario_id,

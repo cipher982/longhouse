@@ -86,6 +86,8 @@ def _request(tmp_path: Path, binary: Path, identity: str) -> Path:
                 "provider_bin": str(binary),
                 "expected_provider_version": "1.2.3",
                 "expected_executable_identity": identity,
+                "expected_provider_build_identity": identity,
+                "expected_provider_build_granularity": "full_installed_tree",
                 "invocation_id": "interrupt-run-1",
                 "producer_class": "local_diagnostic",
                 "producer_version": "test",
