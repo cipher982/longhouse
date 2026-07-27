@@ -5,6 +5,5 @@ Third-party plugins can be loaded dynamically via the registry.
 """
 
 from zerg.channels.plugins.mock import MockChannel
-from zerg.channels.plugins.telegram import TelegramChannel
 
-__all__ = ["MockChannel", "TelegramChannel"]
+__all__ = ["MockChannel"]

@@ -217,7 +217,7 @@ class MockChannel(ChannelPlugin):
             message_id=message_id,
         )
 
-    async def send_reaction(self, message_id: str, reaction: str, chat_id: str | None = None) -> MessageDeliveryResult:
+    async def send_reaction(self, message_id: str, _reaction: str, chat_id: str | None = None) -> MessageDeliveryResult:
         """React to a message (no-op in mock)."""
         return MessageDeliveryResult(
             success=True,

@@ -38,7 +38,6 @@ components:
         - grep_sessions
         - filter_sessions
         - get_session_detail
-        - send_telegram
         - web_fetch
         - web_search
         - list_tools
@@ -57,7 +56,6 @@ components:
         - slack
         - coordination
         - session
-        - telegram
         - web_fetch
         - web_search
         - tool_discovery
@@ -148,8 +146,6 @@ components:
               const: session
             get_session_detail:
               const: session
-            send_telegram:
-              const: telegram
             web_fetch:
               const: web_fetch
             web_search:
@@ -182,7 +178,6 @@ components:
             - grep_sessions
             - filter_sessions
             - get_session_detail
-            - send_telegram
             - web_fetch
             - web_search
             - list_tools

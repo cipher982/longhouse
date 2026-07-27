@@ -271,11 +271,6 @@ class Settings:  # noqa: D401 – simple data container
     umami_tag: str | None = None
     live_database_url: str = ""
 
-    # Telegram channel integration ------------------------------------
-    telegram_bot_token: str | None = None  # TELEGRAM_BOT_TOKEN from @BotFather
-    telegram_webhook_url: str | None = None  # TELEGRAM_WEBHOOK_URL (e.g. https://your-domain/api/webhooks/channels/telegram)
-    telegram_webhook_secret: str | None = None  # TELEGRAM_WEBHOOK_SECRET for request validation
-
     # Loop PWA web push -------------------------------------------------
     loop_push_vapid_public_key: str | None = None
     loop_push_vapid_private_key: str | None = None
@@ -454,13 +449,11 @@ def validate_public_origin_config(settings: Settings, cors_origins: list[str]) -
     public_site_origin = _origin_from_url(settings.public_site_url)
     if public_site_origin and public_site_origin not in cors_origins:
         warnings.append(
-            "PUBLIC_SITE_URL/APP_PUBLIC_URL does not appear in CORS origins. " "Set ALLOWED_CORS_ORIGINS or PUBLIC_SITE_URL to match."
+            "PUBLIC_SITE_URL/APP_PUBLIC_URL does not appear in CORS origins. Set ALLOWED_CORS_ORIGINS or PUBLIC_SITE_URL to match."
         )
 
     if not public_site_origin and not settings.allowed_cors_origins and not settings.auth_disabled:
-        warnings.append(
-            "PUBLIC_SITE_URL (or APP_PUBLIC_URL) is not set and ALLOWED_CORS_ORIGINS is empty. " "CORS will default to localhost."
-        )
+        warnings.append("PUBLIC_SITE_URL (or APP_PUBLIC_URL) is not set and ALLOWED_CORS_ORIGINS is empty. CORS will default to localhost.")
 
     return warnings
 
@@ -615,10 +608,6 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
         # Tool output storage
         tool_output_max_chars=int(os.getenv("LONGHOUSE_TOOL_OUTPUT_MAX_CHARS", "8000")),
         tool_output_preview_chars=int(os.getenv("LONGHOUSE_TOOL_OUTPUT_PREVIEW_CHARS", "1200")),
-        # Telegram channel
-        telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN"),
-        telegram_webhook_url=os.getenv("TELEGRAM_WEBHOOK_URL"),
-        telegram_webhook_secret=os.getenv("TELEGRAM_WEBHOOK_SECRET"),
         loop_push_vapid_public_key=os.getenv("LOOP_PUSH_VAPID_PUBLIC_KEY"),
         loop_push_vapid_private_key=os.getenv("LOOP_PUSH_VAPID_PRIVATE_KEY"),
         loop_push_vapid_subject=os.getenv("LOOP_PUSH_VAPID_SUBJECT"),

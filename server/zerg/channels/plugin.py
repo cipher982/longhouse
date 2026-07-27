@@ -197,7 +197,7 @@ class ChannelPlugin(ABC):
         """
         raise NotImplementedError(f"{self.meta['id']} does not support message deletion")
 
-    async def send_reaction(self, message_id: str, reaction: str, chat_id: str | None = None) -> MessageDeliveryResult:
+    async def send_reaction(self, message_id: str, _reaction: str, chat_id: str | None = None) -> MessageDeliveryResult:
         """React to a message.
 
         Args:
@@ -225,7 +225,7 @@ class ChannelPlugin(ABC):
         """
         pass
 
-    async def get_presence(self, user_id: str) -> ChannelPresence | None:
+    async def get_presence(self, _user_id: str) -> ChannelPresence | None:
         """Get presence information for a user.
 
         Args:

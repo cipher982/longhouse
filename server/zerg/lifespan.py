@@ -365,30 +365,6 @@ async def lifespan(app: FastAPI):
             except Exception:
                 logger.exception("Failed to start maintenance loop")
 
-        # Telegram channel
-        if not catalog_mode and not _settings.testing and _settings.telegram_bot_token:
-            try:
-                from zerg.channels.plugins.telegram import TelegramChannel
-                from zerg.channels.registry import register_channel
-
-                _tg_channel = TelegramChannel()
-                await _tg_channel.configure(
-                    {
-                        "credentials": {"bot_token": _settings.telegram_bot_token},
-                        "settings": {
-                            "webhook_url": _settings.telegram_webhook_url,
-                            "webhook_secret": _settings.telegram_webhook_secret,
-                            "parse_mode": "html",
-                        },
-                    }
-                )
-                await _tg_channel.start()
-                register_channel(_tg_channel, replace=True)
-                app.state.telegram_channel = _tg_channel
-                logger.info("Telegram channel started (@%s)", _tg_channel._bot_info.get("username", "unknown"))
-            except Exception:
-                logger.exception("Telegram startup failed (non-fatal) — bot will be unavailable")
-
         # Mark runners offline
         if not catalog_mode:
             try:
@@ -464,12 +440,6 @@ async def lifespan(app: FastAPI):
     # Shutdown
     try:
         if not _settings.testing:
-            try:
-                if hasattr(app.state, "telegram_channel"):
-                    await app.state.telegram_channel.stop()
-            except Exception:  # noqa: BLE001
-                logger.exception("Failed to stop Telegram channel")
-
             try:
                 from zerg.database import stop_wal_checkpoint_loop
 

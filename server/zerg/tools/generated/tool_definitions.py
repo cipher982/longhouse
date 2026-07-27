@@ -31,7 +31,6 @@ class ToolName(str, Enum):
     GREP_SESSIONS = "grep_sessions"
     FILTER_SESSIONS = "filter_sessions"
     GET_SESSION_DETAIL = "get_session_detail"
-    SEND_TELEGRAM = "send_telegram"
     WEB_FETCH = "web_fetch"
     WEB_SEARCH = "web_search"
     LIST_TOOLS = "list_tools"
@@ -50,7 +49,6 @@ class ServerName(str, Enum):
     SLACK = "slack"
     COORDINATION = "coordination"
     SESSION = "session"
-    TELEGRAM = "telegram"
     WEB_FETCH = "web_fetch"
     WEB_SEARCH = "web_search"
     TOOL_DISCOVERY = "tool_discovery"
@@ -81,7 +79,6 @@ TOOL_SERVER_MAPPING: Dict[ToolName, ServerName] = {
     ToolName.GREP_SESSIONS: ServerName.SESSION,
     ToolName.FILTER_SESSIONS: ServerName.SESSION,
     ToolName.GET_SESSION_DETAIL: ServerName.SESSION,
-    ToolName.SEND_TELEGRAM: ServerName.TELEGRAM,
     ToolName.WEB_FETCH: ServerName.WEB_FETCH,
     ToolName.WEB_SEARCH: ServerName.WEB_SEARCH,
     ToolName.LIST_TOOLS: ServerName.TOOL_DISCOVERY,
