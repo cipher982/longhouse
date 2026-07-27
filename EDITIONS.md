@@ -19,7 +19,10 @@ Longhouse Cloud is proprietary and lives outside this repository. It includes:
 - hosted instance provisioning and fleet operations
 - production deployment automation and private operator dashboards
 - abuse controls, quotas, and hosted-only infrastructure glue
-- paid-provider pools or other shared cloud resources
+
+Hosted Longhouse operates the Runtime Host and control plane. Provider execution
+continues through each user's installed provider clients and existing accounts;
+hosted plans do not bundle or resell model inference.
 
 The public Runtime Host can be configured to talk to a hosted control plane via
 `CONTROL_PLANE_URL`. That is a service boundary, not a source-code dependency.
