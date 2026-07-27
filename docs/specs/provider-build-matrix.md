@@ -257,11 +257,32 @@ requested provider with no declared file now produces a red
 `provider_binary_not_found`. Opt-in real acquisition refuses partial provider
 sets instead of labelling a mixed or empty run as real-provider proof.
 
-**3. Channel declarations and staging for npm-shaped providers.** Declare
-`channel` / `coordinate` / `version_discovery` / `verification`. Generalize
-the existing Claude staging to Codex and OpenCode. Defers Cursor and every
-credential question. At the end of this step at least one provider column has
-real-build evidence inside Longhouse CI.
+**3. Channel declarations and real-build staging — implemented 2026-07-27.**
+Every provider contract now declares `channel`, `coordinate`,
+`version_discovery`, `verification`, and platform artifacts. Claude uses its
+public npm release and platform packages; Codex and OpenCode use stable GitHub
+releases; Cursor is permanently `observed_only`. Antigravity's existing public
+release declaration remains recorded while its support tier stays maintenance.
+
+Longhouse owns the typed declaration, closure manifest, append-only store seam,
+and qualification runner. It does not own acquisition. The existing private
+factory downloads public artifacts, verifies upstream digests and versions,
+then qualifies from a staged closure and records that closure using the same
+versioned manifest shape. Proof records carry build identity separately from
+entrypoint identity, and the worker requires both. Every worker tick first
+compares its complete acquisition policy to the generated Longhouse contract
+and fails closed on missing, additional, or drifted provider declarations. The
+resulting proof binds the real closure digest to the exact Longhouse SHA.
+
+This replaces the original plan to add another downloader to public Longhouse
+CI. The already-deployed factory is the real-build lane and invokes Longhouse's
+public qualification runner; duplicating acquisition in GitHub Actions would
+create two implementations of archive selection and integrity verification.
+No provider credentials or token-bearing proof entered this step.
+Persistent ingestion of private factory closures into the append-only store is
+part of step 4 scheduling; step 3 evidence remains immutable per factory run.
+Cursor observations can already enter through the store seam, but no automatic
+Cursor observer is scheduled yet.
 
 **4. Sparse live scheduling, and only then skip logic.** Requires measurement of
 hash stability first.
