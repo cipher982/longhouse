@@ -39,6 +39,10 @@
       "external_event_channel": null,
       "pause_tool_name": "requestUserInput",
       "harness_safe_no_token_prompt": true,
+      "harness_safe_managed_session_scenarios": [
+        "launch_managed_session",
+        "send_receive"
+      ],
       "harness_real_managed_session_e2e": true,
       "launch_local": true,
       "run_once": true,
@@ -309,6 +313,7 @@
       "external_event_channel": "provider_live.claude_development_channel",
       "pause_tool_name": "AskUserQuestion",
       "harness_safe_no_token_prompt": false,
+      "harness_safe_managed_session_scenarios": [],
       "harness_real_managed_session_e2e": true,
       "launch_local": true,
       "run_once": false,
@@ -629,6 +634,10 @@
       "external_event_channel": null,
       "pause_tool_name": "opencode_pause_request",
       "harness_safe_no_token_prompt": false,
+      "harness_safe_managed_session_scenarios": [
+        "launch_managed_session",
+        "send_receive"
+      ],
       "harness_real_managed_session_e2e": true,
       "launch_local": true,
       "run_once": false,
@@ -824,6 +833,7 @@
       "external_event_channel": "provider_control.antigravity_hook_inbox",
       "pause_tool_name": "antigravity_pause_request",
       "harness_safe_no_token_prompt": false,
+      "harness_safe_managed_session_scenarios": [],
       "harness_real_managed_session_e2e": true,
       "launch_local": true,
       "run_once": false,
@@ -1046,6 +1056,7 @@
       "external_event_channel": null,
       "pause_tool_name": "cursor_pause_request",
       "harness_safe_no_token_prompt": false,
+      "harness_safe_managed_session_scenarios": [],
       "harness_real_managed_session_e2e": false,
       "launch_local": true,
       "run_once": false,

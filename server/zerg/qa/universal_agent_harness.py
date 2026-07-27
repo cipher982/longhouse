@@ -14,7 +14,6 @@ import http.server
 import json
 import os
 import re
-import shutil
 import subprocess
 import sys
 import threading
@@ -219,7 +218,6 @@ COMPOSITE_PROFILES = {
     "control_surface": ("control_surface",),
     "drift_compare": ("baseline_compare", "old_new_release_diff"),
 }
-SAFE_MANAGED_SESSION_SCENARIOS = ("launch_managed_session", "send_receive")
 FULL_ACTION_SUITE_SCENARIOS = (
     "probe_identity",
     "adapter_conformance",
@@ -5285,13 +5283,7 @@ class UniversalProviderAdapter:
         if self.provider_bin is not None:
             path = self.provider_bin.expanduser()
             return (path, "provider_bin") if path.is_file() else (None, "provider_bin_missing")
-        if self.config.binary_env:
-            raw = os.environ.get(self.config.binary_env)
-            if raw:
-                path = Path(raw).expanduser()
-                return (path, self.config.binary_env) if path.is_file() else (None, f"{self.config.binary_env}_missing")
-        path = shutil.which(self.config.binary_name)
-        return (Path(path), "PATH") if path else (None, "missing")
+        return None, "missing"
 
 
 class ClaudeCodeHarnessAdapter(UniversalProviderAdapter):
@@ -5331,6 +5323,8 @@ def adapter_snapshot(config: AdapterConfig) -> dict[str, Any]:
         "capabilities": list(config.capabilities),
         "profiles": list(config.profiles),
         "methods": list(config.methods),
+        "safe_run_prompt_once": config.safe_run_prompt_once,
+        "safe_managed_session_scenarios": list(config.safe_managed_session_scenarios),
         "real_managed_session_e2e": config.real_managed_session_e2e,
     }
 
@@ -7896,9 +7890,7 @@ def provider_configs() -> dict[str, AdapterConfig]:
         binary_env = PROVIDER_CLI_ENV_BY_PROVIDER.get(provider) or f"LONGHOUSE_{provider.upper()}_BIN"
         safe_run_prompt_once = bool(contract and contract.harness_safe_no_token_prompt)
         real_managed_session_e2e = bool(contract and contract.harness_real_managed_session_e2e)
-        # A provider that can be prompted safely, or driven through a bridge that
-        # does not spend tokens, can run the managed-session scenario set.
-        safe_managed_session_scenarios = SAFE_MANAGED_SESSION_SCENARIOS if provider in {"codex", "opencode"} else ()
+        safe_managed_session_scenarios = tuple(contract.harness_safe_managed_session_scenarios) if contract else ()
         configs[provider] = AdapterConfig(
             provider=provider,
             binary_name=PROVIDER_CLI_BINARY_BY_PROVIDER.get(provider, provider),

@@ -1,8 +1,8 @@
 # Provider Build Matrix
 
-**Status:** proposed
+**Status:** step 1 implemented; steps 2–4 proposed
 **Owner:** Longhouse
-**Updated:** 2026-07-26
+**Updated:** 2026-07-27
 **Extends:** `provider-automation-factory-epic.md`, `provider-automation-factory-completion.md`
 **Scope:** How Longhouse proves what it can do, against which provider builds, and
 what has to re-run when either side changes.
@@ -11,10 +11,10 @@ what has to re-run when either side changes.
 
 Longhouse and its providers are two independent change streams writing into one
 body of evidence. Today only one is wired into CI: our commits are tested against
-fake or ambient binaries, while provider releases are tested elsewhere, on a
-schedule, by a private operations lane. The two never meet, so we cannot answer the question the
-factory exists to answer — *does Longhouse still work against the Codex that
-shipped this morning?*
+explicit fake binaries, while provider releases are tested elsewhere, on a
+schedule, by a private operations lane. The two never meet, so we cannot answer
+the question the factory exists to answer — *does Longhouse still work against
+the Codex that shipped this morning?*
 
 This makes the provider build a first-class input rather than an ambient property
 of whichever machine ran the test.
@@ -32,16 +32,16 @@ failed immediately in CI. `cursor-agent` is installed on the author's laptop and
 absent from GitHub runners, so every Cursor test silently resolved the real
 binary and passed.
 
-`universal_agent_harness.py:_resolve_binary` (~5284) has three tiers: injected
-path, environment override, then `shutil.which()`. The third means a test that
-forgets to inject a fake does not fail — it uses whatever the machine has.
-Fifteen of fifty-nine `HarnessOptions` constructions rely on this.
+Before step 1, `universal_agent_harness.py:_resolve_binary` had three tiers:
+injected path, environment override, then `shutil.which()`. The third meant a
+test that forgot to inject a fake did not fail — it used whatever the machine
+had. Fifteen of fifty-nine `HarnessOptions` constructions relied on this.
 
 Two details matter more than the missing fixture:
 
-- The harness records `binary_source: "PATH"` into the evidence artifact at five
-  call sites. The proof already declared that it used an ambient binary. Nothing
-  asserted on it.
+- The harness recorded `binary_source: "PATH"` into the evidence artifact at
+  five call sites. The proof declared that it used an ambient binary, but
+  nothing asserted on it.
 - The smoke runner already records `provider_bin_mode`. The system knows which
   mode it is in and treats that as a label rather than a rule.
 
@@ -227,27 +227,20 @@ Until then the full column runs. At four providers it is cheap.
 
 Four steps. Each is useful if the next never happens.
 
-**1. Fail-closed runner.** Delete tier-3 `shutil.which()` from `_resolve_binary`
-(~5284); fix the fifteen `HarnessOptions` call sites that omit `provider_bins`;
-the runner requires a build reference or fails. `which()` survives only inside
-acquisition, which stages what it finds and records it. Alone, this permanently
-kills the "green suite testing a laptop" bug class.
+**1. Fail-closed runner — implemented 2026-07-27.** Tier-3 `shutil.which()` is
+gone from `_resolve_binary`; the fifteen `HarnessOptions` call sites now inject
+provider binaries; and the runner requires a declared path or reports the binary
+missing. `which()` survives only in the opt-in real-provider smoke entry point,
+which resolves what it finds once and records the source before invoking the
+harness. The safe managed-session scenario list also moved into the generated
+provider contract, removing the final support decision based on provider names.
 
-**Do not delete tier 3 before reading this.** It is currently the *live* lane's
-mechanism, not just an accident. `provider-release-proof-universal-smoke.py:682`
-passes `provider_bins=None` when `--use-real-provider-bins` is set, precisely so
-tier 3 resolves the operator's installed binaries. Deleting it without replacing
-that path breaks real-provider smoke.
-
-The problem is not that the fallback exists; it is that one code path serves two
-opposite intents, and which one you get is decided by an *omission* rather than a
-declaration. Forgetting to inject a fake is indistinguishable from asking for a
-real binary. So the live lane must resolve explicitly at its entry point and pass
-a build reference down, rather than letting an adapter guess three layers deep.
-
-To reproduce the CI environment locally, rebuild `PATH` without `~/.local/bin`;
-otherwise an installed provider silently satisfies the probe and the suite goes
-green against your laptop.
+The old tier 3 was also the live lane's mechanism, not just a test accident.
+Removing it without replacing that path would have broken real-provider smoke.
+The live smoke entry point now owns that distinction explicitly:
+`--use-real-provider-bins` resolves named environment overrides or `PATH`, records
+the source of every provider input, and injects the resolved paths. Direct
+harness callers never inspect ambient environment or `PATH`.
 
 **2. Build store, fakes only.** Generate fakes into the store with closure
 digests recorded in evidence. No network, no credentials, offline-safe. Buys

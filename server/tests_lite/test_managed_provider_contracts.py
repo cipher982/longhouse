@@ -84,6 +84,17 @@ def test_managed_provider_contract_manifest_is_generated_from_schema():
     assert render_contract_manifest_json(schema_payload) == manifest_path.read_text(encoding="utf-8")
 
 
+def test_managed_provider_contract_rejects_unknown_safe_managed_session_scenario():
+    repo_root = Path(__file__).resolve().parents[2]
+    schema_payload = yaml.safe_load(
+        (repo_root / "schemas" / "managed_providers.yml").read_text(encoding="utf-8")
+    )
+    schema_payload["providers"][0]["harness_safe_managed_session_scenarios"] = ["unknown_scenario"]
+
+    with pytest.raises(ValueError, match="harness_safe_managed_session_scenarios"):
+        normalize_contract_manifest(schema_payload)
+
+
 def test_generated_runtime_manifest_does_not_require_repository_sources(monkeypatch):
     manifest_path = Path(__file__).resolve().parents[1] / "zerg" / "config" / "managed_provider_contracts.json"
     payload = json.loads(manifest_path.read_text())
@@ -851,10 +862,15 @@ def test_support_decisions_carry_no_provider_name_checks() -> None:
     import inspect
 
     from zerg.qa import universal_agent_harness as harness
+    from zerg.services.managed_provider_contracts import managed_provider_names
 
     for function in (harness._action_support, harness._provider_pause_tool_name, harness.provider_configs):
         source = inspect.getsource(function)
-        offenders = [line.strip() for line in source.splitlines() if 'provider == "' in line]
+        offenders = [
+            provider
+            for provider in managed_provider_names()
+            if f'"{provider}"' in source or f"'{provider}'" in source
+        ]
         assert offenders == [], f"{function.__name__} still branches on provider name: {offenders}"
 
 
@@ -862,12 +878,19 @@ def test_contract_carries_the_facts_the_runner_used_to_hardcode() -> None:
     from zerg.services.managed_provider_contracts import contract_for_provider
 
     claude = contract_for_provider("claude")
+    codex = contract_for_provider("codex")
     cursor = contract_for_provider("cursor")
+    opencode = contract_for_provider("opencode")
     antigravity = contract_for_provider("antigravity")
-    assert claude is not None and cursor is not None and antigravity is not None
+    assert all(contract is not None for contract in (claude, codex, cursor, opencode, antigravity))
 
     assert claude.external_event_channel == "provider_live.claude_development_channel"
     assert cursor.external_event_channel is None
     assert claude.pause_tool_name == "AskUserQuestion"
     assert cursor.permission_prompt_surface is True
     assert antigravity.permission_prompt_surface is False
+    assert codex.harness_safe_managed_session_scenarios == ("launch_managed_session", "send_receive")
+    assert opencode.harness_safe_managed_session_scenarios == ("launch_managed_session", "send_receive")
+    assert claude.harness_safe_managed_session_scenarios == ()
+    assert cursor.harness_safe_managed_session_scenarios == ()
+    assert antigravity.harness_safe_managed_session_scenarios == ()

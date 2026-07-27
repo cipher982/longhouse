@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import shutil
 import subprocess
 import sys
 from datetime import UTC
@@ -23,6 +25,7 @@ sys.path.insert(0, str(SERVER_PATH))
 
 from zerg.qa.universal_agent_harness import SUPPORTED_PROVIDERS
 from zerg.qa.universal_agent_harness import HarnessOptions
+from zerg.qa.universal_agent_harness import provider_configs
 from zerg.qa.universal_agent_harness import run_harness
 
 DEFAULT_SCENARIOS = (
@@ -383,6 +386,36 @@ def write_fake_provider_bins(root: Path) -> dict[str, Path]:
     return result
 
 
+def resolve_installed_provider_bins(
+    providers: tuple[str, ...],
+) -> tuple[dict[str, Path], dict[str, str]]:
+    """Resolve live provider inputs once, before entering the harness.
+
+    The harness is fail-closed: omission never means "use this machine's PATH".
+    This opt-in smoke entry point is the acquisition boundary that may inspect
+    operator overrides and PATH, and it records exactly what it found.
+    """
+
+    configs = provider_configs()
+    bins: dict[str, Path] = {}
+    sources: dict[str, str] = {}
+    for provider in providers:
+        config = configs[provider]
+        if config.binary_env and (raw := os.environ.get(config.binary_env)):
+            path = Path(raw).expanduser()
+            sources[provider] = (
+                config.binary_env if path.is_file() else f"{config.binary_env}_missing"
+            )
+            if path.is_file():
+                bins[provider] = path
+            continue
+        raw_path = shutil.which(config.binary_name)
+        sources[provider] = "PATH" if raw_path else "missing"
+        if raw_path:
+            bins[provider] = Path(raw_path)
+    return bins, sources
+
+
 def write_parse_fixture(root: Path) -> Path:
     fixture_path = root / "fixtures" / "provider-events.jsonl"
     rows = (
@@ -678,9 +711,11 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
         .resolve()
     )
     scenarios = _selected_scenarios(args)
-    provider_bins = (
-        None if args.use_real_provider_bins else write_fake_provider_bins(evidence_root)
-    )
+    if args.use_real_provider_bins:
+        provider_bins, provider_bin_sources = resolve_installed_provider_bins(SUPPORTED_PROVIDERS)
+    else:
+        provider_bins = write_fake_provider_bins(evidence_root)
+        provider_bin_sources = {provider: "generated_fake" for provider in SUPPORTED_PROVIDERS}
     fixture_path = write_parse_fixture(evidence_root)
     old_proof_paths, new_proof_paths = write_synthetic_old_new_release_proofs(
         evidence_root
@@ -706,6 +741,7 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
         "providers": list(SUPPORTED_PROVIDERS),
         "scenarios": list(scenarios),
         "provider_bin_mode": "path_or_env" if args.use_real_provider_bins else "fake",
+        "provider_bin_sources": provider_bin_sources,
         "token_spending_scenarios": [LIVE_TOKEN_SCENARIO]
         if LIVE_TOKEN_SCENARIO in scenarios
         else [],

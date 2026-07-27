@@ -988,6 +988,7 @@ def test_old_new_release_diff_blocks_without_explicit_artifacts(tmp_path: Path) 
             providers=uah.SUPPORTED_PROVIDERS,
             scenarios=("old_new_release_diff",),
             evidence_root=tmp_path / "evidence",
+            provider_bins=_fake_bins(tmp_path),
         )
     )
 
@@ -1065,6 +1066,7 @@ def test_old_new_release_diff_compares_explicit_proof_artifacts(tmp_path: Path) 
             providers=("opencode",),
             scenarios=("old_new_release_diff",),
             evidence_root=tmp_path / "evidence",
+            provider_bins=_fake_bins(tmp_path),
             old_proof_path=old,
             new_proof_path=new,
             baseline_root=tmp_path / "baselines",
@@ -1156,6 +1158,7 @@ def test_old_new_release_diff_fails_on_proof_artifact_drift(tmp_path: Path) -> N
             providers=("opencode",),
             scenarios=("old_new_release_diff",),
             evidence_root=tmp_path / "evidence",
+            provider_bins=_fake_bins(tmp_path),
             old_proof_path=old,
             new_proof_path=new,
             baseline_root=tmp_path / "baselines",
@@ -1403,6 +1406,7 @@ def test_db_ingest_project_uses_real_longhouse_sqlite_for_all_providers(tmp_path
             providers=uah.SUPPORTED_PROVIDERS,
             scenarios=("db_ingest_project",),
             evidence_root=tmp_path / "evidence",
+            provider_bins=_fake_bins(tmp_path),
         )
     )
 
@@ -2239,6 +2243,7 @@ def test_claude_interrupt_cancel_uses_channel_control_canary(tmp_path: Path, mon
             providers=("claude",),
             scenarios=("interrupt_cancel",),
             evidence_root=tmp_path / "evidence",
+            provider_bins=_fake_bins(tmp_path),
         )
     )
 
@@ -2319,6 +2324,7 @@ def test_claude_steer_active_turn_uses_channel_control_canary(tmp_path: Path, mo
             providers=("claude",),
             scenarios=("steer_active_turn",),
             evidence_root=tmp_path / "evidence",
+            provider_bins=_fake_bins(tmp_path),
         )
     )
 
@@ -2348,6 +2354,7 @@ def test_steer_active_turn_reports_explicit_provider_gaps(tmp_path: Path) -> Non
             providers=("codex", "opencode", "antigravity"),
             scenarios=("steer_active_turn",),
             evidence_root=tmp_path / "evidence",
+            provider_bins=_fake_bins(tmp_path),
         )
     )
 
@@ -2387,6 +2394,7 @@ def test_pause_request_detect_projects_pending_question_for_all_providers(tmp_pa
             providers=uah.SUPPORTED_PROVIDERS,
             scenarios=("pause_request_detect",),
             evidence_root=tmp_path / "evidence",
+            provider_bins=_fake_bins(tmp_path),
         )
     )
 
@@ -2420,6 +2428,7 @@ def test_answer_pause_request_resolves_service_and_dispatches_managed_answer(tmp
             providers=("claude", "codex", "opencode"),
             scenarios=("answer_pause_request",),
             evidence_root=tmp_path / "evidence",
+            provider_bins=_fake_bins(tmp_path),
         )
     )
 
@@ -2459,6 +2468,7 @@ def test_answer_pause_request_reports_explicit_provider_gaps(tmp_path: Path) -> 
             providers=("antigravity",),
             scenarios=("answer_pause_request",),
             evidence_root=tmp_path / "evidence",
+            provider_bins=_fake_bins(tmp_path),
         )
     )
 
@@ -2475,6 +2485,7 @@ def test_observation_surface_scenarios_emit_comparable_artifacts_for_all_provide
             providers=uah.SUPPORTED_PROVIDERS,
             scenarios=("tail_output", "runtime_phase", "transcript_binding"),
             evidence_root=tmp_path / "evidence",
+            provider_bins=_fake_bins(tmp_path),
         )
     )
 
@@ -2510,6 +2521,7 @@ def test_terminate_cleanup_respects_provider_contract(tmp_path: Path) -> None:
             providers=uah.SUPPORTED_PROVIDERS,
             scenarios=("terminate_cleanup",),
             evidence_root=tmp_path / "evidence",
+            provider_bins=_fake_bins(tmp_path),
         )
     )
 
@@ -3267,6 +3279,7 @@ def test_antigravity_managed_session_e2e_uses_hook_inbox_canary(tmp_path: Path, 
             providers=("antigravity",),
             scenarios=("managed_session_e2e",),
             evidence_root=tmp_path / "evidence",
+            provider_bins=_fake_bins(tmp_path),
         )
     )
 
@@ -3322,6 +3335,7 @@ def test_antigravity_managed_session_e2e_fails_when_hook_inbox_canary_fails(
             providers=("antigravity",),
             scenarios=("managed_session_e2e",),
             evidence_root=tmp_path / "evidence",
+            provider_bins=_fake_bins(tmp_path),
         )
     )
 
@@ -3360,6 +3374,7 @@ def test_collect_raw_evidence_runs_for_all_providers_without_launching(tmp_path:
             providers=uah.SUPPORTED_PROVIDERS,
             scenarios=("collect_raw_evidence",),
             evidence_root=tmp_path / "evidence",
+            provider_bins=_fake_bins(tmp_path),
         )
     )
 
@@ -3391,6 +3406,16 @@ def test_probe_failure_writes_raw_and_assertion_evidence(tmp_path: Path) -> None
     assert (evidence_root / "manifest.json").is_file()
     assert (evidence_root / "raw" / "version-command.json").is_file()
     assert (evidence_root / "assertions" / "probe.json").is_file()
+
+
+def test_adapter_binary_resolution_ignores_ambient_discovery(tmp_path: Path, monkeypatch) -> None:
+    ambient = _fake_bins(tmp_path)["codex"]
+    monkeypatch.setenv("PATH", str(ambient.parent))
+    monkeypatch.setenv("LONGHOUSE_CODEX_BIN", str(ambient))
+
+    adapter = uah.adapter_registry()["codex"]
+
+    assert adapter._resolve_binary() == (None, "missing")
 
 
 def test_parse_ingest_project_replays_fixture_without_launching_provider(tmp_path: Path) -> None:
@@ -3692,6 +3717,29 @@ def test_universal_smoke_rejects_live_token_without_real_provider_bins(tmp_path:
     assert "live_token_streaming requires --use-real-provider-bins" in result.stderr
 
 
+def test_universal_smoke_resolves_live_bins_at_the_acquisition_boundary(
+    tmp_path: Path, monkeypatch
+) -> None:
+    smoke = _load_universal_smoke_module()
+    codex = _write_exe(tmp_path / "configured" / "codex", "codex-cli 9.9.9")
+    cursor = _write_exe(tmp_path / "path" / "cursor-agent", "2026.07.23-e383d2b")
+    monkeypatch.setenv("LONGHOUSE_CODEX_BIN", str(codex))
+    monkeypatch.setattr(
+        smoke.shutil,
+        "which",
+        lambda name: str(cursor) if name == "cursor-agent" else None,
+    )
+
+    bins, sources = smoke.resolve_installed_provider_bins(("codex", "cursor", "claude"))
+
+    assert bins == {"codex": codex, "cursor": cursor}
+    assert sources == {
+        "codex": "LONGHOUSE_CODEX_BIN",
+        "cursor": "PATH",
+        "claude": "missing",
+    }
+
+
 def test_universal_smoke_can_select_real_provider_live_token_mode(tmp_path: Path, monkeypatch) -> None:
     smoke = _load_universal_smoke_module()
     calls: list[object] = []
@@ -3712,7 +3760,14 @@ def test_universal_smoke_can_select_real_provider_live_token_mode(tmp_path: Path
             "provider_execution_coverage_matrix": {"artifact_kind": "fake_execution"},
         }
 
+    resolved_bins = _fake_bins(tmp_path)
+    resolved_sources = {provider: "PATH" for provider in resolved_bins}
     monkeypatch.setattr(smoke, "run_harness", fake_run_harness)
+    monkeypatch.setattr(
+        smoke,
+        "resolve_installed_provider_bins",
+        lambda providers: (resolved_bins, resolved_sources),
+    )
     args = smoke.build_parser().parse_args(
         [
             "--evidence-root",
@@ -3727,9 +3782,10 @@ def test_universal_smoke_can_select_real_provider_live_token_mode(tmp_path: Path
 
     assert calls
     options = calls[0]
-    assert options.provider_bins is None
+    assert options.provider_bins == resolved_bins
     assert "live_token_streaming" in options.scenarios
     assert artifact["provider_bin_mode"] == "path_or_env"
+    assert artifact["provider_bin_sources"] == resolved_sources
     assert artifact["token_spending_scenarios"] == ["live_token_streaming"]
     assert artifact["artifact_path"] == str((tmp_path / "smoke.json").resolve())
     assert Path(artifact["maturity_rollup_path"]).is_file()

@@ -62,6 +62,7 @@ class ManagedProviderContract:
     # Whether the universal harness can exercise the provider without spending
     # model tokens, and whether it has a real managed-session E2E scenario.
     harness_safe_no_token_prompt: bool = False
+    harness_safe_managed_session_scenarios: tuple[str, ...] = ()
     harness_real_managed_session_e2e: bool = False
     requires_longhouse_cli: bool = True
     launch_local: bool = True
@@ -158,6 +159,7 @@ def _contract_from_manifest_item(item: dict[str, object]) -> ManagedProviderCont
         external_event_channel=(str(item["external_event_channel"]) if item.get("external_event_channel") else None),
         pause_tool_name=str(item.get("pause_tool_name") or "structured_question"),
         harness_safe_no_token_prompt=bool(item.get("harness_safe_no_token_prompt", False)),
+        harness_safe_managed_session_scenarios=tuple(str(value) for value in item.get("harness_safe_managed_session_scenarios") or ()),
         harness_real_managed_session_e2e=bool(item.get("harness_real_managed_session_e2e", False)),
         requires_longhouse_cli=bool(item.get("requires_longhouse_cli", True)),
         launch_local=bool(item.get("launch_local", True)),

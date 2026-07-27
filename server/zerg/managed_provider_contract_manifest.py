@@ -36,6 +36,7 @@ _STRING_LIST_FIELDS = (
     "adapter_sources",
     "wire_families",
     "observation_sources",
+    "harness_safe_managed_session_scenarios",
 )
 _FACTORY_STRING_FIELDS = ("normalization_ruleset", "presentation_ruleset")
 # The factory's supported-provider set is derived from this field rather than
@@ -45,6 +46,7 @@ _FACTORY_STRING_FIELDS = ("normalization_ruleset", "presentation_ruleset")
 _SUPPORT_TIERS = frozenset({"launch", "maintenance"})
 _PROOF_PROFILE_NAMES = frozenset({"pull_request", "release_candidate", "continuous"})
 _PROOF_PROFILE_VALUES = frozenset({"hermetic", "staged_release", "privacy_safe_live_replay"})
+_HARNESS_SAFE_MANAGED_SESSION_SCENARIOS = frozenset({"launch_managed_session", "send_receive"})
 _OPERATION_EVIDENCE_FIELDS = (
     "launch_local",
     "run_once",
@@ -339,6 +341,12 @@ def _validate_factory_contract(item: dict[str, Any]) -> None:
     _validate_string_field(item, "pause_tool_name")
     for field in ("harness_safe_no_token_prompt", "harness_real_managed_session_e2e"):
         _validate_bool_field(item, field)
+    safe_scenarios = set(item.get("harness_safe_managed_session_scenarios") or ())
+    if not safe_scenarios <= _HARNESS_SAFE_MANAGED_SESSION_SCENARIOS:
+        raise ValueError(
+            f"managed provider contract {provider}: harness_safe_managed_session_scenarios must contain only "
+            f"{sorted(_HARNESS_SAFE_MANAGED_SESSION_SCENARIOS)}"
+        )
     if item.get("support_tier") not in _SUPPORT_TIERS:
         raise ValueError(f"managed provider contract {provider}: support_tier must be one of {sorted(_SUPPORT_TIERS)}")
     proof_profiles = item.get("proof_profiles")
