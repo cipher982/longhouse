@@ -221,7 +221,7 @@ def _record(
     )
 
 
-def _emit(
+def emit_proof_bundle(
     *,
     request: dict[str, Any],
     output_root: Path,
@@ -234,6 +234,17 @@ def _emit(
     observation: dict[str, Any],
     evidence_class: EvidenceClass,
 ) -> dict[str, Any]:
+    """Serialize outcomes into the standard proof-bundle.json shape.
+
+    Public (was `_emit`) so both this module's own `run()` (the release-lane
+    legacy path) and the harness-backed bridge script
+    (scripts/qa/provider-harness-qualification.py, Phase 2's "bridge/dispatcher
+    design" — docs/specs/provider-factory-coherence.md) produce byte-identical
+    proof records from the same inputs. The caller is responsible for
+    obtaining and validating identity/version/build provenance before calling
+    this — that acquisition logic legitimately differs between staged-release
+    qualification and harness-backed qualification and is not shared.
+    """
     contract = contract_for_provider("codex")
     if contract is None:
         raise identity_bridge.RequestError("Codex managed-provider contract is missing")
@@ -447,7 +458,7 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
         outcomes["exact_executable_identity_observed"] = (
             AssertionOutcome.PASS if blocked_post_identity == pre_execution_identity else AssertionOutcome.INFRASTRUCTURE_ERROR
         )
-        return _emit(
+        return emit_proof_bundle(
             request=request,
             output_root=output_root,
             executable_identity=actual_identity,
@@ -656,7 +667,7 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
         "tool_run": tool_observation,
     }
     semantic_process_attempted = bool(tool_observation is not None and tool_observation.get("status") != "not_run")
-    return _emit(
+    return emit_proof_bundle(
         request=request,
         output_root=output_root,
         executable_identity=actual_identity,

@@ -419,7 +419,7 @@ def _record(
     )
 
 
-def _emit(
+def emit_proof_bundle(
     *,
     request: dict[str, Any],
     output_root: Path,
@@ -432,6 +432,18 @@ def _emit(
     execution: dict[str, Any],
     observation: dict[str, Any],
 ) -> dict[str, Any]:
+    """Serialize outcomes into the standard proof-bundle.json shape.
+
+    Public (was `_emit`) so both this module's own `run()` (the release-lane
+    legacy path) and the harness-backed bridge script
+    (scripts/qa/provider-harness-qualification.py, Phase 2's "bridge/dispatcher
+    design" — docs/specs/provider-factory-coherence.md) produce byte-identical
+    proof records from the same inputs. The caller is responsible for
+    obtaining and validating identity/version/engine provenance before
+    calling this — that acquisition logic legitimately differs between
+    staged-release qualification and harness-backed qualification and is not
+    shared.
+    """
     contract = contract_for_provider("codex")
     if contract is None:
         raise identity_bridge.RequestError("Codex managed-provider contract is missing")
@@ -591,7 +603,7 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
     values, missing = _required_environment()
     if missing:
         outcomes = {assertion: AssertionOutcome.BLOCKED for assertion in ASSERTIONS}
-        return _emit(
+        return emit_proof_bundle(
             request=request,
             output_root=output_root,
             provider_identity=provider_identity,
@@ -626,7 +638,7 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
     if engine_build_probe["status"] != "pass":
         outcome = AssertionOutcome.BLOCKED if engine_build_probe["status"] == "blocked" else AssertionOutcome.INFRASTRUCTURE_ERROR
         outcomes = {assertion: outcome for assertion in ASSERTIONS}
-        return _emit(
+        return emit_proof_bundle(
             request=request,
             output_root=output_root,
             provider_identity=provider_identity,
@@ -660,7 +672,7 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         outcomes = {assertion: AssertionOutcome.INFRASTRUCTURE_ERROR for assertion in ASSERTIONS}
-        return _emit(
+        return emit_proof_bundle(
             request=request,
             output_root=output_root,
             provider_identity=provider_identity,
@@ -685,7 +697,7 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
     reported_version = match.group("version") if match else None
     if version.returncode != 0 or reported_version is None:
         outcomes = {assertion: AssertionOutcome.INFRASTRUCTURE_ERROR for assertion in ASSERTIONS}
-        return _emit(
+        return emit_proof_bundle(
             request=request,
             output_root=output_root,
             provider_identity=provider_identity,
@@ -712,7 +724,7 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
         )
     if reported_version != request["expected_provider_version"]:
         outcomes = {assertion: AssertionOutcome.BLOCKED for assertion in ASSERTIONS}
-        return _emit(
+        return emit_proof_bundle(
             request=request,
             output_root=output_root,
             provider_identity=provider_identity,
@@ -787,7 +799,7 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
         "stop_evidence": stop,
         "identities_stable": identities_stable,
     }
-    return _emit(
+    return emit_proof_bundle(
         request=request,
         output_root=output_root,
         provider_identity=provider_identity,
