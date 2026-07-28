@@ -8625,8 +8625,14 @@ def codex_tool_call_result_strict(package: EvidencePackage, binary: Path) -> dic
     payload = {
         "status": STATUS_PASS if passed else STATUS_FAIL,
         "scenario": "codex_tool_call_result_strict",
-        "command_execution_completed_with_exact_output": command_outcome.value,
-        "tool_result_linked_to_final_agent_message": linked_outcome.value,
+        # Nested under strict_oracle to match interrupt_cancel's convention
+        # (docs/specs/provider-factory-coherence.md, "Closing the observation
+        # gap") -- the bridge script reads this key uniformly across both
+        # strict scenarios.
+        "strict_oracle": {
+            "command_execution_completed_with_exact_output": command_outcome.value,
+            "tool_result_linked_to_final_agent_message": linked_outcome.value,
+        },
         "timed_out": observation["timed_out"],
         "error": observation["error"],
     }

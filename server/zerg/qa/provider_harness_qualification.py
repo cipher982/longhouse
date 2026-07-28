@@ -1,0 +1,356 @@
+"""Bridge two codex qualification profiles through the universal harness.
+
+Phase 2's "bridge/dispatcher design" (docs/specs/provider-factory-coherence.md):
+`codex_tool_call_result_v1` and `codex_helm_interrupt_v1` are the two
+release-lane profiles whose strict oracles can now be satisfied by a harness
+scenario instead of each profile launching its own subprocess. This module
+is the seam: it loads the same staged-release request the release lane's own
+executors consume, derives and verifies a real `ProviderBuildRef` (unlike
+the release lane's own `run()`, which trusts the request's claimed build
+identity without live re-verification), runs exactly the harness scenarios
+needed for one provider, and emits the identical `proof-bundle.json` shape
+via each profile's `emit_proof_bundle()` finalizer.
+
+Deliberately not a general harness bridge: only these two (provider, profile)
+pairs are supported. Neither harness scenario alone produces its profile's
+full assertion set — `probe_identity` runs alongside the strict scenario in
+every call, supplying `exact_executable_identity_observed` (computed here,
+from pre/post hash agreement, same as the release lane) and
+`reported_version_matches_expected` (parsed from `probe_identity`'s reported
+`--version` output).
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+from typing import Any
+
+from zerg.qa import codex_helm_interrupt
+from zerg.qa import codex_release_identity as identity_bridge
+from zerg.qa import codex_tool_call_result
+from zerg.qa.provider_build_store import ProviderBuildRef
+from zerg.qa.provider_build_store import materialize_staged_provider_build
+from zerg.qa.universal_agent_harness import HarnessOptions
+from zerg.qa.universal_agent_harness import run_harness
+from zerg.services.provider_capability_proof import AssertionOutcome
+from zerg.services.provider_capability_proof import EvidenceClass
+
+RequestError = identity_bridge.RequestError
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+
+# The strict harness scenario -> ScenarioResult "data" keys it reports under
+# strict_oracle, per profile.
+_TOOL_CALL_RESULT_STRICT_KEYS = frozenset({"command_execution_completed_with_exact_output", "tool_result_linked_to_final_agent_message"})
+_HELM_INTERRUPT_STRICT_KEYS = frozenset(
+    {
+        "active_managed_turn_observed",
+        "interrupt_terminal_cancelled_or_interrupted",
+        "managed_bridge_cleanup_completed",
+    }
+)
+
+
+def _build_provider_build_ref(request: dict[str, Any], provider_bin: Path, *, output_root: Path) -> ProviderBuildRef:
+    """Derive, validate, and materialize the staged build's ProviderBuildRef.
+
+    `codex_tool_call_result_v1` and `codex_helm_interrupt_v1` both stage the
+    managed Codex package (control-plane/provider_factory/core.py:623-643:
+    `uses_provider_package` is unconditionally True for both), always at
+    entrypoint `bin/codex` — so `source_root`/`entrypoint_relative` are
+    derivable from `provider_bin`'s own path, not free-floating unknowns. The
+    derivation is validated, not trusted:
+    `codex_helm_interrupt._package_identity` already checks the exact managed
+    Codex package member set and raises if the layout doesn't match.
+
+    Uses a run-scoped store under `output_root` — this is a per-run integrity
+    check, not participation in control-plane's separate, already-working
+    persistent build-store ingestion pipeline.
+    """
+    granularity = request["expected_provider_build_granularity"]
+    if granularity != "full_installed_tree":
+        raise RequestError(f"provider_harness_qualification only supports full_installed_tree staged builds, got {granularity!r}")
+    source_root = provider_bin.parent.parent
+    codex_helm_interrupt._package_identity(str(source_root), provider_bin)  # noqa: SLF001
+    store_root = output_root / "provider-build-store"
+    build_ref = materialize_staged_provider_build(
+        provider="codex",
+        version=request["expected_provider_version"],
+        source_root=source_root,
+        entrypoint_relative="bin/codex",
+        store_root=store_root,
+        closure_granularity="full_installed_tree",
+    )
+    expected_identity = request["expected_provider_build_identity"]
+    if expected_identity != f"sha256:{build_ref.closure_digest}":
+        raise RequestError("staged build closure digest does not match expected_provider_build_identity")
+    return build_ref
+
+
+def _scenario_result(harness_payload: dict[str, Any], *, provider: str, scenario: str) -> dict[str, Any]:
+    matches = [
+        result for result in harness_payload.get("results", []) if result.get("provider") == provider and result.get("scenario") == scenario
+    ]
+    if len(matches) != 1:
+        raise RequestError(f"expected exactly one {provider}/{scenario} harness result, got {len(matches)}")
+    return matches[0]
+
+
+def _reported_version(probe_result: dict[str, Any], expected_version: str) -> tuple[AssertionOutcome, str]:
+    if probe_result.get("status") != "pass":
+        return AssertionOutcome.INFRASTRUCTURE_ERROR, "unreported"
+    version_text = str((probe_result.get("data") or {}).get("version") or "")
+    match = identity_bridge._VERSION_LINE.fullmatch(version_text.strip())  # noqa: SLF001
+    if match is None:
+        return AssertionOutcome.INFRASTRUCTURE_ERROR, "unreported"
+    reported = match.group("version")
+    outcome = AssertionOutcome.PASS if reported == expected_version else AssertionOutcome.SEMANTIC_FAIL
+    return outcome, reported
+
+
+def _strict_outcomes(strict_result: dict[str, Any], *, required_keys: frozenset[str]) -> dict[str, AssertionOutcome]:
+    """Read a scenario's `data.strict_oracle` map, failing closed rather than
+    inventing an outcome for a scenario that never actually ran the strict
+    check (e.g. blocked on missing credentials)."""
+    strict_oracle = (strict_result.get("data") or {}).get("strict_oracle")
+    if strict_result.get("status") not in {"pass", "fail"} or not isinstance(strict_oracle, dict):
+        # "unsupported_gap" (e.g. codex_tool_call_result_strict without
+        # CODEX_API_KEY) and "blocked" (e.g. interrupt_cancel's own strict-lane
+        # preflight, docs/specs/provider-factory-coherence.md's "Closing the
+        # observation gap") both mean the scenario declined to run the strict
+        # check at all, not that it ran and failed -- both map to BLOCKED.
+        # Anything else (an actual scenario failure/crash without a
+        # strict_oracle) is INFRASTRUCTURE_ERROR.
+        fallback = (
+            AssertionOutcome.BLOCKED
+            if strict_result.get("status") in {"unsupported_gap", "blocked"}
+            else AssertionOutcome.INFRASTRUCTURE_ERROR
+        )
+        return dict.fromkeys(required_keys, fallback)
+    if set(strict_oracle) != required_keys:
+        raise RequestError(f"harness strict_oracle is missing required keys: {sorted(required_keys - set(strict_oracle))}")
+    return {key: AssertionOutcome(value) for key, value in strict_oracle.items()}
+
+
+def run_codex_tool_call_result(request_path: Path, output_root: Path) -> dict[str, Any]:
+    request = codex_tool_call_result._load_request(request_path)  # noqa: SLF001
+    provider_bin, pre_execution_identity, runner_sha = identity_bridge._preflight(  # noqa: SLF001
+        request, output_root, _REPO_ROOT
+    )
+    generated_at = identity_bridge._now()  # noqa: SLF001
+
+    try:
+        build_ref = _build_provider_build_ref(request, provider_bin, output_root=output_root)
+    except RequestError as exc:
+        outcomes = dict.fromkeys(codex_tool_call_result.ASSERTIONS, AssertionOutcome.BLOCKED)
+        return codex_tool_call_result.emit_proof_bundle(
+            request=request,
+            output_root=output_root,
+            executable_identity=pre_execution_identity,
+            runner_sha=runner_sha,
+            generated_at=generated_at,
+            provider_version="unreported",
+            outcomes=outcomes,
+            execution={"status": "blocked", "reason": "provider_build_ref_invalid", "error": str(exc)},
+            observation={"provider_bin": str(provider_bin), "blocked_reason": str(exc)},
+            evidence_class=EvidenceClass.LIVE_NO_TOKEN,
+        )
+
+    harness_payload = run_harness(
+        HarnessOptions(
+            providers=("codex",),
+            scenarios=("probe_identity", "codex_tool_call_result_strict"),
+            evidence_root=output_root / "harness-evidence",
+            provider_bins={"codex": provider_bin},
+            provider_builds={"codex": build_ref},
+        )
+    )
+    probe_result = _scenario_result(harness_payload, provider="codex", scenario="probe_identity")
+    strict_result = _scenario_result(harness_payload, provider="codex", scenario="codex_tool_call_result_strict")
+
+    post_execution_identity = identity_bridge._sha256_file(  # noqa: SLF001
+        provider_bin
+    )
+    identity_outcome = AssertionOutcome.PASS if post_execution_identity == pre_execution_identity else AssertionOutcome.INFRASTRUCTURE_ERROR
+    version_outcome, reported_version = _reported_version(probe_result, request["expected_provider_version"])
+    strict_outcomes = _strict_outcomes(strict_result, required_keys=_TOOL_CALL_RESULT_STRICT_KEYS)
+
+    outcomes = {
+        "exact_executable_identity_observed": identity_outcome,
+        "reported_version_matches_expected": version_outcome,
+        **strict_outcomes,
+    }
+    ran_strict_check = strict_result.get("status") in {"pass", "fail"}
+    evidence_class = EvidenceClass.LIVE_TOKEN if ran_strict_check else EvidenceClass.LIVE_NO_TOKEN
+    execution_status = "completed" if AssertionOutcome.INFRASTRUCTURE_ERROR not in outcomes.values() else "infrastructure_error"
+
+    observation = {
+        "provider_bin": str(provider_bin),
+        "pre_execution_identity": pre_execution_identity,
+        "post_execution_identity": post_execution_identity,
+        "provider_build": build_ref.to_evidence(),
+        "probe_identity": probe_result,
+        "codex_tool_call_result_strict": strict_result,
+    }
+    return codex_tool_call_result.emit_proof_bundle(
+        request=request,
+        output_root=output_root,
+        executable_identity=pre_execution_identity,
+        runner_sha=runner_sha,
+        generated_at=generated_at,
+        provider_version=reported_version,
+        outcomes=outcomes,
+        execution={"status": execution_status},
+        observation=observation,
+        evidence_class=evidence_class,
+    )
+
+
+def run_codex_helm_interrupt(request_path: Path, output_root: Path) -> dict[str, Any]:
+    request = codex_helm_interrupt._load_request(request_path)  # noqa: SLF001
+    provider_bin, pre_execution_identity, runner_sha = identity_bridge._preflight(  # noqa: SLF001
+        request, output_root, _REPO_ROOT
+    )
+
+    try:
+        build_ref = _build_provider_build_ref(request, provider_bin, output_root=output_root)
+    except RequestError as exc:
+        outcomes = dict.fromkeys(codex_helm_interrupt.ASSERTIONS, AssertionOutcome.BLOCKED)
+        return codex_helm_interrupt.emit_proof_bundle(
+            request=request,
+            output_root=output_root,
+            provider_identity=pre_execution_identity,
+            provider_version="unreported",
+            engine_identity=None,
+            runner_sha=runner_sha,
+            outcomes=outcomes,
+            evidence_class=EvidenceClass.LIVE_NO_TOKEN,
+            execution={"status": "blocked", "reason": "provider_build_ref_invalid", "error": str(exc)},
+            observation={"provider_bin": str(provider_bin), "blocked_reason": str(exc)},
+        )
+
+    harness_payload = run_harness(
+        HarnessOptions(
+            providers=("codex",),
+            scenarios=("probe_identity", "interrupt_cancel"),
+            evidence_root=output_root / "harness-evidence",
+            provider_bins={"codex": provider_bin},
+            provider_builds={"codex": build_ref},
+        )
+    )
+    probe_result = _scenario_result(harness_payload, provider="codex", scenario="probe_identity")
+    interrupt_result = _scenario_result(harness_payload, provider="codex", scenario="interrupt_cancel")
+
+    post_execution_identity = identity_bridge._sha256_file(  # noqa: SLF001
+        provider_bin
+    )
+    identity_outcome = AssertionOutcome.PASS if post_execution_identity == pre_execution_identity else AssertionOutcome.INFRASTRUCTURE_ERROR
+    version_outcome, reported_version = _reported_version(probe_result, request["expected_provider_version"])
+    interrupt_data = interrupt_result.get("data") or {}
+    # interrupt_cancel's own two-stage preflight (docs/specs/provider-factory-coherence.md,
+    # "Closing the observation gap") can legitimately end this scenario in a
+    # BLOCKED status (strict-lane inputs missing) or the hermetic dispatch
+    # fallback (bridge credentials missing) without ever reaching the strict
+    # oracle at all -- both must fail closed here, not be treated as "pass."
+    strict_outcomes = _strict_outcomes(interrupt_result, required_keys=_HELM_INTERRUPT_STRICT_KEYS)
+    engine_identity = interrupt_data.get("engine_identity")
+
+    outcomes = {
+        "active_managed_turn_observed": strict_outcomes["active_managed_turn_observed"],
+        "interrupt_terminal_cancelled_or_interrupted": strict_outcomes["interrupt_terminal_cancelled_or_interrupted"],
+        "managed_bridge_cleanup_completed": strict_outcomes["managed_bridge_cleanup_completed"],
+    }
+    # identity_outcome/version_outcome inform evidence_class/execution_status
+    # below but codex_helm_interrupt.ASSERTIONS does not include them as
+    # separate assertion ids (see codex_helm_interrupt.py:31-35) -- unlike
+    # codex_tool_call_result, this profile only judges the three interrupt
+    # outcomes.
+    ran_strict_check = interrupt_data.get("strict_oracle") is not None
+    evidence_class = EvidenceClass.LIVE_TOKEN if ran_strict_check else EvidenceClass.LIVE_NO_TOKEN
+    infra_error = (
+        identity_outcome != AssertionOutcome.PASS
+        or version_outcome == AssertionOutcome.INFRASTRUCTURE_ERROR
+        or AssertionOutcome.INFRASTRUCTURE_ERROR in outcomes.values()
+        or (ran_strict_check and engine_identity is None)
+    )
+    if infra_error:
+        outcomes = dict.fromkeys(codex_helm_interrupt.ASSERTIONS, AssertionOutcome.INFRASTRUCTURE_ERROR)
+    execution_status = "infrastructure_error" if infra_error else "completed"
+
+    observation = {
+        "provider_bin": str(provider_bin),
+        "pre_execution_identity": pre_execution_identity,
+        "post_execution_identity": post_execution_identity,
+        "provider_build": build_ref.to_evidence(),
+        "probe_identity": probe_result,
+        "interrupt_cancel": interrupt_result,
+        "reported_version": reported_version,
+    }
+    return codex_helm_interrupt.emit_proof_bundle(
+        request=request,
+        output_root=output_root,
+        provider_identity=pre_execution_identity,
+        provider_version=reported_version,
+        engine_identity=engine_identity,
+        runner_sha=runner_sha,
+        outcomes=outcomes,
+        evidence_class=evidence_class,
+        execution={"status": execution_status},
+        observation=observation,
+    )
+
+
+# Deliberately exactly these two (provider, profile) pairs — this is not a
+# general harness bridge. See module docstring and
+# docs/specs/provider-factory-coherence.md, "The bridge/dispatcher design".
+_PROFILES = {
+    ("codex", codex_tool_call_result.PROFILE): run_codex_tool_call_result,
+    ("codex", codex_helm_interrupt.PROFILE): run_codex_helm_interrupt,
+}
+
+
+def _profile_key(request_path: Path) -> tuple[str, str]:
+    try:
+        payload: Any = json.loads(request_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RequestError(f"invalid request JSON: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise RequestError("request must be an object")
+    provider = payload.get("provider")
+    profile = payload.get("profile")
+    if not isinstance(provider, str) or not isinstance(profile, str):
+        raise RequestError("provider and profile must be strings")
+    return provider, profile
+
+
+def run(request_path: Path, output_root: Path) -> dict[str, Any]:
+    key = _profile_key(request_path)
+    runner = _PROFILES.get(key)
+    if runner is None:
+        raise RequestError("unsupported provider/profile for the harness bridge")
+    return runner(request_path, output_root)
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--request", required=True, type=Path)
+    parser.add_argument("--output-root", required=True, type=Path)
+    parser.add_argument("--json", action="store_true")
+    args = parser.parse_args(argv)
+    try:
+        result = run(args.request, args.output_root)
+    except RequestError as exc:
+        if args.json:
+            print(json.dumps({"valid": False, "error": str(exc)}, sort_keys=True))
+        else:
+            print(str(exc), file=sys.stderr)
+        return 2
+    if args.json:
+        print(json.dumps(result, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

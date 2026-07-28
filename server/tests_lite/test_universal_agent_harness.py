@@ -3259,8 +3259,8 @@ def test_codex_tool_call_result_strict_passes_with_exact_command_and_linkage(tmp
     )
     result = payload["results"][0]
     assert result["status"] == "pass"
-    assert result["data"]["command_execution_completed_with_exact_output"] == "pass"
-    assert result["data"]["tool_result_linked_to_final_agent_message"] == "pass"
+    assert result["data"]["strict_oracle"]["command_execution_completed_with_exact_output"] == "pass"
+    assert result["data"]["strict_oracle"]["tool_result_linked_to_final_agent_message"] == "pass"
 
 
 def test_codex_tool_call_result_strict_fails_on_command_mismatch(tmp_path: Path, monkeypatch) -> None:
