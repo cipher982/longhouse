@@ -20,16 +20,40 @@ vocabulary and `plan_run`'s design. Not deployed to clifford (Phase 1 is
 planning-model code with no runtime hookup; nothing about current execution
 changed).
 
-Phase 2 step 1 shipped 2026-07-28 (longhouse `2eeacfc87`): the versioned
-run-evidence index (`server/zerg/qa/run_evidence_index.py`) and a pure oracle
-extracted from every one of the 10 release-lane `_PROFILES`, each verified to
-preserve its current executor's behavior exactly (898-test qa/provider suite
-unchanged). Not deployed to clifford — pure refactor, no behavior change, no
-redeploy needed. Steps 2-5 (multi-profile `ProviderLane`, shadow-dual-write,
-staged-build-authoritative harness launch under `QualificationSandbox`,
-shadow-compare, retire duplicate execution + the env-var selector) not
-started. Revised pacing per David: this system has zero users, so there is no
-elapsed-time gate anywhere in this phase — see "The shadow gate" below.
+Phase 2 in progress, three pieces shipped 2026-07-28, none deployed to
+clifford (all pure refactors / additive-only, no live behavior change, no
+redeploy needed):
+
+- **Step 1** (longhouse `2eeacfc87`): the versioned run-evidence index
+  (`server/zerg/qa/run_evidence_index.py`) and a pure oracle extracted from
+  every one of the 10 release-lane `_PROFILES`, each verified to preserve its
+  current executor's behavior exactly (898-test qa/provider suite unchanged).
+- **Step 2, prerequisite** (control-plane `67251ff`, fixed `8ceb4c3`):
+  `run_multi_profile_tick` lets one provider carry multiple qualification
+  profiles in one tick, purely additive alongside the unchanged single-profile
+  `run_tick`/`run_codex_tick`. Hatch Sol review of the first draft caught a
+  real cursor-coordination bug (a later profile's success could silently
+  advance the shared cursor past a release whose earlier profile's evidence
+  was rejected, permanently skipping its retry) — fixed with a new
+  `FactoryState.advance_cursor()` and a `cursor_advance_eligible` signal, with
+  a regression test for the exact scenario.
+- **Step 3, bounded slice** (longhouse `882d91beb`), scoped per Sol's explicit
+  recommendation: `run_harness()` now derives `provider_bins` from
+  `provider_builds`' own entrypoints when staged (an ambient/PATH binary
+  cannot win by construction) and calls `verify_provider_builds()` itself,
+  before and after execution, rather than relying on external callers to
+  remember. Two tests prove both properties directly.
+
+**Explicitly not started**, and multi-session scope per Sol: control-plane
+harness process launching, full-column `QualificationSandbox` policy,
+port/process lifecycle, intervention production, run-evidence-index
+production (the schema exists; nothing writes one yet), oracle invocation
+over that index, shadow-compare, and retiring the duplicate launch-and-collect
+code + the env-var selector. Revised pacing per David: this system has zero
+users, so there is no elapsed-time gate anywhere in this phase — see "The
+shadow gate" below — but the remaining work is real engineering depth, not
+waiting, and half-wiring it would create a third execution path instead of
+convergence.
 
 Two rounds of independent review (Hatch Fable, Hatch Codex Sol, Hatch
 OpenRouter Kimi K3) have corrected this document eleven times. Corrections are
