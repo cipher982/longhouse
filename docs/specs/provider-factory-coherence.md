@@ -84,20 +84,43 @@ NOT deployed to clifford:
    below has actually run — "code-complete but not deployed" is true only
    because deployment is a separate, still-unperformed action, not because
    the code checks anything at runtime.
-3. Equivalence tests between legacy and harness finalization paths — not yet
-   written (item 3 of the design, below).
+3. Equivalence tests, partial (longhouse `852456782`, `9d424127d`): one test
+   runs `codex_tool_call_result.run()` (legacy, inline subprocess) and
+   `provider_harness_qualification.run_codex_tool_call_result()` (harness,
+   shared `run_codex_real_tool_command()`) against the identical fake codex
+   package with `CODEX_MANAGED_PACKAGE_ROOT` set exactly as control-plane
+   sets it in production for this profile, and asserts identical outcomes —
+   this genuinely exercises two different observation-producing code paths,
+   not a tautology, since only the pure oracle and the finalizer are shared.
+   Writing this test surfaced a real, previously undetected bug in the
+   bridge (not yet deployed anywhere, so no live impact): when bridge
+   credentials are missing, `interrupt_cancel`'s Stage 1 falls back to a
+   hermetic-only dispatch proof reporting `status="pass"/"fail"` with no
+   `strict_oracle` key at all — `_strict_outcomes()`'s status allowlist
+   didn't recognize this shape and misclassified it as
+   `INFRASTRUCTURE_ERROR` instead of `BLOCKED`, diverging from the legacy
+   path's own credentials-missing handling. Fixed by simplifying
+   `_strict_outcomes()` to key off `strict_oracle`'s presence alone; a
+   regression test reproduces the exact hermetic-fallback payload shape.
+   **Not yet written:** the equivalent test for `codex_helm_interrupt_v1`
+   (harder — needs a live/managed engine bootstrap that's hermetically fake
+   only via `run_harness` mocking today, not a real end-to-end run like
+   `codex_tool_call_result_v1`'s), and equivalence at the finalizer/manifest
+   level (both paths already share `emit_proof_bundle()`, so this would
+   mostly test serialization, but Phase 2's own definition of done still
+   names it).
 
 **Explicitly not started**, and multi-session scope per Sol: control-plane
 harness process launching, full-column `QualificationSandbox` policy,
 port/process lifecycle, intervention production, run-evidence-index
 production (the schema exists; nothing writes one yet), oracle invocation
 over that index, shadow-compare (the actual comparison run, now that both
-sides are wired), equivalence tests between legacy/harness finalization
-output, and retiring the duplicate launch-and-collect code + the env-var
-selector. Revised pacing per David: this system has zero users, so there is
-no elapsed-time gate anywhere in this phase — see "The shadow gate" below —
-but the remaining work is real engineering depth, not waiting, and
-half-wiring it would create a third execution path instead of convergence.
+sides are wired), the `codex_helm_interrupt_v1` equivalence test, and
+retiring the duplicate launch-and-collect code + the env-var selector.
+Revised pacing per David: this system has zero users, so there is no
+elapsed-time gate anywhere in this phase — see "The shadow gate" below — but
+the remaining work is real engineering depth, not waiting, and half-wiring
+it would create a third execution path instead of convergence.
 
 Two rounds of independent review (Hatch Fable, Hatch Codex Sol, Hatch
 OpenRouter Kimi K3) have corrected this document eleven times. Corrections are
