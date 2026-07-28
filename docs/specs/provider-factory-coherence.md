@@ -780,15 +780,41 @@ separate, already-working persistent build-store ingestion pipeline
 (`ingest_provider_build` / `scripts/qa/provider-build-store.py`); conflating
 the two would be scope creep past what step 2 needs.
 
-Still to do for step 2: write the two `run()` functions
-(`codex_tool_call_result_v1` → `codex_tool_call_result_strict` scenario,
-`codex_helm_interrupt_v1` → `interrupt_cancel`'s strict path) that load the
-request, derive+validate+materialize the `ProviderBuildRef` as above, call
-`run_harness()` with `providers=("codex",)`, `provider_builds={"codex": ref}`,
-and exactly one scenario, require exactly one matching `ScenarioResult` with
-a complete `strict_oracle` field, recheck post-execution identity, and call
-`emit_proof_bundle()`. Then step 3 (control-plane dispatch map) and shadow
-comparison, per the design above.
+**One more resolved gap, found while drafting the actual `run()` bodies**: the
+two harness scenarios only produce *some* of each profile's `ASSERTIONS`.
+`codex_tool_call_result_strict`'s payload carries
+`command_execution_completed_with_exact_output` and
+`tool_result_linked_to_final_agent_message`, but not
+`exact_executable_identity_observed` (the bridge's own preflight already
+computes this — pre/post hash comparison, same as the release lane) or
+`reported_version_matches_expected` (nothing in the strict scenario probes
+`--version` at all). Fix: call `run_harness()` with **two** scenarios —
+`("probe_identity", "codex_tool_call_result_strict")` — and read
+`probe_identity`'s result `data["version"]` (raw `--version` stdout),
+parsed through `identity_bridge._VERSION_LINE` and compared against
+`request["expected_provider_version"]`, for the fourth assertion.
+`codex_helm_interrupt`'s bridge needs the same combination:
+`("probe_identity", "interrupt_cancel")`, reading `interrupt_cancel`'s
+already-shipped `engine_identity`/`strict_oracle` fields plus
+`probe_identity`'s version for `codex_helm_interrupt.ASSERTIONS`'
+`reported_version_matches_expected` (`_required_environment`'s missing-input
+BLOCKED path and the bridge credentials preflight both already exist inside
+`_run_codex_interrupt_cancel` and will surface as `interrupt_cancel`'s own
+`status`/`failure_code`, which the bridge must check before trusting
+`strict_oracle` is present at all).
+
+Still to do for step 2, concretely: write the two `run()` functions with this
+two-scenario combination, derive+validate+materialize the `ProviderBuildRef`
+as above, require exactly one matching `ScenarioResult` per scenario name,
+fail closed (not silently skip) if either is missing or `strict_oracle` is
+incomplete, recheck post-execution identity, and call `emit_proof_bundle()`
+with the assembled four-assertion outcome map. Then tests (unit tests against
+a stubbed `run_harness`, not a live Codex run), step 3 (control-plane
+dispatch map), and shadow comparison, per the design above. This is genuinely
+substantial, correctness-critical implementation — the design is now fully
+resolved (nothing left to discover), but writing and testing it carefully is
+its own unit of work, deliberately not rushed into the tail of the session
+that resolved the design.
 
 ### The bridge/dispatcher design (Sol, not yet built)
 
