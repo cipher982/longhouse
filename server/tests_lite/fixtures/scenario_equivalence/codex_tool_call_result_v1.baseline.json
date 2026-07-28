@@ -1,0 +1,11 @@
+{
+  "data": {
+    "assertions": {
+      "command_execution_completed_with_exact_output": "pass",
+      "exact_executable_identity_observed": "pass",
+      "reported_version_matches_expected": "pass",
+      "tool_result_linked_to_final_agent_message": "pass"
+    }
+  },
+  "status": "completed"
+}

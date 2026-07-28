@@ -280,7 +280,19 @@ def run_codex_helm_interrupt(request_path: Path, output_root: Path) -> dict[str,
     )
     if infra_error:
         outcomes = dict.fromkeys(codex_helm_interrupt.ASSERTIONS, AssertionOutcome.INFRASTRUCTURE_ERROR)
-    execution_status = "infrastructure_error" if infra_error else "completed"
+        execution_status = "infrastructure_error"
+    elif all(outcome == AssertionOutcome.BLOCKED for outcome in outcomes.values()):
+        # Matches the legacy release lane's own convention
+        # (codex_helm_interrupt.run(): execution={"status": "blocked", ...}
+        # when _required_environment() reports missing inputs) -- found via
+        # the Phase 3 equivalence oracle (scenario_equivalence.py) comparing
+        # real captures of both paths: this bridge reported "completed" for
+        # a run where the strict check never attempted anything at all,
+        # which would mislead a dashboard/alert distinguishing "ran, proved
+        # nothing" from "didn't run."
+        execution_status = "blocked"
+    else:
+        execution_status = "completed"
 
     observation = {
         "provider_bin": str(provider_bin),

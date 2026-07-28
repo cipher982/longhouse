@@ -1,0 +1,10 @@
+{
+  "data": {
+    "assertions": {
+      "active_managed_turn_observed": "blocked",
+      "interrupt_terminal_cancelled_or_interrupted": "blocked",
+      "managed_bridge_cleanup_completed": "blocked"
+    }
+  },
+  "status": "blocked"
+}
