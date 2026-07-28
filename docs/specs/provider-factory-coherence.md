@@ -20,9 +20,9 @@ vocabulary and `plan_run`'s design. Not deployed to clifford (Phase 1 is
 planning-model code with no runtime hookup; nothing about current execution
 changed).
 
-Phase 2 in progress, three pieces shipped 2026-07-28, none deployed to
-clifford (all pure refactors / additive-only, no live behavior change, no
-redeploy needed):
+Phase 2 in progress, four pieces shipped 2026-07-28, none deployed to
+clifford (pure refactors / additive-only right up until the dispatch map,
+which is code-complete but deliberately not deployed — see below):
 
 - **Step 1** (longhouse `2eeacfc87`): the versioned run-evidence index
   (`server/zerg/qa/run_evidence_index.py`) and a pure oracle extracted from
@@ -44,16 +44,60 @@ redeploy needed):
   before and after execution, rather than relying on external callers to
   remember. Two tests prove both properties directly.
 
+Bridge/dispatcher design (below) fully landed 2026-07-28, code-complete and
+NOT deployed to clifford:
+
+1. Finalizer promotion, harness scenario, and the new
+   `scripts/qa/provider-harness-qualification.py` CLI (longhouse `882d91beb`
+   and prior Step 3 commits) — `codex_tool_call_result.emit_proof_bundle()`
+   and `codex_helm_interrupt.emit_proof_bundle()` are the shared finalizers;
+   `provider_harness_qualification.py` builds a real `ProviderBuildRef`,
+   drives `run_harness()`, and reuses them. Two real end-to-end bugs were
+   caught by testing against a scripted fake codex binary (not mocks): the
+   `codex_tool_call_result_strict` scenario payload wasn't nested under
+   `strict_oracle` like `interrupt_cancel`'s was, and the bridge's
+   `_strict_outcomes()` reader didn't recognize `interrupt_cancel`'s own
+   `"blocked"` status. Both fixed; regression tests added.
+2. **Control-plane dispatch map** (control-plane `9412d9f`):
+   `_qualification_bridge_script(provider, profile)` in `core.py` routes
+   `codex_tool_call_result_v1`/`codex_helm_interrupt_v1` to
+   `provider-harness-qualification.py` and every other profile to
+   `provider-qualification.py` unchanged; rejects a harness profile paired
+   with a non-codex provider. Wired into both `_run_v2_bridge`'s argv and
+   `binary_factory.py`'s parallel caller. Fixing this also exposed a real
+   correctness gap in `_longhouse_identity`: it unconditionally checksummed
+   `provider-qualification.py` into the manifest regardless of which script
+   the profile actually launches — now it checksums whichever script
+   `_qualification_bridge_script` resolves, so the manifest's recorded
+   runner provenance matches the runner that actually ran. Tests assert the
+   exact launched path for both strict profiles and one ordinary profile
+   (`codex_release_identity_v1`), per Sol's explicit ask. 510/510
+   control-plane tests pass.
+
+   **This dispatch is unconditional, not env-gated** — the only reason it is
+   inert today is that nothing has redeployed control-plane to clifford
+   since it landed. Clifford's live `.env` already sets
+   `PROVIDER_FACTORY_QUALIFICATION_PROFILE=codex_tool_call_result_v1`
+   (Phase 0), so deploying this commit to clifford would flip that lane's
+   live script immediately, not gradually. Do not run
+   `deploy-provider-factory.sh` for this change until the shadow comparison
+   below has actually run — "code-complete but not deployed" is true only
+   because deployment is a separate, still-unperformed action, not because
+   the code checks anything at runtime.
+3. Equivalence tests between legacy and harness finalization paths — not yet
+   written (item 3 of the design, below).
+
 **Explicitly not started**, and multi-session scope per Sol: control-plane
 harness process launching, full-column `QualificationSandbox` policy,
 port/process lifecycle, intervention production, run-evidence-index
 production (the schema exists; nothing writes one yet), oracle invocation
-over that index, shadow-compare, and retiring the duplicate launch-and-collect
-code + the env-var selector. Revised pacing per David: this system has zero
-users, so there is no elapsed-time gate anywhere in this phase — see "The
-shadow gate" below — but the remaining work is real engineering depth, not
-waiting, and half-wiring it would create a third execution path instead of
-convergence.
+over that index, shadow-compare (the actual comparison run, now that both
+sides are wired), equivalence tests between legacy/harness finalization
+output, and retiring the duplicate launch-and-collect code + the env-var
+selector. Revised pacing per David: this system has zero users, so there is
+no elapsed-time gate anywhere in this phase — see "The shadow gate" below —
+but the remaining work is real engineering depth, not waiting, and
+half-wiring it would create a third execution path instead of convergence.
 
 Two rounds of independent review (Hatch Fable, Hatch Codex Sol, Hatch
 OpenRouter Kimi K3) have corrected this document eleven times. Corrections are
@@ -816,7 +860,7 @@ resolved (nothing left to discover), but writing and testing it carefully is
 its own unit of work, deliberately not rushed into the tail of the session
 that resolved the design.
 
-### The bridge/dispatcher design (Sol, not yet built)
+### The bridge/dispatcher design (Sol; all three pieces landed 2026-07-28)
 
 Third Sol consult for this section. Three decisions:
 
@@ -854,12 +898,17 @@ Third Sol consult for this section. Three decisions:
    through the legacy and harness finalization paths must produce identical
    records, byte-for-byte except explicitly variable evidence/timestamps.
 
-Sequencing for whoever builds this: finalizer promotion first (pure refactor
-of already-tested code, lowest risk), then the new CLI script (new code,
-testable standalone against constructed fixtures, no control-plane change),
-then the control-plane dispatch map last (the only piece that touches what's
-actually deployed) — shadow-compared before anything currently running is
-retired, per the shadow gate above.
+Sequencing followed exactly as specced: finalizer promotion first (pure
+refactor of already-tested code, lowest risk, longhouse), then the new CLI
+script (new code, testable standalone against constructed fixtures, no
+control-plane change, longhouse `882d91beb`), then the control-plane dispatch
+map last (the only piece that touches what's actually deployed, control-plane
+`9412d9f`). All three are code-complete and tested. What has NOT happened:
+the map has not been deployed to clifford, and item 3's equivalence tests
+(legacy vs. harness finalization output, byte-for-byte except explicitly
+variable fields) have not been written — both are required before the
+duplicate launch-and-collect code or the env-var selector can be retired, per
+the shadow gate above.
 
 ### Phase 3 — equivalence oracle, then split the adapter
 
