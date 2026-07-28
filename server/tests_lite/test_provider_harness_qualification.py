@@ -378,3 +378,56 @@ def test_helm_interrupt_blocked_fails_closed(tmp_path: Path, monkeypatch) -> Non
     bundle = json.loads(Path(result["proof_bundle"]).read_text(encoding="utf-8"))
     assert set(bundle["coverage_manifest"]["outcomes"].values()) == {"blocked"}
     assert bundle["coverage_manifest"]["evidence_class"] == "live_no_token"
+
+
+def test_helm_interrupt_hermetic_dispatch_fallback_is_blocked_not_infrastructure_error(tmp_path: Path, monkeypatch) -> None:
+    """Regression test for a real bug found while writing the bridge/dispatcher
+    design's equivalence tests (docs/specs/provider-factory-coherence.md).
+    When bridge credentials (CODEX_API_URL/CODEX_AGENTS_TOKEN) are missing,
+    interrupt_cancel's Stage 1 falls back to
+    _run_codex_interrupt_dispatch_proof (universal_agent_harness.py:4237) --
+    a hermetic-only dispatch proof that legitimately reports status="pass"
+    (the hermetic check itself succeeded) with no strict_oracle key at all
+    (the live/strict check was never attempted). _strict_outcomes() must
+    still classify this as BLOCKED, matching the legacy release-lane path's
+    own credentials-missing handling -- not INFRASTRUCTURE_ERROR, which
+    would misrepresent "the live check never ran" as "something crashed."
+    """
+    from zerg.qa import universal_agent_harness as uah
+
+    package_root, binary, identity = _codex_package(tmp_path, behavior="pass")
+    build_identity = f"sha256:{_closure_digest(package_root)}"
+    request = _request(
+        tmp_path,
+        profile=codex_helm_interrupt.PROFILE,
+        binary=binary,
+        identity=identity,
+        build_identity=build_identity,
+    )
+
+    def fake_run_harness(options: uah.HarnessOptions):
+        return {
+            "results": [
+                {"provider": "codex", "scenario": "probe_identity", "status": "pass", "data": {"version": "codex-cli 1.2.3"}},
+                {
+                    "provider": "codex",
+                    "scenario": "interrupt_cancel",
+                    "status": "pass",
+                    "data": {
+                        "missing_live_credentials": ["--api-url", "--agents-token"],
+                        "operation_evidence": {
+                            "interrupt": {"status": "pass", "level": "hermetic"},
+                            "live_interrupt_canary": {"status": "blocked", "level": "live_token_required"},
+                        },
+                    },
+                },
+            ]
+        }
+
+    monkeypatch.setattr(bridge, "run_harness", fake_run_harness)
+
+    result = bridge.run(request, tmp_path / "output")
+
+    bundle = json.loads(Path(result["proof_bundle"]).read_text(encoding="utf-8"))
+    assert set(bundle["coverage_manifest"]["outcomes"].values()) == {"blocked"}
+    assert bundle["coverage_manifest"]["evidence_class"] == "live_no_token"

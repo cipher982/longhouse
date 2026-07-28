@@ -113,22 +113,25 @@ def _reported_version(probe_result: dict[str, Any], expected_version: str) -> tu
 def _strict_outcomes(strict_result: dict[str, Any], *, required_keys: frozenset[str]) -> dict[str, AssertionOutcome]:
     """Read a scenario's `data.strict_oracle` map, failing closed rather than
     inventing an outcome for a scenario that never actually ran the strict
-    check (e.g. blocked on missing credentials)."""
+    check.
+
+    A missing/invalid `strict_oracle` always means BLOCKED, regardless of the
+    wrapping `status` -- by construction of both bridged scenarios, it is
+    absent in exactly three cases and none of them mean "crashed":
+    `codex_tool_call_result_strict`'s STATUS_UNSUPPORTED_GAP (no
+    CODEX_API_KEY); `interrupt_cancel`'s own STATUS_BLOCKED (its strict-lane
+    preflight, see "Closing the observation gap"); and `interrupt_cancel`'s
+    Stage 1 hermetic-dispatch-proof fallback (missing bridge credentials,
+    universal_agent_harness.py:_run_codex_interrupt_dispatch_proof), which
+    legitimately reports STATUS_PASS/STATUS_FAIL for the hermetic check it
+    did run while never attempting the strict one at all. Found and fixed as
+    a real bug during the bridge/dispatcher design's equivalence testing:
+    the earlier status-allowlisted version of this function misclassified
+    that last case as INFRASTRUCTURE_ERROR.
+    """
     strict_oracle = (strict_result.get("data") or {}).get("strict_oracle")
-    if strict_result.get("status") not in {"pass", "fail"} or not isinstance(strict_oracle, dict):
-        # "unsupported_gap" (e.g. codex_tool_call_result_strict without
-        # CODEX_API_KEY) and "blocked" (e.g. interrupt_cancel's own strict-lane
-        # preflight, docs/specs/provider-factory-coherence.md's "Closing the
-        # observation gap") both mean the scenario declined to run the strict
-        # check at all, not that it ran and failed -- both map to BLOCKED.
-        # Anything else (an actual scenario failure/crash without a
-        # strict_oracle) is INFRASTRUCTURE_ERROR.
-        fallback = (
-            AssertionOutcome.BLOCKED
-            if strict_result.get("status") in {"unsupported_gap", "blocked"}
-            else AssertionOutcome.INFRASTRUCTURE_ERROR
-        )
-        return dict.fromkeys(required_keys, fallback)
+    if not isinstance(strict_oracle, dict):
+        return dict.fromkeys(required_keys, AssertionOutcome.BLOCKED)
     if set(strict_oracle) != required_keys:
         raise RequestError(f"harness strict_oracle is missing required keys: {sorted(required_keys - set(strict_oracle))}")
     return {key: AssertionOutcome(value) for key, value in strict_oracle.items()}
