@@ -328,6 +328,92 @@ def _run_process_group(
     return subprocess.CompletedProcess(argv, process.returncode, stdout, stderr)
 
 
+def run_codex_real_tool_command(
+    binary: Path,
+    *,
+    api_key: str,
+    timeout: float = TIMEOUT_SECONDS,
+) -> dict[str, Any]:
+    """Launch the exact real-tool test this profile's oracle judges: run
+    `python -c 'import secrets; print(secrets.token_hex(16))'` via the shell
+    tool exactly once, and reply with only its exact output.
+
+    Shared observation-producing half, extracted for the harness's
+    `codex_tool_call_result_strict` scenario (Phase 2, "closing the
+    observation gap" — Hatch Sol's option (c): a codex-only harness scenario
+    that gives `codex_tool_call_result_command_oracle` its real required
+    input, instead of the generic `tool_call_result` scenario's unrelated
+    printf/DONE test). No sandbox or managed-package staging here — that
+    stays specific to the release lane's own `run()`, which qualifies a
+    staged build under stricter provenance requirements than an ambient
+    real-binary harness run needs.
+    """
+    command = f"{shlex.quote(sys.executable)} -c 'import secrets; print(secrets.token_hex(16))'"
+    prompt = (
+        "Use the shell tool exactly once to run exactly this one command: "
+        f"{command}\nThen reply with only the command output, copied exactly."
+    )
+    with tempfile.TemporaryDirectory(prefix="longhouse-codex-tool-call-result-") as raw_runtime:
+        runtime_root = Path(raw_runtime)
+        workspace = runtime_root / "workspace"
+        codex_home = runtime_root / "codex-home"
+        workspace.mkdir()
+        codex_home.mkdir()
+        argv = [
+            str(binary),
+            "exec",
+            "--json",
+            "--ephemeral",
+            "--ignore-user-config",
+            "--ignore-rules",
+            "--skip-git-repo-check",
+            "--sandbox",
+            "workspace-write",
+            "-c",
+            'approval_policy="never"',
+            "--color",
+            "never",
+            "-C",
+            str(workspace),
+            prompt,
+        ]
+        env = {
+            "PATH": os.environ.get("PATH", ""),
+            API_KEY_ENV: api_key,
+            "HOME": str(runtime_root),
+            "CODEX_HOME": str(codex_home),
+        }
+        tool_result: subprocess.CompletedProcess[str] | None = None
+        tool_error: str | None = None
+        tool_timed_out = False
+        tool_stdout = ""
+        tool_stderr = ""
+        try:
+            tool_result = _run_process_group(argv, cwd=workspace, env=env, timeout=timeout)
+        except subprocess.TimeoutExpired as exc:
+            tool_timed_out = True
+            tool_error = "timeout"
+            tool_stdout = exc.stdout if isinstance(exc.stdout, str) else ""
+            tool_stderr = exc.stderr if isinstance(exc.stderr, str) else ""
+        except OSError as exc:
+            tool_error = f"{type(exc).__name__}: {exc}"
+        else:
+            tool_stdout = tool_result.stdout
+            tool_stderr = tool_result.stderr
+    events, invalid_lines = _jsonl_events(tool_stdout)
+    return {
+        "command": command,
+        "prompt": prompt,
+        "events": events,
+        "invalid_lines": invalid_lines,
+        "returncode": tool_result.returncode if tool_result is not None else None,
+        "timed_out": tool_timed_out,
+        "error": tool_error,
+        "stdout": tool_stdout,
+        "stderr": tool_stderr,
+    }
+
+
 def run(request_path: Path, output_root: Path) -> dict[str, Any]:
     request = _load_request(request_path)
     output_root = output_root.expanduser().resolve()

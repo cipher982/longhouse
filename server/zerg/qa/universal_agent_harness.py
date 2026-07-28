@@ -40,6 +40,7 @@ from zerg.services.managed_provider_contracts import contract_for_provider
 from zerg.services.managed_provider_contracts import factory_provider_names
 from zerg.services.provider_action_coverage import derive_provider_action_coverage
 from zerg.services.provider_action_coverage import serialize_provider_action_coverage
+from zerg.services.provider_capability_proof import AssertionOutcome
 from zerg.services.tool_presentation import project_tool_presentation
 from zerg.services.tool_translation_evaluator import evaluate_manifest
 
@@ -126,6 +127,7 @@ SCENARIOS = (
     "interrupt_cancel",
     "tool_call_result_projection",
     "tool_call_result",
+    "codex_tool_call_result_strict",
     "resume_reattach",
     "terminate_cleanup",
     "tail_output",
@@ -8495,6 +8497,113 @@ def run_tool_call_result(adapter: AgentHarnessAdapter, package: EvidencePackage)
     )
 
 
+def codex_tool_call_result_strict(package: EvidencePackage, binary: Path) -> dict[str, Any]:
+    """Codex-only strict tool-call/result scenario.
+
+    Runs the exact test `codex_tool_call_result_v1` (the release-lane
+    profile, server/zerg/qa/codex_tool_call_result.py) judges strictly —
+    exactly one shell-tool command matching a specific expected command,
+    exact output, and exact linkage to the final agent_message. Deliberately
+    separate from the generic `tool_call_result` scenario, which runs a
+    looser printf/DONE test identically across all providers: the two prove
+    different things and converging them would mean weakening the
+    cross-provider smoke test to match one provider's stricter contract, or
+    strengthening it for providers it was never meant to be strict for. See
+    docs/specs/provider-factory-coherence.md, "Closing the observation gap"
+    (Hatch Sol's option (c)).
+    """
+    from zerg.qa.codex_tool_call_result import API_KEY_ENV
+    from zerg.qa.codex_tool_call_result import codex_tool_call_result_command_oracle
+    from zerg.qa.codex_tool_call_result import run_codex_real_tool_command
+
+    api_key = os.environ.get(API_KEY_ENV, "")
+    if not api_key:
+        payload = {
+            "status": STATUS_UNSUPPORTED_GAP,
+            "scenario": "codex_tool_call_result_strict",
+            "failure_code": "codex_api_key_missing",
+            "message": f"{API_KEY_ENV} is required for the strict Codex tool-call-result scenario.",
+        }
+        package.write_json("assertions/codex_tool_call_result_strict.json", payload)
+        return payload
+
+    observation = run_codex_real_tool_command(binary, api_key=api_key)
+    package.write_json(
+        "raw/codex-tool-call-result-strict.json",
+        {key: value for key, value in observation.items() if key != "events"},
+    )
+    infrastructure_error = observation["returncode"] is None or observation["returncode"] != 0
+    if infrastructure_error:
+        command_outcome = AssertionOutcome.INFRASTRUCTURE_ERROR
+        linked_outcome = AssertionOutcome.INFRASTRUCTURE_ERROR
+    else:
+        oracle_result = codex_tool_call_result_command_oracle(
+            observation["events"],
+            expected_command=observation["command"],
+            prompt=observation["prompt"],
+        )
+        command_outcome = oracle_result.command_outcome
+        linked_outcome = oracle_result.linked_outcome
+    passed = command_outcome == AssertionOutcome.PASS and linked_outcome == AssertionOutcome.PASS
+    payload = {
+        "status": STATUS_PASS if passed else STATUS_FAIL,
+        "scenario": "codex_tool_call_result_strict",
+        "command_execution_completed_with_exact_output": command_outcome.value,
+        "tool_result_linked_to_final_agent_message": linked_outcome.value,
+        "timed_out": observation["timed_out"],
+        "error": observation["error"],
+    }
+    if not passed:
+        payload["failure_code"] = (
+            "codex_tool_call_result_strict_timeout"
+            if observation["timed_out"]
+            else "codex_tool_call_result_strict_infrastructure_error"
+            if infrastructure_error
+            else "codex_tool_call_result_strict_semantic_fail"
+        )
+        payload["message"] = "Strict Codex tool-call/result oracle did not pass."
+    package.write_json("assertions/codex_tool_call_result_strict.json", payload)
+    return payload
+
+
+def run_codex_tool_call_result_strict(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
+    adapter.prepare(package)
+    if adapter.config.provider != "codex":
+        payload = {
+            "status": STATUS_NOT_APPLICABLE,
+            "scenario": "codex_tool_call_result_strict",
+            "failure_code": "codex_tool_call_result_strict_provider_not_applicable",
+            "message": "codex_tool_call_result_strict only applies to the Codex provider.",
+        }
+        package.write_json("assertions/codex_tool_call_result_strict.json", payload)
+        adapter.cleanup(package)
+        return scenario_result(
+            provider=adapter.config.provider,
+            scenario="codex_tool_call_result_strict",
+            package=package,
+            payload=payload,
+        )
+
+    binary, binary_error = adapter._require_binary(package, "codex_tool_call_result_strict")  # noqa: SLF001
+    if binary_error is not None:
+        adapter.cleanup(package)
+        return scenario_result(
+            provider=adapter.config.provider,
+            scenario="codex_tool_call_result_strict",
+            package=package,
+            payload=binary_error,
+        )
+
+    payload = codex_tool_call_result_strict(package, binary)
+    adapter.cleanup(package)
+    return scenario_result(
+        provider=adapter.config.provider,
+        scenario="codex_tool_call_result_strict",
+        package=package,
+        payload=payload,
+    )
+
+
 def run_tool_call_result_projection(
     adapter: AgentHarnessAdapter,
     package: EvidencePackage,
@@ -8763,6 +8872,7 @@ SCENARIO_RUNNERS = {
     "interrupt_cancel": run_interrupt_cancel,
     "tool_call_result_projection": run_tool_call_result_projection,
     "tool_call_result": run_tool_call_result,
+    "codex_tool_call_result_strict": run_codex_tool_call_result_strict,
     "resume_reattach": run_resume_reattach,
     "terminate_cleanup": run_terminate_cleanup,
     "tail_output": run_tail_output,

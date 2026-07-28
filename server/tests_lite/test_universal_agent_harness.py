@@ -3059,6 +3059,130 @@ def test_codex_tool_call_result_uses_real_tool_canary(tmp_path: Path, monkeypatc
     assert db_snapshot["timeline"]["matched"] is True
 
 
+def test_codex_tool_call_result_strict_is_not_applicable_for_other_providers(tmp_path: Path) -> None:
+    payload = uah.run_harness(
+        uah.HarnessOptions(
+            providers=("claude",),
+            scenarios=("codex_tool_call_result_strict",),
+            evidence_root=tmp_path / "evidence",
+            provider_bins={"claude": _fake_bins(tmp_path)["claude"]},
+        )
+    )
+    result = payload["results"][0]
+    assert result["status"] == "not_applicable"
+    assert result["failure_code"] == "codex_tool_call_result_strict_provider_not_applicable"
+
+
+def test_codex_tool_call_result_strict_requires_api_key(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("CODEX_API_KEY", raising=False)
+    payload = uah.run_harness(
+        uah.HarnessOptions(
+            providers=("codex",),
+            scenarios=("codex_tool_call_result_strict",),
+            evidence_root=tmp_path / "evidence",
+            provider_bins={"codex": _fake_bins(tmp_path)["codex"]},
+        )
+    )
+    result = payload["results"][0]
+    assert result["status"] == "unsupported_gap"
+    assert result["failure_code"] == "codex_api_key_missing"
+
+
+def _codex_tool_call_events(command: str, output: str) -> list[dict]:
+    return [
+        {
+            "type": "item.completed",
+            "item": {"id": "call-1", "type": "command_execution", "command": command},
+        },
+        {
+            "type": "item.completed",
+            "item": {
+                "id": "call-1",
+                "type": "command_execution",
+                "command": command,
+                "status": "completed",
+                "exit_code": 0,
+                "aggregated_output": f"{output}\n",
+            },
+        },
+        {
+            "type": "item.completed",
+            "item": {"id": "message-1", "type": "agent_message", "text": output},
+        },
+    ]
+
+
+def test_codex_tool_call_result_strict_passes_with_exact_command_and_linkage(tmp_path: Path, monkeypatch) -> None:
+    from zerg.qa import codex_tool_call_result
+
+    monkeypatch.setenv("CODEX_API_KEY", "fixture-key")
+    command = "fixture-command"
+    output = "a" * 32
+
+    def fake_run_codex_real_tool_command(binary, *, api_key, timeout=180):
+        return {
+            "command": command,
+            "prompt": "fixture prompt",
+            "events": _codex_tool_call_events(command, output),
+            "invalid_lines": [],
+            "returncode": 0,
+            "timed_out": False,
+            "error": None,
+            "stdout": "",
+            "stderr": "",
+        }
+
+    monkeypatch.setattr(codex_tool_call_result, "run_codex_real_tool_command", fake_run_codex_real_tool_command)
+    payload = uah.run_harness(
+        uah.HarnessOptions(
+            providers=("codex",),
+            scenarios=("codex_tool_call_result_strict",),
+            evidence_root=tmp_path / "evidence",
+            provider_bins={"codex": _fake_bins(tmp_path)["codex"]},
+        )
+    )
+    result = payload["results"][0]
+    assert result["status"] == "pass"
+    assert result["data"]["command_execution_completed_with_exact_output"] == "pass"
+    assert result["data"]["tool_result_linked_to_final_agent_message"] == "pass"
+
+
+def test_codex_tool_call_result_strict_fails_on_command_mismatch(tmp_path: Path, monkeypatch) -> None:
+    # This is the exact failure mode the generic tool_call_result scenario's
+    # printf/DONE test would trigger if fed straight into this oracle -- the
+    # reason for a separate scenario instead of reusing that observation
+    # (docs/specs/provider-factory-coherence.md, "Closing the observation gap").
+    from zerg.qa import codex_tool_call_result
+
+    monkeypatch.setenv("CODEX_API_KEY", "fixture-key")
+
+    def fake_run_codex_real_tool_command(binary, *, api_key, timeout=180):
+        return {
+            "command": "expected-command",
+            "prompt": "fixture prompt",
+            "events": _codex_tool_call_events("printf 'unrelated\\n'", "unrelated"),
+            "invalid_lines": [],
+            "returncode": 0,
+            "timed_out": False,
+            "error": None,
+            "stdout": "",
+            "stderr": "",
+        }
+
+    monkeypatch.setattr(codex_tool_call_result, "run_codex_real_tool_command", fake_run_codex_real_tool_command)
+    payload = uah.run_harness(
+        uah.HarnessOptions(
+            providers=("codex",),
+            scenarios=("codex_tool_call_result_strict",),
+            evidence_root=tmp_path / "evidence",
+            provider_bins={"codex": _fake_bins(tmp_path)["codex"]},
+        )
+    )
+    result = payload["results"][0]
+    assert result["status"] == "fail"
+    assert result["failure_code"] == "codex_tool_call_result_strict_semantic_fail"
+
+
 def test_opencode_tool_call_result_uses_real_tool_canary(tmp_path: Path, monkeypatch) -> None:
     calls: list[dict[str, object]] = []
 
