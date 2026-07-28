@@ -1,0 +1,1540 @@
+{
+  "rule": "git-tracked .py/.ts/.tsx/.rs files, excluding /generated/ and node_modules, containing an exact quoted literal for two or more distinct provider names from schemas/managed_providers.yml",
+  "provider_names": [
+    "antigravity",
+    "claude",
+    "codex",
+    "cursor",
+    "opencode"
+  ],
+  "file_count": 189,
+  "files": [
+    {
+      "path": "e2e/tests/core/sessions.spec.ts",
+      "providers": [
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "e2e/tests/live/management-state-live.spec.ts",
+      "providers": [
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "engine/src/commands/cmd_ship.rs",
+      "providers": [
+        "antigravity",
+        "claude",
+        "cursor",
+        "opencode"
+      ]
+    },
+    {
+      "path": "engine/src/control_channel.rs",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "cursor",
+        "opencode"
+      ]
+    },
+    {
+      "path": "engine/src/daemon.rs",
+      "providers": [
+        "claude",
+        "codex",
+        "cursor",
+        "opencode"
+      ]
+    },
+    {
+      "path": "engine/src/discovery.rs",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "cursor",
+        "opencode"
+      ]
+    },
+    {
+      "path": "engine/src/heartbeat.rs",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "cursor",
+        "opencode"
+      ]
+    },
+    {
+      "path": "engine/src/longhouse.rs",
+      "providers": [
+        "claude",
+        "codex",
+        "cursor",
+        "opencode"
+      ]
+    },
+    {
+      "path": "engine/src/main.rs",
+      "providers": [
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "engine/src/pipeline/compressor.rs",
+      "providers": [
+        "claude",
+        "codex",
+        "opencode"
+      ]
+    },
+    {
+      "path": "engine/src/pipeline/parser.rs",
+      "providers": [
+        "antigravity",
+        "claude"
+      ]
+    },
+    {
+      "path": "engine/src/process_identity.rs",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "opencode"
+      ]
+    },
+    {
+      "path": "engine/src/scheduler.rs",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "cursor",
+        "opencode"
+      ]
+    },
+    {
+      "path": "engine/src/shipper/mod.rs",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "opencode"
+      ]
+    },
+    {
+      "path": "engine/src/state/file_state.rs",
+      "providers": [
+        "claude",
+        "opencode"
+      ]
+    },
+    {
+      "path": "engine/src/state/pending_source_envelope.rs",
+      "providers": [
+        "claude",
+        "codex",
+        "cursor"
+      ]
+    },
+    {
+      "path": "engine/src/state/session_phase.rs",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "engine/src/state/source_epoch.rs",
+      "providers": [
+        "claude",
+        "codex",
+        "cursor"
+      ]
+    },
+    {
+      "path": "engine/src/state/source_inventory.rs",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "cursor",
+        "opencode"
+      ]
+    },
+    {
+      "path": "engine/src/state/spool.rs",
+      "providers": [
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "engine/src/storage_v2_shipper.rs",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "cursor",
+        "opencode"
+      ]
+    },
+    {
+      "path": "engine/src/turn_claims.rs",
+      "providers": [
+        "codex",
+        "cursor"
+      ]
+    },
+    {
+      "path": "engine/src/unmanaged_bindings.rs",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "opencode"
+      ]
+    },
+    {
+      "path": "engine/tests/adversarial_parser.rs",
+      "providers": [
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "engine/tests/golden_parser_contract.rs",
+      "providers": [
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "labs/startup-continuity/install.py",
+      "providers": [
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "scripts/managed-local/profile_longhouse_hooks.py",
+      "providers": [
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "scripts/ops/hatch_backfill_llm.py",
+      "providers": [
+        "claude",
+        "codex",
+        "cursor",
+        "opencode"
+      ]
+    },
+    {
+      "path": "scripts/ops/managed_profiler/sla_manifest.py",
+      "providers": [
+        "claude",
+        "codex",
+        "opencode"
+      ]
+    },
+    {
+      "path": "scripts/ops/profile-managed-session-propagation.py",
+      "providers": [
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "scripts/qa/check-no-python-device-path.py",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "cursor",
+        "opencode"
+      ]
+    },
+    {
+      "path": "scripts/qa/opencode-console-product-e2e.py",
+      "providers": [
+        "cursor",
+        "opencode"
+      ]
+    },
+    {
+      "path": "scripts/qa/provider-control-e2e-canary.py",
+      "providers": [
+        "antigravity",
+        "claude",
+        "opencode"
+      ]
+    },
+    {
+      "path": "scripts/qa/provider-live-route-e2e.py",
+      "providers": [
+        "antigravity",
+        "claude",
+        "opencode"
+      ]
+    },
+    {
+      "path": "scripts/qa/provider-release-profile-canary.py",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "opencode"
+      ]
+    },
+    {
+      "path": "scripts/qa/provider-release-proof-universal-smoke.py",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "cursor",
+        "opencode"
+      ]
+    },
+    {
+      "path": "scripts/qa/provider-release-proof.py",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "opencode"
+      ]
+    },
+    {
+      "path": "scripts/qa/session-state-fault-matrix.py",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "cursor",
+        "opencode"
+      ]
+    },
+    {
+      "path": "scripts/tests/managed-session-contract.test.py",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "opencode"
+      ]
+    },
+    {
+      "path": "scripts/tests/provider-control-e2e-canary.test.py",
+      "providers": [
+        "antigravity",
+        "claude",
+        "opencode"
+      ]
+    },
+    {
+      "path": "scripts/tests/provider-live-canary.test.py",
+      "providers": [
+        "antigravity",
+        "opencode"
+      ]
+    },
+    {
+      "path": "scripts/tests/provider-live-proof-publish.test.py",
+      "providers": [
+        "claude",
+        "opencode"
+      ]
+    },
+    {
+      "path": "scripts/tests/provider-live-route-e2e.test.py",
+      "providers": [
+        "claude",
+        "opencode"
+      ]
+    },
+    {
+      "path": "scripts/tests/provider-release-profile-canary.test.py",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "opencode"
+      ]
+    },
+    {
+      "path": "scripts/tests/provider-release-proof-baseline.test.py",
+      "providers": [
+        "codex",
+        "opencode"
+      ]
+    },
+    {
+      "path": "scripts/tests/provider-release-proof-coverage.test.py",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "cursor",
+        "opencode"
+      ]
+    },
+    {
+      "path": "scripts/tests/provider-release-proof-make.test.py",
+      "providers": [
+        "codex",
+        "opencode"
+      ]
+    },
+    {
+      "path": "scripts/tests/provider-release-proof-maturity.test.py",
+      "providers": [
+        "claude",
+        "opencode"
+      ]
+    },
+    {
+      "path": "scripts/tests/provider-release-proof.test.py",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "opencode"
+      ]
+    },
+    {
+      "path": "scripts/tests/session-state-deep-health.test.py",
+      "providers": [
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "scripts/ui-fixtures/timelineCardStress.ts",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "server/tests/integration/test_shipper_e2e.py",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "cursor",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/tests_lite/_capability_test_helper.py",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_agents_duplicate_sqlite.py",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_agents_ingest_sqlite.py",
+      "providers": [
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_agents_media.py",
+      "providers": [
+        "codex",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_agents_slow_turns.py",
+      "providers": [
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_agents_source_lines.py",
+      "providers": [
+        "codex",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_agents_storage_v2.py",
+      "providers": [
+        "codex",
+        "cursor"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_apns_notifications.py",
+      "providers": [
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_archive_backlog.py",
+      "providers": [
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_catalog_mode_chat_gaps.py",
+      "providers": [
+        "codex",
+        "cursor"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_catalogd_control_commands.py",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "cursor",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_catalogd_directed_inputs.py",
+      "providers": [
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_catalogd_interactions.py",
+      "providers": [
+        "claude",
+        "codex",
+        "cursor"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_catalogd_launch.py",
+      "providers": [
+        "antigravity",
+        "claude",
+        "cursor"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_cli_server_contract.py",
+      "providers": [
+        "claude",
+        "codex",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_console_turns.py",
+      "providers": [
+        "claude",
+        "codex",
+        "cursor",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_cursor_role_backfill.py",
+      "providers": [
+        "claude",
+        "cursor"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_db_migrations.py",
+      "providers": [
+        "claude",
+        "codex",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_directed_input_envelope.py",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "cursor",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_fleet_wall.py",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_heartbeat_endpoint.py",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "cursor",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_hot_write_backpressure_routes.py",
+      "providers": [
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_ingest_export_roundtrip.py",
+      "providers": [
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_ingest_session_counts.py",
+      "providers": [
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_legacy_corpus_migration.py",
+      "providers": [
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_live_catalog_routing.py",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "cursor",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_live_catalog_timeline.py",
+      "providers": [
+        "claude",
+        "codex",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_live_store_split.py",
+      "providers": [
+        "claude",
+        "codex",
+        "cursor"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_local_runtime_installer.py",
+      "providers": [
+        "antigravity",
+        "codex",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_longhouse_mcp_server.py",
+      "providers": [
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_machines_directory.py",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "cursor"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_managed_control_dispatcher.py",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_managed_local_control.py",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "cursor",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_managed_local_launch.py",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "cursor",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_managed_local_launch_liveness.py",
+      "providers": [
+        "antigravity",
+        "claude",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_managed_local_session_chat.py",
+      "providers": [
+        "claude",
+        "codex",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_managed_local_transport.py",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_managed_provider_capability_decisions.py",
+      "providers": [
+        "claude",
+        "cursor",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_managed_provider_contracts.py",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "cursor",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_managed_session_contracts.py",
+      "providers": [
+        "claude",
+        "codex",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_observability_routes.py",
+      "providers": [
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_permission_gate_routes.py",
+      "providers": [
+        "claude",
+        "codex",
+        "cursor"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_permission_mode_launch.py",
+      "providers": [
+        "claude",
+        "cursor"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_profile_longhouse_hooks_script.py",
+      "providers": [
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_provider_action_coverage.py",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_provider_capability_proof_routes.py",
+      "providers": [
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_provider_live_proof.py",
+      "providers": [
+        "antigravity",
+        "claude",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_provider_live_route_e2e.py",
+      "providers": [
+        "claude",
+        "codex",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_provider_release_identity.py",
+      "providers": [
+        "antigravity",
+        "claude",
+        "cursor",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_provider_release_schedule.py",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_provider_release_status.py",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "cursor",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_provider_semantic_qualification.py",
+      "providers": [
+        "antigravity",
+        "claude",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_provider_support_state.py",
+      "providers": [
+        "claude",
+        "codex",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_rewind_branch_projection.py",
+      "providers": [
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_searchd.py",
+      "providers": [
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_session_archive_bundle_api.py",
+      "providers": [
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_session_capabilities.py",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_session_chat.py",
+      "providers": [
+        "claude",
+        "codex",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_session_input_presentation.py",
+      "providers": [
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_session_inputs_api.py",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_session_inputs_attachments_api.py",
+      "providers": [
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_session_kernel_backfill.py",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_session_kernel_capabilities.py",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_session_kernel_launch_materialization.py",
+      "providers": [
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_session_launch_provenance.py",
+      "providers": [
+        "claude",
+        "codex",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_session_listing_canary_filter.py",
+      "providers": [
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_session_live_previews.py",
+      "providers": [
+        "codex",
+        "cursor",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_session_observation_rebuild.py",
+      "providers": [
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_session_pause_requests.py",
+      "providers": [
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_session_preview.py",
+      "providers": [
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_session_processing_summarize.py",
+      "providers": [
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_session_propagation_sla_manifest.py",
+      "providers": [
+        "claude",
+        "codex",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_session_revision_guards.py",
+      "providers": [
+        "claude",
+        "codex",
+        "cursor",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_session_runtime_display.py",
+      "providers": [
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_session_state_diagnostics.py",
+      "providers": [
+        "claude",
+        "codex",
+        "cursor",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_session_workspace_revision.py",
+      "providers": [
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_ship_unship_roundtrip_e2e.py",
+      "providers": [
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_source_line_roundtrip.py",
+      "providers": [
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_sqlite_migration_guard.py",
+      "providers": [
+        "codex",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_startup_context_api.py",
+      "providers": [
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_storage_v2_archive_bundle.py",
+      "providers": [
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_storage_v2_contracts.py",
+      "providers": [
+        "codex",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_storage_v2_workspace.py",
+      "providers": [
+        "codex",
+        "cursor"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_subagent_thread_ingest.py",
+      "providers": [
+        "claude",
+        "codex",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_telemetry_beacon.py",
+      "providers": [
+        "claude",
+        "codex",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_timeline_api_auth_boundary.py",
+      "providers": [
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_timeline_runtime_overlay.py",
+      "providers": [
+        "claude",
+        "codex",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_timeline_stream.py",
+      "providers": [
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_tool_presentation.py",
+      "providers": [
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_tool_translation_evaluator.py",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "cursor",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_universal_agent_harness.py",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "cursor",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_usage_stats.py",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_workspace_stream.py",
+      "providers": [
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "server/zerg/catalogd/server.py",
+      "providers": [
+        "claude",
+        "cursor"
+      ]
+    },
+    {
+      "path": "server/zerg/catalogd/store.py",
+      "providers": [
+        "claude",
+        "cursor",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/zerg/cli/_launch_ui.py",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "cursor",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/zerg/cli/onboard.py",
+      "providers": [
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "server/zerg/provider_cli_contract.py",
+      "providers": [
+        "claude",
+        "codex",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/zerg/provider_live_proof.py",
+      "providers": [
+        "antigravity",
+        "claude",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/zerg/qa/provider_live_canary.py",
+      "providers": [
+        "antigravity",
+        "claude",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/zerg/qa/provider_qualification.py",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "cursor",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/zerg/qa/universal_agent_harness.py",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "cursor",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/zerg/routers/heartbeat.py",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "cursor",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/zerg/routers/permission_gate.py",
+      "providers": [
+        "claude",
+        "cursor"
+      ]
+    },
+    {
+      "path": "server/zerg/schemas/machines.py",
+      "providers": [
+        "antigravity",
+        "claude",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/zerg/services/agents/automation_backfill.py",
+      "providers": [
+        "claude",
+        "codex",
+        "cursor",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/zerg/services/agents/helpers.py",
+      "providers": [
+        "antigravity",
+        "codex"
+      ]
+    },
+    {
+      "path": "server/zerg/services/agents/store.py",
+      "providers": [
+        "claude",
+        "codex",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/zerg/services/apns_sender.py",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "cursor"
+      ]
+    },
+    {
+      "path": "server/zerg/services/demo_sessions.py",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "cursor",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/zerg/services/directed_input_envelope.py",
+      "providers": [
+        "claude",
+        "codex",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/zerg/services/live_control_catalog.py",
+      "providers": [
+        "claude",
+        "codex",
+        "cursor",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/zerg/services/local_health/constants.py",
+      "providers": [
+        "antigravity",
+        "codex",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/zerg/services/local_health/engine_status.py",
+      "providers": [
+        "codex",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/zerg/services/local_health/process.py",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/zerg/services/local_runtime_installer.py",
+      "providers": [
+        "antigravity",
+        "codex",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/zerg/services/managed_local_launcher.py",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "cursor",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/zerg/services/managed_local_transport.py",
+      "providers": [
+        "codex",
+        "cursor",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/zerg/services/managed_provider_contracts.py",
+      "providers": [
+        "antigravity",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/zerg/services/provider_action_coverage.py",
+      "providers": [
+        "codex",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/zerg/services/session_chat_impl.py",
+      "providers": [
+        "claude",
+        "codex",
+        "cursor"
+      ]
+    },
+    {
+      "path": "server/zerg/services/session_live_previews.py",
+      "providers": [
+        "codex",
+        "cursor",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/zerg/services/session_runtime.py",
+      "providers": [
+        "codex",
+        "cursor",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/zerg/services/session_runtime_display.py",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "server/zerg/services/session_views.py",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/zerg/services/shipper/hooks.py",
+      "providers": [
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "web/src/components/ProviderGlyph.tsx",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "cursor",
+        "opencode"
+      ]
+    },
+    {
+      "path": "web/src/components/__tests__/LaunchSessionModal.test.tsx",
+      "providers": [
+        "codex",
+        "opencode"
+      ]
+    },
+    {
+      "path": "web/src/components/__tests__/SessionChat.test.tsx",
+      "providers": [
+        "claude",
+        "codex",
+        "cursor"
+      ]
+    },
+    {
+      "path": "web/src/components/__tests__/SessionPickerModal.test.tsx",
+      "providers": [
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "web/src/hooks/__tests__/useSessionWorkspace.test.tsx",
+      "providers": [
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "web/src/lib/__tests__/providers.test.ts",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "cursor",
+        "opencode"
+      ]
+    },
+    {
+      "path": "web/src/lib/__tests__/sessionWorkspace.test.ts",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "web/src/lib/providers.ts",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "cursor",
+        "opencode"
+      ]
+    },
+    {
+      "path": "web/src/lib/sessionUtils.tsx",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "web/src/pages/__tests__/ObservabilityPage.test.tsx",
+      "providers": [
+        "claude",
+        "codex",
+        "cursor"
+      ]
+    },
+    {
+      "path": "web/src/pages/__tests__/SessionsPage.test.tsx",
+      "providers": [
+        "claude",
+        "codex"
+      ]
+    }
+  ]
+}
