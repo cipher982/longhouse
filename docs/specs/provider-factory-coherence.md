@@ -1,6 +1,17 @@
 # Provider factory coherence
 
-**Status:** proposed, revision 4. No code has moved.
+**Status:** revision 4 design; implementation underway. Phase 0 shipped
+2026-07-28: clifford is deployed at control-plane `07a40bb` / longhouse
+`c3065017a0`, Codex qualification profile `codex_tool_call_result_v1`,
+verified via a healthy post-deploy tick. The provider census is a CI-checked
+generated artifact (`scripts/generate_provider_census.py`,
+`docs/generated/provider_census.json`, 189 files). Phase 0 commits, in order:
+control-plane `355be4b` (profile flip) + `07a40bb` (bridge-timeout fix caught
+by Hatch Sol review — the flip alone would have silently broken on any run
+taking 120-180s; deployed). Longhouse `c3065017a` (census, deployed) +
+`313d3e31c` (path-component exclusion fix from the same Sol review — doc/CI
+tooling only, no runtime effect, not yet redeployed to clifford but will ride
+the next Phase 1+ deploy). Phases 1-5 not started.
 
 Two rounds of independent review (Hatch Fable, Hatch Codex Sol, Hatch
 OpenRouter Kimi K3) have corrected this document eleven times. Corrections are
