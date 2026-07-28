@@ -11,7 +11,14 @@ by Hatch Sol review — the flip alone would have silently broken on any run
 taking 120-180s; deployed). Longhouse `c3065017a` (census, deployed) +
 `313d3e31c` (path-component exclusion fix from the same Sol review — doc/CI
 tooling only, no runtime effect, not yet redeployed to clifford but will ride
-the next Phase 1+ deploy). Phases 1-5 not started.
+the next Phase 1+ deploy).
+
+Phase 1 shipped 2026-07-28: `server/zerg/qa/provider_factory_model.py`
+(longhouse `0c9455e7e`) plus a cross-repo derivation check
+(control-plane `0dab206`) — see "Phase 1 model" below for the resolved
+vocabulary and `plan_run`'s design. Not deployed to clifford (Phase 1 is
+planning-model code with no runtime hookup; nothing about current execution
+changed). Phases 2-5 not started.
 
 Two rounds of independent review (Hatch Fable, Hatch Codex Sol, Hatch
 OpenRouter Kimi K3) have corrected this document eleven times. Corrections are
