@@ -1,5 +1,5 @@
 {
-  "rule": "git-tracked .py/.ts/.tsx/.rs files, excluding /generated/ and node_modules, containing an exact quoted literal for two or more distinct provider names from schemas/managed_providers.yml",
+  "rule": "git-tracked .py/.ts/.tsx/.rs files, excluding files with a path component named 'generated' or 'node_modules', containing an exact quoted literal for two or more distinct provider names from schemas/managed_providers.yml",
   "provider_names": [
     "antigravity",
     "claude",

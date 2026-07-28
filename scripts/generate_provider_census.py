@@ -2,10 +2,10 @@
 """Generate the provider-name-literal census.
 
 Counting rule (provider-factory-coherence.md, "The provider census"): files
-tracked by git with extension .py, .ts, .tsx, .rs, excluding paths containing
-/generated/ or node_modules, that contain an exact quoted string literal
-(single or double quotes, e.g. "codex" or 'codex') for two or more distinct
-provider names. Provider names are the `provider:` entries in
+tracked by git with extension .py, .ts, .tsx, .rs, excluding files with a path
+component named `generated` or `node_modules`, that contain an exact quoted
+string literal (single or double quotes, e.g. "codex" or 'codex') for two or
+more distinct provider names. Provider names are the `provider:` entries in
 schemas/managed_providers.yml.
 
 This is not a duplication scanner. A file appearing here may be intentional
@@ -29,7 +29,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SCHEMA_PATH = ROOT / "schemas" / "managed_providers.yml"
 OUTPUT_PATH = ROOT / "docs" / "generated" / "provider_census.json"
 EXTENSIONS = ("*.py", "*.ts", "*.tsx", "*.rs")
-EXCLUDE_SUBSTRINGS = ("/generated/", "node_modules")
+EXCLUDE_PATH_COMPONENTS = ("generated", "node_modules")
 
 
 def _provider_names() -> list[str]:
@@ -51,7 +51,7 @@ def _tracked_files() -> list[str]:
         check=True,
     )
     files = result.stdout.splitlines()
-    return [f for f in files if not any(marker in f for marker in EXCLUDE_SUBSTRINGS)]
+    return [f for f in files if not set(Path(f).parts) & set(EXCLUDE_PATH_COMPONENTS)]
 
 
 def _literal_pattern(name: str) -> re.Pattern[str]:
@@ -74,9 +74,9 @@ def build_census() -> dict:
     entries.sort(key=lambda entry: entry["path"])
     return {
         "rule": (
-            "git-tracked .py/.ts/.tsx/.rs files, excluding /generated/ and node_modules, "
-            "containing an exact quoted literal for two or more distinct provider names "
-            "from schemas/managed_providers.yml"
+            "git-tracked .py/.ts/.tsx/.rs files, excluding files with a path component named "
+            "'generated' or 'node_modules', containing an exact quoted literal for two or more "
+            "distinct provider names from schemas/managed_providers.yml"
         ),
         "provider_names": providers,
         "file_count": len(entries),
