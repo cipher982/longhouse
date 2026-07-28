@@ -293,6 +293,139 @@ branches, no environment reads. Commit the **generated plan matrix** —
 diff-failing on drift. "This cell has never run" is a first-class renderable
 state, which is how the diagonal stops being invisible.
 
+### Phase 1 model (resolved 2026-07-28)
+
+Three scenario kinds exist, not two. The spec's original framing — "schema
+scenarios are semantic proof procedures, harness scenarios are pipeline
+stages" — collapsed two different things on the schema side.
+
+| Kind | Count | Identified by | Producer | Consumes |
+|---|---|---|---|---|
+| **Capability-proof scenario** | 13 `scenario_id`s in the schema | `(provider, capability)` → `required_assertions[].scenario_id` | 3 release-lane profiles whose own `SCENARIO_ID` equals the schema value (`claude_real_print_v1`, `opencode_server_contract_v1`, `antigravity_hook_inbox_v1`); 1 more (`codex_coordination_awareness_post_compaction`) has a CI-automated producer that runs on every push (`provider_coordination_scenarios.py`, codex-only) | An "observation" dict the oracle function transforms into typed booleans |
+| **Identity-proof scenario** | 7 in `_PROFILES` (`provider_qualification.py`) | `(provider, profile)` key; own `SCENARIO_ID` constant that is never a schema value | The release lane itself — each launches its own subprocess (`--version`, or for `codex_tool_call_result`/`codex_helm_interrupt`, a real Codex invocation) | Nothing upstream; self-contained |
+| **Harness pipeline scenario** | 36 declared; 22 on weekly cron, 4 on every push | Function name in `SCENARIO_RUNNERS` | CI — push runs 4 (`adapter_conformance`, `action_matrix`, `control_surface`, `old_new_release_diff`, via `validate-provider-cli-canaries`), weekly cron runs the full 22-scenario `DEFAULT_SCENARIOS`; both against fake binaries | Fixture data or a live adapter call |
+
+A first draft of this table collapsed push and weekly-cron into one "commit
+lane" trigger and called the coordination-proof producer "manual." Both were
+wrong and both were caught by Hatch Sol review, not by re-reading this file:
+`validate-provider-cli-canaries` (`Makefile`) runs only 4 harness scenarios on
+every push, `provider-release-weekly.yml` runs the full 22 once a week, and
+`contract-first-ci.yml`'s "Produce executable provider capability proof
+bundle" step runs `provider_coordination_scenarios.py` — codex-only, hermetic
+— on every push and PR. The corrected model below treats these as four
+separate triggers (`release_poll`, `push`, `weekly_cron`, `manual`), not two.
+
+**9 of the schema's 13 `scenario_id`s have zero producer of any kind** —
+verified independently three ways: no non-test importer of
+`awareness_create_assertions`, `directed_input_assertions`, or
+`unsupported_steer_assertions`; `provider_control_oracles.py` (the declared
+`oracle_source` for both `*_steer_rejection` scenarios) has no caller
+anywhere, test or production; and there is no dynamic dispatcher anywhere in
+the codebase that reads a schema `oracle_source` string and invokes it —
+every reference is a hardcoded string used only for manifest generation and
+digest-hashing (`provider_semantic_qualification.py:193`,
+`managed_provider_contract_manifest.py:487`). These are not merely
+undeployed, the way `codex_tool_call_result_v1` was before Phase 0 — nothing
+in either repository can produce the observation their oracle functions
+require. `codex_coordination_awareness_create`, `codex_coordination_directed_input`,
+`claude_coordination_awareness_create`, `claude_coordination_awareness_post_compaction`,
+`claude_coordination_directed_input`, `antigravity_steer_rejection`,
+`cursor_coordination_awareness_create`, `cursor_coordination_directed_input`,
+`cursor_steer_rejection` are declared and unfulfillable as declared. This is
+what "never-run cell" means concretely, and the generated plan matrix below
+renders exactly these 9 as such rather than asserting anything about them.
+
+**Zero name-level overlap between the 36 harness scenarios and the 13 schema
+`scenario_id`s is confirmed** (matches spec's "empty intersection"), but a
+non-empty *conceptual* overlap exists — the same capability, observed by
+different code, producing different evidence shapes:
+
+| Capability area | Schema scenario_id(s) | Harness scenario(s) (conceptually adjacent, not equal) |
+|---|---|---|
+| `session.launch.helm` | `claude_real_print`, `opencode_server_contract`, `antigravity_hook_inbox` | `launch_managed_session`, `managed_session_e2e` |
+| `session.reattach.helm` (opencode restart) | `opencode_server_contract` (`process_restart_reattach_preserved`) | `resume_reattach` |
+| interrupt semantics | none (release lane has `codex_helm_interrupt`, an identity-proof scenario, not a schema `scenario_id`) | `interrupt_cancel` |
+| tool-call result semantics | none (release lane has `codex_tool_call_result`, an identity-proof scenario) | `tool_call_result`, `tool_call_result_projection` |
+| coordination/directed input | 9 orphaned `scenario_id`s above | `send_receive` (conceptually adjacent; no shared evidence shape) |
+
+This is a proposed mapping for Phase 2/3 to formalize, not a claim that these
+pairs are interchangeable today — `codex_tool_call_result`'s oracle requires
+exactly one command, exact output, and exact linkage to the final message;
+the harness's `tool_call_result` Codex driver does not yet produce that shape
+(the spec already states this under Phase 2's profile-parity gate).
+
+**A third, previously undocumented instance of the duplication pattern**: the
+string `"codex_release_identity_v1"` is hardcoded as a fallback default in
+three independent places — `docker-compose.provider-factory.yml` (fixed in
+Phase 0), `provider_factory/registry.py::codex_lane()`'s parameter default,
+and `provider_factory/service.py:88`'s `env.get(...)` fallback. Phase 0 fixed
+the one that governs clifford's actual runtime behavior; the other two are
+inert today (both are always called with an explicit `qualification_profile`
+supplied by the env-reading path) but are exactly the kind of fact the
+schema does not represent and code duplicates by hand. Left as-is
+deliberately — removing the env-var mechanism entirely is Phase 2's job, not
+Phase 1's, per Phase 0's "deliberate, documented choice" framing.
+
+**Relationships, made concrete as `plan_run`**: implemented in
+`server/zerg/qa/provider_factory_model.py`, split into two steps because a
+single I/O-doing `plan_run` is not actually pure. `load_facts()` performs all
+I/O once — parses `schemas/managed_providers.yml`, imports
+`provider_qualification.py::_PROFILES`, AST-parses `DEFAULT_SCENARIOS` out of
+the smoke wrapper's source without executing it (the wrapper's filename is
+hyphenated and not import-safe), regex-parses the push-CI scenario override
+out of the `Makefile`, and reads `config/provider-release-schedule.yml`'s
+`weekly_unconditional` provider set. `plan_run(facts, provider,
+build_provenance, trigger) -> PlanCell` then does no I/O at all: it is a
+lookup over the resulting `ProviderFactoryFacts` snapshot plus a small number
+of hand-verified constant tables the schema cannot express (which evidence
+class each known producer actually generates per assertion, which
+credentials a release-lane profile's bridge is allowed to receive). Every
+`PlanCell` now carries `credential_requirement` and per-assertion
+`assertion_status` (`acceptable_evidence` vs. `producible_evidence` vs.
+`satisfiable`) — the first draft omitted both, and Phase 1 explicitly
+requires evidence class and credential policy as modeled relationships, not
+just build provenance and trigger.
+
+That per-assertion status is what makes the `manual` trigger meaningful: it
+is not merely "for scenario_ids where the release lane doesn't run
+automatically." `codex_coordination_awareness_post_compaction` runs
+automatically on every push (hermetic evidence), but the CI producer
+hardcodes one of its two assertions to `False` and that assertion's schema
+entry only accepts `live_token` evidence anyway — so that specific assertion
+is `manual`-only despite its scenario_id having an automated producer.
+Symmetrically, `antigravity_hook_inbox_v1` runs automatically on every
+`release_poll`, but `real_print_injection_observed` is permanently blocked by
+the oracle module itself (no isolated profile/data-root to run a real `agy
+--print` safely) — so it is also `manual`-only, forever, unless that
+constraint changes. Modeling at the scenario_id level would have missed both.
+
+The generated plan matrix (`docs/generated/provider_factory_plan.json`,
+`make validate-provider-factory-plan`) evaluates `plan_run` over every
+`(provider, build_provenance, trigger)` cell — 60 cells (5 providers × 3
+provenances × 4 triggers), 20 `runs` / 40 `never_run` — and is verified
+against real system state as of this phase: it reproduces clifford's actual
+deployed profile per provider (confirmed against the live `/health`
+payload), push CI's actual 4-scenario override, weekly cron's actual
+22-scenario default and 5-provider schedule, and renders all 9 orphaned
+capability-proof scenarios and Cursor's absent release lane (`PROVIDER_REGISTRY`
+in `control-plane/provider_factory/registry.py` has no `cursor_lane`, and
+`registered_lane("cursor")` raises `ValueError`) as `never_run`. Nothing about
+current execution changed to produce this; the plan is a read, not a write.
+
+**The cross-repo check does not duplicate the fact it guards.** A first draft
+had control-plane assert its `PROVIDER_REGISTRY` against a second
+hand-copied dict — passing the review that it recreates exactly the failure
+mode the epic exists to kill, since the two hardcoded dicts could silently
+drift from each other. `control-plane/tests/test_deployed_profiles_match_plan_model.py`
+now reads longhouse's *generated* `docs/generated/provider_factory_plan.json`
+from the sibling checkout this workspace already assumes exists
+(`deploy-provider-factory.sh`'s `PROVIDER_FACTORY_LONGHOUSE_SOURCE_REPO`
+convention) and checks against that artifact instead — a real derivation
+check, skipped rather than failed when the sibling checkout is absent.
+control-plane's CI does not check out longhouse today, so this only runs
+locally; wiring a real cross-repo CI check is Phase 2's "narrow derivation
+check at universal fan-out boundaries" work, not Phase 1's.
+
 ### Public proposes, private disposes
 
 Public Longhouse owns the declarative desired-proof contract. The private
@@ -554,11 +687,21 @@ launch blockers.
 
 ## Still open
 
-- Is the adapter seam correctly placed on **provider** at all? A 33-method
-  Protocol suggests the variance may be per-scenario. Phase 1's model work
-  should answer this before Phase 3 commits to five provider modules.
-- Do the 13 schema scenarios and 22 harness scenarios reconcile into one type,
-  or are they permanently two types with an explicit mapping? Phase 1 decides.
+- **Resolved by Phase 1, partially:** the 13 schema scenario_ids and 36
+  harness scenarios do not reconcile into one type — there turn out to be
+  three types, not two (capability-proof, identity-proof, harness-pipeline;
+  see "Phase 1 model" above), with zero name-level overlap and a named
+  conceptual mapping for the subset that overlaps in capability. Phase 3 still
+  owns making any of these structurally equivalent.
+- **Evidence gathered, not resolved:** is the adapter seam correctly placed on
+  **provider**? The harness has 27 real per-provider driver functions
+  (`_run_<provider>_<scenario>`) across ~11 distinct scenario concepts and 4
+  providers (0 for Cursor) — codex alone has 9, including sub-variants no
+  other provider has (`_run_codex_interrupt_dispatch_proof`,
+  `_run_codex_resume_attach_command_proof`). Variance is not cleanly
+  one-dimensional on either axis, which is itself evidence against a simple
+  "move the seam to scenario" fix. Phase 3 decides with the equivalence
+  oracle in hand, as originally planned.
 
 ## Appendix: corrections from review
 

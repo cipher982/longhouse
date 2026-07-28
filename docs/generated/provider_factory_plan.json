@@ -1,0 +1,1059 @@
+{
+  "description": "plan_run(provider, build_provenance, trigger) over every cell. 'never_run' is a first-class result, not an omission \u2014 see docs/specs/provider-factory-coherence.md.",
+  "providers": [
+    "codex",
+    "claude",
+    "opencode",
+    "antigravity",
+    "cursor"
+  ],
+  "build_provenances": [
+    "generated_fake",
+    "staged_release",
+    "observed_install"
+  ],
+  "triggers": [
+    "release_poll",
+    "push",
+    "weekly_cron",
+    "manual"
+  ],
+  "never_run_count": 40,
+  "runs_count": 20,
+  "cells": [
+    {
+      "provider": "antigravity",
+      "build_provenance": "generated_fake",
+      "trigger": "manual",
+      "status": "runs",
+      "reason": "has at least one capability-proof assertion no automated trigger can satisfy",
+      "qualification_profile": null,
+      "scenario_ids": [
+        "antigravity_hook_inbox"
+      ],
+      "harness_scenarios": [],
+      "credential_requirement": [],
+      "assertion_status": [
+        {
+          "assertion_id": "real_print_injection_observed",
+          "scenario_id": "antigravity_hook_inbox",
+          "acceptable_evidence": [
+            "live_token"
+          ],
+          "producible_evidence": [],
+          "satisfiable": false
+        }
+      ]
+    },
+    {
+      "provider": "antigravity",
+      "build_provenance": "generated_fake",
+      "trigger": "push",
+      "status": "runs",
+      "reason": "push-CI harness smoke (validate-provider-cli-canaries), plus the codex coordination proof job if applicable",
+      "qualification_profile": null,
+      "scenario_ids": [],
+      "harness_scenarios": [
+        "adapter_conformance",
+        "action_matrix",
+        "control_surface",
+        "old_new_release_diff"
+      ],
+      "credential_requirement": [],
+      "assertion_status": []
+    },
+    {
+      "provider": "antigravity",
+      "build_provenance": "generated_fake",
+      "trigger": "release_poll",
+      "status": "never_run",
+      "reason": "the release lane only runs against staged upstream releases",
+      "qualification_profile": null,
+      "scenario_ids": [],
+      "harness_scenarios": [],
+      "credential_requirement": [],
+      "assertion_status": []
+    },
+    {
+      "provider": "antigravity",
+      "build_provenance": "generated_fake",
+      "trigger": "weekly_cron",
+      "status": "runs",
+      "reason": "weekly full-column smoke (provider-release-weekly.yml, DEFAULT_SCENARIOS)",
+      "qualification_profile": null,
+      "scenario_ids": [],
+      "harness_scenarios": [
+        "probe_identity",
+        "adapter_conformance",
+        "collect_raw_evidence",
+        "action_matrix",
+        "control_surface",
+        "full_action_suite",
+        "baseline_compare",
+        "old_new_release_diff",
+        "parse_ingest_project",
+        "db_ingest_project",
+        "session_projection",
+        "timeline_projection",
+        "run_prompt_once",
+        "launch_managed_session",
+        "send_receive",
+        "pause_request_detect",
+        "tail_output",
+        "runtime_phase",
+        "transcript_binding",
+        "multi_turn_continuity",
+        "crash_timeout_cleanup",
+        "managed_session_e2e"
+      ],
+      "credential_requirement": [],
+      "assertion_status": []
+    },
+    {
+      "provider": "antigravity",
+      "build_provenance": "observed_install",
+      "trigger": "manual",
+      "status": "runs",
+      "reason": "has at least one capability-proof assertion no automated trigger can satisfy",
+      "qualification_profile": null,
+      "scenario_ids": [
+        "antigravity_hook_inbox"
+      ],
+      "harness_scenarios": [],
+      "credential_requirement": [],
+      "assertion_status": [
+        {
+          "assertion_id": "real_print_injection_observed",
+          "scenario_id": "antigravity_hook_inbox",
+          "acceptable_evidence": [
+            "live_token"
+          ],
+          "producible_evidence": [],
+          "satisfiable": false
+        }
+      ]
+    },
+    {
+      "provider": "antigravity",
+      "build_provenance": "observed_install",
+      "trigger": "push",
+      "status": "never_run",
+      "reason": "push CI only runs against generated fake binaries",
+      "qualification_profile": null,
+      "scenario_ids": [],
+      "harness_scenarios": [],
+      "credential_requirement": [],
+      "assertion_status": []
+    },
+    {
+      "provider": "antigravity",
+      "build_provenance": "observed_install",
+      "trigger": "release_poll",
+      "status": "never_run",
+      "reason": "the release lane only runs against staged upstream releases",
+      "qualification_profile": null,
+      "scenario_ids": [],
+      "harness_scenarios": [],
+      "credential_requirement": [],
+      "assertion_status": []
+    },
+    {
+      "provider": "antigravity",
+      "build_provenance": "observed_install",
+      "trigger": "weekly_cron",
+      "status": "never_run",
+      "reason": "the weekly matrix only runs against generated fake binaries (scheduled_evidence: generated_fake_unconditional_full_column)",
+      "qualification_profile": null,
+      "scenario_ids": [],
+      "harness_scenarios": [],
+      "credential_requirement": [],
+      "assertion_status": []
+    },
+    {
+      "provider": "antigravity",
+      "build_provenance": "staged_release",
+      "trigger": "manual",
+      "status": "runs",
+      "reason": "has at least one capability-proof assertion no automated trigger can satisfy",
+      "qualification_profile": null,
+      "scenario_ids": [
+        "antigravity_hook_inbox"
+      ],
+      "harness_scenarios": [],
+      "credential_requirement": [],
+      "assertion_status": [
+        {
+          "assertion_id": "real_print_injection_observed",
+          "scenario_id": "antigravity_hook_inbox",
+          "acceptable_evidence": [
+            "live_token"
+          ],
+          "producible_evidence": [],
+          "satisfiable": false
+        }
+      ]
+    },
+    {
+      "provider": "antigravity",
+      "build_provenance": "staged_release",
+      "trigger": "push",
+      "status": "never_run",
+      "reason": "push CI only runs against generated fake binaries",
+      "qualification_profile": null,
+      "scenario_ids": [],
+      "harness_scenarios": [],
+      "credential_requirement": [],
+      "assertion_status": []
+    },
+    {
+      "provider": "antigravity",
+      "build_provenance": "staged_release",
+      "trigger": "release_poll",
+      "status": "runs",
+      "reason": "deployed release-lane default for antigravity",
+      "qualification_profile": "antigravity_hook_inbox_v1",
+      "scenario_ids": [
+        "antigravity_hook_inbox"
+      ],
+      "harness_scenarios": [],
+      "credential_requirement": [],
+      "assertion_status": [
+        {
+          "assertion_id": "hook_inbox_contract_preserved",
+          "scenario_id": "antigravity_hook_inbox",
+          "acceptable_evidence": [
+            "live_no_token"
+          ],
+          "producible_evidence": [
+            "live_no_token"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "real_print_injection_observed",
+          "scenario_id": "antigravity_hook_inbox",
+          "acceptable_evidence": [
+            "live_token"
+          ],
+          "producible_evidence": [],
+          "satisfiable": false
+        }
+      ]
+    },
+    {
+      "provider": "antigravity",
+      "build_provenance": "staged_release",
+      "trigger": "weekly_cron",
+      "status": "never_run",
+      "reason": "the weekly matrix only runs against generated fake binaries (scheduled_evidence: generated_fake_unconditional_full_column)",
+      "qualification_profile": null,
+      "scenario_ids": [],
+      "harness_scenarios": [],
+      "credential_requirement": [],
+      "assertion_status": []
+    },
+    {
+      "provider": "claude",
+      "build_provenance": "generated_fake",
+      "trigger": "manual",
+      "status": "never_run",
+      "reason": "remaining capability-proof scenario_ids for claude are orphaned: ['claude_coordination_awareness_create', 'claude_coordination_awareness_post_compaction', 'claude_coordination_directed_input']",
+      "qualification_profile": null,
+      "scenario_ids": [],
+      "harness_scenarios": [],
+      "credential_requirement": [],
+      "assertion_status": []
+    },
+    {
+      "provider": "claude",
+      "build_provenance": "generated_fake",
+      "trigger": "push",
+      "status": "runs",
+      "reason": "push-CI harness smoke (validate-provider-cli-canaries), plus the codex coordination proof job if applicable",
+      "qualification_profile": null,
+      "scenario_ids": [],
+      "harness_scenarios": [
+        "adapter_conformance",
+        "action_matrix",
+        "control_surface",
+        "old_new_release_diff"
+      ],
+      "credential_requirement": [],
+      "assertion_status": []
+    },
+    {
+      "provider": "claude",
+      "build_provenance": "generated_fake",
+      "trigger": "release_poll",
+      "status": "never_run",
+      "reason": "the release lane only runs against staged upstream releases",
+      "qualification_profile": null,
+      "scenario_ids": [],
+      "harness_scenarios": [],
+      "credential_requirement": [],
+      "assertion_status": []
+    },
+    {
+      "provider": "claude",
+      "build_provenance": "generated_fake",
+      "trigger": "weekly_cron",
+      "status": "runs",
+      "reason": "weekly full-column smoke (provider-release-weekly.yml, DEFAULT_SCENARIOS)",
+      "qualification_profile": null,
+      "scenario_ids": [],
+      "harness_scenarios": [
+        "probe_identity",
+        "adapter_conformance",
+        "collect_raw_evidence",
+        "action_matrix",
+        "control_surface",
+        "full_action_suite",
+        "baseline_compare",
+        "old_new_release_diff",
+        "parse_ingest_project",
+        "db_ingest_project",
+        "session_projection",
+        "timeline_projection",
+        "run_prompt_once",
+        "launch_managed_session",
+        "send_receive",
+        "pause_request_detect",
+        "tail_output",
+        "runtime_phase",
+        "transcript_binding",
+        "multi_turn_continuity",
+        "crash_timeout_cleanup",
+        "managed_session_e2e"
+      ],
+      "credential_requirement": [],
+      "assertion_status": []
+    },
+    {
+      "provider": "claude",
+      "build_provenance": "observed_install",
+      "trigger": "manual",
+      "status": "never_run",
+      "reason": "remaining capability-proof scenario_ids for claude are orphaned: ['claude_coordination_awareness_create', 'claude_coordination_awareness_post_compaction', 'claude_coordination_directed_input']",
+      "qualification_profile": null,
+      "scenario_ids": [],
+      "harness_scenarios": [],
+      "credential_requirement": [],
+      "assertion_status": []
+    },
+    {
+      "provider": "claude",
+      "build_provenance": "observed_install",
+      "trigger": "push",
+      "status": "never_run",
+      "reason": "push CI only runs against generated fake binaries",
+      "qualification_profile": null,
+      "scenario_ids": [],
+      "harness_scenarios": [],
+      "credential_requirement": [],
+      "assertion_status": []
+    },
+    {
+      "provider": "claude",
+      "build_provenance": "observed_install",
+      "trigger": "release_poll",
+      "status": "never_run",
+      "reason": "the release lane only runs against staged upstream releases",
+      "qualification_profile": null,
+      "scenario_ids": [],
+      "harness_scenarios": [],
+      "credential_requirement": [],
+      "assertion_status": []
+    },
+    {
+      "provider": "claude",
+      "build_provenance": "observed_install",
+      "trigger": "weekly_cron",
+      "status": "never_run",
+      "reason": "the weekly matrix only runs against generated fake binaries (scheduled_evidence: generated_fake_unconditional_full_column)",
+      "qualification_profile": null,
+      "scenario_ids": [],
+      "harness_scenarios": [],
+      "credential_requirement": [],
+      "assertion_status": []
+    },
+    {
+      "provider": "claude",
+      "build_provenance": "staged_release",
+      "trigger": "manual",
+      "status": "never_run",
+      "reason": "remaining capability-proof scenario_ids for claude are orphaned: ['claude_coordination_awareness_create', 'claude_coordination_awareness_post_compaction', 'claude_coordination_directed_input']",
+      "qualification_profile": null,
+      "scenario_ids": [],
+      "harness_scenarios": [],
+      "credential_requirement": [],
+      "assertion_status": []
+    },
+    {
+      "provider": "claude",
+      "build_provenance": "staged_release",
+      "trigger": "push",
+      "status": "never_run",
+      "reason": "push CI only runs against generated fake binaries",
+      "qualification_profile": null,
+      "scenario_ids": [],
+      "harness_scenarios": [],
+      "credential_requirement": [],
+      "assertion_status": []
+    },
+    {
+      "provider": "claude",
+      "build_provenance": "staged_release",
+      "trigger": "release_poll",
+      "status": "runs",
+      "reason": "deployed release-lane default for claude",
+      "qualification_profile": "claude_real_print_v1",
+      "scenario_ids": [
+        "claude_real_print"
+      ],
+      "harness_scenarios": [],
+      "credential_requirement": [],
+      "assertion_status": [
+        {
+          "assertion_id": "claude_cli_channel_contract_preserved",
+          "scenario_id": "claude_real_print",
+          "acceptable_evidence": [
+            "live_no_token"
+          ],
+          "producible_evidence": [
+            "live_no_token"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "real_print_marker_returned",
+          "scenario_id": "claude_real_print",
+          "acceptable_evidence": [
+            "live_token"
+          ],
+          "producible_evidence": [
+            "live_no_token",
+            "live_token"
+          ],
+          "satisfiable": true
+        }
+      ]
+    },
+    {
+      "provider": "claude",
+      "build_provenance": "staged_release",
+      "trigger": "weekly_cron",
+      "status": "never_run",
+      "reason": "the weekly matrix only runs against generated fake binaries (scheduled_evidence: generated_fake_unconditional_full_column)",
+      "qualification_profile": null,
+      "scenario_ids": [],
+      "harness_scenarios": [],
+      "credential_requirement": [],
+      "assertion_status": []
+    },
+    {
+      "provider": "codex",
+      "build_provenance": "generated_fake",
+      "trigger": "manual",
+      "status": "runs",
+      "reason": "has at least one capability-proof assertion no automated trigger can satisfy",
+      "qualification_profile": null,
+      "scenario_ids": [
+        "codex_coordination_awareness_post_compaction"
+      ],
+      "harness_scenarios": [],
+      "credential_requirement": [],
+      "assertion_status": [
+        {
+          "assertion_id": "coordination_instructions_model_visible_after_compaction",
+          "scenario_id": "codex_coordination_awareness_post_compaction",
+          "acceptable_evidence": [
+            "live_token"
+          ],
+          "producible_evidence": [],
+          "satisfiable": false
+        }
+      ]
+    },
+    {
+      "provider": "codex",
+      "build_provenance": "generated_fake",
+      "trigger": "push",
+      "status": "runs",
+      "reason": "push-CI harness smoke (validate-provider-cli-canaries), plus the codex coordination proof job if applicable",
+      "qualification_profile": null,
+      "scenario_ids": [
+        "codex_coordination_awareness_post_compaction"
+      ],
+      "harness_scenarios": [
+        "adapter_conformance",
+        "action_matrix",
+        "control_surface",
+        "old_new_release_diff"
+      ],
+      "credential_requirement": [],
+      "assertion_status": [
+        {
+          "assertion_id": "coordination_instructions_model_visible_after_compaction",
+          "scenario_id": "codex_coordination_awareness_post_compaction",
+          "acceptable_evidence": [
+            "live_token"
+          ],
+          "producible_evidence": [],
+          "satisfiable": false
+        },
+        {
+          "assertion_id": "no_duplicate_visible_bootstrap",
+          "scenario_id": "codex_coordination_awareness_post_compaction",
+          "acceptable_evidence": [
+            "hermetic",
+            "live_token"
+          ],
+          "producible_evidence": [
+            "hermetic"
+          ],
+          "satisfiable": true
+        }
+      ]
+    },
+    {
+      "provider": "codex",
+      "build_provenance": "generated_fake",
+      "trigger": "release_poll",
+      "status": "never_run",
+      "reason": "the release lane only runs against staged upstream releases",
+      "qualification_profile": null,
+      "scenario_ids": [],
+      "harness_scenarios": [],
+      "credential_requirement": [],
+      "assertion_status": []
+    },
+    {
+      "provider": "codex",
+      "build_provenance": "generated_fake",
+      "trigger": "weekly_cron",
+      "status": "runs",
+      "reason": "weekly full-column smoke (provider-release-weekly.yml, DEFAULT_SCENARIOS)",
+      "qualification_profile": null,
+      "scenario_ids": [],
+      "harness_scenarios": [
+        "probe_identity",
+        "adapter_conformance",
+        "collect_raw_evidence",
+        "action_matrix",
+        "control_surface",
+        "full_action_suite",
+        "baseline_compare",
+        "old_new_release_diff",
+        "parse_ingest_project",
+        "db_ingest_project",
+        "session_projection",
+        "timeline_projection",
+        "run_prompt_once",
+        "launch_managed_session",
+        "send_receive",
+        "pause_request_detect",
+        "tail_output",
+        "runtime_phase",
+        "transcript_binding",
+        "multi_turn_continuity",
+        "crash_timeout_cleanup",
+        "managed_session_e2e"
+      ],
+      "credential_requirement": [],
+      "assertion_status": []
+    },
+    {
+      "provider": "codex",
+      "build_provenance": "observed_install",
+      "trigger": "manual",
+      "status": "runs",
+      "reason": "has at least one capability-proof assertion no automated trigger can satisfy",
+      "qualification_profile": null,
+      "scenario_ids": [
+        "codex_coordination_awareness_post_compaction"
+      ],
+      "harness_scenarios": [],
+      "credential_requirement": [],
+      "assertion_status": [
+        {
+          "assertion_id": "coordination_instructions_model_visible_after_compaction",
+          "scenario_id": "codex_coordination_awareness_post_compaction",
+          "acceptable_evidence": [
+            "live_token"
+          ],
+          "producible_evidence": [],
+          "satisfiable": false
+        }
+      ]
+    },
+    {
+      "provider": "codex",
+      "build_provenance": "observed_install",
+      "trigger": "push",
+      "status": "never_run",
+      "reason": "push CI only runs against generated fake binaries",
+      "qualification_profile": null,
+      "scenario_ids": [],
+      "harness_scenarios": [],
+      "credential_requirement": [],
+      "assertion_status": []
+    },
+    {
+      "provider": "codex",
+      "build_provenance": "observed_install",
+      "trigger": "release_poll",
+      "status": "never_run",
+      "reason": "the release lane only runs against staged upstream releases",
+      "qualification_profile": null,
+      "scenario_ids": [],
+      "harness_scenarios": [],
+      "credential_requirement": [],
+      "assertion_status": []
+    },
+    {
+      "provider": "codex",
+      "build_provenance": "observed_install",
+      "trigger": "weekly_cron",
+      "status": "never_run",
+      "reason": "the weekly matrix only runs against generated fake binaries (scheduled_evidence: generated_fake_unconditional_full_column)",
+      "qualification_profile": null,
+      "scenario_ids": [],
+      "harness_scenarios": [],
+      "credential_requirement": [],
+      "assertion_status": []
+    },
+    {
+      "provider": "codex",
+      "build_provenance": "staged_release",
+      "trigger": "manual",
+      "status": "runs",
+      "reason": "has at least one capability-proof assertion no automated trigger can satisfy",
+      "qualification_profile": null,
+      "scenario_ids": [
+        "codex_coordination_awareness_post_compaction"
+      ],
+      "harness_scenarios": [],
+      "credential_requirement": [],
+      "assertion_status": [
+        {
+          "assertion_id": "coordination_instructions_model_visible_after_compaction",
+          "scenario_id": "codex_coordination_awareness_post_compaction",
+          "acceptable_evidence": [
+            "live_token"
+          ],
+          "producible_evidence": [],
+          "satisfiable": false
+        }
+      ]
+    },
+    {
+      "provider": "codex",
+      "build_provenance": "staged_release",
+      "trigger": "push",
+      "status": "never_run",
+      "reason": "push CI only runs against generated fake binaries",
+      "qualification_profile": null,
+      "scenario_ids": [],
+      "harness_scenarios": [],
+      "credential_requirement": [],
+      "assertion_status": []
+    },
+    {
+      "provider": "codex",
+      "build_provenance": "staged_release",
+      "trigger": "release_poll",
+      "status": "runs",
+      "reason": "deployed release-lane default for codex",
+      "qualification_profile": "codex_tool_call_result_v1",
+      "scenario_ids": [
+        "codex_tool_call_result"
+      ],
+      "harness_scenarios": [],
+      "credential_requirement": [
+        "CODEX_API_KEY"
+      ],
+      "assertion_status": []
+    },
+    {
+      "provider": "codex",
+      "build_provenance": "staged_release",
+      "trigger": "weekly_cron",
+      "status": "never_run",
+      "reason": "the weekly matrix only runs against generated fake binaries (scheduled_evidence: generated_fake_unconditional_full_column)",
+      "qualification_profile": null,
+      "scenario_ids": [],
+      "harness_scenarios": [],
+      "credential_requirement": [],
+      "assertion_status": []
+    },
+    {
+      "provider": "cursor",
+      "build_provenance": "generated_fake",
+      "trigger": "manual",
+      "status": "never_run",
+      "reason": "remaining capability-proof scenario_ids for cursor are orphaned: ['cursor_coordination_awareness_create', 'cursor_coordination_directed_input', 'cursor_steer_rejection']",
+      "qualification_profile": null,
+      "scenario_ids": [],
+      "harness_scenarios": [],
+      "credential_requirement": [],
+      "assertion_status": []
+    },
+    {
+      "provider": "cursor",
+      "build_provenance": "generated_fake",
+      "trigger": "push",
+      "status": "runs",
+      "reason": "push-CI harness smoke (validate-provider-cli-canaries), plus the codex coordination proof job if applicable",
+      "qualification_profile": null,
+      "scenario_ids": [],
+      "harness_scenarios": [
+        "adapter_conformance",
+        "action_matrix",
+        "control_surface",
+        "old_new_release_diff"
+      ],
+      "credential_requirement": [],
+      "assertion_status": []
+    },
+    {
+      "provider": "cursor",
+      "build_provenance": "generated_fake",
+      "trigger": "release_poll",
+      "status": "never_run",
+      "reason": "the release lane only runs against staged upstream releases",
+      "qualification_profile": null,
+      "scenario_ids": [],
+      "harness_scenarios": [],
+      "credential_requirement": [],
+      "assertion_status": []
+    },
+    {
+      "provider": "cursor",
+      "build_provenance": "generated_fake",
+      "trigger": "weekly_cron",
+      "status": "runs",
+      "reason": "weekly full-column smoke (provider-release-weekly.yml, DEFAULT_SCENARIOS)",
+      "qualification_profile": null,
+      "scenario_ids": [],
+      "harness_scenarios": [
+        "probe_identity",
+        "adapter_conformance",
+        "collect_raw_evidence",
+        "action_matrix",
+        "control_surface",
+        "full_action_suite",
+        "baseline_compare",
+        "old_new_release_diff",
+        "parse_ingest_project",
+        "db_ingest_project",
+        "session_projection",
+        "timeline_projection",
+        "run_prompt_once",
+        "launch_managed_session",
+        "send_receive",
+        "pause_request_detect",
+        "tail_output",
+        "runtime_phase",
+        "transcript_binding",
+        "multi_turn_continuity",
+        "crash_timeout_cleanup",
+        "managed_session_e2e"
+      ],
+      "credential_requirement": [],
+      "assertion_status": []
+    },
+    {
+      "provider": "cursor",
+      "build_provenance": "observed_install",
+      "trigger": "manual",
+      "status": "never_run",
+      "reason": "remaining capability-proof scenario_ids for cursor are orphaned: ['cursor_coordination_awareness_create', 'cursor_coordination_directed_input', 'cursor_steer_rejection']",
+      "qualification_profile": null,
+      "scenario_ids": [],
+      "harness_scenarios": [],
+      "credential_requirement": [],
+      "assertion_status": []
+    },
+    {
+      "provider": "cursor",
+      "build_provenance": "observed_install",
+      "trigger": "push",
+      "status": "never_run",
+      "reason": "push CI only runs against generated fake binaries",
+      "qualification_profile": null,
+      "scenario_ids": [],
+      "harness_scenarios": [],
+      "credential_requirement": [],
+      "assertion_status": []
+    },
+    {
+      "provider": "cursor",
+      "build_provenance": "observed_install",
+      "trigger": "release_poll",
+      "status": "never_run",
+      "reason": "the release lane only runs against staged upstream releases",
+      "qualification_profile": null,
+      "scenario_ids": [],
+      "harness_scenarios": [],
+      "credential_requirement": [],
+      "assertion_status": []
+    },
+    {
+      "provider": "cursor",
+      "build_provenance": "observed_install",
+      "trigger": "weekly_cron",
+      "status": "never_run",
+      "reason": "the weekly matrix only runs against generated fake binaries (scheduled_evidence: generated_fake_unconditional_full_column)",
+      "qualification_profile": null,
+      "scenario_ids": [],
+      "harness_scenarios": [],
+      "credential_requirement": [],
+      "assertion_status": []
+    },
+    {
+      "provider": "cursor",
+      "build_provenance": "staged_release",
+      "trigger": "manual",
+      "status": "never_run",
+      "reason": "remaining capability-proof scenario_ids for cursor are orphaned: ['cursor_coordination_awareness_create', 'cursor_coordination_directed_input', 'cursor_steer_rejection']",
+      "qualification_profile": null,
+      "scenario_ids": [],
+      "harness_scenarios": [],
+      "credential_requirement": [],
+      "assertion_status": []
+    },
+    {
+      "provider": "cursor",
+      "build_provenance": "staged_release",
+      "trigger": "push",
+      "status": "never_run",
+      "reason": "push CI only runs against generated fake binaries",
+      "qualification_profile": null,
+      "scenario_ids": [],
+      "harness_scenarios": [],
+      "credential_requirement": [],
+      "assertion_status": []
+    },
+    {
+      "provider": "cursor",
+      "build_provenance": "staged_release",
+      "trigger": "release_poll",
+      "status": "never_run",
+      "reason": "cursor has no registered release lane (no *_lane() in provider_factory/registry.py)",
+      "qualification_profile": null,
+      "scenario_ids": [],
+      "harness_scenarios": [],
+      "credential_requirement": [],
+      "assertion_status": []
+    },
+    {
+      "provider": "cursor",
+      "build_provenance": "staged_release",
+      "trigger": "weekly_cron",
+      "status": "never_run",
+      "reason": "the weekly matrix only runs against generated fake binaries (scheduled_evidence: generated_fake_unconditional_full_column)",
+      "qualification_profile": null,
+      "scenario_ids": [],
+      "harness_scenarios": [],
+      "credential_requirement": [],
+      "assertion_status": []
+    },
+    {
+      "provider": "opencode",
+      "build_provenance": "generated_fake",
+      "trigger": "manual",
+      "status": "never_run",
+      "reason": "every capability-proof assertion declared for opencode is already satisfiable by an automated trigger",
+      "qualification_profile": null,
+      "scenario_ids": [],
+      "harness_scenarios": [],
+      "credential_requirement": [],
+      "assertion_status": []
+    },
+    {
+      "provider": "opencode",
+      "build_provenance": "generated_fake",
+      "trigger": "push",
+      "status": "runs",
+      "reason": "push-CI harness smoke (validate-provider-cli-canaries), plus the codex coordination proof job if applicable",
+      "qualification_profile": null,
+      "scenario_ids": [],
+      "harness_scenarios": [
+        "adapter_conformance",
+        "action_matrix",
+        "control_surface",
+        "old_new_release_diff"
+      ],
+      "credential_requirement": [],
+      "assertion_status": []
+    },
+    {
+      "provider": "opencode",
+      "build_provenance": "generated_fake",
+      "trigger": "release_poll",
+      "status": "never_run",
+      "reason": "the release lane only runs against staged upstream releases",
+      "qualification_profile": null,
+      "scenario_ids": [],
+      "harness_scenarios": [],
+      "credential_requirement": [],
+      "assertion_status": []
+    },
+    {
+      "provider": "opencode",
+      "build_provenance": "generated_fake",
+      "trigger": "weekly_cron",
+      "status": "runs",
+      "reason": "weekly full-column smoke (provider-release-weekly.yml, DEFAULT_SCENARIOS)",
+      "qualification_profile": null,
+      "scenario_ids": [],
+      "harness_scenarios": [
+        "probe_identity",
+        "adapter_conformance",
+        "collect_raw_evidence",
+        "action_matrix",
+        "control_surface",
+        "full_action_suite",
+        "baseline_compare",
+        "old_new_release_diff",
+        "parse_ingest_project",
+        "db_ingest_project",
+        "session_projection",
+        "timeline_projection",
+        "run_prompt_once",
+        "launch_managed_session",
+        "send_receive",
+        "pause_request_detect",
+        "tail_output",
+        "runtime_phase",
+        "transcript_binding",
+        "multi_turn_continuity",
+        "crash_timeout_cleanup",
+        "managed_session_e2e"
+      ],
+      "credential_requirement": [],
+      "assertion_status": []
+    },
+    {
+      "provider": "opencode",
+      "build_provenance": "observed_install",
+      "trigger": "manual",
+      "status": "never_run",
+      "reason": "every capability-proof assertion declared for opencode is already satisfiable by an automated trigger",
+      "qualification_profile": null,
+      "scenario_ids": [],
+      "harness_scenarios": [],
+      "credential_requirement": [],
+      "assertion_status": []
+    },
+    {
+      "provider": "opencode",
+      "build_provenance": "observed_install",
+      "trigger": "push",
+      "status": "never_run",
+      "reason": "push CI only runs against generated fake binaries",
+      "qualification_profile": null,
+      "scenario_ids": [],
+      "harness_scenarios": [],
+      "credential_requirement": [],
+      "assertion_status": []
+    },
+    {
+      "provider": "opencode",
+      "build_provenance": "observed_install",
+      "trigger": "release_poll",
+      "status": "never_run",
+      "reason": "the release lane only runs against staged upstream releases",
+      "qualification_profile": null,
+      "scenario_ids": [],
+      "harness_scenarios": [],
+      "credential_requirement": [],
+      "assertion_status": []
+    },
+    {
+      "provider": "opencode",
+      "build_provenance": "observed_install",
+      "trigger": "weekly_cron",
+      "status": "never_run",
+      "reason": "the weekly matrix only runs against generated fake binaries (scheduled_evidence: generated_fake_unconditional_full_column)",
+      "qualification_profile": null,
+      "scenario_ids": [],
+      "harness_scenarios": [],
+      "credential_requirement": [],
+      "assertion_status": []
+    },
+    {
+      "provider": "opencode",
+      "build_provenance": "staged_release",
+      "trigger": "manual",
+      "status": "never_run",
+      "reason": "every capability-proof assertion declared for opencode is already satisfiable by an automated trigger",
+      "qualification_profile": null,
+      "scenario_ids": [],
+      "harness_scenarios": [],
+      "credential_requirement": [],
+      "assertion_status": []
+    },
+    {
+      "provider": "opencode",
+      "build_provenance": "staged_release",
+      "trigger": "push",
+      "status": "never_run",
+      "reason": "push CI only runs against generated fake binaries",
+      "qualification_profile": null,
+      "scenario_ids": [],
+      "harness_scenarios": [],
+      "credential_requirement": [],
+      "assertion_status": []
+    },
+    {
+      "provider": "opencode",
+      "build_provenance": "staged_release",
+      "trigger": "release_poll",
+      "status": "runs",
+      "reason": "deployed release-lane default for opencode",
+      "qualification_profile": "opencode_server_contract_v1",
+      "scenario_ids": [
+        "opencode_server_contract"
+      ],
+      "harness_scenarios": [],
+      "credential_requirement": [],
+      "assertion_status": [
+        {
+          "assertion_id": "serve_session_contract_preserved",
+          "scenario_id": "opencode_server_contract",
+          "acceptable_evidence": [
+            "live_no_token"
+          ],
+          "producible_evidence": [
+            "live_no_token"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "process_restart_reattach_preserved",
+          "scenario_id": "opencode_server_contract",
+          "acceptable_evidence": [
+            "live_no_token"
+          ],
+          "producible_evidence": [
+            "live_no_token"
+          ],
+          "satisfiable": true
+        }
+      ]
+    },
+    {
+      "provider": "opencode",
+      "build_provenance": "staged_release",
+      "trigger": "weekly_cron",
+      "status": "never_run",
+      "reason": "the weekly matrix only runs against generated fake binaries (scheduled_evidence: generated_fake_unconditional_full_column)",
+      "qualification_profile": null,
+      "scenario_ids": [],
+      "harness_scenarios": [],
+      "credential_requirement": [],
+      "assertion_status": []
+    }
+  ]
+}
