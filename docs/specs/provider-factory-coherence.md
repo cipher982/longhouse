@@ -736,6 +736,60 @@ shadow-compare. `_run_v2_bridge` still hardcodes `scripts/qa/provider-qualificat
 nothing in either repository invokes these new harness scenarios from the
 release lane yet.
 
+**Finalizer promotion (step 1 of 3) is shipped** (longhouse `130831239`):
+both `codex_tool_call_result.py` and `codex_helm_interrupt.py`'s `_emit()`
+were already parameterized generically enough (explicit identity/version/
+outcomes/execution/observation inputs, no hidden state) to become
+`emit_proof_bundle()` — a pure rename, both modules' own `run()` unchanged,
+all 35 existing tests pass unchanged. This is what the new bridge script
+will call once it has real provenance to hand it.
+
+**The new bridge script (step 2 of 3) is concretely harder than the
+request/output CLI contract makes it look, but the hard part is resolved.**
+`load_request()` (`provider_release_identity.py:118`) already gives the
+bridge everything the *release lane* trusts: `provider_bin`,
+`expected_provider_build_identity` (a hash string), and
+`expected_provider_build_granularity` — but the release lane's own `run()`
+never re-verifies that hash against a live closure; it passes the request's
+claim straight through into the record. A harness-backed bridge that did the
+same would add nothing. Phase 2 step 3's `run_harness()` work
+(`verify_provider_builds()`, now internal to `run_harness()`, called before
+and after execution) is exactly the live verification the release lane
+lacks, but using it requires a real `ProviderBuildRef`, which needs
+`build_root`/`entrypoint_relative` — neither is a request field.
+
+Resolved by reading control-plane's own acquisition code
+(`control-plane/provider_factory/core.py:623-643`): both
+`codex_tool_call_result_v1` and `codex_helm_interrupt_v1` set
+`uses_provider_package = True` unconditionally — there is no `single_asset`
+case for either profile, only `full_installed_tree`, staged at
+`package_root = artifact_root / "provider-package"` with the entrypoint
+always `bin/codex` (`binary = package_root / "bin" / "codex"`). So for these
+two profiles specifically: `source_root = provider_bin.parent.parent`,
+`entrypoint_relative = "bin/codex"`, always — derive it, then *validate* the
+guess by calling `codex_helm_interrupt._package_identity(str(source_root),
+provider_bin)`, which already checks the exact `PACKAGE_MEMBERS` set and
+raises if the layout doesn't match, rather than trusting the derivation
+blind. `provider_build_store.materialize_staged_provider_build()` already
+exists and does exactly the rest: copies the closure into a content-addressed
+store (idempotent — a second call for the same provider/version/platform
+just re-verifies, it doesn't re-copy), computes the real digest, and returns
+a `ProviderBuildRef`. Use a run-scoped store under `output_root` for this —
+this is a per-run integrity check, not participation in control-plane's
+separate, already-working persistent build-store ingestion pipeline
+(`ingest_provider_build` / `scripts/qa/provider-build-store.py`); conflating
+the two would be scope creep past what step 2 needs.
+
+Still to do for step 2: write the two `run()` functions
+(`codex_tool_call_result_v1` → `codex_tool_call_result_strict` scenario,
+`codex_helm_interrupt_v1` → `interrupt_cancel`'s strict path) that load the
+request, derive+validate+materialize the `ProviderBuildRef` as above, call
+`run_harness()` with `providers=("codex",)`, `provider_builds={"codex": ref}`,
+and exactly one scenario, require exactly one matching `ScenarioResult` with
+a complete `strict_oracle` field, recheck post-execution identity, and call
+`emit_proof_bundle()`. Then step 3 (control-plane dispatch map) and shadow
+comparison, per the design above.
+
 ### The bridge/dispatcher design (Sol, not yet built)
 
 Third Sol consult for this section. Three decisions:
