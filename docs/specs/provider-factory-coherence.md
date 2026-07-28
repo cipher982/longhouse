@@ -1,6 +1,6 @@
 # Provider factory coherence
 
-**Status:** proposed, revision 2. No code has moved.
+**Status:** proposed, revision 3. No code has moved.
 
 Revision 2 follows review by three independent agents (Hatch Fable, Hatch Codex
 Sol, Hatch OpenRouter Kimi K3). Sol rejected revision 1 and reframed it; several
@@ -239,6 +239,61 @@ an afterthought.
 
 ## Target architecture
 
+### The convergence: fold each stack in half
+
+Revision 2 said the two stacks merge without saying which half of each
+survives. This is that answer, and it changes the framing: they are not two
+implementations of one thing. Each is a half-implementation of two different
+things, which is why "merge" had no obvious direction.
+
+| | Execution — run a binary, drive it, collect observations | Judgment — did assertion X hold, emit typed proof |
+|---|---|---|
+| Universal harness | 9,317 lines, 22 stages | **none.** `ProviderCapabilityProofRecord` appears zero times |
+| Release-lane modules | `provider_live_canary.py` (2,032 lines) for claude/opencode/antigravity; raw `subprocess` in `codex_tool_call_result`, `codex_helm_interrupt`, `provider_release_identity` | typed records carrying `AssertionOutcome` and `EvidenceClass` |
+
+Execution is implemented three times. Judgment is implemented once, inside the
+stack with almost no execution breadth. No release-lane module imports the
+harness.
+
+The target is one execution layer and one oracle layer, connected by the
+evidence package.
+
+**The harness becomes the sole execution layer.** It is the only one with
+pipeline breadth — ingest, projection, timeline, managed-session E2E. It
+already accepts real binaries through `--use-real-provider-bins`, and
+`HarnessOptions.provider_builds: Mapping[str, ProviderBuildRef]` already accepts
+staged build references. That seam was built by the previous epic and nothing
+in the factory calls it.
+
+**The qualification modules become the sole oracle layer**, minus their private
+execution. `claude_real_print_qualification` stops calling
+`run_provider_live_canary`; it receives an evidence package and returns
+assertion outcomes. They keep the one thing only they have: typed capability
+proof.
+
+**The factory stops executing.** It becomes acquisition and scheduling — stage
+the build, hand it to the execution layer, store the resulting proof records.
+
+Deleted: `provider_live_canary.py`'s execution role, the three raw-subprocess
+execution paths, and the factory's executor role. Roughly 2,000 lines go and no
+new stack is written.
+
+The diagonal then fills by construction rather than as a feature. Once the seam
+is real, real binary crossed with full column is the only path that exists:
+staged build → execution layer → every oracle → proof store. It is impossible
+today because the executor with breadth produces no proof and the producer of
+proof has no breadth.
+
+Integration cost is narrow. The harness has seven `subprocess` call sites, so
+giving it an injectable runner — needed to execute under clifford's bwrap,
+which the release lane already does via `runner=sandbox` — is small. It needs a
+typed proof output. The factory swaps its executor for a harness call.
+
+This does not fix the 4,446-line class. Making the harness the *sole* execution
+layer raises the stakes on decomposing it, and makes the still-open question of
+whether the seam belongs on provider or on scenario more consequential, not
+less.
+
 ### One authority, generated consumers
 
 `schemas/managed_providers.yml` stays authority. All three reviewers agreed;
@@ -363,21 +418,32 @@ semantics it does not — version grammars, binary-name sets, acquisition
 behavior — stay provider-owned code and are documented as such rather than
 forced into the schema.
 
-### Phase 2 — both loops consume the plan, in shadow first
+### Phase 2 — converge the stacks, driven by the plan, shadowed first
 
-Make the release lane and the commit lane execute from the serialized plan
-while keeping the existing adapter implementation untouched.
+The structural core. Three moves, in order, with the adapter implementation
+left untouched throughout:
+
+1. Give the harness an injectable runner across its seven `subprocess` sites
+   and a typed `ProviderCapabilityProofRecord` output.
+2. Strip private execution from the qualification modules so each becomes an
+   oracle over an evidence package.
+3. Make the factory stage a build and call the execution layer, rather than
+   executing itself.
+
+Both loops execute from the serialized plan at the end of this.
 
 Shadow mode is the gate, per Kimi: for one full poll cycle the factory emits
-derived plans and diffs them against what the env var and hardcoded profiles
-would have selected, without acting on them. Only when the diff is empty does
-the plan become authoritative. Pin the factory's Longhouse ref to a SHA rather
-than a moving checkout, and keep the env var as a documented override shim.
+derived plans and runs the converged path in parallel with the existing one,
+diffing outcomes without acting on them. Only when the diff is empty does the
+converged path become authoritative. Pin the factory's Longhouse ref to a SHA
+rather than a moving checkout, and keep the env var as a documented override
+shim.
 
 Retire `PROVIDER_FACTORY_QUALIFICATION_PROFILE` at the end of this phase, not
 the start.
 
-Deletes: `provider-release-proof.md` (verify inbound links first),
+Deletes: `provider_live_canary.py`'s execution role, the three raw-subprocess
+paths, `provider-release-proof.md` (verify inbound links first),
 `provider-automation-factory-epic.md`.
 
 ### Phase 3 — build the equivalence oracle, then split the adapter
@@ -463,12 +529,20 @@ twenty tool calls to reach an answer, and the answer was wrong.
 
 ## Risks
 
-**The two stacks may not want to merge.** The release lane's ten dedicated
+**The two stacks may not want to converge.** The release lane's ten dedicated
 modules and the universal harness were built independently for different
-purposes. Unification is the epic's core bet and Phase 1 is where it either
-holds or is disproven. If the planning model cannot reconcile them, the honest
-outcome is two planners sharing a contract, and Phase 1 should be allowed to
-reach that conclusion.
+purposes. The execution/oracle split is the epic's core bet and Phase 1 is
+where it either holds or is disproven. If the planning model cannot reconcile
+them, the honest outcome is two executors sharing one oracle layer and one
+contract, and Phase 1 should be allowed to reach that conclusion.
+
+**Phase 2 converges onto a god class that Phase 3 then splits.** Making the
+4,446-line harness the sole executor before decomposing it concentrates risk in
+the component with the widest blast radius, and briefly makes the codebase
+worse. The alternative — splitting first — means guessing the interface before
+the planner and the oracle seam have told you what it should be, which is the
+sequencing error all three reviewers warned against. The order stands, but the
+cost is real and Phase 3 should not be deferred once Phase 2 lands.
 
 **Phase 3 is a 4,446-line refactor behind an oracle that must be built first.**
 The oracle is now scoped work rather than an assumed reuse.
