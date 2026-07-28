@@ -34,6 +34,39 @@ def _group_outcome(canaries: dict[str, Any], required: tuple[str, ...]) -> Asser
     return AssertionOutcome.INFRASTRUCTURE_ERROR
 
 
+_SERVE_REQUIRED_CANARIES = (
+    "binary_identity",
+    "attach_command_shape",
+    "server_startup",
+    "schema_probe",
+    "session_create",
+    "session_get",
+    "prompt_async_no_reply_delivery",
+    "session_abort",
+)
+_RESTART_REQUIRED_CANARIES = ("binary_identity", "process_restart_reattach_contract")
+
+
+def opencode_server_contract_oracle(canaries: dict[str, Any]) -> tuple[semantic.SemanticAssertion, ...]:
+    """Pure: an observation dict -> typed capability-proof assertion records.
+
+    No I/O, no subprocess, no filesystem access — takes exactly the `canaries`
+    shape `run_provider_live_canary` already produces. This is the Phase 2
+    step 1 extraction (docs/specs/provider-factory-coherence.md, "The
+    run-evidence index"): pull judgment out of the executor while preserving
+    the executor's current behavior exactly. `opencode_server_qualification`
+    is the profile the spec calls "already close to a pure mapping," which is
+    why it is the first of the ten `_PROFILES` extracted this way; the other
+    nine are documented as not-yet-done in the spec's Phase 2 status.
+    """
+    serve_outcome = _group_outcome(canaries, _SERVE_REQUIRED_CANARIES)
+    restart_outcome = _group_outcome(canaries, _RESTART_REQUIRED_CANARIES)
+    return (
+        semantic.SemanticAssertion(ASSERTIONS[0], serve_outcome, EvidenceClass.LIVE_NO_TOKEN),
+        semantic.SemanticAssertion(ASSERTIONS[1], restart_outcome, EvidenceClass.LIVE_NO_TOKEN),
+    )
+
+
 def _execute(binary: Path, evidence_root: Path):
     artifact = run_provider_live_canary(
         {
@@ -46,30 +79,11 @@ def _execute(binary: Path, evidence_root: Path):
         }
     )
     canaries = dict(artifact.get("canaries") or {})
-    serve_outcome = _group_outcome(
-        canaries,
-        (
-            "binary_identity",
-            "attach_command_shape",
-            "server_startup",
-            "schema_probe",
-            "session_create",
-            "session_get",
-            "prompt_async_no_reply_delivery",
-            "session_abort",
-        ),
-    )
-    restart_outcome = _group_outcome(
-        canaries,
-        ("binary_identity", "process_restart_reattach_contract"),
-    )
-    overall = "pass" if {serve_outcome, restart_outcome} == {AssertionOutcome.PASS} else "fail"
+    assertions = opencode_server_contract_oracle(canaries)
+    overall = "pass" if {a.outcome for a in assertions} == {AssertionOutcome.PASS} else "fail"
     return (
         {"status": overall, "provider_live_canary": artifact},
-        (
-            semantic.SemanticAssertion(ASSERTIONS[0], serve_outcome, EvidenceClass.LIVE_NO_TOKEN),
-            semantic.SemanticAssertion(ASSERTIONS[1], restart_outcome, EvidenceClass.LIVE_NO_TOKEN),
-        ),
+        assertions,
         (),
     )
 

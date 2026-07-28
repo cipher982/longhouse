@@ -374,6 +374,87 @@ def _emit(
     }
 
 
+def codex_helm_interrupt_oracle(
+    canary_result: dict[str, Any],
+    stop: dict[str, Any] | None,
+    *,
+    canary_error: str | None,
+) -> dict[str, AssertionOutcome]:
+    """Pure: the managed-live-interrupt canary result + stop.json evidence ->
+    typed outcomes for all three ASSERTIONS. No I/O, no subprocess.
+
+    Extracted per Phase 2 step 1 (docs/specs/provider-factory-coherence.md).
+    This profile judges exact turn identity (the interrupt must have hit the
+    exact turn that was sent, not just any turn) and verified cleanup (stop.json
+    must show an attempted stop, a clean subprocess exit, and post-hoc
+    verification that the process reached a terminal state with its socket
+    gone) — both timing-coupled interventions the spec's run-evidence index is
+    designed to carry (see run_evidence_index.InterventionLogEntry).
+    """
+    start_summary = canary_result.get("start_summary") if isinstance(canary_result.get("start_summary"), dict) else {}
+    send_summary = canary_result.get("send_summary") if isinstance(canary_result.get("send_summary"), dict) else {}
+    retained_state = canary_result.get("state") if isinstance(canary_result.get("state"), dict) else {}
+    send_active_evidence = bool(
+        str(send_summary.get("thread_id") or "").strip()
+        and str(send_summary.get("turn_id") or "").strip()
+        and str(send_summary.get("turn_status") or "").strip()
+    )
+    send_active = send_active_evidence and str(send_summary.get("turn_status") or "").lower() in {
+        "inprogress",
+        "in_progress",
+        "running",
+    }
+    state_active_evidence = bool(
+        str(retained_state.get("active_turn_id") or "").strip()
+        and str(retained_state.get("last_turn_status") or "").strip()
+        and str(retained_state.get("thread_id") or start_summary.get("thread_id") or "").strip()
+    )
+    state_active = state_active_evidence and str(retained_state.get("last_turn_status") or "").lower() in {
+        "inprogress",
+        "in_progress",
+        "running",
+    }
+    active_turn = send_active or state_active
+    active_evidence_available = send_active_evidence or state_active_evidence
+    sent_turn_id = str(send_summary.get("turn_id") or "")
+    interrupted_turn_id = str(canary_result.get("interrupted_turn_id") or "")
+    exact_turn_interrupted = bool(sent_turn_id and interrupted_turn_id == sent_turn_id)
+    terminal_status = canary_result.get("last_turn_status") or retained_state.get("last_turn_status")
+    terminal_evidence_available = bool(str(terminal_status or "").strip())
+    terminal = exact_turn_interrupted and str(terminal_status or "").lower() in {"interrupted", "cancelled"}
+    cleanup = bool(
+        stop
+        and stop.get("attempted") is True
+        and isinstance(stop.get("evidence"), dict)
+        and stop["evidence"].get("returncode") == 0
+        and isinstance(stop.get("verification"), dict)
+        and stop["verification"].get("verified") is True
+        and stop["verification"].get("terminal_state") is True
+        and stop["verification"].get("socket_absent") is True
+    )
+    failure_code = str(canary_result.get("failure_code") or "")
+    semantic_completion = canary_result.get("status") == "pass" or failure_code in _SEMANTIC_FAILURE_CODES
+    if canary_error or not semantic_completion:
+        return {assertion: AssertionOutcome.INFRASTRUCTURE_ERROR for assertion in ASSERTIONS}
+    return {
+        "active_managed_turn_observed": (
+            AssertionOutcome.PASS
+            if active_turn
+            else AssertionOutcome.SEMANTIC_FAIL
+            if active_evidence_available
+            else AssertionOutcome.INFRASTRUCTURE_ERROR
+        ),
+        "interrupt_terminal_cancelled_or_interrupted": (
+            AssertionOutcome.PASS
+            if terminal
+            else AssertionOutcome.SEMANTIC_FAIL
+            if terminal_evidence_available
+            else AssertionOutcome.INFRASTRUCTURE_ERROR
+        ),
+        "managed_bridge_cleanup_completed": (AssertionOutcome.PASS if cleanup else AssertionOutcome.INFRASTRUCTURE_ERROR),
+    }
+
+
 def run(request_path: Path, output_root: Path) -> dict[str, Any]:
     request = _load_request(request_path)
     output_root = output_root.expanduser().resolve()
@@ -577,71 +658,9 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
     canary_error = _redact_text(canary_error, secrets) if canary_error else None
     stop = _stop_evidence(canary_root)
 
-    start_summary = canary_result.get("start_summary") if isinstance(canary_result.get("start_summary"), dict) else {}
-    send_summary = canary_result.get("send_summary") if isinstance(canary_result.get("send_summary"), dict) else {}
-    retained_state = canary_result.get("state") if isinstance(canary_result.get("state"), dict) else {}
-    send_active_evidence = bool(
-        str(send_summary.get("thread_id") or "").strip()
-        and str(send_summary.get("turn_id") or "").strip()
-        and str(send_summary.get("turn_status") or "").strip()
-    )
-    send_active = send_active_evidence and str(send_summary.get("turn_status") or "").lower() in {
-        "inprogress",
-        "in_progress",
-        "running",
-    }
-    state_active_evidence = bool(
-        str(retained_state.get("active_turn_id") or "").strip()
-        and str(retained_state.get("last_turn_status") or "").strip()
-        and str(retained_state.get("thread_id") or start_summary.get("thread_id") or "").strip()
-    )
-    state_active = state_active_evidence and str(retained_state.get("last_turn_status") or "").lower() in {
-        "inprogress",
-        "in_progress",
-        "running",
-    }
-    active_turn = send_active or state_active
-    active_evidence_available = send_active_evidence or state_active_evidence
-    sent_turn_id = str(send_summary.get("turn_id") or "")
-    interrupted_turn_id = str(canary_result.get("interrupted_turn_id") or "")
-    exact_turn_interrupted = bool(sent_turn_id and interrupted_turn_id == sent_turn_id)
-    terminal_status = canary_result.get("last_turn_status") or retained_state.get("last_turn_status")
-    terminal_evidence_available = bool(str(terminal_status or "").strip())
-    terminal = exact_turn_interrupted and str(terminal_status or "").lower() in {"interrupted", "cancelled"}
-    cleanup = bool(
-        stop
-        and stop.get("attempted") is True
-        and isinstance(stop.get("evidence"), dict)
-        and stop["evidence"].get("returncode") == 0
-        and isinstance(stop.get("verification"), dict)
-        and stop["verification"].get("verified") is True
-        and stop["verification"].get("terminal_state") is True
-        and stop["verification"].get("socket_absent") is True
-    )
+    outcomes = codex_helm_interrupt_oracle(canary_result, stop, canary_error=canary_error)
+    execution_status = "infrastructure_error" if AssertionOutcome.INFRASTRUCTURE_ERROR in outcomes.values() else "completed"
     failure_code = str(canary_result.get("failure_code") or "")
-    semantic_completion = canary_result.get("status") == "pass" or failure_code in _SEMANTIC_FAILURE_CODES
-    if canary_error or not semantic_completion:
-        outcomes = {assertion: AssertionOutcome.INFRASTRUCTURE_ERROR for assertion in ASSERTIONS}
-        execution_status = "infrastructure_error"
-    else:
-        outcomes = {
-            "active_managed_turn_observed": (
-                AssertionOutcome.PASS
-                if active_turn
-                else AssertionOutcome.SEMANTIC_FAIL
-                if active_evidence_available
-                else AssertionOutcome.INFRASTRUCTURE_ERROR
-            ),
-            "interrupt_terminal_cancelled_or_interrupted": (
-                AssertionOutcome.PASS
-                if terminal
-                else AssertionOutcome.SEMANTIC_FAIL
-                if terminal_evidence_available
-                else AssertionOutcome.INFRASTRUCTURE_ERROR
-            ),
-            "managed_bridge_cleanup_completed": (AssertionOutcome.PASS if cleanup else AssertionOutcome.INFRASTRUCTURE_ERROR),
-        }
-        execution_status = "infrastructure_error" if AssertionOutcome.INFRASTRUCTURE_ERROR in outcomes.values() else "completed"
 
     try:
         post_engine_identity = identity_bridge._sha256_file(engine)  # noqa: SLF001

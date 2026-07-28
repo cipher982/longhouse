@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 from contextlib import suppress
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -102,6 +103,81 @@ def _command_matches_expected(observed: object, expected: str) -> bool:
     except ValueError:
         return False
     return len(parts) == 3 and Path(parts[0]).name in _SHELL_NAMES and parts[1] in {"-c", "-lc"} and parts[2] == expected
+
+
+@dataclass(frozen=True)
+class CommandOracleResult:
+    command_outcome: AssertionOutcome
+    linked_outcome: AssertionOutcome
+    command_event_count: int
+    command_item_count: int
+    command_shapes_exact: bool
+    matching_command_count: int
+    raw_command_output: str | None
+    observed_output: str | None
+    final_agent_message_text: str | None
+
+
+def codex_tool_call_result_command_oracle(
+    events: list[dict[str, Any]],
+    *,
+    expected_command: str,
+    prompt: str,
+) -> CommandOracleResult:
+    """Pure: parsed Codex exec JSONL events -> outcomes plus their diagnostics.
+
+    No I/O, no subprocess. Judges exactly one thing: did exactly one
+    command_execution item match the expected command with exact output, and
+    is that output verbatim in the final agent_message after it. Extracted
+    per Phase 2 step 1 (docs/specs/provider-factory-coherence.md). The spec
+    notes this profile "cannot consume the harness's current Codex
+    observation" yet, because the harness's `tool_call_result` driver doesn't
+    yet produce this exact shape — this function is the pure-judgment half of
+    closing that gap; only the observation-production half (making the
+    harness emit `events` in this shape) remains open. Returns the diagnostic
+    fields alongside the outcomes so callers building an evidence record
+    don't recompute the same judgment a second time.
+    """
+    indexed_items = [(index, _event_item(event)) for index, event in enumerate(events)]
+    command_items = [(index, item) for index, item in indexed_items if item.get("type") == "command_execution"]
+    command_item_ids = {str(item.get("id")) for _, item in command_items if item.get("id") is not None}
+    command_shapes_exact = bool(command_items) and all(
+        _command_matches_expected(item.get("command"), expected_command) for _, item in command_items
+    )
+    matching_commands = [
+        (index, item)
+        for index, event in enumerate(events)
+        if event.get("type") == "item.completed"
+        and (item := _event_item(event)).get("type") == "command_execution"
+        and item.get("status") == "completed"
+        and item.get("exit_code") == 0
+        and _command_matches_expected(item.get("command"), expected_command)
+        and re.fullmatch(r"[0-9a-f]{32}\n", str(item.get("aggregated_output") or "")) is not None
+    ]
+    agent_messages = [(index, item) for index, item in indexed_items if item.get("type") == "agent_message"]
+    final_message = agent_messages[-1] if agent_messages else None
+    command_passed = command_shapes_exact and len(command_item_ids) == 1 and len(matching_commands) == 1
+    raw_command_output = str(matching_commands[0][1].get("aggregated_output") or "") if command_passed else None
+    observed_output = raw_command_output.rstrip("\n") if raw_command_output is not None else None
+    linked = bool(
+        command_passed
+        and observed_output
+        and final_message
+        and final_message[0] > matching_commands[0][0]
+        and str(final_message[1].get("text") or "") == observed_output
+        and observed_output not in prompt
+    )
+    return CommandOracleResult(
+        command_outcome=AssertionOutcome.PASS if command_passed else AssertionOutcome.SEMANTIC_FAIL,
+        linked_outcome=AssertionOutcome.PASS if linked else AssertionOutcome.SEMANTIC_FAIL,
+        command_event_count=len(command_items),
+        command_item_count=len(command_item_ids),
+        command_shapes_exact=command_shapes_exact,
+        matching_command_count=len(matching_commands),
+        raw_command_output=raw_command_output,
+        observed_output=observed_output,
+        final_agent_message_text=str(final_message[1].get("text") or "") if final_message else None,
+    )
 
 
 def _record(
@@ -438,45 +514,15 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
             sandbox_helper_evidence["vendored_bwrap_stable"] = vendored_bwrap_post_identity == vendored_bwrap_identity
             sandbox_helper_evidence["shim_removed"] = not Path(sandbox_helper_evidence["shim_path"]).exists()
         events, invalid_lines = _jsonl_events(tool_stdout)
-        indexed_items = [(index, _event_item(event)) for index, event in enumerate(events)]
-        command_items = [(index, item) for index, item in indexed_items if item.get("type") == "command_execution"]
-        command_item_ids = {str(item.get("id")) for _, item in command_items if item.get("id") is not None}
-        command_shapes_exact = bool(command_items) and all(
-            _command_matches_expected(item.get("command"), command) for _, item in command_items
-        )
-        matching_commands = [
-            (index, item)
-            for index, event in enumerate(events)
-            if event.get("type") == "item.completed"
-            and (item := _event_item(event)).get("type") == "command_execution"
-            and item.get("status") == "completed"
-            and item.get("exit_code") == 0
-            and _command_matches_expected(item.get("command"), command)
-            and re.fullmatch(r"[0-9a-f]{32}\n", str(item.get("aggregated_output") or "")) is not None
-        ]
-        agent_messages = [(index, item) for index, item in indexed_items if item.get("type") == "agent_message"]
-        final_message = agent_messages[-1] if agent_messages else None
-        command_passed = command_shapes_exact and len(command_item_ids) == 1 and len(matching_commands) == 1
-        raw_command_output = str(matching_commands[0][1].get("aggregated_output") or "") if command_passed else None
-        observed_output = raw_command_output.rstrip("\n") if raw_command_output is not None else None
-        linked = bool(
-            command_passed
-            and observed_output
-            and final_message
-            and final_message[0] > matching_commands[0][0]
-            and str(final_message[1].get("text") or "") == observed_output
-            and observed_output not in prompt
-        )
+        oracle_result = codex_tool_call_result_command_oracle(events, expected_command=command, prompt=prompt)
         tool_infrastructure_error = tool_result is None or tool_result.returncode != 0
         if tool_infrastructure_error:
             outcomes["command_execution_completed_with_exact_output"] = AssertionOutcome.INFRASTRUCTURE_ERROR
             outcomes["tool_result_linked_to_final_agent_message"] = AssertionOutcome.INFRASTRUCTURE_ERROR
             execution_status = "timed_out" if tool_timed_out else "infrastructure_error"
         else:
-            outcomes["command_execution_completed_with_exact_output"] = (
-                AssertionOutcome.PASS if command_passed else AssertionOutcome.SEMANTIC_FAIL
-            )
-            outcomes["tool_result_linked_to_final_agent_message"] = AssertionOutcome.PASS if linked else AssertionOutcome.SEMANTIC_FAIL
+            outcomes["command_execution_completed_with_exact_output"] = oracle_result.command_outcome
+            outcomes["tool_result_linked_to_final_agent_message"] = oracle_result.linked_outcome
             execution_status = "completed"
         if sandbox_helper_evidence is not None and (
             not sandbox_helper_evidence["vendored_bwrap_stable"] or not sandbox_helper_evidence["shim_removed"]
@@ -493,14 +539,16 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
             "stderr": _redact(tool_stderr, api_key, managed_package_root),
             "invalid_jsonl_lines": [_redact(line, api_key, managed_package_root) for line in invalid_lines],
             "event_count": len(events),
-            "command_event_count": len(command_items),
-            "command_item_count": len(command_item_ids),
-            "command_shapes_exact": command_shapes_exact,
-            "matching_command_count": len(matching_commands),
-            "raw_command_output": raw_command_output,
-            "observed_output": observed_output,
+            "command_event_count": oracle_result.command_event_count,
+            "command_item_count": oracle_result.command_item_count,
+            "command_shapes_exact": oracle_result.command_shapes_exact,
+            "matching_command_count": oracle_result.matching_command_count,
+            "raw_command_output": oracle_result.raw_command_output,
+            "observed_output": oracle_result.observed_output,
             "final_agent_message": (
-                _redact(str(final_message[1].get("text") or ""), api_key, managed_package_root) if final_message else None
+                _redact(oracle_result.final_agent_message_text, api_key, managed_package_root)
+                if oracle_result.final_agent_message_text is not None
+                else None
             ),
         }
 

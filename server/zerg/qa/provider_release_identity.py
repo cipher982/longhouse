@@ -260,6 +260,40 @@ def _record(
     )
 
 
+@dataclass(frozen=True)
+class IdentityObservation:
+    pre_execution_identity: str
+    post_execution_identity: str | None
+    process_returned: bool
+    returncode: int | None
+    reported_version: str | None
+    expected_provider_version: str
+
+
+def identity_oracle(observation: IdentityObservation) -> tuple[AssertionOutcome, AssertionOutcome]:
+    """Pure: an IdentityObservation -> (identity_outcome, version_outcome).
+
+    No I/O, no subprocess. Extracted from run_identity_profile's judgment
+    logic per Phase 2 step 1 (docs/specs/provider-factory-coherence.md, "The
+    run-evidence index"). Shared by all five *_release_identity profiles,
+    which is why extracting it here covers 5 of the epic's 10 `_PROFILES` at
+    once — see test_provider_release_identity_oracle_parity for the
+    profile-parity check.
+    """
+    identity_outcome = (
+        AssertionOutcome.PASS
+        if observation.post_execution_identity == observation.pre_execution_identity
+        else AssertionOutcome.INFRASTRUCTURE_ERROR
+    )
+    if not observation.process_returned or observation.returncode != 0:
+        version_outcome = AssertionOutcome.INFRASTRUCTURE_ERROR
+    elif observation.reported_version != observation.expected_provider_version:
+        version_outcome = AssertionOutcome.SEMANTIC_FAIL
+    else:
+        version_outcome = AssertionOutcome.PASS
+    return identity_outcome, version_outcome
+
+
 def run_identity_profile(
     request_path: Path,
     output_root: Path,
@@ -324,13 +358,16 @@ def run_identity_profile(
     match = profile.version_line.fullmatch(stdout.strip()) if not timed_out else None
     reported_version = match.group("version") if match else None
     process_returned = result is not None and not timed_out
-    identity_outcome = AssertionOutcome.PASS if post_execution_identity == pre_execution_identity else AssertionOutcome.INFRASTRUCTURE_ERROR
-    if not process_returned or result.returncode != 0:
-        version_outcome = AssertionOutcome.INFRASTRUCTURE_ERROR
-    elif reported_version != request["expected_provider_version"]:
-        version_outcome = AssertionOutcome.SEMANTIC_FAIL
-    else:
-        version_outcome = AssertionOutcome.PASS
+    identity_outcome, version_outcome = identity_oracle(
+        IdentityObservation(
+            pre_execution_identity=pre_execution_identity,
+            post_execution_identity=post_execution_identity,
+            process_returned=process_returned,
+            returncode=result.returncode if process_returned else None,
+            reported_version=reported_version,
+            expected_provider_version=request["expected_provider_version"],
+        )
+    )
     observation = {
         "argv": argv,
         "provider": profile.provider,

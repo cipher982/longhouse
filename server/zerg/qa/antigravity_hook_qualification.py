@@ -37,6 +37,33 @@ def _group_outcome(canaries: dict[str, Any], required: tuple[str, ...]) -> Asser
     return AssertionOutcome.INFRASTRUCTURE_ERROR
 
 
+_NO_TOKEN_REQUIRED_CANARIES = (
+    "binary_identity",
+    "command_shape",
+    "plugin_contract",
+    "global_hooks_contract",
+    "hook_inbox_claim_contract",
+)
+
+
+def antigravity_hook_inbox_oracle(canaries: dict[str, Any]) -> tuple[semantic.SemanticAssertion, ...]:
+    """Pure: an observation dict -> typed capability-proof assertion records.
+
+    No I/O, no subprocess. Extracted per Phase 2 step 1 (see
+    opencode_server_qualification.opencode_server_contract_oracle for the
+    pattern this mirrors). The live-print assertion is permanently BLOCKED
+    regardless of input: Antigravity has no isolated profile/data-root, so a
+    real `agy --print` here could create a Shadow transcript indistinguishable
+    from a user's own session (see the comment in `_execute`). No credential
+    or environment state can change that until an unwatched worker exists.
+    """
+    no_token_outcome = _group_outcome(canaries, _NO_TOKEN_REQUIRED_CANARIES)
+    return (
+        semantic.SemanticAssertion(ASSERTIONS[0], no_token_outcome, EvidenceClass.LIVE_NO_TOKEN),
+        semantic.SemanticAssertion(ASSERTIONS[1], AssertionOutcome.BLOCKED, EvidenceClass.LIVE_NO_TOKEN),
+    )
+
+
 def _execute(binary: Path, evidence_root: Path):
     no_token_root = evidence_root / "no-token"
     no_token_home = no_token_root / "home"
@@ -53,16 +80,9 @@ def _execute(binary: Path, evidence_root: Path):
                 "json": False,
             }
         )
-    no_token_outcome = _group_outcome(
-        dict(no_token.get("canaries") or {}),
-        (
-            "binary_identity",
-            "command_shape",
-            "plugin_contract",
-            "global_hooks_contract",
-            "hook_inbox_claim_contract",
-        ),
-    )
+    assertions = antigravity_hook_inbox_oracle(dict(no_token.get("canaries") or {}))
+    no_token_outcome = assertions[0].outcome
+    live_outcome = assertions[1].outcome
     raw_home = str(os.environ.get(QUALIFICATION_HOME_ENV) or "").strip()
     live_requested = os.environ.get(LIVE_ENABLE_ENV) == "1" or bool(raw_home)
     # This qualification runner executes on a Machine Agent host. Antigravity
@@ -85,8 +105,6 @@ def _execute(binary: Path, evidence_root: Path):
         "qualification_home_env": QUALIFICATION_HOME_ENV,
         "producer_boundary": "unwatched_worker_required",
     }
-    live_outcome = AssertionOutcome.BLOCKED
-    live_evidence_class = EvidenceClass.LIVE_NO_TOKEN
     overall = "pass"
     if AssertionOutcome.SEMANTIC_FAIL in {no_token_outcome, live_outcome}:
         overall = "fail"
@@ -94,10 +112,7 @@ def _execute(binary: Path, evidence_root: Path):
         overall = "blocked"
     return (
         {"status": overall, "no_token_canary": no_token, "real_print_canary": live},
-        (
-            semantic.SemanticAssertion(ASSERTIONS[0], no_token_outcome, EvidenceClass.LIVE_NO_TOKEN),
-            semantic.SemanticAssertion(ASSERTIONS[1], live_outcome, live_evidence_class),
-        ),
+        assertions,
         (),
     )
 

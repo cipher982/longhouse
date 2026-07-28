@@ -47,6 +47,33 @@ def _status_outcome(status: str) -> AssertionOutcome:
     return AssertionOutcome.SEMANTIC_FAIL
 
 
+def claude_real_print_oracle(
+    *,
+    no_token_verdict: str,
+    live_enabled: bool,
+    live_status: str | None,
+) -> tuple[semantic.SemanticAssertion, ...]:
+    """Pure: observation -> typed capability-proof assertion records.
+
+    No I/O, no subprocess, no env reads. Extracted per Phase 2 step 1 (see
+    opencode_server_qualification.opencode_server_contract_oracle for the
+    pattern). `_execute` still decides *whether* to run the live canary
+    (credential discovery is inherently impure); this function only judges
+    what was observed.
+    """
+    no_token_outcome = _status_outcome(str(no_token_verdict).replace("green", "pass").replace("yellow", "warn").replace("red", "fail"))
+    if live_enabled:
+        live_outcome = AssertionOutcome.PASS if live_status == "pass" else AssertionOutcome.SEMANTIC_FAIL
+        live_evidence_class = EvidenceClass.LIVE_TOKEN
+    else:
+        live_outcome = AssertionOutcome.BLOCKED
+        live_evidence_class = EvidenceClass.LIVE_NO_TOKEN
+    return (
+        semantic.SemanticAssertion(ASSERTIONS[0], no_token_outcome, EvidenceClass.LIVE_NO_TOKEN),
+        semantic.SemanticAssertion(ASSERTIONS[1], live_outcome, live_evidence_class),
+    )
+
+
 def _execute(binary: Path, evidence_root: Path):
     no_token_root = evidence_root / "no-token"
     no_token_home = no_token_root / "home"
@@ -96,8 +123,6 @@ def _execute(binary: Path, evidence_root: Path):
             env["HOME"] = str(isolated_home)
         with semantic.temporary_environment(env):
             live = module.run_claude_real_print_canary(argparse.Namespace(claude_print_timeout_secs=180), live_root)
-        live_outcome = AssertionOutcome.PASS if live.get("status") == "pass" else AssertionOutcome.SEMANTIC_FAIL
-        live_evidence_class = EvidenceClass.LIVE_TOKEN
     else:
         live = {
             "status": "blocked",
@@ -110,8 +135,12 @@ def _execute(binary: Path, evidence_root: Path):
             "default_home_enable_env": USE_DEFAULT_HOME_ENV,
             "accepted_credential_env": list(EXPLICIT_CREDENTIAL_ENV),
         }
-        live_outcome = AssertionOutcome.BLOCKED
-        live_evidence_class = EvidenceClass.LIVE_NO_TOKEN
+    assertions = claude_real_print_oracle(
+        no_token_verdict=str(no_token.get("verdict") or "red"),
+        live_enabled=live_enabled,
+        live_status=live.get("status") if live_enabled else None,
+    )
+    no_token_outcome, live_outcome = assertions[0].outcome, assertions[1].outcome
     overall = "pass"
     if AssertionOutcome.SEMANTIC_FAIL in {no_token_outcome, live_outcome}:
         overall = "fail"
@@ -119,10 +148,7 @@ def _execute(binary: Path, evidence_root: Path):
         overall = "blocked"
     return (
         {"status": overall, "no_token_canary": no_token, "real_print_canary": live},
-        (
-            semantic.SemanticAssertion(ASSERTIONS[0], no_token_outcome, EvidenceClass.LIVE_NO_TOKEN),
-            semantic.SemanticAssertion(ASSERTIONS[1], live_outcome, live_evidence_class),
-        ),
+        assertions,
         tuple(credentials[key] for key in ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY") if key in credentials),
     )
 
