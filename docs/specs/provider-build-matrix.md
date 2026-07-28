@@ -1,6 +1,6 @@
 # Provider Build Matrix
 
-**Status:** steps 1–2 implemented; steps 3–4 proposed
+**Status:** steps 1–4 implemented
 **Owner:** Longhouse
 **Updated:** 2026-07-27
 **Extends:** `provider-automation-factory-epic.md`, `provider-automation-factory-completion.md`
@@ -22,7 +22,7 @@ of whichever machine ran the test.
 The governing principle, from two independent reviews that otherwise disagreed:
 **rigorous identity, dumb scheduling.** Get the evidence key exactly right,
 because a wrong key silently invalidates every conclusion drawn from it. Then
-schedule with a cron and a committed table, because at four providers nothing
+schedule with a cron and a committed table, because at five providers nothing
 more earns its keep.
 
 ## The incident that motivates it
@@ -104,7 +104,7 @@ provider-builds.lock                                   # version → closure dig
 ```
 
 Content-addressing is for *identity and verification*, not storage layout. At
-four providers there is no dedup, shared-closure, or distribution problem, so
+five providers there is no dedup, shared-closure, or distribution problem, so
 resist a content-addressed filesystem. The lockfile carries the rigor; the
 directory stays legible.
 
@@ -217,7 +217,7 @@ When it is eventually built:
   machinery the epic already specifies and `schema_fingerprints` already
   partially implements.
 
-Until then the full column runs. At four providers it is cheap.
+Until then the full column runs. At five providers it is cheap.
 
 ## Sequencing
 
@@ -366,7 +366,7 @@ forward, which is how Chrome-for-Testing solved the same problem.
 ## Do not build
 
 - **No scheduler or disposition engine.** A weekly cron and a committed table
-  suffice at four providers.
+  suffice at five providers.
 - **No external sandbox for the remaining couplings.** Trapped `PATH` and fresh
   `HOME` already exist in `native-installer-smoke.sh`. Enforce the pinned build,
   declare the rest, stop.
