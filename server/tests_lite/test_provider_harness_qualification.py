@@ -146,6 +146,60 @@ def test_tool_call_result_legacy_and_harness_paths_agree_on_the_same_binary(tmp_
     assert legacy_bundle["coverage_manifest"]["evidence_class"] == harness_bundle["coverage_manifest"]["evidence_class"] == "live_token"
 
 
+def test_helm_interrupt_legacy_and_harness_paths_agree_when_bridge_credentials_are_missing(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Equivalence check for codex_helm_interrupt_v1, the harder of the two
+    bridged profiles: a real live interrupt needs a managed engine/MCP
+    bootstrap that isn't hermetically testable end-to-end. The one case both
+    the legacy executor and the harness bridge can reach without any of that
+    is bridge credentials (CODEX_API_URL/CODEX_AGENTS_TOKEN) missing --
+    legacy's codex_helm_interrupt._required_environment() short-circuits
+    immediately to BLOCKED; the harness's interrupt_cancel Stage 1 instead
+    runs a real hermetic-only dispatch proof
+    (universal_agent_harness._run_codex_interrupt_dispatch_proof, exercised
+    for real here, not mocked) and only maps to BLOCKED via the
+    _strict_outcomes() fix above. Confirms that fix actually produces
+    equivalence, not just the shape the regression test checks in isolation.
+    """
+    package_root, binary, identity = _codex_package(tmp_path, behavior="pass")
+    build_identity = f"sha256:{_closure_digest(package_root)}"
+    monkeypatch.delenv("CODEX_API_URL", raising=False)
+    monkeypatch.delenv("CODEX_AGENTS_TOKEN", raising=False)
+    monkeypatch.delenv(codex_helm_interrupt.ENGINE_ENV, raising=False)
+    monkeypatch.delenv(codex_helm_interrupt.PACKAGE_ROOT_ENV, raising=False)
+    monkeypatch.delenv(codex_helm_interrupt.PROVIDER_TOKEN_ENV, raising=False)
+
+    legacy_request = _request(
+        tmp_path,
+        profile=codex_helm_interrupt.PROFILE,
+        binary=binary,
+        identity=identity,
+        build_identity=build_identity,
+        invocation_id="helm-equivalence-legacy",
+    )
+    legacy_result = codex_helm_interrupt.run(legacy_request, tmp_path / "legacy-output")
+
+    harness_request = _request(
+        tmp_path,
+        profile=codex_helm_interrupt.PROFILE,
+        binary=binary,
+        identity=identity,
+        build_identity=build_identity,
+        invocation_id="helm-equivalence-harness",
+    )
+    harness_result = bridge.run(harness_request, tmp_path / "harness-output")
+
+    assert legacy_result["assertions"] == harness_result["assertions"] == {
+        "active_managed_turn_observed": "blocked",
+        "interrupt_terminal_cancelled_or_interrupted": "blocked",
+        "managed_bridge_cleanup_completed": "blocked",
+    }
+    legacy_bundle = json.loads((tmp_path / "legacy-output" / "proof-bundle.json").read_text(encoding="utf-8"))
+    harness_bundle = json.loads((tmp_path / "harness-output" / "proof-bundle.json").read_text(encoding="utf-8"))
+    assert legacy_bundle["coverage_manifest"]["evidence_class"] == harness_bundle["coverage_manifest"]["evidence_class"] == "live_no_token"
+
+
 def test_tool_call_result_end_to_end_pass(tmp_path: Path, monkeypatch) -> None:
     package_root, binary, identity = _codex_package(tmp_path, behavior="pass")
     build_identity = f"sha256:{_closure_digest(package_root)}"
