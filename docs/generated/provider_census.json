@@ -7,7 +7,7 @@
     "cursor",
     "opencode"
   ],
-  "file_count": 189,
+  "file_count": 191,
   "files": [
     {
       "path": "e2e/tests/core/sessions.spec.ts",
@@ -810,6 +810,16 @@
       ]
     },
     {
+      "path": "server/tests_lite/test_provider_factory_model.py",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "cursor",
+        "opencode"
+      ]
+    },
+    {
       "path": "server/tests_lite/test_provider_live_proof.py",
       "providers": [
         "antigravity",
@@ -1218,6 +1228,16 @@
       "providers": [
         "antigravity",
         "claude",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/zerg/qa/provider_factory_model.py",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "cursor",
         "opencode"
       ]
     },
