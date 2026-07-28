@@ -736,6 +736,51 @@ shadow-compare. `_run_v2_bridge` still hardcodes `scripts/qa/provider-qualificat
 nothing in either repository invokes these new harness scenarios from the
 release lane yet.
 
+### The bridge/dispatcher design (Sol, not yet built)
+
+Third Sol consult for this section. Three decisions:
+
+1. **A new, narrow public CLI**: `scripts/qa/provider-harness-qualification.py`.
+   Same `--request`/`--output-root`/`--json` contract as `provider-qualification.py`.
+   Accepts only the two explicit profile-to-scenario mappings (no general
+   provider/scenario selection — this is not a second harness CLI). Builds a
+   real `ProviderBuildRef` from the staged request, calls `run_harness()` with
+   exactly `providers=("codex",)` and one scenario, requires exactly one
+   matching `ScenarioResult` (fails closed on missing/multiple/mismatched
+   results or an incomplete `strict_oracle` field), preserves the full harness
+   observation as raw evidence, rechecks provider identity post-execution
+   (plus verified engine identity for helm), and produces the normal proof
+   bundle via the finalizer below.
+2. **Control-plane dispatch**: a narrow profile-to-script map next to
+   `_run_v2_bridge` — `{"codex_tool_call_result_v1", "codex_helm_interrupt_v1"}`
+   select the new script; every other profile keeps
+   `provider-qualification.py` unchanged. Reject impossible provider/profile
+   combinations rather than silently falling back. The manifest records which
+   execution boundary was selected; rollback is one mapping edit. Tests must
+   assert the exact launched path for both strict profiles and one ordinary
+   profile (regression guard against the map silently widening).
+3. **Provenance: promote, don't duplicate, don't over-abstract.** Each of the
+   two release-lane modules' `_emit()` becomes a small public finalizer (e.g.
+   `emit_proof_bundle()`), called by both that module's own `run()` (legacy
+   path, still what's deployed today) and the new harness bridge script. This
+   reuses the exact `ProviderCapabilityProofRecord` serialization, canonical
+   `artifact_id` hash, contract/adapter/oracle digests, and coverage shape
+   without building a generic framework across all ten profiles. The bridge
+   script stays responsible for obtaining and validating pre/post identity,
+   reported version, `ProviderBuildRef`, and (for helm) engine hash before
+   calling the finalizer — that acquisition logic is legitimately different
+   between staged-release qualification and harness-backed qualification, and
+   is not shared. Add equivalence tests: identical outcomes/provenance fed
+   through the legacy and harness finalization paths must produce identical
+   records, byte-for-byte except explicitly variable evidence/timestamps.
+
+Sequencing for whoever builds this: finalizer promotion first (pure refactor
+of already-tested code, lowest risk), then the new CLI script (new code,
+testable standalone against constructed fixtures, no control-plane change),
+then the control-plane dispatch map last (the only piece that touches what's
+actually deployed) — shadow-compared before anything currently running is
+retired, per the shadow gate above.
+
 ### Phase 3 — equivalence oracle, then split the adapter
 
 Build the fixture corpus and semantic comparison: explicit outcomes, commands
