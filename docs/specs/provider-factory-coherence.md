@@ -944,13 +944,32 @@ the shadow gate above.
 
 ### Phase 3 — equivalence oracle, then split the adapter
 
-Build the fixture corpus and semantic comparison: explicit outcomes, commands
-and arguments, transcript projections, capability booleans, exit status,
-assertion identities, checksums for non-JSON artifacts. Structural fingerprints
-stay schema-drift diagnostics.
+**Comparison half shipped 2026-07-28 (longhouse `ef16bccaa`):**
+`server/zerg/qa/scenario_equivalence.py`'s `compare_scenario_results()`
+judges two `ScenarioResult`-shaped captures for equivalence — explicit
+outcomes, commands/arguments, exit status, assertion identities, capability
+booleans, and presence/shape (not value equality, since two runs legitimately
+differ) of non-JSON-artifact checksums. Value-based, not schema-based: a
+release-lane proof-bundle-derived payload and a native harness payload are
+both judged by the same function. Fixture corpus seeded with real captures
+(not synthetic) from the two profiles Phase 2 proved equivalent —
+`server/tests_lite/fixtures/scenario_equivalence/`. Running it against real
+data immediately caught a new, previously-unchecked discrepancy:
+`run_codex_helm_interrupt()` reported `execution_status="completed"` for a
+credentials-missing run where every outcome was BLOCKED and nothing was
+actually attempted, diverging from the legacy path's own `"blocked"`
+convention — fixed to match.
 
-Then split the adapter behind `AgentHarnessAdapter`, guarded by that oracle and
-the sixth-provider test.
+**Not started:** the fixture corpus only covers the two already-bridged
+codex profiles; it doesn't yet run across the other eight `_PROFILES` or any
+generic (non-codex) harness scenario. Transcript projections specifically
+(the harness's `session_projection`/`timeline_projection` output) aren't
+compared yet — the two seeded fixtures don't produce them.
+
+Then split the adapter behind `AgentHarnessAdapter` (already exists as a
+`Protocol`, `universal_agent_harness.py:727`, with ~35 methods — the split is
+decomposing the current single implementing class into one implementation
+per provider), guarded by that oracle and the sixth-provider test.
 
 Deletes: `executable-provider-capability-contract-epic.md`,
 `provider-release-proof-roadmap.md`.
