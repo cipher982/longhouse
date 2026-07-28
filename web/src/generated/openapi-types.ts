@@ -2808,85 +2808,11 @@ export interface paths {
         };
         /**
          * Semantic Search Sessions
-         * @description Search sessions by semantic similarity using embeddings.
+         * @description Search sessions by semantic similarity, scoped to the owner's storage-v2 catalog.
          */
         get: operations["semantic_search_sessions_agents_sessions_semantic_get"];
         put?: never;
         post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/agents/recall/status": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Recall Index Status
-         * @description Return retrieval.db recall index status.
-         */
-        get: operations["recall_index_status_agents_recall_status_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/agents/recall/index": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Index Recall Sessions
-         * @description Queue recent sessions for projection into retrieval.db.
-         */
-        post: operations["index_recall_sessions_agents_recall_index_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/agents/recall/index/{job_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Recall Index Job Status */
-        get: operations["recall_index_job_status_agents_recall_index__job_id__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/agents/recall/index/{job_id}/cancel": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Cancel Recall Index Job */
-        post: operations["cancel_recall_index_job_agents_recall_index__job_id__cancel_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3837,30 +3763,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/agents/backfill-embeddings": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Backfill Embeddings Progress
-         * @description Check embedding backfill progress.
-         */
-        get: operations["backfill_embeddings_progress_agents_backfill_embeddings_get"];
-        put?: never;
-        /**
-         * Backfill Embeddings
-         * @description Start backfilling missing embeddings as a background task.
-         */
-        post: operations["backfill_embeddings_agents_backfill_embeddings_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/agents/media/backfill-inline-data-urls": {
         parameters: {
             query?: never;
@@ -4765,62 +4667,6 @@ export interface components {
             archive_repair?: {
                 [key: string]: unknown;
             };
-        };
-        /**
-         * BackfillEmbeddingsProgressResponse
-         * @description Response for embedding backfill progress check.
-         */
-        BackfillEmbeddingsProgressResponse: {
-            /** Running */
-            running: boolean;
-            /**
-             * Embedded
-             * @default 0
-             */
-            embedded: number;
-            /**
-             * Skipped
-             * @default 0
-             */
-            skipped: number;
-            /**
-             * Errors
-             * @default 0
-             */
-            errors: number;
-            /**
-             * Remaining
-             * @default 0
-             */
-            remaining: number;
-            /**
-             * Total
-             * @default 0
-             */
-            total: number;
-        };
-        /**
-         * BackfillEmbeddingsResponse
-         * @description Response for embedding backfill endpoint.
-         */
-        BackfillEmbeddingsResponse: {
-            /**
-             * Status
-             * @description 'started', 'already_running', or 'nothing_to_do'
-             */
-            status: string;
-            /**
-             * Total
-             * @description Total sessions to process
-             * @default 0
-             */
-            total: number;
-            /**
-             * Message
-             * @description Human-readable status message
-             * @default
-             */
-            message: string;
         };
         /**
          * BackfillProgressResponse
@@ -16766,134 +16612,6 @@ export interface operations {
             };
         };
     };
-    recall_index_status_agents_recall_status_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
-                };
-            };
-        };
-    };
-    index_recall_sessions_agents_recall_index_post: {
-        parameters: {
-            query?: {
-                /** @description Filter by project */
-                project?: string | null;
-                /** @description Filter by provider */
-                provider?: string | null;
-                /** @description Days to index */
-                since_days?: number;
-                /** @description Max sessions to index */
-                limit?: number;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    recall_index_job_status_agents_recall_index__job_id__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                job_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    cancel_recall_index_job_agents_recall_index__job_id__cancel_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                job_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     recall_sessions_agents_recall_get: {
         parameters: {
             query: {
@@ -18707,62 +18425,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BackfillSummariesResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    backfill_embeddings_progress_agents_backfill_embeddings_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BackfillEmbeddingsProgressResponse"];
-                };
-            };
-        };
-    };
-    backfill_embeddings_agents_backfill_embeddings_post: {
-        parameters: {
-            query?: {
-                /** @description Max concurrent embedding requests */
-                concurrency?: number;
-                /** @description Optional project filter */
-                project?: string | null;
-                /** @description Re-embed sessions that already have embeddings */
-                force?: boolean;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BackfillEmbeddingsResponse"];
                 };
             };
             /** @description Validation Error */
