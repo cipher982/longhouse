@@ -2,11 +2,14 @@
 
 **Status:** proposed, revision 3. No code has moved.
 
-Revision 2 follows review by three independent agents (Hatch Fable, Hatch Codex
-Sol, Hatch OpenRouter Kimi K3). Sol rejected revision 1 and reframed it; several
-of revision 1's headline facts were wrong. Those corrections are marked
+Revision 2 followed review by three independent agents (Hatch Fable, Hatch
+Codex Sol, Hatch OpenRouter Kimi K3). Sol rejected revision 1 and reframed it;
+several of revision 1's headline facts were wrong. Those corrections are marked
 **[r1 error]** below and are kept visible rather than quietly fixed, because a
 document arguing for checkable claims has to be checkable itself.
+
+Revision 3 adds the convergence plan — which half of each execution stack
+survives — which revision 2 left unspecified.
 
 ## What this system is
 
