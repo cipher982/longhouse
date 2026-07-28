@@ -102,25 +102,34 @@ NOT deployed to clifford:
    path's own credentials-missing handling. Fixed by simplifying
    `_strict_outcomes()` to key off `strict_oracle`'s presence alone; a
    regression test reproduces the exact hermetic-fallback payload shape.
-   **Not yet written:** the equivalent test for `codex_helm_interrupt_v1`
-   (harder — needs a live/managed engine bootstrap that's hermetically fake
-   only via `run_harness` mocking today, not a real end-to-end run like
-   `codex_tool_call_result_v1`'s), and equivalence at the finalizer/manifest
-   level (both paths already share `emit_proof_bundle()`, so this would
-   mostly test serialization, but Phase 2's own definition of done still
-   names it).
+   `codex_helm_interrupt_v1`'s equivalence test (longhouse `250667f78`) is
+   also landed: its full live-interrupt path needs a managed engine/MCP
+   bootstrap that isn't hermetically testable end to end, but the
+   credentials-missing case is reachable by both paths without one —
+   legacy's `_required_environment()` short-circuits to BLOCKED
+   immediately; the harness's `interrupt_cancel` Stage 1 runs a real (not
+   mocked) hermetic-only dispatch proof and only reaches BLOCKED via the
+   `_strict_outcomes()` fix. The test confirms the fix actually produces
+   equivalence, not just the isolated shape the regression test checks.
+   **Not yet written:** equivalence at the finalizer/manifest level (both
+   paths already share `emit_proof_bundle()`, so this would mostly test
+   serialization, but Phase 2's own definition of done still names it), and
+   neither equivalence test covers the full live-token success path (both
+   profiles' actual live interrupt/tool-call execution against a real
+   engine) — only the credentials-missing/hermetic-fallback case for helm,
+   and a hermetic fake-binary pass for tool_call_result.
 
 **Explicitly not started**, and multi-session scope per Sol: control-plane
 harness process launching, full-column `QualificationSandbox` policy,
 port/process lifecycle, intervention production, run-evidence-index
 production (the schema exists; nothing writes one yet), oracle invocation
-over that index, shadow-compare (the actual comparison run, now that both
-sides are wired), the `codex_helm_interrupt_v1` equivalence test, and
-retiring the duplicate launch-and-collect code + the env-var selector.
-Revised pacing per David: this system has zero users, so there is no
-elapsed-time gate anywhere in this phase — see "The shadow gate" below — but
-the remaining work is real engineering depth, not waiting, and half-wiring
-it would create a third execution path instead of convergence.
+over that index, shadow-compare (the actual comparison run against real
+clifford-shaped inputs, now that both sides are wired), and retiring the
+duplicate launch-and-collect code + the env-var selector. Revised pacing per
+David: this system has zero users, so there is no elapsed-time gate anywhere
+in this phase — see "The shadow gate" below — but the remaining work is real
+engineering depth, not waiting, and half-wiring it would create a third
+execution path instead of convergence.
 
 Two rounds of independent review (Hatch Fable, Hatch Codex Sol, Hatch
 OpenRouter Kimi K3) have corrected this document eleven times. Corrections are
