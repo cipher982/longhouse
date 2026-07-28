@@ -623,80 +623,89 @@ Deletes: duplicate execution in the three named modules,
 `provider-release-proof.md` (verify inbound links first),
 `provider-automation-factory-epic.md`.
 
-### Closing the observation gap (designed 2026-07-28, not yet built)
+### Closing the observation gap — first draft wrong, corrected by review (2026-07-28)
 
 Steps 1-3's bounded slices are done (pure oracles for all 10 profiles, an
 additive multi-profile tick, staged builds authoritative inside
-`run_harness()`). What's left — control-plane launching the real harness
-under `QualificationSandbox`, and the two profiles the profile-parity notes
-flagged as unable to consume the harness's current observation — turned out
-to be one problem, not several, once traced to the actual call sites.
+`run_harness()`). A first draft of this section claimed the two flagged
+profiles (`codex_helm_interrupt`, `codex_tool_call_result`) could consume the
+harness's existing observation with only additive changes. Hatch Sol review
+found that claim false or overstated on every substantive point, before any
+code was written. Kept here, corrected, for the same reason the appendix
+keeps revision 1-3's errors: the corrected fact matters more than a clean
+draft history.
 
-**The two flagged profiles already share their underlying execution with the
-harness; only the judgment differs, and only for `codex_tool_call_result`.**
+**`codex_tool_call_result`: the harness runs a different test, not a
+differently-parsed version of the same test.** The harness's
+`run_real_tool_exec` (`codex_provider_release_canary.py`) has the model run
+`printf '{marker}\n'` and reply exactly `DONE`. `codex_tool_call_result_v1`
+requires `python -c 'import secrets; print(secrets.token_hex(16))'` and the
+final message to equal that command's exact output
+(`codex_tool_call_result.py:357-360,467`). These are different scenarios that
+happen to share a scenario name. Calling `codex_tool_call_result_command_oracle`
+over the harness's `printf`/`DONE` events with the release lane's expected
+command would deterministically return `SEMANTIC_FAIL` — command mismatch,
+every time, regardless of whether Codex behaves correctly. The raw-JSONL-file
+observation was real; the claim that it was *the right observation* for this
+oracle was not. Fixing this means either changing what the harness's
+`tool_call_result` scenario asks the model to do (which changes what every
+other provider's `tool_call_result` scenario is compared against, since the
+scenario name is shared and provider-neutral by design), or accepting that
+`codex_tool_call_result_v1` tests something genuinely more specific than the
+harness's generic `tool_call_result` scenario and the two should not converge
+at the scenario-name level. **This is a product decision, not an execution
+detail, and is not resolved here.**
 
-- `codex_helm_interrupt`: the harness's `_run_codex_interrupt_cancel` driver
-  calls `run_codex_provider_release_canary(..., run_managed_live_interrupt=True)`,
-  which — traced through `codex_provider_release_canary.py` — dispatches to
-  the exact same `run_managed_live_interrupt(args, evidence_root, codex_bin)`
-  that `codex_helm_interrupt.py`'s own executor imports as `bridge_canary.run_managed_live_interrupt`.
-  Same function, same call. The harness's `canary_artifact["canaries"]["managed_live_interrupt"]`
-  is the same shape `codex_helm_interrupt_oracle()` already consumes as
-  `canary_result`. The only missing piece is `stop.json` — the harness driver
-  doesn't currently surface it in a location the oracle can find; `_stop_evidence()`
-  (already defined in `codex_helm_interrupt.py`) needs to be pointed at the
-  harness's `canary_evidence_root` instead of the release lane's own run root.
-- `codex_tool_call_result`: the harness's `_run_codex_tool_call_result` driver
-  calls `run_codex_provider_release_canary(..., run_real_tool=True)`, which
-  runs a real `codex exec --json` and writes the complete raw event stream to
-  `codex-exec.stdout.jsonl` on disk (`codex_provider_release_canary.py`,
-  `run_real_tool_exec`) — but then judges it with `_codex_exec_json_events`,
-  a **second, independent reimplementation** of `codex_tool_call_result.py`'s
-  own `_jsonl_events`/`_event_item`, using looser criteria (spec's existing
-  words: "tolerates multiple command events, checks only that a matching one
-  exists"). This is itself a small instance of the epic's duplication pattern,
-  found by tracing this design, not previously documented. The raw JSONL file
-  the canary already writes is exactly `codex_tool_call_result_command_oracle`'s
-  input shape — no new execution is needed, only reading that file and calling
-  the existing pure oracle instead of (or alongside) the looser one.
+**`codex_helm_interrupt`: same underlying function, different execution
+contract.** `_run_codex_interrupt_cancel` and `codex_helm_interrupt.py`'s own
+executor do both call `run_managed_live_interrupt()` — that part of the first
+draft holds. But the release-lane executor first builds an isolated,
+fully-replaced environment (`os.environ.clear()` then a `strict_env` with
+exactly the allowed variables), prepares inert MCP bootstrap config, and
+wraps the call with pre/post engine and provider identity verification
+(`codex_helm_interrupt.py:611-649` and surrounding). The harness calls the
+same function inside its own ambient process environment with none of that
+isolation. "Same function, same call" is true; "therefore the observation is
+equally trustworthy" does not follow — the release lane's isolation is part
+of what makes its proof meaningful, not incidental plumbing. Reusing the
+observation requires the harness driver to adopt the same setup, not just
+call the same function.
 
-**Sequencing, safe-to-risky:**
+**The bridge design's "no control-plane changes" claim is also false**, on
+two independent grounds:
 
-1. **Enrich both harness drivers additively.** Add a `strict_oracle` field to
-   `_run_codex_interrupt_cancel`'s and `_run_codex_tool_call_result`'s payload,
-   computed by calling `codex_helm_interrupt_oracle`/`codex_tool_call_result_command_oracle`
-   over data the harness already produces. Existing `status`/`verdict` fields,
-   and every existing test, are untouched — this is pure addition, testable
-   with the harness's existing fixture-driven tests plus new fixtures for the
-   strict path, no sandbox or control-plane change involved.
-2. **Build the bridge script**: a new entrypoint (replacing
-   `scripts/qa/provider-qualification.py` as what `_run_v2_bridge` launches for
-   these two profiles only) that builds `HarnessOptions` with the staged build
-   as `provider_builds`, calls `run_harness()` for the one relevant scenario,
-   reads the new `strict_oracle` field, and emits the **same**
-   `proof-bundle.json` shape (`schema_version: 2`,
-   `artifact_kind: "provider_capability_assertion"`) the existing profile
-   modules already emit. This is the load-bearing design choice: because
-   `_validated_outcomes()` in control-plane validates that shape and nothing
-   else, **no control-plane code changes** — not `ProviderLane`, not
-   `_qualify_locked`, not baselines, not the cursor. Only what produces the
-   file changes.
-3. **Switch the launch target**, one profile at a time, using the existing
-   `qualification_profile` string as the selector `registered_lane()` already
-   dispatches on (no new mechanism to build) — shadow-compare the new bridge's
-   proof-bundle against the old executor's for the same release before
-   retiring the old one, per the shadow gate above.
+1. `_run_v2_bridge` (`control-plane/provider_factory/core.py:481-489`)
+   hardcodes the launched script path to `scripts/qa/provider-qualification.py`.
+   A different entrypoint requires a real dispatch change there, not zero
+   changes — unless `provider-qualification.py` itself is taught to dispatch
+   to the harness internally, which is a legitimate alternative not explored
+   here.
+2. Even granting the same `proof-bundle.json` shape, the record `artifact_id`
+   is a canonical-JSON sha256 over the full record
+   (`_validated_outcomes()`/`worker.py:118-121`), and `_validated_outcomes()`
+   additionally requires the exact `provider_version`, pre/post executable
+   hash agreement, `provider_build_identity`/`granularity` matching a real
+   `ProviderBuildRef`, and (for helm) `longhouse_build_id` matching the
+   verified engine binary's hash (`worker.py:64-146`). A bridge script must
+   independently reconstruct all of this provenance from what the harness
+   produces — it is not free from "same shape." The bundle's own
+   `artifact_kind` is `"provider_capability_proof_bundle"`, not
+   `"provider_capability_assertion"` as the first draft of this section
+   said — that field name belongs to the individual records, not the bundle
+   (`worker.py:84-87`; `codex_tool_call_result.py:283-289`).
 
-**What this design explicitly does not solve**, left for whoever picks it up
-next: the other 8 profiles either don't need this (the three schema-aligned
-ones — `claude_real_print`, `opencode_server_contract`, `antigravity_hook_inbox`
-— already consume `provider_live_canary` the same way their harness scenarios
-do, per the original convergence section above) or aren't release-lane
-profiles the harness runs at all yet (the five `*_release_identity` profiles
-have no harness scenario counterpart — `probe_identity` doesn't record
-pre/post hashes, per the Phase 2 profile-parity notes). Full-column sandbox
-policy, port/process lifecycle, and the failure contract remain exactly as
-scoped above and are not touched by this design.
+**Where this leaves Phase 2's remaining scope**: `codex_helm_interrupt`
+convergence is real, bounded, harder-than-first-drafted work — port the
+release lane's isolation/bootstrap/identity-verification setup into the
+harness driver, then the shared-function observation is trustworthy and
+usable. `codex_tool_call_result` convergence is blocked on a product decision
+about whether the harness's generic `tool_call_result` scenario should change
+to match one provider's stricter contract, or whether they are legitimately
+different tests that happen to share a name. Both remain unbuilt. Sol's
+recommended order: make the two observations parity-compatible with
+fixture-tested typed outcomes first; add proof emission behind the existing
+dispatcher second; implement explicit dual execution for shadow comparison
+third — "a selector alone cannot shadow both paths for one release."
 
 ### Phase 3 — equivalence oracle, then split the adapter
 
