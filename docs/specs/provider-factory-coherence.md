@@ -22,7 +22,10 @@ changed).
 
 Phase 2 in progress, four pieces shipped 2026-07-28, none deployed to
 clifford (pure refactors / additive-only right up until the dispatch map,
-which is code-complete but deliberately not deployed — see below):
+which is code-complete but deliberately not deployed — see below). Shadow-compare
+for `codex_tool_call_result_v1` ran for real against a real Codex binary and a
+real API key (result below); deploying to clifford is still an open decision,
+not something this result auto-triggers:
 
 - **Step 1** (longhouse `2eeacfc87`): the versioned run-evidence index
   (`server/zerg/qa/run_evidence_index.py`) and a pure oracle extracted from
@@ -935,12 +938,36 @@ refactor of already-tested code, lowest risk, longhouse), then the new CLI
 script (new code, testable standalone against constructed fixtures, no
 control-plane change, longhouse `882d91beb`), then the control-plane dispatch
 map last (the only piece that touches what's actually deployed, control-plane
-`9412d9f`). All three are code-complete and tested. What has NOT happened:
-the map has not been deployed to clifford, and item 3's equivalence tests
-(legacy vs. harness finalization output, byte-for-byte except explicitly
-variable fields) have not been written — both are required before the
-duplicate launch-and-collect code or the env-var selector can be retired, per
-the shadow gate above.
+`9412d9f`). All three are code-complete and tested, and item 3's equivalence
+tests (legacy vs. harness output) are written for both bridged profiles
+(longhouse `852456782`, `250667f78`) against fake binaries.
+
+**Shadow-compare, real (2026-07-28):** ran both the legacy executor and the
+harness bridge for `codex_tool_call_result_v1` against an actually-downloaded
+real Codex release (`rust-v0.145.0`, `codex-package-aarch64-unknown-linux-musl.tar.gz`,
+sha256 `54f79a05...cb6f54`) with a real `CODEX_API_KEY`, inside a scratch
+Linux container (not clifford — zero effect on anything deployed). Both paths
+produced byte-identical assertion outcomes:
+`exact_executable_identity_observed`/`reported_version_matches_expected`
+passed, `command_execution_completed_with_exact_output`/
+`tool_result_linked_to_final_agent_message` both `semantic_fail`ed
+identically, because the container didn't grant unprivileged user
+namespaces and Codex's `bwrap` sandbox couldn't start (`sysctl
+kernel.unprivileged_userns_clone`) — a container-permission artifact of the
+scratch environment, not a code defect, and both paths correctly classified
+it as `semantic_fail` rather than silently mis-reporting it. `compare_scenario_results()`
+(Phase 3) confirmed `equivalent: true, mismatches: []`. Not persisted as a
+checked-in fixture (needs a live API key to regenerate) or a CI test —
+one-shot manual validation, ad hoc driver script in scratch, not committed.
+
+**Still not run:** the same real-binary shadow-compare for
+`codex_helm_interrupt_v1` (needs a live managed-session/engine bootstrap,
+meaningfully more infrastructure than a binary + API key), and a real
+success-path run for `codex_tool_call_result_v1` (this run only proved
+equivalence on a real *failure* — real environments with working
+`bwrap`/user-namespace support, like clifford's, should be checked too before
+fully trusting the live-success path). **Not yet deployed to clifford** —
+that decision is still open regardless of this result.
 
 ### Phase 3 — equivalence oracle, then split the adapter
 
