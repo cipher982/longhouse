@@ -33,6 +33,7 @@ from uuid import uuid5
 from zerg.provider_cli_contract import PROVIDER_CLI_BINARY_BY_PROVIDER
 from zerg.provider_cli_contract import PROVIDER_CLI_ENV_BY_PROVIDER
 from zerg.qa.provider_build_store import ProviderBuildRef
+from zerg.qa.provider_build_store import verify_provider_builds
 from zerg.qa.provider_evidence_measurement import measure_evidence_package
 from zerg.qa.repo_root import default_repo_root
 from zerg.services.managed_provider_contracts import contract_for_provider
@@ -9054,10 +9055,27 @@ def provider_execution_coverage_matrix(
 
 
 def run_harness(options: HarnessOptions) -> dict[str, Any]:
-    registry = adapter_registry(options.provider_bins)
+    # Phase 2 step 3 (docs/specs/provider-factory-coherence.md): when staged
+    # builds are declared, they are authoritative for binary selection, not
+    # merely checked against a separately-supplied provider_bins. Deriving
+    # provider_bins from the build's own entrypoint means an ambient/PATH
+    # binary cannot win by construction, not by a per-provider mismatch check
+    # a caller could bypass by constructing HarnessOptions directly. Verified
+    # both before and after the run so a closure mutated mid-run is caught
+    # here rather than depending on every caller to remember an external
+    # verify_provider_builds() call (the smoke wrapper's own pre/post calls,
+    # now redundant with this, were the only place this happened before).
+    if options.provider_builds is not None:
+        verify_provider_builds(options.provider_builds)
+    provider_bins = (
+        {**options.provider_bins, **{provider: build.entrypoint for provider, build in options.provider_builds.items()}}
+        if options.provider_builds is not None
+        else options.provider_bins
+    )
+    registry = adapter_registry(provider_bins)
     results: list[ScenarioResult] = []
     for provider in options.providers:
-        declared_binary = options.provider_bins.get(provider)
+        declared_binary = provider_bins.get(provider)
         if declared_binary is None or not declared_binary.expanduser().is_file():
             package = EvidencePackage(
                 root=options.evidence_root,
@@ -9086,32 +9104,34 @@ def run_harness(options: HarnessOptions) -> dict[str, Any]:
                 )
             )
             continue
-        if options.provider_builds is not None:
-            build = options.provider_builds.get(provider)
-            if build is None or build.entrypoint.resolve() != declared_binary.expanduser().resolve():
-                package = EvidencePackage(
-                    root=options.evidence_root,
+        if options.provider_builds is not None and provider not in options.provider_builds:
+            # provider_bins is now derived from provider_builds' own entrypoints
+            # (above), so an entrypoint *mismatch* can no longer happen for any
+            # provider present in provider_builds -- only "no build declared at
+            # all for this provider while staged mode is active" remains possible.
+            package = EvidencePackage(
+                root=options.evidence_root,
+                provider=provider,
+                scenario="build_declaration",
+            )
+            declaration_adapter = registry.get(provider)
+            if declaration_adapter is not None:
+                package.initialize(adapter=declaration_adapter.config)
+            payload = {
+                "status": STATUS_FAIL,
+                "failure_code": "undeclared_provider_build_identity",
+                "message": f"No staged provider build was declared for {provider}.",
+            }
+            package.write_json("assertions/build-declaration.json", payload)
+            results.append(
+                scenario_result(
                     provider=provider,
                     scenario="build_declaration",
+                    package=package,
+                    payload=payload,
                 )
-                declaration_adapter = registry.get(provider)
-                if declaration_adapter is not None:
-                    package.initialize(adapter=declaration_adapter.config)
-                payload = {
-                    "status": STATUS_FAIL,
-                    "failure_code": ("undeclared_provider_build_identity" if build is None else "provider_build_entrypoint_mismatch"),
-                    "message": f"Provider build identity does not match the declared binary for {provider}.",
-                }
-                package.write_json("assertions/build-declaration.json", payload)
-                results.append(
-                    scenario_result(
-                        provider=provider,
-                        scenario="build_declaration",
-                        package=package,
-                        payload=payload,
-                    )
-                )
-                continue
+            )
+            continue
         adapter = registry.get(provider)
         if adapter is None:
             package = EvidencePackage(root=options.evidence_root, provider=provider, scenario="adapter_load")
@@ -9153,6 +9173,13 @@ def run_harness(options: HarnessOptions) -> dict[str, Any]:
                     baseline_root=options.baseline_root,
                 )
             )
+
+    if options.provider_builds is not None:
+        # Catches a build closure mutated by a scenario mid-run (a scenario
+        # writing into the provider's own install tree, for example) — the
+        # pre-run check above only proves the closure was correct at the
+        # start.
+        verify_provider_builds(options.provider_builds)
 
     support_matrix = provider_support_matrix(providers=options.providers, scenarios=options.scenarios, results=results)
     execution_coverage_matrix = provider_execution_coverage_matrix(

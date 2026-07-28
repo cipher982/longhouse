@@ -10,6 +10,8 @@ from pathlib import Path
 import pytest
 
 from zerg.qa import universal_agent_harness as uah
+from zerg.qa.provider_build_store import ProviderBuildStoreError
+from zerg.qa.provider_build_store import materialize_generated_fake_builds
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -3404,6 +3406,56 @@ def test_adapter_binary_resolution_ignores_ambient_discovery(tmp_path: Path, mon
     adapter = uah.adapter_registry()["codex"]
 
     assert adapter._resolve_binary() == (None, "missing")
+
+
+def test_staged_build_is_authoritative_over_a_mismatched_provider_bins(tmp_path: Path) -> None:
+    # Phase 2 step 3 (docs/specs/provider-factory-coherence.md): when a staged
+    # build is declared, it must select the executed binary by construction,
+    # not merely be checked against a separately-supplied provider_bins that a
+    # caller could get wrong (or an ambient/PATH binary could occupy). Prove
+    # the wrong path in provider_bins is ignored, not merely rejected.
+    real_codex = _fake_bins(tmp_path)["codex"]
+    wrong_codex = _write_exe(tmp_path / "bin" / "wrong-codex", "codex-cli 0.0.1")
+    store_root = tmp_path / "provider-builds"
+    builds = materialize_generated_fake_builds({"codex": real_codex}, store_root=store_root)
+
+    payload = uah.run_harness(
+        uah.HarnessOptions(
+            providers=("codex",),
+            scenarios=("probe_identity",),
+            evidence_root=tmp_path / "evidence",
+            provider_bins={"codex": wrong_codex},
+            provider_builds=builds,
+        )
+    )
+
+    assert payload["verdict"] == "green"
+    result = payload["results"][0]
+    evidence_root = Path(result["evidence_root"])
+    version_command = json.loads((evidence_root / "raw" / "version-command.json").read_text(encoding="utf-8"))
+    assert version_command["argv"][0] == str(builds["codex"].entrypoint)
+    assert version_command["argv"][0] != str(wrong_codex)
+
+
+def test_mutated_closure_fails_before_any_scenario_runs(tmp_path: Path) -> None:
+    real_codex = _fake_bins(tmp_path)["codex"]
+    store_root = tmp_path / "provider-builds"
+    builds = materialize_generated_fake_builds({"codex": real_codex}, store_root=store_root)
+
+    # Mutate the staged closure after materialization, before the harness
+    # ever runs -- the pre-run verify_provider_builds() call must catch this.
+    builds["codex"].entrypoint.write_text("#!/usr/bin/env python3\nprint('tampered')\n")
+
+    with pytest.raises(ProviderBuildStoreError):
+        uah.run_harness(
+            uah.HarnessOptions(
+                providers=("codex",),
+                scenarios=("probe_identity",),
+                evidence_root=tmp_path / "evidence",
+                provider_bins={"codex": builds["codex"].entrypoint},
+                provider_builds=builds,
+            )
+        )
 
 
 def test_parse_ingest_project_replays_fixture_without_launching_provider(tmp_path: Path) -> None:

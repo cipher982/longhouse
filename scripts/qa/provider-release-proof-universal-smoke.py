@@ -23,12 +23,11 @@ from typing import Any
 SERVER_PATH = Path(__file__).resolve().parents[2] / "server"
 sys.path.insert(0, str(SERVER_PATH))
 
+from zerg.qa.provider_build_store import materialize_generated_fake_builds
 from zerg.qa.universal_agent_harness import SUPPORTED_PROVIDERS
 from zerg.qa.universal_agent_harness import HarnessOptions
 from zerg.qa.universal_agent_harness import provider_configs
 from zerg.qa.universal_agent_harness import run_harness
-from zerg.qa.provider_build_store import materialize_generated_fake_builds
-from zerg.qa.provider_build_store import verify_provider_builds
 
 DEFAULT_SCENARIOS = (
     "probe_identity",
@@ -747,7 +746,6 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
             generated_bins,
             store_root=provider_build_store_root,
         )
-        verify_provider_builds(provider_builds)
         provider_bins = {
             provider: build.entrypoint for provider, build in provider_builds.items()
         }
@@ -773,8 +771,8 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
             baseline_root=evidence_root / "baselines",
         )
     )
-    if provider_builds is not None:
-        verify_provider_builds(provider_builds)
+    # run_harness() now verifies provider_builds itself, before and after
+    # execution (Phase 2 step 3) -- no need to duplicate that here.
     artifact = {
         "schema_version": 1,
         "artifact_kind": "provider_release_proof_universal_smoke",
