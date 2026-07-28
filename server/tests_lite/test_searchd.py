@@ -25,6 +25,7 @@ from zerg.searchd.store import _SEARCH_SQL
 from zerg.searchd.store import _SEARCHABLE_SEARCH_SQL
 from zerg.searchd.store import SCHEMA_GENERATION
 from zerg.searchd.store import SearchStore
+from zerg.searchd.store import _bounded_worklog_content
 from zerg.searchd.store import _fts_query
 from zerg.searchd.store import object_set_hash
 from zerg.searchd.store import open_search_database
@@ -74,6 +75,20 @@ def _search_params(query: str) -> dict:
         "window_end_us": None,
         "limit": 10,
     }
+
+
+def test_worklog_export_bounds_oversized_messages_without_splitting_utf8():
+    content = "a" * (128 * 1024) + "💾"
+
+    bounded = _bounded_worklog_content(content)
+
+    assert len(bounded.encode("utf-8")) <= 128 * 1024
+    assert bounded.endswith("[Longhouse worklog export truncated oversized message]")
+    assert "�" not in bounded
+
+
+def test_worklog_export_preserves_messages_within_the_boundary():
+    assert _bounded_worklog_content("ordinary message") == "ordinary message"
 
 
 def test_embedding_write_contract_accepts_full_desired_episode_set():

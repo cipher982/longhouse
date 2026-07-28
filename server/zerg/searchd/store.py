@@ -25,6 +25,8 @@ SEARCHABLE_FAST_WINDOW_DAYS = 90
 SEARCHABLE_FAST_WINDOW_MARGIN_SECONDS = 300
 _OBJECT_SET_DOMAIN = b"longhouse-search-object-set-v1\0"
 _WORKLOG_PAGE_BYTES = 700_000
+_WORKLOG_EVENT_CONTENT_BYTES = 128 * 1024
+_WORKLOG_TRUNCATION_MARKER = "\n\n[Longhouse worklog export truncated oversized message]"
 _WORKLOG_SNAPSHOT_BYTES = 64 * 1024 * 1024
 _WORKLOG_SNAPSHOT_MAX_PAGES = 200
 _WORKLOG_SNAPSHOT_TTL_SECONDS = 120.0
@@ -1384,7 +1386,12 @@ class SearchStore:
                 limit + 1,
             ),
         ).fetchall()
-        return _bounded_worklog_page(rows, limit=limit, cursor_builder=_event_cursor)
+        normalized_rows = []
+        for row in rows:
+            item = dict(row)
+            item["content_text"] = _bounded_worklog_content(str(item["content_text"]))
+            normalized_rows.append(item)
+        return _bounded_worklog_page(normalized_rows, limit=limit, cursor_builder=_event_cursor)
 
     def delete_session(self, *, session_id: str) -> dict[str, object]:
         self.connection.execute("BEGIN IMMEDIATE")
@@ -1443,7 +1450,16 @@ def _fts_query(raw: str) -> str:
     return normalized
 
 
-def _bounded_worklog_page(rows: list[sqlite3.Row], *, limit: int, cursor_builder) -> dict[str, object]:
+def _bounded_worklog_content(value: str) -> str:
+    encoded = value.encode("utf-8")
+    if len(encoded) <= _WORKLOG_EVENT_CONTENT_BYTES:
+        return value
+    marker = _WORKLOG_TRUNCATION_MARKER.encode("utf-8")
+    prefix = encoded[: _WORKLOG_EVENT_CONTENT_BYTES - len(marker)].decode("utf-8", "ignore")
+    return prefix + _WORKLOG_TRUNCATION_MARKER
+
+
+def _bounded_worklog_page(rows: list[sqlite3.Row | dict[str, Any]], *, limit: int, cursor_builder) -> dict[str, object]:
     items: list[dict[str, Any]] = []
     encoded_bytes = 0
     for row in rows[:limit]:
