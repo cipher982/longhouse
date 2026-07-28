@@ -96,6 +96,56 @@ def _closure_digest(package_root: Path) -> str:
     return closure_digest(package_root, granularity="full_installed_tree")
 
 
+def test_tool_call_result_legacy_and_harness_paths_agree_on_the_same_binary(tmp_path: Path, monkeypatch) -> None:
+    """Equivalence check for the bridge/dispatcher design's item 3
+    (docs/specs/provider-factory-coherence.md): the legacy release-lane
+    executor (codex_tool_call_result.run(), which launches its own inline
+    subprocess) and the harness-backed bridge (which launches the shared
+    run_codex_real_tool_command() inside a harness scenario) are two
+    genuinely different observation-producing code paths judged by the same
+    pure oracle. Run both against the identical fake codex binary/package,
+    with CODEX_MANAGED_PACKAGE_ROOT set exactly as control-plane's
+    run_factory() sets it in production for this profile
+    (control-plane/provider_factory/core.py:655-660), and assert they reach
+    the same assertion outcomes.
+    """
+    package_root, binary, identity = _codex_package(tmp_path, behavior="pass")
+    build_identity = f"sha256:{_closure_digest(package_root)}"
+    monkeypatch.setenv(codex_tool_call_result.API_KEY_ENV, "seeded-test-api-key-not-a-real-secret")
+    monkeypatch.setenv(codex_tool_call_result.MANAGED_PACKAGE_ROOT_ENV, str(package_root))
+
+    legacy_request = _request(
+        tmp_path,
+        profile=codex_tool_call_result.PROFILE,
+        binary=binary,
+        identity=identity,
+        build_identity=build_identity,
+        invocation_id="equivalence-legacy",
+    )
+    legacy_result = codex_tool_call_result.run(legacy_request, tmp_path / "legacy-output")
+
+    harness_request = _request(
+        tmp_path,
+        profile=codex_tool_call_result.PROFILE,
+        binary=binary,
+        identity=identity,
+        build_identity=build_identity,
+        invocation_id="equivalence-harness",
+    )
+    harness_result = bridge.run(harness_request, tmp_path / "harness-output")
+
+    assert legacy_result["assertions"] == harness_result["assertions"] == {
+        "exact_executable_identity_observed": "pass",
+        "reported_version_matches_expected": "pass",
+        "command_execution_completed_with_exact_output": "pass",
+        "tool_result_linked_to_final_agent_message": "pass",
+    }
+    assert legacy_result["execution_status"] == harness_result["execution_status"] == "completed"
+    legacy_bundle = json.loads((tmp_path / "legacy-output" / "proof-bundle.json").read_text(encoding="utf-8"))
+    harness_bundle = json.loads((tmp_path / "harness-output" / "proof-bundle.json").read_text(encoding="utf-8"))
+    assert legacy_bundle["coverage_manifest"]["evidence_class"] == harness_bundle["coverage_manifest"]["evidence_class"] == "live_token"
+
+
 def test_tool_call_result_end_to_end_pass(tmp_path: Path, monkeypatch) -> None:
     package_root, binary, identity = _codex_package(tmp_path, behavior="pass")
     build_identity = f"sha256:{_closure_digest(package_root)}"
