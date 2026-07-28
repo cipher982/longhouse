@@ -18,7 +18,18 @@ Phase 1 shipped 2026-07-28: `server/zerg/qa/provider_factory_model.py`
 (control-plane `0dab206`) — see "Phase 1 model" below for the resolved
 vocabulary and `plan_run`'s design. Not deployed to clifford (Phase 1 is
 planning-model code with no runtime hookup; nothing about current execution
-changed). Phases 2-5 not started.
+changed).
+
+Phase 2 step 1 shipped 2026-07-28 (longhouse `2eeacfc87`): the versioned
+run-evidence index (`server/zerg/qa/run_evidence_index.py`) and a pure oracle
+extracted from every one of the 10 release-lane `_PROFILES`, each verified to
+preserve its current executor's behavior exactly (898-test qa/provider suite
+unchanged). Not deployed to clifford — pure refactor, no behavior change, no
+redeploy needed. Steps 2-5 (multi-profile `ProviderLane`, shadow-dual-write,
+staged-build-authoritative harness launch under `QualificationSandbox`,
+shadow-compare, retire duplicate execution + the env-var selector) not
+started. Revised pacing per David: this system has zero users, so there is no
+elapsed-time gate anywhere in this phase — see "The shadow gate" below.
 
 Two rounds of independent review (Hatch Fable, Hatch Codex Sol, Hatch
 OpenRouter Kimi K3) have corrected this document eleven times. Corrections are
@@ -528,11 +539,17 @@ caller or it deletes. It currently owns `DEFAULT_SCENARIOS`, the
 is incomplete while it does.
 
 **The shadow gate.** "One poll cycle" is not a gate — a 900s tick that finds no
-release exercises neither path, so it can pass having diffed zero runs. The
-gate is: each provider reaches N consecutive agreeing qualifying runs, seeded
-by replaying the last K staged releases so it completes in days rather than at
-release cadence. Diff **typed proof records only** — assertion identity,
-outcome, evidence class — never payloads, paths, or timings. The
+release exercises neither path, so it can pass having diffed zero runs.
+Revised 2026-07-28: this system has zero users and one operator, and every
+deploy already has instant rollback (`deploy-provider-factory.sh --rollback`).
+A multi-day wait bought safety margin against a cost this system doesn't have
+today — the original framing ("N consecutive agreeing runs... so it completes
+in days rather than at release cadence") was sized for a team/user-facing
+system, not this one. The gate is instead: replay the last K staged releases
+through both paths **synchronously, in one sitting**, and cut over the moment
+they agree. If they disagree, fix it and replay again immediately — no
+elapsed-time requirement. Diff **typed proof records only** — assertion
+identity, outcome, evidence class — never payloads, paths, or timings. The
 `canonical_digest_v1` lesson is that value churn makes payload comparison
 useless; a payload-diff shadow flake-blocks on day one. Pull exactly that
 narrow proof-record comparator forward from Phase 3; the fixture corpus and
