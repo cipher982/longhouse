@@ -698,14 +698,27 @@ two independent grounds:
 convergence is real, bounded, harder-than-first-drafted work — port the
 release lane's isolation/bootstrap/identity-verification setup into the
 harness driver, then the shared-function observation is trustworthy and
-usable. `codex_tool_call_result` convergence is blocked on a product decision
-about whether the harness's generic `tool_call_result` scenario should change
-to match one provider's stricter contract, or whether they are legitimately
-different tests that happen to share a name. Both remain unbuilt. Sol's
-recommended order: make the two observations parity-compatible with
-fixture-tested typed outcomes first; add proof emission behind the existing
-dispatcher second; implement explicit dual execution for shadow comparison
-third — "a selector alone cannot shadow both paths for one release."
+usable. Not yet built.
+
+`codex_tool_call_result`'s product-decision blocker is **resolved**: asked to
+decide from first principles (David delegated the call), Sol chose option
+(c) — a distinct, codex-only harness scenario, leaving the existing generic
+`tool_call_result` scenario unchanged for every provider including codex.
+Reasoning: the two tests prove different contracts (basic cross-provider tool
+execution vs. codex-specific exact-command/exact-output/exact-linkage), and
+imposing the stricter contract on four unrelated providers' fake-binary stubs
+would add real complexity for no coverage gain. **Shipped**:
+`codex_tool_call_result_strict`, a codex-only harness scenario, following the
+existing `opencode_lineage_projection` precedent (free function +
+not_applicable gating, not a new adapter Protocol method — deliberately not
+growing the 33-method surface for a scenario that only ever applies to one
+provider). `codex_tool_call_result.py` gained `run_codex_real_tool_command()`,
+the reusable observation-producing half, alongside its existing pure oracle;
+the release lane's own `run()` is untouched. Not in `DEFAULT_HARNESS_SCENARIOS`
+(opt-in, real-binary + `CODEX_API_KEY` only, like `live_token_streaming`). Not
+yet wired to control-plane or shadow-compared — per Sol's stated order (parity
+first, dispatcher second, dual execution third), this is the "parity" step;
+the bridge/dispatcher and shadow-compare steps remain.
 
 ### Phase 3 — equivalence oracle, then split the adapter
 
