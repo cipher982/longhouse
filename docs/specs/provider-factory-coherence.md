@@ -694,31 +694,47 @@ two independent grounds:
    said — that field name belongs to the individual records, not the bundle
    (`worker.py:84-87`; `codex_tool_call_result.py:283-289`).
 
-**Where this leaves Phase 2's remaining scope**: `codex_helm_interrupt`
-convergence is real, bounded, harder-than-first-drafted work — port the
-release lane's isolation/bootstrap/identity-verification setup into the
-harness driver, then the shared-function observation is trustworthy and
-usable. Not yet built.
+**Both flagged profiles' parity step is now shipped** (longhouse `ae507c15a`
+for `codex_helm_interrupt`, `d6d91b24f` for `codex_tool_call_result`) — per
+Sol's stated order (parity first, dispatcher second, dual execution third),
+this closes step one for both.
 
-`codex_tool_call_result`'s product-decision blocker is **resolved**: asked to
-decide from first principles (David delegated the call), Sol chose option
-(c) — a distinct, codex-only harness scenario, leaving the existing generic
-`tool_call_result` scenario unchanged for every provider including codex.
-Reasoning: the two tests prove different contracts (basic cross-provider tool
-execution vs. codex-specific exact-command/exact-output/exact-linkage), and
-imposing the stricter contract on four unrelated providers' fake-binary stubs
-would add real complexity for no coverage gain. **Shipped**:
-`codex_tool_call_result_strict`, a codex-only harness scenario, following the
+`codex_tool_call_result`'s product-decision blocker was **resolved** by Sol
+(asked to decide from first principles, per David's delegation): option (c),
+a distinct codex-only harness scenario (`codex_tool_call_result_strict`),
+leaving the existing generic `tool_call_result` scenario unchanged for every
+provider including codex — the two tests prove different contracts (basic
+cross-provider tool execution vs. codex-specific exact-command/exact-output/
+exact-linkage), and imposing the stricter one on four unrelated providers'
+fake-binary stubs would add real complexity for no coverage gain. Follows the
 existing `opencode_lineage_projection` precedent (free function +
-not_applicable gating, not a new adapter Protocol method — deliberately not
-growing the 33-method surface for a scenario that only ever applies to one
-provider). `codex_tool_call_result.py` gained `run_codex_real_tool_command()`,
-the reusable observation-producing half, alongside its existing pure oracle;
-the release lane's own `run()` is untouched. Not in `DEFAULT_HARNESS_SCENARIOS`
-(opt-in, real-binary + `CODEX_API_KEY` only, like `live_token_streaming`). Not
-yet wired to control-plane or shadow-compared — per Sol's stated order (parity
-first, dispatcher second, dual execution third), this is the "parity" step;
-the bridge/dispatcher and shadow-compare steps remain.
+not_applicable gating, not a new adapter Protocol method). `codex_tool_call_result.py`
+gained `run_codex_real_tool_command()`, the reusable observation-producing
+half, alongside its existing pure oracle; the release lane's own `run()` is
+untouched. Not in `DEFAULT_HARNESS_SCENARIOS` (opt-in, real-binary +
+`CODEX_API_KEY` only, like `live_token_streaming`).
+
+`codex_helm_interrupt` convergence required a second Sol consult mid-build:
+the harness's credentials check ran post-hoc (after already calling the
+canary), so naively wrapping that call in environment isolation risked
+breaking the existing no-credentials fallback test. Fix: `run_isolated_codex_operation`,
+extracted from the release lane's `run()`, generalized to accept the actual
+canary call as a callable so the release lane and the harness driver share
+one isolation implementation instead of two — verified unchanged against the
+release lane's 14 existing tests. The harness's `_run_codex_interrupt_cancel`
+is now a two-stage preflight: bridge credentials checked before touching
+`os.environ` at all (falls back to the existing hermetic dispatch, entirely
+outside the isolation path); the full strict-lane input set required second
+(missing is `BLOCKED`, not the hermetic fallback, since bridge credentials
+already proved present); only then does the isolated interrupt run, feeding
+`codex_helm_interrupt_oracle` for a new `strict_oracle` field alongside the
+unchanged existing payload.
+
+**Not yet built**: the bridge/dispatcher (wiring control-plane to launch
+either strict path instead of the release lane's own executors) and
+shadow-compare. `_run_v2_bridge` still hardcodes `scripts/qa/provider-qualification.py`;
+nothing in either repository invokes these new harness scenarios from the
+release lane yet.
 
 ### Phase 3 — equivalence oracle, then split the adapter
 
