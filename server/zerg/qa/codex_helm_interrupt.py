@@ -9,8 +9,10 @@ import platform
 import re
 import subprocess
 import tempfile
+import threading
 from pathlib import Path
 from typing import Any
+from typing import Callable
 
 from zerg.qa import codex_provider_release_canary as bridge_canary
 from zerg.qa import codex_release_identity as identity_bridge
@@ -247,6 +249,130 @@ def _prepare_inert_mcp_bootstrap(
         "config_digest": identity_bridge._sha256(encoded),  # noqa: SLF001
         "retained_config": str(retained_config),
     }
+
+
+# os.environ.clear()/update() below is process-global. If this function is
+# ever called from more than one thread of the same process at once, the two
+# calls' environments would race. Guarded defensively per Hatch Sol review,
+# even though today's callers (the release lane's run(), and the harness's
+# interrupt_cancel driver) are each single-threaded per process.
+_ENV_ISOLATION_LOCK = threading.Lock()
+
+
+def run_isolated_codex_operation(
+    provider_bin: Path,
+    *,
+    engine: Path,
+    package_root: str,
+    api_url: str,
+    agents_token: str,
+    provider_token: str,
+    output_root: Path,
+    operation: Callable[[Path, Path], Any],
+) -> tuple[Any, str | None, dict[str, Any] | None, dict[str, Any]]:
+    """Run `operation(canary_root, provider_bin)` under full environment
+    isolation and inert MCP bootstrap.
+
+    Extracted from run() (Phase 2, "closing the observation gap" —
+    docs/specs/provider-factory-coherence.md) so both the release lane and
+    the harness's interrupt_cancel driver can produce the same trustworthy
+    observation `codex_helm_interrupt_oracle` expects, instead of the harness
+    calling into a live interrupt from its own unisolated ambient process
+    environment. `operation` is deliberately a callable rather than a fixed
+    call to `bridge_canary.run_managed_live_interrupt` directly: the release
+    lane needs that exact low-level call, but the harness needs to go through
+    `run_codex_provider_release_canary`'s dict-based entrypoint instead (to
+    keep producing the wrapper-shaped artifact its operation_evidence/DB-ingest
+    projection code already depends on) — both get the identical isolation
+    setup and teardown either way, since `run_codex_provider_release_canary`
+    re-derives `api_url`/`agents_token` from `os.environ` internally and will
+    see the isolated values.
+
+    Returns (operation_result, error, stop_evidence, mcp_bootstrap). Whatever
+    `operation` returns is returned unchanged; a raised exception is caught
+    and reported as `error` instead, preserving an infrastructure-error
+    outcome as evidence rather than propagating.
+    """
+    secrets = (agents_token, provider_token)
+    canary_root = output_root / "canary-evidence"
+    canary_root.mkdir(parents=True, exist_ok=True)
+    result: Any = None
+    error: str | None = None
+    with _ENV_ISOLATION_LOCK, tempfile.TemporaryDirectory(prefix="longhouse-helm-qualification-") as runtime:
+        runtime_root = Path(runtime)
+        codex_home = runtime_root / "codex-home"
+        codex_home.mkdir()
+        (runtime_root / "tmp").mkdir()
+        mcp_bootstrap = _prepare_inert_mcp_bootstrap(codex_home, canary_root, secrets)
+        strict_env = {
+            "PATH": os.environ.get("PATH", ""),
+            "LANG": "C",
+            "LC_ALL": "C",
+            "HOME": runtime,
+            "CODEX_HOME": str(codex_home),
+            "TMPDIR": str(runtime_root / "tmp"),
+            ENGINE_ENV: str(engine),
+            PACKAGE_ROOT_ENV: package_root,
+            API_URL_ENV: api_url,
+            AGENTS_TOKEN_ENV: agents_token,
+            PROVIDER_TOKEN_ENV: provider_token,
+        }
+        original_env = os.environ.copy()
+        try:
+            os.environ.clear()
+            os.environ.update(strict_env)
+            result = operation(canary_root, provider_bin)
+        except Exception as exc:  # noqa: BLE001 - preserve infrastructure outcome as evidence
+            result = None
+            error = f"{type(exc).__name__}: {exc}"
+        finally:
+            os.environ.clear()
+            os.environ.update(original_env)
+    _scrub_evidence_tree(canary_root, secrets)
+    result = _redact_value(result, secrets)
+    error = _redact_text(error, secrets) if error else None
+    stop = _stop_evidence(canary_root)
+    return result, error, stop, mcp_bootstrap
+
+
+def run_isolated_managed_live_interrupt(
+    provider_bin: Path,
+    *,
+    engine: Path,
+    package_root: str,
+    api_url: str,
+    agents_token: str,
+    provider_token: str,
+    repo_root: Path,
+    output_root: Path,
+) -> tuple[dict[str, Any], str | None, dict[str, Any] | None, dict[str, Any]]:
+    """The release lane's exact original call shape, now a thin wrapper over
+    run_isolated_codex_operation. Returns (canary_result, canary_error,
+    stop_evidence, mcp_bootstrap)."""
+
+    def _operation(canary_root: Path, binary: Path) -> dict[str, Any]:
+        args = argparse.Namespace(
+            engine=str(engine),
+            repo_root=repo_root,
+            api_url=api_url,
+            agents_token=agents_token,
+            model=None,
+            bridge_start_timeout_secs=30,
+            live_interrupt_timeout_secs=45,
+        )
+        return bridge_canary.run_managed_live_interrupt(args, canary_root, str(binary))
+
+    canary_result, canary_error, stop, mcp_bootstrap = run_isolated_codex_operation(
+        provider_bin,
+        engine=engine,
+        package_root=package_root,
+        api_url=api_url,
+        agents_token=agents_token,
+        provider_token=provider_token,
+        output_root=output_root,
+        operation=_operation,
+    )
+    return canary_result or {}, canary_error, stop, mcp_bootstrap
 
 
 def _record(
@@ -609,54 +735,16 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
             },
         )
 
-    canary_root = output_root / "canary-evidence"
-    canary_root.mkdir()
-    canary_result: dict[str, Any]
-    canary_error: str | None = None
-    mcp_bootstrap: dict[str, Any]
-    with tempfile.TemporaryDirectory(prefix="longhouse-helm-qualification-") as runtime:
-        runtime_root = Path(runtime)
-        codex_home = runtime_root / "codex-home"
-        codex_home.mkdir()
-        (runtime_root / "tmp").mkdir()
-        mcp_bootstrap = _prepare_inert_mcp_bootstrap(codex_home, canary_root, secrets)
-        strict_env = {
-            "PATH": os.environ.get("PATH", ""),
-            "LANG": "C",
-            "LC_ALL": "C",
-            "HOME": runtime,
-            "CODEX_HOME": str(codex_home),
-            "TMPDIR": str(runtime_root / "tmp"),
-            ENGINE_ENV: str(engine),
-            PACKAGE_ROOT_ENV: str(package_root),
-            API_URL_ENV: values[API_URL_ENV],
-            AGENTS_TOKEN_ENV: values[AGENTS_TOKEN_ENV],
-            PROVIDER_TOKEN_ENV: values[PROVIDER_TOKEN_ENV],
-        }
-        original_env = os.environ.copy()
-        try:
-            os.environ.clear()
-            os.environ.update(strict_env)
-            args = argparse.Namespace(
-                engine=str(engine),
-                repo_root=repo_root,
-                api_url=values[API_URL_ENV],
-                agents_token=values[AGENTS_TOKEN_ENV],
-                model=None,
-                bridge_start_timeout_secs=30,
-                live_interrupt_timeout_secs=45,
-            )
-            canary_result = bridge_canary.run_managed_live_interrupt(args, canary_root, str(provider_bin))
-        except Exception as exc:  # noqa: BLE001 - preserve infrastructure outcome as evidence
-            canary_result = {}
-            canary_error = f"{type(exc).__name__}: {exc}"
-        finally:
-            os.environ.clear()
-            os.environ.update(original_env)
-    _scrub_evidence_tree(canary_root, secrets)
-    canary_result = _redact_value(canary_result, secrets)
-    canary_error = _redact_text(canary_error, secrets) if canary_error else None
-    stop = _stop_evidence(canary_root)
+    canary_result, canary_error, stop, mcp_bootstrap = run_isolated_managed_live_interrupt(
+        provider_bin,
+        engine=engine,
+        package_root=str(package_root),
+        api_url=values[API_URL_ENV],
+        agents_token=values[AGENTS_TOKEN_ENV],
+        provider_token=values[PROVIDER_TOKEN_ENV],
+        repo_root=repo_root,
+        output_root=output_root,
+    )
 
     outcomes = codex_helm_interrupt_oracle(canary_result, stop, canary_error=canary_error)
     execution_status = "infrastructure_error" if AssertionOutcome.INFRASTRUCTURE_ERROR in outcomes.values() else "completed"

@@ -4093,33 +4093,106 @@ class UniversalProviderAdapter:
         if binary_error is not None:
             return binary_error
 
+        from zerg.qa import codex_helm_interrupt
+        from zerg.qa.codex_provider_release_canary import CODEX_AGENTS_TOKEN_ENV
+        from zerg.qa.codex_provider_release_canary import CODEX_API_URL_ENV
         from zerg.qa.codex_provider_release_canary import run_codex_provider_release_canary
 
         canary_evidence_root = package.path("raw", "codex-interrupt-canary-evidence")
         canary_artifact_path = package.path("raw", "codex-provider-release-canary.json")
-        canary_artifact = run_codex_provider_release_canary(
-            {
-                "codex_bin": str(binary),
-                "artifact": canary_artifact_path,
-                "evidence_root": canary_evidence_root,
-                "repo_root": default_repo_root(),
-                "source_review_status": "pass",
-                "skip_static_contract": True,
-                "run_managed_live_interrupt": True,
+
+        # Stage 1: bridge credentials, checked BEFORE touching the process
+        # environment -- mirrors codex_provider_release_canary's own
+        # _managed_bridge_credentials_gap predicate (a preflight check, not
+        # the post-execution artifact parse _codex_canary_credentials_gap
+        # does). Missing either falls back to the existing hermetic dispatch
+        # proof, exactly as before Phase 2, "closing the observation gap"
+        # (docs/specs/provider-factory-coherence.md) -- just decided earlier,
+        # so the canary (and any environment isolation) is never invoked at
+        # all on this path, per Hatch Sol review.
+        bridge_credentials_gap = [
+            flag
+            for flag, env_name in (("--api-url", CODEX_API_URL_ENV), ("--agents-token", CODEX_AGENTS_TOKEN_ENV))
+            if not os.environ.get(env_name)
+        ]
+        if bridge_credentials_gap:
+            return self._run_codex_interrupt_dispatch_proof(
+                package,
+                credentials_gap=bridge_credentials_gap,
+                canary_artifact_path=canary_artifact_path,
+                canary_evidence_root=canary_evidence_root,
+                source_artifact_kind=None,
+            )
+
+        # Stage 2: the strict-lane inputs the release lane itself requires
+        # (codex_helm_interrupt._required_environment()) before it will ever
+        # replace the environment or start a live interrupt. Missing here is
+        # BLOCKED, not the hermetic fallback -- bridge credentials exist, so
+        # this is a genuine gap in the isolated-run inputs, not "no live
+        # credentials at all."
+        strict_values, strict_missing = codex_helm_interrupt._required_environment()  # noqa: SLF001
+        if strict_missing:
+            payload = {
+                "status": STATUS_BLOCKED,
+                "scenario": "interrupt_cancel",
+                "failure_code": "codex_helm_strict_environment_missing",
+                "message": "Strict Codex helm-interrupt isolation inputs are missing.",
+                "missing": sorted(strict_missing),
             }
+            package.write_json("assertions/interrupt_cancel.json", payload)
+            return payload
+
+        engine = Path(strict_values[codex_helm_interrupt.ENGINE_ENV])
+        try:
+            engine_identity = codex_helm_interrupt._file_identity(  # noqa: SLF001
+                engine, label=codex_helm_interrupt.ENGINE_ENV, executable=True
+            )
+            _package_root_path, package_identity, _package_members = codex_helm_interrupt._package_identity(  # noqa: SLF001
+                strict_values[codex_helm_interrupt.PACKAGE_ROOT_ENV], binary
+            )
+        except codex_helm_interrupt.identity_bridge.RequestError as exc:
+            payload = {
+                "status": STATUS_BLOCKED,
+                "scenario": "interrupt_cancel",
+                "failure_code": "codex_helm_strict_identity_invalid",
+                "message": str(exc),
+            }
+            package.write_json("assertions/interrupt_cancel.json", payload)
+            return payload
+
+        def _operation(canary_root: Path, provider_bin: Path) -> dict[str, Any]:
+            return run_codex_provider_release_canary(
+                {
+                    "codex_bin": str(provider_bin),
+                    "artifact": canary_artifact_path,
+                    "evidence_root": canary_root,
+                    "repo_root": default_repo_root(),
+                    "source_review_status": "pass",
+                    "skip_static_contract": True,
+                    "run_managed_live_interrupt": True,
+                }
+            )
+
+        canary_artifact, canary_error, stop, mcp_bootstrap = codex_helm_interrupt.run_isolated_codex_operation(
+            binary,
+            engine=engine,
+            package_root=strict_values[codex_helm_interrupt.PACKAGE_ROOT_ENV],
+            api_url=strict_values[codex_helm_interrupt.API_URL_ENV],
+            agents_token=strict_values[codex_helm_interrupt.AGENTS_TOKEN_ENV],
+            provider_token=strict_values[codex_helm_interrupt.PROVIDER_TOKEN_ENV],
+            output_root=canary_evidence_root,
+            operation=_operation,
         )
+        canary_artifact = canary_artifact or {}
         if not canary_artifact_path.is_file():
             package.write_json("raw/codex-provider-release-canary.json", canary_artifact)
         package.write_json("raw/codex-provider-release-canary-inline.json", canary_artifact)
-        credentials_gap = _codex_canary_credentials_gap(canary_artifact, ("managed_live_interrupt",))
-        if credentials_gap:
-            return self._run_codex_interrupt_dispatch_proof(
-                package,
-                credentials_gap=credentials_gap,
-                canary_artifact_path=canary_artifact_path,
-                canary_evidence_root=canary_evidence_root,
-                source_artifact_kind=canary_artifact.get("artifact_kind"),
-            )
+
+        strict_outcomes = codex_helm_interrupt.codex_helm_interrupt_oracle(
+            canary_artifact.get("canaries", {}).get("managed_live_interrupt") or {},
+            stop,
+            canary_error=canary_error,
+        )
 
         operation_evidence = self._operation_evidence_map(canary_artifact.get("operation_evidence"))
         raw_events = codex_interrupt_cancel_raw_events(canary_artifact)
@@ -4147,6 +4220,10 @@ class UniversalProviderAdapter:
             "synthetic": False,
             "operation_evidence": operation_evidence,
             "longhouse_ingest": self._longhouse_ingest_block(db_ingest),
+            "engine_identity": engine_identity,
+            "package_identity": package_identity,
+            "strict_oracle": {key: value.value for key, value in strict_outcomes.items()},
+            "mcp_bootstrap": mcp_bootstrap,
         }
         if verdict != "green" or interrupt_status != STATUS_PASS:
             payload["failure_code"] = canary_artifact.get("failure_code") or "codex_interrupt_cancel_failed"

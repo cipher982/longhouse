@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import inspect
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -2083,13 +2084,69 @@ def test_codex_managed_session_e2e_uses_provider_release_canary(tmp_path: Path, 
     assert db_snapshot["timeline"]["matched"] is True
 
 
+def _codex_helm_package(tmp_path: Path) -> tuple[Path, Path]:
+    from zerg.qa import codex_helm_interrupt as profile
+
+    root = tmp_path / "codex-package"
+    for name in sorted(profile.PACKAGE_MEMBERS):
+        path = root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if name == "bin/codex":
+            path.write_text(
+                f"#!{sys.executable}\nimport sys\nprint('codex-cli 9.9.9' if sys.argv[1:] == ['--version'] else '')\n",
+                encoding="utf-8",
+            )
+        else:
+            path.write_text(name, encoding="utf-8")
+        if name in profile._EXECUTABLE_PACKAGE_MEMBERS:  # noqa: SLF001
+            path.chmod(0o700)
+    return root, root / "bin/codex"
+
+
+def _codex_helm_engine(tmp_path: Path) -> Path:
+    path = tmp_path / "longhouse-engine"
+    path.write_text(f"#!{sys.executable}\nprint('engine')\n", encoding="utf-8")
+    path.chmod(0o700)
+    return path
+
+
+def _set_codex_helm_strict_environment(tmp_path: Path, monkeypatch) -> tuple[Path, Path]:
+    package_root, binary = _codex_helm_package(tmp_path)
+    engine = _codex_helm_engine(tmp_path)
+    monkeypatch.setenv("LONGHOUSE_ENGINE_BIN", str(engine))
+    monkeypatch.setenv("CODEX_MANAGED_PACKAGE_ROOT", str(package_root))
+    monkeypatch.setenv("CODEX_API_URL", "https://runtime.example/api")
+    monkeypatch.setenv("CODEX_AGENTS_TOKEN", "agents-token-fixture")
+    monkeypatch.setenv("CODEX_API_KEY", "provider-token-fixture")
+    return package_root, binary
+
+
 def test_codex_interrupt_cancel_uses_managed_live_interrupt_canary(tmp_path: Path, monkeypatch) -> None:
     from zerg.qa import codex_provider_release_canary
 
+    _package_root, binary = _set_codex_helm_strict_environment(tmp_path, monkeypatch)
     calls: list[dict[str, object]] = []
+    ambient_env_during_call: dict[str, str] = {}
 
     def fake_canary(args: dict[str, object]) -> dict[str, object]:
         calls.append(args)
+        # Environment isolation (Phase 2, "closing the observation gap") must
+        # already be active by the time the canary runs: only the strict
+        # allowlisted vars, not whatever pytest's own ambient env carries.
+        ambient_env_during_call.update(os.environ)
+        evidence_root = Path(str(args["evidence_root"]))
+        stop_dir = evidence_root / "managed-live-interrupt"
+        stop_dir.mkdir(parents=True, exist_ok=True)
+        (stop_dir / "stop.json").write_text(
+            json.dumps(
+                {
+                    "attempted": True,
+                    "evidence": {"returncode": 0},
+                    "verification": {"verified": True, "terminal_state": True, "socket_absent": True},
+                }
+            ),
+            encoding="utf-8",
+        )
         return {
             "artifact_kind": "codex_provider_release_canary",
             "provider": "codex",
@@ -2102,6 +2159,8 @@ def test_codex_interrupt_cancel_uses_managed_live_interrupt_canary(tmp_path: Pat
                     "thread_id": "codex-thread-interrupt",
                     "marker": "LONGHOUSE_CODEX_INTERRUPT_CANARY_fake",
                     "last_turn_status": "interrupted",
+                    "interrupted_turn_id": "turn-1",
+                    "send_summary": {"thread_id": "codex-thread-interrupt", "turn_id": "turn-1", "turn_status": "inprogress"},
                     "state_file": str(tmp_path / "state.json"),
                 }
             },
@@ -2120,19 +2179,31 @@ def test_codex_interrupt_cancel_uses_managed_live_interrupt_canary(tmp_path: Pat
             providers=("codex",),
             scenarios=("interrupt_cancel",),
             evidence_root=tmp_path / "evidence",
-            provider_bins={"codex": _fake_bins(tmp_path)["codex"]},
+            provider_bins={"codex": binary},
         )
     )
 
     assert calls
     assert calls[0]["run_managed_live_interrupt"] is True
     assert calls[0]["source_review_status"] == "pass"
+    # The canary saw the isolated strict env, not this test's own ambient PATH.
+    assert ambient_env_during_call["CODEX_API_URL"] == "https://runtime.example/api"
+    assert "PYTEST_CURRENT_TEST" not in ambient_env_during_call
+
     result = payload["results"][0]
     assert payload["verdict"] == "green"
     assert result["status"] == "pass"
     assert result["data"]["scenario"] == "interrupt_cancel"
     assert result["data"]["operation_evidence"]["interrupt"]["level"] == "live_token"
     assert result["data"]["operation_evidence"]["db_ingest"]["status"] == "pass"
+    assert result["data"]["strict_oracle"] == {
+        "active_managed_turn_observed": "pass",
+        "interrupt_terminal_cancelled_or_interrupted": "pass",
+        "managed_bridge_cleanup_completed": "pass",
+    }
+    assert result["data"]["engine_identity"].startswith("sha256:")
+    assert result["data"]["package_identity"].startswith("sha256:")
+    assert result["data"]["mcp_bootstrap"]["purpose"] == "codex_transport_shape_bootstrap_only"
 
     evidence_root = Path(result["evidence_root"])
     raw_events = (evidence_root / "events" / "provider-raw-events.jsonl").read_text(encoding="utf-8")
@@ -2146,7 +2217,46 @@ def test_codex_interrupt_cancel_uses_managed_live_interrupt_canary(tmp_path: Pat
     assert db_snapshot["timeline"]["matched"] is True
 
 
-def test_codex_interrupt_cancel_falls_back_to_hermetic_dispatch_when_credentials_missing(tmp_path: Path) -> None:
+def test_codex_interrupt_cancel_blocks_when_strict_environment_missing(tmp_path: Path, monkeypatch) -> None:
+    from zerg.qa import codex_provider_release_canary
+
+    monkeypatch.setenv("CODEX_API_URL", "https://runtime.example/api")
+    monkeypatch.setenv("CODEX_AGENTS_TOKEN", "agents-token-fixture")
+    monkeypatch.delenv("LONGHOUSE_ENGINE_BIN", raising=False)
+    monkeypatch.delenv("CODEX_MANAGED_PACKAGE_ROOT", raising=False)
+    monkeypatch.delenv("CODEX_API_KEY", raising=False)
+
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("run_codex_provider_release_canary must not run with strict inputs missing")
+
+    monkeypatch.setattr(codex_provider_release_canary, "run_codex_provider_release_canary", fail_if_called)
+
+    payload = uah.run_harness(
+        uah.HarnessOptions(
+            providers=("codex",),
+            scenarios=("interrupt_cancel",),
+            evidence_root=tmp_path / "evidence",
+            provider_bins={"codex": _fake_bins(tmp_path)["codex"]},
+        )
+    )
+    result = payload["results"][0]
+    assert result["status"] == "blocked"
+    assert result["failure_code"] == "codex_helm_strict_environment_missing"
+    assert set(result["data"]["missing"]) == {"CODEX_MANAGED_PACKAGE_ROOT", "CODEX_API_KEY", "LONGHOUSE_ENGINE_BIN"}
+
+
+def test_codex_interrupt_cancel_falls_back_to_hermetic_dispatch_when_credentials_missing(tmp_path: Path, monkeypatch) -> None:
+    from zerg.qa import codex_provider_release_canary
+
+    monkeypatch.delenv("CODEX_API_URL", raising=False)
+    monkeypatch.delenv("CODEX_AGENTS_TOKEN", raising=False)
+    ambient_env_before = dict(os.environ)
+
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("run_codex_provider_release_canary must not run without bridge credentials")
+
+    monkeypatch.setattr(codex_provider_release_canary, "run_codex_provider_release_canary", fail_if_called)
+
     payload = uah.run_harness(
         uah.HarnessOptions(
             providers=("codex",),
@@ -2156,10 +2266,16 @@ def test_codex_interrupt_cancel_falls_back_to_hermetic_dispatch_when_credentials
         )
     )
 
+    # Stage 1's preflight check (docs/specs/provider-factory-coherence.md,
+    # "Closing the observation gap") must reject and fall back before ever
+    # touching the environment or invoking the canary -- confirmed above by
+    # the monkeypatch, and here by the ambient environment being untouched.
+    assert dict(os.environ) == ambient_env_before
+
     result = payload["results"][0]
     assert payload["verdict"] == "green"
     assert result["status"] == "pass"
-    assert result["data"]["missing_live_credentials"] == ["--agents-token", "--api-url"]
+    assert result["data"]["missing_live_credentials"] == ["--api-url", "--agents-token"]
     assert result["data"]["operation_evidence"]["interrupt"]["status"] == "pass"
     assert result["data"]["operation_evidence"]["interrupt"]["level"] == "hermetic"
     assert result["data"]["operation_evidence"]["interrupt"]["canary"] == "codex_managed_local_interrupt_dispatch"
