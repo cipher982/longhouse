@@ -571,11 +571,33 @@ def _publish_params(value: dict) -> dict:
 
 
 def _embedding_write_params(value: dict) -> dict:
-    _exact_keys(value, {"session_id", "owner_id", "generation_id", "revision", "model", "dims", "complete", "episodes"})
+    _exact_keys(
+        value,
+        {
+            "session_id",
+            "owner_id",
+            "generation_id",
+            "revision",
+            "model",
+            "dims",
+            "complete",
+            "desired_episode_ordinals",
+            "episodes",
+        },
+    )
     dims = value["dims"]
     episodes = value["episodes"]
+    desired_episode_ordinals = value["desired_episode_ordinals"]
     if type(dims) is not int or not 1 <= dims <= 16_384 or not isinstance(episodes, list) or len(episodes) > 512:
         raise ValueError("embedding write dimensions or episodes are invalid")
+    if desired_episode_ordinals is not None:
+        if (
+            not isinstance(desired_episode_ordinals, list)
+            or len(desired_episode_ordinals) > 1_000_000
+            or any(type(ordinal) is not int or ordinal < 0 for ordinal in desired_episode_ordinals)
+            or len(set(desired_episode_ordinals)) != len(desired_episode_ordinals)
+        ):
+            raise ValueError("desired embedding episode ordinals are invalid")
     parsed = []
     for episode in episodes:
         if not isinstance(episode, dict) or set(episode) != {
@@ -610,6 +632,7 @@ def _embedding_write_params(value: dict) -> dict:
         "model": _text(value["model"], "model", 255),
         "dims": dims,
         "complete": value["complete"] is True,
+        "desired_episode_ordinals": desired_episode_ordinals,
         "episodes": parsed,
     }
 

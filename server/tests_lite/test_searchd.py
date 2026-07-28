@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import sqlite3
 import threading
@@ -18,6 +19,7 @@ from zerg.catalogd.client import CatalogClient
 from zerg.catalogd.client import CatalogRemoteError
 from zerg.catalogd.client import CatalogUnavailable
 from zerg.searchd.server import SearchDaemon
+from zerg.searchd.server import _embedding_write_params
 from zerg.searchd.store import _PUBLISH_AGGREGATES_SQL
 from zerg.searchd.store import _SEARCH_SQL
 from zerg.searchd.store import _SEARCHABLE_SEARCH_SQL
@@ -72,6 +74,52 @@ def _search_params(query: str) -> dict:
         "window_end_us": None,
         "limit": 10,
     }
+
+
+def test_embedding_write_contract_accepts_full_desired_episode_set():
+    params = _embedding_write_params(
+        {
+            "session_id": str(uuid4()),
+            "owner_id": "owner-1",
+            "generation_id": str(uuid4()),
+            "revision": "3",
+            "model": "test-model",
+            "dims": 2,
+            "complete": True,
+            "desired_episode_ordinals": [0, 1, 2],
+            "episodes": [
+                {
+                    "episode_ordinal": 2,
+                    "event_index_start": 4,
+                    "event_index_end": 5,
+                    "content_hash": "c" * 64,
+                    "embedding": base64.b64encode(
+                        np.array([0, 0], dtype=np.float32).tobytes()
+                    ).decode("ascii"),
+                }
+            ],
+        }
+    )
+
+    assert params["desired_episode_ordinals"] == [0, 1, 2]
+
+
+@pytest.mark.parametrize("ordinals", [[0, 0], [-1], [True]])
+def test_embedding_write_contract_rejects_invalid_desired_episode_set(ordinals):
+    with pytest.raises(ValueError, match="desired embedding episode ordinals"):
+        _embedding_write_params(
+            {
+                "session_id": str(uuid4()),
+                "owner_id": "owner-1",
+                "generation_id": str(uuid4()),
+                "revision": "3",
+                "model": "test-model",
+                "dims": 2,
+                "complete": True,
+                "desired_episode_ordinals": ordinals,
+                "episodes": [],
+            }
+        )
 
 
 @pytest.mark.parametrize(
