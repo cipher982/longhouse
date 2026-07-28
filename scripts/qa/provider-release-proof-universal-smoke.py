@@ -24,36 +24,19 @@ SERVER_PATH = Path(__file__).resolve().parents[2] / "server"
 sys.path.insert(0, str(SERVER_PATH))
 
 from zerg.qa.provider_build_store import materialize_generated_fake_builds
+from zerg.qa.provider_factory_model import DEFAULT_HARNESS_SCENARIOS as DEFAULT_SCENARIOS
+from zerg.qa.provider_factory_model import LIVE_TOKEN_HARNESS_SCENARIO as LIVE_TOKEN_SCENARIO
 from zerg.qa.universal_agent_harness import SUPPORTED_PROVIDERS
 from zerg.qa.universal_agent_harness import HarnessOptions
 from zerg.qa.universal_agent_harness import provider_configs
 from zerg.qa.universal_agent_harness import run_harness
 
-DEFAULT_SCENARIOS = (
-    "probe_identity",
-    "adapter_conformance",
-    "collect_raw_evidence",
-    "action_matrix",
-    "control_surface",
-    "full_action_suite",
-    "baseline_compare",
-    "old_new_release_diff",
-    "parse_ingest_project",
-    "db_ingest_project",
-    "session_projection",
-    "timeline_projection",
-    "run_prompt_once",
-    "launch_managed_session",
-    "send_receive",
-    "pause_request_detect",
-    "tail_output",
-    "runtime_phase",
-    "transcript_binding",
-    "multi_turn_continuity",
-    "crash_timeout_cleanup",
-    "managed_session_e2e",
-)
-LIVE_TOKEN_SCENARIO = "live_token_streaming"
+# DEFAULT_SCENARIOS and LIVE_TOKEN_SCENARIO now live in provider_factory_model.py
+# (docs/specs/provider-factory-coherence.md, Phase 2 "assign the smoke
+# wrapper's fate") -- this used to be the sole declaration, and the planning
+# model AST-parsed it out of this file's source at runtime. That was backwards:
+# a value the model needs to reason about should be authoritative in the
+# model, not scraped from whichever script happened to declare it first.
 # Each fake version must satisfy the provider's real version_line grammar, so a
 # provider that does not use semver needs its own shape here.
 FAKE_VERSION_BY_PROVIDER = {

@@ -6,8 +6,7 @@ provenance, evidence class, and credential policy, made concrete enough to
 derive "what runs" without re-deriving it by hand each time.
 
 Two-step contract, deliberately split: `load_facts()` does all I/O (parses
-the schema YAML, AST-parses the smoke wrapper's DEFAULT_SCENARIOS without
-executing it, regex-parses the Makefile's push-CI scenario override, reads
+the schema YAML, regex-parses the Makefile's push-CI scenario override, reads
 config/provider-release-schedule.yml's weekly provider set, imports
 provider_qualification._PROFILES). `plan_run(facts, provider, build_provenance,
 trigger)` then performs no I/O at all — it is a pure lookup over the
@@ -32,7 +31,6 @@ caught by review, not by inspection of this file alone.
 
 from __future__ import annotations
 
-import ast
 import re
 import sys
 from dataclasses import dataclass
@@ -43,7 +41,6 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[3]
 SCHEMA_PATH = ROOT / "schemas" / "managed_providers.yml"
-SMOKE_WRAPPER_PATH = ROOT / "scripts" / "qa" / "provider-release-proof-universal-smoke.py"
 MAKEFILE_PATH = ROOT / "Makefile"
 WEEKLY_SCHEDULE_PATH = ROOT / "config" / "provider-release-schedule.yml"
 
@@ -52,6 +49,41 @@ class BuildProvenance(StrEnum):
     GENERATED_FAKE = "generated_fake"
     STAGED_RELEASE = "staged_release"
     OBSERVED_INSTALL = "observed_install"
+
+
+# Canonical home for the weekly-cron/full-column harness scenario set.
+# Previously duplicated: this module AST-parsed it out of the smoke wrapper's
+# own DEFAULT_SCENARIOS constant, which is exactly the hand-duplication
+# pattern the epic exists to fix. The wrapper now imports this constant
+# instead of declaring its own copy (docs/specs/provider-factory-coherence.md,
+# Phase 2's "assign the smoke wrapper's fate" — this is the "thin caller"
+# direction for the one piece of it that was pure schema-derivable data; the
+# wrapper's execution mechanics stay wrapper-owned).
+DEFAULT_HARNESS_SCENARIOS: tuple[str, ...] = (
+    "probe_identity",
+    "adapter_conformance",
+    "collect_raw_evidence",
+    "action_matrix",
+    "control_surface",
+    "full_action_suite",
+    "baseline_compare",
+    "old_new_release_diff",
+    "parse_ingest_project",
+    "db_ingest_project",
+    "session_projection",
+    "timeline_projection",
+    "run_prompt_once",
+    "launch_managed_session",
+    "send_receive",
+    "pause_request_detect",
+    "tail_output",
+    "runtime_phase",
+    "transcript_binding",
+    "multi_turn_continuity",
+    "crash_timeout_cleanup",
+    "managed_session_e2e",
+)
+LIVE_TOKEN_HARNESS_SCENARIO = "live_token_streaming"
 
 
 class Trigger(StrEnum):
@@ -243,22 +275,9 @@ def _load_capability_assertions() -> tuple[CapabilityAssertion, ...]:
 
 
 def _load_default_harness_scenarios() -> tuple[str, ...]:
-    """DEFAULT_SCENARIOS from the smoke wrapper, read without executing it.
-
-    The wrapper's filename is hyphenated and not import-safe, and running it
-    would violate the no-subprocess load contract, so this parses the
-    module-level assignment out of its AST instead of hand-copying the tuple.
-    """
-    tree = ast.parse(SMOKE_WRAPPER_PATH.read_text(encoding="utf-8"), filename=str(SMOKE_WRAPPER_PATH))
-    for node in tree.body:
-        if isinstance(node, ast.Assign) and any(
-            isinstance(target, ast.Name) and target.id == "DEFAULT_SCENARIOS" for target in node.targets
-        ):
-            value = ast.literal_eval(node.value)
-            if not isinstance(value, tuple):
-                raise SystemExit(f"DEFAULT_SCENARIOS in {SMOKE_WRAPPER_PATH} did not parse to a tuple")
-            return value
-    raise SystemExit(f"DEFAULT_SCENARIOS not found in {SMOKE_WRAPPER_PATH}")
+    """The weekly-cron/full-column scenario set. A plain lookup now — see
+    DEFAULT_HARNESS_SCENARIOS above for why this is no longer an I/O read."""
+    return DEFAULT_HARNESS_SCENARIOS
 
 
 def _load_push_harness_scenarios() -> tuple[str, ...]:
