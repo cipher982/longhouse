@@ -16,7 +16,7 @@ from zerg.config import get_settings
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.qa.capability_projection import project_capabilities
-from zerg.qa.provider_factory_model import load_facts
+from zerg.qa.provider_factory_model import load_capability_assertions
 from zerg.services.managed_provider_contracts import managed_provider_names
 from zerg.services.provider_capability_proof import ProviderCapabilityProofRecord
 from zerg.services.provider_capability_proof import proof_record_from_mapping
@@ -174,8 +174,7 @@ def list_provider_capabilities(
     all_records: list[ProviderCapabilityProofRecord] = []
     for provider in sorted(managed_provider_names()):
         all_records.extend(store.records(provider))
-    facts = load_facts()
-    projections = project_capabilities(facts.capability_assertions, all_records)
+    projections = project_capabilities(load_capability_assertions(), all_records)
     return {
         "schema_version": 1,
         "artifact_kind": "provider_capability_projection",

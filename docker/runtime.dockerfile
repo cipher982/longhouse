@@ -96,6 +96,13 @@ COPY server/ ./
 COPY config/models.json /config/models.json
 COPY config/tool-tiers.json /config/tool-tiers.json
 
+# schemas/managed_providers.yml: read live by
+# zerg/qa/provider_factory_model.py's capability-projection endpoint
+# (docs/specs/provider-factory-coherence.md, Phase 5). Found missing here the
+# hard way -- the endpoint's first real deploy 500'd on FileNotFoundError
+# because this file was never part of the runtime image at all.
+COPY schemas/managed_providers.yml /schemas/managed_providers.yml
+
 # Copy REAL frontend dist from frontend-builder (not placeholder)
 COPY --from=frontend-builder /app/dist /repo/web/dist
 
@@ -153,6 +160,9 @@ COPY --from=frontend-builder --chown=longhouse:longhouse /app/dist /app/web/dist
 
 # Copy config
 COPY --from=backend-builder --chown=longhouse:longhouse /config /config
+
+# Copy schemas (see the matching COPY in the backend-builder stage above)
+COPY --from=backend-builder --chown=longhouse:longhouse /schemas /schemas
 
 # Bootstrap pip in the venv so job packs can pip-install their own deps at startup
 RUN /app/.venv/bin/python -m ensurepip --default-pip 2>/dev/null || true

@@ -40,9 +40,34 @@ from pathlib import Path
 import yaml
 
 ROOT = Path(__file__).resolve().parents[3]
-SCHEMA_PATH = ROOT / "schemas" / "managed_providers.yml"
 MAKEFILE_PATH = ROOT / "Makefile"
 WEEKLY_SCHEDULE_PATH = ROOT / "config" / "provider-release-schedule.yml"
+
+
+def _resolve_schema_path() -> Path:
+    """Where schemas/managed_providers.yml actually lives, in either of the
+    two environments this module runs in.
+
+    Found live in production (2026-07-29): this repo's local/CI checkout has
+    server/zerg/qa/<this file>, four levels below the repo root, so
+    `ROOT = parents[3]` lands on the repo root and `ROOT / "schemas" / ...`
+    is correct there. The deployed Runtime Host image is not a full repo
+    checkout -- docker/runtime.dockerfile copies only server/'s *contents*
+    into /app (so this file lives at /app/zerg/qa/..., one level shallower),
+    which makes the exact same `parents[3]` arithmetic land on `/` by
+    accident, and schemas/ was never copied there at all -- a real
+    FileNotFoundError the first live call to this endpoint hit. Explicit
+    candidates instead of relying on that directory-depth coincidence to
+    keep meaning "the repo root" in two structurally different layouts.
+    """
+    candidates = (
+        ROOT / "schemas" / "managed_providers.yml",  # local dev / CI checkout
+        Path("/schemas/managed_providers.yml"),  # deployed runtime image (docker/runtime.dockerfile)
+    )
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    raise FileNotFoundError("schemas/managed_providers.yml not found at any known location: " + ", ".join(str(c) for c in candidates))
 
 
 class BuildProvenance(StrEnum):
@@ -231,9 +256,10 @@ class ProviderFactoryFacts:
 
 
 def _load_schema() -> dict:
-    payload = yaml.safe_load(SCHEMA_PATH.read_text(encoding="utf-8"))
+    schema_path = _resolve_schema_path()
+    payload = yaml.safe_load(schema_path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict) or not isinstance(payload.get("providers"), list):
-        raise SystemExit(f"{SCHEMA_PATH} must contain a YAML mapping with a top-level 'providers' list")
+        raise SystemExit(f"{schema_path} must contain a YAML mapping with a top-level 'providers' list")
     return payload
 
 
@@ -308,6 +334,20 @@ def _load_weekly_cron_providers() -> tuple[str, ...]:
     payload = yaml.safe_load(WEEKLY_SCHEDULE_PATH.read_text(encoding="utf-8"))
     providers = payload.get("providers") or []
     return tuple(row["provider"] for row in providers if row.get("weekly_unconditional") is True)
+
+
+def load_capability_assertions() -> tuple[CapabilityAssertion, ...]:
+    """Public, narrow entry point for callers that only need the declared
+    capability -> assertion mapping (schemas/managed_providers.yml), not the
+    rest of `load_facts()`'s I/O (Makefile parsing, the weekly release
+    schedule). Used by the live capability-projection endpoint
+    (zerg/routers/provider_capability_proofs.py) -- a Runtime Host serving
+    real traffic has no reason to depend on the Makefile or the weekly-cron
+    schedule file being present just to answer "what does the contract
+    declare," and `load_facts()`'s other three I/O calls have their own,
+    separate real-environment assumptions this endpoint should not inherit
+    silently."""
+    return _load_capability_assertions()
 
 
 def load_facts() -> ProviderFactoryFacts:

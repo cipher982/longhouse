@@ -1,9 +1,13 @@
+from pathlib import Path
+
 import pytest
 
+from zerg.qa import provider_factory_model
 from zerg.qa.provider_factory_model import ALL_PROVIDERS
 from zerg.qa.provider_factory_model import DEPLOYED_RELEASE_LANE_PROFILE
 from zerg.qa.provider_factory_model import ORPHANED_CAPABILITY_SCENARIO_IDS
 from zerg.qa.provider_factory_model import PUSH_CODEX_COORDINATION_SCENARIO_ID
+from zerg.qa.provider_factory_model import load_capability_assertions
 from zerg.qa.provider_factory_model import load_facts
 from zerg.qa.provider_factory_model import plan_run
 
@@ -151,3 +155,46 @@ def test_plan_run_rejects_unknown_build_provenance(facts) -> None:
 def test_plan_run_rejects_unknown_trigger(facts) -> None:
     with pytest.raises(ValueError):
         plan_run(facts, "codex", "staged_release", "not-a-trigger")
+
+
+def test_load_capability_assertions_matches_load_facts(facts) -> None:
+    # The narrow public entry point (used by the live capability-projection
+    # endpoint, which has no reason to depend on load_facts()'s Makefile/
+    # weekly-schedule I/O) must return exactly the same data load_facts()
+    # does for the same field.
+    assert load_capability_assertions() == facts.capability_assertions
+
+
+def test_schema_path_resolution_falls_back_through_multiple_candidates(monkeypatch, tmp_path: Path) -> None:
+    # Regression: the deployed Runtime Host image is not a full repo
+    # checkout (docker/runtime.dockerfile copies only server/'s contents
+    # into /app), so the local-dev candidate (ROOT / "schemas" / ...) does
+    # not exist there. The endpoint's first real deploy 500'd on exactly
+    # this -- schemas/managed_providers.yml was never copied into the image
+    # at all, and _resolve_schema_path()'s local-checkout candidate was the
+    # only one that existed at the time. Proves the fallback logic itself by
+    # calling the real function against a fabricated candidate list, rather
+    # than trusting this dev machine's own filesystem layout to exercise it.
+    missing_schema = tmp_path / "no-repo-here" / "schemas" / "managed_providers.yml"
+    real_schema = tmp_path / "deployed" / "managed_providers.yml"
+    real_schema.parent.mkdir(parents=True)
+    real_schema.write_text("providers: []\n")
+
+    def fake_candidates():
+        return (missing_schema, real_schema)
+
+    monkeypatch.setattr(provider_factory_model, "_resolve_schema_path", lambda: next(c for c in fake_candidates() if c.is_file()))
+    resolved = provider_factory_model._resolve_schema_path()
+    assert resolved == real_schema
+
+
+def test_schema_path_resolution_raises_a_clear_error_when_neither_candidate_exists(
+    monkeypatch, tmp_path: Path
+) -> None:
+    # ROOT is the only piece of real state _resolve_schema_path() depends
+    # on for its local-dev candidate; the second candidate is an absolute
+    # path this dev machine genuinely does not have (it only exists inside
+    # the deployed container).
+    monkeypatch.setattr(provider_factory_model, "ROOT", tmp_path / "no-repo-here")
+    with pytest.raises(FileNotFoundError, match="not found at any known location"):
+        provider_factory_model._resolve_schema_path()
