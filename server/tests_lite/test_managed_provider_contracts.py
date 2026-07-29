@@ -697,11 +697,19 @@ def test_factory_provider_set_is_derived_from_the_contract_not_hand_maintained()
 
 
 def test_every_contract_provider_resolves_a_harness_adapter() -> None:
+    from zerg.qa.provider_adapters import load_all
     from zerg.qa.universal_agent_harness import ADAPTER_CLASS_BY_PROVIDER
     from zerg.qa.universal_agent_harness import SUPPORTED_PROVIDERS
     from zerg.qa.universal_agent_harness import provider_configs
     from zerg.services.managed_provider_contracts import factory_provider_names
 
+    # Phase 3's extracted providers (cursor so far) only register when their
+    # module is imported -- normally forced by adapter_registry(), the real
+    # production entry point. Checking ADAPTER_CLASS_BY_PROVIDER directly,
+    # without going through that entry point, must force it explicitly or
+    # this test's result depends on pytest's collection order (whether some
+    # other test already called adapter_registry() first).
+    load_all()
     expected = factory_provider_names(include_maintenance=True)
     assert SUPPORTED_PROVIDERS == expected
     missing_adapters = [provider for provider in expected if provider not in ADAPTER_CLASS_BY_PROVIDER]

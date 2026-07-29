@@ -5473,11 +5473,6 @@ class AntigravityHarnessAdapter(UniversalProviderAdapter):
         return payload
 
 
-@register_adapter("cursor")
-class CursorHarnessAdapter(UniversalProviderAdapter):
-    """Cursor concrete adapter for the universal Longhouse action contract."""
-
-
 def adapter_snapshot(config: AdapterConfig) -> dict[str, Any]:
     return {
         "provider": config.provider,
@@ -8066,6 +8061,17 @@ def provider_configs() -> dict[str, AdapterConfig]:
 
 
 def adapter_registry(provider_bins: Mapping[str, Path] | None = None) -> dict[str, AgentHarnessAdapter]:
+    # Lazy, function-body import (not module-level): provider_adapters
+    # submodules import UniversalProviderAdapter/register_adapter from this
+    # module, so importing the package at this module's own top level would
+    # be circular. By the time this function is actually called, this
+    # module has already finished loading, so the import here is safe -- and
+    # it is what makes discover_adapters()'s decorator-based registration
+    # real for this file's own extracted providers (Phase 3), not just for
+    # the toy adapter in test_sixth_provider_is_discoverable_without_editing_this_module.
+    from zerg.qa import provider_adapters
+
+    provider_adapters.load_all()
     bins = dict(provider_bins or {})
     registry: dict[str, AgentHarnessAdapter] = {}
     for provider, config in provider_configs().items():

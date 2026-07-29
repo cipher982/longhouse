@@ -4187,3 +4187,18 @@ def test_register_adapter_rejects_a_non_adapter_class(tmp_path: Path) -> None:
     with pytest.raises(TypeError, match="UniversalProviderAdapter subclass"):
         uah.discover_adapters([not_an_adapter_module_path])
     assert "not_real" not in uah.ADAPTER_CLASS_BY_PROVIDER
+
+
+def test_adapter_registry_wires_a_real_extracted_provider_module(tmp_path: Path) -> None:
+    # docs/specs/provider-factory-coherence.md, Phase 3: cursor is the first
+    # provider actually moved into server/zerg/qa/provider_adapters/ (not a
+    # toy test module). adapter_registry() -- the real production entry
+    # point -- must import that package to register it; this is the
+    # regression guard for that wiring, distinct from
+    # test_sixth_provider_is_discoverable_without_editing_this_module, which
+    # only proves the decorator mechanism works given an explicit path.
+    from zerg.qa.provider_adapters.cursor import CursorHarnessAdapter
+
+    registry = uah.adapter_registry(_fake_bins(tmp_path))
+    assert type(registry["cursor"]).__name__ == "CursorHarnessAdapter"
+    assert isinstance(registry["cursor"], CursorHarnessAdapter)
