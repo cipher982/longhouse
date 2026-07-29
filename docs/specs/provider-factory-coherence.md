@@ -1389,8 +1389,35 @@ being trustworthy on faith ("nothing derives from the authority") now
 literally derives from it, and is now actually held to that by a test that
 reads this exact file.
 
-**Not yet done:** the UI actually rendering this data for a human outside a
-markdown file. Real, separate, frontend work this session did not reach.
+**UI rendering shipped 2026-07-29 (longhouse `962e5eb87`).** The data layer
+(`GET /agents/provider-capabilities`) is device-token-only, which a
+logged-in browser user never has — `/api/agents/*` is the machine surface,
+not something the frontend calls directly (the same split every other
+browser page in this repo already follows: `/timeline/*`, `/admin/*`,
+cookie-authenticated). Added `GET /admin/provider-capabilities` calling the
+exact same `build_capability_projection_payload()`, and a new
+`/admin/provider-capabilities` page rendering every declared capability
+assertion with its real proof status, evidence class, and last-proven time,
+filterable by provider. One projection code path, two auth surfaces, proven
+identical by a test that hits both and asserts equal responses.
+
+Caught two real bugs by actually rendering the page (`make dev-demo` +
+headless screenshot) rather than trusting typecheck/lint alone — matching
+this epic's own recurring lesson that "tests pass" and "verified working"
+are different claims: the page blindly copied `ObservabilityPage`'s
+`enabled: config.singleTenant` query gate, correct for that page's
+genuinely single-tenant-only health data but wrong here (this data isn't
+tenant-scoped, it's admin-gated Longhouse-wide diagnostic data) — the gate
+silently disabled the query in dev/demo and produced a misleading "Unknown
+error" instead of loading; and the header's provider-filter `<select>`
+reused `.modal-select` bare (a full-width, modal-scoped helper), clipping
+its text the same way `ObservabilityPage`'s own select needed a dedicated
+override to avoid. Both fixed before the first commit, not after.
+
+This closes the concretely-scoped remainder of Phase 5. What's left
+(codex's remaining scenario columns, the `provider_adapters/` package
+split, the clifford deploy decision) is the genuinely multi-session work
+Sol's review already confirmed is correctly scoped, not under-scoped.
 
 ## Definition of done
 
