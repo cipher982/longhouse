@@ -1003,16 +1003,50 @@ Deletes: `executable-provider-capability-contract-epic.md`,
 
 ### Phase 4 — signal plan, then coverage
 
-The signal plan lands before the volume: expected runs per day, evidence
-retention, flake retry policy, alert grouping. The model is wpt.fyi — many
-implementations, one shared suite, and the public matrix is a projection of the
-freshest result per cell so nobody reads individual runs. Pair it with
-Sentry-style fingerprint grouping and Chromium sheriff practice: page on a
-novel failure fingerprint or a green→red transition on a previously stable
-provider × scenario cell; everything else is dashboard state.
+**Correction (2026-07-28): the signal plan already exists and is live.**
+This section originally described the plan as unbuilt. It isn't — it was
+built separately (control-plane, dated 2026-07-24/25, predating this epic's
+Phase 0) and never connected to this document, which is exactly the kind of
+map/territory gap the epic exists to close.
 
-Then turn coverage up — real binaries, full columns, every release, on cube.
-Cursor enters as `observed_install` snapshots. The diagonal fills.
+- **Alert grouping / Sentry-style fingerprinting**: `provider_factory/policy.py`.
+  `_failure_shape()` digests the sorted set of failed assertions into a
+  `sha256` fingerprint; `identical_infrastructure_failure` suppresses repeat
+  noise only when two runs share the exact same infrastructure-failure
+  fingerprint (never suppresses a semantic failure).
+- **Baseline comparison / green→red paging**: `assertion_deltas()` classifies
+  each assertion as `new`/`unchanged`/`regressed`/`recovered`/`changed`
+  against a recorded `assertion_baseline`; `notification_tier()` pages
+  (`"alert"`) only on a semantic failure or adverse movement
+  (`regressed`/`changed`/a new non-pass), routes first-seen gaps to a quiet
+  `"digest"`, and stays `"silent"` on an unchanged known gap — exactly
+  "page on a novel failure fingerprint or a green→red transition... everything
+  else is dashboard state."
+- **Disposition / triage routing**: `qualification_decision()` in the same
+  file assigns `quarantined`/`triage_filed`/`baseline_seeded`/
+  `rerun_scheduled`/`none_required`, live-called from `worker.py:509`.
+  `triage.py`/`triage_agent.py` and `delivery.py` consume these dispositions
+  for actual notification delivery (`PROVIDER_FACTORY_NOTIFICATION_TO`,
+  confirmed configured on clifford).
+- **Flake vs. genuinely stuck**: `RELEASE_STUCK_AFTER_SECONDS = 6 * 60 * 60`
+  (`policy.py`) — a release failing qualification for under 6h reads as
+  normal publication lag (asset upload racing the tag), not a broken
+  factory; past that, `unresolved_release_report()` marks it `"stuck"`.
+- **Evidence retention**: `provider_factory/retention.py`,
+  `FULL_COMPLETED_RUNS_PER_PROVIDER = 10`, `SLIM_EVIDENCE_DAYS = 30`,
+  `MIN_SLIM_AGE_HOURS = 48`; mode (`off`/`report`/`apply`) is
+  `PROVIDER_FACTORY_RETENTION_MODE`, confirmed `apply` on clifford.
+- **Not present under this name**: an explicit "expected runs per day"
+  artifact. The interval (900s) and per-trigger cadence (Phase 1's
+  `plan_run`) give this implicitly; nothing currently asserts "codex should
+  have produced N runs today and didn't."
+
+So Phase 4's actual remaining work is only the coverage volume, not the
+signal plan: turn coverage up — real binaries, full columns, every release,
+on cube. Cursor enters as `observed_install` snapshots. The diagonal fills.
+The model is wpt.fyi — many implementations, one shared suite, and the
+public matrix is a projection of the freshest result per cell so nobody
+reads individual runs.
 
 Deletes: `provider-build-matrix.md`, `provider-automation-factory-completion.md`.
 
