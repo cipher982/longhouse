@@ -7,7 +7,7 @@
     "cursor",
     "opencode"
   ],
-  "file_count": 191,
+  "file_count": 194,
   "files": [
     {
       "path": "e2e/tests/core/sessions.spec.ts",
@@ -507,6 +507,13 @@
       ]
     },
     {
+      "path": "server/tests_lite/test_capability_projection.py",
+      "providers": [
+        "claude",
+        "codex"
+      ]
+    },
+    {
       "path": "server/tests_lite/test_catalog_mode_chat_gaps.py",
       "providers": [
         "codex",
@@ -806,7 +813,8 @@
       "path": "server/tests_lite/test_provider_capability_proof_routes.py",
       "providers": [
         "claude",
-        "codex"
+        "codex",
+        "cursor"
       ]
     },
     {
@@ -876,6 +884,13 @@
         "claude",
         "codex",
         "opencode"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_render_provider_factory_status.py",
+      "providers": [
+        "codex",
+        "cursor"
       ]
     },
     {
@@ -1262,7 +1277,6 @@
     {
       "path": "server/zerg/qa/universal_agent_harness.py",
       "providers": [
-        "antigravity",
         "claude",
         "codex",
         "cursor",
@@ -1545,6 +1559,13 @@
       "path": "web/src/pages/__tests__/ObservabilityPage.test.tsx",
       "providers": [
         "claude",
+        "codex",
+        "cursor"
+      ]
+    },
+    {
+      "path": "web/src/pages/__tests__/ProviderCapabilitiesPage.test.tsx",
+      "providers": [
         "codex",
         "cursor"
       ]
