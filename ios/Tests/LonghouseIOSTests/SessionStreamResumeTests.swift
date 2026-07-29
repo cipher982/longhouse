@@ -246,7 +246,10 @@ struct SessionStreamResumeTests {
         for seq in 1...100 {
             recorder.emitPreview(text: "token \(seq)", pubsubSeq: seq)
         }
-        try? await Task.sleep(nanoseconds: 100_000_000)
+        // Wait for the burst to drain instead of assuming a drain rate. A fixed
+        // sleep made this assert wall-clock throughput on a loaded machine, and
+        // it failed with whatever preview happened to be last (51, 81, ...).
+        await waitForLastItemId(model, "prose:synthetic:preview:100")
 
         #expect(await api.tailRequestCount() == baseline)
         #expect(model.items.last?.id == "prose:synthetic:preview:100")
@@ -329,6 +332,16 @@ struct SessionStreamResumeTests {
         #expect(SessionViewModel.pendingInputPollDelay(submittedInputs: [working], now: createdAt.addingTimeInterval(60)) == 5_000_000_000)
         #expect(SessionViewModel.pendingInputPollDelay(submittedInputs: [working], now: createdAt.addingTimeInterval(121)) == nil)
         #expect(SessionViewModel.pendingInputPollDelay(submittedInputs: [failed], now: createdAt) == nil)
+    }
+
+    private func waitForLastItemId(_ model: SessionViewModel, _ expected: String) async {
+        let deadline = Date().addingTimeInterval(2)
+        while Date() < deadline {
+            if model.items.last?.id == expected {
+                return
+            }
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
     }
 
     private func waitForItemIds(_ model: SessionViewModel, _ expected: [String]) async {
