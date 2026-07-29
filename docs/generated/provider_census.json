@@ -7,7 +7,7 @@
     "cursor",
     "opencode"
   ],
-  "file_count": 196,
+  "file_count": 198,
   "files": [
     {
       "path": "e2e/tests/core/sessions.spec.ts",
@@ -538,6 +538,13 @@
       ]
     },
     {
+      "path": "server/tests_lite/test_catalogd_heartbeat.py",
+      "providers": [
+        "claude",
+        "codex"
+      ]
+    },
+    {
       "path": "server/tests_lite/test_catalogd_interactions.py",
       "providers": [
         "claude",
@@ -831,7 +838,8 @@
       "path": "server/tests_lite/test_provider_harness_qualification.py",
       "providers": [
         "claude",
-        "codex"
+        "codex",
+        "opencode"
       ]
     },
     {
@@ -898,7 +906,8 @@
       "providers": [
         "claude",
         "codex",
-        "cursor"
+        "cursor",
+        "opencode"
       ]
     },
     {
@@ -1239,6 +1248,15 @@
       ]
     },
     {
+      "path": "server/zerg/machine_evidence.py",
+      "providers": [
+        "claude",
+        "codex",
+        "cursor",
+        "opencode"
+      ]
+    },
+    {
       "path": "server/zerg/provider_cli_contract.py",
       "providers": [
         "claude",
@@ -1268,7 +1286,8 @@
       "path": "server/zerg/qa/provider_harness_qualification.py",
       "providers": [
         "claude",
-        "codex"
+        "codex",
+        "opencode"
       ]
     },
     {
