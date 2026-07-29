@@ -237,11 +237,11 @@ one row per provider, all `never runs`, held by
 
 | Provider | The diagonal (real binary x full scenario set) |
 |---|---|
-| codex | never runs — the weekly matrix only runs against generated fake binaries |
-| claude | never runs — the weekly matrix only runs against generated fake binaries |
-| opencode | never runs — the weekly matrix only runs against generated fake binaries |
-| antigravity | never runs — the weekly matrix only runs against generated fake binaries |
-| cursor | never runs — the weekly matrix only runs against generated fake binaries |
+| codex | never runs — the weekly matrix only runs against generated fake binaries (scheduled_evidence: generated_fake_unconditional_full_column) |
+| claude | never runs — the weekly matrix only runs against generated fake binaries (scheduled_evidence: generated_fake_unconditional_full_column) |
+| opencode | never runs — the weekly matrix only runs against generated fake binaries (scheduled_evidence: generated_fake_unconditional_full_column) |
+| antigravity | never runs — the weekly matrix only runs against generated fake binaries (scheduled_evidence: generated_fake_unconditional_full_column) |
+| cursor | never runs — the weekly matrix only runs against generated fake binaries (scheduled_evidence: generated_fake_unconditional_full_column) |
 
 This is the first table in this document's history where "is this still true"
 is a test run, not a re-read.
@@ -1142,35 +1142,61 @@ cross-provider branching left in `UniversalProviderAdapter`; Cursor needs no
 extraction (its control path lives outside this file). 3673 tests passed,
 16 skipped, zero regressions, at every one of the four extraction commits.
 
-**The registry/discovery half of the acceptance bar shipped 2026-07-29.**
-Re-read Sol's actual bar before assuming the file-split and the
-extensibility gap were the same task: the bar was never "one file per
-provider" for its own sake, it was "adding a real sixth provider must not
-require editing this shared file." A hardcoded `ADAPTER_CLASS_BY_PROVIDER`
-dict literal fails that regardless of how many files the five classes above
-it live in — every new provider still means a new dict entry there, whether
-that dict sits in a 9500-line file or a 40-line one. That part is now fixed
-independently of the file-split: `register_adapter(provider)` is a class
-decorator populating `ADAPTER_CLASS_BY_PROVIDER` at class-definition time
-(the five real providers now carry `@register_adapter("claude")` etc.
-instead of being listed in a separate dict), and `discover_adapters(paths)`
-imports arbitrary `.py` files so their decorators run. Proven by
-`test_sixth_provider_is_discoverable_without_editing_this_module`: a toy
-adapter class defined in a tmp-path module this file has never imported
-becomes resolvable through the exact same `ADAPTER_CLASS_BY_PROVIDER` the
-five real providers use, with the five real providers' resolution
-unaffected. 80 passed (harness module), zero regressions.
+**The data-structure half of the registry/discovery gap shipped 2026-07-29
+(longhouse `ab89e9b6d`) — corrected 2026-07-29 after Hatch Sol review, the
+first real review-during-work this epic has actually recorded, not just
+referenced.** Original framing overstated what shipped: "closes the
+sixth-provider gap." Sol's review (full transcript findings below) caught
+that it closes only the data-structure half. `register_adapter(provider)` is
+a class decorator populating `ADAPTER_CLASS_BY_PROVIDER` at class-definition
+time (the five real providers now carry `@register_adapter("claude")` etc.
+instead of being listed in a separate hardcoded dict — genuinely removes the
+"every new provider needs a new dict entry in this file" problem), and
+`discover_adapters(paths)` imports arbitrary `.py` files so their decorators
+run, correctly proven against a toy adapter by
+`test_sixth_provider_is_discoverable_without_editing_this_module`.
+
+**What Sol caught that the commit message didn't say:** `discover_adapters()`
+is called nowhere except that test. `adapter_registry()` (the real production
+entry point, `universal_agent_harness.py:8053`) never calls it; there is no
+directory scan; `server/zerg/qa/provider_adapters/` doesn't exist yet. So
+today, a real sixth provider's adapter class, written in a new file, would
+never actually get imported by anything — the decorator would never fire,
+and `ADAPTER_CLASS_BY_PROVIDER.get(provider, UniversalProviderAdapter)` would
+silently fall back to the generic base adapter. The mechanism is sound and
+the test proves it works *given explicit paths*; it does not yet prove a
+sixth provider is discoverable in production. That wiring — `adapter_registry()`
+or startup scanning `provider_adapters/` and calling `discover_adapters()`
+over what it finds — is a small, real, still-open piece, correctly folded
+into the package-split task below rather than tracked as separately closed.
 
 **Not yet done:** all five provider classes still live in one file
 (`universal_agent_harness.py`, ~9500 lines) — the `provider_adapters/`
 package structure Sol's design calls for (one file per provider under
-`server/zerg/qa/provider_adapters/`) is still open, and is now honestly
-scoped as a pure file-layout task, decoupled from the extensibility
-behavior it was previously bundled with. Splitting each class across a file
-boundary means resolving every name each class's moved code references
-(imports, module-level helper functions, `EvidencePackage`/`HarnessOptions`
-types) per provider — real work, but no longer blocking the sixth-provider
-claim.
+`server/zerg/qa/provider_adapters/`), *and* the discovery wiring that makes
+`discover_adapters()` mean something outside a test, are still open and are
+one task, not two. Splitting each class across a file boundary means
+resolving every name each class's moved code references (imports,
+module-level helper functions, `EvidencePackage`/`HarnessOptions` types) per
+provider — real work Sol flagged as carrying the same per-provider
+name-resolution risk the Claude/Codex extraction slices already hit twice
+(a missing method override, a dangling cross-method rename, both caught only
+by running the full suite, not by the mechanical diff).
+
+**The rest of Sol's review, for the record (this session, 2026-07-29):**
+confirmed `control-plane`'s comma-separated `qualification_profiles` parsing
+(`ddfcbc8`) has no real gaps — whitespace-stripped, duplicate-rejecting,
+allowlist-validated, fails closed on empty. Confirmed
+`capability_projection.py`'s join logic is correct — freshest-by-timestamp
+reduction, one row per declared assertion always, no crash on unparseable
+timestamps. Flagged (pre-existing, not this session, no action taken here)
+that `list_provider_capabilities` calls `store.records(provider)` unbounded
+per request with no cap, unlike the sibling bounded-records endpoint —
+unbounded I/O growth over the factory's lifetime, not a correctness bug.
+Directly asked whether anything currently scoped "multi-session" was
+actually closeable now: answered yes for the doc-drift gap below, no for
+everything else (package split, remaining codex scenarios, the clifford
+deploy decision, Phase 5 UI) — each already correctly scoped, not busywork.
 
 Deletes: `executable-provider-capability-contract-epic.md`,
 `provider-release-proof-roadmap.md`.
@@ -1338,16 +1364,30 @@ that 3685 passing local tests did not:**
    caught the second gap before a broken image could ship).
 
 **"This document's status tables become generated" — first slice shipped
-2026-07-29.** `server/scripts/render_provider_factory_status.py` renders the
+2026-07-29, corrected same day after Hatch Sol review.** `server/scripts/render_provider_factory_status.py` renders the
 "What it proves today" status matrix and the diagonal-empty claim straight
-from `plan_run()`; both are embedded above and pinned by
+from `plan_run()`; both are embedded above. Original claim: "pinned by
 `test_render_provider_factory_status.py`, which fails the moment either
-becomes stale rather than waiting for someone to notice. This does not yet
-cover every table in the document (the release-lane/commit-lane architecture
-comparison at the top of "What it proves today" is a structural description,
-not schema-derivable data, and stays hand-written) — but the specific claim
-this epic was written to stop being trustworthy on faith
-("nothing derives from the authority") now literally derives from it.
+becomes stale." Sol caught that this was false — the original two tests
+checked the render functions' own output (row counts, "never runs" on every
+diagonal cell) but never read this document, so a schema change altering a
+cell's text could go stale here silently while both tests kept passing.
+Worse: the actual diagonal table embedded above was already stale relative
+to `render_diagonal_status()`'s real output the moment the drift test was
+added and run — it was missing each row's
+`(scheduled_evidence: generated_fake_unconditional_full_column)` suffix,
+hand-trimmed for readability when first embedded, breaking the
+"regenerate, do not hand-edit" contract stated right above it. Fixed both:
+`test_generated_tables_embedded_in_the_spec_are_not_stale` now asserts exact
+substring containment of each render function's live output inside this
+file, and the diagonal table above was corrected to the literal generator
+output. This does not yet cover every table in the document (the
+release-lane/commit-lane architecture comparison at the top of "What it
+proves today" is a structural description, not schema-derivable data, and
+stays hand-written) — but the specific claim this epic was written to stop
+being trustworthy on faith ("nothing derives from the authority") now
+literally derives from it, and is now actually held to that by a test that
+reads this exact file.
 
 **Not yet done:** the UI actually rendering this data for a human outside a
 markdown file. Real, separate, frontend work this session did not reach.
