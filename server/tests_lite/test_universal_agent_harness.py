@@ -277,11 +277,40 @@ def _fake_codex_permission_canary(args: dict[str, object]) -> dict[str, object]:
 
 def _fake_codex_permission_canary_only(original):
     def fake_canary(args: dict[str, object]) -> dict[str, object]:
-        if args.get("run_fake_app_server"):
+        if args.get("run_fake_app_server") or args.get("run_fake_app_server_binary"):
             return _fake_codex_permission_canary(args)
         return original(args)
 
     return fake_canary
+
+
+def test_codex_permission_prompt_prefers_installed_engine_canary(tmp_path: Path, monkeypatch) -> None:
+    from zerg.qa import codex_provider_release_canary
+
+    engine = tmp_path / "longhouse-engine"
+    engine.write_text("engine\n", encoding="utf-8")
+    engine.chmod(0o700)
+    monkeypatch.setenv("LONGHOUSE_ENGINE_BIN", str(engine))
+    calls: list[dict[str, object]] = []
+
+    def fake_canary(args: dict[str, object]) -> dict[str, object]:
+        calls.append(args)
+        return _fake_codex_permission_canary(args)
+
+    monkeypatch.setattr(codex_provider_release_canary, "run_codex_provider_release_canary", fake_canary)
+    payload = uah.run_harness(
+        uah.HarnessOptions(
+            providers=("codex",),
+            scenarios=("permission_prompt",),
+            evidence_root=tmp_path / "evidence",
+            provider_bins={"codex": _fake_bins(tmp_path)["codex"]},
+        )
+    )
+
+    assert payload["verdict"] == "green"
+    assert calls[0]["engine"] == str(engine)
+    assert calls[0]["run_fake_app_server_binary"] is True
+    assert "run_fake_app_server" not in calls[0]
 
 
 def _proof_verdict_for_status(status: str) -> str:

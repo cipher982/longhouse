@@ -267,17 +267,20 @@ class CodexOpenAIHarnessAdapter(UniversalProviderAdapter):
 
         canary_evidence_root = package.path("raw", "codex-permission-canary-evidence")
         canary_artifact_path = package.path("raw", "codex-provider-release-canary.json")
-        canary_artifact = run_codex_provider_release_canary(
-            {
-                "codex_bin": str(binary),
-                "artifact": canary_artifact_path,
-                "evidence_root": canary_evidence_root,
-                "repo_root": default_repo_root(),
-                "source_review_status": "pass",
-                "skip_static_contract": True,
-                "run_fake_app_server": True,
-            }
-        )
+        canary_args: dict[str, Any] = {
+            "codex_bin": str(binary),
+            "artifact": canary_artifact_path,
+            "evidence_root": canary_evidence_root,
+            "repo_root": default_repo_root(),
+            "source_review_status": "pass",
+            "skip_static_contract": True,
+        }
+        engine = os.environ.get("LONGHOUSE_ENGINE_BIN")
+        if engine:
+            canary_args.update(engine=engine, run_fake_app_server_binary=True)
+        else:
+            canary_args["run_fake_app_server"] = True
+        canary_artifact = run_codex_provider_release_canary(canary_args)
         if not canary_artifact_path.is_file():
             package.write_json("raw/codex-provider-release-canary.json", canary_artifact)
         package.write_json("raw/codex-provider-release-canary-inline.json", canary_artifact)

@@ -568,6 +568,153 @@ def run_fake_app_server_unit(args: argparse.Namespace) -> dict[str, Any]:
     )
 
 
+_FAKE_PERMISSION_APP_SERVER = r"""#!/usr/bin/env python3
+import json
+import sys
+
+
+def emit(obj):
+    sys.stdout.write(json.dumps(obj) + "\n")
+    sys.stdout.flush()
+
+
+def expect_response(expected_id, check):
+    line = sys.stdin.readline()
+    if not line:
+        sys.exit(3)
+    message = json.loads(line)
+    if message.get("id") != expected_id:
+        sys.exit(4)
+    if not check(message.get("result", {})):
+        sys.exit(5)
+
+
+if len(sys.argv) < 2 or sys.argv[1] != "app-server":
+    sys.exit(2)
+
+for line in sys.stdin:
+    message = json.loads(line)
+    method = message.get("method")
+    if method == "initialize":
+        emit({"id": message["id"], "result": {"platformFamily": "unix", "platformOs": "linux", "userAgent": "fake/1.0"}})
+    elif method == "initialized":
+        pass
+    elif method == "thread/start":
+        emit({"method": "thread/started", "params": {"thread": {"id": "thr_test"}}})
+        emit({"id": message["id"], "result": {"thread": {"id": "thr_test"}}})
+    elif method == "turn/start":
+        emit({"id": message["id"], "result": {"turn": {"id": "turn_test", "status": "inProgress", "items": []}}})
+        emit({"method": "turn/started", "params": {"threadId": "thr_test", "turn": {"id": "turn_test", "status": "inProgress", "items": []}}})
+        emit({"method": "thread/status/changed", "params": {"threadId": "thr_test", "status": {"type": "active", "activeFlags": ["waitingOnApproval"]}}})
+        emit({"id": 99, "method": "item/commandExecution/requestApproval", "params": {"threadId": "thr_test", "turnId": "turn_test", "itemId": "cmd_1"}})
+        expect_response(99, lambda result: result.get("decision") == "accept")
+        emit({"id": 100, "method": "item/permissions/requestApproval", "params": {"threadId": "thr_test", "turnId": "turn_test", "itemId": "perm_1", "permissions": {"network": {"hosts": ["example.com"]}}}})
+        expect_response(100, lambda result: result.get("scope") == "turn" and result.get("permissions", {}).get("network", {}).get("hosts") == ["example.com"])
+        emit({"method": "thread/status/changed", "params": {"threadId": "thr_test", "status": {"type": "active", "activeFlags": ["waitingOnUserInput"]}}})
+        emit({"id": 101, "method": "item/tool/requestUserInput", "params": {"threadId": "thr_test", "turnId": "turn_test", "itemId": "input_1", "questions": [{"id": "color", "header": "Color", "question": "Pick one", "options": [{"label": "blue", "description": "Blue"}, {"label": "red", "description": "Red"}]}]}})
+        expect_response(101, lambda result: result.get("answers", {}).get("color", {}).get("answers") == ["blue"])
+        emit({"method": "thread/status/changed", "params": {"threadId": "thr_test", "status": {"type": "active", "activeFlags": []}}})
+        emit({"method": "turn/completed", "params": {"threadId": "thr_test", "turn": {"id": "turn_test", "status": "completed", "items": []}}})
+    else:
+        emit({"id": message["id"], "result": {}})
+"""
+
+
+def run_fake_app_server_binary(args: argparse.Namespace, evidence_root: Path) -> dict[str, Any]:
+    engine = _resolve_executable(args.engine, "longhouse-engine")
+    if not engine:
+        return _fail("engine_not_found", "longhouse-engine binary was not found")
+
+    root = evidence_root / "fake-app-server-binary"
+    root.mkdir(parents=True, exist_ok=True)
+    workspace = root / "workspace"
+    workspace.mkdir(exist_ok=True)
+    fake_codex = root / "codex"
+    fake_codex.write_text(_FAKE_PERMISSION_APP_SERVER, encoding="utf-8")
+    fake_codex.chmod(0o700)
+    log_path = root / "canary.jsonl"
+    command = [
+        engine,
+        "codex-app-server-canary",
+        "--prompt",
+        "Exercise approval and user-input requests.",
+        "--cwd",
+        str(workspace),
+        "--codex-bin",
+        str(fake_codex),
+        "--approval-policy",
+        "on-request",
+        "--sandbox",
+        "workspace-write",
+        "--auto-approve",
+        "--event-timeout-secs",
+        "10",
+        "--log-jsonl",
+        str(log_path),
+        "--json",
+    ]
+    result = _run(command, timeout=args.fake_app_server_timeout_secs)
+    command_evidence = _command_evidence(result)
+    _write_json(root / "command.json", command_evidence)
+    if result.returncode != 0:
+        return _fail(
+            "fake_app_server_binary_failed",
+            "installed longhouse-engine fake app-server canary failed",
+            evidence=command_evidence,
+        )
+    try:
+        summary = _load_json_stdout(result)
+    except (ValueError, json.JSONDecodeError) as exc:
+        return _fail(
+            "fake_app_server_binary_invalid_json",
+            f"installed longhouse-engine canary returned invalid JSON: {exc}",
+            evidence=command_evidence,
+        )
+    _write_json(root / "summary.json", summary)
+
+    request_counts = dict(summary.get("server_request_counts") or {})
+    active_flag_counts = dict(summary.get("thread_active_flag_counts") or {})
+    expected_requests = {
+        "item/commandExecution/requestApproval": 1,
+        "item/permissions/requestApproval": 1,
+        "item/tool/requestUserInput": 1,
+    }
+    semantic_failures: list[str] = []
+    for method, expected_count in expected_requests.items():
+        if request_counts.get(method) != expected_count:
+            semantic_failures.append(f"{method}={request_counts.get(method)!r}")
+    for flag in ("waitingOnApproval", "waitingOnUserInput"):
+        if int(active_flag_counts.get(flag) or 0) < 1:
+            semantic_failures.append(f"{flag}={active_flag_counts.get(flag)!r}")
+    if summary.get("turn_status") != "completed":
+        semantic_failures.append(f"turn_status={summary.get('turn_status')!r}")
+    if summary.get("response_errors"):
+        semantic_failures.append(f"response_errors={summary.get('response_errors')!r}")
+    if semantic_failures:
+        return _fail(
+            "fake_app_server_binary_semantic_failure",
+            "installed longhouse-engine did not satisfy the permission protocol contract",
+            semantic_failures=semantic_failures,
+            summary=summary,
+            evidence=command_evidence,
+        )
+
+    return _status(
+        "pass",
+        summary=summary,
+        evidence=command_evidence,
+        operation_evidence={
+            "permission_prompt": {
+                "status": "pass",
+                "level": "hermetic",
+                "source": "installed longhouse-engine against a deterministic Codex app-server permission fixture",
+                "canary": "codex_fake_app_server_permission_approval",
+                "next": "Promote with a live held-permission Codex provider canary.",
+            }
+        },
+    )
+
+
 def run_raw_fresh_remote(args: argparse.Namespace, evidence_root: Path, codex_bin: str) -> dict[str, Any]:
     engine = _resolve_executable(args.engine, "longhouse-engine")
     if not engine:
@@ -1364,6 +1511,7 @@ def _profile_requested(args: argparse.Namespace) -> bool:
     return any(
         (
             args.run_fake_app_server,
+            args.run_fake_app_server_binary,
             args.run_raw_fresh_remote,
             args.run_managed_tui_attach,
             args.run_managed_live_send,
@@ -1428,6 +1576,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--skip-binary-identity", action="store_true")
     parser.add_argument("--skip-static-contract", action="store_true")
     parser.add_argument("--run-fake-app-server", action="store_true")
+    parser.add_argument("--run-fake-app-server-binary", action="store_true")
     parser.add_argument("--run-raw-fresh-remote", action="store_true")
     parser.add_argument("--run-managed-tui-attach", action="store_true")
     parser.add_argument("--run-managed-live-send", action="store_true")
@@ -1481,7 +1630,7 @@ def run_codex_provider_release_canary(args: argparse.Namespace | Mapping[str, An
     artifact_path = args.artifact or evidence_root / "provider-release-canary.json"
 
     if args.run_all_live:
-        args.run_fake_app_server = True
+        args.run_fake_app_server_binary = True
         args.run_raw_fresh_remote = True
         args.run_managed_tui_attach = True
         args.run_managed_live_send = True
@@ -1501,11 +1650,17 @@ def run_codex_provider_release_canary(args: argparse.Namespace | Mapping[str, An
     else:
         canaries["static_contract"] = run_static_contract(args)
 
-    canaries["fake_app_server"] = (
-        run_fake_app_server_unit(args)
-        if args.run_fake_app_server
-        else _status("not_run", reason="pass --run-fake-app-server to exercise this canary")
-    )
+    if args.run_fake_app_server and args.run_fake_app_server_binary:
+        raise ValueError("fake app-server source and installed-binary modes are mutually exclusive")
+    if args.run_fake_app_server_binary:
+        canaries["fake_app_server"] = run_fake_app_server_binary(args, evidence_root)
+    elif args.run_fake_app_server:
+        canaries["fake_app_server"] = run_fake_app_server_unit(args)
+    else:
+        canaries["fake_app_server"] = _status(
+            "not_run",
+            reason="pass --run-fake-app-server-binary or --run-fake-app-server to exercise this canary",
+        )
     canaries["raw_fresh_remote"] = (
         run_raw_fresh_remote(args, evidence_root, codex_bin)
         if args.run_raw_fresh_remote

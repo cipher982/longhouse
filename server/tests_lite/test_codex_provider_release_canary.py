@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 from zerg.qa import codex_provider_release_canary as canary
@@ -18,6 +19,60 @@ def _args(tmp_path: Path) -> argparse.Namespace:
         bridge_start_timeout_secs=5,
         live_interrupt_timeout_secs=1,
     )
+
+
+def test_fake_app_server_binary_proves_installed_engine_permission_protocol(tmp_path: Path) -> None:
+    engine = tmp_path / "longhouse-engine"
+    engine.write_text(
+        f"""#!{sys.executable}
+import json
+import sys
+from pathlib import Path
+
+args = sys.argv[1:]
+assert args[0] == "codex-app-server-canary"
+assert "--auto-approve" in args
+codex_bin = Path(args[args.index("--codex-bin") + 1])
+assert codex_bin.is_file() and codex_bin.stat().st_mode & 0o100
+print(json.dumps({{
+    "turn_status": "completed",
+    "server_request_counts": {{
+        "item/commandExecution/requestApproval": 1,
+        "item/permissions/requestApproval": 1,
+        "item/tool/requestUserInput": 1,
+    }},
+    "thread_active_flag_counts": {{
+        "waitingOnApproval": 1,
+        "waitingOnUserInput": 1,
+    }},
+    "response_errors": [],
+}}))
+""",
+        encoding="utf-8",
+    )
+    engine.chmod(0o700)
+    args = canary._coerce_args(
+        {
+            "engine": str(engine),
+            "repo_root": tmp_path,
+            "fake_app_server_timeout_secs": 10,
+        }
+    )
+
+    result = canary.run_fake_app_server_binary(args, tmp_path / "evidence")
+
+    assert result["status"] == "pass"
+    assert result["operation_evidence"]["permission_prompt"] == {
+        "status": "pass",
+        "level": "hermetic",
+        "source": "installed longhouse-engine against a deterministic Codex app-server permission fixture",
+        "canary": "codex_fake_app_server_permission_approval",
+        "next": "Promote with a live held-permission Codex provider canary.",
+    }
+    evidence_root = tmp_path / "evidence" / "fake-app-server-binary"
+    assert (evidence_root / "codex").is_file()
+    assert (evidence_root / "command.json").is_file()
+    assert (evidence_root / "summary.json").is_file()
 
 
 def test_stop_bridge_uses_force_and_verifies_terminal_state_and_socket_absence(tmp_path: Path, monkeypatch) -> None:
@@ -117,6 +172,7 @@ def test_live_interrupt_semantic_failure_retains_start_send_and_turn_state(tmp_p
         "_start_bridge",
         lambda *_args, **_kwargs: (start_summary, start_result, isolation_root),
     )
+
     def run_command(*_args, **_kwargs):
         result = next(command_results)
         if result.args == ["interrupt"]:
