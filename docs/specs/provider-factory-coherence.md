@@ -1,17 +1,51 @@
 # Provider factory coherence
 
-**Status:** revision 4 design; implementation underway. Phase 0 shipped
-2026-07-28: clifford is deployed at control-plane `07a40bb` / longhouse
-`c3065017a0`, Codex qualification profile `codex_tool_call_result_v1`,
-verified via a healthy post-deploy tick. The provider census is a CI-checked
-generated artifact (`scripts/generate_provider_census.py`,
-`docs/generated/provider_census.json`, 189 files). Phase 0 commits, in order:
-control-plane `355be4b` (profile flip) + `07a40bb` (bridge-timeout fix caught
-by Hatch Sol review — the flip alone would have silently broken on any run
-taking 120-180s; deployed). Longhouse `c3065017a` (census, deployed) +
-`313d3e31c` (path-component exclusion fix from the same Sol review — doc/CI
-tooling only, no runtime effect, not yet redeployed to clifford but will ride
-the next Phase 1+ deploy).
+**Status: complete, deployed, and fresh-state verified 2026-07-29.** Clifford
+is running control-plane `c40b6c5` with Longhouse `32c7464f0`; the paired
+deploy completed a healthy scheduled tick. A separate empty-state run at
+`_manual-full-column-c40b6c5-32c7464f0` then qualified the latest releases
+for every configured provider with no unresolved releases. Both Codex
+profiles completed against the identical staged `rust-v0.146.0` full-package
+closure (`sha256:1445535b...`):
+
+- `codex_tool_call_result_v1`, run
+  `26a6b15c-a037-48bf-8208-119d70ef21ac`: all four release assertions passed,
+  including a real model tool call with exact command output linked to the
+  final agent message. The 33-action suite recorded 32 passes and the one
+  declared provider-contract gap (`external_event_channel`). All 26 runnable
+  scenarios passed; the only other statuses were the two explicit unsupported
+  gaps and the aggregate blocked status those gaps require. DB ingest,
+  session projection, timeline projection, baseline comparison, and old/new
+  release comparison all passed.
+- `codex_helm_interrupt_v1`, run
+  `65ffdda5-c7af-420b-94f1-469a2d9d78b0`: active managed turn observed,
+  terminal interrupt observed, and bridge cleanup verified, all pass.
+- The installed-engine permission canary observed one command approval, one
+  permissions approval, one user-input request, both waiting flags, a
+  completed turn, and zero response errors. It runs from an order-independent
+  fixture HOME and no longer compiles source in the production container.
+- Claude `2.1.220` (`190d2007-579e-462e-8229-2581f0113401`), OpenCode
+  `1.18.9` (`d4c765b2-1384-4dec-9388-efee6da803d5`), and maintenance-tier
+  Antigravity `1.1.8` (`eba05f17-ec99-4b59-967b-357c4734a670`) all completed
+  their staged release lanes in the same run.
+
+The progress notes below are the chronological implementation record. Any
+dated “not yet deployed,” “still open,” or “in progress” statement in that
+record is superseded by this completion status unless it is restated in a
+later section.
+
+### Implementation record
+
+Phase 0 shipped 2026-07-28: clifford was deployed at control-plane `07a40bb`
+/ longhouse `c3065017a0`, Codex qualification profile
+`codex_tool_call_result_v1`, verified via a healthy post-deploy tick. The
+provider census is a CI-checked generated artifact
+(`scripts/generate_provider_census.py`, `docs/generated/provider_census.json`,
+189 files). Phase 0 commits, in order: control-plane `355be4b` (profile flip)
++ `07a40bb` (bridge-timeout fix caught by Hatch Sol review — the flip alone
+would have silently broken on any run taking 120-180s; deployed). Longhouse
+`c3065017a` (census, deployed) + `313d3e31c` (path-component exclusion fix
+from the same Sol review).
 
 Phase 1 shipped 2026-07-28: `server/zerg/qa/provider_factory_model.py`
 (longhouse `0c9455e7e`) plus a cross-repo derivation check
@@ -1349,6 +1383,22 @@ remaining scenario — real, multi-session-scale engineering, not a
 config change. This wiring makes that additive once each scenario is
 ready; it does not shortcut producing them.
 
+**Coverage completed and enabled on clifford 2026-07-29.** The tool-result
+profile now runs the complete 22-scenario Codex column through the universal
+harness, while the Helm profile independently proves the live managed
+interrupt path. Both profiles are configured in the deployed service and run
+from one staged full-package closure per upstream release. The final
+fresh-state proof is recorded at the top of this file. The production defects
+found during cutover were all in integration boundaries that unit-only proof
+would have missed: the image lacked Longhouse runtime dependencies; an
+unchanged half of a paired incremental deploy produced an invalid empty Git
+bundle; the harness did not bind `CODEX_MANAGED_PACKAGE_ROOT` to the
+materialized build; the tool lane did not declare its engine input; nested
+bubblewrap could not create a second user namespace under the outer sandbox's
+read-only `/proc`; and the installed-engine permission fixture inherited
+scenario-order-dependent HOME state. Each now has a regression test and a
+successful exact-pair live rerun.
+
 Deletes: `provider-build-matrix.md`, `provider-automation-factory-completion.md`.
 
 ### Phase 5 — serving
@@ -1445,10 +1495,10 @@ reused `.modal-select` bare (a full-width, modal-scoped helper), clipping
 its text the same way `ObservabilityPage`'s own select needed a dedicated
 override to avoid. Both fixed before the first commit, not after.
 
-This closes the concretely-scoped remainder of Phase 5. What's left
-(codex's remaining scenario columns, the `provider_adapters/` package
-split, the clifford deploy decision) is the genuinely multi-session work
-Sol's review already confirmed is correctly scoped, not under-scoped.
+This closed the concretely-scoped remainder of Phase 5. At that point the
+remaining work was Codex's full scenario column, the `provider_adapters/`
+package split, and the clifford deploy decision. Those later closed in
+Phases 3 and 4 and in the final live proof recorded at the top of this file.
 
 **Independent multi-reviewer pass, 2026-07-29 (longhouse `214372640`) — real
 correctness bugs found in the code this session had already called
@@ -1593,23 +1643,25 @@ Phase 0 is worth doing today. Phase 1 is cheap and gates knowing whether the
 rest is coherent. Phases 3 and 4 should be scheduled explicitly after the
 launch blockers.
 
-## Still open
+## Resolved design questions
 
-- **Resolved by Phase 1, partially:** the 13 schema scenario_ids and 36
+- The 13 schema scenario_ids and 36
   harness scenarios do not reconcile into one type — there turn out to be
   three types, not two (capability-proof, identity-proof, harness-pipeline;
   see "Phase 1 model" above), with zero name-level overlap and a named
-  conceptual mapping for the subset that overlaps in capability. Phase 3 still
-  owns making any of these structurally equivalent.
-- **Evidence gathered, not resolved:** is the adapter seam correctly placed on
-  **provider**? The harness has 27 real per-provider driver functions
+  conceptual mapping for the subset that overlaps in capability. The final
+  implementation shares execution and oracles without pretending those three
+  types are structurally identical.
+- The adapter seam is correctly placed on **provider**. The harness has 27 real
+  per-provider driver functions
   (`_run_<provider>_<scenario>`) across ~11 distinct scenario concepts and 4
   providers (0 for Cursor) — codex alone has 9, including sub-variants no
   other provider has (`_run_codex_interrupt_dispatch_proof`,
   `_run_codex_resume_attach_command_proof`). Variance is not cleanly
-  one-dimensional on either axis, which is itself evidence against a simple
-  "move the seam to scenario" fix. Phase 3 decides with the equivalence
-  oracle in hand, as originally planned.
+  one-dimensional on either axis. The completed `provider_adapters/` package
+  keeps provider-specific execution together while shared ingest, projection,
+  and evidence machinery remains in the base; the fresh-state all-provider run
+  proves that split through the production loader.
 
 ## Appendix: corrections from review
 
