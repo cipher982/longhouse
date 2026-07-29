@@ -1200,24 +1200,61 @@ struct SessionViewModelTests {
         }
     }
 
-    private func waitForWorkspaceRequestCount(_ api: FakeSessionWorkspaceClient, atLeast count: Int) async {
-        for _ in 0..<50 {
-            if await api.workspaceRequestCount() >= count { return }
+    /// Poll until `probe` reaches `count`, and fail loudly if it never does.
+    ///
+    /// These helpers order the rest of the test around the fake client, so a
+    /// silent timeout does not just lose coverage — it hands the following
+    /// lines a different interleaving. `memoryWarningDropsSpeculativePrefetch…`
+    /// failed exactly that way on a loaded CI machine: the paused prefetch had
+    /// not consumed its queued workspace yet, so the *next* request took the
+    /// prefetch's payload and the transcript asserted against the wrong page.
+    /// Timing out must be a test failure, not a quiet change of plan.
+    private func waitForCount(
+        _ label: String,
+        atLeast count: Int,
+        sourceLocation: SourceLocation = #_sourceLocation,
+        probe: () async -> Int
+    ) async {
+        // 5s, not 1s: these run on a shared CI machine alongside a simulator
+        // boot and four other agents' work.
+        for _ in 0..<250 {
+            if await probe() >= count { return }
             try? await Task.sleep(nanoseconds: 20_000_000)
+        }
+        let observed = await probe()
+        Issue.record(
+            "Timed out waiting for \(label) to reach \(count); observed \(observed)",
+            sourceLocation: sourceLocation
+        )
+    }
+
+    private func waitForWorkspaceRequestCount(
+        _ api: FakeSessionWorkspaceClient,
+        atLeast count: Int,
+        sourceLocation: SourceLocation = #_sourceLocation
+    ) async {
+        await waitForCount("workspace request count", atLeast: count, sourceLocation: sourceLocation) {
+            await api.workspaceRequestCount()
         }
     }
 
-    private func waitForTailRequestCount(_ api: FakeSessionWorkspaceClient, atLeast count: Int) async {
-        for _ in 0..<50 {
-            if await api.tailRequestCount() >= count { return }
-            try? await Task.sleep(nanoseconds: 20_000_000)
+    private func waitForTailRequestCount(
+        _ api: FakeSessionWorkspaceClient,
+        atLeast count: Int,
+        sourceLocation: SourceLocation = #_sourceLocation
+    ) async {
+        await waitForCount("tail request count", atLeast: count, sourceLocation: sourceLocation) {
+            await api.tailRequestCount()
         }
     }
 
-    private func waitForTailResponseCount(_ api: FakeSessionWorkspaceClient, atLeast count: Int) async {
-        for _ in 0..<50 {
-            if await api.tailResponseCount() >= count { return }
-            try? await Task.sleep(nanoseconds: 20_000_000)
+    private func waitForTailResponseCount(
+        _ api: FakeSessionWorkspaceClient,
+        atLeast count: Int,
+        sourceLocation: SourceLocation = #_sourceLocation
+    ) async {
+        await waitForCount("tail response count", atLeast: count, sourceLocation: sourceLocation) {
+            await api.tailResponseCount()
         }
     }
 
@@ -1331,6 +1368,12 @@ private actor FakeSessionWorkspaceClient: SessionWorkspaceClient {
     ) async throws -> SessionMobileTailResponse {
         workspaceRequests.append((id: id, limit: limit, branchMode: branchMode))
         tailRequests.append((id: id, limit: limit, offset: offset, branchMode: branchMode, snapshotEventId: snapshotEventId, cursor: cursor))
+        // Take this request's payload off the queue *before* parking on a pause,
+        // so the queue binds to requests in request order. Consuming it after the
+        // pause let a later, unpaused request overtake a parked one and steal its
+        // page, which is how memoryWarningDropsSpeculativePrefetch… asserted
+        // against the prefetched page it was supposed to have discarded.
+        let workspace = try nextWorkspace()
         if let pausedCount = pausedTailResponseCounts[offset], pausedCount > 0 {
             if pausedCount == 1 {
                 pausedTailResponseCounts[offset] = nil
@@ -1341,7 +1384,6 @@ private actor FakeSessionWorkspaceClient: SessionWorkspaceClient {
                 pausedTailContinuations.append(continuation)
             }
         }
-        let workspace = try nextWorkspace()
         tailResponses += 1
         return SessionMobileTailResponse(
             session: workspace.session,

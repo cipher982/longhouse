@@ -121,16 +121,43 @@ final class WebTranscriptScrollPinningTests: XCTestCase {
         _ = try await evaluate("window.setStickToBottom(\(stick ? "true" : "false")); 1")
     }
 
+    /// Resize the native frame and wait for the web process to actually see it.
+    /// The frame change crosses a process boundary, so `window.innerHeight` lags
+    /// the assignment; returning early lets the next step render against the
+    /// old viewport.
     private func resizeViewport(height: CGFloat) async throws {
         webView.frame = CGRect(x: 0, y: 0, width: webView.frame.width, height: height)
         webView.layoutIfNeeded()
         window.layoutIfNeeded()
+        let deadline = Date().addingTimeInterval(3)
+        while Date() < deadline {
+            if abs(try await number("window.innerHeight") - Double(height)) <= 1 { break }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
         try await settle()
     }
 
+    /// Poll until the transcript settles on its last row, rather than sampling
+    /// once after a fixed delay.
+    ///
+    /// A frame count is not a clock. WebKit propagates a native frame change to
+    /// the web process asynchronously, and the relayout that follows can move
+    /// `scrollHeight` after the re-pin has already run — so a single sample can
+    /// catch the document mid-flight and read a `scrollY` that was correct for
+    /// the previous layout. That is what failed on CI: 4270 against a 4030
+    /// maximum, off by exactly the viewport height. Convergence is the real
+    /// invariant; the number of frames it takes is not.
     private func assertPinnedToBottom(_ context: String, file: StaticString = #filePath, line: UInt = #line) async throws {
-        let scrollY = try await number("window.scrollY")
-        let maxScroll = try await number("document.documentElement.scrollHeight - window.innerHeight")
+        var scrollY = Double.nan
+        var maxScroll = Double.nan
+        let deadline = Date().addingTimeInterval(3)
+        repeat {
+            scrollY = try await number("window.scrollY")
+            maxScroll = try await number("document.documentElement.scrollHeight - window.innerHeight")
+            if abs(scrollY - maxScroll) <= 2 { break }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        } while Date() < deadline
+
         XCTAssertGreaterThan(maxScroll, 0, "\(context): document must overflow the viewport for this test to mean anything", file: file, line: line)
         XCTAssertEqual(
             scrollY,
