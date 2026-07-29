@@ -76,6 +76,7 @@ _EXPECTED_CODEX_FULL_COLUMN_LIMITS: dict[str, tuple[str, str | None]] = {
 _EXPECTED_CLAUDE_FULL_COLUMN_LIMITS: dict[str, tuple[str, str | None]] = {
     "action_matrix": ("blocked", None),
     "control_surface": ("blocked", None),
+    "full_action_suite": ("blocked", "full_action_suite_has_explicit_gaps"),
     "run_prompt_once": ("unsupported_gap", "run_prompt_once_not_safe_no_token"),
     "send_receive": ("unsupported_gap", "send_receive_not_safe_no_token"),
 }

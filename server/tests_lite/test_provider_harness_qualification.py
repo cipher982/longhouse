@@ -169,7 +169,7 @@ def _passing_claude_full_column_payload() -> dict:
         "results": results,
         "provider_execution_coverage_matrix_path": "/evidence/provider-execution-coverage-matrix.json",
         "provider_execution_coverage_matrix": {
-            "provider_coverage_gap_kind_counts": {"claude": {"passed": 31, "no_token_safety_gate": 2}},
+            "provider_coverage_gap_kind_counts": {"claude": {"passed": 32, "no_token_safety_gate": 1}},
             "missing_provider_actions": [],
         },
     }
@@ -217,8 +217,12 @@ def test_claude_full_column_gate_accepts_explicit_no_token_limits() -> None:
     assert gate["provider"] == "claude"
     assert gate["expected_scenario_count"] == 22
     assert gate["coverage_gap_kind_counts"] == {
-        "passed": 31,
-        "no_token_safety_gate": 2,
+        "passed": 32,
+        "no_token_safety_gate": 1,
+    }
+    assert gate["expected_limits"]["full_action_suite"] == {
+        "status": "blocked",
+        "failure_code": "full_action_suite_has_explicit_gaps",
     }
 
 
