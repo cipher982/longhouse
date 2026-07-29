@@ -1,9 +1,9 @@
 # Provider factory coherence
 
 **Status: complete, deployed, and fresh-state verified 2026-07-29.** Clifford
-is running control-plane `5abf60b` with Longhouse `8bd7f7417`; the paired
-deploy and a forced same-release replay both completed healthy ticks. The
-earlier empty-state run at
+is running control-plane `a66ea19` with Longhouse `a49274933`; the paired
+deploy and a forced Antigravity `1.1.8` same-release replay both completed
+healthy ticks. The earlier empty-state run at
 `_manual-full-column-c40b6c5-32c7464f0` then qualified the latest releases
 for every configured provider with no unresolved releases. Both Codex
 profiles completed against the identical staged `rust-v0.146.0` full-package
@@ -25,10 +25,18 @@ closure (`sha256:1445535b...`):
   permissions approval, one user-input request, both waiting flags, a
   completed turn, and zero response errors. It runs from an order-independent
   fixture HOME and no longer compiles source in the production container.
-- Claude `2.1.220` (`190d2007-579e-462e-8229-2581f0113401`) and
-  maintenance-tier Antigravity `1.1.8`
-  (`eba05f17-ec99-4b59-967b-357c4734a670`) completed their staged release
-  lanes in the same run.
+- Claude `2.1.220` (`190d2007-579e-462e-8229-2581f0113401`) completed its
+  staged release lane. The final Antigravity cutover replay is
+  `f7feea0b-9165-4d34-b356-0a0e2a11a71e` against staged release `1.1.8` and
+  runner `a49274933`: all 22 scenarios were captured, 17 passed, three
+  aggregate scenarios were blocked by their typed gaps, and two scenarios
+  reported the expected unsupported gaps. The 33-action matrix recorded 26
+  passes, one no-token safety gate, one not-applicable action, five
+  provider-contract-unsupported actions, no missing action, and no unknown
+  gap kind. Identity, version, hook-inbox control, ingest, session/timeline
+  projection, transcript binding, and cleanup all passed. Real-print
+  injection remains explicitly blocked because it requires an unwatched
+  worker; no new Antigravity control investment was added.
 - OpenCode `1.18.9` now runs the complete staged-release column. Run
   `f4b7cde7-4c72-42f1-8bc4-3ec911e15ef9` used the exact single-asset closure
   `sha256:bf1194ea...` under Longhouse `8bd7f7417`: all four profile
@@ -46,6 +54,23 @@ closure (`sha256:1445535b...`):
   OpenRouter inputs, `opencode run` needed an explicit `--dir` to bind the
   tool workspace inside the sandbox, and outbox identities needed the run ID
   so a deliberate same-release replay could commit independently.
+- Cursor's forward-only manual lane ran the same complete 22-scenario column
+  against the exact installed `2026.07.23-e383d2b` build. Gate 0 recorded
+  executable `sha256:eed61c52...`; observed-install qualification then proved
+  the unchanged 274-entry closure `sha256:60d7b7fe...`, 29 passing action
+  cells, one no-token gate, two not-applicable cells, one declared
+  provider-contract-unsupported cell, and no missing actions. Cursor is not
+  presented as a requestable historical release: the proof is bound to that
+  observed installation and its captured Gate 0 artifact.
+- `outstanding_factory_work()` is empty for all four launch-tier providers.
+  Its only remaining rows are the six intentionally excluded Antigravity
+  maintenance-tier control investments. Each provider adapter now lives in
+  its own `provider_adapters/` module, and generated plan/contract tables are
+  checked against those same authorities.
+- Exact-SHA cutover verification passed 3,730 backend tests, the full provider
+  canary and factory-plan validators, 537 control-plane tests, clifford's
+  first healthy tick, and cowbell Deploy and Verify run `30495508753`; demo
+  and hosted canary both reported healthy on `a49274933`.
 
 The progress notes below are the chronological implementation record. Any
 dated “not yet deployed,” “still open,” or “in progress” statement in that
