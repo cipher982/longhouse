@@ -42,7 +42,7 @@ Phase 0 shipped 2026-07-28: clifford was deployed at control-plane `07a40bb`
 provider census is a CI-checked generated artifact
 (`scripts/generate_provider_census.py`, `docs/generated/provider_census.json`,
 189 files). Phase 0 commits, in order: control-plane `355be4b` (profile flip)
-+ `07a40bb` (bridge-timeout fix caught by Hatch Sol review — the flip alone
++ `07a40bb` (bridge-timeout fix caught by independent review — the flip alone
 would have silently broken on any run taking 120-180s; deployed). Longhouse
 `c3065017a` (census, deployed) + `313d3e31c` (path-component exclusion fix
 from the same Sol review).
@@ -68,7 +68,7 @@ not something this result auto-triggers:
 - **Step 2, prerequisite** (control-plane `67251ff`, fixed `8ceb4c3`):
   `run_multi_profile_tick` lets one provider carry multiple qualification
   profiles in one tick, purely additive alongside the unchanged single-profile
-  `run_tick`/`run_codex_tick`. Hatch Sol review of the first draft caught a
+  `run_tick`/`run_codex_tick`. Independent review of the first draft caught a
   real cursor-coordination bug (a later profile's success could silently
   advance the shared cursor past a release whose earlier profile's evidence
   was rejected, permanently skipping its retry) — fixed with a new
@@ -168,8 +168,7 @@ in this phase — see "The shadow gate" below — but the remaining work is real
 engineering depth, not waiting, and half-wiring it would create a third
 execution path instead of convergence.
 
-Two rounds of independent review (Hatch Fable, Hatch Codex Sol, Hatch
-OpenRouter Kimi K3) have corrected this document eleven times. Corrections are
+Two rounds of independent review have corrected this document eleven times. Corrections are
 listed in the appendix rather than narrated inline. Claims here are checkable
 and have been checked; if you find one that is wrong, that is a defect.
 
@@ -533,7 +532,7 @@ stages" — collapsed two different things on the schema side.
 
 A first draft of this table collapsed push and weekly-cron into one "commit
 lane" trigger and called the coordination-proof producer "manual." Both were
-wrong and both were caught by Hatch Sol review, not by re-reading this file:
+wrong and both were caught by independent review, not by re-reading this file:
 `validate-provider-cli-canaries` (`Makefile`) runs only 4 harness scenarios on
 every push, `provider-release-weekly.yml` runs the full 22 once a week, and
 `contract-first-ci.yml`'s "Produce executable provider capability proof
@@ -813,7 +812,7 @@ Steps 1-3's bounded slices are done (pure oracles for all 10 profiles, an
 additive multi-profile tick, staged builds authoritative inside
 `run_harness()`). A first draft of this section claimed the two flagged
 profiles (`codex_helm_interrupt`, `codex_tool_call_result`) could consume the
-harness's existing observation with only additive changes. Hatch Sol review
+harness's existing observation with only additive changes. Independent review
 found that claim false or overstated on every substantive point, before any
 code was written. Kept here, corrected, for the same reason the appendix
 keeps revision 1-3's errors: the corrected fact matters more than a clean
@@ -1098,7 +1097,7 @@ generic (non-codex) harness scenario. Transcript projections specifically
 (the harness's `session_projection`/`timeline_projection` output) aren't
 compared yet — the two seeded fixtures don't produce them.
 
-**Adapter split design (Hatch Sol, 2026-07-28):** `AgentHarnessAdapter` is a
+**Adapter split design (independent review, 2026-07-28):** `AgentHarnessAdapter` is a
 33-method `Protocol` (`universal_agent_harness.py:727`). There is one real
 implementation, `UniversalProviderAdapter` (`854-5376` before this landed);
 the five per-provider classes were cosmetic empty subclasses selected by
@@ -1174,7 +1173,7 @@ extraction (its control path lives outside this file). 3673 tests passed,
 16 skipped, zero regressions, at every one of the four extraction commits.
 
 **The data-structure half of the registry/discovery gap shipped 2026-07-29
-(longhouse `ab89e9b6d`) — corrected 2026-07-29 after Hatch Sol review, the
+(longhouse `ab89e9b6d`) — corrected 2026-07-29 after independent review, the
 first real review-during-work this epic has actually recorded, not just
 referenced.** Original framing overstated what shipped: "closes the
 sixth-provider gap." Sol's review (full transcript findings below) caught
@@ -1425,7 +1424,7 @@ that 3685 passing local tests did not:**
    before it could finish — six consecutive `Deploy and Verify` failures
    (`ef16bccaa5` through `ab6e98c2a`), completely invisible unless someone
    actually checked `gh run list` rather than trusting `git push` succeeding.
-   David010 stayed pinned to a build from before any of Phase 3 the whole
+   The hosted dogfood instance stayed pinned to a build from before any of Phase 3 the whole
    time. Fixed operationally, not by changing the pipeline: manually
    dispatched `deploy-and-verify.yml` (`workflow_dispatch`) with nothing
    further pushed to interrupt it.
@@ -1445,7 +1444,7 @@ that 3685 passing local tests did not:**
    caught the second gap before a broken image could ship).
 
 **"This document's status tables become generated" — first slice shipped
-2026-07-29, corrected same day after Hatch Sol review.** `server/scripts/render_provider_factory_status.py` renders the
+2026-07-29, corrected the same day after independent review.** `server/scripts/render_provider_factory_status.py` renders the
 "What it proves today" status matrix and the diagonal-empty claim straight
 from `plan_run()`; both are embedded above. Original claim: "pinned by
 `test_render_provider_factory_status.py`, which fails the moment either
@@ -1502,13 +1501,10 @@ Phases 3 and 4 and in the final live proof recorded at the top of this file.
 
 **Independent multi-reviewer pass, 2026-07-29 (longhouse `214372640`) — real
 correctness bugs found in the code this session had already called
-"shipped and tested."** Dispatched three independent Hatch reviewers
-(Fable, Sol, Cursor/Grok) at everything shipped in this stretch, each with
-no visibility into the others' findings. Sol hit Hatch's 30-minute hard
-timeout mid-investigation and its resume path turned out separately broken
-(a provider model-name mismatch); its partial evidence trail did not
-contradict the other two, but its own final report never landed. Fable and
-Grok both completed and **independently converged on the same core defect**
+"shipped and tested."** Dispatched three independent reviewers at everything
+shipped in this stretch, each with no visibility into the others' findings.
+One timed out mid-investigation; the other two completed and **independently
+converged on the same core defect**
 in `capability_projection.py` — this being the first review this epic has
 actually run against its own newly-shipped serving layer, not a design or
 plan, is exactly the case for running more than one reviewer at once rather
@@ -1561,7 +1557,8 @@ fixed and tested.
 
 **Confirmed live against real hosted data, not just tests, the moment this
 deployed (commit_short `21437264`):** `GET /agents/provider-capabilities`
-against `david010` now returns a row with `proof_status: "unacceptable_evidence"`
+against the hosted dogfood instance returned a row with
+`proof_status: "unacceptable_evidence"`
 that would have silently read `"pass"` before this fix. Finding #1 above
 was not a hypothetical — it was already live, on real production proof
 data, at the moment the review caught it.
@@ -1693,7 +1690,7 @@ not the original error.
 11. `HarnessOptions.provider_builds` is a partial seam: recorded and
     entrypoint-checked for generated fakes, `None` on the real-binary path,
     with closure verification outside `run_harness()`.
-12. **Hatch Sol code review, 2026-07-29** (a review "along the way" of the
+12. **Independent code review, 2026-07-29** (a review "along the way" of the
     Phase 2/3 work above, distinct from the design-consult reviews already
     cited): checked the four adapter-split extraction commits
     (`870493d47`/`7d43303f1`/`42dc90949`/`6662b9bca`) and the two
