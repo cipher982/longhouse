@@ -298,6 +298,16 @@ if args and args[0] == "codex-app-server-canary":
         "thread_id": "thread_raw",
         "turn_id": "turn_raw",
         "turn_status": "completed",
+        "server_request_counts": {
+            "item/commandExecution/requestApproval": 1,
+            "item/permissions/requestApproval": 1,
+            "item/tool/requestUserInput": 1,
+        },
+        "thread_active_flag_counts": {
+            "waitingOnApproval": 1,
+            "waitingOnUserInput": 1,
+        },
+        "response_errors": [],
         "remote_tui_spawned": True,
         "remote_tui_alive_after_grace": True,
         "remote_tui_alive_before_shutdown": True,
