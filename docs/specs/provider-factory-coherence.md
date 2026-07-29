@@ -1164,10 +1164,45 @@ retention, triage) all consume that shape. Forcing a shape-compatibility
 patch into the actual unattended production tick loop — real credentials,
 runs every 15 minutes, no one watching — without designing it carefully is
 exactly the kind of rushed change worth refusing even under time pressure.
-The concrete next step: either write a result-shape adapter so
-`run_multi_profile_tick`'s output satisfies every downstream consumer
-`run_tick`'s does, or change those consumers to accept both shapes — a
-real, scoped, single-session task, not a re-investigation.
+**Wiring shipped 2026-07-29 (control-plane `a8723fc`).** The shapes turned
+out closer than the investigation above assumed: both are the same
+`{"provider", "profile", "releases"}` dict; `run_multi_profile_tick` just
+reaches it one level deeper, keyed by profile, because a provider can carry
+more than one. `_flatten_multi_profile_result` unwraps that level — proven
+a true no-op for the single-profile case (every provider running today)
+by a test that runs both `run_tick` and `run_multi_profile_tick` +
+flatten on identical inputs and asserts byte-identical output, and proven
+correct for the genuinely-multi-profile case by a second test asserting
+merged releases each keep their own `qualification_profile` tag.
+`worker_cli.py` now always calls `run_multi_profile_tick` + flatten instead
+of `run_tick`, and `--qualification-profile` accepts more than one value.
+516 passed, zero regressions.
+
+**Still not live, deliberately.** `service.py` — the actual container
+entrypoint clifford runs — still only ever emits one
+`--qualification-profile` flag from `PROVIDER_FACTORY_QUALIFICATION_PROFILE`
+(a single-value env var, validated against exactly the 3 known profiles).
+This commit changes nothing about clifford's live behavior by itself.
+Turning on a second codex profile for real needs two more decisions, both
+left open on purpose rather than rushed: (1) extend `service.py` to accept
+more than one profile from the env (a small, mechanical follow-on to this
+commit), and (2) decide to actually deploy that to clifford, which is a
+live production change to an unattended, every-15-minute, real-credentials
+process — exactly the kind of thing this epic's own "zero users" ethos
+still doesn't mean "skip verifying," it means "don't be afraid of cheap
+rollback," and this hasn't been shadow-verified against a real second
+profile running concurrently yet.
+
+**What "coverage volume" still does not mean, even after this:** the
+Definition of Done's actual bar is "the full column runs green under
+`QualificationSandbox` on clifford" — every scenario for at least one
+provider, not two profiles for one. Codex has two of roughly ten scenarios
+harness-bridge-capable today (`codex_tool_call_result_v1`,
+`codex_helm_interrupt_v1`). Filling the rest of even one provider's column
+means repeating Phase 2's bridge-design-plus-equivalence-test work per
+remaining scenario — real, multi-session-scale engineering, not a
+config change. This wiring makes that additive once each scenario is
+ready; it does not shortcut producing them.
 
 Deletes: `provider-build-matrix.md`, `provider-automation-factory-completion.md`.
 
