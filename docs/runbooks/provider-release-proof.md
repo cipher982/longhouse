@@ -2,7 +2,7 @@
 
 Use this runbook to generate, compare, accept, and inspect provider proof
 artifacts. The design contract is `docs/specs/provider-release-proof.md`; the
-next build-identity work is `docs/specs/provider-build-matrix.md`.
+the provider build and execution model is `docs/specs/provider-factory-coherence.md`.
 
 ## Rules
 

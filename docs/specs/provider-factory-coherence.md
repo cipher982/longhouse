@@ -193,14 +193,11 @@ deployed assertions:
 - `antigravity` → `hook_inbox_contract_preserved`, `real_print_injection_observed`
 - `codex` → `exact_executable_identity_observed`, `reported_version_matches_expected`
 
-Codex is the most-used provider and its release lane proves only that the
-downloaded file is the file that was expected. `codex_tool_call_result_v1` and
-`codex_helm_interrupt_v1` are implemented and not deployed.
-
-The diagonal is empty because no code path executes a real upstream binary
-through the universal scenario set. That claim, and every row below, is
-generated — not hand-typed — from `provider_factory_model.plan_run()` against
-the live schema and registry constants:
+Codex is the most-used provider. Its release lane now schedules both strict
+profiles and the tool-result profile also runs the complete 22-scenario
+universal column against the staged release. The generated rows below come
+from `provider_factory_model.plan_run()` against the live schema and registry
+constants:
 
 ```
 uv run --directory server python scripts/render_provider_factory_status.py
@@ -210,7 +207,7 @@ uv run --directory server python scripts/render_provider_factory_status.py
 
 | Provider | Trigger | Build provenance | Status |
 |---|---|---|---|
-| codex | release_poll | staged_release | runs — 1 scenario |
+| codex | release_poll | staged_release | runs — 2 qualification scenarios + 22 harness scenarios |
 | codex | push | generated_fake | runs — 1 scenario |
 | codex | weekly_cron | generated_fake | runs — 22 scenarios |
 | codex | manual | observed_install | runs — 1 scenario |
@@ -231,17 +228,17 @@ uv run --directory server python scripts/render_provider_factory_status.py
 | cursor | weekly_cron | generated_fake | runs — 22 scenarios |
 | cursor | manual | observed_install | never runs — remaining capability-proof scenario_ids for cursor are orphaned: ['cursor_coordination_awareness_create', 'cursor_coordination_directed_input', 'cursor_steer_rejection'] |
 
-**The diagonal** (`staged_release` binary x `weekly_cron`'s full scenario set) —
-one row per provider, all `never runs`, held by
-`test_render_provider_factory_status.py::test_diagonal_is_empty_for_every_provider`:
+**The diagonal** (`staged_release` binary x the release lane's full scenario
+set) — one row per provider, held by
+`test_render_provider_factory_status.py::test_codex_fills_the_staged_release_diagonal`:
 
 | Provider | The diagonal (real binary x full scenario set) |
 |---|---|
-| codex | never runs — the weekly matrix only runs against generated fake binaries (scheduled_evidence: generated_fake_unconditional_full_column) |
-| claude | never runs — the weekly matrix only runs against generated fake binaries (scheduled_evidence: generated_fake_unconditional_full_column) |
-| opencode | never runs — the weekly matrix only runs against generated fake binaries (scheduled_evidence: generated_fake_unconditional_full_column) |
-| antigravity | never runs — the weekly matrix only runs against generated fake binaries (scheduled_evidence: generated_fake_unconditional_full_column) |
-| cursor | never runs — the weekly matrix only runs against generated fake binaries (scheduled_evidence: generated_fake_unconditional_full_column) |
+| codex | runs — 22 scenarios |
+| claude | never runs — release lane does not execute the full universal scenario set |
+| opencode | never runs — release lane does not execute the full universal scenario set |
+| antigravity | never runs — release lane does not execute the full universal scenario set |
+| cursor | never runs — release lane does not execute the full universal scenario set |
 
 This is the first table in this document's history where "is this still true"
 is a test run, not a re-read.

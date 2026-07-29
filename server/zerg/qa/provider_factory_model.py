@@ -124,17 +124,19 @@ class Trigger(StrEnum):
 
 ALL_PROVIDERS = ("codex", "claude", "opencode", "antigravity", "cursor")
 
-# The release lane's actual deployed default profile per provider, as
-# currently running on clifford. Verified against the live /health payload
-# and control-plane/provider_factory/registry.py's PROVIDER_REGISTRY
-# construction (2026-07-28). Cursor has no entry: registered_lane("cursor")
-# raises ValueError, there is no cursor_lane().
-DEPLOYED_RELEASE_LANE_PROFILE: dict[str, str] = {
-    "codex": "codex_tool_call_result_v1",
-    "claude": "claude_real_print_v1",
-    "opencode": "opencode_server_contract_v1",
-    "antigravity": "antigravity_hook_inbox_v1",
+# The release lane's actual deployed profiles per provider. Codex deliberately
+# has two profiles: the tool-result lane owns the complete universal column,
+# while the Helm lane supplies the strict managed-interrupt proof. The singular
+# mapping remains the primary/default profile for older generated consumers.
+# Cursor has no entry: registered_lane("cursor") raises ValueError, there is no
+# cursor_lane().
+DEPLOYED_RELEASE_LANE_PROFILES: dict[str, tuple[str, ...]] = {
+    "codex": ("codex_tool_call_result_v1", "codex_helm_interrupt_v1"),
+    "claude": ("claude_real_print_v1",),
+    "opencode": ("opencode_server_contract_v1",),
+    "antigravity": ("antigravity_hook_inbox_v1",),
 }
+DEPLOYED_RELEASE_LANE_PROFILE: dict[str, str] = {provider: profiles[0] for provider, profiles in DEPLOYED_RELEASE_LANE_PROFILES.items()}
 
 # Schema scenario_ids with zero producer of any kind, verified by hand:
 # - no non-test importer of the corresponding oracle function
@@ -245,6 +247,7 @@ class PlanCell:
     status: str  # "runs" | "never_run"
     reason: str
     qualification_profile: str | None = None
+    qualification_profiles: tuple[str, ...] = ()
     scenario_ids: tuple[str, ...] = ()
     harness_scenarios: tuple[str, ...] = ()
     credential_requirement: tuple[str, ...] = ()
@@ -413,8 +416,8 @@ def plan_run(facts: ProviderFactoryFacts, provider: str, build_provenance: str, 
                 status="never_run",
                 reason="the release lane only runs against staged upstream releases",
             )
-        profile = DEPLOYED_RELEASE_LANE_PROFILE.get(provider)
-        if profile is None:
+        profiles = DEPLOYED_RELEASE_LANE_PROFILES.get(provider)
+        if profiles is None:
             return PlanCell(
                 provider=provider,
                 build_provenance=build_provenance,
@@ -422,17 +425,22 @@ def plan_run(facts: ProviderFactoryFacts, provider: str, build_provenance: str, 
                 status="never_run",
                 reason=f"{provider} has no registered release lane (no *_lane() in provider_factory/registry.py)",
             )
-        scenario_id = _release_lane_scenario_id(provider, profile)
-        relevant_assertions = tuple(a for a in facts.capability_assertions if a.provider == provider and a.scenario_id == scenario_id)
+        scenario_ids = tuple(_release_lane_scenario_id(provider, profile) for profile in profiles)
+        relevant_assertions = tuple(a for a in facts.capability_assertions if a.provider == provider and a.scenario_id in scenario_ids)
+        credential_requirement = tuple(
+            dict.fromkeys(requirement for profile in profiles for requirement in CREDENTIAL_REQUIREMENT_BY_PROFILE.get(profile, ()))
+        )
         return PlanCell(
             provider=provider,
             build_provenance=build_provenance,
             trigger=trigger,
             status="runs",
-            reason=f"deployed release-lane default for {provider}",
-            qualification_profile=profile,
-            scenario_ids=(scenario_id,),
-            credential_requirement=CREDENTIAL_REQUIREMENT_BY_PROFILE.get(profile, ()),
+            reason=f"deployed release-lane profiles for {provider}",
+            qualification_profile=profiles[0],
+            qualification_profiles=profiles,
+            scenario_ids=scenario_ids,
+            harness_scenarios=(facts.default_harness_scenarios if provider == "codex" else ()),
+            credential_requirement=credential_requirement,
             assertion_status=_assertion_statuses(relevant_assertions),
         )
 

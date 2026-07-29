@@ -11,6 +11,7 @@ from zerg.qa import codex_helm_interrupt
 from zerg.qa import codex_release_identity
 from zerg.qa import codex_tool_call_result
 from zerg.qa import provider_harness_qualification as bridge
+from zerg.qa.provider_factory_model import DEFAULT_HARNESS_SCENARIOS
 
 
 @pytest.fixture(autouse=True)
@@ -94,6 +95,65 @@ def _closure_digest(package_root: Path) -> str:
     from zerg.qa.provider_build_store import closure_digest
 
     return closure_digest(package_root, granularity="full_installed_tree")
+
+
+def _passing_full_column_payload() -> dict:
+    results = []
+    for scenario in DEFAULT_HARNESS_SCENARIOS:
+        status, failure_code = bridge._EXPECTED_CODEX_FULL_COLUMN_LIMITS.get(  # noqa: SLF001
+            scenario, ("pass", None)
+        )
+        row = {"provider": "codex", "scenario": scenario, "status": status}
+        if failure_code is not None:
+            row["failure_code"] = failure_code
+        results.append(row)
+    return {
+        "results": results,
+        "provider_execution_coverage_matrix": {
+            "provider_coverage_gap_kind_counts": {
+                "codex": {"passed": 32, "provider_contract_unsupported": 1}
+            },
+            "missing_provider_actions": [],
+        },
+    }
+
+
+def test_full_column_gate_accepts_only_the_complete_known_codex_surface() -> None:
+    gate = bridge._full_column_gate(_passing_full_column_payload())  # noqa: SLF001
+
+    assert gate["status"] == "pass"
+    assert gate["expected_scenario_count"] == 22
+    assert gate["captured_scenario_count"] == 22
+    assert gate["unexpected_results"] == []
+
+
+def test_full_column_gate_rejects_one_regressed_scenario() -> None:
+    payload = _passing_full_column_payload()
+    row = next(
+        result
+        for result in payload["results"]
+        if result["scenario"] == "timeline_projection"
+    )
+    row["status"] = "fail"
+    row["failure_code"] = "projection_regressed"
+    payload["provider_execution_coverage_matrix"][
+        "provider_coverage_gap_kind_counts"
+    ]["codex"] = {"passed": 31, "unexpected_failure": 1}
+
+    gate = bridge._full_column_gate(payload)  # noqa: SLF001
+
+    assert gate["status"] == "fail"
+    assert gate["failure_code"] == "codex_full_column_regression"
+    assert gate["unexpected_results"] == [
+        {
+            "scenario": "timeline_projection",
+            "expected_status": "pass",
+            "expected_failure_code": None,
+            "actual_status": "fail",
+            "actual_failure_code": "projection_regressed",
+        }
+    ]
+    assert gate["unexpected_coverage_gap_kinds"] == {"unexpected_failure": 1}
 
 
 def test_tool_call_result_legacy_and_harness_paths_agree_on_the_same_binary(tmp_path: Path, monkeypatch) -> None:

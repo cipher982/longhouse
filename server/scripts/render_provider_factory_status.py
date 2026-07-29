@@ -38,14 +38,19 @@ _WIRED_COMBINATIONS: tuple[tuple[str, str], ...] = (
     (Trigger.MANUAL, BuildProvenance.OBSERVED_INSTALL),
 )
 
-# The diagonal this epic is about: a real upstream binary (staged_release)
-# driven through the full scenario set (weekly_cron's harness_scenarios).
-_DIAGONAL = (Trigger.WEEKLY_CRON, BuildProvenance.STAGED_RELEASE)
+# The diagonal this epic is about: a staged upstream release driven through
+# the full scenario set by the unattended release-poll lane.
+_DIAGONAL = (Trigger.RELEASE_POLL, BuildProvenance.STAGED_RELEASE)
 
 
 def _cell_detail(cell) -> str:
     if cell.status == "never_run":
         return f"never runs — {cell.reason}"
+    if cell.scenario_ids and cell.harness_scenarios:
+        return (
+            f"runs — {len(cell.scenario_ids)} qualification scenarios + "
+            f"{len(cell.harness_scenarios)} harness scenarios"
+        )
     count = len(cell.scenario_ids) or len(cell.harness_scenarios)
     unit = "scenario" if count == 1 else "scenarios"
     return f"runs — {count} {unit}"
@@ -65,7 +70,17 @@ def render_diagonal_status(facts: ProviderFactoryFacts) -> str:
     lines = ["| Provider | The diagonal (real binary x full scenario set) |", "|---|---|"]
     for provider in ALL_PROVIDERS:
         cell = plan_run(facts, provider, provenance, trigger)
-        lines.append(f"| {provider} | {_cell_detail(cell)} |")
+        if (
+            cell.status == "runs"
+            and cell.harness_scenarios == facts.default_harness_scenarios
+        ):
+            lines.append(
+                f"| {provider} | runs — {len(cell.harness_scenarios)} scenarios |"
+            )
+        else:
+            lines.append(
+                f"| {provider} | never runs — release lane does not execute the full universal scenario set |"
+            )
     return "\n".join(lines)
 
 

@@ -264,7 +264,7 @@ bytes. `can_interrupt` requires graceful active-turn cancellation. No
 
 Per-operation disposition and evidence now live in
 `schemas/managed_providers.yml`; see
-`provider-automation-factory-completion.md` for how those are classified.
+`provider-factory-coherence.md` for how those are classified.
 
 ## Non-goals
 

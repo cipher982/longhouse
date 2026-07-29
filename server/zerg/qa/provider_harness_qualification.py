@@ -1,15 +1,15 @@
-"""Bridge two codex qualification profiles through the universal harness.
+"""Bridge Codex release qualification through the universal harness.
 
 Phase 2's "bridge/dispatcher design" (docs/specs/provider-factory-coherence.md):
 `codex_tool_call_result_v1` and `codex_helm_interrupt_v1` are the two
 release-lane profiles whose strict oracles can now be satisfied by a harness
-scenario instead of each profile launching its own subprocess. This module
-is the seam: it loads the same staged-release request the release lane's own
-executors consume, derives and verifies a real `ProviderBuildRef` (unlike
-the release lane's own `run()`, which trusts the request's claimed build
-identity without live re-verification), runs exactly the harness scenarios
-needed for one provider, and emits the identical `proof-bundle.json` shape
-via each profile's `emit_proof_bundle()` finalizer.
+scenario instead of each profile launching its own subprocess. The tool-result
+profile also owns the release lane's complete 22-scenario Codex column. This
+module loads the same staged-release request the release lane's own executors
+consume, derives and verifies a real `ProviderBuildRef` (unlike the release
+lane's own `run()`, which trusts the request's claimed build identity without
+live re-verification), and emits the identical `proof-bundle.json` shape via
+each profile's `emit_proof_bundle()` finalizer.
 
 Deliberately not a general harness bridge: only these two (provider, profile)
 pairs are supported. Neither harness scenario alone produces its profile's
@@ -33,6 +33,7 @@ from zerg.qa import codex_release_identity as identity_bridge
 from zerg.qa import codex_tool_call_result
 from zerg.qa.provider_build_store import ProviderBuildRef
 from zerg.qa.provider_build_store import materialize_staged_provider_build
+from zerg.qa.provider_factory_model import DEFAULT_HARNESS_SCENARIOS
 from zerg.qa.universal_agent_harness import HarnessOptions
 from zerg.qa.universal_agent_harness import run_harness
 from zerg.services.provider_capability_proof import AssertionOutcome
@@ -51,6 +52,20 @@ _HELM_INTERRUPT_STRICT_KEYS = frozenset(
         "managed_bridge_cleanup_completed",
     }
 )
+
+# The universal column has a few explicit, typed product limits. They are not
+# regressions, and making the factory demand fake parity would erase useful
+# contract truth. Everything else in the column must pass. A change to one of
+# these rows is a deliberate contract change and should update this gate.
+_EXPECTED_CODEX_FULL_COLUMN_LIMITS: dict[str, tuple[str, str | None]] = {
+    "action_matrix": ("blocked", None),
+    "control_surface": ("blocked", None),
+    "full_action_suite": ("blocked", "full_action_suite_has_explicit_gaps"),
+    "managed_session_e2e": (
+        "unsupported_gap",
+        "codex_managed_bridge_credentials_missing",
+    ),
+}
 
 
 def _build_provider_build_ref(request: dict[str, Any], provider_bin: Path, *, output_root: Path) -> ProviderBuildRef:
@@ -137,6 +152,69 @@ def _strict_outcomes(strict_result: dict[str, Any], *, required_keys: frozenset[
     return {key: AssertionOutcome(value) for key, value in strict_oracle.items()}
 
 
+def _full_column_gate(harness_payload: dict[str, Any]) -> dict[str, Any]:
+    """Fail closed unless the complete Codex column has only known limits."""
+
+    results = harness_payload.get("results")
+    if not isinstance(results, list):
+        return {
+            "status": "fail",
+            "failure_code": "full_column_results_missing",
+            "expected_scenarios": list(DEFAULT_HARNESS_SCENARIOS),
+        }
+
+    by_scenario: dict[str, list[dict[str, Any]]] = {
+        scenario: [
+            result
+            for result in results
+            if isinstance(result, dict) and result.get("provider") == "codex" and result.get("scenario") == scenario
+        ]
+        for scenario in DEFAULT_HARNESS_SCENARIOS
+    }
+    cardinality_errors = {scenario: len(matches) for scenario, matches in by_scenario.items() if len(matches) != 1}
+    unexpected_results: list[dict[str, Any]] = []
+    for scenario, matches in by_scenario.items():
+        if len(matches) != 1:
+            continue
+        result = matches[0]
+        actual = (result.get("status"), result.get("failure_code"))
+        expected = _EXPECTED_CODEX_FULL_COLUMN_LIMITS.get(scenario, ("pass", None))
+        if actual != expected:
+            unexpected_results.append(
+                {
+                    "scenario": scenario,
+                    "expected_status": expected[0],
+                    "expected_failure_code": expected[1],
+                    "actual_status": actual[0],
+                    "actual_failure_code": actual[1],
+                }
+            )
+
+    coverage = harness_payload.get("provider_execution_coverage_matrix")
+    coverage = coverage if isinstance(coverage, dict) else {}
+    gap_counts = (coverage.get("provider_coverage_gap_kind_counts") or {}).get("codex", {})
+    allowed_gap_kinds = {"passed", "provider_contract_unsupported"}
+    unexpected_gap_kinds = {str(kind): count for kind, count in gap_counts.items() if kind not in allowed_gap_kinds and count}
+    missing_actions = coverage.get("missing_provider_actions")
+    coverage_complete = isinstance(missing_actions, list) and not missing_actions
+    passed = not cardinality_errors and not unexpected_results and not unexpected_gap_kinds and coverage_complete
+    return {
+        "status": "pass" if passed else "fail",
+        "failure_code": None if passed else "codex_full_column_regression",
+        "expected_scenario_count": len(DEFAULT_HARNESS_SCENARIOS),
+        "captured_scenario_count": sum(1 for matches in by_scenario.values() if len(matches) == 1),
+        "expected_limits": {
+            scenario: {"status": status, "failure_code": failure_code}
+            for scenario, (status, failure_code) in sorted(_EXPECTED_CODEX_FULL_COLUMN_LIMITS.items())
+        },
+        "cardinality_errors": cardinality_errors,
+        "unexpected_results": unexpected_results,
+        "coverage_gap_kind_counts": gap_counts,
+        "unexpected_coverage_gap_kinds": unexpected_gap_kinds,
+        "missing_provider_actions": missing_actions,
+    }
+
+
 def run_codex_tool_call_result(request_path: Path, output_root: Path) -> dict[str, Any]:
     request = codex_tool_call_result._load_request(request_path)  # noqa: SLF001
     provider_bin, pre_execution_identity, runner_sha = identity_bridge._preflight(  # noqa: SLF001
@@ -164,7 +242,7 @@ def run_codex_tool_call_result(request_path: Path, output_root: Path) -> dict[st
     harness_payload = run_harness(
         HarnessOptions(
             providers=("codex",),
-            scenarios=("probe_identity", "codex_tool_call_result_strict"),
+            scenarios=(*DEFAULT_HARNESS_SCENARIOS, "codex_tool_call_result_strict"),
             evidence_root=output_root / "harness-evidence",
             provider_bins={"codex": provider_bin},
             provider_builds={"codex": build_ref},
@@ -172,6 +250,7 @@ def run_codex_tool_call_result(request_path: Path, output_root: Path) -> dict[st
     )
     probe_result = _scenario_result(harness_payload, provider="codex", scenario="probe_identity")
     strict_result = _scenario_result(harness_payload, provider="codex", scenario="codex_tool_call_result_strict")
+    full_column_gate = _full_column_gate(harness_payload)
 
     post_execution_identity = identity_bridge._sha256_file(  # noqa: SLF001
         provider_bin
@@ -187,13 +266,18 @@ def run_codex_tool_call_result(request_path: Path, output_root: Path) -> dict[st
     }
     ran_strict_check = strict_result.get("status") in {"pass", "fail"}
     evidence_class = EvidenceClass.LIVE_TOKEN if ran_strict_check else EvidenceClass.LIVE_NO_TOKEN
-    execution_status = "completed" if AssertionOutcome.INFRASTRUCTURE_ERROR not in outcomes.values() else "infrastructure_error"
+    execution_status = (
+        "completed"
+        if AssertionOutcome.INFRASTRUCTURE_ERROR not in outcomes.values() and full_column_gate["status"] == "pass"
+        else "infrastructure_error"
+    )
 
     observation = {
         "provider_bin": str(provider_bin),
         "pre_execution_identity": pre_execution_identity,
         "post_execution_identity": post_execution_identity,
         "provider_build": build_ref.to_evidence(),
+        "full_column_gate": full_column_gate,
         "probe_identity": probe_result,
         "codex_tool_call_result_strict": strict_result,
     }

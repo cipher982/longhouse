@@ -30,7 +30,7 @@ artifact and CLI boundary. It does not redefine scenarios, assertions, support
 flags, or pass criteria.
 
 Operator commands live in `docs/runbooks/provider-release-proof.md`. The next
-build-identity design is `docs/specs/provider-build-matrix.md`.
+build-identity design is consolidated in `docs/specs/provider-factory-coherence.md`.
 
 ## Required Proof Loop
 

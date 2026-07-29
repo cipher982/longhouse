@@ -13,16 +13,18 @@ def test_status_table_has_one_row_per_provider_per_wired_combination() -> None:
     assert "cursor" in table
 
 
-def test_diagonal_is_empty_for_every_provider() -> None:
-    # This is the epic's central, previously hand-asserted claim
-    # ("The diagonal is empty because no code path executes a real upstream
-    # binary through the universal scenario set") — generated from plan_run()
-    # instead of typed prose. If any provider's diagonal cell ever starts
-    # running, this test breaks and the doc claim must be re-examined, not
-    # silently left stale.
+def test_codex_fills_the_staged_release_diagonal() -> None:
     diagonal = render_diagonal_status(load_facts())
-    for provider in ALL_PROVIDERS:
-        line = next(line for line in diagonal.splitlines() if line.startswith(f"| {provider} |"))
+    codex = next(
+        line for line in diagonal.splitlines() if line.startswith("| codex |")
+    )
+    assert "runs — 22 scenarios" in codex
+    for provider in set(ALL_PROVIDERS) - {"codex"}:
+        line = next(
+            line
+            for line in diagonal.splitlines()
+            if line.startswith(f"| {provider} |")
+        )
         assert "never runs" in line
 
 

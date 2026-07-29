@@ -5,6 +5,7 @@ import pytest
 from zerg.qa import provider_factory_model
 from zerg.qa.provider_factory_model import ALL_PROVIDERS
 from zerg.qa.provider_factory_model import DEPLOYED_RELEASE_LANE_PROFILE
+from zerg.qa.provider_factory_model import DEPLOYED_RELEASE_LANE_PROFILES
 from zerg.qa.provider_factory_model import ORPHANED_CAPABILITY_SCENARIO_IDS
 from zerg.qa.provider_factory_model import PUSH_CODEX_COORDINATION_SCENARIO_ID
 from zerg.qa.provider_factory_model import load_capability_assertions
@@ -59,6 +60,7 @@ def test_release_poll_runs_the_deployed_profile_for_automated_providers(facts, p
     cell = plan_run(facts, provider, "staged_release", "release_poll")
     assert cell.status == "runs"
     assert cell.qualification_profile == DEPLOYED_RELEASE_LANE_PROFILE[provider]
+    assert cell.qualification_profiles == DEPLOYED_RELEASE_LANE_PROFILES[provider]
     assert cell.scenario_ids
 
 
@@ -74,9 +76,19 @@ def test_release_poll_never_runs_against_generated_fake_provenance(facts) -> Non
         assert cell.status == "never_run"
 
 
-def test_codex_release_poll_requires_codex_api_key(facts) -> None:
+def test_codex_release_poll_runs_both_profiles_and_the_full_staged_column(facts) -> None:
     cell = plan_run(facts, "codex", "staged_release", "release_poll")
-    assert cell.credential_requirement == ("CODEX_API_KEY",)
+    assert cell.qualification_profiles == (
+        "codex_tool_call_result_v1",
+        "codex_helm_interrupt_v1",
+    )
+    assert cell.harness_scenarios == facts.default_harness_scenarios
+    assert cell.credential_requirement == (
+        "CODEX_API_KEY",
+        "CODEX_AGENTS_TOKEN",
+        "CODEX_API_URL",
+        "LONGHOUSE_ENGINE_BIN",
+    )
 
 
 @pytest.mark.parametrize("provider", ALL_PROVIDERS)
