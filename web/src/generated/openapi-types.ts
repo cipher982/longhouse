@@ -1277,6 +1277,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/agents/provider-capabilities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Provider Capabilities
+         * @description Capability projection from the contract, proof status attached
+         *     separately (docs/specs/provider-factory-coherence.md, Phase 5). Every
+         *     declared capability assertion for every managed provider gets exactly
+         *     one row, whether or not it has ever been proven -- the schema is the
+         *     source of truth for what should exist.
+         */
+        get: operations["list_provider_capabilities_agents_provider_capabilities_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/skills": {
         parameters: {
             query?: never;
@@ -13641,6 +13665,28 @@ export interface operations {
         };
     };
     list_provider_capability_proofs_agents_provider_capability_proofs_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    list_provider_capabilities_agents_provider_capabilities_get: {
         parameters: {
             query?: never;
             header?: never;
