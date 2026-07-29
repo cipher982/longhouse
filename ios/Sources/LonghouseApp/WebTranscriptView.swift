@@ -12,10 +12,6 @@ struct WebTranscriptView: UIViewRepresentable {
     let errorMessage: String?
     let sourceRevision: Int?
     let sourceOperation: String?
-    /// Height (pt) of the floating native control surface below the transcript.
-    /// Drives `#root` bottom padding so the last row clears the card. Defaults
-    /// to the original 18px hardcoded inset.
-    let bottomInset: CGFloat
     let onNearTop: (() -> Void)?
     let onDiagnostics: ((RenderBeaconReporter.WebKitDiagnostics) -> Void)?
     let onLifecycle: ((String) -> Void)?
@@ -27,7 +23,6 @@ struct WebTranscriptView: UIViewRepresentable {
         errorMessage: String?,
         sourceRevision: Int? = nil,
         sourceOperation: String? = nil,
-        bottomInset: CGFloat = 18,
         onNearTop: (() -> Void)? = nil,
         onDiagnostics: ((RenderBeaconReporter.WebKitDiagnostics) -> Void)? = nil,
         onLifecycle: ((String) -> Void)? = nil
@@ -38,7 +33,6 @@ struct WebTranscriptView: UIViewRepresentable {
         self.errorMessage = errorMessage
         self.sourceRevision = sourceRevision
         self.sourceOperation = sourceOperation
-        self.bottomInset = bottomInset
         self.onNearTop = onNearTop
         self.onDiagnostics = onDiagnostics
         self.onLifecycle = onLifecycle
@@ -55,12 +49,16 @@ struct WebTranscriptView: UIViewRepresentable {
         webView.scrollView.delegate = context.coordinator
         webView.scrollView.keyboardDismissMode = .interactive
         webView.scrollView.alwaysBounceVertical = true
-        // Bottom clearance has exactly ONE owner: the `--native-bottom-inset`
-        // DOM padding, fed the SwiftUI-computed bottom safe area (card + tab bar
-        // + keyboard/home indicator). Disable the scroll view's automatic
-        // safe-area inset so it can't double-count or fight the DOM padding — the
-        // SwiftUI side takes the WebView full-bleed via
-        // .ignoresSafeArea([.container, .keyboard], edges: .bottom).
+        // SwiftUI lays this view out INSIDE the safe area, so the WebView frame
+        // already stops at the top of the floating control card and the DOM's
+        // 18px bottom padding is only the comfort gap above it. Disable the
+        // scroll view's automatic safe-area inset so it cannot add a second
+        // clearance on top of that padding.
+        //
+        // Consequence, and the reason the DOM re-pins on resize: the frame
+        // height is NOT constant. It moves with the card, the keyboard, and the
+        // safe area, and UIScrollView does not re-clamp contentOffset when its
+        // bounds change.
         webView.scrollView.contentInsetAdjustmentBehavior = .never
         webView.isOpaque = false
         webView.backgroundColor = .clear
@@ -90,7 +88,6 @@ struct WebTranscriptView: UIViewRepresentable {
     func updateUIView(_ webView: WKWebView, context: Context) {
         context.coordinator.configureMediaAuth(serverURL: serverURL, on: webView)
         context.coordinator.ensureDocumentServerURL(serverURL, on: webView)
-        context.coordinator.updateBottomInset(bottomInset, on: webView)
         context.coordinator.send(
             preparedPayload(),
             to: webView,
@@ -677,7 +674,18 @@ struct WebTranscriptView: UIViewRepresentable {
         weak var webView: WKWebView?
         private let logger = Logger(subsystem: "ai.longhouse.ios", category: "WebTranscript")
         fileprivate var isLoaded = false
-        private var shouldStickToBottom = true
+        /// User intent only: false once the user deliberately scrolls toward
+        /// older messages. Every change is pushed to the DOM, which owns the
+        /// geometry and re-pins on viewport/content resize, so it never runs on
+        /// a stale opinion.
+        private var shouldStickToBottom = true {
+            didSet {
+                guard shouldStickToBottom != oldValue, isLoaded else { return }
+                webView?.evaluateJavaScript(
+                    "window.setStickToBottom && window.setStickToBottom(\(shouldStickToBottom ? "true" : "false"));"
+                )
+            }
+        }
         private var userScrollInProgress = false
         private var dragStartOffsetY: CGFloat?
         private var pendingPayload: WebTranscriptPreparedPayload?
@@ -695,20 +703,18 @@ struct WebTranscriptView: UIViewRepresentable {
         private var lastNearTopRequestAt = Date.distantPast
         private var documentServerURL: String?
         private var mediaAuthSignature: String?
-        private var settledRepinWorkItem: DispatchWorkItem?
-        private var settledRepinGeneration = 0
-        /// Last bottom inset (pt) pushed to JS; re-applied on load and only
-        /// re-sent when it changes by ≥0.5pt to avoid churn during streaming.
-        private var lastBottomInset: CGFloat = 18
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             isLoaded = true
             Task { @MainActor in
                 self.onLifecycle?("webview_html_loaded")
             }
-            // A pooled/reused webview is already loaded when the inset was first
-            // set; a fresh one needs the inset applied now that JS exists.
-            applyBottomInset(lastBottomInset, on: webView)
+            // Intent changes recorded before the document existed never reached
+            // the DOM; a recycled WebView also carries the previous session's
+            // value. Resend unconditionally now that JS is there.
+            webView.evaluateJavaScript(
+                "window.setStickToBottom && window.setStickToBottom(\(shouldStickToBottom ? "true" : "false"));"
+            )
             flushPendingPayload(
                 to: webView,
                 diagnosticsEnabled: diagnosticsEnabled,
@@ -741,6 +747,12 @@ struct WebTranscriptView: UIViewRepresentable {
         func adoptDocument(serverURL: String, loaded: Bool) {
             documentServerURL = serverURL
             isLoaded = loaded
+            // A recycled document keeps the previous session's stickiness;
+            // `didFinish` will not fire again to reset it.
+            guard loaded else { return }
+            webView?.evaluateJavaScript(
+                "window.setStickToBottom && window.setStickToBottom(\(shouldStickToBottom ? "true" : "false"));"
+            )
         }
 
         func ensureDocumentServerURL(_ serverURL: String, on webView: WKWebView) {
@@ -764,19 +776,6 @@ struct WebTranscriptView: UIViewRepresentable {
             for cookie in cookies {
                 cookieStore.setCookie(cookie)
             }
-        }
-
-        func updateBottomInset(_ inset: CGFloat, on webView: WKWebView) {
-            guard abs(inset - lastBottomInset) >= 0.5 else { return }
-            lastBottomInset = inset
-            guard isLoaded else { return }   // applied in didFinish otherwise
-            applyBottomInset(inset, on: webView)
-            repinToBottomIfSticky(reason: "bottom_inset_changed", followUpDelay: 0.05)
-        }
-
-        private func applyBottomInset(_ inset: CGFloat, on webView: WKWebView) {
-            let px = Int(inset.rounded())
-            webView.evaluateJavaScript("window.setBottomInset && window.setBottomInset(\(px));")
         }
 
         func scrollViewDidScroll(_ scrollView: UIScrollView) {
@@ -815,31 +814,6 @@ struct WebTranscriptView: UIViewRepresentable {
             shouldStickToBottom = distanceFromBottom < 96
         }
 
-        private func repinToBottomIfSticky(reason: String, followUpDelay: TimeInterval? = nil) {
-            guard shouldStickToBottom, !userScrollInProgress else { return }
-            repinToBottom(reason: reason)
-            settledRepinWorkItem?.cancel()
-            settledRepinGeneration += 1
-            if let followUpDelay {
-                let delay = max(0.05, min(0.5, followUpDelay))
-                let generation = settledRepinGeneration
-                let workItem = DispatchWorkItem { [weak self] in
-                    guard let self, self.settledRepinGeneration == generation else { return }
-                    self.repinToBottom(reason: "\(reason)_settled")
-                }
-                settledRepinWorkItem = workItem
-                DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
-            }
-        }
-
-        private func repinToBottom(reason: String) {
-            guard let webView, isLoaded, !userScrollInProgress else { return }
-            shouldStickToBottom = true
-            suppressNearTopUntil = Date().addingTimeInterval(0.75)
-            logger.debug("webkit transcript repin reason=\(reason, privacy: .public)")
-            webView.evaluateJavaScript("window.scrollTranscriptToBottom && window.scrollTranscriptToBottom();")
-        }
-
         private func emitNearTopIfNeeded(_ scrollView: UIScrollView) {
             guard inFlightPayload == nil else { return }
             guard userScrollInProgress || !shouldStickToBottom else { return }
@@ -853,9 +827,6 @@ struct WebTranscriptView: UIViewRepresentable {
         }
 
         func prepareForReuse() {
-            settledRepinWorkItem?.cancel()
-            settledRepinWorkItem = nil
-            settledRepinGeneration += 1
             webView?.navigationDelegate = nil
             webView?.scrollView.delegate = nil
             webView = nil
@@ -1329,10 +1300,9 @@ private extension WebTranscriptView {
 
     #root {
       min-height: 100vh;
-      /* Bottom padding is driven from native via window.setBottomInset so the
-         last transcript row clears the floating control surface. Defaults to
-         the original 18px until Swift reports the measured chrome height. */
-      padding: 12px 16px var(--native-bottom-inset, 18px);
+      /* SwiftUI lays the WebView out inside the safe area, so its frame already
+         stops above the floating control card. This is only the comfort gap. */
+      padding: 12px 16px 18px;
     }
 
     .empty, .error {
@@ -2073,24 +2043,6 @@ private extension WebTranscriptView {
       return html;
     }
 
-    function isAtBottom() {
-      const doc = document.documentElement;
-      return window.innerHeight + window.scrollY >= doc.scrollHeight - 96;
-    }
-
-    // Native reports the floating control-surface height so #root padding keeps
-    // the last row clear of it. Re-pin to bottom if the user was already there,
-    // so growing the inset (attachments, turn-ended, keyboard) never hides the
-    // newest content behind the card.
-    window.setBottomInset = function(px) {
-      const wasAtBottom = isAtBottom();
-      const clamped = Math.max(0, Math.min(2000, Number(px) || 0));
-      document.documentElement.style.setProperty('--native-bottom-inset', clamped + 'px');
-      if (wasAtBottom) {
-        requestAnimationFrame(scrollToBottom);
-      }
-    };
-
     function scrollToBottom() {
       window.scrollTo(0, document.documentElement.scrollHeight);
       requestAnimationFrame(() => {
@@ -2098,7 +2050,32 @@ private extension WebTranscriptView {
       });
     }
 
-    window.scrollTranscriptToBottom = scrollToBottom;
+    // Stickiness is split by what each side can actually see. Native owns the
+    // INTENT ("the user deliberately scrolled up") because only it observes the
+    // drag. This side owns the GEOMETRY, because only it can read viewport
+    // height and content height in the same frame.
+    //
+    // The WebView's height is not constant: the floating control card, the
+    // keyboard, and the safe area all resize it through SwiftUI. UIScrollView
+    // does not re-clamp contentOffset when its bounds change, so a pinned
+    // transcript silently ends up short of (or past) the last row until the
+    // user drags. Nothing else in the app watches for that, so every viewport
+    // or content-height change has to re-pin here.
+    let stickToBottom = true;
+
+    window.setStickToBottom = function(stick) {
+      stickToBottom = !!stick;
+    };
+
+    function repinIfSticky() {
+      if (stickToBottom) requestAnimationFrame(scrollToBottom);
+    }
+
+    window.addEventListener('resize', repinIfSticky);
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', repinIfSticky);
+    }
+    new ResizeObserver(repinIfSticky).observe(document.getElementById('root'));
 
     function toolDetails(item) {
       // A failure is never hidden behind a duration: the exit chip wins (R4).
@@ -2379,7 +2356,10 @@ private extension WebTranscriptView {
 
     window.renderTranscript = function(base64, shouldStickToBottom, sequence, renderMode) {
       const startedAt = performance.now();
-      const wasAtBottom = shouldStickToBottom || isAtBottom();
+      // Native owns this decision. Re-reading geometry here is what let a stale
+      // opinion override a deliberate scroll away from the bottom.
+      stickToBottom = !!shouldStickToBottom;
+      const wasAtBottom = stickToBottom;
       const previousItems = currentItems;
       const previousFirstId = previousItems.length > 0 ? previousItems[0].id : null;
       const previousScrollHeight = document.documentElement.scrollHeight;

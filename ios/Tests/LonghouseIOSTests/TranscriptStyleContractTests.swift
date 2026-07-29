@@ -109,11 +109,16 @@ final class TranscriptStyleContractTests: XCTestCase {
         XCTAssertTrue(css.contains("### "), "markdownToHtml must handle h3 prefix")
     }
 
-    // MARK: Bottom-inset hook for the floating control surface is wired
+    // MARK: The DOM re-pins itself when the viewport or content resizes
 
-    func testBottomInsetVariableDrivesRootPadding() {
-        XCTAssertTrue(css.contains("var(--native-bottom-inset"), "Root padding must read the native bottom inset var")
-        XCTAssertTrue(css.contains("window.setBottomInset"), "JS bottom-inset setter must exist for the floating card")
+    func testTranscriptRepinsOnViewportAndContentResize() {
+        // SwiftUI resizes the WebView (control card, keyboard, safe area) and
+        // UIScrollView does not re-clamp contentOffset when its bounds change.
+        // Behaviour is covered by WebTranscriptScrollPinningTests; this only
+        // guards the wiring from being deleted as "unused".
+        XCTAssertTrue(css.contains("window.setStickToBottom"), "Native must be able to publish scroll intent to the DOM")
+        XCTAssertTrue(css.contains("addEventListener('resize', repinIfSticky)"), "Viewport resize must re-pin a sticky transcript")
+        XCTAssertTrue(css.contains("new ResizeObserver(repinIfSticky)"), "Content-height changes outside a render must re-pin too")
     }
 
     // MARK: Shared design tokens — the palette is the single source of truth

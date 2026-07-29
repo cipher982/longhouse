@@ -260,7 +260,6 @@ struct SessionView: View {
                     errorMessage: viewModel.errorMessage,
                     sourceRevision: viewModel.benchmarkSourceRevision,
                     sourceOperation: viewModel.benchmarkSourceOperation,
-                    bottomInset: 18,
                     onNearTop: {
                         Task { await viewModel.loadOlder(sessionId: sessionId, appState: appState) }
                     },
