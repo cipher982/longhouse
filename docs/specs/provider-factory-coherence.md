@@ -1211,6 +1211,49 @@ Deletes: `provider-build-matrix.md`, `provider-automation-factory-completion.md`
 Capability projection from the contract, proof status attached separately, both
 rendered. This document's status tables become generated.
 
+**Data layer shipped and verified live 2026-07-29 (longhouse `ab6e98c2a` →
+`ff9cc705a`).** `server/zerg/qa/capability_projection.py`'s
+`project_capabilities()` joins the schema's declared capabilities
+(`provider_factory_model.load_capability_assertions()`) with real proof
+records, served at `GET /api/agents/provider-capabilities`.
+
+**What actually verifying this against the real hosted Runtime Host caught,
+that 3685 passing local tests did not:**
+
+1. **A deploy-pipeline gap that had been silently active since the first
+   Phase 3 commit.** `deploy-and-verify.yml`'s gate polls
+   `contract-first-ci.yml`'s E2E job for the *exact* pushed SHA; its
+   concurrency group cancels an in-progress run whenever a newer commit
+   lands on `main`. This session's habit of committing code, then
+   immediately committing and pushing a spec-doc update right after, meant
+   every code commit's own CI run got cancelled by the doc commit's push
+   before it could finish — six consecutive `Deploy and Verify` failures
+   (`ef16bccaa5` through `ab6e98c2a`), completely invisible unless someone
+   actually checked `gh run list` rather than trusting `git push` succeeding.
+   David010 stayed pinned to a build from before any of Phase 3 the whole
+   time. Fixed operationally, not by changing the pipeline: manually
+   dispatched `deploy-and-verify.yml` (`workflow_dispatch`) with nothing
+   further pushed to interrupt it.
+2. **A real production 500 on the endpoint's first live call.**
+   `provider_factory_model.py`'s schema-path resolution
+   (`Path(__file__).resolve().parents[3]`) correctly lands on the repo root
+   in a local/CI checkout, but the deployed Runtime Host image is not a
+   full repo checkout — `docker/runtime.dockerfile` copies only `server/`'s
+   *contents* into `/app`, one directory level shallower — so the identical
+   arithmetic lands on `/` by accident, and `schemas/` was never part of the
+   image at all. This code was written for `load_facts()`, a build-time/CI
+   planning tool from Phase 1; nothing had ever called it from a live
+   request path before this endpoint did. Fixed in two places that both had
+   to be right: the Dockerfile `COPY`, and `.dockerignore` (an explicit
+   allowlist that never included `schemas/` — the first fix attempt still
+   failed, image build itself refusing with "not found," which is what
+   caught the second gap before a broken image could ship).
+
+**Not yet done:** the UI actually rendering this data, and "this document's
+status tables become generated" — restructuring the document's own status
+sections into templated output rather than hand-maintained prose. Real,
+separate, frontend/tooling work this session did not reach.
+
 ## Definition of done
 
 ### Mechanical
