@@ -1368,12 +1368,6 @@ private actor FakeSessionWorkspaceClient: SessionWorkspaceClient {
     ) async throws -> SessionMobileTailResponse {
         workspaceRequests.append((id: id, limit: limit, branchMode: branchMode))
         tailRequests.append((id: id, limit: limit, offset: offset, branchMode: branchMode, snapshotEventId: snapshotEventId, cursor: cursor))
-        // Take this request's payload off the queue *before* parking on a pause,
-        // so the queue binds to requests in request order. Consuming it after the
-        // pause let a later, unpaused request overtake a parked one and steal its
-        // page, which is how memoryWarningDropsSpeculativePrefetch… asserted
-        // against the prefetched page it was supposed to have discarded.
-        let workspace = try nextWorkspace()
         if let pausedCount = pausedTailResponseCounts[offset], pausedCount > 0 {
             if pausedCount == 1 {
                 pausedTailResponseCounts[offset] = nil
@@ -1384,6 +1378,7 @@ private actor FakeSessionWorkspaceClient: SessionWorkspaceClient {
                 pausedTailContinuations.append(continuation)
             }
         }
+        let workspace = try nextWorkspace()
         tailResponses += 1
         return SessionMobileTailResponse(
             session: workspace.session,
