@@ -1053,14 +1053,37 @@ calling a first, not a shared base-class helper — renaming `interrupt_cancel`
 left a dangling `AttributeError` the test suite caught immediately. Full
 suite: 3673 passed, 16 skipped, zero regressions — after fixing both.
 
-**Not yet done:** Codex (last — much larger, launch-critical, per Sol's
-sequencing), the `provider_adapters/` package structure, the
-discovery-loader replacing `ADAPTER_CLASS_BY_PROVIDER`, and the
-sixth-provider test (add a temporary importable toy adapter, assert
-discovery constructs it and existing provider modules need zero edits —
-Sol's design, not yet implemented). The full split is genuinely
-multi-session scope; these are verified increments of it, not the whole
-thing.
+**Codex slice shipped 2026-07-28 (longhouse `6662b9bca`), completing all
+five providers.** `CodexOpenAIHarnessAdapter` now has real overrides for its
+seven methods (`permission_prompt`, `steer_active_turn`, `interrupt_cancel`,
+`tool_call_result`, `live_token_streaming`, `managed_session_e2e`,
+`resume_reattach`); three shared internal helpers stay private, unrenamed
+(`_run_codex_interrupt_dispatch_proof`, `_run_codex_managed_session_canary_projection`,
+`_run_codex_resume_attach_command_proof`). Mapped the full internal call
+graph before moving anything, specifically checking for the exact
+cross-reference bug the Claude slice caught — none found, full suite passed
+on the first run. **All five providers now resolved**: Antigravity,
+OpenCode, Claude, Codex have real per-provider overrides with zero
+cross-provider branching left in `UniversalProviderAdapter`; Cursor needs no
+extraction (its control path lives outside this file). 3673 tests passed,
+16 skipped, zero regressions, at every one of the four extraction commits.
+
+**Not yet done, and the harder-to-assess remainder:** all five provider
+classes still live in the same one file as the shared base
+(`universal_agent_harness.py`, ~9500 lines) — the `provider_adapters/`
+package structure Sol's design calls for (one file per provider under
+`server/zerg/qa/provider_adapters/`), the discovery-loader replacing
+`ADAPTER_CLASS_BY_PROVIDER`'s hardcoded map, and the sixth-provider test
+(add a temporary importable toy adapter, assert discovery constructs it and
+existing provider modules need zero edits) are all still open. This matters
+because the behavioral decoupling just shipped (no provider branches in
+shared code) does not by itself deliver Sol's actual acceptance bar: adding
+a real sixth provider today would still require editing this shared file
+(a new class + a new map entry), not just adding new files. Splitting each
+class across a file boundary means resolving every name each class's moved
+code references (imports, module-level helper functions, `EvidencePackage`/
+`HarnessOptions` types) per provider — a distinct, nontrivial task from the
+extraction just done, not a mechanical follow-on.
 
 Deletes: `executable-provider-capability-contract-epic.md`,
 `provider-release-proof-roadmap.md`.
