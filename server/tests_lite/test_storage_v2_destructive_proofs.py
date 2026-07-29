@@ -203,10 +203,7 @@ async def test_corrupt_raw_object_is_attributed_without_harming_catalog_or_timel
         default_timeout_seconds=DESTRUCTIVE_PROOF_RPC_TIMEOUT_SECONDS,
     )
     try:
-        # This commit creates the corruption fixture; RPC latency is covered by
-        # the catalog client contract tests. Leave enough room for cold SQLite
-        # and executor startup on shared CI runners.
-        await client.call("storage.raw_object.commit.v2", params, timeout_seconds=5.0)
+        await client.call("storage.raw_object.commit.v2", params)
         object_path = object_root / sealed_raw.object_path
         corrupted = bytearray(object_path.read_bytes())
         corrupted[len(corrupted) // 2] ^= 0xFF
