@@ -246,6 +246,34 @@ one row per provider, all `never runs`, held by
 This is the first table in this document's history where "is this still true"
 is a test run, not a re-read.
 
+**Landing this caught two more real problems, immediately, the same way the
+schema-path bug did — not in local `pytest`, but in CI and in the deploy
+pipeline's own concurrency handling:**
+
+1. **A genuine `make validate-sdk` failure**, unrelated to the generated
+   tables: the `GET /api/agents/provider-capabilities` endpoint (shipped
+   `ab6e98c2a`/`ff9cc705a`, verified live) had changed the OpenAPI schema
+   without a matching `make generate-sdk` run, so `web/src/generated/openapi-types.ts`
+   was stale. Fixed in `57332f4bf`, pure regen, no hand edits.
+2. **The exact concurrency-group race documented above, reproduced live in
+   this same session, minutes after being written down.** Pushing that
+   doc-only "record the deploy-pipeline gap" commit while `540f5235c`'s own
+   CI run was still in flight triggered `ci-${{ github.ref }}`'s
+   `cancel-in-progress: true` immediately at push time — not when the newer
+   run started a job, which is too late for a reactive `gh run cancel` to
+   help. Collateral damage: `540f5235c`'s "Backend tests" job shows
+   `cancelled`, not a real result, in the run history — and that same run
+   also had a genuine, unrelated `Validation` job failure (the SDK drift
+   above), which a `cancelled` overall conclusion nearly hid. `Deploy and
+   Verify` still deployed `540f5235c` successfully regardless — it does not
+   gate on the `CI` workflow's "Backend tests"/"Validation" jobs, only on
+   the E2E job for the exact SHA — but the commit's own CI history is now
+   permanently a false negative rather than a clean pass. No code fix
+   applies here; the fix is operational discipline (never push a second
+   commit to `main` until the prior one's CI is terminal) and is now
+   captured outside this document too, since a spec section didn't stop it
+   from recurring in the same session it was written in.
+
 ## Why that is not enough
 
 The factory works. It cannot explain itself, and parts of it are not true.
