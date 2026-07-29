@@ -111,10 +111,20 @@ def _runtime_env(args: argparse.Namespace, extra: dict[str, str] | None = None) 
     return env
 
 
-def _longhouse_cmd(args: argparse.Namespace) -> list[str]:
+_CHANNEL_COMMAND_MODULES = {
+    "antigravity-channel": "zerg.cli.antigravity_channel",
+    "claude-channel": "zerg.cli.claude_channel",
+    "opencode-channel": "zerg.cli.opencode_channel",
+}
+
+
+def _longhouse_command(args: argparse.Namespace, command: list[str]) -> list[str]:
     if args.longhouse_bin:
-        return [args.longhouse_bin]
-    return [*_server_python_cmd(args), "-m", "zerg.cli.main"]
+        return [args.longhouse_bin, *command]
+    module = _CHANNEL_COMMAND_MODULES.get(command[0]) if command else None
+    if module is not None:
+        return [*_server_python_cmd(args), "-m", module, *command[1:]]
+    return [*_server_python_cmd(args), "-m", "zerg.cli.main", *command]
 
 
 def _run_longhouse(
@@ -125,7 +135,7 @@ def _run_longhouse(
     timeout: int = 30,
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [*_longhouse_cmd(args), *command],
+        _longhouse_command(args, command),
         cwd=str(_server_cwd(args)),
         env=_runtime_env(args, env),
         text=True,
@@ -180,11 +190,12 @@ def _first_event(events: list[dict[str, Any]], event: str) -> dict[str, Any] | N
     return None
 
 
-def _exception_failure(code: str, exc: BaseException) -> dict[str, Any]:
+def _exception_failure(code: str, exc: BaseException, **fields: Any) -> dict[str, Any]:
     return _fail(
         code,
         f"{type(exc).__name__}: {exc}",
         traceback=traceback.format_exception_only(type(exc), exc),
+        **fields,
     )
 
 
@@ -538,6 +549,7 @@ def run_claude_channel_canary(args: argparse.Namespace, root: Path) -> dict[str,
         "LONGHOUSE_ENGINE_BIN": str(fake_engine),
     }
     bridge: subprocess.Popen[str] | None = None
+    bridge_command: list[str] | None = None
     try:
         assert fake_claude.stdout is not None
         ready = fake_claude.stdout.readline().strip()
@@ -547,9 +559,9 @@ def run_claude_channel_canary(args: argparse.Namespace, root: Path) -> dict[str,
                 "fake Claude process did not become ready",
             )
 
-        bridge = subprocess.Popen(
+        bridge_command = _longhouse_command(
+            args,
             [
-                *_longhouse_cmd(args),
                 "claude-channel",
                 "serve",
                 "--session-id",
@@ -561,6 +573,9 @@ def run_claude_channel_canary(args: argparse.Namespace, root: Path) -> dict[str,
                 "--claude-pid",
                 str(fake_claude.pid),
             ],
+        )
+        bridge = subprocess.Popen(
+            bridge_command,
             cwd=str(_server_cwd(args)),
             env=_runtime_env(args, channel_env),
             stdin=subprocess.PIPE,
@@ -714,7 +729,23 @@ def run_claude_channel_canary(args: argparse.Namespace, root: Path) -> dict[str,
             interrupt_marker=str(interrupt_marker),
         )
     except Exception as exc:  # noqa: BLE001
-        return _exception_failure("claude_channel_canary_exception", exc)
+        bridge_evidence: dict[str, Any] = {"argv": bridge_command}
+        if bridge is not None:
+            if bridge.poll() is None:
+                bridge.terminate()
+                try:
+                    bridge.wait(timeout=5.0)
+                except subprocess.TimeoutExpired:
+                    bridge.kill()
+                    bridge.wait(timeout=5.0)
+            bridge_evidence["returncode"] = bridge.returncode
+            if bridge.stderr is not None:
+                bridge_evidence["stderr"] = bridge.stderr.read()[-4000:]
+        return _exception_failure(
+            "claude_channel_canary_exception",
+            exc,
+            bridge=bridge_evidence,
+        )
     finally:
         if bridge is not None and bridge.poll() is None:
             bridge.terminate()
@@ -1878,19 +1909,21 @@ def _run_antigravity_claim_cycle(
     wait_claimed_secs: str = "45",
 ) -> dict[str, Any]:
     send_proc = subprocess.Popen(
-        [
-            *_longhouse_cmd(args),
-            "antigravity-channel",
-            "send",
-            "--config-dir",
-            str(config_dir),
-            "--session-id",
-            session_id,
-            "--text",
-            text,
-            "--wait-claimed-secs",
-            wait_claimed_secs,
-        ],
+        _longhouse_command(
+            args,
+            [
+                "antigravity-channel",
+                "send",
+                "--config-dir",
+                str(config_dir),
+                "--session-id",
+                session_id,
+                "--text",
+                text,
+                "--wait-claimed-secs",
+                wait_claimed_secs,
+            ],
+        ),
         cwd=str(_server_cwd(args)),
         env=_runtime_env(args),
         text=True,

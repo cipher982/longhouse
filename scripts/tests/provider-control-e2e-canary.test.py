@@ -339,6 +339,25 @@ def test_claude_real_print_canary_preserves_non_secret_launch_env() -> None:
         assert payload["canaries"]["claude"]["status"] == "pass"
 
 
+def test_claude_channel_canary_uses_native_channel_module() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        result, payload = _run_canary(
+            root,
+            [
+                "--provider",
+                "claude",
+            ],
+        )
+
+        assert result.returncode == 0, result.stderr + result.stdout
+        claude = payload["canaries"]["claude"]
+        assert claude["status"] == "pass"
+        assert claude["send_meta"]["injected_by"] == "longhouse"
+        assert claude["steer_meta"]["intent"] == "steer"
+        assert Path(claude["interrupt_marker"]).read_text().strip() == "sigint"
+
+
 def test_antigravity_real_agy_send_canary_blocks_without_an_unwatched_worker() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
@@ -495,6 +514,7 @@ def main() -> int:
         test_claude_real_print_canary_requires_exact_marker_result,
         test_claude_real_print_canary_fails_on_api_error_result,
         test_claude_real_print_canary_preserves_non_secret_launch_env,
+        test_claude_channel_canary_uses_native_channel_module,
         test_antigravity_real_agy_send_canary_blocks_without_an_unwatched_worker,
         test_antigravity_real_agy_send_canary_blocks_before_marker_evaluation,
         test_opencode_real_tool_canary_requires_completed_tool_marker,

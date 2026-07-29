@@ -4909,6 +4909,8 @@ def run_provider_control_e2e_canary(
             str(artifact_path),
             "--evidence-root",
             str(evidence_root),
+            "--python-bin",
+            sys.executable,
             "--json",
             *(extra_args or []),
         ],
