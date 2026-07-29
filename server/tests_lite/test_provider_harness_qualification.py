@@ -13,12 +13,15 @@ from zerg.qa import codex_release_identity
 from zerg.qa import codex_tool_call_result
 from zerg.qa import provider_harness_qualification as bridge
 from zerg.qa.provider_factory_model import DEFAULT_HARNESS_SCENARIOS
+from tests_lite._provider_harness_test_helpers import install_fake_engine
 
 
 @pytest.fixture(autouse=True)
-def _stable_runner_checkout(monkeypatch) -> None:
+def _stable_runner_checkout(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(codex_release_identity, "_git_sha", lambda _root: "test-sha")
     monkeypatch.setattr(codex_release_identity, "_git_dirty", lambda _root: False)
+    engine = install_fake_engine(tmp_path / "longhouse-engine")
+    monkeypatch.setenv("LONGHOUSE_ENGINE_BIN", str(engine))
 
 
 def _codex_package(tmp_path: Path, *, behavior: str = "pass") -> tuple[Path, Path, str]:
