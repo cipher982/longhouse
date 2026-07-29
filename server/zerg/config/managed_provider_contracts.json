@@ -1075,7 +1075,7 @@
       "machine_control_supports": [
         "antigravity.send"
       ],
-      "adapter_digest": "b5c9fa029f8b578d0352ecbe5a2f6cc0a609a615e1213ba365ed8a1f9ce98726"
+      "adapter_digest": "3e3c17a7f8dfe07ccea203142cbd17e1109229b818f304c8187d40de143b36a9"
     },
     {
       "provider": "cursor",

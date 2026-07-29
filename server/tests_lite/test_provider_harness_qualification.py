@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from tests_lite._provider_harness_test_helpers import install_fake_engine
+from zerg.qa import antigravity_hook_qualification
 from zerg.qa import claude_real_print_qualification
 from zerg.qa import codex_helm_interrupt
 from zerg.qa import codex_release_identity
@@ -99,6 +100,24 @@ def _opencode_single_asset(tmp_path: Path) -> tuple[Path, Path, str]:
         "import sys\n"
         'if sys.argv[1:] == ["--version"]:\n'
         '    print("1.17.20")\n'
+        "    raise SystemExit(0)\n"
+        "raise SystemExit(2)\n",
+        encoding="utf-8",
+    )
+    binary.chmod(0o700)
+    identity = f"sha256:{hashlib.sha256(binary.read_bytes()).hexdigest()}"
+    return root, binary, identity
+
+
+def _antigravity_single_asset(tmp_path: Path) -> tuple[Path, Path, str]:
+    root = tmp_path / "antigravity-closure"
+    root.mkdir()
+    binary = root / "provider"
+    binary.write_text(
+        f"#!{sys.executable}\n"
+        "import sys\n"
+        'if sys.argv[1:] == ["--version"]:\n'
+        '    print("1.1.5")\n'
         "    raise SystemExit(0)\n"
         "raise SystemExit(2)\n",
         encoding="utf-8",
@@ -254,6 +273,53 @@ def _passing_opencode_full_column_payload(evidence_root: Path) -> dict:
     }
 
 
+def _passing_antigravity_full_column_payload(evidence_root: Path) -> dict:
+    results = []
+    for scenario in DEFAULT_HARNESS_SCENARIOS:
+        status, failure_code = bridge._EXPECTED_ANTIGRAVITY_FULL_COLUMN_LIMITS.get(  # noqa: SLF001
+            scenario, ("pass", None)
+        )
+        row: dict[str, object] = {
+            "provider": "antigravity",
+            "scenario": scenario,
+            "status": status,
+        }
+        if failure_code is not None:
+            row["failure_code"] = failure_code
+        results.append(row)
+
+    live_path = evidence_root / "antigravity" / "launch_managed_session" / "raw" / "provider-live-canary.json"
+    live_path.parent.mkdir(parents=True, exist_ok=True)
+    live_path.write_text(
+        json.dumps(
+            {
+                "canaries": {
+                    name: {"status": "pass"}
+                    for name in antigravity_hook_qualification._NO_TOKEN_REQUIRED_CANARIES  # noqa: SLF001
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    launch = next(row for row in results if row["scenario"] == "launch_managed_session")
+    launch["data"] = {"provider_live_artifact_path": str(live_path)}
+    return {
+        "results": results,
+        "provider_execution_coverage_matrix_path": "/evidence/provider-execution-coverage-matrix.json",
+        "provider_execution_coverage_matrix": {
+            "provider_coverage_gap_kind_counts": {
+                "antigravity": {
+                    "passed": 26,
+                    "no_token_safety_gate": 1,
+                    "not_applicable": 1,
+                    "provider_contract_unsupported": 5,
+                }
+            },
+            "missing_provider_actions": [],
+        },
+    }
+
+
 def test_full_column_gate_accepts_only_the_complete_known_codex_surface() -> None:
     gate = bridge._full_column_gate(_passing_full_column_payload())  # noqa: SLF001
 
@@ -320,6 +386,53 @@ def test_opencode_full_column_gate_accepts_measured_contract_limits(tmp_path: Pa
         "not_applicable": 1,
         "provider_contract_unsupported": 1,
     }
+
+
+def test_antigravity_full_column_gate_accepts_maintenance_tier_limits(tmp_path: Path) -> None:
+    gate = bridge._full_column_gate(  # noqa: SLF001
+        _passing_antigravity_full_column_payload(tmp_path),
+        provider="antigravity",
+    )
+
+    assert gate["status"] == "pass"
+    assert gate["provider"] == "antigravity"
+    assert gate["expected_scenario_count"] == 22
+    assert gate["coverage_gap_kind_counts"] == {
+        "passed": 26,
+        "no_token_safety_gate": 1,
+        "not_applicable": 1,
+        "provider_contract_unsupported": 5,
+    }
+
+
+def test_cursor_full_column_gate_accepts_live_gate0_limits() -> None:
+    results = []
+    for scenario in DEFAULT_HARNESS_SCENARIOS:
+        status, failure_code = bridge._EXPECTED_CURSOR_FULL_COLUMN_LIMITS.get(  # noqa: SLF001
+            scenario, ("pass", None)
+        )
+        row = {"provider": "cursor", "scenario": scenario, "status": status}
+        if failure_code is not None:
+            row["failure_code"] = failure_code
+        results.append(row)
+    payload = {
+        "results": results,
+        "provider_execution_coverage_matrix": {
+            "provider_coverage_gap_kind_counts": {
+                "cursor": {
+                    "passed": 29,
+                    "no_token_safety_gate": 1,
+                    "not_applicable": 2,
+                    "provider_contract_unsupported": 1,
+                }
+            },
+            "missing_provider_actions": [],
+        },
+    }
+
+    gate = bridge._full_column_gate(payload, provider="cursor")  # noqa: SLF001
+
+    assert gate["status"] == "pass"
 
 
 def test_claude_profile_runs_one_full_column_and_reuses_live_print_result(
@@ -466,6 +579,77 @@ def test_opencode_release_gate_regression_fails_profile_assertions_closed(
     outcomes = bundle["coverage_manifest"]["outcomes"]
     assert outcomes["serve_session_contract_preserved"] == "infrastructure_error"
     assert outcomes["process_restart_reattach_preserved"] == "infrastructure_error"
+    assert bundle["execution_metadata"]["semantic_status"] == "infrastructure_error"
+
+
+def test_antigravity_profile_runs_full_column_and_preserves_blocked_live_boundary(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    root, binary, identity = _antigravity_single_asset(tmp_path)
+    request = _request(
+        tmp_path,
+        profile=antigravity_hook_qualification.PROFILE,
+        binary=binary,
+        identity=identity,
+        build_identity=f"sha256:{_closure_digest(root, granularity='single_asset')}",
+        provider="antigravity",
+        version="1.1.5",
+        granularity="single_asset",
+    )
+    captured_options = []
+
+    def fake_run_harness(options):
+        captured_options.append(options)
+        return _passing_antigravity_full_column_payload(options.evidence_root)
+
+    monkeypatch.setattr(bridge, "run_harness", fake_run_harness)
+
+    result = bridge.run(request, tmp_path / "output")
+
+    assert len(captured_options) == 1
+    options = captured_options[0]
+    assert options.providers == ("antigravity",)
+    assert options.scenarios == DEFAULT_HARNESS_SCENARIOS
+    assert options.provider_bins == {"antigravity": binary}
+    assert options.provider_builds["antigravity"].closure_granularity == "single_asset"
+    bundle = json.loads(Path(result["proof_bundle"]).read_text(encoding="utf-8"))
+    outcomes = bundle["coverage_manifest"]["outcomes"]
+    assert outcomes["hook_inbox_contract_preserved"] == "pass"
+    assert outcomes["real_print_injection_observed"] == "blocked"
+    assert bundle["execution_metadata"]["semantic_status"] == "blocked"
+
+
+def test_antigravity_full_column_regression_fails_profile_assertions_closed(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    root, binary, identity = _antigravity_single_asset(tmp_path)
+    request = _request(
+        tmp_path,
+        profile=antigravity_hook_qualification.PROFILE,
+        binary=binary,
+        identity=identity,
+        build_identity=f"sha256:{_closure_digest(root, granularity='single_asset')}",
+        provider="antigravity",
+        version="1.1.5",
+        granularity="single_asset",
+    )
+
+    def fake_run_harness(options):
+        payload = _passing_antigravity_full_column_payload(options.evidence_root)
+        row = next(item for item in payload["results"] if item["scenario"] == "timeline_projection")
+        row.update(status="fail", failure_code="projection_regressed")
+        return payload
+
+    monkeypatch.setattr(bridge, "run_harness", fake_run_harness)
+
+    result = bridge.run(request, tmp_path / "output")
+
+    bundle = json.loads(Path(result["proof_bundle"]).read_text(encoding="utf-8"))
+    outcomes = bundle["coverage_manifest"]["outcomes"]
+    assert outcomes["hook_inbox_contract_preserved"] == "infrastructure_error"
+    assert outcomes["real_print_injection_observed"] == "infrastructure_error"
     assert bundle["execution_metadata"]["semantic_status"] == "infrastructure_error"
 
 

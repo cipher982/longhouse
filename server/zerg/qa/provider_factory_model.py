@@ -123,6 +123,7 @@ FULL_COLUMN_RELEASE_PROFILES = frozenset(
         "codex_tool_call_result_v1",
         "claude_real_print_v1",
         "opencode_server_contract_v1",
+        "antigravity_hook_inbox_v1",
     }
 )
 
@@ -501,6 +502,27 @@ def plan_run(facts: ProviderFactoryFacts, provider: str, build_provenance: str, 
             trigger=trigger,
             status="runs",
             reason="weekly full-column smoke (provider-release-weekly.yml, DEFAULT_SCENARIOS)",
+            harness_scenarios=facts.default_harness_scenarios,
+        )
+
+    # Cursor has no upstream release feed. Its real-binary lane is an exact,
+    # explicit snapshot of the observed install plus a matching live Gate 0
+    # artifact; it still runs the same complete universal column.
+    if provider == "cursor":
+        if build_provenance != BuildProvenance.OBSERVED_INSTALL:
+            return PlanCell(
+                provider=provider,
+                build_provenance=build_provenance,
+                trigger=trigger,
+                status="never_run",
+                reason="Cursor manual qualification only runs against an explicit observed install",
+            )
+        return PlanCell(
+            provider=provider,
+            build_provenance=build_provenance,
+            trigger=trigger,
+            status="runs",
+            reason="exact observed-install snapshot with matching live Cursor Gate 0 evidence",
             harness_scenarios=facts.default_harness_scenarios,
         )
 

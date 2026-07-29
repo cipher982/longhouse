@@ -869,6 +869,7 @@ def _active_steer_scenario(
 
 def run_gate0(args: argparse.Namespace) -> dict[str, Any]:
     binary = _cursor_binary(args.cursor_bin)
+    resolved_binary = Path(binary).expanduser().resolve(strict=True)
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     artifact_root = Path(args.artifact_root).expanduser() / timestamp
     artifact_root.mkdir(parents=True, exist_ok=False)
@@ -883,6 +884,8 @@ def run_gate0(args: argparse.Namespace) -> dict[str, Any]:
         "gate": "cursor_helm_gate0",
         "provider": "cursor",
         "provider_version": version,
+        "provider_bin": str(resolved_binary),
+        "provider_executable_identity": f"sha256:{_file_sha256(resolved_binary)}",
         "longhouse_commit": _git_commit(),
         "started_at": _now(),
         "artifact_root": str(artifact_root),
@@ -983,6 +986,14 @@ def run_gate0(args: argparse.Namespace) -> dict[str, Any]:
     report["finished_at"] = _now()
     output_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return report
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _git_commit() -> str | None:

@@ -852,6 +852,7 @@ class UniversalProviderAdapter:
     def __init__(self, config: AdapterConfig, *, provider_bin: Path | None = None) -> None:
         self.config = config
         self.provider_bin = provider_bin
+        self._probe_cache: dict[str, Any] | None = None
 
     @property
     def adapter_name(self) -> str:
@@ -873,6 +874,9 @@ class UniversalProviderAdapter:
         return payload
 
     def probe(self, package: EvidencePackage) -> dict[str, Any]:
+        if self._probe_cache is not None:
+            self._write_probe_evidence(package, self._probe_cache)
+            return dict(self._probe_cache)
         binary, source = self._resolve_binary()
         contract = contract_for_provider(self.config.provider)
         base = {
@@ -897,23 +901,33 @@ class UniversalProviderAdapter:
                 "failure_code": "provider_binary_not_found",
                 "message": f"{self.config.binary_name} binary was not found",
             }
-            package.write_json("assertions/probe.json", payload)
-            package.write_json(
-                "raw/version-command.json",
-                {"argv": [self.config.binary_name, "--version"], "error": payload["message"]},
+            self._probe_cache = payload
+            self._write_probe_evidence(package, payload)
+            return dict(payload)
+        try:
+            result = subprocess.run(
+                [str(binary), "--version"],
+                text=True,
+                capture_output=True,
+                timeout=8,
+                check=False,
             )
-            return payload
-        result = subprocess.run(
-            [str(binary), "--version"],
-            text=True,
-            capture_output=True,
-            timeout=8,
-            check=False,
-        )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            payload = {
+                **base,
+                "status": STATUS_FAIL,
+                "path": str(binary),
+                "failure_code": "provider_version_probe_error",
+                "message": f"{type(exc).__name__}: {exc}",
+                "command": {
+                    "argv": [str(binary), "--version"],
+                    "error": f"{type(exc).__name__}: {exc}",
+                },
+            }
+            self._probe_cache = payload
+            self._write_probe_evidence(package, payload)
+            return dict(payload)
         evidence = command_evidence(result)
-        package.write_json("raw/version-command.json", evidence)
-        package.write_text("raw/stdout.log", result.stdout or "")
-        package.write_text("raw/stderr.log", result.stderr or "")
         version = (result.stdout or result.stderr or "").strip()
         if result.returncode != 0 or not version:
             payload = {
@@ -932,8 +946,24 @@ class UniversalProviderAdapter:
                 "version": version,
                 "command": evidence,
             }
-        package.write_json("assertions/probe.json", payload)
-        return payload
+        self._probe_cache = payload
+        self._write_probe_evidence(package, payload)
+        return dict(payload)
+
+    def _write_probe_evidence(self, package: EvidencePackage, payload: Mapping[str, Any]) -> None:
+        command = payload.get("command")
+        command = (
+            command
+            if isinstance(command, Mapping)
+            else {
+                "argv": [self.config.binary_name, "--version"],
+                "error": payload.get("message"),
+            }
+        )
+        package.write_json("raw/version-command.json", dict(command))
+        package.write_text("raw/stdout.log", str(command.get("stdout") or ""))
+        package.write_text("raw/stderr.log", str(command.get("stderr") or ""))
+        package.write_json("assertions/probe.json", dict(payload))
 
     def adapter_conformance(self, package: EvidencePackage) -> dict[str, Any]:
         declared_methods = set(self.config.methods)

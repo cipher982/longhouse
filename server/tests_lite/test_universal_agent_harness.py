@@ -880,6 +880,58 @@ def test_probe_identity_runs_for_all_providers_through_shared_scenario(tmp_path:
         assert probe["version"]
 
 
+def test_provider_version_probe_runs_once_per_full_adapter_column(tmp_path: Path) -> None:
+    counter = tmp_path / "version-count.txt"
+    binary = tmp_path / "cursor-agent"
+    binary.write_text(
+        f"#!{sys.executable}\n"
+        "import pathlib, sys\n"
+        f"counter = pathlib.Path({str(counter)!r})\n"
+        'if sys.argv[1:] == ["--version"]:\n'
+        "    count = int(counter.read_text()) if counter.exists() else 0\n"
+        "    counter.write_text(str(count + 1))\n"
+        '    print("2026.07.23-test")\n'
+        "    raise SystemExit(0)\n"
+        "raise SystemExit(2)\n",
+        encoding="utf-8",
+    )
+    binary.chmod(0o755)
+
+    payload = uah.run_harness(
+        uah.HarnessOptions(
+            providers=("cursor",),
+            scenarios=("probe_identity", "action_matrix", "control_surface"),
+            evidence_root=tmp_path / "evidence",
+            provider_bins={"cursor": binary},
+        )
+    )
+
+    assert all(result["status"] in {"pass", "blocked"} for result in payload["results"])
+    assert counter.read_text(encoding="utf-8") == "1"
+    for scenario in ("probe_identity", "action_matrix", "control_surface"):
+        assert (tmp_path / "evidence" / "cursor" / scenario / "raw" / "version-command.json").is_file()
+
+
+def test_provider_version_timeout_is_a_typed_failure(tmp_path: Path, monkeypatch) -> None:
+    binary = _fake_bins(tmp_path)["cursor"]
+
+    def timeout(*_args, **_kwargs):
+        raise subprocess.TimeoutExpired([str(binary), "--version"], 8)
+
+    monkeypatch.setattr(uah.subprocess, "run", timeout)
+    payload = uah.run_harness(
+        uah.HarnessOptions(
+            providers=("cursor",),
+            scenarios=("probe_identity",),
+            evidence_root=tmp_path / "evidence",
+            provider_bins={"cursor": binary},
+        )
+    )
+
+    assert payload["results"][0]["status"] == "fail"
+    assert payload["results"][0]["failure_code"] == "provider_version_probe_error"
+
+
 def test_adapter_registry_uses_concrete_provider_adapters(tmp_path: Path) -> None:
     registry = uah.adapter_registry(_fake_bins(tmp_path))
 

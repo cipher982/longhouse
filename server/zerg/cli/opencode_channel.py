@@ -857,3 +857,7 @@ __all__ = [
     "send_opencode_text",
     "stop_opencode_server_bridge",
 ]
+
+
+if __name__ == "__main__":
+    app(prog_name="longhouse opencode-channel")

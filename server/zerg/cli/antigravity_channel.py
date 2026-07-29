@@ -22,6 +22,11 @@ __all__ = [
 app = typer.Typer(no_args_is_help=True, help="Antigravity hook-inbox control commands")
 
 
+@app.callback()
+def channel_root() -> None:
+    """Operate the Antigravity hook-inbox channel."""
+
+
 @app.command(name="send")
 def send_command(
     session_id: str = typer.Option(..., "--session-id", help="Longhouse session id."),
@@ -90,3 +95,7 @@ def send_command(
             sort_keys=True,
         )
     )
+
+
+if __name__ == "__main__":
+    app(prog_name="longhouse antigravity-channel")

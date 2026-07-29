@@ -111,11 +111,12 @@ def test_opencode_release_poll_runs_the_full_staged_column(facts) -> None:
     assert cell.credential_requirement == ("OPENROUTER_API_KEY",)
 
 
-@pytest.mark.parametrize("provider", ["antigravity"])
-def test_unbridged_release_profiles_do_not_claim_a_full_column(facts, provider: str) -> None:
-    cell = plan_run(facts, provider, "staged_release", "release_poll")
+def test_antigravity_release_poll_runs_the_full_staged_column_without_live_credentials(facts) -> None:
+    cell = plan_run(facts, "antigravity", "staged_release", "release_poll")
 
-    assert cell.harness_scenarios == ()
+    assert cell.qualification_profiles == ("antigravity_hook_inbox_v1",)
+    assert cell.harness_scenarios == facts.default_harness_scenarios
+    assert cell.credential_requirement == ()
 
 
 @pytest.mark.parametrize("provider", ALL_PROVIDERS)
@@ -161,10 +162,11 @@ def test_weekly_cron_never_runs_against_staged_release_provenance(facts) -> None
     assert cell.status == "never_run"
 
 
-def test_manual_trigger_never_runs_for_cursor_because_every_scenario_is_orphaned(facts) -> None:
+def test_manual_trigger_runs_full_column_for_cursor_observed_install(facts) -> None:
     cell = plan_run(facts, "cursor", "observed_install", "manual")
-    assert cell.status == "never_run"
-    assert "orphaned" in cell.reason
+    assert cell.status == "runs"
+    assert cell.harness_scenarios == facts.default_harness_scenarios
+    assert "Gate 0" in cell.reason
 
 
 def test_manual_trigger_runs_for_codex_because_of_the_live_token_gap(facts) -> None:

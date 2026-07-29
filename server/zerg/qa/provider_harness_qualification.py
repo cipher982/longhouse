@@ -31,6 +31,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+from zerg.qa import antigravity_hook_qualification
 from zerg.qa import claude_real_print_qualification
 from zerg.qa import codex_helm_interrupt
 from zerg.qa import codex_release_identity as identity_bridge
@@ -91,16 +92,49 @@ _EXPECTED_OPENCODE_FULL_COLUMN_LIMITS: dict[str, tuple[str, str | None]] = {
     "run_prompt_once": ("unsupported_gap", "run_prompt_once_not_safe_no_token"),
 }
 
+_EXPECTED_ANTIGRAVITY_FULL_COLUMN_LIMITS: dict[str, tuple[str, str | None]] = {
+    "action_matrix": ("blocked", None),
+    "control_surface": ("blocked", None),
+    "full_action_suite": ("blocked", "full_action_suite_has_explicit_gaps"),
+    "run_prompt_once": ("unsupported_gap", "run_prompt_once_not_safe_no_token"),
+    "send_receive": ("unsupported_gap", "send_receive_not_safe_no_token"),
+}
+
+_EXPECTED_CURSOR_FULL_COLUMN_LIMITS: dict[str, tuple[str, str | None]] = {
+    "action_matrix": ("blocked", None),
+    "control_surface": ("blocked", None),
+    "full_action_suite": ("blocked", "full_action_suite_has_explicit_gaps"),
+    "run_prompt_once": ("unsupported_gap", "run_prompt_once_not_safe_no_token"),
+}
+
 _FULL_COLUMN_LIMITS = {
     "codex": _EXPECTED_CODEX_FULL_COLUMN_LIMITS,
     "claude": _EXPECTED_CLAUDE_FULL_COLUMN_LIMITS,
     "opencode": _EXPECTED_OPENCODE_FULL_COLUMN_LIMITS,
+    "antigravity": _EXPECTED_ANTIGRAVITY_FULL_COLUMN_LIMITS,
+    "cursor": _EXPECTED_CURSOR_FULL_COLUMN_LIMITS,
 }
 
 _FULL_COLUMN_ALLOWED_GAP_KINDS = {
     "codex": frozenset({"passed", "provider_contract_unsupported"}),
     "claude": frozenset({"passed", "no_token_safety_gate"}),
     "opencode": frozenset(
+        {
+            "passed",
+            "no_token_safety_gate",
+            "not_applicable",
+            "provider_contract_unsupported",
+        }
+    ),
+    "antigravity": frozenset(
+        {
+            "passed",
+            "no_token_safety_gate",
+            "not_applicable",
+            "provider_contract_unsupported",
+        }
+    ),
+    "cursor": frozenset(
         {
             "passed",
             "no_token_safety_gate",
@@ -144,7 +178,7 @@ def _build_provider_build_ref(request: dict[str, Any], provider_bin: Path, *, ou
         source_root = provider_bin.parent.parent
         entrypoint_relative = "bin/codex"
         codex_helm_interrupt._package_identity(str(source_root), provider_bin)  # noqa: SLF001
-    elif provider in {"claude", "opencode"} and granularity == "single_asset":
+    elif provider in {"claude", "opencode", "antigravity"} and granularity == "single_asset":
         source_root = provider_bin.parent
         entrypoint_relative = provider_bin.name
         if tuple(path.name for path in source_root.iterdir()) != (provider_bin.name,):
@@ -682,6 +716,106 @@ def run_opencode_server_contract(request_path: Path, output_root: Path) -> dict[
     )
 
 
+def _antigravity_hook_canaries(launch_result: dict[str, Any], *, evidence_root: Path) -> dict[str, Any]:
+    artifact_value = (launch_result.get("data") or {}).get("provider_live_artifact_path")
+    if not isinstance(artifact_value, str) or not artifact_value.strip():
+        raise RequestError("Antigravity launch_managed_session did not report its provider-live artifact")
+    artifact_path = Path(artifact_value).expanduser().resolve(strict=True)
+    allowed_root = (evidence_root / "harness-evidence").resolve(strict=True)
+    if not artifact_path.is_relative_to(allowed_root):
+        raise RequestError("Antigravity provider-live artifact escaped the harness evidence root")
+    try:
+        artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RequestError(f"invalid Antigravity provider-live artifact: {exc}") from exc
+    if not isinstance(artifact, dict) or not isinstance(artifact.get("canaries"), dict):
+        raise RequestError("Antigravity provider-live artifact has no canary mapping")
+    return dict(artifact["canaries"])
+
+
+def _antigravity_full_column_executor(
+    binary: Path,
+    evidence_root: Path,
+    *,
+    request: dict[str, Any],
+) -> tuple[dict[str, Any], tuple[semantic.SemanticAssertion, ...], tuple[str, ...]]:
+    build_ref = _build_provider_build_ref(request, binary, output_root=evidence_root)
+    harness_payload = run_harness(
+        HarnessOptions(
+            providers=("antigravity",),
+            scenarios=DEFAULT_HARNESS_SCENARIOS,
+            evidence_root=evidence_root / "harness-evidence",
+            provider_bins={"antigravity": binary},
+            provider_builds={"antigravity": build_ref},
+        )
+    )
+    launch_result = _scenario_result(
+        harness_payload,
+        provider="antigravity",
+        scenario="launch_managed_session",
+    )
+    managed_result = _scenario_result(
+        harness_payload,
+        provider="antigravity",
+        scenario="managed_session_e2e",
+    )
+    full_column_gate = _full_column_gate(harness_payload, provider="antigravity")
+    canaries = _antigravity_hook_canaries(launch_result, evidence_root=evidence_root)
+    assertions = antigravity_hook_qualification.antigravity_hook_inbox_oracle(canaries)
+
+    if full_column_gate["status"] != "pass":
+        assertions = tuple(
+            semantic.SemanticAssertion(
+                assertion.assertion_id,
+                AssertionOutcome.INFRASTRUCTURE_ERROR,
+                assertion.evidence_class,
+            )
+            for assertion in assertions
+        )
+        status = "infrastructure_error"
+    elif AssertionOutcome.INFRASTRUCTURE_ERROR in {assertion.outcome for assertion in assertions}:
+        status = "infrastructure_error"
+    elif AssertionOutcome.SEMANTIC_FAIL in {assertion.outcome for assertion in assertions}:
+        status = "fail"
+    elif AssertionOutcome.BLOCKED in {assertion.outcome for assertion in assertions}:
+        status = "blocked"
+    else:
+        status = "pass"
+
+    observation = {
+        "status": status,
+        "provider_bin": str(binary),
+        "provider_build": build_ref.to_evidence(),
+        "full_column_gate": full_column_gate,
+        "launch_managed_session": launch_result,
+        "managed_session_e2e": managed_result,
+        "producer_boundary": "unwatched_worker_required",
+        "provider_execution_coverage_matrix_path": harness_payload.get("provider_execution_coverage_matrix_path"),
+    }
+    return observation, assertions, ()
+
+
+def run_antigravity_hook_inbox(request_path: Path, output_root: Path) -> dict[str, Any]:
+    request = provider_release_identity.load_request(
+        request_path,
+        provider="antigravity",
+        profile=antigravity_hook_qualification.PROFILE,
+        version_grammar=antigravity_hook_qualification._PROFILE.version_grammar,  # noqa: SLF001
+    )
+
+    def execute(binary: Path, evidence_root: Path):
+        return _antigravity_full_column_executor(binary, evidence_root, request=request)
+
+    return semantic.run_semantic_profile(
+        request_path,
+        output_root,
+        profile=antigravity_hook_qualification._PROFILE,  # noqa: SLF001
+        assertion_ids=antigravity_hook_qualification.ASSERTIONS,
+        executor=execute,
+        oracle_source=Path(semantic_oracles.__file__),
+    )
+
+
 # Deliberately only these provider/profile pairs. This is not a fallback for
 # arbitrary release profiles; every admission carries provider-specific proof
 # mapping and fail-closed limits.
@@ -690,6 +824,7 @@ _PROFILES = {
     ("codex", codex_helm_interrupt.PROFILE): run_codex_helm_interrupt,
     ("claude", claude_real_print_qualification.PROFILE): run_claude_real_print,
     ("opencode", opencode_server_qualification.PROFILE): run_opencode_server_contract,
+    ("antigravity", antigravity_hook_qualification.PROFILE): run_antigravity_hook_inbox,
 }
 
 

@@ -248,7 +248,11 @@ Codex is the most-used provider. Its release lane schedules both strict
 profiles, and the tool-result profile runs the complete 22-scenario universal
 column against the staged release. Claude's real-print profile now does the
 same, reusing its live-print harness result as the profile assertion instead
-of launching the paid canary twice. The generated rows below come
+of launching the paid canary twice. OpenCode and Antigravity also run the full
+staged column; Antigravity retains its maintenance-tier and unwatched-worker
+policy limits. Cursor has no upstream release lane, so its explicit
+observed-install snapshot combines a stable install-closure digest with a
+matching live Gate 0 artifact and the same 22-scenario column. The generated rows below come
 from `provider_factory_model.plan_run()` against the live schema and registry
 constants:
 
@@ -272,14 +276,14 @@ uv run --directory server python scripts/render_provider_factory_status.py
 | opencode | push | generated_fake | runs — 4 scenarios |
 | opencode | weekly_cron | generated_fake | runs — 22 scenarios |
 | opencode | manual | observed_install | never runs — every capability-proof assertion declared for opencode is already satisfiable by an automated trigger |
-| antigravity | release_poll | staged_release | runs — 1 scenario |
+| antigravity | release_poll | staged_release | runs — 1 qualification scenario + 22 harness scenarios |
 | antigravity | push | generated_fake | runs — 4 scenarios |
 | antigravity | weekly_cron | generated_fake | runs — 22 scenarios |
 | antigravity | manual | observed_install | runs — 1 scenario |
 | cursor | release_poll | staged_release | never runs — cursor has no registered release lane (no *_lane() in provider_factory/registry.py) |
 | cursor | push | generated_fake | runs — 4 scenarios |
 | cursor | weekly_cron | generated_fake | runs — 22 scenarios |
-| cursor | manual | observed_install | never runs — remaining capability-proof scenario_ids for cursor are orphaned: ['cursor_coordination_awareness_create', 'cursor_coordination_directed_input', 'cursor_steer_rejection'] |
+| cursor | manual | observed_install | runs — 22 scenarios |
 
 **The diagonal** (`staged_release` binary x the release lane's full scenario
 set) — one row per provider, held by
@@ -290,7 +294,7 @@ set) — one row per provider, held by
 | codex | runs — 22 scenarios |
 | claude | runs — 22 scenarios |
 | opencode | runs — 22 scenarios |
-| antigravity | never runs — release lane does not execute the full universal scenario set |
+| antigravity | runs — 22 scenarios |
 | cursor | never runs — release lane does not execute the full universal scenario set |
 
 This is the first table in this document's history where "is this still true"
