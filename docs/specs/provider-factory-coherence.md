@@ -1144,6 +1144,31 @@ actually runs (clifford at higher capacity, a new dedicated host, or
 something else) is an infrastructure decision, not a technical unknown —
 flagging it rather than picking a host unilaterally.
 
+**Investigated 2026-07-29: the narrower "just turn on codex's second
+profile" path is real but not a quick flip.** Before assuming coverage
+volume needs new infrastructure at all, checked whether it could grow inside
+clifford's existing single container — `run_multi_profile_tick`
+(`provider_factory/worker.py:672`) already lets one provider carry more than
+one qualification profile per tick, and both codex harness-bridge profiles
+(`codex_tool_call_result_v1`, `codex_helm_interrupt_v1`) are already
+equivalence-tested against the legacy path (Phase 2). It is not wired to any
+deployed entrypoint, by its own docstring, deliberately — `worker_cli.py`'s
+`main()`, the actual container process, still calls `run_tick` with exactly
+one profile. Wiring it in is not a config flip: `run_tick`'s and
+`run_multi_profile_tick`'s per-provider result shapes are genuinely
+incompatible (`_run_lane_tick_locked` returns a flat list of per-release
+qualification results per provider; `run_multi_profile_tick`'s equivalent is
+a dict nested by profile, `worker.py:763-766`), and `worker_cli.py`'s
+downstream code (`provider_build_staleness`, `drain_factory_delivery`,
+retention, triage) all consume that shape. Forcing a shape-compatibility
+patch into the actual unattended production tick loop — real credentials,
+runs every 15 minutes, no one watching — without designing it carefully is
+exactly the kind of rushed change worth refusing even under time pressure.
+The concrete next step: either write a result-shape adapter so
+`run_multi_profile_tick`'s output satisfies every downstream consumer
+`run_tick`'s does, or change those consumers to accept both shapes — a
+real, scoped, single-session task, not a re-investigation.
+
 Deletes: `provider-build-matrix.md`, `provider-automation-factory-completion.md`.
 
 ### Phase 5 — serving
