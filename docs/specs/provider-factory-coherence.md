@@ -1276,3 +1276,23 @@ not the original error.
 11. `HarnessOptions.provider_builds` is a partial seam: recorded and
     entrypoint-checked for generated fakes, `None` on the real-binary path,
     with closure verification outside `run_harness()`.
+12. **Hatch Sol code review, 2026-07-29** (a review "along the way" of the
+    Phase 2/3 work above, distinct from the design-consult reviews already
+    cited): checked the four adapter-split extraction commits
+    (`870493d47`/`7d43303f1`/`42dc90949`/`6662b9bca`) and the two
+    release-discovery fix commits (`7784154`/`09275c7`) against current code,
+    not just the commit messages — reading every extracted subclass in full,
+    AST-diffing old vs. new class bodies, running the test suite itself, and
+    checking the release-tag regex against every page of `openai/codex`'s
+    actual live release history via the GitHub API. Cleared the adapter split
+    entirely: every moved method's body was preserved, every remaining
+    provider-private call resolves inside its own subclass, no orphaned
+    dispatch branch was left in the shared base. Found one real defect: the
+    release-discovery filter reused `core.py`'s `_release_version()`, which
+    accepts bare `X.Y.Z`/`vX.Y.Z` in addition to `rust-vX.Y.Z` — correct for
+    that function's own job (parsing a tag already trusted to be real), wrong
+    for filtering candidates, since a same-repo vendored release tagged with
+    bare semver would still slip through and reproduce the exact
+    permanent-retry bug the filter existed to fix. Fixed in `91f8758`
+    (control-plane) with a discovery-specific `rust-v...`-only check and a
+    regression test for both bare-semver shapes; deployed to clifford.
