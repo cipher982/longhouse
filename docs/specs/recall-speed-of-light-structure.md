@@ -28,7 +28,7 @@ not synonyms.
 match set, and broad queries went from 3.4 s to a few hundred milliseconds warm.
 What remains is not an algorithm problem.
 
-Measured on hosted `david010`, page-cache faults per query against latency:
+Measured on the hosted dogfood instance, page-cache faults per query against latency:
 
 | query | cold | MB faulted | warm | MB faulted |
 | --- | --- | --- | --- | --- |

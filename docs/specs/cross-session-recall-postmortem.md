@@ -1,11 +1,10 @@
 # Cross-session recall: postmortem and redesign
 
 **Date:** 2026-07-24
-**Trigger:** g55 codex session `b07da0af-da8b-4024-91d4-aca7ae82deaf`, the first
-real-world attempt by an agent to recover prior work from Longhouse history under time
-pressure.
-**Reviewed by:** `hatch codex sol`, `hatch openrouter kimi-k3`. Both reviews were
-valuable and both reached a central recommendation this document now rejects; see §8.
+**Trigger:** a managed Codex dogfood session, the first real-world attempt by an
+agent to recover prior work from Longhouse history under time pressure.
+**Review:** two independent reviews were valuable and both reached a central
+recommendation this document now rejects; see §8.
 
 ---
 
@@ -36,7 +35,7 @@ The agent never found the answer. It gave up on retrieval and asked David to plu
 
 ### The counterfactual
 
-Verified against hosted `david010` while writing this document:
+Verified against the hosted dogfood instance while writing this document:
 
 ```
 GET /api/agents/sessions?query=adb&project=g55&days_back=14
@@ -69,7 +68,7 @@ Confirmed against David's live config:
 
 ```toml
 [mcp_servers.longhouse]
-command = "/Users/davidrose/.local/bin/longhouse-engine"
+command = "/usr/local/bin/longhouse-engine"
 args = ["claude-channel", "serve"]
 ```
 
@@ -267,7 +266,7 @@ Agent error was a contributing cause. The absent tool was the root cause.
 Longhouse (canonical)                    Life Hub (mirror)
 ─────────────────────                    ─────────────────
 owns raw agent history          ──────>  agent_sessions source
-SQLite, hosted david010                  Postgres, 266k chunks, ~174s lag
+SQLite, hosted dogfood instance          Postgres, 266k chunks, ~174s lag
 /api/agents/{sessions,recall,tail}       /api/evidence/agent-sessions/{search,chunk}
                                          one of nine mirrored sources
 ```
@@ -396,7 +395,8 @@ stashed clean tree and last touched by unrelated commits). `make test-engine`: c
 Life Hub: 40 passed. Both ships green — runs 30140127523 and 30140928388, demo and canary
 healthy on the exact SHAs.
 
-The journey the g55 agent could not make, run against hosted `david010` on the shipped code:
+The journey the managed agent could not make, run against the hosted dogfood
+instance on the shipped code:
 
 ```
 search_sessions(query="adb", project="g55")
