@@ -629,6 +629,8 @@ def run_fake_app_server_binary(args: argparse.Namespace, evidence_root: Path) ->
     root.mkdir(parents=True, exist_ok=True)
     workspace = root / "workspace"
     workspace.mkdir(exist_ok=True)
+    source_home = root / "source-home"
+    (source_home / ".codex").mkdir(parents=True, exist_ok=True)
     fake_codex = root / "codex"
     fake_codex.write_text(_FAKE_PERMISSION_APP_SERVER, encoding="utf-8")
     fake_codex.chmod(0o700)
@@ -653,7 +655,9 @@ def run_fake_app_server_binary(args: argparse.Namespace, evidence_root: Path) ->
         str(log_path),
         "--json",
     ]
-    result = _run(command, timeout=args.fake_app_server_timeout_secs)
+    environment = os.environ.copy()
+    environment["HOME"] = str(source_home)
+    result = _run(command, env=environment, timeout=args.fake_app_server_timeout_secs)
     command_evidence = _command_evidence(result)
     _write_json(root / "command.json", command_evidence)
     if result.returncode != 0:

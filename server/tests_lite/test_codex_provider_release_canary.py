@@ -26,12 +26,14 @@ def test_fake_app_server_binary_proves_installed_engine_permission_protocol(tmp_
     engine.write_text(
         f"""#!{sys.executable}
 import json
+import os
 import sys
 from pathlib import Path
 
 args = sys.argv[1:]
 assert args[0] == "codex-app-server-canary"
 assert "--auto-approve" in args
+assert (Path(os.environ["HOME"]) / ".codex").is_dir()
 codex_bin = Path(args[args.index("--codex-bin") + 1])
 assert codex_bin.is_file() and codex_bin.stat().st_mode & 0o100
 print(json.dumps({{
@@ -72,6 +74,7 @@ print(json.dumps({{
     evidence_root = tmp_path / "evidence" / "fake-app-server-binary"
     assert (evidence_root / "codex").is_file()
     assert (evidence_root / "command.json").is_file()
+    assert (evidence_root / "source-home" / ".codex").is_dir()
     assert (evidence_root / "summary.json").is_file()
 
 
