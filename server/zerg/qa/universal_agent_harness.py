@@ -3208,6 +3208,54 @@ class UniversalProviderAdapter:
         return None, "missing"
 
 
+# Phase 3 of docs/specs/provider-factory-coherence.md ("split the adapter"):
+# Sol's actual acceptance bar was never "one file per provider" for its own
+# sake -- it was "adding a real sixth provider must not require editing this
+# shared file." A hardcoded dict literal at the bottom of the file failed
+# that regardless of whether the five classes above it live in one file or
+# five: every new provider still meant a new dict entry here. This registry
+# is the extensibility half of that bar; discover_adapters() below is the
+# "add a module, don't edit this one" half. The five classes still live in
+# this file today -- the remaining provider_adapters/ package split is a
+# real, separate, file-layout task, not a further behavior change.
+ADAPTER_CLASS_BY_PROVIDER: dict[str, type[UniversalProviderAdapter]] = {}
+
+
+def register_adapter(provider: str):
+    """Class decorator: register a UniversalProviderAdapter subclass by provider name.
+
+    Importing any module containing a decorated class is sufficient to
+    register it -- see discover_adapters() for loading such a module without
+    editing this file.
+    """
+
+    def decorator(cls: type[UniversalProviderAdapter]) -> type[UniversalProviderAdapter]:
+        ADAPTER_CLASS_BY_PROVIDER[provider] = cls
+        return cls
+
+    return decorator
+
+
+def discover_adapters(module_paths: Iterable[Path]) -> None:
+    """Import each given .py file so its @register_adapter decorators run.
+
+    Proves the extensibility claim directly: a provider adapter defined in a
+    module that has never been imported by this file becomes resolvable
+    through ADAPTER_CLASS_BY_PROVIDER purely by being passed here, with zero
+    edits to universal_agent_harness.py. See
+    test_universal_agent_harness.py's sixth-provider test.
+    """
+    import importlib.util
+
+    for path in module_paths:
+        spec = importlib.util.spec_from_file_location(f"_discovered_adapter_{path.stem}", path)
+        if spec is None or spec.loader is None:
+            raise ImportError(f"could not load adapter module: {path}")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+
+@register_adapter("claude")
 class ClaudeCodeHarnessAdapter(UniversalProviderAdapter):
     """Claude Code concrete adapter for the universal Longhouse action contract.
 
@@ -3827,6 +3875,7 @@ class ClaudeCodeHarnessAdapter(UniversalProviderAdapter):
         return payload
 
 
+@register_adapter("codex")
 class CodexOpenAIHarnessAdapter(UniversalProviderAdapter):
     """Codex/OpenAI concrete adapter for the universal Longhouse action contract.
 
@@ -4715,6 +4764,7 @@ class CodexOpenAIHarnessAdapter(UniversalProviderAdapter):
         return payload
 
 
+@register_adapter("opencode")
 class OpenCodeHarnessAdapter(UniversalProviderAdapter):
     """OpenCode concrete adapter for the universal Longhouse action contract.
 
@@ -5170,6 +5220,7 @@ class OpenCodeHarnessAdapter(UniversalProviderAdapter):
         return payload
 
 
+@register_adapter("antigravity")
 class AntigravityHarnessAdapter(UniversalProviderAdapter):
     """Antigravity concrete adapter for the universal Longhouse action contract.
 
@@ -5407,17 +5458,9 @@ class AntigravityHarnessAdapter(UniversalProviderAdapter):
         return payload
 
 
+@register_adapter("cursor")
 class CursorHarnessAdapter(UniversalProviderAdapter):
     """Cursor concrete adapter for the universal Longhouse action contract."""
-
-
-ADAPTER_CLASS_BY_PROVIDER: Mapping[str, type[UniversalProviderAdapter]] = {
-    "claude": ClaudeCodeHarnessAdapter,
-    "codex": CodexOpenAIHarnessAdapter,
-    "opencode": OpenCodeHarnessAdapter,
-    "antigravity": AntigravityHarnessAdapter,
-    "cursor": CursorHarnessAdapter,
-}
 
 
 def adapter_snapshot(config: AdapterConfig) -> dict[str, Any]:

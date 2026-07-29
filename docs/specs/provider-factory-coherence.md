@@ -1142,22 +1142,35 @@ cross-provider branching left in `UniversalProviderAdapter`; Cursor needs no
 extraction (its control path lives outside this file). 3673 tests passed,
 16 skipped, zero regressions, at every one of the four extraction commits.
 
-**Not yet done, and the harder-to-assess remainder:** all five provider
-classes still live in the same one file as the shared base
+**The registry/discovery half of the acceptance bar shipped 2026-07-29.**
+Re-read Sol's actual bar before assuming the file-split and the
+extensibility gap were the same task: the bar was never "one file per
+provider" for its own sake, it was "adding a real sixth provider must not
+require editing this shared file." A hardcoded `ADAPTER_CLASS_BY_PROVIDER`
+dict literal fails that regardless of how many files the five classes above
+it live in — every new provider still means a new dict entry there, whether
+that dict sits in a 9500-line file or a 40-line one. That part is now fixed
+independently of the file-split: `register_adapter(provider)` is a class
+decorator populating `ADAPTER_CLASS_BY_PROVIDER` at class-definition time
+(the five real providers now carry `@register_adapter("claude")` etc.
+instead of being listed in a separate dict), and `discover_adapters(paths)`
+imports arbitrary `.py` files so their decorators run. Proven by
+`test_sixth_provider_is_discoverable_without_editing_this_module`: a toy
+adapter class defined in a tmp-path module this file has never imported
+becomes resolvable through the exact same `ADAPTER_CLASS_BY_PROVIDER` the
+five real providers use, with the five real providers' resolution
+unaffected. 80 passed (harness module), zero regressions.
+
+**Not yet done:** all five provider classes still live in one file
 (`universal_agent_harness.py`, ~9500 lines) — the `provider_adapters/`
 package structure Sol's design calls for (one file per provider under
-`server/zerg/qa/provider_adapters/`), the discovery-loader replacing
-`ADAPTER_CLASS_BY_PROVIDER`'s hardcoded map, and the sixth-provider test
-(add a temporary importable toy adapter, assert discovery constructs it and
-existing provider modules need zero edits) are all still open. This matters
-because the behavioral decoupling just shipped (no provider branches in
-shared code) does not by itself deliver Sol's actual acceptance bar: adding
-a real sixth provider today would still require editing this shared file
-(a new class + a new map entry), not just adding new files. Splitting each
-class across a file boundary means resolving every name each class's moved
-code references (imports, module-level helper functions, `EvidencePackage`/
-`HarnessOptions` types) per provider — a distinct, nontrivial task from the
-extraction just done, not a mechanical follow-on.
+`server/zerg/qa/provider_adapters/`) is still open, and is now honestly
+scoped as a pure file-layout task, decoupled from the extensibility
+behavior it was previously bundled with. Splitting each class across a file
+boundary means resolving every name each class's moved code references
+(imports, module-level helper functions, `EvidencePackage`/`HarnessOptions`
+types) per provider — real work, but no longer blocking the sixth-provider
+claim.
 
 Deletes: `executable-provider-capability-contract-epic.md`,
 `provider-release-proof-roadmap.md`.

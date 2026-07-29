@@ -4117,3 +4117,36 @@ def test_universal_smoke_can_select_real_provider_live_token_mode(tmp_path: Path
     assert Path(artifact["maturity_rollup_path"]).is_file()
     assert artifact["maturity_rollup"]["status"] == "pass"
     assert artifact["maturity_rollup"]["universal_harness"]["run_modes"]["token_spending_scenarios"] == ["live_token_streaming"]
+
+
+def test_sixth_provider_is_discoverable_without_editing_this_module(tmp_path: Path) -> None:
+    # docs/specs/provider-factory-coherence.md, Phase 3: Sol's actual
+    # acceptance bar was "adding a real sixth provider must not require
+    # editing universal_agent_harness.py," not "one file per provider" for
+    # its own sake. This is that bar, proven directly: a toy adapter defined
+    # in a module this test file writes to tmp_path -- never imported by
+    # universal_agent_harness.py, never referenced by name anywhere in it --
+    # becomes resolvable through the same ADAPTER_CLASS_BY_PROVIDER the five
+    # real providers use, purely by being passed to discover_adapters().
+    toy_module_path = tmp_path / "toy_sixth_provider_adapter.py"
+    toy_module_path.write_text(
+        "from zerg.qa.universal_agent_harness import UniversalProviderAdapter\n"
+        "from zerg.qa.universal_agent_harness import register_adapter\n"
+        "\n"
+        "\n"
+        '@register_adapter("toy_sixth_provider")\n'
+        "class ToySixthProviderAdapter(UniversalProviderAdapter):\n"
+        '    """A provider this file has never heard of."""\n',
+        encoding="utf-8",
+    )
+
+    assert "toy_sixth_provider" not in uah.ADAPTER_CLASS_BY_PROVIDER
+    try:
+        uah.discover_adapters([toy_module_path])
+        assert uah.ADAPTER_CLASS_BY_PROVIDER["toy_sixth_provider"].__name__ == "ToySixthProviderAdapter"
+        assert issubclass(uah.ADAPTER_CLASS_BY_PROVIDER["toy_sixth_provider"], uah.UniversalProviderAdapter)
+        # The five real providers are unaffected by having just registered a sixth.
+        for provider, class_name in EXPECTED_ADAPTER_CLASS_BY_PROVIDER.items():
+            assert uah.ADAPTER_CLASS_BY_PROVIDER[provider].__name__ == class_name
+    finally:
+        del uah.ADAPTER_CLASS_BY_PROVIDER["toy_sixth_provider"]
