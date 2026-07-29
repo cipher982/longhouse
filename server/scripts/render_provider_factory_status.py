@@ -46,7 +46,7 @@ _DIAGONAL = (Trigger.RELEASE_POLL, BuildProvenance.STAGED_RELEASE)
 def _cell_detail(cell) -> str:
     if cell.status == "never_run":
         return f"never runs — {cell.reason}"
-    if cell.scenario_ids and cell.harness_scenarios:
+    if cell.qualification_profiles and cell.scenario_ids and cell.harness_scenarios:
         return (
             f"runs — {len(cell.scenario_ids)} qualification scenarios + "
             f"{len(cell.harness_scenarios)} harness scenarios"

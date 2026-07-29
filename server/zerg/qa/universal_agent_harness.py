@@ -6249,6 +6249,14 @@ def run_harness(options: HarnessOptions) -> dict[str, Any]:
     registry = adapter_registry(provider_bins)
     results: list[ScenarioResult] = []
     for provider in options.providers:
+        # A complete column is self-contained: baseline_compare emits the two
+        # provider-release-proof artifacts that the later old/new scenario
+        # consumes. Explicit caller-supplied paths still win. This keeps the
+        # standalone old/new scenario fail-closed while letting the ordered
+        # DEFAULT_HARNESS_SCENARIOS column exercise the real diff tool without
+        # a second orchestration layer manufacturing duplicate artifacts.
+        derived_old_proof_path: Path | None = None
+        derived_new_proof_path: Path | None = None
         declared_binary = provider_bins.get(provider)
         if declared_binary is None or not declared_binary.expanduser().is_file():
             package = EvidencePackage(
@@ -6335,18 +6343,24 @@ def run_harness(options: HarnessOptions) -> dict[str, Any]:
                 provider_paths=options.new_proof_paths,
                 fallback_path=options.new_proof_path,
             )
-            results.append(
-                run_scenario(
-                    adapter,
-                    scenario,
-                    evidence_root=options.evidence_root,
-                    fixture_path=options.fixture_path,
-                    prompt=options.prompt,
-                    old_proof_path=old_proof_path,
-                    new_proof_path=new_proof_path,
-                    baseline_root=options.baseline_root,
-                )
+            result = run_scenario(
+                adapter,
+                scenario,
+                evidence_root=options.evidence_root,
+                fixture_path=options.fixture_path,
+                prompt=options.prompt,
+                old_proof_path=old_proof_path or derived_old_proof_path,
+                new_proof_path=new_proof_path or derived_new_proof_path,
+                baseline_root=options.baseline_root,
             )
+            results.append(result)
+            if scenario == "baseline_compare" and result.status == STATUS_PASS:
+                data = result.data if isinstance(result.data, Mapping) else {}
+                baseline_path = data.get("baseline_proof_path")
+                candidate_path = data.get("candidate_proof_path")
+                if isinstance(baseline_path, str) and isinstance(candidate_path, str):
+                    derived_old_proof_path = Path(baseline_path)
+                    derived_new_proof_path = Path(candidate_path)
 
     if options.provider_builds is not None:
         # Catches a build closure mutated by a scenario mid-run (a scenario
