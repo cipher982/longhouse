@@ -24,7 +24,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -66,6 +68,21 @@ _EXPECTED_CODEX_FULL_COLUMN_LIMITS: dict[str, tuple[str, str | None]] = {
         "codex_managed_bridge_credentials_missing",
     ),
 }
+
+
+@contextmanager
+def _managed_package_root(build_ref: ProviderBuildRef):
+    """Bind strict Codex identity checks to the materialized build under test."""
+    name = codex_tool_call_result.MANAGED_PACKAGE_ROOT_ENV
+    previous = os.environ.get(name)
+    os.environ[name] = str(build_ref.build_root)
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop(name, None)
+        else:
+            os.environ[name] = previous
 
 
 def _build_provider_build_ref(request: dict[str, Any], provider_bin: Path, *, output_root: Path) -> ProviderBuildRef:
@@ -239,15 +256,16 @@ def run_codex_tool_call_result(request_path: Path, output_root: Path) -> dict[st
             evidence_class=EvidenceClass.LIVE_NO_TOKEN,
         )
 
-    harness_payload = run_harness(
-        HarnessOptions(
-            providers=("codex",),
-            scenarios=(*DEFAULT_HARNESS_SCENARIOS, "codex_tool_call_result_strict"),
-            evidence_root=output_root / "harness-evidence",
-            provider_bins={"codex": provider_bin},
-            provider_builds={"codex": build_ref},
+    with _managed_package_root(build_ref):
+        harness_payload = run_harness(
+            HarnessOptions(
+                providers=("codex",),
+                scenarios=(*DEFAULT_HARNESS_SCENARIOS, "codex_tool_call_result_strict"),
+                evidence_root=output_root / "harness-evidence",
+                provider_bins={"codex": provider_bin},
+                provider_builds={"codex": build_ref},
+            )
         )
-    )
     probe_result = _scenario_result(harness_payload, provider="codex", scenario="probe_identity")
     strict_result = _scenario_result(harness_payload, provider="codex", scenario="codex_tool_call_result_strict")
     full_column_gate = _full_column_gate(harness_payload)
@@ -318,15 +336,16 @@ def run_codex_helm_interrupt(request_path: Path, output_root: Path) -> dict[str,
             observation={"provider_bin": str(provider_bin), "blocked_reason": str(exc)},
         )
 
-    harness_payload = run_harness(
-        HarnessOptions(
-            providers=("codex",),
-            scenarios=("probe_identity", "interrupt_cancel"),
-            evidence_root=output_root / "harness-evidence",
-            provider_bins={"codex": provider_bin},
-            provider_builds={"codex": build_ref},
+    with _managed_package_root(build_ref):
+        harness_payload = run_harness(
+            HarnessOptions(
+                providers=("codex",),
+                scenarios=("probe_identity", "interrupt_cancel"),
+                evidence_root=output_root / "harness-evidence",
+                provider_bins={"codex": provider_bin},
+                provider_builds={"codex": build_ref},
+            )
         )
-    )
     probe_result = _scenario_result(harness_payload, provider="codex", scenario="probe_identity")
     interrupt_result = _scenario_result(harness_payload, provider="codex", scenario="interrupt_cancel")
 

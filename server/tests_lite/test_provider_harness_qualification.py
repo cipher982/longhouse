@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -414,9 +415,12 @@ def test_helm_interrupt_uses_probe_and_interrupt_scenarios(tmp_path: Path, monke
     )
 
     captured_options: list[uah.HarnessOptions] = []
+    captured_package_roots: list[str | None] = []
+    monkeypatch.setenv(codex_helm_interrupt.PACKAGE_ROOT_ENV, "original-package-root")
 
     def fake_run_harness(options: uah.HarnessOptions):
         captured_options.append(options)
+        captured_package_roots.append(os.environ.get(codex_helm_interrupt.PACKAGE_ROOT_ENV))
         return {
             "results": [
                 {
@@ -447,6 +451,10 @@ def test_helm_interrupt_uses_probe_and_interrupt_scenarios(tmp_path: Path, monke
 
     assert captured_options[0].scenarios == ("probe_identity", "interrupt_cancel")
     assert captured_options[0].providers == ("codex",)
+    assert captured_package_roots == [
+        str(captured_options[0].provider_builds["codex"].build_root)
+    ]
+    assert os.environ[codex_helm_interrupt.PACKAGE_ROOT_ENV] == "original-package-root"
     bundle = json.loads(Path(result["proof_bundle"]).read_text(encoding="utf-8"))
     assert bundle["coverage_manifest"]["outcomes"] == {
         "active_managed_turn_observed": "pass",
