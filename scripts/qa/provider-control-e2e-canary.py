@@ -1315,7 +1315,12 @@ def _event_part(event: dict[str, Any]) -> dict[str, Any]:
 
 
 def _opencode_real_tool_env() -> dict[str, str]:
-    return _provider_real_run_env()
+    return _provider_real_run_env(extra_keys=("OPENROUTER_API_KEY",))
+
+
+def _opencode_qualification_model() -> str:
+    default = "openrouter/~openai/gpt-mini-latest"
+    return os.environ.get("LONGHOUSE_OPENCODE_QUALIFICATION_MODEL", "").strip() or default
 
 
 def _event_session_id(event: dict[str, Any]) -> str:
@@ -1405,6 +1410,8 @@ def run_opencode_real_print_canary(args: argparse.Namespace, root: Path) -> dict
     command = [
         binary,
         "run",
+        "--model",
+        _opencode_qualification_model(),
         "--format",
         "json",
         "--pure",
@@ -1536,6 +1543,8 @@ def run_opencode_real_tool_canary(args: argparse.Namespace, root: Path) -> dict[
     command = [
         binary,
         "run",
+        "--model",
+        _opencode_qualification_model(),
         "--format",
         "json",
         "--pure",

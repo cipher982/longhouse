@@ -250,7 +250,7 @@ uv run --directory server python scripts/render_provider_factory_status.py
 | claude | push | generated_fake | runs — 4 scenarios |
 | claude | weekly_cron | generated_fake | runs — 22 scenarios |
 | claude | manual | observed_install | never runs — remaining capability-proof scenario_ids for claude are orphaned: ['claude_coordination_awareness_create', 'claude_coordination_awareness_post_compaction', 'claude_coordination_directed_input'] |
-| opencode | release_poll | staged_release | runs — 1 scenario |
+| opencode | release_poll | staged_release | runs — 1 qualification scenario + 22 harness scenarios |
 | opencode | push | generated_fake | runs — 4 scenarios |
 | opencode | weekly_cron | generated_fake | runs — 22 scenarios |
 | opencode | manual | observed_install | never runs — every capability-proof assertion declared for opencode is already satisfiable by an automated trigger |
@@ -271,7 +271,7 @@ set) — one row per provider, held by
 |---|---|
 | codex | runs — 22 scenarios |
 | claude | runs — 22 scenarios |
-| opencode | never runs — release lane does not execute the full universal scenario set |
+| opencode | runs — 22 scenarios |
 | antigravity | never runs — release lane does not execute the full universal scenario set |
 | cursor | never runs — release lane does not execute the full universal scenario set |
 

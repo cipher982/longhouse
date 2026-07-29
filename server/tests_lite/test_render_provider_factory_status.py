@@ -15,10 +15,10 @@ def test_status_table_has_one_row_per_provider_per_wired_combination() -> None:
 
 def test_harness_backed_profiles_fill_the_staged_release_diagonal() -> None:
     diagonal = render_diagonal_status(load_facts())
-    for provider in {"codex", "claude"}:
+    for provider in {"codex", "claude", "opencode"}:
         line = next(line for line in diagonal.splitlines() if line.startswith(f"| {provider} |"))
         assert "runs — 22 scenarios" in line
-    for provider in set(ALL_PROVIDERS) - {"codex", "claude"}:
+    for provider in set(ALL_PROVIDERS) - {"codex", "claude", "opencode"}:
         line = next(line for line in diagonal.splitlines() if line.startswith(f"| {provider} |"))
         assert "never runs" in line
 

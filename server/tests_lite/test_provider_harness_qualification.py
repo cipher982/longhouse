@@ -13,6 +13,7 @@ from zerg.qa import claude_real_print_qualification
 from zerg.qa import codex_helm_interrupt
 from zerg.qa import codex_release_identity
 from zerg.qa import codex_tool_call_result
+from zerg.qa import opencode_server_qualification
 from zerg.qa import provider_harness_qualification as bridge
 from zerg.qa import provider_release_identity
 from zerg.qa.provider_factory_model import DEFAULT_HARNESS_SCENARIOS
@@ -80,6 +81,24 @@ def _claude_single_asset(tmp_path: Path) -> tuple[Path, Path, str]:
         "import sys\n"
         'if sys.argv[1:] == ["--version"]:\n'
         '    print("2.1.220 (Claude Code)")\n'
+        "    raise SystemExit(0)\n"
+        "raise SystemExit(2)\n",
+        encoding="utf-8",
+    )
+    binary.chmod(0o700)
+    identity = f"sha256:{hashlib.sha256(binary.read_bytes()).hexdigest()}"
+    return root, binary, identity
+
+
+def _opencode_single_asset(tmp_path: Path) -> tuple[Path, Path, str]:
+    root = tmp_path / "opencode-closure"
+    root.mkdir()
+    binary = root / "provider"
+    binary.write_text(
+        f"#!{sys.executable}\n"
+        "import sys\n"
+        'if sys.argv[1:] == ["--version"]:\n'
+        '    print("1.17.20")\n'
         "    raise SystemExit(0)\n"
         "raise SystemExit(2)\n",
         encoding="utf-8",
@@ -175,6 +194,66 @@ def _passing_claude_full_column_payload() -> dict:
     }
 
 
+def _passing_opencode_full_column_payload(evidence_root: Path) -> dict:
+    results = []
+    for scenario in DEFAULT_HARNESS_SCENARIOS:
+        status, failure_code = bridge._EXPECTED_OPENCODE_FULL_COLUMN_LIMITS.get(  # noqa: SLF001
+            scenario, ("pass", None)
+        )
+        row: dict[str, object] = {
+            "provider": "opencode",
+            "scenario": scenario,
+            "status": status,
+        }
+        if failure_code is not None:
+            row["failure_code"] = failure_code
+        results.append(row)
+
+    live_path = evidence_root / "opencode" / "managed_session_e2e" / "raw" / "provider-live-canary.json"
+    live_path.parent.mkdir(parents=True, exist_ok=True)
+    live_path.write_text(
+        json.dumps(
+            {
+                "canaries": {
+                    name: {"status": "pass"}
+                    for name in {
+                        *opencode_server_qualification._SERVE_REQUIRED_CANARIES,  # noqa: SLF001
+                        *opencode_server_qualification._RESTART_REQUIRED_CANARIES,  # noqa: SLF001
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    managed = next(row for row in results if row["scenario"] == "managed_session_e2e")
+    managed["data"] = {"provider_live_artifact_path": str(live_path)}
+    results.extend(
+        [
+            {"provider": "opencode", "scenario": "tool_call_result", "status": "pass"},
+            {
+                "provider": "opencode",
+                "scenario": LIVE_TOKEN_HARNESS_SCENARIO,
+                "status": "pass",
+            },
+        ]
+    )
+    return {
+        "results": results,
+        "provider_execution_coverage_matrix_path": "/evidence/provider-execution-coverage-matrix.json",
+        "provider_execution_coverage_matrix": {
+            "provider_coverage_gap_kind_counts": {
+                "opencode": {
+                    "passed": 30,
+                    "no_token_safety_gate": 1,
+                    "not_applicable": 1,
+                    "provider_contract_unsupported": 1,
+                }
+            },
+            "missing_provider_actions": [],
+        },
+    }
+
+
 def test_full_column_gate_accepts_only_the_complete_known_codex_surface() -> None:
     gate = bridge._full_column_gate(_passing_full_column_payload())  # noqa: SLF001
 
@@ -223,6 +302,23 @@ def test_claude_full_column_gate_accepts_explicit_no_token_limits() -> None:
     assert gate["expected_limits"]["full_action_suite"] == {
         "status": "blocked",
         "failure_code": "full_action_suite_has_explicit_gaps",
+    }
+
+
+def test_opencode_full_column_gate_accepts_measured_contract_limits(tmp_path: Path) -> None:
+    gate = bridge._full_column_gate(  # noqa: SLF001
+        _passing_opencode_full_column_payload(tmp_path),
+        provider="opencode",
+    )
+
+    assert gate["status"] == "pass"
+    assert gate["provider"] == "opencode"
+    assert gate["expected_scenario_count"] == 22
+    assert gate["coverage_gap_kind_counts"] == {
+        "passed": 30,
+        "no_token_safety_gate": 1,
+        "not_applicable": 1,
+        "provider_contract_unsupported": 1,
     }
 
 
@@ -293,6 +389,83 @@ def test_claude_full_column_regression_fails_both_profile_assertions_closed(
     outcomes = bundle["coverage_manifest"]["outcomes"]
     assert outcomes["claude_cli_channel_contract_preserved"] == "infrastructure_error"
     assert outcomes["real_print_marker_returned"] == "infrastructure_error"
+    assert bundle["execution_metadata"]["semantic_status"] == "infrastructure_error"
+
+
+def test_opencode_profile_runs_one_full_column_with_server_tool_and_live_proof(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    root, binary, identity = _opencode_single_asset(tmp_path)
+    request = _request(
+        tmp_path,
+        profile=opencode_server_qualification.PROFILE,
+        binary=binary,
+        identity=identity,
+        build_identity=f"sha256:{_closure_digest(root, granularity='single_asset')}",
+        provider="opencode",
+        version="1.17.20",
+        granularity="single_asset",
+    )
+    captured_options = []
+
+    def fake_run_harness(options):
+        captured_options.append(options)
+        return _passing_opencode_full_column_payload(options.evidence_root)
+
+    monkeypatch.setattr(bridge, "run_harness", fake_run_harness)
+
+    result = bridge.run(request, tmp_path / "output")
+
+    assert len(captured_options) == 1
+    options = captured_options[0]
+    assert options.providers == ("opencode",)
+    assert options.scenarios == (
+        *DEFAULT_HARNESS_SCENARIOS,
+        "tool_call_result",
+        LIVE_TOKEN_HARNESS_SCENARIO,
+    )
+    assert options.provider_bins == {"opencode": binary}
+    assert options.provider_builds["opencode"].closure_granularity == "single_asset"
+    bundle = json.loads(Path(result["proof_bundle"]).read_text(encoding="utf-8"))
+    outcomes = bundle["coverage_manifest"]["outcomes"]
+    assert outcomes["serve_session_contract_preserved"] == "pass"
+    assert outcomes["process_restart_reattach_preserved"] == "pass"
+    assert bundle["execution_metadata"]["semantic_status"] == "pass"
+
+
+@pytest.mark.parametrize("regressed_scenario", ["timeline_projection", "tool_call_result", LIVE_TOKEN_HARNESS_SCENARIO])
+def test_opencode_release_gate_regression_fails_profile_assertions_closed(
+    tmp_path: Path,
+    monkeypatch,
+    regressed_scenario: str,
+) -> None:
+    root, binary, identity = _opencode_single_asset(tmp_path)
+    request = _request(
+        tmp_path,
+        profile=opencode_server_qualification.PROFILE,
+        binary=binary,
+        identity=identity,
+        build_identity=f"sha256:{_closure_digest(root, granularity='single_asset')}",
+        provider="opencode",
+        version="1.17.20",
+        granularity="single_asset",
+    )
+
+    def fake_run_harness(options):
+        payload = _passing_opencode_full_column_payload(options.evidence_root)
+        row = next(item for item in payload["results"] if item["scenario"] == regressed_scenario)
+        row.update(status="fail", failure_code="release_gate_regressed")
+        return payload
+
+    monkeypatch.setattr(bridge, "run_harness", fake_run_harness)
+
+    result = bridge.run(request, tmp_path / "output")
+
+    bundle = json.loads(Path(result["proof_bundle"]).read_text(encoding="utf-8"))
+    outcomes = bundle["coverage_manifest"]["outcomes"]
+    assert outcomes["serve_session_contract_preserved"] == "infrastructure_error"
+    assert outcomes["process_restart_reattach_preserved"] == "infrastructure_error"
     assert bundle["execution_metadata"]["semantic_status"] == "infrastructure_error"
 
 

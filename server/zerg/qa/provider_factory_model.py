@@ -122,6 +122,7 @@ FULL_COLUMN_RELEASE_PROFILES = frozenset(
     {
         "codex_tool_call_result_v1",
         "claude_real_print_v1",
+        "opencode_server_contract_v1",
     }
 )
 
@@ -218,15 +219,14 @@ KNOWN_PRODUCIBLE_EVIDENCE_BY_ASSERTION: dict[str, tuple[str, ...]] = {
     "coordination_instructions_model_visible_after_compaction": (),  # hardcoded False by the hermetic producer; needs live_token
 }
 
-# Credentials each release-lane profile's v2 bridge is allowed to receive
-# (control-plane/provider_factory/core.py's allowed_qualification_environment).
-# Only codex is known precisely today; the other three profiles' credential
-# handling lives inside their own oracle modules rather than a control-plane
-# allowlist, and is not restated here.
+# Credentials each release-lane profile's v2 bridge requires in the deployed
+# factory. Optional provider-specific overrides are deliberately omitted.
 CREDENTIAL_REQUIREMENT_BY_PROFILE: dict[str, tuple[str, ...]] = {
     "codex_tool_call_result_v1": ("CODEX_API_KEY",),
     "codex_release_identity_v1": ("CODEX_API_KEY",),
     "codex_helm_interrupt_v1": ("CODEX_AGENTS_TOKEN", "CODEX_API_KEY", "CODEX_API_URL", "LONGHOUSE_ENGINE_BIN"),
+    "claude_real_print_v1": ("ANTHROPIC_API_KEY", "LONGHOUSE_CLAUDE_QUALIFICATION_LIVE", "LONGHOUSE_ENGINE_BIN"),
+    "opencode_server_contract_v1": ("OPENROUTER_API_KEY",),
 }
 
 

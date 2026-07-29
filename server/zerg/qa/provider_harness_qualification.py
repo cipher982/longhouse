@@ -16,7 +16,9 @@ Each admitted profile names its provider, strict scenario, assertion mapping,
 and expected full-column limits. Codex profiles use their existing proof-bundle
 finalizers. Claude uses the existing semantic-profile finalizer around one
 harness execution, so the full column and real-print assertion share the same
-provider call instead of paying for a duplicate legacy canary.
+provider call instead of paying for a duplicate legacy canary. OpenCode uses
+that same envelope around its no-token server contract, real-tool projection,
+and live-token behavior.
 """
 
 from __future__ import annotations
@@ -33,6 +35,7 @@ from zerg.qa import claude_real_print_qualification
 from zerg.qa import codex_helm_interrupt
 from zerg.qa import codex_release_identity as identity_bridge
 from zerg.qa import codex_tool_call_result
+from zerg.qa import opencode_server_qualification
 from zerg.qa import provider_release_identity
 from zerg.qa import provider_release_semantic_oracles as semantic_oracles
 from zerg.qa import provider_semantic_qualification as semantic
@@ -81,14 +84,30 @@ _EXPECTED_CLAUDE_FULL_COLUMN_LIMITS: dict[str, tuple[str, str | None]] = {
     "send_receive": ("unsupported_gap", "send_receive_not_safe_no_token"),
 }
 
+_EXPECTED_OPENCODE_FULL_COLUMN_LIMITS: dict[str, tuple[str, str | None]] = {
+    "action_matrix": ("blocked", None),
+    "control_surface": ("blocked", None),
+    "full_action_suite": ("blocked", "full_action_suite_has_explicit_gaps"),
+    "run_prompt_once": ("unsupported_gap", "run_prompt_once_not_safe_no_token"),
+}
+
 _FULL_COLUMN_LIMITS = {
     "codex": _EXPECTED_CODEX_FULL_COLUMN_LIMITS,
     "claude": _EXPECTED_CLAUDE_FULL_COLUMN_LIMITS,
+    "opencode": _EXPECTED_OPENCODE_FULL_COLUMN_LIMITS,
 }
 
 _FULL_COLUMN_ALLOWED_GAP_KINDS = {
     "codex": frozenset({"passed", "provider_contract_unsupported"}),
     "claude": frozenset({"passed", "no_token_safety_gate"}),
+    "opencode": frozenset(
+        {
+            "passed",
+            "no_token_safety_gate",
+            "not_applicable",
+            "provider_contract_unsupported",
+        }
+    ),
 }
 
 
@@ -110,8 +129,8 @@ def _managed_package_root(build_ref: ProviderBuildRef):
 def _build_provider_build_ref(request: dict[str, Any], provider_bin: Path, *, output_root: Path) -> ProviderBuildRef:
     """Derive, validate, and materialize the staged build's ProviderBuildRef.
 
-    Codex's profiles stage the documented full package at `bin/codex`; Claude's
-    binary factory stages one exact executable. Both roots and entrypoints are
+    Codex's profiles stage the documented full package at `bin/codex`; Claude
+    and OpenCode stage one exact executable. Both roots and entrypoints are
     derived from `provider_bin`, then checked against the request's closure
     digest instead of trusting caller-supplied paths.
 
@@ -125,11 +144,11 @@ def _build_provider_build_ref(request: dict[str, Any], provider_bin: Path, *, ou
         source_root = provider_bin.parent.parent
         entrypoint_relative = "bin/codex"
         codex_helm_interrupt._package_identity(str(source_root), provider_bin)  # noqa: SLF001
-    elif provider == "claude" and granularity == "single_asset":
+    elif provider in {"claude", "opencode"} and granularity == "single_asset":
         source_root = provider_bin.parent
         entrypoint_relative = provider_bin.name
         if tuple(path.name for path in source_root.iterdir()) != (provider_bin.name,):
-            raise RequestError("Claude single-asset staged build must contain exactly its provider entrypoint")
+            raise RequestError(f"{provider} single-asset staged build must contain exactly its provider entrypoint")
     else:
         raise RequestError(f"unsupported staged build shape for harness qualification: provider={provider!r}, granularity={granularity!r}")
     store_root = output_root / "provider-build-store"
@@ -543,6 +562,126 @@ def run_claude_real_print(request_path: Path, output_root: Path) -> dict[str, An
     )
 
 
+def _opencode_server_canaries(managed_result: dict[str, Any], *, evidence_root: Path) -> dict[str, Any]:
+    artifact_value = (managed_result.get("data") or {}).get("provider_live_artifact_path")
+    if not isinstance(artifact_value, str) or not artifact_value.strip():
+        raise RequestError("OpenCode managed_session_e2e did not report its provider-live artifact")
+    artifact_path = Path(artifact_value).expanduser().resolve(strict=True)
+    allowed_root = (evidence_root / "harness-evidence").resolve(strict=True)
+    if not artifact_path.is_relative_to(allowed_root):
+        raise RequestError("OpenCode provider-live artifact escaped the harness evidence root")
+    try:
+        artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RequestError(f"invalid OpenCode provider-live artifact: {exc}") from exc
+    if not isinstance(artifact, dict) or not isinstance(artifact.get("canaries"), dict):
+        raise RequestError("OpenCode provider-live artifact has no canary mapping")
+    return dict(artifact["canaries"])
+
+
+def _opencode_full_column_executor(
+    binary: Path,
+    evidence_root: Path,
+    *,
+    request: dict[str, Any],
+) -> tuple[dict[str, Any], tuple[semantic.SemanticAssertion, ...], tuple[str, ...]]:
+    build_ref = _build_provider_build_ref(request, binary, output_root=evidence_root)
+    harness_payload = run_harness(
+        HarnessOptions(
+            providers=("opencode",),
+            scenarios=(
+                *DEFAULT_HARNESS_SCENARIOS,
+                "tool_call_result",
+                LIVE_TOKEN_HARNESS_SCENARIO,
+            ),
+            evidence_root=evidence_root / "harness-evidence",
+            provider_bins={"opencode": binary},
+            provider_builds={"opencode": build_ref},
+        )
+    )
+    managed_result = _scenario_result(
+        harness_payload,
+        provider="opencode",
+        scenario="managed_session_e2e",
+    )
+    tool_result = _scenario_result(
+        harness_payload,
+        provider="opencode",
+        scenario="tool_call_result",
+    )
+    live_result = _scenario_result(
+        harness_payload,
+        provider="opencode",
+        scenario=LIVE_TOKEN_HARNESS_SCENARIO,
+    )
+    full_column_gate = _full_column_gate(harness_payload, provider="opencode")
+    canaries = _opencode_server_canaries(managed_result, evidence_root=evidence_root)
+    assertions = opencode_server_qualification.opencode_server_contract_oracle(canaries)
+
+    release_gate_failures = {
+        name: result.get("status")
+        for name, result in {
+            "full_column": full_column_gate,
+            "tool_call_result": tool_result,
+            LIVE_TOKEN_HARNESS_SCENARIO: live_result,
+        }.items()
+        if result.get("status") != "pass"
+    }
+    if release_gate_failures:
+        assertions = tuple(
+            semantic.SemanticAssertion(
+                assertion.assertion_id,
+                AssertionOutcome.INFRASTRUCTURE_ERROR,
+                assertion.evidence_class,
+            )
+            for assertion in assertions
+        )
+        status = "infrastructure_error"
+    elif AssertionOutcome.INFRASTRUCTURE_ERROR in {assertion.outcome for assertion in assertions}:
+        status = "infrastructure_error"
+    elif AssertionOutcome.SEMANTIC_FAIL in {assertion.outcome for assertion in assertions}:
+        status = "fail"
+    elif AssertionOutcome.BLOCKED in {assertion.outcome for assertion in assertions}:
+        status = "blocked"
+    else:
+        status = "pass"
+
+    secrets = tuple(value for name in ("OPENROUTER_API_KEY",) if (value := str(os.environ.get(name) or "").strip()))
+    observation = {
+        "status": status,
+        "provider_bin": str(binary),
+        "provider_build": build_ref.to_evidence(),
+        "full_column_gate": full_column_gate,
+        "managed_session_e2e": managed_result,
+        "tool_call_result": tool_result,
+        LIVE_TOKEN_HARNESS_SCENARIO: live_result,
+        "release_gate_failures": release_gate_failures,
+        "provider_execution_coverage_matrix_path": harness_payload.get("provider_execution_coverage_matrix_path"),
+    }
+    return observation, assertions, secrets
+
+
+def run_opencode_server_contract(request_path: Path, output_root: Path) -> dict[str, Any]:
+    request = provider_release_identity.load_request(
+        request_path,
+        provider="opencode",
+        profile=opencode_server_qualification.PROFILE,
+        version_grammar=opencode_server_qualification._PROFILE.version_grammar,  # noqa: SLF001
+    )
+
+    def execute(binary: Path, evidence_root: Path):
+        return _opencode_full_column_executor(binary, evidence_root, request=request)
+
+    return semantic.run_semantic_profile(
+        request_path,
+        output_root,
+        profile=opencode_server_qualification._PROFILE,  # noqa: SLF001
+        assertion_ids=opencode_server_qualification.ASSERTIONS,
+        executor=execute,
+        oracle_source=Path(semantic_oracles.__file__),
+    )
+
+
 # Deliberately only these provider/profile pairs. This is not a fallback for
 # arbitrary release profiles; every admission carries provider-specific proof
 # mapping and fail-closed limits.
@@ -550,6 +689,7 @@ _PROFILES = {
     ("codex", codex_tool_call_result.PROFILE): run_codex_tool_call_result,
     ("codex", codex_helm_interrupt.PROFILE): run_codex_helm_interrupt,
     ("claude", claude_real_print_qualification.PROFILE): run_claude_real_print,
+    ("opencode", opencode_server_qualification.PROFILE): run_opencode_server_contract,
 }
 
 

@@ -96,9 +96,22 @@ def test_claude_release_poll_runs_the_full_staged_column(facts) -> None:
 
     assert cell.qualification_profiles == ("claude_real_print_v1",)
     assert cell.harness_scenarios == facts.default_harness_scenarios
+    assert cell.credential_requirement == (
+        "ANTHROPIC_API_KEY",
+        "LONGHOUSE_CLAUDE_QUALIFICATION_LIVE",
+        "LONGHOUSE_ENGINE_BIN",
+    )
 
 
-@pytest.mark.parametrize("provider", ["opencode", "antigravity"])
+def test_opencode_release_poll_runs_the_full_staged_column(facts) -> None:
+    cell = plan_run(facts, "opencode", "staged_release", "release_poll")
+
+    assert cell.qualification_profiles == ("opencode_server_contract_v1",)
+    assert cell.harness_scenarios == facts.default_harness_scenarios
+    assert cell.credential_requirement == ("OPENROUTER_API_KEY",)
+
+
+@pytest.mark.parametrize("provider", ["antigravity"])
 def test_unbridged_release_profiles_do_not_claim_a_full_column(facts, provider: str) -> None:
     cell = plan_run(facts, provider, "staged_release", "release_poll")
 

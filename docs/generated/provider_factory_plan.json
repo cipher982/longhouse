@@ -461,7 +461,11 @@
         "crash_timeout_cleanup",
         "managed_session_e2e"
       ],
-      "credential_requirement": [],
+      "credential_requirement": [
+        "ANTHROPIC_API_KEY",
+        "LONGHOUSE_CLAUDE_QUALIFICATION_LIVE",
+        "LONGHOUSE_ENGINE_BIN"
+      ],
       "assertion_status": [
         {
           "assertion_id": "claude_cli_channel_contract_preserved",
@@ -1134,8 +1138,33 @@
       "scenario_ids": [
         "opencode_server_contract"
       ],
-      "harness_scenarios": [],
-      "credential_requirement": [],
+      "harness_scenarios": [
+        "probe_identity",
+        "adapter_conformance",
+        "collect_raw_evidence",
+        "action_matrix",
+        "control_surface",
+        "baseline_compare",
+        "old_new_release_diff",
+        "full_action_suite",
+        "parse_ingest_project",
+        "db_ingest_project",
+        "session_projection",
+        "timeline_projection",
+        "run_prompt_once",
+        "launch_managed_session",
+        "send_receive",
+        "pause_request_detect",
+        "tail_output",
+        "runtime_phase",
+        "transcript_binding",
+        "multi_turn_continuity",
+        "crash_timeout_cleanup",
+        "managed_session_e2e"
+      ],
+      "credential_requirement": [
+        "OPENROUTER_API_KEY"
+      ],
       "assertion_status": [
         {
           "assertion_id": "serve_session_contract_preserved",
