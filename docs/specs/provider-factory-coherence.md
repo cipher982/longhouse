@@ -1037,10 +1037,26 @@ rather than manual copy-paste for the larger, more complex bodies (one
 defines a nested HTTP server class). Full suite: 3673 passed, 16 skipped,
 zero regressions, both before and after.
 
-**Not yet done:** Claude and Codex extractions (Codex last — much larger,
-launch-critical, per Sol's sequencing), the `provider_adapters/` package
-structure, the discovery-loader replacing `ADAPTER_CLASS_BY_PROVIDER`, and
-the sixth-provider test (add a temporary importable toy adapter, assert
+**Claude slice shipped 2026-07-28 (longhouse `42dc90949`):**
+`ClaudeCodeHarnessAdapter` now has real overrides for its eight methods
+(`launch_managed_session`, `managed_session_e2e`, `external_event_channel`,
+`permission_prompt`, `interrupt_cancel`, `steer_active_turn`,
+`resume_reattach`, `live_token_streaming`); `_run_claude_provider_live_projection`
+stays a private shared helper (three of the overrides call it). Two real
+mistakes surfaced by running the full suite, not caught by the mechanical
+diff alone: `external_event_channel` was missing from the original
+extraction plan entirely (its only body was the claude branch — removing
+the branch without adding the override silently made claude fall through to
+"unsupported"), and `steer_active_turn`'s body internally called
+`self._run_claude_interrupt_cancel(...)`, a second provider-specific method
+calling a first, not a shared base-class helper — renaming `interrupt_cancel`
+left a dangling `AttributeError` the test suite caught immediately. Full
+suite: 3673 passed, 16 skipped, zero regressions — after fixing both.
+
+**Not yet done:** Codex (last — much larger, launch-critical, per Sol's
+sequencing), the `provider_adapters/` package structure, the
+discovery-loader replacing `ADAPTER_CLASS_BY_PROVIDER`, and the
+sixth-provider test (add a temporary importable toy adapter, assert
 discovery constructs it and existing provider modules need zero edits —
 Sol's design, not yet implemented). The full split is genuinely
 multi-session scope; these are verified increments of it, not the whole
