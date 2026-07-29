@@ -343,12 +343,16 @@ jobs:
         DESTINATION="$(python3 scripts/ci/select_ios_simulator.py ios/XcodeHarness/LonghouseIOS.xcodeproj Longhouse)"
         echo "destination=$DESTINATION" >> "$GITHUB_OUTPUT"
 
+    # Calls the Makefile target rather than naming schemes here. This step used to
+    # run "Longhouse LonghouseChatStress" while `make test-ios` ran
+    # "Longhouse LonghouseSmoke", so local runs were green against a scheme set CI
+    # never executed, and a wall-clock benchmark suite gated every merge from a
+    # shared runner. Benchmarks now live in `make test-ios-perf`.
     - name: Run iOS tests
       run: |
         IOS_DERIVED_DATA_PATH="$RUNNER_TEMP/LonghouseIOSDerivedData" \
         IOS_RESULTS_DIR="$RUNNER_TEMP/ios-test-results" \
-        IOS_TEST_SCHEMES="Longhouse LonghouseChatStress" \
-        ./scripts/ci/run_ios_tests.sh "${{ steps.simulator.outputs.destination }}"
+        make test-ios
 
     - name: Upload iOS test results
       if: failure()
