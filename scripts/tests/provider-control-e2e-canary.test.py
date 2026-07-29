@@ -436,6 +436,8 @@ def test_opencode_real_tool_canary_requires_completed_tool_marker() -> None:
         assert result.returncode == 0, result.stderr + result.stdout
         opencode = payload["canaries"]["opencode"]
         assert opencode["status"] == "pass"
+        directory_index = opencode["argv"].index("--dir")
+        assert opencode["argv"][directory_index + 1] == opencode["workspace"]
         assert opencode["operation_evidence"]["transcript_binding"]["status"] == "pass"
         assert opencode["operation_evidence"]["transcript_binding"]["level"] == "live_token"
         assert opencode["tool_name"] == "bash"

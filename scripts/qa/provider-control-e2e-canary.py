@@ -1410,6 +1410,8 @@ def run_opencode_real_print_canary(args: argparse.Namespace, root: Path) -> dict
     command = [
         binary,
         "run",
+        "--dir",
+        str(workspace),
         "--model",
         _opencode_qualification_model(),
         "--format",
@@ -1543,6 +1545,8 @@ def run_opencode_real_tool_canary(args: argparse.Namespace, root: Path) -> dict[
     command = [
         binary,
         "run",
+        "--dir",
+        str(workspace),
         "--model",
         _opencode_qualification_model(),
         "--format",
