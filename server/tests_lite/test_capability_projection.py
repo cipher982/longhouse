@@ -5,6 +5,7 @@ from datetime import datetime
 
 from zerg.qa.capability_projection import NEVER_PROVEN
 from zerg.qa.capability_projection import STALE
+from zerg.qa.capability_projection import UNACCEPTABLE_EVIDENCE
 from zerg.qa.capability_projection import project_capabilities
 from zerg.qa.provider_factory_model import CapabilityAssertion
 from zerg.services.provider_capability_proof import AssertionOutcome
@@ -12,7 +13,9 @@ from zerg.services.provider_capability_proof import EvidenceClass
 from zerg.services.provider_capability_proof import ProviderCapabilityProofRecord
 
 
-def _assertion(*, provider: str = "codex", assertion_id: str = "interrupt_terminal_cancelled", max_age_seconds: int = 3600) -> CapabilityAssertion:
+def _assertion(
+    *, provider: str = "codex", assertion_id: str = "interrupt_terminal_cancelled", max_age_seconds: int = 3600
+) -> CapabilityAssertion:
     return CapabilityAssertion(
         scenario_id="interrupt_cancel",
         assertion_id=assertion_id,
@@ -95,6 +98,49 @@ def test_records_for_a_different_provider_do_not_leak_across():
     record = _record(provider="claude")
     projections = project_capabilities((_assertion(provider="codex"),), [record])
     assert projections[0].proof_status == NEVER_PROVEN
+
+
+def test_stale_semantic_failure_is_not_masked_as_merely_stale():
+    # Review 2026-07-29 (Fable/Grok, independently): the original join
+    # collapsed staleness and outcome into one field, so an old
+    # semantic_fail rendered as "stale" -- visually upgrading a known break
+    # to "merely old" and losing the one fact that matters most. Staleness
+    # must only demote a passing result.
+    now = datetime(2026, 7, 29, 3, 0, 0, tzinfo=UTC)
+    record = _record(generated_at="2026-07-29T00:00:00+00:00", outcome=AssertionOutcome.SEMANTIC_FAIL)
+    projections = project_capabilities((_assertion(max_age_seconds=3600),), [record], now=now)
+    assert projections[0].proof_status == "semantic_fail"
+
+
+def test_wrong_evidence_class_does_not_count_as_proof():
+    # Review 2026-07-29: acceptable_evidence was attached for display but
+    # never joined into proof_status. A hermetic proof for an assertion
+    # whose schema entry only accepts live_token never counted as real
+    # proof of anything -- it must not render as "pass".
+    assertion = _assertion()
+    assert assertion.acceptable_evidence == ("live_token",)
+    record = _record(evidence_class=EvidenceClass.HERMETIC, outcome=AssertionOutcome.PASS)
+    projections = project_capabilities((assertion,), [record])
+    assert projections[0].proof_status == UNACCEPTABLE_EVIDENCE
+
+
+def test_wrong_evidence_class_applies_even_to_a_failing_outcome():
+    # A hermetic "fail" for a live_token-only assertion is just as
+    # uninformative as a hermetic "pass" -- the evidence class disqualifies
+    # the record before outcome is ever considered.
+    record = _record(evidence_class=EvidenceClass.HERMETIC, outcome=AssertionOutcome.SEMANTIC_FAIL)
+    projections = project_capabilities((_assertion(),), [record])
+    assert projections[0].proof_status == UNACCEPTABLE_EVIDENCE
+
+
+def test_unparseable_timestamp_fails_safe_to_stale_not_eternally_fresh():
+    # Review 2026-07-29: an unparseable generated_at produced age_seconds is
+    # None, which the original join treated as "not stale" -- a proof with a
+    # garbage timestamp rendered as fresh forever. It must fail toward
+    # distrust: unverifiable freshness is stale, not fresh.
+    record = _record(generated_at="not-a-real-timestamp", outcome=AssertionOutcome.PASS)
+    projections = project_capabilities((_assertion(),), [record])
+    assert projections[0].proof_status == STALE
 
 
 def test_every_declared_assertion_produces_exactly_one_row():

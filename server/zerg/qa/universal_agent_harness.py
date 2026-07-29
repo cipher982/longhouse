@@ -3230,6 +3230,21 @@ def register_adapter(provider: str):
     """
 
     def decorator(cls: type[UniversalProviderAdapter]) -> type[UniversalProviderAdapter]:
+        if not (isinstance(cls, type) and issubclass(cls, UniversalProviderAdapter)):
+            raise TypeError(f"@register_adapter({provider!r}) requires a UniversalProviderAdapter subclass, got {cls!r}")
+        existing = ADAPTER_CLASS_BY_PROVIDER.get(provider)
+        # Reviewed 2026-07-29: a duplicate registration used to silently
+        # overwrite whichever class registered first -- invisible today
+        # (all five real providers register exactly once, in this one
+        # file), but this decorator's whole purpose is enabling adapters
+        # defined in modules this file never sees. A stray module shadowing
+        # a real provider's registration must fail loudly, not silently
+        # replace it. Re-registering the exact same class (e.g. a module
+        # imported twice) is harmless and allowed.
+        if existing is not None and existing is not cls:
+            raise ValueError(
+                f"provider {provider!r} is already registered to {existing.__name__}; refusing to silently replace it with {cls.__name__}"
+            )
         ADAPTER_CLASS_BY_PROVIDER[provider] = cls
         return cls
 

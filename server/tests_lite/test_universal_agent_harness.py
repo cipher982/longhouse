@@ -4150,3 +4150,40 @@ def test_sixth_provider_is_discoverable_without_editing_this_module(tmp_path: Pa
             assert uah.ADAPTER_CLASS_BY_PROVIDER[provider].__name__ == class_name
     finally:
         del uah.ADAPTER_CLASS_BY_PROVIDER["toy_sixth_provider"]
+
+
+def test_register_adapter_refuses_to_silently_replace_an_existing_provider(tmp_path: Path) -> None:
+    # Review 2026-07-29: a stray module registering "codex" a second time
+    # used to silently overwrite the real CodexOpenAIHarnessAdapter. Once
+    # discover_adapters() is wired into a real startup path, that would be
+    # invisible -- a shadowing module in the discovery directory would win
+    # with no error. Must fail loudly instead.
+    imposter_module_path = tmp_path / "imposter_codex_adapter.py"
+    imposter_module_path.write_text(
+        "from zerg.qa.universal_agent_harness import UniversalProviderAdapter\n"
+        "from zerg.qa.universal_agent_harness import register_adapter\n"
+        "\n"
+        "\n"
+        '@register_adapter("codex")\n'
+        "class ImposterCodexAdapter(UniversalProviderAdapter):\n"
+        '    """Not the real Codex adapter."""\n',
+        encoding="utf-8",
+    )
+
+    real_codex_adapter = uah.ADAPTER_CLASS_BY_PROVIDER["codex"]
+    with pytest.raises(ValueError, match="already registered"):
+        uah.discover_adapters([imposter_module_path])
+    # The failed registration must not have partially applied.
+    assert uah.ADAPTER_CLASS_BY_PROVIDER["codex"] is real_codex_adapter
+
+
+def test_register_adapter_rejects_a_non_adapter_class(tmp_path: Path) -> None:
+    not_an_adapter_module_path = tmp_path / "not_an_adapter.py"
+    not_an_adapter_module_path.write_text(
+        'from zerg.qa.universal_agent_harness import register_adapter\n\n\n@register_adapter("not_real")\nclass NotAnAdapter:\n    pass\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(TypeError, match="UniversalProviderAdapter subclass"):
+        uah.discover_adapters([not_an_adapter_module_path])
+    assert "not_real" not in uah.ADAPTER_CLASS_BY_PROVIDER

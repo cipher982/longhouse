@@ -90,4 +90,28 @@ describe("ProviderCapabilitiesPage", () => {
     expect(await screen.findByText("Unable to load provider capabilities")).toBeInTheDocument();
     expect(screen.getByText("Admin access required")).toBeInTheDocument();
   });
+
+  it("still fetches when config.singleTenant is false", async () => {
+    // Regression lock (review 2026-07-29, Grok): the page originally copied
+    // ObservabilityPage's `enabled: config.singleTenant` query gate, which
+    // is correct for that page's genuinely single-tenant-only health data
+    // but wrong here -- this data is admin-gated, not tenant-scoped. The
+    // gate silently disabled the query outside single-tenant deployments
+    // (dev-demo included) and surfaced a misleading "Unknown error" instead
+    // of loading. Every other test in this file runs with singleTenant=true
+    // from beforeEach, so none of them would have caught a regression here.
+    config.singleTenant = false;
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve(buildProjection()),
+    });
+
+    renderPage();
+
+    expect(await screen.findByText("Provider capabilities")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getAllByText("coordination_instructions_model_visible")).toHaveLength(2);
+    });
+    expect(screen.queryByText("Unable to load provider capabilities")).not.toBeInTheDocument();
+  });
 });

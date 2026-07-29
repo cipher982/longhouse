@@ -31,6 +31,13 @@ from zerg.services.provider_capability_proof import ProviderCapabilityProofRecor
 # differently from an actual failing proof.
 NEVER_PROVEN = "never_proven"
 STALE = "stale"
+# The proof exists and is fresh, but was produced by an evidence class the
+# assertion's own schema entry does not accept (e.g. a hermetic run against
+# an assertion that only accepts live_token) -- caught by review 2026-07-29:
+# ignoring acceptable_evidence let a proof of the wrong evidence class render
+# as a trusted "pass", exactly the "oracle that lies" failure class this
+# epic exists to prevent.
+UNACCEPTABLE_EVIDENCE = "unacceptable_evidence"
 
 
 @dataclass(frozen=True)
@@ -117,9 +124,29 @@ def project_capabilities(
             )
             continue
         parsed = _parse_timestamp(latest.generated_at)
-        age_seconds = (moment - parsed).total_seconds() if parsed is not None else None
-        is_stale = age_seconds is not None and age_seconds > assertion.max_age_seconds
-        proof_status = STALE if is_stale else latest.outcome.value
+        if parsed is None:
+            # An unparseable timestamp cannot be proven fresh -- treat it as
+            # stale rather than eternally fresh. Failing safe: the freshness
+            # axis exists to catch proofs that have gone silently out of
+            # date, and "we can't tell" must fail toward distrust, not trust.
+            is_stale = True
+        else:
+            age_seconds = (moment - parsed).total_seconds()
+            is_stale = age_seconds > assertion.max_age_seconds
+        if latest.evidence_class.value not in assertion.acceptable_evidence:
+            # Wrong evidence class outranks both outcome and staleness: a
+            # hermetic "pass" for an assertion that only accepts live_token
+            # never counted as proof in the first place, regardless of how
+            # fresh it is or what outcome the producer recorded.
+            proof_status = UNACCEPTABLE_EVIDENCE
+        elif is_stale and latest.outcome.value == "pass":
+            # Staleness only demotes a passing result -- a stale *failure*
+            # stays a failure. Collapsing "semantic_fail, three weeks ago"
+            # into "stale" would visually upgrade a known break to "merely
+            # old," losing the one piece of information that matters most.
+            proof_status = STALE
+        else:
+            proof_status = latest.outcome.value
         projections.append(
             CapabilityProjection(
                 provider=assertion.provider,

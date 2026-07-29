@@ -280,6 +280,12 @@ def test_capability_projection_joins_a_real_proof_and_labels_the_unproven_rest(m
             assertion_id="coordination_instructions_model_visible",
             outcome=AssertionOutcome.PASS,
             generated_at=generated_at,
+            # The schema's real acceptable_evidence for this assertion is
+            # live_token only (schemas/managed_providers.yml) -- the fixture
+            # must use a genuinely valid evidence class now that
+            # project_capabilities() checks it (review 2026-07-29), or this
+            # "proven" row silently becomes unacceptable_evidence instead.
+            evidence_class=EvidenceClass.LIVE_TOKEN,
         )
     )
     client = _client(monkeypatch, tmp_path)
@@ -351,6 +357,27 @@ def test_admin_provider_capabilities_mirrors_the_agents_surface(monkeypatch, tmp
     assert payload["capabilities"]
     assert agents_response.status_code == 200
     assert admin_response.json() == agents_response.json()
+
+
+def test_capability_projection_translates_malformed_schema_to_a_clean_500(monkeypatch, tmp_path: Path) -> None:
+    # Review 2026-07-29: provider_factory_model._load_schema() raises
+    # SystemExit for a malformed schema -- correct for the Makefile-driven
+    # CLI callers it predates, wrong for this endpoint, which is now a live
+    # Runtime Host request path. SystemExit is a BaseException; left
+    # untranslated it can take the worker down instead of returning a 5xx.
+    client = _client(monkeypatch, tmp_path)
+
+    def broken_load_capability_assertions():
+        raise SystemExit("schemas/managed_providers.yml must contain a YAML mapping with a top-level 'providers' list")
+
+    monkeypatch.setattr(routes, "load_capability_assertions", broken_load_capability_assertions)
+    try:
+        response = client.get("/api/agents/provider-capabilities")
+    finally:
+        api_app.dependency_overrides.clear()
+
+    assert response.status_code == 500
+    assert "providers" in response.json()["detail"]
 
 
 def test_capability_projection_requires_agents_auth(monkeypatch, tmp_path: Path) -> None:

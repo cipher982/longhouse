@@ -172,25 +172,25 @@ def test_schema_path_resolution_falls_back_through_multiple_candidates(monkeypat
     # not exist there. The endpoint's first real deploy 500'd on exactly
     # this -- schemas/managed_providers.yml was never copied into the image
     # at all, and _resolve_schema_path()'s local-checkout candidate was the
-    # only one that existed at the time. Proves the fallback logic itself by
-    # calling the real function against a fabricated candidate list, rather
-    # than trusting this dev machine's own filesystem layout to exercise it.
+    # only one that existed at the time.
+    #
+    # Review 2026-07-29 (Grok): the original version of this test
+    # monkeypatched _resolve_schema_path itself with an equivalent lambda,
+    # then asserted the replacement worked -- tautological, it never
+    # executed the real function's loop-and-select logic. Patching the
+    # narrower _schema_path_candidates() instead lets the real
+    # _resolve_schema_path() body actually run against a fabricated list.
     missing_schema = tmp_path / "no-repo-here" / "schemas" / "managed_providers.yml"
     real_schema = tmp_path / "deployed" / "managed_providers.yml"
     real_schema.parent.mkdir(parents=True)
     real_schema.write_text("providers: []\n")
 
-    def fake_candidates():
-        return (missing_schema, real_schema)
-
-    monkeypatch.setattr(provider_factory_model, "_resolve_schema_path", lambda: next(c for c in fake_candidates() if c.is_file()))
+    monkeypatch.setattr(provider_factory_model, "_schema_path_candidates", lambda: (missing_schema, real_schema))
     resolved = provider_factory_model._resolve_schema_path()
     assert resolved == real_schema
 
 
-def test_schema_path_resolution_raises_a_clear_error_when_neither_candidate_exists(
-    monkeypatch, tmp_path: Path
-) -> None:
+def test_schema_path_resolution_raises_a_clear_error_when_neither_candidate_exists(monkeypatch, tmp_path: Path) -> None:
     # ROOT is the only piece of real state _resolve_schema_path() depends
     # on for its local-dev candidate; the second candidate is an absolute
     # path this dev machine genuinely does not have (it only exists inside

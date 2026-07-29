@@ -176,7 +176,21 @@ def build_capability_projection_payload() -> dict[str, Any]:
     all_records: list[ProviderCapabilityProofRecord] = []
     for provider in sorted(managed_provider_names()):
         all_records.extend(store.records(provider))
-    projections = project_capabilities(load_capability_assertions(), all_records)
+    try:
+        assertions = load_capability_assertions()
+    except SystemExit as exc:
+        # provider_factory_model.py's schema loader predates this endpoint
+        # and raises SystemExit -- a BaseException, not caught by normal
+        # exception handling -- for a malformed schema. That is the right
+        # behavior for the Makefile-driven CLI callers it was written for
+        # (abort the script, print the message), and wrong here: this
+        # function now also sits behind a live Runtime Host request path
+        # (review 2026-07-29), where an uncaught SystemExit can take down
+        # the worker instead of returning a 5xx. Translate at this one
+        # narrow boundary rather than changing the shared loader's
+        # CLI-facing contract for every other caller.
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
+    projections = project_capabilities(assertions, all_records)
     return {
         "schema_version": 1,
         "artifact_kind": "provider_capability_projection",

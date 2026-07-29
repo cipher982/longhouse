@@ -60,14 +60,18 @@ def _resolve_schema_path() -> Path:
     candidates instead of relying on that directory-depth coincidence to
     keep meaning "the repo root" in two structurally different layouts.
     """
-    candidates = (
-        ROOT / "schemas" / "managed_providers.yml",  # local dev / CI checkout
-        Path("/schemas/managed_providers.yml"),  # deployed runtime image (docker/runtime.dockerfile)
-    )
+    candidates = _schema_path_candidates()
     for candidate in candidates:
         if candidate.is_file():
             return candidate
     raise FileNotFoundError("schemas/managed_providers.yml not found at any known location: " + ", ".join(str(c) for c in candidates))
+
+
+def _schema_path_candidates() -> tuple[Path, ...]:
+    return (
+        ROOT / "schemas" / "managed_providers.yml",  # local dev / CI checkout
+        Path("/schemas/managed_providers.yml"),  # deployed runtime image (docker/runtime.dockerfile)
+    )
 
 
 class BuildProvenance(StrEnum):
