@@ -1419,6 +1419,72 @@ This closes the concretely-scoped remainder of Phase 5. What's left
 split, the clifford deploy decision) is the genuinely multi-session work
 Sol's review already confirmed is correctly scoped, not under-scoped.
 
+**Independent multi-reviewer pass, 2026-07-29 (longhouse `214372640`) — real
+correctness bugs found in the code this session had already called
+"shipped and tested."** Dispatched three independent Hatch reviewers
+(Fable, Sol, Cursor/Grok) at everything shipped in this stretch, each with
+no visibility into the others' findings. Sol hit Hatch's 30-minute hard
+timeout mid-investigation and its resume path turned out separately broken
+(a provider model-name mismatch); its partial evidence trail did not
+contradict the other two, but its own final report never landed. Fable and
+Grok both completed and **independently converged on the same core defect**
+in `capability_projection.py` — this being the first review this epic has
+actually run against its own newly-shipped serving layer, not a design or
+plan, is exactly the case for running more than one reviewer at once rather
+than trusting a single "no issues" pass.
+
+Three real bugs, all fixed:
+
+1. **`acceptable_evidence` was attached to every row for display but never
+   joined into `proof_status`.** A hermetic proof for an assertion whose
+   schema entry only accepts `live_token` rendered as a trusted `"pass"` —
+   precisely the "oracle that lies" failure class named in this document's
+   own opening section, now reproduced in the thing meant to prevent it.
+   Added `UNACCEPTABLE_EVIDENCE`, checked before outcome or staleness.
+2. **An unparseable `generated_at` rendered a proof fresh forever.**
+   `age_seconds is None` was treated as "not stale." Now fails safe: an
+   unverifiable timestamp is stale, not fresh.
+3. **Staleness silently overwrote a failing outcome.** A `semantic_fail`
+   older than `max_age_seconds` rendered as merely `"stale"`, visually
+   upgrading a known break to "old news." Staleness now only demotes a
+   passing result — a stale failure stays a failure.
+
+One more real bug, orthogonal to the join: `provider_factory_model
+._load_schema()` raises `SystemExit` — a `BaseException` — for a malformed
+schema file, correct for the Makefile-driven CLI scripts it predates, wrong
+now that `load_capability_assertions()` also sits behind two live HTTP
+endpoints. Translated at the one narrow boundary that matters
+(`provider_capability_proofs.py`) into a clean 500, without touching the
+shared loader's contract for its other callers — the same "narrow the
+blast radius" pattern used for the schema-path fix (`ed4bafd07`).
+
+Fable separately caught a real gap in the adapter registry (`ab89e9b6d`):
+`register_adapter()` had no collision guard and accepted non-adapter
+classes — latent today (all five real providers register once, in this one
+file) but exactly the failure mode that matters once `discover_adapters()`
+is wired into a real startup path, where a shadowing module could silently
+replace a real provider's adapter. Now raises loudly on both.
+
+Grok separately caught two test-quality bugs, both fixed: the schema-path
+fallback test monkeypatched `_resolve_schema_path` itself with an
+equivalent lambda, so it never executed the real function's candidate-loop
+(extracted `_schema_path_candidates()` so the real loop now runs against a
+fabricated list); and the UI's `singleTenant`-gate fix had zero regression
+lock — every existing test set `singleTenant = true` in `beforeEach`, so
+none of them would have caught the bug coming back.
+
+Full backend suite: 3697 passed, 16 skipped. Full frontend suite: 545
+passed. Nothing in this pass was a false positive; every finding reported
+by either completed reviewer reproduced against the real code and is now
+fixed and tested.
+
+**Confirmed live against real hosted data, not just tests, the moment this
+deployed (commit_short `21437264`):** `GET /agents/provider-capabilities`
+against `david010` now returns a row with `proof_status: "unacceptable_evidence"`
+that would have silently read `"pass"` before this fix. Finding #1 above
+was not a hypothetical — it was already live, on real production proof
+data, at the moment the review caught it.
+
 ## Definition of done
 
 ### Mechanical
