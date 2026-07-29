@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import os
 from dataclasses import replace
+from datetime import UTC
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -259,3 +261,67 @@ def test_machine_read_is_bounded_and_provider_fair(monkeypatch, tmp_path: Path) 
     assert [record["provider"] for record in payload["records"]] == ["claude", "codex", "claude", "codex"]
     assert payload["total_records"] == 6
     assert payload["truncated"] is True
+
+
+def test_capability_projection_joins_a_real_proof_and_labels_the_unproven_rest(monkeypatch, tmp_path: Path) -> None:
+    # coordination_instructions_model_visible is a real assertion_id from
+    # schemas/managed_providers.yml's codex coordination.awareness.create
+    # capability -- an end-to-end check that the join actually resolves a
+    # real schema entry, not a fixture invented for this test alone. Uses a
+    # live-relative timestamp, not a fixed date: the route calls
+    # project_capabilities() with now=None (real time), so a hardcoded past
+    # date eventually ages past the assertion's real max_age_seconds and the
+    # test starts asserting "stale" instead of "pass".
+    generated_at = datetime.now(UTC).isoformat()
+    store = ProviderCapabilityProofStore(tmp_path / "proofs")
+    monkeypatch.setattr(routes, "_proof_store", lambda: store)
+    store.write(
+        _record(
+            assertion_id="coordination_instructions_model_visible",
+            outcome=AssertionOutcome.PASS,
+            generated_at=generated_at,
+        )
+    )
+    client = _client(monkeypatch, tmp_path)
+    try:
+        response = client.get("/api/agents/provider-capabilities")
+    finally:
+        api_app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["artifact_kind"] == "provider_capability_projection"
+    # assertion_id is not globally unique across providers -- e.g. both codex
+    # and cursor declare "coordination_instructions_model_visible" for their
+    # own coordination.awareness.create capability -- so the join and this
+    # assertion must both key on (provider, assertion_id), not assertion_id
+    # alone.
+    by_key = {(row["provider"], row["assertion_id"]): row for row in payload["capabilities"]}
+    proven = by_key[("codex", "coordination_instructions_model_visible")]
+    assert proven["capability"] == "coordination.awareness.create"
+    assert proven["proof_status"] == "pass"
+    assert proven["generated_at"] == generated_at
+    other_codex_proven = by_key.get(("cursor", "coordination_instructions_model_visible"))
+    if other_codex_proven is not None:
+        assert other_codex_proven["proof_status"] == "never_proven"
+    # Every other declared assertion has no proof in this store at all --
+    # the row must still exist, labeled, not silently dropped.
+    unproven = [row for key, row in by_key.items() if key != ("codex", "coordination_instructions_model_visible")]
+    assert unproven
+    assert all(row["proof_status"] == "never_proven" for row in unproven)
+    assert all(row["generated_at"] is None for row in unproven)
+
+
+def test_capability_projection_requires_agents_auth(monkeypatch, tmp_path: Path) -> None:
+    client = _client(monkeypatch, tmp_path)
+
+    def reject_machine():
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="missing machine token")
+
+    api_app.dependency_overrides[verify_agents_token] = reject_machine
+    try:
+        response = client.get("/api/agents/provider-capabilities")
+    finally:
+        api_app.dependency_overrides.clear()
+
+    assert response.status_code == 401

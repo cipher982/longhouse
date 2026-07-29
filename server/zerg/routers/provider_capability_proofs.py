@@ -15,6 +15,8 @@ from fastapi import status
 from zerg.config import get_settings
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
+from zerg.qa.capability_projection import project_capabilities
+from zerg.qa.provider_factory_model import load_facts
 from zerg.services.managed_provider_contracts import managed_provider_names
 from zerg.services.provider_capability_proof import ProviderCapabilityProofRecord
 from zerg.services.provider_capability_proof import proof_record_from_mapping
@@ -155,4 +157,39 @@ def list_provider_capability_proofs(
         "trusted_artifact_ids": [record.artifact_id for record in records],
         "total_records": total,
         "truncated": total > len(records),
+    }
+
+
+@router.get("/agents/provider-capabilities")
+def list_provider_capabilities(
+    _auth: object = Depends(verify_agents_token),
+    _single: None = Depends(require_single_tenant),
+) -> dict[str, Any]:
+    """Capability projection from the contract, proof status attached
+    separately (docs/specs/provider-factory-coherence.md, Phase 5). Every
+    declared capability assertion for every managed provider gets exactly
+    one row, whether or not it has ever been proven -- the schema is the
+    source of truth for what should exist."""
+    store = _proof_store()
+    all_records: list[ProviderCapabilityProofRecord] = []
+    for provider in sorted(managed_provider_names()):
+        all_records.extend(store.records(provider))
+    facts = load_facts()
+    projections = project_capabilities(facts.capability_assertions, all_records)
+    return {
+        "schema_version": 1,
+        "artifact_kind": "provider_capability_projection",
+        "capabilities": [
+            {
+                "provider": p.provider,
+                "capability": p.capability,
+                "assertion_id": p.assertion_id,
+                "scenario_id": p.scenario_id,
+                "declared": p.declared,
+                "proof_status": p.proof_status,
+                "generated_at": p.generated_at,
+                "evidence_class": p.evidence_class,
+            }
+            for p in projections
+        ],
     }

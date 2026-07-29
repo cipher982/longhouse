@@ -1,0 +1,108 @@
+from __future__ import annotations
+
+from datetime import UTC
+from datetime import datetime
+
+from zerg.qa.capability_projection import NEVER_PROVEN
+from zerg.qa.capability_projection import STALE
+from zerg.qa.capability_projection import project_capabilities
+from zerg.qa.provider_factory_model import CapabilityAssertion
+from zerg.services.provider_capability_proof import AssertionOutcome
+from zerg.services.provider_capability_proof import EvidenceClass
+from zerg.services.provider_capability_proof import ProviderCapabilityProofRecord
+
+
+def _assertion(*, provider: str = "codex", assertion_id: str = "interrupt_terminal_cancelled", max_age_seconds: int = 3600) -> CapabilityAssertion:
+    return CapabilityAssertion(
+        scenario_id="interrupt_cancel",
+        assertion_id=assertion_id,
+        provider=provider,
+        capability="interrupt",
+        oracle_source="codex_helm_interrupt",
+        acceptable_evidence=("live_token",),
+        max_age_seconds=max_age_seconds,
+    )
+
+
+def _record(
+    *,
+    provider: str = "codex",
+    assertion_id: str = "interrupt_terminal_cancelled",
+    outcome: AssertionOutcome = AssertionOutcome.PASS,
+    generated_at: str = "2026-07-29T00:00:00+00:00",
+    evidence_class: EvidenceClass = EvidenceClass.LIVE_TOKEN,
+) -> ProviderCapabilityProofRecord:
+    return ProviderCapabilityProofRecord(
+        provider=provider,
+        provider_version="1.2.3",
+        provider_executable_identity="sha256:" + "a" * 64,
+        provider_contract_digest="sha256:" + "b" * 64,
+        adapter_digest="sha256:" + "c" * 64,
+        scenario_id="interrupt_cancel",
+        scenario_revision=1,
+        oracle_digest="sha256:" + "d" * 64,
+        assertion_id=assertion_id,
+        outcome=outcome,
+        evidence_class=evidence_class,
+        generated_at=generated_at,
+        producer_class="release_factory",
+        producer_version="1",
+        invocation_id="test-invocation",
+    )
+
+
+def test_never_proven_capability_is_labeled_not_omitted():
+    projections = project_capabilities((_assertion(),), [])
+    assert len(projections) == 1
+    assert projections[0].declared is True
+    assert projections[0].proof_status == NEVER_PROVEN
+    assert projections[0].generated_at is None
+
+
+def test_fresh_passing_proof_is_attached():
+    now = datetime(2026, 7, 29, 1, 0, 0, tzinfo=UTC)
+    record = _record(generated_at="2026-07-29T00:30:00+00:00")
+    projections = project_capabilities((_assertion(),), [record], now=now)
+    assert projections[0].proof_status == "pass"
+    assert projections[0].generated_at == "2026-07-29T00:30:00+00:00"
+    assert projections[0].evidence_class == "live_token"
+
+
+def test_proof_older_than_max_age_is_stale_not_silently_pass():
+    now = datetime(2026, 7, 29, 3, 0, 0, tzinfo=UTC)
+    record = _record(generated_at="2026-07-29T00:00:00+00:00")
+    projections = project_capabilities((_assertion(max_age_seconds=3600),), [record], now=now)
+    assert projections[0].proof_status == STALE
+
+
+def test_semantic_failure_is_not_masked_by_freshness():
+    now = datetime(2026, 7, 29, 0, 5, 0, tzinfo=UTC)
+    record = _record(generated_at="2026-07-29T00:00:00+00:00", outcome=AssertionOutcome.SEMANTIC_FAIL)
+    projections = project_capabilities((_assertion(),), [record], now=now)
+    assert projections[0].proof_status == "semantic_fail"
+
+
+def test_multiple_records_for_the_same_assertion_pick_the_freshest():
+    now = datetime(2026, 7, 29, 0, 5, 0, tzinfo=UTC)
+    older_pass = _record(generated_at="2026-07-28T00:00:00+00:00", outcome=AssertionOutcome.PASS)
+    newer_fail = _record(generated_at="2026-07-29T00:00:00+00:00", outcome=AssertionOutcome.SEMANTIC_FAIL)
+    projections = project_capabilities((_assertion(),), [older_pass, newer_fail], now=now)
+    assert projections[0].proof_status == "semantic_fail"
+    assert projections[0].generated_at == "2026-07-29T00:00:00+00:00"
+
+
+def test_records_for_a_different_provider_do_not_leak_across():
+    record = _record(provider="claude")
+    projections = project_capabilities((_assertion(provider="codex"),), [record])
+    assert projections[0].proof_status == NEVER_PROVEN
+
+
+def test_every_declared_assertion_produces_exactly_one_row():
+    assertions = (
+        _assertion(assertion_id="a"),
+        _assertion(assertion_id="b"),
+        _assertion(assertion_id="c"),
+    )
+    projections = project_capabilities(assertions, [_record(assertion_id="b")])
+    assert {p.assertion_id for p in projections} == {"a", "b", "c"}
+    assert len(projections) == 3
