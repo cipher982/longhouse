@@ -25,6 +25,9 @@ from zerg.storage_v2.render_objects import read_render_object
 from zerg.storage_v2.render_objects import seal_render_object
 
 
+DESTRUCTIVE_PROOF_RPC_TIMEOUT_SECONDS = 5.0
+
+
 class _RenderReader:
     def __init__(self, root: Path) -> None:
         self.root = root
@@ -191,9 +194,19 @@ async def test_corrupt_raw_object_is_attributed_without_harming_catalog_or_timel
     params, sealed_raw, _ = _build_storage_commit(object_root, session_id=session_id, text="durable truth", now=now)
     daemon = CatalogDaemon(database_path=root / "live.db", socket_path=root / "catalogd.sock")
     await daemon.start()
-    client = CatalogClient(root / "catalogd.sock")
+    # These are destructive recovery proofs, not the catalog RPC latency
+    # contract. CI repeatedly exhausted the production one-second client
+    # deadline while materializing the first commit late in the full suite,
+    # before the corruption assertions ran at all.
+    client = CatalogClient(
+        root / "catalogd.sock",
+        default_timeout_seconds=DESTRUCTIVE_PROOF_RPC_TIMEOUT_SECONDS,
+    )
     try:
-        await client.call("storage.raw_object.commit.v2", params)
+        # This commit creates the corruption fixture; RPC latency is covered by
+        # the catalog client contract tests. Leave enough room for cold SQLite
+        # and executor startup on shared CI runners.
+        await client.call("storage.raw_object.commit.v2", params, timeout_seconds=5.0)
         object_path = object_root / sealed_raw.object_path
         corrupted = bytearray(object_path.read_bytes())
         corrupted[len(corrupted) // 2] ^= 0xFF
@@ -237,8 +250,14 @@ async def test_corrupt_disposable_search_rebuilds_entirely_from_storage_v2_truth
     search_daemon = SearchDaemon(database_path=search_path, socket_path=root / "searchd.sock")
     await catalog_daemon.start()
     await search_daemon.start()
-    catalog = CatalogClient(root / "catalogd.sock")
-    search = CatalogClient(root / "searchd.sock")
+    catalog = CatalogClient(
+        root / "catalogd.sock",
+        default_timeout_seconds=DESTRUCTIVE_PROOF_RPC_TIMEOUT_SECONDS,
+    )
+    search = CatalogClient(
+        root / "searchd.sock",
+        default_timeout_seconds=DESTRUCTIVE_PROOF_RPC_TIMEOUT_SECONDS,
+    )
     reader = _RenderReader(object_root)
     try:
         await catalog.call("storage.raw_object.commit.v2", params)
@@ -260,7 +279,10 @@ async def test_corrupt_disposable_search_rebuilds_entirely_from_storage_v2_truth
 
         search_daemon = SearchDaemon(database_path=search_path, socket_path=root / "searchd.sock")
         await search_daemon.start()
-        search = CatalogClient(root / "searchd.sock")
+        search = CatalogClient(
+            root / "searchd.sock",
+            default_timeout_seconds=DESTRUCTIVE_PROOF_RPC_TIMEOUT_SECONDS,
+        )
         rebuilt_ping = await search.call("search.ping.v2")
         assert rebuilt_ping["store_id"] != first_store_id
         assert rebuilt_ping["published_sessions"] == 0
@@ -304,7 +326,10 @@ async def test_session_tombstone_fences_retried_and_late_machine_agent_commits(t
     )
     daemon = CatalogDaemon(database_path=root / "live.db", socket_path=root / "catalogd.sock")
     await daemon.start()
-    client = CatalogClient(root / "catalogd.sock")
+    client = CatalogClient(
+        root / "catalogd.sock",
+        default_timeout_seconds=DESTRUCTIVE_PROOF_RPC_TIMEOUT_SECONDS,
+    )
     try:
         await client.call("storage.raw_object.commit.v2", original)
         deleted = await client.call(
