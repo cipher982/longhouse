@@ -1129,11 +1129,20 @@ map/territory gap the epic exists to close.
   have produced N runs today and didn't."
 
 So Phase 4's actual remaining work is only the coverage volume, not the
-signal plan: turn coverage up — real binaries, full columns, every release,
-on cube. Cursor enters as `observed_install` snapshots. The diagonal fills.
-The model is wpt.fyi — many implementations, one shared suite, and the
-public matrix is a projection of the freshest result per cell so nobody
-reads individual runs.
+signal plan: turn coverage up — real binaries, full columns, every release.
+Cursor enters as `observed_install` snapshots. The diagonal fills. The model
+is wpt.fyi — many implementations, one shared suite, and the public matrix
+is a projection of the freshest result per cell so nobody reads individual
+runs.
+
+**Correction (2026-07-29): "on cube" conflicts with standing policy.** This
+section originally named cube as the host for the expanded volume. Verified
+against `~/.claude/CLAUDE.md`: "cube (`/cube-llm`): local Tailscale inference
+only — not batch/automation." Running the factory's real-binary batch
+qualification workload there would violate that. Where the expanded volume
+actually runs (clifford at higher capacity, a new dedicated host, or
+something else) is an infrastructure decision, not a technical unknown —
+flagging it rather than picking a host unilaterally.
 
 Deletes: `provider-build-matrix.md`, `provider-automation-factory-completion.md`.
 
