@@ -185,6 +185,8 @@ pub struct MachineEvidence {
     #[serde(default)]
     pub identities: Vec<EvidenceIdentity>,
     #[serde(default)]
+    pub run: Vec<RunEvidence>,
+    #[serde(default)]
     pub process: Vec<ProcessEvidence>,
     #[serde(default)]
     pub activity: Vec<ActivityEvidence>,
@@ -196,6 +198,25 @@ pub struct MachineEvidence {
     pub process_snapshot_scopes: Vec<ProcessSnapshotScope>,
     #[serde(default)]
     pub readiness: Vec<ReadinessEvidence>,
+}
+
+/// Run-scoped terminal evidence produced only when a provider adapter can
+/// prove that the exact execution-owner process recorded for that run is gone.
+/// A missing heartbeat, lease, socket, or TUI is never enough.
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
+pub struct RunEvidence {
+    pub authority_class: String,
+    pub provider: String,
+    pub session_id: String,
+    pub run_id: String,
+    pub state: String,
+    pub end_reason: String,
+    pub process_role: String,
+    pub pid: u32,
+    pub process_start_time: String,
+    pub boot_id: String,
+    pub source: String,
+    pub observed_at: String,
 }
 
 #[derive(Debug, Serialize, Clone, PartialEq, Eq)]
@@ -352,6 +373,38 @@ pub struct TranscriptEvidence {
     pub source_mtime: Option<String>,
     pub source: String,
     pub observed_at: String,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn exact_process_exit_evidence(
+    provider: &str,
+    session_id: &str,
+    run_id: Option<&str>,
+    process_role: &str,
+    pid: Option<u32>,
+    process_start_time: Option<&str>,
+    boot_id: Option<&str>,
+    alive: bool,
+    source: &str,
+    observed_at: &str,
+) -> Option<RunEvidence> {
+    if alive {
+        return None;
+    }
+    Some(RunEvidence {
+        authority_class: "exact_process_exit".to_string(),
+        provider: provider.to_string(),
+        session_id: session_id.to_string(),
+        run_id: nonempty(run_id)?.to_string(),
+        state: "ended".to_string(),
+        end_reason: "process_gone".to_string(),
+        process_role: process_role.to_string(),
+        pid: pid?,
+        process_start_time: nonempty(process_start_time)?.to_string(),
+        boot_id: nonempty(boot_id)?.to_string(),
+        source: source.to_string(),
+        observed_at: observed_at.to_string(),
+    })
 }
 
 #[derive(Debug, Serialize, Clone, PartialEq, Eq)]
@@ -978,6 +1031,7 @@ pub(crate) fn machine_evidence_from_observations(
 ) -> MachineEvidence {
     let envelope_observed_at = now.to_rfc3339();
     let boot_id = machine_boot_id();
+    let mut run = Vec::new();
     let mut process = Vec::new();
     let mut control = Vec::new();
     let mut transcript = Vec::new();
@@ -996,6 +1050,20 @@ pub(crate) fn machine_evidence_from_observations(
 
     for obs in codex_observations {
         let at = observed_at(&obs.updated_at);
+        if let Some(terminal) = exact_process_exit_evidence(
+            "codex",
+            &obs.session_id,
+            obs.run_id.as_deref(),
+            "app_server",
+            obs.app_server_pid,
+            obs.app_server_process_start_time.as_deref(),
+            boot_id.as_deref(),
+            obs.app_server_alive,
+            "codex_bridge_scan",
+            &envelope_observed_at,
+        ) {
+            run.push(terminal);
+        }
         process.push(ProcessEvidence {
             authority_class: "exact_process_identity".to_string(),
             provider: "codex".to_string(),
@@ -1095,6 +1163,20 @@ pub(crate) fn machine_evidence_from_observations(
 
     for obs in claude_observations {
         let at = observed_at(&obs.updated_at);
+        if let Some(terminal) = exact_process_exit_evidence(
+            "claude",
+            &obs.session_id,
+            obs.run_id.as_deref(),
+            "provider",
+            obs.claude_pid,
+            Some(&obs.started_at),
+            boot_id.as_deref(),
+            obs.claude_alive,
+            "claude_channel_scan",
+            &envelope_observed_at,
+        ) {
+            run.push(terminal);
+        }
         if let Some(pid) = obs.claude_pid {
             process.push(ProcessEvidence {
                 authority_class: "exact_process_identity".to_string(),
@@ -1188,6 +1270,20 @@ pub(crate) fn machine_evidence_from_observations(
 
     for obs in opencode_observations {
         let at = observed_at(&obs.updated_at);
+        if let Some(terminal) = exact_process_exit_evidence(
+            "opencode",
+            &obs.session_id,
+            obs.run_id.as_deref(),
+            "provider",
+            obs.pid,
+            Some(&obs.process_start_time),
+            boot_id.as_deref(),
+            obs.server_alive,
+            "opencode_server_scan",
+            &envelope_observed_at,
+        ) {
+            run.push(terminal);
+        }
         if let Some(pid) = obs.pid {
             process.push(ProcessEvidence {
                 authority_class: "exact_process_identity".to_string(),
@@ -1255,6 +1351,20 @@ pub(crate) fn machine_evidence_from_observations(
 
     for obs in cursor_observations {
         let at = observed_at(&obs.updated_at);
+        if let Some(terminal) = exact_process_exit_evidence(
+            "cursor",
+            &obs.session_id,
+            obs.run_id.as_deref(),
+            "launcher",
+            obs.launcher_pid,
+            obs.launcher_process_start_time.as_deref(),
+            boot_id.as_deref(),
+            obs.launcher_alive,
+            "cursor_helm_scan",
+            &envelope_observed_at,
+        ) {
+            run.push(terminal);
+        }
         for (role, pid, start_time, alive) in [
             (
                 "launcher",
@@ -1424,6 +1534,9 @@ pub(crate) fn machine_evidence_from_observations(
         })
         .collect::<Vec<_>>();
 
+    run.sort_by(|a, b| {
+        (&a.provider, &a.session_id, &a.run_id).cmp(&(&b.provider, &b.session_id, &b.run_id))
+    });
     process.sort_by(|a, b| {
         (&a.provider, &a.session_id, &a.role, a.pid).cmp(&(
             &b.provider,
@@ -1438,6 +1551,7 @@ pub(crate) fn machine_evidence_from_observations(
         (&a.provider, &a.provider_session_id).cmp(&(&b.provider, &b.provider_session_id))
     });
     readiness.sort_by(|a, b| a.session_id.cmp(&b.session_id));
+    run.truncate(MAX_MACHINE_EVIDENCE_FACTS_PER_FAMILY);
     process.truncate(MAX_MACHINE_EVIDENCE_FACTS_PER_FAMILY);
     activity.truncate(MAX_MACHINE_EVIDENCE_FACTS_PER_FAMILY);
     control.truncate(MAX_MACHINE_EVIDENCE_FACTS_PER_FAMILY);
@@ -1446,6 +1560,7 @@ pub(crate) fn machine_evidence_from_observations(
 
     let identities = reducer_evidence_identities(
         machine_id,
+        &run,
         &process,
         &activity,
         &control,
@@ -1457,6 +1572,7 @@ pub(crate) fn machine_evidence_from_observations(
         schema_version: 3,
         observed_at: envelope_observed_at.clone(),
         identities,
+        run,
         process,
         activity,
         control,
@@ -1487,13 +1603,33 @@ pub(crate) fn machine_evidence_from_observations(
 
 fn reducer_evidence_identities(
     machine_id: &str,
+    run: &[RunEvidence],
     process: &[ProcessEvidence],
     activity: &[ActivityEvidence],
     control: &[ControlEvidence],
     transcript: &[TranscriptEvidence],
     readiness: &[ReadinessEvidence],
 ) -> Vec<EvidenceIdentity> {
-    let mut families = [Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new()];
+    let mut families = [
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+    ];
+
+    for (fact_index, fact) in run.iter().enumerate() {
+        families[5].push(evidence_identity(
+            "run",
+            fact_index,
+            format!("run:{}", fact.run_id),
+            &fact.source,
+            Some(fact.run_id.clone()),
+            None,
+            fact,
+        ));
+    }
 
     for (fact_index, fact) in process.iter().enumerate() {
         let (Some(pid), Some(start), Some(boot)) = (
@@ -4558,6 +4694,7 @@ mod tests {
         );
 
         assert_eq!(evidence.schema_version, 3);
+        assert!(evidence.run.is_empty());
         assert!(evidence.identities.iter().any(|identity| {
             identity.fact_family == "activity" && identity.subject_key == "run:run-codex-session"
         }));
@@ -4774,6 +4911,65 @@ mod tests {
     }
 
     #[test]
+    fn exact_process_exit_requires_complete_run_and_process_identity() {
+        let terminal = exact_process_exit_evidence(
+            "claude",
+            "session-1",
+            Some("run-1"),
+            "provider",
+            Some(43123),
+            Some("2026-07-29T20:45:00Z"),
+            Some("boot-cinder"),
+            false,
+            "claude_channel_scan",
+            "2026-07-29T20:50:00Z",
+        )
+        .unwrap();
+        assert_eq!(terminal.run_id, "run-1");
+        assert_eq!(terminal.end_reason, "process_gone");
+
+        assert!(exact_process_exit_evidence(
+            "claude",
+            "session-1",
+            Some("run-1"),
+            "provider",
+            Some(43123),
+            Some("2026-07-29T20:45:00Z"),
+            Some("boot-cinder"),
+            true,
+            "claude_channel_scan",
+            "2026-07-29T20:50:00Z",
+        )
+        .is_none());
+        assert!(exact_process_exit_evidence(
+            "claude",
+            "session-1",
+            None,
+            "provider",
+            Some(43123),
+            Some("2026-07-29T20:45:00Z"),
+            Some("boot-cinder"),
+            false,
+            "claude_channel_scan",
+            "2026-07-29T20:50:00Z",
+        )
+        .is_none());
+        assert!(exact_process_exit_evidence(
+            "claude",
+            "session-1",
+            Some("run-1"),
+            "provider",
+            Some(43123),
+            None,
+            Some("boot-cinder"),
+            false,
+            "claude_channel_scan",
+            "2026-07-29T20:50:00Z",
+        )
+        .is_none());
+    }
+
+    #[test]
     fn antigravity_readiness_without_proofs_is_stable_across_heartbeats() {
         let now = DateTime::parse_from_rfc3339("2026-05-08T12:05:00Z")
             .unwrap()
@@ -4808,8 +5004,10 @@ mod tests {
             parse_utc(Some(&observation.updated_at))
         );
 
-        let first_identity = reducer_evidence_identities("cinder", &[], &[], &[], &[], &[first]);
-        let second_identity = reducer_evidence_identities("cinder", &[], &[], &[], &[], &[second]);
+        let first_identity =
+            reducer_evidence_identities("cinder", &[], &[], &[], &[], &[], &[first]);
+        let second_identity =
+            reducer_evidence_identities("cinder", &[], &[], &[], &[], &[], &[second]);
         assert_eq!(first_identity, second_identity);
         assert_eq!(first_identity.len(), 1);
         assert!(first_identity[0].source_epoch.is_some());

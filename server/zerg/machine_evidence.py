@@ -17,6 +17,7 @@ _MIN_CANONICAL_INTEGER = -(2**63)
 _MAX_CANONICAL_INTEGER = 2**64 - 1
 _CANONICAL_TIMESTAMP_FIELDS = frozenset({"observed_at", "valid_until", "source_mtime", "hook_observed_at", "claimed_at", "response_at"})
 _SUBJECT_PREFIX = {
+    "run": "run:",
     "process": "process:",
     "activity": "run:",
     "control": "connection:",
@@ -24,6 +25,7 @@ _SUBJECT_PREFIX = {
     "readiness": "readiness:",
 }
 _AUTHORITY_CLASS = {
+    "run": "exact_process_exit",
     "process": "exact_process_identity",
     "activity": "provider_runtime",
     "control": "provider_control",
@@ -31,6 +33,12 @@ _AUTHORITY_CLASS = {
     "readiness": "operation_proof",
 }
 _GRANTED_OPERATIONS = frozenset({"send_input", "interrupt", "terminate", "tail_output", "resume"})
+_RUN_EXIT_AUTHORITY = {
+    "codex": ("app_server", "codex_bridge_scan"),
+    "claude": ("provider", "claude_channel_scan"),
+    "opencode": ("provider", "opencode_server_scan"),
+    "cursor": ("launcher", "cursor_helm_scan"),
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -153,6 +161,21 @@ def _validate_v3_authority(family: str, value: dict[str, Any]) -> None:
     expected = _AUTHORITY_CLASS[family]
     if value.get("authority_class") != expected:
         raise ValueError(f"machine evidence {family} authority_class must be {expected}")
+    if family == "run":
+        _required_component(value, "session_id")
+        _required_component(value, "run_id")
+        if value.get("state") != "ended" or value.get("end_reason") != "process_gone":
+            raise ValueError("machine evidence run must be an exact process_gone terminal")
+        provider = _required_component(value, "provider")
+        process_role = _required_component(value, "process_role")
+        source = _required_component(value, "source")
+        if _RUN_EXIT_AUTHORITY.get(provider) != (process_role, source):
+            raise ValueError("machine evidence run source is not the provider execution-owner authority")
+        _required_component(value, "process_start_time", allow_colon=True)
+        _required_component(value, "boot_id", allow_colon=True)
+        if type(value.get("pid")) is not int or value["pid"] <= 0:
+            raise ValueError("machine evidence run requires a positive pid")
+        return
     if family != "control":
         return
     _required_component(value, "run_id")
@@ -164,7 +187,9 @@ def _validate_v3_authority(family: str, value: dict[str, Any]) -> None:
 
 
 def _validate_subject_key(family: str, subject_key: str, value: dict[str, Any]) -> None:
-    if family == "process":
+    if family == "run":
+        expected = f"run:{_required_component(value, 'run_id')}"
+    elif family == "process":
         provider = _required_component(value, "provider")
         boot_id = _required_component(value, "boot_id", allow_colon=True)
         pid = value.get("pid")
@@ -183,7 +208,7 @@ def _validate_subject_key(family: str, subject_key: str, value: dict[str, Any]) 
         ):
             raise ValueError("process reducer identity does not match its fact")
         return
-    if family == "activity":
+    elif family == "activity":
         expected = f"run:{_required_component(value, 'run_id')}"
     elif family == "control":
         expected = f"connection:{_required_component(value, 'connection_id')}:{_required_component(value, 'lease_generation')}"

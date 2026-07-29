@@ -994,6 +994,7 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
     let exit = run_result?;
     if let Err(error) = record_claude_terminal_event(
         &response.session_id,
+        &response.run_id,
         &provider_session_id,
         &machine_name,
         exit,
@@ -1196,6 +1197,7 @@ fn stop_opencode_bridge(session_id: &str, claude_dir: Option<PathBuf>) -> anyhow
 
 fn record_claude_terminal_event(
     session_id: &str,
+    run_id: &str,
     provider_session_id: &str,
     machine_name: &str,
     exit_code: i32,
@@ -1209,12 +1211,13 @@ fn record_claude_terminal_event(
     let event = json!({
         "runtime_key": format!("claude:{provider_session_id}"),
         "session_id": session_id,
+        "run_id": run_id,
         "provider": "claude",
         "device_id": machine_name,
         "source": "claude_channel_wrapper",
         "kind": "terminal_signal",
         "occurred_at": occurred_at,
-        "dedupe_key": format!("claude-terminal:{provider_session_id}:{exit_code}:{occurred_at}"),
+        "dedupe_key": format!("claude-terminal:{session_id}:{run_id}"),
         "payload": {
             "terminal_state": terminal_state,
             "terminal_reason": "provider_exit",
@@ -2449,7 +2452,7 @@ mod tests {
             "LONGHOUSE_HOME",
             Some(temp.path().display().to_string()),
             || {
-                record_claude_terminal_event("session", "provider", "device", 0).unwrap();
+                record_claude_terminal_event("session", "run", "provider", "device", 0).unwrap();
             },
         );
         let event_path = std::fs::read_dir(temp.path().join("agent/runtime-events-outbox"))
@@ -2461,6 +2464,7 @@ mod tests {
         let event: serde_json::Value =
             serde_json::from_slice(&std::fs::read(event_path).unwrap()).unwrap();
         assert_eq!(event["kind"], "terminal_signal");
+        assert_eq!(event["run_id"], "run");
         assert_eq!(event["payload"]["terminal_state"], "session_ended");
     }
 

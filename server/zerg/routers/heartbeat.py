@@ -163,6 +163,21 @@ class ProcessEvidenceIn(UTCBaseModel):
     observed_at: datetime
 
 
+class RunEvidenceIn(UTCBaseModel):
+    authority_class: Literal["exact_process_exit"] | None = None
+    provider: str = Field(..., max_length=64)
+    session_id: str = Field(..., min_length=1, max_length=255)
+    run_id: str = Field(..., min_length=1, max_length=255)
+    state: Literal["ended"]
+    end_reason: Literal["process_gone"]
+    process_role: Literal["provider", "app_server", "launcher"]
+    pid: int = Field(..., ge=1)
+    process_start_time: str = Field(..., min_length=1, max_length=255)
+    boot_id: str = Field(..., min_length=1, max_length=255)
+    source: str = Field(..., min_length=1, max_length=64)
+    observed_at: datetime
+
+
 class ActivityEvidenceIn(UTCBaseModel):
     authority_class: Literal["provider_runtime"] | None = None
     provider: str = Field(..., max_length=64)
@@ -249,7 +264,7 @@ class ReadinessEvidenceIn(UTCBaseModel):
 
 
 class EvidenceIdentityIn(UTCBaseModel):
-    fact_family: Literal["process", "activity", "control", "transcript", "readiness"]
+    fact_family: Literal["run", "process", "activity", "control", "transcript", "readiness"]
     fact_index: int = Field(..., ge=0, le=MAX_MACHINE_EVIDENCE_FACTS_PER_FAMILY - 1)
     subject_key: str = Field(..., min_length=1, max_length=1024)
     source: str = Field(..., min_length=1, max_length=64)
@@ -264,6 +279,7 @@ class MachineEvidenceIn(UTCBaseModel):
     schema_version: Literal[1, 2, 3]
     observed_at: datetime
     identities: list[EvidenceIdentityIn] = Field(default_factory=list, max_length=MAX_REDUCER_EVIDENCE_FACTS)
+    run: list[RunEvidenceIn] = Field(default_factory=list, max_length=MAX_MACHINE_EVIDENCE_FACTS_PER_FAMILY)
     process: list[ProcessEvidenceIn] = Field(default_factory=list, max_length=MAX_MACHINE_EVIDENCE_FACTS_PER_FAMILY)
     activity: list[ActivityEvidenceIn] = Field(default_factory=list, max_length=MAX_MACHINE_EVIDENCE_FACTS_PER_FAMILY)
     control: list[ControlEvidenceIn] = Field(default_factory=list, max_length=MAX_MACHINE_EVIDENCE_FACTS_PER_FAMILY)

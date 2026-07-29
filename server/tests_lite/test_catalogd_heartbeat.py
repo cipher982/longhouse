@@ -174,6 +174,40 @@ def _schema_v3_control_evidence(*, session_id: str, observed_at: datetime, run_i
     }
 
 
+def _schema_v3_run_terminal_evidence(*, session_id: str, run_id: str, observed_at: datetime) -> dict:
+    fact = {
+        "authority_class": "exact_process_exit",
+        "provider": "claude",
+        "session_id": session_id,
+        "run_id": run_id,
+        "state": "ended",
+        "end_reason": "process_gone",
+        "process_role": "provider",
+        "pid": 43123,
+        "process_start_time": "2026-07-29T20:45:00Z",
+        "boot_id": "boot-cinder",
+        "source": "claude_channel_scan",
+        "observed_at": observed_at.isoformat(),
+    }
+    return {
+        "schema_version": 3,
+        "run": [fact],
+        "identities": [
+            {
+                "fact_family": "run",
+                "fact_index": 0,
+                "subject_key": f"run:{run_id}",
+                "source": "claude_channel_scan",
+                "source_epoch": run_id,
+                "source_seq": None,
+                "sequenced": False,
+                "dedupe_key": hashlib.sha256(f"{run_id}:process-gone".encode()).hexdigest(),
+                "evidence_hash": canonical_evidence_hash(fact),
+            }
+        ],
+    }
+
+
 def test_schema_v2_evidence_is_retained_but_not_shadow_reduced():
     evidence = _schema_v3_evidence(session_id=str(uuid4()), run_id=str(uuid4()), observed_at=datetime.now(UTC))
     evidence["schema_version"] = 2
@@ -447,6 +481,7 @@ async def test_shadow_reducer_uses_heartbeat_transaction_and_one_commit_sequence
         "stale": 0,
         "conflicts": 0,
         "identity_binding": {"bound": 0, "matched": 0, "unbound": 0, "mismatched": 0},
+        "run_terminal": {"ended": 0, "already_ended": 0, "unbound": 0},
     }
     assert replay == {**first, "exact_replay": True}
     assert duplicate["commit_seq"] == "2"
@@ -461,6 +496,115 @@ async def test_shadow_reducer_uses_heartbeat_transaction_and_one_commit_sequence
         assert head["updated_commit_seq"] == 1
         assert connection.execute(LiveHeartbeatStamp.__table__.select()).fetchall()
     engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_shadow_reducer_ends_exact_run_from_execution_owner_process_exit(daemon_paths, monkeypatch):
+    monkeypatch.setenv("LONGHOUSE_SHADOW_REDUCER_INGEST_ENABLED", "1")
+    database_path, socket_path = daemon_paths
+    started_at = datetime.now(UTC).replace(microsecond=0) - timedelta(minutes=5)
+    observed_at = started_at + timedelta(minutes=4)
+    session_id = str(uuid4())
+    thread_id = str(uuid4())
+    run_id = str(uuid4())
+    engine = create_catalog_engine(database_path)
+    initialize_catalog_schema(engine)
+    with engine.begin() as connection:
+        connection.execute(
+            LiveSessionCatalog.__table__.insert().values(
+                session_id=session_id,
+                provider="claude",
+                environment="production",
+                device_id="cinder",
+                started_at=started_at,
+                primary_thread_id=thread_id,
+            )
+        )
+        connection.execute(
+            LiveSessionThread.__table__.insert().values(
+                id=thread_id,
+                session_id=session_id,
+                provider="claude",
+                branch_kind="root",
+                is_primary=1,
+                created_at=started_at,
+                updated_at=started_at,
+            )
+        )
+        connection.execute(
+            LiveSessionRun.__table__.insert().values(
+                id=run_id,
+                thread_id=thread_id,
+                provider="claude",
+                host_id="cinder",
+                launch_origin="longhouse_spawned",
+                started_at=started_at,
+            )
+        )
+        connection.execute(
+            LiveSessionConnection.__table__.insert().values(
+                run_id=run_id,
+                control_plane="claude_channel",
+                acquisition_kind="spawned_control",
+                state="detached",
+                device_id="cinder",
+                can_send_input=1,
+                can_interrupt=1,
+                can_terminate=1,
+                can_tail_output=1,
+                can_resume=1,
+                acquired_at=started_at,
+                last_health_at=started_at,
+            )
+        )
+    engine.dispose()
+
+    evidence = _schema_v3_run_terminal_evidence(
+        session_id=session_id,
+        run_id=run_id,
+        observed_at=observed_at,
+    )
+    heartbeat = _heartbeat(device_id="cinder", received_at=observed_at, digest="run-terminal")
+    heartbeat["raw_json"] = json.dumps({"machine_evidence": evidence})
+    params = {
+        "heartbeat": heartbeat,
+        "managed_leases": [],
+        "managed_leases_present": True,
+        "owner_id": 7,
+    }
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        result = await client.call("machine.heartbeat.apply.v2", params)
+        replay = await client.call(
+            "machine.heartbeat.apply.v2",
+            {
+                **params,
+                "heartbeat": {
+                    **heartbeat,
+                    "received_at": (observed_at + timedelta(seconds=1)).isoformat(),
+                    "sessions_digest": "run-terminal-replay",
+                },
+            },
+        )
+    finally:
+        await client.close()
+        await daemon.close()
+
+    assert result["shadow_reducer"]["run_terminal"] == {"ended": 1, "already_ended": 0, "unbound": 0}
+    assert replay["shadow_reducer"]["run_terminal"] == {"ended": 0, "already_ended": 1, "unbound": 0}
+    engine = create_catalog_engine(database_path)
+    with engine.connect() as connection:
+        run = connection.execute(LiveSessionRun.__table__.select()).mappings().one()
+        control = connection.execute(LiveSessionConnection.__table__.select()).mappings().one()
+    engine.dispose()
+    assert run["ended_at"].replace(tzinfo=UTC) == observed_at
+    assert run["exit_status"] == "process_gone"
+    assert control["state"] == "ended"
+    assert control["released_at"].replace(tzinfo=UTC) == observed_at
+    assert control["last_health_at"].replace(tzinfo=UTC) == observed_at
+    assert {control[key] for key in ("can_send_input", "can_interrupt", "can_terminate", "can_tail_output", "can_resume")} == {0}
 
 
 @pytest.mark.asyncio

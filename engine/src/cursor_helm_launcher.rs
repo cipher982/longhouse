@@ -653,12 +653,17 @@ fn register(
         })
         .filter(|value| value.session_id == session_id && !value.run_id.trim().is_empty())
 }
-fn enqueue_terminal_event(config: &LaunchConfig, session_id: &str, exit_code: i32) {
+fn enqueue_terminal_event(
+    config: &LaunchConfig,
+    session_id: &str,
+    run_id: Option<&str>,
+    exit_code: i32,
+) {
     let Ok(root) = home(config.config_dir.as_deref()) else {
         return;
     };
     let now = Utc::now().to_rfc3339();
-    let event = json!({"runtime_key":format!("cursor:{session_id}"),"session_id":session_id,"provider":"cursor","device_id":std::env::var("HOSTNAME").unwrap_or_else(|_| "unknown".into()),"source":"cursor_helm","kind":"terminal_signal","phase":"finished","occurred_at":now,"dedupe_key":format!("cursor-helm-terminal:{session_id}:{now}"),"payload":{"terminal_state":"session_ended","terminal_reason":"provider_exit","terminal_source":"cursor_helm","exit_code":exit_code}});
+    let event = json!({"runtime_key":format!("cursor:{session_id}"),"session_id":session_id,"run_id":run_id,"provider":"cursor","device_id":std::env::var("HOSTNAME").unwrap_or_else(|_| "unknown".into()),"source":"cursor_helm","kind":"terminal_signal","phase":"finished","occurred_at":now,"dedupe_key":format!("cursor-helm-terminal:{session_id}:{}",run_id.unwrap_or("unbound")),"payload":{"terminal_state":"session_ended","terminal_reason":"provider_exit","terminal_source":"cursor_helm","exit_code":exit_code}});
     let _ = write_json(
         &root
             .join("agent/runtime-events-outbox")
@@ -1188,7 +1193,12 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
             128 + libc::WTERMSIG(status)
         }
     };
-    enqueue_terminal_event(&config, &session_id, exit_code);
+    enqueue_terminal_event(
+        &config,
+        &session_id,
+        registered.as_ref().map(|value| value.run_id.as_str()),
+        exit_code,
+    );
     unsafe {
         libc::close(master);
     }
@@ -1263,6 +1273,39 @@ mod tests {
         }
         write_json(&claim_path(dir, &session_id), &claim).unwrap();
         session_id
+    }
+
+    #[test]
+    fn terminal_event_carries_the_registered_run_identity() {
+        let root = tempfile::tempdir().unwrap();
+        let config = LaunchConfig {
+            cwd: PathBuf::new(),
+            project: None,
+            name: None,
+            loop_mode: "interactive".into(),
+            url: None,
+            token: None,
+            resume_session: None,
+            cursor_bin: None,
+            config_dir: Some(root.path().to_path_buf()),
+            permission_mode: None,
+            verbose: false,
+            open: false,
+            cursor_args: vec![],
+        };
+
+        enqueue_terminal_event(&config, "session-1", Some("run-1"), 0);
+
+        let event_path = fs::read_dir(root.path().join("agent/runtime-events-outbox"))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        let event: Value = serde_json::from_slice(&fs::read(event_path).unwrap()).unwrap();
+        assert_eq!(event["run_id"], "run-1");
+        assert_eq!(event["dedupe_key"], "cursor-helm-terminal:session-1:run-1");
+        assert_eq!(event["payload"]["terminal_state"], "session_ended");
     }
 
     #[test]

@@ -9132,6 +9132,7 @@ def _apply_shadow_reducer(
                 commit_seq_override=commit_seq,
             )
             identity_binding = _bind_control_evidence_identities(connection, facts)
+            run_terminal = _apply_exact_run_terminal_evidence(connection, facts)
             return {
                 "status": "applied",
                 "changed_heads": reduced.changed_heads,
@@ -9139,6 +9140,7 @@ def _apply_shadow_reducer(
                 "stale": reduced.stale,
                 "conflicts": reduced.conflicts,
                 "identity_binding": identity_binding,
+                "run_terminal": run_terminal,
             }
     except DBAPIError as exc:
         if exc.connection_invalidated or connection.invalidated:
@@ -9150,6 +9152,70 @@ def _apply_shadow_reducer(
         return {"status": "failed", "reason": "database_error"}
     except (RecursionError, TypeError, ValueError):
         return {"status": "failed", "reason": "invalid_evidence"}
+
+
+def _apply_exact_run_terminal_evidence(connection, facts) -> dict[str, int]:
+    """End only the exact durable run named by validated process-exit evidence."""
+
+    run_table = LiveSessionRun.__table__
+    thread_table = LiveSessionThread.__table__
+    connection_table = LiveSessionConnection.__table__
+    counts = {"ended": 0, "already_ended": 0, "unbound": 0}
+    for fact in facts:
+        if fact.family != "run":
+            continue
+        value = fact.value
+        run_id = str(value.get("run_id") or "")
+        session_id = str(value.get("session_id") or "")
+        ended_at = fact.observed_at
+        if not run_id or not session_id or ended_at is None:
+            counts["unbound"] += 1
+            continue
+        bound = (
+            connection.execute(
+                select(run_table.c.ended_at, run_table.c.started_at)
+                .select_from(run_table.join(thread_table, thread_table.c.id == run_table.c.thread_id))
+                .where(run_table.c.id == run_id, thread_table.c.session_id == session_id)
+                .limit(1)
+            )
+            .mappings()
+            .first()
+        )
+        if bound is None:
+            counts["unbound"] += 1
+            continue
+        if bound["ended_at"] is not None:
+            counts["already_ended"] += 1
+            continue
+        started_at = _as_aware_utc(bound["started_at"])
+        terminal_at = max(ended_at, started_at) if started_at is not None else ended_at
+        updated = connection.execute(
+            update(run_table)
+            .where(run_table.c.id == run_id, run_table.c.ended_at.is_(None))
+            .values(ended_at=terminal_at, exit_status="process_gone")
+        ).rowcount
+        if updated != 1:
+            counts["already_ended"] += 1
+            continue
+        connection.execute(
+            update(connection_table)
+            .where(
+                connection_table.c.run_id == run_id,
+                connection_table.c.state.in_(("attached", "degraded", "detached")),
+            )
+            .values(
+                state="ended",
+                released_at=terminal_at,
+                last_health_at=terminal_at,
+                can_send_input=0,
+                can_interrupt=0,
+                can_terminate=0,
+                can_tail_output=0,
+                can_resume=0,
+            )
+        )
+        counts["ended"] += 1
+    return counts
 
 
 def _bind_control_evidence_identities(connection, facts) -> dict[str, int]:
