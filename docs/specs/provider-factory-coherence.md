@@ -1020,13 +1020,31 @@ extraction pattern without adding package/discovery-loader risk in the same
 change, per Sol's own sequencing. Full suite: 3673 passed, 16 skipped, zero
 regressions.
 
-**Not yet done:** Cursor/OpenCode/Claude/Codex extractions, the
-`provider_adapters/` package structure, the discovery-loader replacing
-`ADAPTER_CLASS_BY_PROVIDER`, and the sixth-provider test (add a temporary
-importable toy adapter, assert discovery constructs it and existing provider
-modules need zero edits — Sol's design, not yet implemented). The full split
-is genuinely multi-session scope; this is one verified increment of it, not
-the whole thing.
+**Cursor: no extraction needed.** It has essentially zero provider-specific
+dispatch inside `universal_agent_harness.py` — its real control-path
+implementation (PTY injection) lives in a separate module entirely, per an
+earlier Sol investigation this same session. `CursorHarnessAdapter` staying
+an empty pass-through subclass is already correct for this file's scope.
+
+**OpenCode slice shipped 2026-07-28 (longhouse `7d43303f1`):**
+`OpenCodeHarnessAdapter` now has real overrides for its six methods
+(`permission_prompt`, `managed_session_e2e`, `interrupt_cancel`,
+`resume_reattach`, `tool_call_result`, `live_token_streaming`); every
+opencode branch is gone from `UniversalProviderAdapter`, including
+flattening `managed_session_e2e`'s inverted "if not opencode: ...; else:
+opencode" structure into sequential checks. Used AST-derived line boundaries
+rather than manual copy-paste for the larger, more complex bodies (one
+defines a nested HTTP server class). Full suite: 3673 passed, 16 skipped,
+zero regressions, both before and after.
+
+**Not yet done:** Claude and Codex extractions (Codex last — much larger,
+launch-critical, per Sol's sequencing), the `provider_adapters/` package
+structure, the discovery-loader replacing `ADAPTER_CLASS_BY_PROVIDER`, and
+the sixth-provider test (add a temporary importable toy adapter, assert
+discovery constructs it and existing provider modules need zero edits —
+Sol's design, not yet implemented). The full split is genuinely
+multi-session scope; these are verified increments of it, not the whole
+thing.
 
 Deletes: `executable-provider-capability-contract-epic.md`,
 `provider-release-proof-roadmap.md`.
