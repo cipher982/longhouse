@@ -1197,36 +1197,25 @@ name-resolution risk the Claude/Codex extraction slices already hit
 twice") — caught by the full suite, not the mechanical diff, exactly as
 predicted.
 
-**Not yet done:** the remaining four providers (`claude`, `codex`,
-`opencode`, `antigravity`) still live in `universal_agent_harness.py`
-(~9500 lines) — same pattern, not yet moved, and each one is real,
-separate work: resolving every name that class's moved methods reference
-(module-level helper functions, `EvidencePackage`/`HarnessOptions` types,
-shared private helpers) per provider, not a mechanical bulk cut.
+**Package split completed 2026-07-29.** Claude, Codex, OpenCode, and
+Antigravity now join Cursor under `server/zerg/qa/provider_adapters/`, with
+each provider's evidence normalizers beside its adapter. Shared projection,
+ingest, registry, and generic scenario code remains in
+`universal_agent_harness.py`; the provider-specific classes and helpers do
+not. The shared file fell from roughly 9,600 to 6,582 lines.
 
-**Concrete evidence this is not overcautious scoping, from actually
-attempting the next extraction (2026-07-29):** started on `opencode`
-(~455 lines, the smallest of the remaining four) and stopped before
-editing anything, once the shape of the real risk became concrete rather
-than abstract. `OpenCodeHarnessAdapter` calls seven module-level helpers
-(`_opencode_control_canary`, `_first_opencode_control_session_id`,
-`opencode_provider_live_raw_events`, `opencode_tool_call_result_raw_events`,
-`opencode_tool_call_result_operation_evidence`,
-`opencode_real_print_raw_events`, `opencode_real_print_operation_evidence`)
-that are genuinely opencode-only and could move with it. But
-`_first_opencode_control_session_id` itself calls `_clean_optional_str`, a
-private helper with 15 call sites across the file, sitting in the same
-function block as `_first_claude_control_session_id` and antigravity's
-equivalent — not three separate per-provider clusters, one interleaved
-block serving all three. `ingest_canonical_events_into_longhouse_db` and
-`run_provider_control_e2e_canary` are called from the shared base class
-itself (line 1257) and from claude, opencode, and antigravity alike. Moving
-`opencode` correctly means separating genuinely-shared code from
-genuinely-opencode-only code inside a block that was never written with
-that boundary in mind — real design work, not a cut-and-paste, and exactly
-what "each provider is real, separate work" meant before it had a concrete
-example. Not attempted further this session rather than force it through
-under time pressure.
+The split preserved every moved class body byte-for-byte at the AST level
+against the pre-split source. Each provider slice passed the full backend
+suite before the next began; the final slice passed 3,699 tests with 16
+skipped. The only test changes needed were to patch the provider module that
+now owns a canary call, rather than patching the old shared module.
+
+`provider_adapters.load_all()` now scans the package instead of hardcoding
+the five module names. A regression test adds a sixth adapter module on a
+temporary package path and proves the real production loader registers it
+without an edit to `universal_agent_harness.py` or the loader. This closes
+the production-discovery half of the sixth-provider bar, including the
+import-order failure the first Cursor extraction exposed.
 
 **The rest of Sol's review, for the record (this session, 2026-07-29):**
 confirmed `control-plane`'s comma-separated `qualification_profiles` parsing

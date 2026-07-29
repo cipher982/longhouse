@@ -703,7 +703,7 @@ def test_every_contract_provider_resolves_a_harness_adapter() -> None:
     from zerg.qa.universal_agent_harness import provider_configs
     from zerg.services.managed_provider_contracts import factory_provider_names
 
-    # Phase 3's extracted providers (cursor so far) only register when their
+    # Phase 3's extracted providers only register when their
     # module is imported -- normally forced by adapter_registry(), the real
     # production entry point. Checking ADAPTER_CLASS_BY_PROVIDER directly,
     # without going through that entry point, must force it explicitly or

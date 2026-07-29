@@ -11,6 +11,9 @@ from pathlib import Path
 import pytest
 
 from zerg.qa import universal_agent_harness as uah
+from zerg.qa.provider_adapters import antigravity as antigravity_adapter
+from zerg.qa.provider_adapters import claude as claude_adapter
+from zerg.qa.provider_adapters import opencode as opencode_adapter
 from zerg.qa.provider_build_store import ProviderBuildStoreError
 from zerg.qa.provider_build_store import materialize_generated_fake_builds
 
@@ -2335,7 +2338,7 @@ def test_claude_interrupt_cancel_uses_channel_control_canary(tmp_path: Path, mon
             },
         }
 
-    monkeypatch.setattr(uah, "run_provider_control_e2e_canary", fake_control_canary)
+    monkeypatch.setattr(claude_adapter, "run_provider_control_e2e_canary", fake_control_canary)
     payload = uah.run_harness(
         uah.HarnessOptions(
             providers=("claude",),
@@ -2416,7 +2419,7 @@ def test_claude_steer_active_turn_uses_channel_control_canary(tmp_path: Path, mo
             },
         }
 
-    monkeypatch.setattr(uah, "run_provider_control_e2e_canary", fake_control_canary)
+    monkeypatch.setattr(claude_adapter, "run_provider_control_e2e_canary", fake_control_canary)
     payload = uah.run_harness(
         uah.HarnessOptions(
             providers=("claude",),
@@ -2884,7 +2887,7 @@ def test_claude_live_token_streaming_uses_real_print_canary(tmp_path: Path, monk
             },
         }
 
-    monkeypatch.setattr(uah, "run_provider_control_e2e_canary", fake_control_canary)
+    monkeypatch.setattr(claude_adapter, "run_provider_control_e2e_canary", fake_control_canary)
     fake_claude = _fake_bins(tmp_path)["claude"]
     payload = uah.run_harness(
         uah.HarnessOptions(
@@ -2971,7 +2974,7 @@ def test_opencode_live_token_streaming_uses_real_print_canary(tmp_path: Path, mo
             },
         }
 
-    monkeypatch.setattr(uah, "run_provider_control_e2e_canary", fake_control_canary)
+    monkeypatch.setattr(opencode_adapter, "run_provider_control_e2e_canary", fake_control_canary)
     fake_opencode = _fake_bins(tmp_path)["opencode"]
     payload = uah.run_harness(
         uah.HarnessOptions(
@@ -3059,7 +3062,7 @@ def test_antigravity_live_token_streaming_uses_real_agy_send_canary(tmp_path: Pa
             },
         }
 
-    monkeypatch.setattr(uah, "run_provider_control_e2e_canary", fake_control_canary)
+    monkeypatch.setattr(antigravity_adapter, "run_provider_control_e2e_canary", fake_control_canary)
     fake_agy = _fake_bins(tmp_path)["antigravity"]
     payload = uah.run_harness(
         uah.HarnessOptions(
@@ -3362,7 +3365,7 @@ def test_opencode_tool_call_result_uses_real_tool_canary(tmp_path: Path, monkeyp
             },
         }
 
-    monkeypatch.setattr(uah, "run_provider_control_e2e_canary", fake_control_canary)
+    monkeypatch.setattr(opencode_adapter, "run_provider_control_e2e_canary", fake_control_canary)
     fake_opencode = _fake_bins(tmp_path)["opencode"]
     payload = uah.run_harness(
         uah.HarnessOptions(
@@ -3490,7 +3493,7 @@ def test_antigravity_managed_session_e2e_uses_hook_inbox_canary(tmp_path: Path, 
             },
         }
 
-    monkeypatch.setattr(uah, "run_provider_control_e2e_canary", fake_control_canary)
+    monkeypatch.setattr(antigravity_adapter, "run_provider_control_e2e_canary", fake_control_canary)
     payload = uah.run_harness(
         uah.HarnessOptions(
             providers=("antigravity",),
@@ -3544,7 +3547,7 @@ def test_antigravity_managed_session_e2e_fails_when_hook_inbox_canary_fails(
             },
         }
 
-    monkeypatch.setattr(uah, "run_provider_control_e2e_canary", fake_control_canary)
+    monkeypatch.setattr(antigravity_adapter, "run_provider_control_e2e_canary", fake_control_canary)
     payload = uah.run_harness(
         uah.HarnessOptions(
             providers=("antigravity",),
@@ -4152,6 +4155,34 @@ def test_sixth_provider_is_discoverable_without_editing_this_module(tmp_path: Pa
         del uah.ADAPTER_CLASS_BY_PROVIDER["toy_sixth_provider"]
 
 
+def test_provider_package_auto_discovers_a_sixth_adapter(tmp_path: Path, monkeypatch) -> None:
+    """The production loader scans modules; adding a provider does not edit it."""
+    from zerg.qa import provider_adapters
+
+    provider = "toy_package_provider"
+    module_name = f"{provider_adapters.__name__}.{provider}"
+    module_path = tmp_path / f"{provider}.py"
+    module_path.write_text(
+        "from zerg.qa.universal_agent_harness import UniversalProviderAdapter\n"
+        "from zerg.qa.universal_agent_harness import register_adapter\n"
+        "\n"
+        "\n"
+        f'@register_adapter("{provider}")\n'
+        "class ToyPackageProviderAdapter(UniversalProviderAdapter):\n"
+        '    """Loaded only because its module exists in the adapter package."""\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(provider_adapters, "__path__", [str(tmp_path), *provider_adapters.__path__])
+
+    assert provider not in uah.ADAPTER_CLASS_BY_PROVIDER
+    try:
+        provider_adapters.load_all()
+        assert uah.ADAPTER_CLASS_BY_PROVIDER[provider].__name__ == "ToyPackageProviderAdapter"
+    finally:
+        uah.ADAPTER_CLASS_BY_PROVIDER.pop(provider, None)
+        sys.modules.pop(module_name, None)
+
+
 def test_register_adapter_refuses_to_silently_replace_an_existing_provider(tmp_path: Path) -> None:
     # Review 2026-07-29: a stray module registering "codex" a second time
     # used to silently overwrite the real CodexOpenAIHarnessAdapter. Once
@@ -4189,16 +4220,27 @@ def test_register_adapter_rejects_a_non_adapter_class(tmp_path: Path) -> None:
     assert "not_real" not in uah.ADAPTER_CLASS_BY_PROVIDER
 
 
-def test_adapter_registry_wires_a_real_extracted_provider_module(tmp_path: Path) -> None:
-    # docs/specs/provider-factory-coherence.md, Phase 3: cursor is the first
-    # provider actually moved into server/zerg/qa/provider_adapters/ (not a
-    # toy test module). adapter_registry() -- the real production entry
-    # point -- must import that package to register it; this is the
+def test_adapter_registry_wires_real_extracted_provider_modules(tmp_path: Path) -> None:
+    # docs/specs/provider-factory-coherence.md, Phase 3: real providers moved
+    # into server/zerg/qa/provider_adapters/ (not toy test modules) must be
+    # loaded by adapter_registry(), the production entry point. This is the
     # regression guard for that wiring, distinct from
     # test_sixth_provider_is_discoverable_without_editing_this_module, which
     # only proves the decorator mechanism works given an explicit path.
+    from zerg.qa.provider_adapters.antigravity import AntigravityHarnessAdapter
+    from zerg.qa.provider_adapters.claude import ClaudeCodeHarnessAdapter
+    from zerg.qa.provider_adapters.codex import CodexOpenAIHarnessAdapter
     from zerg.qa.provider_adapters.cursor import CursorHarnessAdapter
+    from zerg.qa.provider_adapters.opencode import OpenCodeHarnessAdapter
 
     registry = uah.adapter_registry(_fake_bins(tmp_path))
+    assert type(registry["antigravity"]).__name__ == "AntigravityHarnessAdapter"
+    assert isinstance(registry["antigravity"], AntigravityHarnessAdapter)
+    assert type(registry["claude"]).__name__ == "ClaudeCodeHarnessAdapter"
+    assert isinstance(registry["claude"], ClaudeCodeHarnessAdapter)
+    assert type(registry["codex"]).__name__ == "CodexOpenAIHarnessAdapter"
+    assert isinstance(registry["codex"], CodexOpenAIHarnessAdapter)
     assert type(registry["cursor"]).__name__ == "CursorHarnessAdapter"
     assert isinstance(registry["cursor"], CursorHarnessAdapter)
+    assert type(registry["opencode"]).__name__ == "OpenCodeHarnessAdapter"
+    assert isinstance(registry["opencode"], OpenCodeHarnessAdapter)

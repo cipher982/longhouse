@@ -14,17 +14,20 @@ universal_agent_harness.adapter_registry(), the real production entry
 point, so every caller of that function gets real registration without
 needing to know this package exists.
 
-Providers extracted so far: cursor. The remaining four
-(claude, codex, opencode, antigravity) still live in
-universal_agent_harness.py -- same pattern, not yet moved. Each one is real,
-separate work: resolving every name the moved class's methods reference
-(module-level helpers, EvidencePackage/HarnessOptions types, shared private
-methods) per provider, not a mechanical bulk cut.
+All five provider adapters live here. `load_all()` discovers modules from the
+package instead of naming providers, so a sixth adapter becomes available to
+the production registry by adding its module; this file does not need another
+provider-specific edit.
 """
 
 from __future__ import annotations
 
+from importlib import import_module
+from pkgutil import iter_modules
+
 
 def load_all() -> None:
     """Import every provider adapter module, registering it as a side effect."""
-    from zerg.qa.provider_adapters import cursor  # noqa: F401
+    for module in sorted(iter_modules(__path__), key=lambda candidate: candidate.name):
+        if not module.name.startswith("_"):
+            import_module(f"{__name__}.{module.name}")
