@@ -67,6 +67,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/provider-capabilities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Provider Capabilities
+         * @description Cookie-authenticated mirror of GET /agents/provider-capabilities
+         *     (docs/specs/provider-factory-coherence.md, Phase 5 UI). Same projection,
+         *     same code path -- the device-token machine surface and this admin page
+         *     read identical data, they just authenticate differently.
+         */
+        get: operations["get_provider_capabilities_admin_provider_capabilities_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/migration-log": {
         parameters: {
             query?: never;
@@ -11855,6 +11878,28 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_provider_capabilities_admin_provider_capabilities_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
         };

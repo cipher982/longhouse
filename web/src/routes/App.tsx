@@ -21,6 +21,7 @@ import SettingsPage from "../pages/SettingsPage";
 import DevicesPage from "../pages/DevicesPage";
 import AdminPage from "../pages/AdminPage";
 import ObservabilityPage from "../pages/ObservabilityPage";
+import ProviderCapabilitiesPage from "../pages/ProviderCapabilitiesPage";
 import RunnersPage from "../pages/RunnersPage";
 import RunnerDetailPage from "../pages/RunnerDetailPage";
 import SessionsPage from "../pages/SessionsPage";
@@ -260,6 +261,14 @@ export function buildAppRoutes({ demoMode, singleTenant: _singleTenant }: Routin
                 element: (
                   <ErrorBoundary>
                     <AdminPage />
+                  </ErrorBoundary>
+                ),
+              },
+              {
+                path: "/admin/provider-capabilities",
+                element: (
+                  <ErrorBoundary>
+                    <ProviderCapabilitiesPage />
                   </ErrorBoundary>
                 ),
               },

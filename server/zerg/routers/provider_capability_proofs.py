@@ -160,16 +160,18 @@ def list_provider_capability_proofs(
     }
 
 
-@router.get("/agents/provider-capabilities")
-def list_provider_capabilities(
-    _auth: object = Depends(verify_agents_token),
-    _single: None = Depends(require_single_tenant),
-) -> dict[str, Any]:
+def build_capability_projection_payload() -> dict[str, Any]:
     """Capability projection from the contract, proof status attached
     separately (docs/specs/provider-factory-coherence.md, Phase 5). Every
     declared capability assertion for every managed provider gets exactly
     one row, whether or not it has ever been proven -- the schema is the
-    source of truth for what should exist."""
+    source of truth for what should exist.
+
+    Shared by both the device-token machine surface
+    (GET /agents/provider-capabilities) and the cookie-authenticated admin
+    surface (GET /admin/provider-capabilities) so there is exactly one
+    projection code path, not two that can drift.
+    """
     store = _proof_store()
     all_records: list[ProviderCapabilityProofRecord] = []
     for provider in sorted(managed_provider_names()):
@@ -192,3 +194,16 @@ def list_provider_capabilities(
             for p in projections
         ],
     }
+
+
+@router.get("/agents/provider-capabilities")
+def list_provider_capabilities(
+    _auth: object = Depends(verify_agents_token),
+    _single: None = Depends(require_single_tenant),
+) -> dict[str, Any]:
+    """Capability projection from the contract, proof status attached
+    separately (docs/specs/provider-factory-coherence.md, Phase 5). Every
+    declared capability assertion for every managed provider gets exactly
+    one row, whether or not it has ever been proven -- the schema is the
+    source of truth for what should exist."""
+    return build_capability_projection_payload()

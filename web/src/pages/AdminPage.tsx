@@ -1,4 +1,5 @@
 import React, { useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "react-hot-toast";
 import { useAuth } from "../lib/auth";
@@ -683,6 +684,9 @@ function AdminPage() {
         description="Monitor system-wide activity, budgets, and user usage."
         actions={
           <div className="window-selector">
+            <Link to="/admin/provider-capabilities" className="admin-window-label">
+              Provider capabilities
+            </Link>
             <label className="admin-window-label">Time Window:</label>
             <select
               className="ui-input admin-window-select"

@@ -312,6 +312,47 @@ def test_capability_projection_joins_a_real_proof_and_labels_the_unproven_rest(m
     assert all(row["generated_at"] is None for row in unproven)
 
 
+def test_admin_provider_capabilities_mirrors_the_agents_surface(monkeypatch, tmp_path: Path) -> None:
+    # docs/specs/provider-factory-coherence.md, Phase 5 UI: browsers
+    # authenticate with the session cookie, never a device token, so the
+    # web app cannot call GET /agents/provider-capabilities directly.
+    # GET /admin/provider-capabilities is the cookie-authenticated mirror
+    # that calls the exact same build_capability_projection_payload() --
+    # this proves both surfaces return identical data from one proof store,
+    # not two projection code paths that can drift apart.
+    from zerg.dependencies.auth import get_current_user
+    from zerg.dependencies.auth import require_admin
+
+    generated_at = datetime.now(UTC).isoformat()
+    store = ProviderCapabilityProofStore(tmp_path / "proofs")
+    monkeypatch.setattr(routes, "_proof_store", lambda: store)
+    store.write(
+        _record(
+            assertion_id="coordination_instructions_model_visible",
+            outcome=AssertionOutcome.PASS,
+            generated_at=generated_at,
+        )
+    )
+    api_app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id=1, is_admin=True)
+    api_app.dependency_overrides[require_admin] = lambda: None
+    client = TestClient(app, backend="asyncio")
+    try:
+        agents_response = client.get(
+            "/api/agents/provider-capabilities",
+            headers={"X-Agents-Token": "irrelevant-in-auth-disabled-tests"},
+        )
+        admin_response = client.get("/api/admin/provider-capabilities")
+    finally:
+        api_app.dependency_overrides.clear()
+
+    assert admin_response.status_code == 200
+    payload = admin_response.json()
+    assert payload["artifact_kind"] == "provider_capability_projection"
+    assert payload["capabilities"]
+    assert agents_response.status_code == 200
+    assert admin_response.json() == agents_response.json()
+
+
 def test_capability_projection_requires_agents_auth(monkeypatch, tmp_path: Path) -> None:
     client = _client(monkeypatch, tmp_path)
 
