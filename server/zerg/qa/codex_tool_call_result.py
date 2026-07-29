@@ -29,6 +29,8 @@ SCENARIO_REVISION = 1
 TIMEOUT_SECONDS = 180
 API_KEY_ENV = "CODEX_API_KEY"
 MANAGED_PACKAGE_ROOT_ENV = "CODEX_MANAGED_PACKAGE_ROOT"
+QUALIFICATION_SANDBOX_ENV = "LONGHOUSE_QUALIFICATION_SANDBOX"
+QUALIFICATION_SANDBOX_PROFILE = "provider-qualification-bwrap-v3"
 ASSERTIONS = (
     "exact_executable_identity_observed",
     "reported_version_matches_expected",
@@ -67,6 +69,13 @@ def _managed_package_resources() -> tuple[str, Path, str] | None:
     except (OSError, ValueError) as exc:
         raise identity_bridge.RequestError("official Codex sandbox helper cannot be resolved inside package root") from exc
     return raw, helper, helper_identity
+
+
+def _codex_sandbox_mode() -> tuple[str, str | None]:
+    outer_profile = os.environ.get(QUALIFICATION_SANDBOX_ENV)
+    if outer_profile == QUALIFICATION_SANDBOX_PROFILE:
+        return "danger-full-access", outer_profile
+    return "workspace-write", None
 
 
 def _jsonl_events(stdout: str) -> tuple[list[dict[str, Any]], list[str]]:
@@ -355,9 +364,10 @@ def run_codex_real_tool_command(
     that gives `codex_tool_call_result_command_oracle` its real required
     input, instead of the generic `tool_call_result` scenario's unrelated
     printf/DONE test). When a managed package root is present, use the same
-    official Codex sandbox-helper shim as the release lane. This lets Codex
-    run inside the factory's outer qualification sandbox without attempting
-    a second user-namespace setup against its read-only `/proc` mount.
+    official Codex package evidence as the release lane. The factory stamps
+    its exact outer bubblewrap profile into the environment; only under that
+    profile do we disable Codex's redundant inner sandbox, whose second user
+    namespace cannot initialize against the outer sandbox's read-only `/proc`.
     """
     command = f"{shlex.quote(sys.executable)} -c 'import secrets; print(secrets.token_hex(16))'"
     prompt = (
@@ -366,6 +376,7 @@ def run_codex_real_tool_command(
     )
     managed_package_resources = _managed_package_resources()
     managed_package_root = managed_package_resources[0] if managed_package_resources else None
+    codex_sandbox, outer_sandbox_profile = _codex_sandbox_mode()
     sandbox_helper_evidence: dict[str, Any] | None = None
     with tempfile.TemporaryDirectory(prefix="longhouse-codex-tool-call-result-") as raw_runtime:
         runtime_root = Path(raw_runtime)
@@ -376,16 +387,22 @@ def run_codex_real_tool_command(
         helper_link: Path | None = None
         if managed_package_resources is not None:
             _, vendored_bwrap, vendored_bwrap_identity = managed_package_resources
-            helper_bin = runtime_root / "helper-bin"
-            helper_bin.mkdir()
-            helper_link = helper_bin / "codex-linux-sandbox"
-            helper_link.symlink_to(binary)
             sandbox_helper_evidence = {
-                "shim_target_path": str(binary),
                 "vendored_bwrap_path": str(vendored_bwrap),
                 "vendored_bwrap_identity": vendored_bwrap_identity,
-                "shim_path": str(helper_link),
+                "codex_sandbox": codex_sandbox,
+                "outer_sandbox_profile": outer_sandbox_profile,
+                "nested_sandbox_disabled": outer_sandbox_profile is not None,
             }
+            if outer_sandbox_profile is None:
+                helper_bin = runtime_root / "helper-bin"
+                helper_bin.mkdir()
+                helper_link = helper_bin / "codex-linux-sandbox"
+                helper_link.symlink_to(binary)
+                sandbox_helper_evidence.update(
+                    shim_target_path=str(binary),
+                    shim_path=str(helper_link),
+                )
         argv = [
             str(binary),
             "exec",
@@ -395,7 +412,7 @@ def run_codex_real_tool_command(
             "--ignore-rules",
             "--skip-git-repo-check",
             "--sandbox",
-            "workspace-write",
+            codex_sandbox,
             "-c",
             'approval_policy="never"',
             "--color",
@@ -410,8 +427,9 @@ def run_codex_real_tool_command(
             "HOME": str(runtime_root),
             "CODEX_HOME": str(codex_home),
         }
-        if managed_package_root is not None and helper_link is not None:
+        if managed_package_root is not None:
             env[MANAGED_PACKAGE_ROOT_ENV] = managed_package_root
+        if helper_link is not None:
             env["PATH"] = f"{helper_link.parent}{os.pathsep}{env['PATH']}"
         tool_result: subprocess.CompletedProcess[str] | None = None
         tool_error: str | None = None
@@ -438,7 +456,8 @@ def run_codex_real_tool_command(
             vendored_bwrap_post_identity = None
         sandbox_helper_evidence["vendored_bwrap_post_identity"] = vendored_bwrap_post_identity
         sandbox_helper_evidence["vendored_bwrap_stable"] = vendored_bwrap_post_identity == vendored_bwrap_identity
-        sandbox_helper_evidence["shim_removed"] = not Path(sandbox_helper_evidence["shim_path"]).exists()
+        if shim_path := sandbox_helper_evidence.get("shim_path"):
+            sandbox_helper_evidence["shim_removed"] = not Path(shim_path).exists()
     events, invalid_lines = _jsonl_events(tool_stdout)
     return {
         "command": command,
@@ -459,6 +478,7 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
     output_root = output_root.expanduser().resolve()
     managed_package_resources = _managed_package_resources()
     managed_package_root = managed_package_resources[0] if managed_package_resources else None
+    codex_sandbox, outer_sandbox_profile = _codex_sandbox_mode()
     repo_root = Path(__file__).resolve().parents[3]
     binary, actual_identity, runner_sha = identity_bridge._preflight(request, output_root, repo_root)  # noqa: SLF001
     generated_at = identity_bridge._now()  # noqa: SLF001
@@ -570,17 +590,23 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
             helper_link: Path | None = None
             if managed_package_resources is not None:
                 _, vendored_bwrap, vendored_bwrap_identity = managed_package_resources
-                helper_bin = runtime_root / "helper-bin"
-                helper_bin.mkdir()
-                helper_link = helper_bin / "codex-linux-sandbox"
-                helper_link.symlink_to(binary)
                 sandbox_helper_evidence = {
-                    "shim_target_path": str(binary),
-                    "shim_target_identity": actual_identity,
                     "vendored_bwrap_path": str(vendored_bwrap),
                     "vendored_bwrap_identity": vendored_bwrap_identity,
-                    "shim_path": str(helper_link),
+                    "codex_sandbox": codex_sandbox,
+                    "outer_sandbox_profile": outer_sandbox_profile,
+                    "nested_sandbox_disabled": outer_sandbox_profile is not None,
                 }
+                if outer_sandbox_profile is None:
+                    helper_bin = runtime_root / "helper-bin"
+                    helper_bin.mkdir()
+                    helper_link = helper_bin / "codex-linux-sandbox"
+                    helper_link.symlink_to(binary)
+                    sandbox_helper_evidence.update(
+                        shim_target_path=str(binary),
+                        shim_target_identity=actual_identity,
+                        shim_path=str(helper_link),
+                    )
             argv = [
                 str(binary),
                 "exec",
@@ -590,7 +616,7 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
                 "--ignore-rules",
                 "--skip-git-repo-check",
                 "--sandbox",
-                "workspace-write",
+                codex_sandbox,
                 "-c",
                 'approval_policy="never"',
                 "--color",
@@ -607,6 +633,7 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
             }
             if managed_package_root is not None:
                 tool_env[MANAGED_PACKAGE_ROOT_ENV] = managed_package_root
+            if helper_link is not None:
                 tool_env["PATH"] = f"{helper_link.parent}{os.pathsep}{tool_env['PATH']}"
             tool_result: subprocess.CompletedProcess[str] | None = None
             tool_stdout = ""
@@ -638,7 +665,8 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
                 vendored_bwrap_post_identity = None
             sandbox_helper_evidence["vendored_bwrap_post_identity"] = vendored_bwrap_post_identity
             sandbox_helper_evidence["vendored_bwrap_stable"] = vendored_bwrap_post_identity == vendored_bwrap_identity
-            sandbox_helper_evidence["shim_removed"] = not Path(sandbox_helper_evidence["shim_path"]).exists()
+            if shim_path := sandbox_helper_evidence.get("shim_path"):
+                sandbox_helper_evidence["shim_removed"] = not Path(shim_path).exists()
         events, invalid_lines = _jsonl_events(tool_stdout)
         oracle_result = codex_tool_call_result_command_oracle(events, expected_command=command, prompt=prompt)
         tool_infrastructure_error = tool_result is None or tool_result.returncode != 0
@@ -651,7 +679,7 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
             outcomes["tool_result_linked_to_final_agent_message"] = oracle_result.linked_outcome
             execution_status = "completed"
         if sandbox_helper_evidence is not None and (
-            not sandbox_helper_evidence["vendored_bwrap_stable"] or not sandbox_helper_evidence["shim_removed"]
+            not sandbox_helper_evidence["vendored_bwrap_stable"] or not sandbox_helper_evidence.get("shim_removed", True)
         ):
             outcomes["command_execution_completed_with_exact_output"] = AssertionOutcome.INFRASTRUCTURE_ERROR
             outcomes["tool_result_linked_to_final_agent_message"] = AssertionOutcome.INFRASTRUCTURE_ERROR

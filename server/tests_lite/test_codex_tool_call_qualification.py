@@ -308,6 +308,28 @@ def test_managed_package_root_is_validated_live_only_and_redacted(tmp_path: Path
     assert not Path(helper_evidence["shim_path"]).exists()
 
 
+def test_outer_qualification_sandbox_disables_only_nested_codex_sandbox(tmp_path: Path, monkeypatch) -> None:
+    package_root, helper = _official_package_root(tmp_path)
+    monkeypatch.setenv(profile.MANAGED_PACKAGE_ROOT_ENV, str(package_root))
+    monkeypatch.setenv(profile.QUALIFICATION_SANDBOX_ENV, profile.QUALIFICATION_SANDBOX_PROFILE)
+
+    _, output, calls = _run(tmp_path, monkeypatch)
+
+    invocations = [json.loads(line) for line in calls.read_text().splitlines()]
+    tool_invocation = invocations[1]
+    sandbox_index = tool_invocation["argv"].index("--sandbox")
+    assert tool_invocation["argv"][sandbox_index + 1] == "danger-full-access"
+    assert tool_invocation["sandbox_helper"] is None
+    execution = json.loads((output / "execution-summary.json").read_text())
+    helper_evidence = execution["sandbox_helper"]
+    assert helper_evidence["outer_sandbox_profile"] == profile.QUALIFICATION_SANDBOX_PROFILE
+    assert helper_evidence["nested_sandbox_disabled"] is True
+    assert helper_evidence["codex_sandbox"] == "danger-full-access"
+    assert helper_evidence["vendored_bwrap_path"] == str(helper)
+    assert helper_evidence["vendored_bwrap_stable"] is True
+    assert "shim_path" not in helper_evidence
+
+
 @pytest.mark.parametrize("package_root", ["", "relative/package", "/definitely/not/a/codex/package"])
 def test_managed_package_root_must_be_an_absolute_directory(tmp_path: Path, monkeypatch, package_root: str) -> None:
     binary, identity, calls = _fake_codex(tmp_path)
