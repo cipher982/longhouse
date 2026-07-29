@@ -17,6 +17,10 @@ config/*
 !config/models.json
 !config/tool-tiers.json
 
+!schemas/
+schemas/*
+!schemas/managed_providers.yml
+
 !docker/
 docker/*
 !docker/backend.dockerfile
