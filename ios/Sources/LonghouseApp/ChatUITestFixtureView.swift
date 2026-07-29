@@ -52,11 +52,14 @@ struct ChatUITestFixtureView: View {
             )
         }
         .overlay(alignment: .topLeading) {
-            if fixtureName == "benchmark-core" {
-                VStack(spacing: 0) {
-                    ChatUITestProbeStatusView(probe: probe)
-                        .frame(width: 2, height: 2)
-                        .clipped()
+            VStack(spacing: 0) {
+                // The native label is a reliable cross-process render beacon
+                // even when the simulator omits WebKit's DOM accessibility
+                // children. Smoke and benchmark tests both consume it.
+                ChatUITestProbeStatusView(probe: probe)
+                    .frame(width: 2, height: 2)
+                    .clipped()
+                if fixtureName == "benchmark-core" {
                     Button {
                         benchmarkStartRequested = true
                     } label: {

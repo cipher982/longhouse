@@ -279,8 +279,9 @@ struct SessionStreamResumeTests {
         recorder.emitConnected()
         let baseline = await api.tailRequestCount()
         recorder.emitPreview(text: "Durable answer", pubsubSeq: 101, provisional: false)
-        let deadline = Date().addingTimeInterval(1)
-        while await api.tailRequestCount() == baseline, Date() < deadline {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(1))
+        while await api.tailRequestCount() == baseline, clock.now < deadline {
             await Task.yield()
         }
 
@@ -335,8 +336,9 @@ struct SessionStreamResumeTests {
     }
 
     private func waitForLastItemId(_ model: SessionViewModel, _ expected: String) async {
-        let deadline = Date().addingTimeInterval(2)
-        while Date() < deadline {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(2))
+        while clock.now < deadline {
             if model.items.last?.id == expected {
                 return
             }
@@ -345,8 +347,9 @@ struct SessionStreamResumeTests {
     }
 
     private func waitForItemIds(_ model: SessionViewModel, _ expected: [String]) async {
-        let deadline = Date().addingTimeInterval(2)
-        while Date() < deadline {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(2))
+        while clock.now < deadline {
             if model.items.map(\.id) == expected {
                 return
             }
@@ -355,8 +358,9 @@ struct SessionStreamResumeTests {
     }
 
     private func waitForStartCount(_ recorder: StreamFactoryRecorder, atLeast count: Int) async {
-        let deadline = Date().addingTimeInterval(2)
-        while Date() < deadline {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(2))
+        while clock.now < deadline {
             if recorder.startCount >= count {
                 return
             }
@@ -365,8 +369,9 @@ struct SessionStreamResumeTests {
     }
 
     private func waitForStreamDetached(_ model: SessionViewModel) async -> Bool {
-        let deadline = Date().addingTimeInterval(2)
-        while Date() < deadline {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(2))
+        while clock.now < deadline {
             if !model.hasRealtimeStreamTaskForTesting {
                 return true
             }

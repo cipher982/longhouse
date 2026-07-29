@@ -7,12 +7,9 @@ import XCTest
 
 /// Behavioural regression tests for transcript scroll pinning.
 ///
-/// These drive the real transcript document in a real WKWebView because the
-/// bug they exist for is invisible to a string assertion: the WebView's frame
-/// is not constant (the floating control card, the keyboard, and the safe area
-/// all resize it through SwiftUI), and UIScrollView does not re-clamp
-/// contentOffset when its bounds change. A pinned transcript silently lost its
-/// last rows on every viewport change until the DOM started re-pinning.
+/// These drive the real transcript document in a real WKWebView and assert on
+/// its native UIScrollView. The regression was a frozen native contentOffset,
+/// so DOM-only scrollY assertions are not an adequate guard.
 @MainActor
 final class WebTranscriptScrollPinningTests: XCTestCase {
     private var window: UIWindow!
@@ -22,6 +19,7 @@ final class WebTranscriptScrollPinningTests: XCTestCase {
         try await super.setUp()
         window = UIWindow(frame: CGRect(x: 0, y: 0, width: 320, height: 640))
         webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 320, height: 400))
+        webView.scrollView.contentInsetAdjustmentBehavior = .never
         window.addSubview(webView)
         window.makeKeyAndVisible()
         try await loadTranscriptDocument()
@@ -35,27 +33,36 @@ final class WebTranscriptScrollPinningTests: XCTestCase {
         try await super.tearDown()
     }
 
-    /// The regression this file exists for. Pinned to the bottom, then the
-    /// viewport shrinks — as it does when the control card grows or the
-    /// keyboard opens. Every row must stay reachable.
-    func testPinnedTranscriptStaysPinnedWhenViewportShrinks() async throws {
+    /// Recreate the exact native failure state: the viewport has shrunk but
+    /// UIScrollView still holds the old bottom offset. The DOM resize hook must
+    /// move the native scroll view to its new maximum.
+    func testViewportResizeRepinsFrozenNativeContentOffset() async throws {
         try await render(rowCount: 40, stick: true)
-        try await assertPinnedToBottom("initial render")
+        try await assertNativePinnedToBottom("initial render")
+        let oldBottom = webView.scrollView.contentOffset.y
 
         try await resizeViewport(height: 240)
-        try await assertPinnedToBottom("after viewport shrank 400 -> 240")
+        webView.scrollView.setContentOffset(CGPoint(x: 0, y: oldBottom), animated: false)
+        XCTAssertGreaterThan(nativeMaxScrollOffset() - oldBottom, 100, "the forced offset must reproduce hidden tail rows")
+
+        _ = try await evaluate("window.dispatchEvent(new Event('resize')); 1")
+        try await assertNativePinnedToBottom("after the viewport resize event")
     }
 
-    /// The same failure in the other direction: the viewport grows, the frozen
-    /// offset is now past the end of the document, and the transcript shows
-    /// blank space below its last row.
-    func testPinnedTranscriptStaysPinnedWhenViewportGrows() async throws {
-        try await resizeViewport(height: 240)
+    /// Content can grow without a render when media resolves. ResizeObserver
+    /// owns that path and must reconcile the native offset as root grows.
+    func testContentResizeRepinsNativeContentOffset() async throws {
         try await render(rowCount: 40, stick: true)
-        try await assertPinnedToBottom("initial render at 240")
+        try await assertNativePinnedToBottom("initial render")
+        let oldBottom = webView.scrollView.contentOffset.y
 
-        try await resizeViewport(height: 400)
-        try await assertPinnedToBottom("after viewport grew 240 -> 400")
+        _ = try await evaluate(
+            "document.getElementById('root').insertAdjacentHTML('beforeend', '<div id=delayed-growth style=\"height:240px\"></div>'); 1"
+        )
+        try await waitUntil("content size grows") {
+            self.nativeMaxScrollOffset() - oldBottom > 150
+        }
+        try await assertNativePinnedToBottom("after root content grew")
     }
 
     /// Re-pinning must not fight a user who deliberately scrolled up. Native
@@ -69,8 +76,12 @@ final class WebTranscriptScrollPinningTests: XCTestCase {
         try await resizeViewport(height: 240)
         try await settle()
 
-        let scrollY = try await number("window.scrollY")
-        XCTAssertEqual(scrollY, 0, accuracy: 1, "A viewport change must not re-pin a deliberately scrolled-up transcript")
+        XCTAssertEqual(
+            webView.scrollView.contentOffset.y,
+            0,
+            accuracy: 1,
+            "A viewport change must not re-pin a deliberately scrolled-up transcript"
+        )
     }
 
     /// Cheap guard against a JavaScript error in the transcript document —
@@ -87,8 +98,9 @@ final class WebTranscriptScrollPinningTests: XCTestCase {
 
     private func loadTranscriptDocument() async throws {
         webView.loadHTMLString(WebTranscriptView.documentHTMLForTesting, baseURL: nil)
-        let deadline = Date().addingTimeInterval(10)
-        while Date() < deadline {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(10))
+        while clock.now < deadline {
             let ready = try? await webView.evaluateJavaScript("typeof window.renderTranscript === 'function'")
             if (ready as? Bool) == true { return }
             try await Task.sleep(nanoseconds: 50_000_000)
@@ -129,44 +141,52 @@ final class WebTranscriptScrollPinningTests: XCTestCase {
         webView.frame = CGRect(x: 0, y: 0, width: webView.frame.width, height: height)
         webView.layoutIfNeeded()
         window.layoutIfNeeded()
-        let deadline = Date().addingTimeInterval(3)
-        while Date() < deadline {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(3))
+        while clock.now < deadline {
             if abs(try await number("window.innerHeight") - Double(height)) <= 1 { break }
             try await Task.sleep(nanoseconds: 50_000_000)
         }
         try await settle()
     }
 
-    /// Poll until the transcript settles on its last row, rather than sampling
-    /// once after a fixed delay.
-    ///
-    /// A frame count is not a clock. WebKit propagates a native frame change to
-    /// the web process asynchronously, and the relayout that follows can move
-    /// `scrollHeight` after the re-pin has already run — so a single sample can
-    /// catch the document mid-flight and read a `scrollY` that was correct for
-    /// the previous layout. That is what failed on CI: 4270 against a 4030
-    /// maximum, off by exactly the viewport height. Convergence is the real
-    /// invariant; the number of frames it takes is not.
-    private func assertPinnedToBottom(_ context: String, file: StaticString = #filePath, line: UInt = #line) async throws {
-        var scrollY = Double.nan
-        var maxScroll = Double.nan
-        let deadline = Date().addingTimeInterval(3)
-        repeat {
-            scrollY = try await number("window.scrollY")
-            maxScroll = try await number("document.documentElement.scrollHeight - window.innerHeight")
-            if abs(scrollY - maxScroll) <= 2 { break }
-            try await Task.sleep(nanoseconds: 50_000_000)
-        } while Date() < deadline
-
+    private func assertNativePinnedToBottom(
+        _ context: String,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async throws {
+        try await waitUntil(context) {
+            abs(self.webView.scrollView.contentOffset.y - self.nativeMaxScrollOffset()) <= 2
+        }
+        let offset = webView.scrollView.contentOffset.y
+        let maxScroll = nativeMaxScrollOffset()
         XCTAssertGreaterThan(maxScroll, 0, "\(context): document must overflow the viewport for this test to mean anything", file: file, line: line)
         XCTAssertEqual(
-            scrollY,
+            offset,
             maxScroll,
             accuracy: 2,
-            "\(context): transcript must remain pinned to its last row",
+            "\(context): native scroll view must remain pinned to its last row",
             file: file,
             line: line
         )
+    }
+
+    private func nativeMaxScrollOffset() -> CGFloat {
+        max(0, webView.scrollView.contentSize.height - webView.scrollView.bounds.height)
+    }
+
+    private func waitUntil(
+        _ context: String,
+        timeout: Duration = .seconds(3),
+        condition: () -> Bool
+    ) async throws {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: timeout)
+        while clock.now < deadline {
+            if condition() { return }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        XCTFail("Timed out waiting for \(context)")
     }
 
     /// Two frames: `scrollToBottom` re-scrolls inside a requestAnimationFrame,

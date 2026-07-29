@@ -130,14 +130,37 @@ targets:
     supportedDestinations: [iOS]
     sources:
       - path: ../Tests/LonghouseIOSTests
+        excludes:
+          - PreviewSnapshots.swift
         createIntermediateGroups: true
+    dependencies:
+      - target: Longhouse
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ai.longhouse.ios.tests
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_VERSION: "6.0"
+        CODE_SIGN_STYLE: Automatic
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Longhouse.app/Longhouse"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+
+  # SnapshotPreviews hooks gettimeofday at bundle load to make rendered previews
+  # deterministic. Keep that hook out of the normal unit-test process: tests
+  # use real/monotonic time for deadlines and must never inherit a frozen wall
+  # clock merely because preview rendering is installed.
+  LonghousePreviewTests:
+    type: bundle.unit-test
+    platform: iOS
+    supportedDestinations: [iOS]
+    sources:
+      - path: ../Tests/LonghouseIOSTests/PreviewSnapshots.swift
     dependencies:
       - target: Longhouse
       - package: SnapshotPreviews
         product: SnapshottingTests
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: ai.longhouse.ios.tests
+        PRODUCT_BUNDLE_IDENTIFIER: ai.longhouse.ios.preview-tests
         GENERATE_INFOPLIST_FILE: YES
         SWIFT_VERSION: "6.0"
         CODE_SIGN_STYLE: Automatic
@@ -213,6 +236,20 @@ schemes:
       testPlans:
         - path: TestPlans/LonghouseSmoke.xctestplan
           defaultPlan: true
+
+  LonghousePreviews:
+    build:
+      targets:
+        Longhouse: all
+        LonghouseWidgetExtension: all
+        LonghousePreviewTests: [test]
+    run:
+      config: Debug
+      executable: Longhouse
+    test:
+      config: Debug
+      targets:
+        - LonghousePreviewTests
 
   LonghouseChatStress:
     build:

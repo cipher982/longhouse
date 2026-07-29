@@ -40,10 +40,10 @@ echo ">> Running snapshot tests on $SIM_NAME ($SIM_ID)"
 set +e
 xcodebuild test \
   -project XcodeHarness/LonghouseIOS.xcodeproj \
-  -scheme Longhouse \
+  -scheme LonghousePreviews \
   -destination "platform=iOS Simulator,id=$SIM_ID" \
   -configuration Debug \
-  -only-testing:LonghouseIOSTests/PreviewSnapshots \
+  -only-testing:LonghousePreviewTests/PreviewSnapshots \
   -resultBundlePath "$RESULT_BUNDLE" \
   -derivedDataPath "$DERIVED_DATA_PATH" \
   -quiet

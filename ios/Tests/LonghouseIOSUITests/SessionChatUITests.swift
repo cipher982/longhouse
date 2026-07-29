@@ -4,6 +4,8 @@ import XCTest
 
 @MainActor
 final class SessionChatUITests: XCTestCase {
+    private static let webTranscriptTimeout: TimeInterval = 12
+
     private enum LaunchEnvironment {
         static let chatFixture = "LONGHOUSE_UI_TEST_CHAT_FIXTURE"
         static let chatEventCount = "LONGHOUSE_UI_TEST_CHAT_EVENT_COUNT"
@@ -35,11 +37,14 @@ final class SessionChatUITests: XCTestCase {
         app.launch()
 
         XCTAssertTrue(transcriptElement(app).waitForExistence(timeout: 8))
-        // Assistant prose renders, confirming the tool-bearing fixture loaded
-        // and the timeline built through the tool/orphan-tool pairing path.
+        let renderStatus = app.staticTexts["transcript-benchmark-status"]
+        XCTAssertTrue(renderStatus.waitForExistence(timeout: 8))
+        // Consume the WebKit render beacon rather than a DOM accessibility
+        // child: the simulator intermittently publishes the WebView without
+        // any of its text descendants even after rendering has completed.
         XCTAssertTrue(
-            app.staticTexts["The MR was renamed by Alex at 18:42, then moved back to In Review."]
-                .waitForExistence(timeout: 6)
+            waitForLabel(renderStatus, containing: "stage=rendered", timeout: Self.webTranscriptTimeout),
+            renderStatus.label
         )
     }
 
@@ -71,7 +76,7 @@ final class SessionChatUITests: XCTestCase {
         let latestMessage = app.staticTexts["Assistant fixture message 119: streaming-style response with enough body to exercise row layout."]
 
         XCTAssertTrue(transcriptElement(app).waitForExistence(timeout: 5))
-        XCTAssertTrue(latestMessage.waitForExistence(timeout: 5))
+        XCTAssertTrue(latestMessage.waitForExistence(timeout: Self.webTranscriptTimeout))
         assertClearsBottomChrome(latestMessage, app: app)
         assertNotVisible(app.staticTexts["User fixture message 0: request text for chat scroll anchoring."])
     }
@@ -81,7 +86,7 @@ final class SessionChatUITests: XCTestCase {
         let latestMessage = app.staticTexts["User fixture message 118: request text for chat scroll anchoring."]
 
         XCTAssertTrue(transcriptElement(app).waitForExistence(timeout: 5))
-        XCTAssertTrue(latestMessage.waitForExistence(timeout: 5))
+        XCTAssertTrue(latestMessage.waitForExistence(timeout: Self.webTranscriptTimeout))
         assertClearsBottomChrome(latestMessage, app: app)
         assertNotVisible(app.staticTexts["User fixture message 0: request text for chat scroll anchoring."])
     }
@@ -97,7 +102,7 @@ final class SessionChatUITests: XCTestCase {
         composer.typeText(message)
         sendButton.tap()
 
-        XCTAssertTrue(app.staticTexts[message].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts[message].waitForExistence(timeout: Self.webTranscriptTimeout))
         XCTAssertTrue(app.staticTexts["Longhouse"].waitForExistence(timeout: 5))
         XCTAssertEqual(composer.value as? String, "Send a message to the live Codex session...")
     }
@@ -113,7 +118,7 @@ final class SessionChatUITests: XCTestCase {
         composer.typeText(message)
         sendButton.tap()
 
-        XCTAssertTrue(app.staticTexts["Console fixture durable reply."].waitForExistence(timeout: 8))
+        XCTAssertTrue(app.staticTexts["Console fixture durable reply."].waitForExistence(timeout: Self.webTranscriptTimeout))
         XCTAssertEqual(app.staticTexts.matching(identifier: message).count, 1)
         XCTAssertFalse(app.staticTexts["Working..."].exists)
     }
@@ -123,7 +128,7 @@ final class SessionChatUITests: XCTestCase {
         let composer = app.textFields["session-chat-composer"]
         let currentLastMessage = app.staticTexts["Assistant fixture message 39: streaming-style response with enough body to exercise row layout."]
 
-        XCTAssertTrue(currentLastMessage.waitForExistence(timeout: 5))
+        XCTAssertTrue(currentLastMessage.waitForExistence(timeout: Self.webTranscriptTimeout))
         XCTAssertTrue(waitUntilHittable(currentLastMessage, timeout: 5))
         XCTAssertTrue(composer.waitForExistence(timeout: 5))
         composer.tap()
@@ -140,7 +145,7 @@ final class SessionChatUITests: XCTestCase {
         let currentLastMessage = app.staticTexts["Assistant fixture message 39: streaming-style response with enough body to exercise row layout."]
         let liveUpdate = app.staticTexts["Assistant fixture live update at bottom."]
 
-        XCTAssertTrue(currentLastMessage.waitForExistence(timeout: 5))
+        XCTAssertTrue(currentLastMessage.waitForExistence(timeout: Self.webTranscriptTimeout))
         XCTAssertTrue(waitUntilHittable(liveUpdate, timeout: 5))
         assertAnchoredAboveBottomChrome(liveUpdate, app: app)
         assertNotVisible(app.staticTexts["User fixture message 0: request text for chat scroll anchoring."])
@@ -168,7 +173,7 @@ final class SessionChatUITests: XCTestCase {
             "Composer keyboard should appear promptly"
         )
 
-        XCTAssertTrue(liveUpdate.waitForExistence(timeout: 10))
+        XCTAssertTrue(liveUpdate.waitForExistence(timeout: Self.webTranscriptTimeout))
         assertAnchoredAboveBottomChrome(liveUpdate, app: app)
         assertScreenIsVisiblyRendered(app)
         assertNotVisible(app.staticTexts["User fixture message 0: request text for chat scroll anchoring."])
@@ -186,7 +191,7 @@ final class SessionChatUITests: XCTestCase {
             "Composer keyboard should appear promptly"
         )
 
-        XCTAssertTrue(finalChunk.waitForExistence(timeout: 10))
+        XCTAssertTrue(finalChunk.waitForExistence(timeout: Self.webTranscriptTimeout))
         assertAnchoredAboveBottomChrome(finalChunk, app: app)
         assertScreenIsVisiblyRendered(app)
         assertNotVisible(app.staticTexts["User fixture message 0: request text for chat scroll anchoring."])
@@ -197,7 +202,7 @@ final class SessionChatUITests: XCTestCase {
         let transcript = transcriptElement(app)
 
         XCTAssertTrue(transcript.waitForExistence(timeout: 10))
-        XCTAssertTrue(app.staticTexts["Assistant fixture message 499: streaming-style response with enough body to exercise row layout."].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["Assistant fixture message 499: streaming-style response with enough body to exercise row layout."].waitForExistence(timeout: Self.webTranscriptTimeout))
 
         let options = XCTMeasureOptions()
         options.iterationCount = 3
@@ -240,8 +245,11 @@ final class SessionChatUITests: XCTestCase {
         let app = launchChatFixture(name: fixtureName, eventCount: eventCount, appearance: appearance)
 
         XCTAssertTrue(transcriptElement(app).waitForExistence(timeout: 8), file: file, line: line)
+        // The SwiftUI container exists before WebKit publishes its text into
+        // the cross-process accessibility tree. Use the final row as the real
+        // render-ready signal and leave room for a loaded simulator host.
         XCTAssertTrue(
-            app.staticTexts[expectText].waitForExistence(timeout: 6),
+            app.staticTexts[expectText].waitForExistence(timeout: Self.webTranscriptTimeout),
             file: file,
             line: line
         )
@@ -259,11 +267,12 @@ final class SessionChatUITests: XCTestCase {
         file: StaticString = #filePath,
         line: UInt = #line
     ) throws -> XCUIScreenshot {
-        let deadline = Date().addingTimeInterval(timeout)
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(timeout))
         var lastScreenshot = app.screenshot()
         var lastMeanLuminance = meanLuminance(of: lastScreenshot)
 
-        while Date() < deadline {
+        while clock.now < deadline {
             if let meanLuminance = lastMeanLuminance,
                screenshot(meanLuminance: meanLuminance, matches: appearance) {
                 return lastScreenshot
@@ -314,6 +323,12 @@ final class SessionChatUITests: XCTestCase {
         return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
     }
 
+    private func waitForLabel(_ element: XCUIElement, containing value: String, timeout: TimeInterval) -> Bool {
+        let predicate = NSPredicate(format: "label CONTAINS %@", value)
+        let expectation = XCTNSPredicateExpectation(predicate: predicate, object: element)
+        return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
+    }
+
     private func assertClearsBottomChrome(
         _ element: XCUIElement,
         app: XCUIApplication,
@@ -323,10 +338,16 @@ final class SessionChatUITests: XCTestCase {
     ) {
         let bottomChromeCard = app.descendants(matching: .any)["session-chat-bottom-chrome-card"]
         XCTAssertTrue(bottomChromeCard.waitForExistence(timeout: 5), file: file, line: line)
-        XCTAssertLessThanOrEqual(
-            element.frame.maxY,
-            bottomChromeCard.frame.minY - minimumGap,
-            "Latest transcript row overlaps the floating control card",
+        let gap = waitForBottomGap(
+            element,
+            bottomChromeCard: bottomChromeCard,
+            minimumGap: minimumGap,
+            maximumGap: .greatestFiniteMagnitude
+        ) ?? .nan
+        XCTAssertGreaterThanOrEqual(
+            gap,
+            minimumGap,
+            "Latest transcript row never settled clear of the floating control card",
             file: file,
             line: line
         )
@@ -343,7 +364,12 @@ final class SessionChatUITests: XCTestCase {
         let bottomChromeCard = app.descendants(matching: .any)["session-chat-bottom-chrome-card"]
         XCTAssertTrue(bottomChromeCard.waitForExistence(timeout: 5), file: file, line: line)
 
-        let gap = bottomChromeCard.frame.minY - element.frame.maxY
+        let gap = waitForBottomGap(
+            element,
+            bottomChromeCard: bottomChromeCard,
+            minimumGap: minimumGap,
+            maximumGap: maximumGap
+        ) ?? .nan
         XCTAssertGreaterThanOrEqual(
             gap,
             minimumGap,
@@ -358,6 +384,32 @@ final class SessionChatUITests: XCTestCase {
             file: file,
             line: line
         )
+    }
+
+    /// Accessibility geometry can briefly report infinite coordinates while
+    /// WebKit relayout and keyboard presentation cross process boundaries.
+    /// Wait for the layout invariant, not merely for the element to exist.
+    private func waitForBottomGap(
+        _ element: XCUIElement,
+        bottomChromeCard: XCUIElement,
+        minimumGap: CGFloat,
+        maximumGap: CGFloat,
+        timeout: Duration = .seconds(5)
+    ) -> CGFloat? {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: timeout)
+        var lastFiniteGap: CGFloat?
+        while clock.now < deadline {
+            let elementFrame = element.frame
+            let chromeFrame = bottomChromeCard.frame
+            let gap = chromeFrame.minY - elementFrame.maxY
+            if gap.isFinite {
+                lastFiniteGap = gap
+                if gap >= minimumGap && gap <= maximumGap { return gap }
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
+        return lastFiniteGap
     }
 
     private func assertScreenIsVisiblyRendered(
