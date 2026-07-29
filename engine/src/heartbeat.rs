@@ -384,11 +384,12 @@ fn exact_process_exit_evidence(
     pid: Option<u32>,
     process_start_time: Option<&str>,
     boot_id: Option<&str>,
+    process_snapshot_complete: bool,
     alive: bool,
     source: &str,
     observed_at: &str,
 ) -> Option<RunEvidence> {
-    if alive {
+    if alive || !process_snapshot_complete {
         return None;
     }
     Some(RunEvidence {
@@ -1058,6 +1059,7 @@ pub(crate) fn machine_evidence_from_observations(
             obs.app_server_pid,
             obs.app_server_process_start_time.as_deref(),
             boot_id.as_deref(),
+            process_snapshot_complete,
             obs.app_server_alive,
             "codex_bridge_scan",
             &envelope_observed_at,
@@ -1171,6 +1173,7 @@ pub(crate) fn machine_evidence_from_observations(
             obs.claude_pid,
             Some(&obs.started_at),
             boot_id.as_deref(),
+            process_snapshot_complete,
             obs.claude_alive,
             "claude_channel_scan",
             &envelope_observed_at,
@@ -1278,6 +1281,7 @@ pub(crate) fn machine_evidence_from_observations(
             obs.pid,
             Some(&obs.process_start_time),
             boot_id.as_deref(),
+            process_snapshot_complete,
             obs.server_alive,
             "opencode_server_scan",
             &envelope_observed_at,
@@ -1359,6 +1363,7 @@ pub(crate) fn machine_evidence_from_observations(
             obs.launcher_pid,
             obs.launcher_process_start_time.as_deref(),
             boot_id.as_deref(),
+            process_snapshot_complete,
             obs.launcher_alive,
             "cursor_helm_scan",
             &envelope_observed_at,
@@ -4920,6 +4925,7 @@ mod tests {
             Some(43123),
             Some("2026-07-29T20:45:00Z"),
             Some("boot-cinder"),
+            true,
             false,
             "claude_channel_scan",
             "2026-07-29T20:50:00Z",
@@ -4937,6 +4943,7 @@ mod tests {
             Some("2026-07-29T20:45:00Z"),
             Some("boot-cinder"),
             true,
+            true,
             "claude_channel_scan",
             "2026-07-29T20:50:00Z",
         )
@@ -4949,6 +4956,7 @@ mod tests {
             Some(43123),
             Some("2026-07-29T20:45:00Z"),
             Some("boot-cinder"),
+            true,
             false,
             "claude_channel_scan",
             "2026-07-29T20:50:00Z",
@@ -4962,6 +4970,21 @@ mod tests {
             Some(43123),
             None,
             Some("boot-cinder"),
+            true,
+            false,
+            "claude_channel_scan",
+            "2026-07-29T20:50:00Z",
+        )
+        .is_none());
+        assert!(exact_process_exit_evidence(
+            "claude",
+            "session-1",
+            Some("run-1"),
+            "provider",
+            Some(43123),
+            Some("2026-07-29T20:45:00Z"),
+            Some("boot-cinder"),
+            false,
             false,
             "claude_channel_scan",
             "2026-07-29T20:50:00Z",

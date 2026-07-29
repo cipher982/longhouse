@@ -99,6 +99,8 @@ def validate_machine_evidence_identities(evidence: object) -> list[ValidatedEvid
                 if not isinstance(value, dict):
                     raise ValueError("machine evidence fact must be an object")
                 _validate_v3_authority(family, value)
+                if family == "run":
+                    _validate_run_snapshot_scope(evidence, value)
     validated: list[ValidatedEvidenceIdentity] = []
     seen: set[tuple[str, int]] = set()
     for identity in identities:
@@ -184,6 +186,22 @@ def _validate_v3_authority(family: str, value: dict[str, Any]) -> None:
         raise ValueError("machine evidence control granted_operations must be a string list")
     if operations != sorted(set(operations)) or any(operation not in _GRANTED_OPERATIONS for operation in operations):
         raise ValueError("machine evidence control granted_operations must be sorted, unique, and supported")
+
+
+def _validate_run_snapshot_scope(evidence: dict[str, Any], value: dict[str, Any]) -> None:
+    """Require proof that absence came from a complete managed-process scan."""
+
+    boot_id = _required_component(value, "boot_id", allow_colon=True)
+    scopes = evidence.get("process_snapshot_scopes")
+    if not isinstance(scopes, list) or not any(
+        isinstance(scope, dict)
+        and scope.get("scope") == "managed_state_files"
+        and scope.get("source") == "managed_provider_scan"
+        and scope.get("complete") is True
+        and scope.get("machine_boot_id") == boot_id
+        for scope in scopes
+    ):
+        raise ValueError("machine evidence run requires a complete managed-process snapshot on the same boot")
 
 
 def _validate_subject_key(family: str, subject_key: str, value: dict[str, Any]) -> None:

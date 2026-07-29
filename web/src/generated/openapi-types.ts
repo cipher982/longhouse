@@ -5436,7 +5436,7 @@ export interface components {
              * Fact Family
              * @enum {string}
              */
-            fact_family: "process" | "activity" | "control" | "transcript" | "readiness";
+            fact_family: "run" | "process" | "activity" | "control" | "transcript" | "readiness";
             /** Fact Index */
             fact_index: number;
             /** Subject Key */
@@ -5934,6 +5934,8 @@ export interface components {
             observed_at: string;
             /** Identities */
             identities?: components["schemas"]["EvidenceIdentityIn"][];
+            /** Run */
+            run?: components["schemas"]["RunEvidenceIn"][];
             /** Process */
             process?: components["schemas"]["ProcessEvidenceIn"][];
             /** Activity */
@@ -7580,6 +7582,45 @@ export interface components {
             label?: string | null;
             /** Branch */
             branch?: string | null;
+        };
+        /** RunEvidenceIn */
+        RunEvidenceIn: {
+            /** Authority Class */
+            authority_class?: "exact_process_exit" | null;
+            /** Provider */
+            provider: string;
+            /** Session Id */
+            session_id: string;
+            /** Run Id */
+            run_id: string;
+            /**
+             * State
+             * @constant
+             */
+            state: "ended";
+            /**
+             * End Reason
+             * @constant
+             */
+            end_reason: "process_gone";
+            /**
+             * Process Role
+             * @enum {string}
+             */
+            process_role: "provider" | "app_server" | "launcher";
+            /** Pid */
+            pid: number;
+            /** Process Start Time */
+            process_start_time: string;
+            /** Boot Id */
+            boot_id: string;
+            /** Source */
+            source: string;
+            /**
+             * Observed At
+             * Format: date-time
+             */
+            observed_at: string;
         };
         /**
          * RunnerDoctorCheck

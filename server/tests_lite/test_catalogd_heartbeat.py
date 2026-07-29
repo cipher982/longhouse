@@ -24,6 +24,7 @@ from zerg.catalogd.schema import create_catalog_engine
 from zerg.catalogd.schema import initialize_catalog_schema
 from zerg.catalogd.server import CatalogDaemon
 from zerg.machine_evidence import canonical_evidence_hash
+from zerg.machine_evidence import validate_machine_evidence_identities
 from zerg.models.live_store import LiveArchiveOutbox
 from zerg.models.live_store import LiveControlLease
 from zerg.models.live_store import LiveDeviceToken
@@ -192,6 +193,16 @@ def _schema_v3_run_terminal_evidence(*, session_id: str, run_id: str, observed_a
     return {
         "schema_version": 3,
         "run": [fact],
+        "process_snapshot_scopes": [
+            {
+                "scope": "managed_state_files",
+                "complete": True,
+                "captured_at": observed_at.isoformat(),
+                "machine_boot_id": "boot-cinder",
+                "source": "managed_provider_scan",
+                "failure_reason": None,
+            }
+        ],
         "identities": [
             {
                 "fact_family": "run",
@@ -218,6 +229,18 @@ def test_schema_v2_evidence_is_retained_but_not_shadow_reduced():
 
     assert status == "unsupported_schema"
     assert facts == []
+
+
+def test_schema_v3_run_terminal_requires_complete_same_boot_process_snapshot():
+    evidence = _schema_v3_run_terminal_evidence(
+        session_id=str(uuid4()),
+        run_id=str(uuid4()),
+        observed_at=datetime.now(UTC),
+    )
+    evidence["process_snapshot_scopes"][0]["complete"] = False
+
+    with pytest.raises(ValueError, match="complete managed-process snapshot"):
+        validate_machine_evidence_identities(evidence)
 
 
 @pytest.mark.asyncio
