@@ -206,6 +206,21 @@ def test_tool_call_result_legacy_and_harness_paths_agree_on_the_same_binary(tmp_
     legacy_bundle = json.loads((tmp_path / "legacy-output" / "proof-bundle.json").read_text(encoding="utf-8"))
     harness_bundle = json.loads((tmp_path / "harness-output" / "proof-bundle.json").read_text(encoding="utf-8"))
     assert legacy_bundle["coverage_manifest"]["evidence_class"] == harness_bundle["coverage_manifest"]["evidence_class"] == "live_token"
+    strict_capture = json.loads(
+        (
+            tmp_path
+            / "harness-output"
+            / "harness-evidence"
+            / "codex"
+            / "codex_tool_call_result_strict"
+            / "raw"
+            / "codex-tool-call-result-strict.json"
+        ).read_text(encoding="utf-8")
+    )
+    helper = strict_capture["sandbox_helper"]
+    assert helper["vendored_bwrap_stable"] is True
+    assert helper["shim_removed"] is True
+    assert not Path(helper["shim_path"]).exists()
 
 
 def test_helm_interrupt_legacy_and_harness_paths_agree_when_bridge_credentials_are_missing(

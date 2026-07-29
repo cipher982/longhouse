@@ -2188,6 +2188,7 @@ def test_codex_interrupt_cancel_uses_managed_live_interrupt_canary(tmp_path: Pat
 
     assert calls
     assert calls[0]["run_managed_live_interrupt"] is True
+    assert calls[0]["engine"] == os.environ["LONGHOUSE_ENGINE_BIN"]
     assert calls[0]["source_review_status"] == "pass"
     # The canary saw the isolated strict env, not this test's own ambient PATH.
     assert ambient_env_during_call["CODEX_API_URL"] == "https://runtime.example/api"

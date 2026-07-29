@@ -354,22 +354,38 @@ def run_codex_real_tool_command(
     observation gap" — Hatch Sol's option (c): a codex-only harness scenario
     that gives `codex_tool_call_result_command_oracle` its real required
     input, instead of the generic `tool_call_result` scenario's unrelated
-    printf/DONE test). No sandbox or managed-package staging here — that
-    stays specific to the release lane's own `run()`, which qualifies a
-    staged build under stricter provenance requirements than an ambient
-    real-binary harness run needs.
+    printf/DONE test). When a managed package root is present, use the same
+    official Codex sandbox-helper shim as the release lane. This lets Codex
+    run inside the factory's outer qualification sandbox without attempting
+    a second user-namespace setup against its read-only `/proc` mount.
     """
     command = f"{shlex.quote(sys.executable)} -c 'import secrets; print(secrets.token_hex(16))'"
     prompt = (
         "Use the shell tool exactly once to run exactly this one command: "
         f"{command}\nThen reply with only the command output, copied exactly."
     )
+    managed_package_resources = _managed_package_resources()
+    managed_package_root = managed_package_resources[0] if managed_package_resources else None
+    sandbox_helper_evidence: dict[str, Any] | None = None
     with tempfile.TemporaryDirectory(prefix="longhouse-codex-tool-call-result-") as raw_runtime:
         runtime_root = Path(raw_runtime)
         workspace = runtime_root / "workspace"
         codex_home = runtime_root / "codex-home"
         workspace.mkdir()
         codex_home.mkdir()
+        helper_link: Path | None = None
+        if managed_package_resources is not None:
+            _, vendored_bwrap, vendored_bwrap_identity = managed_package_resources
+            helper_bin = runtime_root / "helper-bin"
+            helper_bin.mkdir()
+            helper_link = helper_bin / "codex-linux-sandbox"
+            helper_link.symlink_to(binary)
+            sandbox_helper_evidence = {
+                "shim_target_path": str(binary),
+                "vendored_bwrap_path": str(vendored_bwrap),
+                "vendored_bwrap_identity": vendored_bwrap_identity,
+                "shim_path": str(helper_link),
+            }
         argv = [
             str(binary),
             "exec",
@@ -394,6 +410,9 @@ def run_codex_real_tool_command(
             "HOME": str(runtime_root),
             "CODEX_HOME": str(codex_home),
         }
+        if managed_package_root is not None and helper_link is not None:
+            env[MANAGED_PACKAGE_ROOT_ENV] = managed_package_root
+            env["PATH"] = f"{helper_link.parent}{os.pathsep}{env['PATH']}"
         tool_result: subprocess.CompletedProcess[str] | None = None
         tool_error: str | None = None
         tool_timed_out = False
@@ -411,6 +430,15 @@ def run_codex_real_tool_command(
         else:
             tool_stdout = tool_result.stdout
             tool_stderr = tool_result.stderr
+    if sandbox_helper_evidence is not None and managed_package_resources is not None:
+        _, vendored_bwrap, vendored_bwrap_identity = managed_package_resources
+        try:
+            vendored_bwrap_post_identity = identity_bridge._sha256_file(vendored_bwrap)  # noqa: SLF001
+        except OSError:
+            vendored_bwrap_post_identity = None
+        sandbox_helper_evidence["vendored_bwrap_post_identity"] = vendored_bwrap_post_identity
+        sandbox_helper_evidence["vendored_bwrap_stable"] = vendored_bwrap_post_identity == vendored_bwrap_identity
+        sandbox_helper_evidence["shim_removed"] = not Path(sandbox_helper_evidence["shim_path"]).exists()
     events, invalid_lines = _jsonl_events(tool_stdout)
     return {
         "command": command,
@@ -420,8 +448,9 @@ def run_codex_real_tool_command(
         "returncode": tool_result.returncode if tool_result is not None else None,
         "timed_out": tool_timed_out,
         "error": tool_error,
-        "stdout": tool_stdout,
-        "stderr": tool_stderr,
+        "stdout": _redact(tool_stdout, api_key, managed_package_root),
+        "stderr": _redact(tool_stderr, api_key, managed_package_root),
+        "sandbox_helper": sandbox_helper_evidence,
     }
 
 

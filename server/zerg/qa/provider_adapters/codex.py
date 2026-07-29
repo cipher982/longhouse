@@ -541,6 +541,7 @@ class CodexOpenAIHarnessAdapter(UniversalProviderAdapter):
             return run_codex_provider_release_canary(
                 {
                     "codex_bin": str(provider_bin),
+                    "engine": str(engine),
                     "artifact": canary_artifact_path,
                     "evidence_root": canary_root,
                     "repo_root": default_repo_root(),
