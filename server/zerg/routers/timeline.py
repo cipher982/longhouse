@@ -1232,7 +1232,11 @@ async def get_timeline_session_workspace(
     return storage_workspace
 
 
-@router.get("/sessions/{session_id}/mobile-tail")
+# Documented, not validated: the storage-v2 branch returns an already-serialized
+# dict on a hot mobile path, so declaring `response_model` would re-validate it
+# per request. `responses` publishes the schema so the iOS DTO generator and the
+# SDK drift check stay anchored to the real contract.
+@router.get("/sessions/{session_id}/mobile-tail", responses={200: {"model": SessionMobileTailResponse}})
 async def get_timeline_session_mobile_tail(
     session_id: UUID,
     response: Response,

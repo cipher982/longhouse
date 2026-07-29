@@ -1488,7 +1488,10 @@ class SessionProjectionResponse(BaseModel):
 class SessionWorkspaceRevisionResponse(BaseModel):
     """Durable fingerprint for session viewport-visible state."""
 
-    latest_event_id: int = Field(0, description="Latest durable event id included in the viewport signature")
+    latest_event_id: int | str | None = Field(
+        0,
+        description="Latest durable event id in the viewport signature: legacy integer or storage-v2 string",
+    )
     latest_session_updated_at: Optional[datetime] = Field(None, description="Latest session row update in the viewport path")
     latest_runtime_signal_at: Optional[datetime] = Field(None, description="Latest runtime-state update in the viewport path")
     runtime_version_sum: int = Field(0, description="Sum of runtime versions in the viewport path")
@@ -1519,7 +1522,10 @@ class SessionMobileTailResponse(BaseModel):
 
     session: SessionResponse = Field(..., description="Focused session metadata")
     projection: SessionProjectionResponse = Field(..., description="Tail page of the stitched lineage projection")
-    snapshot_event_id: Optional[int] = Field(None, description="Latest durable event id used to anchor older-page fetches")
+    snapshot_event_id: int | str | None = Field(
+        None,
+        description="Durable event id anchoring older-page fetches: legacy integer or storage-v2 string",
+    )
     workspace_revision: SessionWorkspaceRevisionResponse = Field(..., description="Durable viewport freshness revision")
 
 

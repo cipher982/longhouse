@@ -558,7 +558,7 @@ struct APISessionProjectionResponse: Codable, Hashable, Sendable {
 }
 
 struct APISessionWorkspaceRevisionResponse: Codable, Hashable, Sendable {
-    let latestEventId: Int?
+    let latestEventId: JSONValue?
     let latestSessionUpdatedAt: String?
     let latestRuntimeSignalAt: String?
     let runtimeVersionSum: Int?
@@ -577,6 +577,13 @@ struct APISessionWorkspaceResponse: Codable, Hashable, Sendable {
     let projection: APISessionProjectionResponse
     let workspaceRevision: APISessionWorkspaceRevisionResponse
     let controlOnly: Bool?
+}
+
+struct APISessionMobileTailResponse: Codable, Hashable, Sendable {
+    let session: APISessionResponse
+    let projection: APISessionProjectionResponse
+    let snapshotEventId: JSONValue?
+    let workspaceRevision: APISessionWorkspaceRevisionResponse
 }
 
 struct APIConsoleTurnReceiptResponse: Codable, Hashable, Sendable {

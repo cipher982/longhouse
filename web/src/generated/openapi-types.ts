@@ -8809,6 +8809,23 @@ export interface components {
              */
             message: string;
         };
+        /**
+         * SessionMobileTailResponse
+         * @description Small bootstrap payload for mobile session reads.
+         */
+        SessionMobileTailResponse: {
+            /** @description Focused session metadata */
+            session: components["schemas"]["SessionResponse"];
+            /** @description Tail page of the stitched lineage projection */
+            projection: components["schemas"]["SessionProjectionResponse"];
+            /**
+             * Snapshot Event Id
+             * @description Durable event id anchoring older-page fetches: legacy integer or storage-v2 string
+             */
+            snapshot_event_id?: number | string | null;
+            /** @description Durable viewport freshness revision */
+            workspace_revision: components["schemas"]["SessionWorkspaceRevisionResponse"];
+        };
         /** SessionNotificationWatchRequest */
         SessionNotificationWatchRequest: {
             /**
@@ -10300,10 +10317,10 @@ export interface components {
         SessionWorkspaceRevisionResponse: {
             /**
              * Latest Event Id
-             * @description Latest durable event id included in the viewport signature
+             * @description Latest durable event id in the viewport signature: legacy integer or storage-v2 string
              * @default 0
              */
-            latest_event_id: number;
+            latest_event_id: number | string | null;
             /**
              * Latest Session Updated At
              * @description Latest session row update in the viewport path
@@ -15979,7 +15996,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["SessionMobileTailResponse"];
                 };
             };
             /** @description Validation Error */

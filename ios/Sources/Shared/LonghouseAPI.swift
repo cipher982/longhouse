@@ -271,6 +271,22 @@ struct LonghouseAPI: Sendable {
         return components.url!
     }
 
+    /// Wire payloads decode as generated OpenAPI DTOs and are mapped into the
+    /// domain models. The domain types carry flat display-facing state and are
+    /// only Codable for on-device caches, so decoding them straight off the
+    /// network silently drops `session_state`.
+    static func decodeSessionWorkspace(_ data: Data) throws -> SessionWorkspaceResponse {
+        try JSONDecoder.snakeCase
+            .decode(APISessionWorkspaceResponse.self, from: data)
+            .sessionWorkspaceResponse
+    }
+
+    static func decodeSessionMobileTail(_ data: Data) throws -> SessionMobileTailResponse {
+        try JSONDecoder.snakeCase
+            .decode(APISessionMobileTailResponse.self, from: data)
+            .sessionMobileTailResponse
+    }
+
     func sessionWorkspace(id: String, limit: Int = 200, branchMode: String = "head") async throws -> SessionWorkspaceResponse {
         var request = URLRequest(
             url: Self.sessionWorkspaceURL(baseURL: baseURL, id: id, limit: limit, branchMode: branchMode),
@@ -283,7 +299,7 @@ struct LonghouseAPI: Sendable {
         guard httpResponse.statusCode == 200 else {
             throw LonghouseAPIError.from(statusCode: httpResponse.statusCode)
         }
-        return try JSONDecoder.snakeCase.decode(SessionWorkspaceResponse.self, from: data)
+        return try Self.decodeSessionWorkspace(data)
     }
 
     func sessionMobileTail(
@@ -329,7 +345,7 @@ struct LonghouseAPI: Sendable {
             throw LonghouseAPIError.from(statusCode: httpResponse.statusCode)
         }
         let decodeStartedAt = Date()
-        let decoded = try JSONDecoder.snakeCase.decode(SessionMobileTailResponse.self, from: data)
+        let decoded = try Self.decodeSessionMobileTail(data)
         let decodeMs = Int(Date().timeIntervalSince(decodeStartedAt) * 1000)
         // Decode normally runs well below this; info-level entries should mean "look here".
         if decodeMs >= 100 {

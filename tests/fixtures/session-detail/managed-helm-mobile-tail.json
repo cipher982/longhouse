@@ -1,0 +1,252 @@
+{
+  "session": {
+    "id": "2ad359f3-460c-463c-87ff-b7984ed6db51",
+    "origin_kind": null,
+    "provider": "claude",
+    "project": "zerg",
+    "device_id": null,
+    "environment": null,
+    "cwd": "/Users/davidrose/git/zerg/longhouse",
+    "git_repo": null,
+    "git_branch": "main",
+    "started_at": "2026-07-28T22:43:04Z",
+    "ended_at": null,
+    "user_messages": 12,
+    "assistant_messages": 40,
+    "tool_calls": 97,
+    "last_activity_at": "2026-07-29T04:43:04Z",
+    "timeline_anchor_at": null,
+    "runtime_phase": null,
+    "phase_started_at": null,
+    "last_progress_at": null,
+    "runtime_source": null,
+    "terminal_state": null,
+    "runtime_version": null,
+    "status": null,
+    "presence_state": null,
+    "presence_tool": null,
+    "presence_updated_at": null,
+    "last_live_at": null,
+    "display_phase": null,
+    "active_tool": null,
+    "confidence": null,
+    "summary": "Zerg Project Initialization",
+    "summary_title": null,
+    "anchor_title": null,
+    "timeline_title": "Zerg Project Initialization",
+    "title_state": null,
+    "title_source": null,
+    "summary_status": null,
+    "first_user_message": null,
+    "match_event_id": null,
+    "match_snippet": null,
+    "match_role": null,
+    "match_score": null,
+    "thread_root_session_id": "2ad359f3-460c-463c-87ff-b7984ed6db51",
+    "thread_head_session_id": "2ad359f3-460c-463c-87ff-b7984ed6db51",
+    "thread_continuation_count": 0,
+    "continued_from_session_id": null,
+    "continuation_kind": null,
+    "origin_label": null,
+    "home_label": null,
+    "branched_from_event_id": null,
+    "is_writable_head": false,
+    "is_sidechain": false,
+    "control": null,
+    "capabilities": {
+      "live_control_available": true,
+      "host_reattach_available": false,
+      "reply_to_live_session_available": true,
+      "can_queue_next_input": false,
+      "can_steer_active_turn": false,
+      "display_label": "Read only",
+      "display_detail": "This imported session is searchable, but Longhouse cannot steer it.",
+      "display_tone": "neutral",
+      "input_mode": "live",
+      "default_input_intent": "auto",
+      "composer_enabled": true,
+      "composer_placeholder": "Reply",
+      "composer_disabled_reason": null,
+      "send_disabled_reason": null,
+      "control_label": null,
+      "observe_only": false,
+      "search_only": false,
+      "staleness_reason": null,
+      "can_send_input": false,
+      "can_interrupt": false,
+      "can_terminate": false,
+      "can_tail_output": false,
+      "can_resume": false,
+      "turn_state": "idle",
+      "can_start_turn": false,
+      "start_turn_blocked_by": null,
+      "can_interrupt_active_turn": false,
+      "attach_images": false
+    },
+    "session_state": {
+      "state_contract_version": 1,
+      "presentation_policy_version": 1,
+      "mode": "helm",
+      "disposition": {
+        "state": "open",
+        "closed_at": null,
+        "close_reason": null
+      },
+      "launch": null,
+      "run": null,
+      "activity": {
+        "state": "quiescent",
+        "raw_kind": null,
+        "tool": null,
+        "source": "hook",
+        "observed_at": "2026-07-29T04:43:04Z",
+        "valid_until": null
+      },
+      "control": {
+        "ownership": "owned",
+        "connection": "connected",
+        "connection_id": "conn-1",
+        "lease_generation": null,
+        "control_plane": null,
+        "observed_at": null,
+        "valid_until": null,
+        "actions": {
+          "start_turn": {
+            "state": "unavailable",
+            "reason": "not_console"
+          },
+          "send_input": {
+            "state": "available",
+            "reason": null
+          },
+          "interrupt": {
+            "state": "available",
+            "reason": null
+          },
+          "terminate": {
+            "state": "available",
+            "reason": null
+          },
+          "reattach": {
+            "state": "unavailable",
+            "reason": "not_applicable"
+          },
+          "resume": {
+            "state": "unavailable",
+            "reason": "not_applicable"
+          }
+        }
+      },
+      "pending_interaction": null,
+      "transcript": {
+        "convergence": "current",
+        "source_revision": null,
+        "durable_revision": null,
+        "render_revision": null,
+        "last_append_at": null,
+        "searchable": true,
+        "live_observation": true
+      },
+      "host": {
+        "state": "online",
+        "observed_at": null
+      },
+      "presentation": {
+        "primary": {
+          "key": "idle",
+          "label": "Idle",
+          "tone": "inactive",
+          "observed_at": null
+        },
+        "access": {
+          "key": "live_control",
+          "label": "Live control",
+          "tone": "connected",
+          "observed_at": null
+        },
+        "transcript": {
+          "key": "current",
+          "label": "Up to date",
+          "tone": "inactive",
+          "observed_at": null
+        }
+      },
+      "commit_seq": null
+    },
+    "runtime_display": {
+      "truth_tier": "managed-local",
+      "signal_tier": "process_binding",
+      "state": "idle",
+      "tone": "inactive",
+      "headline": "Idle",
+      "detail": null,
+      "phase_label": "Idle",
+      "compact_tool_label": null,
+      "is_live": true,
+      "is_executing": false,
+      "needs_attention": false,
+      "is_idle": true,
+      "is_stalled": false,
+      "is_managed_local_truth": true,
+      "has_signal": true,
+      "control_path": "managed",
+      "activity_recency": "live",
+      "lifecycle": "open",
+      "host_state": "online",
+      "terminal_reason": null,
+      "pause_request": null
+    },
+    "transcript_preview": null,
+    "timeline_card": {
+      "ownership": {
+        "label": "Managed",
+        "tone": "connected"
+      },
+      "status": {
+        "label": "Idle",
+        "tone": "inactive",
+        "seen_at": null,
+        "seen_at_prefix": "last seen"
+      },
+      "border_tone": "inactive"
+    },
+    "loop_mode": "assist",
+    "user_state": "active",
+    "user_hidden_from_timeline": false,
+    "launch_state": null,
+    "execution_lifetime": null,
+    "launch_error_code": null,
+    "launch_error_message": null,
+    "sharer": null
+  },
+  "projection": {
+    "root_session_id": "2ad359f3-460c-463c-87ff-b7984ed6db51",
+    "focus_session_id": "2ad359f3-460c-463c-87ff-b7984ed6db51",
+    "head_session_id": "2ad359f3-460c-463c-87ff-b7984ed6db51",
+    "path_session_ids": [
+      "2ad359f3-460c-463c-87ff-b7984ed6db51"
+    ],
+    "items": [],
+    "total": 0,
+    "page_offset": 0,
+    "branch_mode": "head",
+    "abandoned_events": 0,
+    "generation_id": null,
+    "next_cursor": null,
+    "has_more": false
+  },
+  "snapshot_event_id": "01J9ZQ8N2K7F3W",
+  "workspace_revision": {
+    "latest_event_id": "01J9ZQ8N2K7F3W",
+    "latest_session_updated_at": null,
+    "latest_runtime_signal_at": null,
+    "runtime_version_sum": 0,
+    "pause_request_count": 0,
+    "pause_request_fingerprint": null,
+    "managed_control_count": 0,
+    "managed_control_fingerprint": null,
+    "live_preview_updated_at": null,
+    "thread_session_count": 0,
+    "fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  }
+}

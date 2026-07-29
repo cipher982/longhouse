@@ -373,6 +373,15 @@ private extension JSONValue {
         case .array, .object, .null: "invalid-event-id"
         }
     }
+
+    /// Event ids that are legitimately absent. Legacy sends an integer,
+    /// storage-v2 sends a string, and an empty page sends null.
+    var optionalEventIdentifier: String? {
+        switch self {
+        case .array, .object, .null: nil
+        default: sessionEventIdentifier
+        }
+    }
 }
 
 extension APIEventMediaRefResponse {
@@ -462,7 +471,7 @@ extension APISessionThreadResponse {
 extension APISessionWorkspaceRevisionResponse {
     var sessionWorkspaceRevision: SessionWorkspaceRevision {
         SessionWorkspaceRevision(
-            latestEventId: latestEventId.map(String.init),
+            latestEventId: latestEventId?.optionalEventIdentifier,
             latestSessionUpdatedAt: latestSessionUpdatedAt,
             latestRuntimeSignalAt: latestRuntimeSignalAt,
             runtimeVersionSum: runtimeVersionSum,
@@ -483,6 +492,17 @@ extension APISessionWorkspaceResponse {
             session: session.sessionDetail,
             thread: thread.sessionThreadResponse,
             projection: projection.sessionProjectionResponse,
+            workspaceRevision: workspaceRevision.sessionWorkspaceRevision
+        )
+    }
+}
+
+extension APISessionMobileTailResponse {
+    var sessionMobileTailResponse: SessionMobileTailResponse {
+        SessionMobileTailResponse(
+            session: session.sessionDetail,
+            projection: projection.sessionProjectionResponse,
+            snapshotEventId: snapshotEventId?.optionalEventIdentifier,
             workspaceRevision: workspaceRevision.sessionWorkspaceRevision
         )
     }

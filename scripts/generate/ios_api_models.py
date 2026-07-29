@@ -18,6 +18,7 @@ ROOT_SCHEMAS = [
     "SessionResponse",
     "SessionThreadResponse",
     "SessionWorkspaceResponse",
+    "SessionMobileTailResponse",
     "SessionProjectionResponse",
     "SessionProjectionItemResponse",
     "EventResponse",
