@@ -1,8 +1,9 @@
 # Provider factory coherence
 
 **Status: complete, deployed, and fresh-state verified 2026-07-29.** Clifford
-is running control-plane `c40b6c5` with Longhouse `32c7464f0`; the paired
-deploy completed a healthy scheduled tick. A separate empty-state run at
+is running control-plane `5abf60b` with Longhouse `8bd7f7417`; the paired
+deploy and a forced same-release replay both completed healthy ticks. The
+earlier empty-state run at
 `_manual-full-column-c40b6c5-32c7464f0` then qualified the latest releases
 for every configured provider with no unresolved releases. Both Codex
 profiles completed against the identical staged `rust-v0.146.0` full-package
@@ -24,10 +25,27 @@ closure (`sha256:1445535b...`):
   permissions approval, one user-input request, both waiting flags, a
   completed turn, and zero response errors. It runs from an order-independent
   fixture HOME and no longer compiles source in the production container.
-- Claude `2.1.220` (`190d2007-579e-462e-8229-2581f0113401`), OpenCode
-  `1.18.9` (`d4c765b2-1384-4dec-9388-efee6da803d5`), and maintenance-tier
-  Antigravity `1.1.8` (`eba05f17-ec99-4b59-967b-357c4734a670`) all completed
-  their staged release lanes in the same run.
+- Claude `2.1.220` (`190d2007-579e-462e-8229-2581f0113401`) and
+  maintenance-tier Antigravity `1.1.8`
+  (`eba05f17-ec99-4b59-967b-357c4734a670`) completed their staged release
+  lanes in the same run.
+- OpenCode `1.18.9` now runs the complete staged-release column. Run
+  `f4b7cde7-4c72-42f1-8bc4-3ec911e15ef9` used the exact single-asset closure
+  `sha256:bf1194ea...` under Longhouse `8bd7f7417`: all four profile
+  assertions passed, all 22 default scenarios matched their expected
+  outcomes, the real no-token managed-session/restart canary passed, the real
+  tool/result canary passed, the real token-response canary passed, and both
+  live-token paths passed Longhouse DB ingest and projection. The 33-action
+  coverage matrix recorded 30 passes plus the three declared facts: one
+  no-token safety gate, one upstream-absent action, and one unsupported
+  provider channel. There were no missing actions or unexpected gap kinds.
+  A second distinct run at the same release and SHA completed and delivered
+  its own outbox event, proving replay idempotency.
+- The OpenCode cutover caught three integration defects and added regression
+  tests for each: the qualification sandbox had not admitted the dedicated
+  OpenRouter inputs, `opencode run` needed an explicit `--dir` to bind the
+  tool workspace inside the sandbox, and outbox identities needed the run ID
+  so a deliberate same-release replay could commit independently.
 
 The progress notes below are the chronological implementation record. Any
 dated “not yet deployed,” “still open,” or “in progress” statement in that
