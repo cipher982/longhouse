@@ -993,10 +993,40 @@ generic (non-codex) harness scenario. Transcript projections specifically
 (the harness's `session_projection`/`timeline_projection` output) aren't
 compared yet — the two seeded fixtures don't produce them.
 
-Then split the adapter behind `AgentHarnessAdapter` (already exists as a
-`Protocol`, `universal_agent_harness.py:727`, with ~35 methods — the split is
-decomposing the current single implementing class into one implementation
-per provider), guarded by that oracle and the sixth-provider test.
+**Adapter split design (Hatch Sol, 2026-07-28):** `AgentHarnessAdapter` is a
+33-method `Protocol` (`universal_agent_harness.py:727`). There is one real
+implementation, `UniversalProviderAdapter` (`854-5376` before this landed);
+the five per-provider classes were cosmetic empty subclasses selected by
+`ADAPTER_CLASS_BY_PROVIDER`, inheriting everything unchanged — one god class
+with 34 provider conditionals and 27 `_run_<provider>_*` methods, not five
+adapters. Target: keep `AgentHarnessAdapter` unchanged, keep
+`UniversalProviderAdapter` as the shared base for genuinely provider-neutral
+logic (evidence packaging, probing, canonical ingest/projection, baseline
+comparison, generic cleanup), give each provider a real subclass overriding
+its methods directly with no provider-name branches left in the shared
+class. Sequence by risk, smallest first: Antigravity → Cursor → OpenCode →
+Claude → Codex (Codex last — much larger, launch-critical). Each provider's
+extraction must leave the ~3700-test suite green before the next one starts;
+`compare_scenario_results()` guards against silent evidence-shape drift
+during each move.
+
+**Antigravity slice shipped 2026-07-28 (longhouse `870493d47`):**
+`AntigravityHarnessAdapter` now has real overrides for its five methods
+(`launch_managed_session`, `managed_session_e2e`, `external_event_channel`,
+`permission_prompt`, `live_token_streaming`); every antigravity branch is
+gone from `UniversalProviderAdapter`. Kept in-file rather than moved to a
+separate `provider_adapters/` package for this first slice — proving the
+extraction pattern without adding package/discovery-loader risk in the same
+change, per Sol's own sequencing. Full suite: 3673 passed, 16 skipped, zero
+regressions.
+
+**Not yet done:** Cursor/OpenCode/Claude/Codex extractions, the
+`provider_adapters/` package structure, the discovery-loader replacing
+`ADAPTER_CLASS_BY_PROVIDER`, and the sixth-provider test (add a temporary
+importable toy adapter, assert discovery constructs it and existing provider
+modules need zero edits — Sol's design, not yet implemented). The full split
+is genuinely multi-session scope; this is one verified increment of it, not
+the whole thing.
 
 Deletes: `executable-provider-capability-contract-epic.md`,
 `provider-release-proof-roadmap.md`.
