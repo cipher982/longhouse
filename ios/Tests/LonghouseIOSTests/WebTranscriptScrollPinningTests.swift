@@ -156,7 +156,9 @@ final class WebTranscriptScrollPinningTests: XCTestCase {
         line: UInt = #line
     ) async throws {
         try await waitUntil(context) {
-            abs(self.webView.scrollView.contentOffset.y - self.nativeMaxScrollOffset()) <= 2
+            let maxScroll = self.nativeMaxScrollOffset()
+            return maxScroll > 0
+                && abs(self.webView.scrollView.contentOffset.y - maxScroll) <= 2
         }
         let offset = webView.scrollView.contentOffset.y
         let maxScroll = nativeMaxScrollOffset()
