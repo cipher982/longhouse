@@ -114,6 +114,17 @@ DEFAULT_HARNESS_SCENARIOS: tuple[str, ...] = (
 )
 LIVE_TOKEN_HARNESS_SCENARIO = "live_token_streaming"
 
+# Release profiles whose deployed dispatcher executes the universal full
+# column in addition to the profile-specific strict scenario. Keep this keyed
+# by profile rather than provider so adding a provider profile cannot silently
+# broaden release behavior.
+FULL_COLUMN_RELEASE_PROFILES = frozenset(
+    {
+        "codex_tool_call_result_v1",
+        "claude_real_print_v1",
+    }
+)
+
 
 class Trigger(StrEnum):
     RELEASE_POLL = "release_poll"  # clifford factory, 900s tick, release lane
@@ -430,6 +441,7 @@ def plan_run(facts: ProviderFactoryFacts, provider: str, build_provenance: str, 
         credential_requirement = tuple(
             dict.fromkeys(requirement for profile in profiles for requirement in CREDENTIAL_REQUIREMENT_BY_PROFILE.get(profile, ()))
         )
+        runs_full_column = any(profile in FULL_COLUMN_RELEASE_PROFILES for profile in profiles)
         return PlanCell(
             provider=provider,
             build_provenance=build_provenance,
@@ -439,7 +451,7 @@ def plan_run(facts: ProviderFactoryFacts, provider: str, build_provenance: str, 
             qualification_profile=profiles[0],
             qualification_profiles=profiles,
             scenario_ids=scenario_ids,
-            harness_scenarios=(facts.default_harness_scenarios if provider == "codex" else ()),
+            harness_scenarios=(facts.default_harness_scenarios if runs_full_column else ()),
             credential_requirement=credential_requirement,
             assertion_status=_assertion_statuses(relevant_assertions),
         )

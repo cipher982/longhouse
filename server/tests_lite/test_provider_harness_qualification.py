@@ -8,18 +8,23 @@ from pathlib import Path
 
 import pytest
 
+from tests_lite._provider_harness_test_helpers import install_fake_engine
+from zerg.qa import claude_real_print_qualification
 from zerg.qa import codex_helm_interrupt
 from zerg.qa import codex_release_identity
 from zerg.qa import codex_tool_call_result
 from zerg.qa import provider_harness_qualification as bridge
+from zerg.qa import provider_release_identity
 from zerg.qa.provider_factory_model import DEFAULT_HARNESS_SCENARIOS
-from tests_lite._provider_harness_test_helpers import install_fake_engine
+from zerg.qa.provider_factory_model import LIVE_TOKEN_HARNESS_SCENARIO
 
 
 @pytest.fixture(autouse=True)
 def _stable_runner_checkout(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(codex_release_identity, "_git_sha", lambda _root: "test-sha")
     monkeypatch.setattr(codex_release_identity, "_git_dirty", lambda _root: False)
+    monkeypatch.setattr(provider_release_identity, "git_sha", lambda _root: "test-sha")
+    monkeypatch.setattr(provider_release_identity, "git_dirty", lambda _root: False)
     engine = install_fake_engine(tmp_path / "longhouse-engine")
     monkeypatch.setenv("LONGHOUSE_ENGINE_BIN", str(engine))
 
@@ -66,6 +71,24 @@ print(json.dumps({{"type": "item.completed", "item": {{
 """
 
 
+def _claude_single_asset(tmp_path: Path) -> tuple[Path, Path, str]:
+    root = tmp_path / "claude-closure"
+    root.mkdir()
+    binary = root / "provider"
+    binary.write_text(
+        f"#!{sys.executable}\n"
+        "import sys\n"
+        'if sys.argv[1:] == ["--version"]:\n'
+        '    print("2.1.220 (Claude Code)")\n'
+        "    raise SystemExit(0)\n"
+        "raise SystemExit(2)\n",
+        encoding="utf-8",
+    )
+    binary.chmod(0o700)
+    identity = f"sha256:{hashlib.sha256(binary.read_bytes()).hexdigest()}"
+    return root, binary, identity
+
+
 def _request(
     tmp_path: Path,
     *,
@@ -73,17 +96,20 @@ def _request(
     binary: Path,
     identity: str,
     build_identity: str,
+    provider: str = "codex",
+    version: str = "1.2.3",
+    granularity: str = "full_installed_tree",
     **changes: object,
 ) -> Path:
     payload: dict[str, object] = {
         "schema_version": 1,
-        "provider": "codex",
+        "provider": provider,
         "profile": profile,
         "provider_bin": str(binary),
-        "expected_provider_version": "1.2.3",
+        "expected_provider_version": version,
         "expected_executable_identity": identity,
         "expected_provider_build_identity": build_identity,
-        "expected_provider_build_granularity": "full_installed_tree",
+        "expected_provider_build_granularity": granularity,
         "invocation_id": "harness-bridge-run-1",
         "producer_class": "local_diagnostic",
         "producer_version": "test",
@@ -95,10 +121,10 @@ def _request(
     return path
 
 
-def _closure_digest(package_root: Path) -> str:
+def _closure_digest(package_root: Path, *, granularity: str = "full_installed_tree") -> str:
     from zerg.qa.provider_build_store import closure_digest
 
-    return closure_digest(package_root, granularity="full_installed_tree")
+    return closure_digest(package_root, granularity=granularity)
 
 
 def _passing_full_column_payload() -> dict:
@@ -114,9 +140,36 @@ def _passing_full_column_payload() -> dict:
     return {
         "results": results,
         "provider_execution_coverage_matrix": {
-            "provider_coverage_gap_kind_counts": {
-                "codex": {"passed": 32, "provider_contract_unsupported": 1}
-            },
+            "provider_coverage_gap_kind_counts": {"codex": {"passed": 32, "provider_contract_unsupported": 1}},
+            "missing_provider_actions": [],
+        },
+    }
+
+
+def _passing_claude_full_column_payload() -> dict:
+    results = []
+    for scenario in DEFAULT_HARNESS_SCENARIOS:
+        status, failure_code = bridge._EXPECTED_CLAUDE_FULL_COLUMN_LIMITS.get(  # noqa: SLF001
+            scenario, ("pass", None)
+        )
+        row = {"provider": "claude", "scenario": scenario, "status": status}
+        if scenario == "probe_identity":
+            row["data"] = {"version": "2.1.220 (Claude Code)"}
+        if failure_code is not None:
+            row["failure_code"] = failure_code
+        results.append(row)
+    results.append(
+        {
+            "provider": "claude",
+            "scenario": LIVE_TOKEN_HARNESS_SCENARIO,
+            "status": "pass",
+        }
+    )
+    return {
+        "results": results,
+        "provider_execution_coverage_matrix_path": "/evidence/provider-execution-coverage-matrix.json",
+        "provider_execution_coverage_matrix": {
+            "provider_coverage_gap_kind_counts": {"claude": {"passed": 31, "no_token_safety_gate": 2}},
             "missing_provider_actions": [],
         },
     }
@@ -133,16 +186,10 @@ def test_full_column_gate_accepts_only_the_complete_known_codex_surface() -> Non
 
 def test_full_column_gate_rejects_one_regressed_scenario() -> None:
     payload = _passing_full_column_payload()
-    row = next(
-        result
-        for result in payload["results"]
-        if result["scenario"] == "timeline_projection"
-    )
+    row = next(result for result in payload["results"] if result["scenario"] == "timeline_projection")
     row["status"] = "fail"
     row["failure_code"] = "projection_regressed"
-    payload["provider_execution_coverage_matrix"][
-        "provider_coverage_gap_kind_counts"
-    ]["codex"] = {"passed": 31, "unexpected_failure": 1}
+    payload["provider_execution_coverage_matrix"]["provider_coverage_gap_kind_counts"]["codex"] = {"passed": 31, "unexpected_failure": 1}
 
     gate = bridge._full_column_gate(payload)  # noqa: SLF001
 
@@ -158,6 +205,91 @@ def test_full_column_gate_rejects_one_regressed_scenario() -> None:
         }
     ]
     assert gate["unexpected_coverage_gap_kinds"] == {"unexpected_failure": 1}
+
+
+def test_claude_full_column_gate_accepts_explicit_no_token_limits() -> None:
+    gate = bridge._full_column_gate(  # noqa: SLF001
+        _passing_claude_full_column_payload(),
+        provider="claude",
+    )
+
+    assert gate["status"] == "pass"
+    assert gate["provider"] == "claude"
+    assert gate["expected_scenario_count"] == 22
+    assert gate["coverage_gap_kind_counts"] == {
+        "passed": 31,
+        "no_token_safety_gate": 2,
+    }
+
+
+def test_claude_profile_runs_one_full_column_and_reuses_live_print_result(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    root, binary, identity = _claude_single_asset(tmp_path)
+    request = _request(
+        tmp_path,
+        profile=claude_real_print_qualification.PROFILE,
+        binary=binary,
+        identity=identity,
+        build_identity=f"sha256:{_closure_digest(root, granularity='single_asset')}",
+        provider="claude",
+        version="2.1.220",
+        granularity="single_asset",
+    )
+    captured_options = []
+
+    def fake_run_harness(options):
+        captured_options.append(options)
+        return _passing_claude_full_column_payload()
+
+    monkeypatch.setattr(bridge, "run_harness", fake_run_harness)
+
+    result = bridge.run(request, tmp_path / "output")
+
+    assert len(captured_options) == 1
+    options = captured_options[0]
+    assert options.providers == ("claude",)
+    assert options.scenarios == (
+        *DEFAULT_HARNESS_SCENARIOS,
+        LIVE_TOKEN_HARNESS_SCENARIO,
+    )
+    assert options.provider_bins == {"claude": binary}
+    assert options.provider_builds["claude"].closure_granularity == "single_asset"
+    bundle = json.loads(Path(result["proof_bundle"]).read_text(encoding="utf-8"))
+    outcomes = bundle["coverage_manifest"]["outcomes"]
+    assert outcomes["claude_cli_channel_contract_preserved"] == "pass"
+    assert outcomes["real_print_marker_returned"] == "pass"
+    assert bundle["execution_metadata"]["semantic_status"] == "pass"
+
+
+def test_claude_full_column_regression_fails_both_profile_assertions_closed(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    root, binary, identity = _claude_single_asset(tmp_path)
+    request = _request(
+        tmp_path,
+        profile=claude_real_print_qualification.PROFILE,
+        binary=binary,
+        identity=identity,
+        build_identity=f"sha256:{_closure_digest(root, granularity='single_asset')}",
+        provider="claude",
+        version="2.1.220",
+        granularity="single_asset",
+    )
+    payload = _passing_claude_full_column_payload()
+    row = next(item for item in payload["results"] if item["scenario"] == "timeline_projection")
+    row.update(status="fail", failure_code="projection_regressed")
+    monkeypatch.setattr(bridge, "run_harness", lambda _options: payload)
+
+    result = bridge.run(request, tmp_path / "output")
+
+    bundle = json.loads(Path(result["proof_bundle"]).read_text(encoding="utf-8"))
+    outcomes = bundle["coverage_manifest"]["outcomes"]
+    assert outcomes["claude_cli_channel_contract_preserved"] == "infrastructure_error"
+    assert outcomes["real_print_marker_returned"] == "infrastructure_error"
+    assert bundle["execution_metadata"]["semantic_status"] == "infrastructure_error"
 
 
 @pytest.mark.timeout(30)
@@ -199,12 +331,16 @@ def test_tool_call_result_legacy_and_harness_paths_agree_on_the_same_binary(tmp_
     )
     harness_result = bridge.run(harness_request, tmp_path / "harness-output")
 
-    assert legacy_result["assertions"] == harness_result["assertions"] == {
-        "exact_executable_identity_observed": "pass",
-        "reported_version_matches_expected": "pass",
-        "command_execution_completed_with_exact_output": "pass",
-        "tool_result_linked_to_final_agent_message": "pass",
-    }
+    assert (
+        legacy_result["assertions"]
+        == harness_result["assertions"]
+        == {
+            "exact_executable_identity_observed": "pass",
+            "reported_version_matches_expected": "pass",
+            "command_execution_completed_with_exact_output": "pass",
+            "tool_result_linked_to_final_agent_message": "pass",
+        }
+    )
     assert legacy_result["execution_status"] == harness_result["execution_status"] == "completed"
     legacy_bundle = json.loads((tmp_path / "legacy-output" / "proof-bundle.json").read_text(encoding="utf-8"))
     harness_bundle = json.loads((tmp_path / "harness-output" / "proof-bundle.json").read_text(encoding="utf-8"))
@@ -226,9 +362,7 @@ def test_tool_call_result_legacy_and_harness_paths_agree_on_the_same_binary(tmp_
     assert not Path(helper["shim_path"]).exists()
 
 
-def test_helm_interrupt_legacy_and_harness_paths_agree_when_bridge_credentials_are_missing(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_helm_interrupt_legacy_and_harness_paths_agree_when_bridge_credentials_are_missing(tmp_path: Path, monkeypatch) -> None:
     """Equivalence check for codex_helm_interrupt_v1, the harder of the two
     bridged profiles: a real live interrupt needs a managed engine/MCP
     bootstrap that isn't hermetically testable end-to-end. The one case both
@@ -270,11 +404,15 @@ def test_helm_interrupt_legacy_and_harness_paths_agree_when_bridge_credentials_a
     )
     harness_result = bridge.run(harness_request, tmp_path / "harness-output")
 
-    assert legacy_result["assertions"] == harness_result["assertions"] == {
-        "active_managed_turn_observed": "blocked",
-        "interrupt_terminal_cancelled_or_interrupted": "blocked",
-        "managed_bridge_cleanup_completed": "blocked",
-    }
+    assert (
+        legacy_result["assertions"]
+        == harness_result["assertions"]
+        == {
+            "active_managed_turn_observed": "blocked",
+            "interrupt_terminal_cancelled_or_interrupted": "blocked",
+            "managed_bridge_cleanup_completed": "blocked",
+        }
+    )
     legacy_bundle = json.loads((tmp_path / "legacy-output" / "proof-bundle.json").read_text(encoding="utf-8"))
     harness_bundle = json.loads((tmp_path / "harness-output" / "proof-bundle.json").read_text(encoding="utf-8"))
     assert legacy_bundle["coverage_manifest"]["evidence_class"] == harness_bundle["coverage_manifest"]["evidence_class"] == "live_no_token"
@@ -473,9 +611,7 @@ def test_helm_interrupt_uses_probe_and_interrupt_scenarios(tmp_path: Path, monke
 
     assert captured_options[0].scenarios == ("probe_identity", "interrupt_cancel")
     assert captured_options[0].providers == ("codex",)
-    assert captured_package_roots == [
-        str(captured_options[0].provider_builds["codex"].build_root)
-    ]
+    assert captured_package_roots == [str(captured_options[0].provider_builds["codex"].build_root)]
     assert os.environ[codex_helm_interrupt.PACKAGE_ROOT_ENV] == "original-package-root"
     bundle = json.loads(Path(result["proof_bundle"]).read_text(encoding="utf-8"))
     assert bundle["coverage_manifest"]["outcomes"] == {

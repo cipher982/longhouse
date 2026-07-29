@@ -13,18 +13,13 @@ def test_status_table_has_one_row_per_provider_per_wired_combination() -> None:
     assert "cursor" in table
 
 
-def test_codex_fills_the_staged_release_diagonal() -> None:
+def test_harness_backed_profiles_fill_the_staged_release_diagonal() -> None:
     diagonal = render_diagonal_status(load_facts())
-    codex = next(
-        line for line in diagonal.splitlines() if line.startswith("| codex |")
-    )
-    assert "runs — 22 scenarios" in codex
-    for provider in set(ALL_PROVIDERS) - {"codex"}:
-        line = next(
-            line
-            for line in diagonal.splitlines()
-            if line.startswith(f"| {provider} |")
-        )
+    for provider in {"codex", "claude"}:
+        line = next(line for line in diagonal.splitlines() if line.startswith(f"| {provider} |"))
+        assert "runs — 22 scenarios" in line
+    for provider in set(ALL_PROVIDERS) - {"codex", "claude"}:
+        line = next(line for line in diagonal.splitlines() if line.startswith(f"| {provider} |"))
         assert "never runs" in line
 
 

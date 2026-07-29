@@ -437,7 +437,30 @@
       "scenario_ids": [
         "claude_real_print"
       ],
-      "harness_scenarios": [],
+      "harness_scenarios": [
+        "probe_identity",
+        "adapter_conformance",
+        "collect_raw_evidence",
+        "action_matrix",
+        "control_surface",
+        "baseline_compare",
+        "old_new_release_diff",
+        "full_action_suite",
+        "parse_ingest_project",
+        "db_ingest_project",
+        "session_projection",
+        "timeline_projection",
+        "run_prompt_once",
+        "launch_managed_session",
+        "send_receive",
+        "pause_request_detect",
+        "tail_output",
+        "runtime_phase",
+        "transcript_binding",
+        "multi_turn_continuity",
+        "crash_timeout_cleanup",
+        "managed_session_e2e"
+      ],
       "credential_requirement": [],
       "assertion_status": [
         {

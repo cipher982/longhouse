@@ -1,4 +1,4 @@
-"""Bridge Codex release qualification through the universal harness.
+"""Bridge release qualification profiles through the universal harness.
 
 Phase 2's "bridge/dispatcher design" (docs/specs/provider-factory-coherence.md):
 `codex_tool_call_result_v1` and `codex_helm_interrupt_v1` are the two
@@ -11,13 +11,12 @@ lane's own `run()`, which trusts the request's claimed build identity without
 live re-verification), and emits the identical `proof-bundle.json` shape via
 each profile's `emit_proof_bundle()` finalizer.
 
-Deliberately not a general harness bridge: only these two (provider, profile)
-pairs are supported. Neither harness scenario alone produces its profile's
-full assertion set — `probe_identity` runs alongside the strict scenario in
-every call, supplying `exact_executable_identity_observed` (computed here,
-from pre/post hash agreement, same as the release lane) and
-`reported_version_matches_expected` (parsed from `probe_identity`'s reported
-`--version` output).
+This remains an explicit profile dispatcher rather than a generic fallback.
+Each admitted profile names its provider, strict scenario, assertion mapping,
+and expected full-column limits. Codex profiles use their existing proof-bundle
+finalizers. Claude uses the existing semantic-profile finalizer around one
+harness execution, so the full column and real-print assertion share the same
+provider call instead of paying for a duplicate legacy canary.
 """
 
 from __future__ import annotations
@@ -30,12 +29,17 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+from zerg.qa import claude_real_print_qualification
 from zerg.qa import codex_helm_interrupt
 from zerg.qa import codex_release_identity as identity_bridge
 from zerg.qa import codex_tool_call_result
+from zerg.qa import provider_release_identity
+from zerg.qa import provider_release_semantic_oracles as semantic_oracles
+from zerg.qa import provider_semantic_qualification as semantic
 from zerg.qa.provider_build_store import ProviderBuildRef
 from zerg.qa.provider_build_store import materialize_staged_provider_build
 from zerg.qa.provider_factory_model import DEFAULT_HARNESS_SCENARIOS
+from zerg.qa.provider_factory_model import LIVE_TOKEN_HARNESS_SCENARIO
 from zerg.qa.universal_agent_harness import HarnessOptions
 from zerg.qa.universal_agent_harness import run_harness
 from zerg.services.provider_capability_proof import AssertionOutcome
@@ -69,6 +73,23 @@ _EXPECTED_CODEX_FULL_COLUMN_LIMITS: dict[str, tuple[str, str | None]] = {
     ),
 }
 
+_EXPECTED_CLAUDE_FULL_COLUMN_LIMITS: dict[str, tuple[str, str | None]] = {
+    "action_matrix": ("blocked", None),
+    "control_surface": ("blocked", None),
+    "run_prompt_once": ("unsupported_gap", "run_prompt_once_not_safe_no_token"),
+    "send_receive": ("unsupported_gap", "send_receive_not_safe_no_token"),
+}
+
+_FULL_COLUMN_LIMITS = {
+    "codex": _EXPECTED_CODEX_FULL_COLUMN_LIMITS,
+    "claude": _EXPECTED_CLAUDE_FULL_COLUMN_LIMITS,
+}
+
+_FULL_COLUMN_ALLOWED_GAP_KINDS = {
+    "codex": frozenset({"passed", "provider_contract_unsupported"}),
+    "claude": frozenset({"passed", "no_token_safety_gate"}),
+}
+
 
 @contextmanager
 def _managed_package_root(build_ref: ProviderBuildRef):
@@ -88,32 +109,36 @@ def _managed_package_root(build_ref: ProviderBuildRef):
 def _build_provider_build_ref(request: dict[str, Any], provider_bin: Path, *, output_root: Path) -> ProviderBuildRef:
     """Derive, validate, and materialize the staged build's ProviderBuildRef.
 
-    `codex_tool_call_result_v1` and `codex_helm_interrupt_v1` both stage the
-    managed Codex package (control-plane/provider_factory/core.py:623-643:
-    `uses_provider_package` is unconditionally True for both), always at
-    entrypoint `bin/codex` — so `source_root`/`entrypoint_relative` are
-    derivable from `provider_bin`'s own path, not free-floating unknowns. The
-    derivation is validated, not trusted:
-    `codex_helm_interrupt._package_identity` already checks the exact managed
-    Codex package member set and raises if the layout doesn't match.
+    Codex's profiles stage the documented full package at `bin/codex`; Claude's
+    binary factory stages one exact executable. Both roots and entrypoints are
+    derived from `provider_bin`, then checked against the request's closure
+    digest instead of trusting caller-supplied paths.
 
     Uses a run-scoped store under `output_root` — this is a per-run integrity
     check, not participation in control-plane's separate, already-working
     persistent build-store ingestion pipeline.
     """
+    provider = request["provider"]
     granularity = request["expected_provider_build_granularity"]
-    if granularity != "full_installed_tree":
-        raise RequestError(f"provider_harness_qualification only supports full_installed_tree staged builds, got {granularity!r}")
-    source_root = provider_bin.parent.parent
-    codex_helm_interrupt._package_identity(str(source_root), provider_bin)  # noqa: SLF001
+    if provider == "codex" and granularity == "full_installed_tree":
+        source_root = provider_bin.parent.parent
+        entrypoint_relative = "bin/codex"
+        codex_helm_interrupt._package_identity(str(source_root), provider_bin)  # noqa: SLF001
+    elif provider == "claude" and granularity == "single_asset":
+        source_root = provider_bin.parent
+        entrypoint_relative = provider_bin.name
+        if tuple(path.name for path in source_root.iterdir()) != (provider_bin.name,):
+            raise RequestError("Claude single-asset staged build must contain exactly its provider entrypoint")
+    else:
+        raise RequestError(f"unsupported staged build shape for harness qualification: provider={provider!r}, granularity={granularity!r}")
     store_root = output_root / "provider-build-store"
     build_ref = materialize_staged_provider_build(
-        provider="codex",
+        provider=provider,
         version=request["expected_provider_version"],
         source_root=source_root,
-        entrypoint_relative="bin/codex",
+        entrypoint_relative=entrypoint_relative,
         store_root=store_root,
-        closure_granularity="full_installed_tree",
+        closure_granularity=granularity,
     )
     expected_identity = request["expected_provider_build_identity"]
     if expected_identity != f"sha256:{build_ref.closure_digest}":
@@ -169,8 +194,14 @@ def _strict_outcomes(strict_result: dict[str, Any], *, required_keys: frozenset[
     return {key: AssertionOutcome(value) for key, value in strict_oracle.items()}
 
 
-def _full_column_gate(harness_payload: dict[str, Any]) -> dict[str, Any]:
-    """Fail closed unless the complete Codex column has only known limits."""
+def _full_column_gate(harness_payload: dict[str, Any], *, provider: str = "codex") -> dict[str, Any]:
+    """Fail closed unless a complete provider column has only known limits."""
+
+    try:
+        expected_limits = _FULL_COLUMN_LIMITS[provider]
+        allowed_gap_kinds = _FULL_COLUMN_ALLOWED_GAP_KINDS[provider]
+    except KeyError:
+        raise RequestError(f"no full-column gate is registered for provider {provider!r}") from None
 
     results = harness_payload.get("results")
     if not isinstance(results, list):
@@ -184,7 +215,7 @@ def _full_column_gate(harness_payload: dict[str, Any]) -> dict[str, Any]:
         scenario: [
             result
             for result in results
-            if isinstance(result, dict) and result.get("provider") == "codex" and result.get("scenario") == scenario
+            if isinstance(result, dict) and result.get("provider") == provider and result.get("scenario") == scenario
         ]
         for scenario in DEFAULT_HARNESS_SCENARIOS
     }
@@ -195,7 +226,7 @@ def _full_column_gate(harness_payload: dict[str, Any]) -> dict[str, Any]:
             continue
         result = matches[0]
         actual = (result.get("status"), result.get("failure_code"))
-        expected = _EXPECTED_CODEX_FULL_COLUMN_LIMITS.get(scenario, ("pass", None))
+        expected = expected_limits.get(scenario, ("pass", None))
         if actual != expected:
             unexpected_results.append(
                 {
@@ -209,20 +240,20 @@ def _full_column_gate(harness_payload: dict[str, Any]) -> dict[str, Any]:
 
     coverage = harness_payload.get("provider_execution_coverage_matrix")
     coverage = coverage if isinstance(coverage, dict) else {}
-    gap_counts = (coverage.get("provider_coverage_gap_kind_counts") or {}).get("codex", {})
-    allowed_gap_kinds = {"passed", "provider_contract_unsupported"}
+    gap_counts = (coverage.get("provider_coverage_gap_kind_counts") or {}).get(provider, {})
     unexpected_gap_kinds = {str(kind): count for kind, count in gap_counts.items() if kind not in allowed_gap_kinds and count}
     missing_actions = coverage.get("missing_provider_actions")
     coverage_complete = isinstance(missing_actions, list) and not missing_actions
     passed = not cardinality_errors and not unexpected_results and not unexpected_gap_kinds and coverage_complete
     return {
         "status": "pass" if passed else "fail",
-        "failure_code": None if passed else "codex_full_column_regression",
+        "provider": provider,
+        "failure_code": None if passed else f"{provider}_full_column_regression",
         "expected_scenario_count": len(DEFAULT_HARNESS_SCENARIOS),
         "captured_scenario_count": sum(1 for matches in by_scenario.values() if len(matches) == 1),
         "expected_limits": {
             scenario: {"status": status, "failure_code": failure_code}
-            for scenario, (status, failure_code) in sorted(_EXPECTED_CODEX_FULL_COLUMN_LIMITS.items())
+            for scenario, (status, failure_code) in sorted(expected_limits.items())
         },
         "cardinality_errors": cardinality_errors,
         "unexpected_results": unexpected_results,
@@ -420,12 +451,104 @@ def run_codex_helm_interrupt(request_path: Path, output_root: Path) -> dict[str,
     )
 
 
-# Deliberately exactly these two (provider, profile) pairs — this is not a
-# general harness bridge. See module docstring and
-# docs/specs/provider-factory-coherence.md, "The bridge/dispatcher design".
+def _claude_full_column_executor(
+    binary: Path,
+    evidence_root: Path,
+    *,
+    request: dict[str, Any],
+) -> tuple[dict[str, Any], tuple[semantic.SemanticAssertion, ...], tuple[str, ...]]:
+    build_ref = _build_provider_build_ref(request, binary, output_root=evidence_root)
+    harness_payload = run_harness(
+        HarnessOptions(
+            providers=("claude",),
+            scenarios=(*DEFAULT_HARNESS_SCENARIOS, LIVE_TOKEN_HARNESS_SCENARIO),
+            evidence_root=evidence_root / "harness-evidence",
+            provider_bins={"claude": binary},
+            provider_builds={"claude": build_ref},
+        )
+    )
+    launch_result = _scenario_result(
+        harness_payload,
+        provider="claude",
+        scenario="launch_managed_session",
+    )
+    live_result = _scenario_result(
+        harness_payload,
+        provider="claude",
+        scenario=LIVE_TOKEN_HARNESS_SCENARIO,
+    )
+    full_column_gate = _full_column_gate(harness_payload, provider="claude")
+
+    no_token_verdict = {
+        "pass": "green",
+        "blocked": "yellow",
+        "unsupported_gap": "yellow",
+    }.get(str(launch_result.get("status")), "red")
+    assertions = claude_real_print_qualification.claude_real_print_oracle(
+        no_token_verdict=no_token_verdict,
+        live_enabled=True,
+        live_status=str(live_result.get("status")),
+    )
+    if full_column_gate["status"] != "pass":
+        assertions = tuple(
+            semantic.SemanticAssertion(
+                assertion.assertion_id,
+                AssertionOutcome.INFRASTRUCTURE_ERROR,
+                assertion.evidence_class,
+            )
+            for assertion in assertions
+        )
+        status = "infrastructure_error"
+    elif AssertionOutcome.SEMANTIC_FAIL in {assertion.outcome for assertion in assertions}:
+        status = "fail"
+    elif AssertionOutcome.BLOCKED in {assertion.outcome for assertion in assertions}:
+        status = "blocked"
+    else:
+        status = "pass"
+
+    secrets = tuple(
+        value for name in ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY") if (value := str(os.environ.get(name) or "").strip())
+    )
+    observation = {
+        "status": status,
+        "provider_bin": str(binary),
+        "provider_build": build_ref.to_evidence(),
+        "full_column_gate": full_column_gate,
+        "launch_managed_session": launch_result,
+        LIVE_TOKEN_HARNESS_SCENARIO: live_result,
+        "provider_execution_coverage_matrix_path": harness_payload.get("provider_execution_coverage_matrix_path"),
+    }
+    return observation, assertions, secrets
+
+
+def run_claude_real_print(request_path: Path, output_root: Path) -> dict[str, Any]:
+    request = provider_release_identity.load_request(
+        request_path,
+        provider="claude",
+        profile=claude_real_print_qualification.PROFILE,
+        version_grammar=claude_real_print_qualification._PROFILE.version_grammar,  # noqa: SLF001
+    )
+
+    def execute(binary: Path, evidence_root: Path):
+        return _claude_full_column_executor(binary, evidence_root, request=request)
+
+    return semantic.run_semantic_profile(
+        request_path,
+        output_root,
+        profile=claude_real_print_qualification._PROFILE,  # noqa: SLF001
+        assertion_ids=claude_real_print_qualification.ASSERTIONS,
+        executor=execute,
+        oracle_source=Path(semantic_oracles.__file__),
+    )
+
+
+# Deliberately only these provider/profile pairs. This is not a fallback for
+# arbitrary release profiles; every admission carries provider-specific proof
+# mapping and fail-closed limits.
 _PROFILES = {
     ("codex", codex_tool_call_result.PROFILE): run_codex_tool_call_result,
     ("codex", codex_helm_interrupt.PROFILE): run_codex_helm_interrupt,
+    ("claude", claude_real_print_qualification.PROFILE): run_claude_real_print,
 }
 
 

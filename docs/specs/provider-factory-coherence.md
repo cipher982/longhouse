@@ -226,9 +226,11 @@ deployed assertions:
 - `antigravity` → `hook_inbox_contract_preserved`, `real_print_injection_observed`
 - `codex` → `exact_executable_identity_observed`, `reported_version_matches_expected`
 
-Codex is the most-used provider. Its release lane now schedules both strict
-profiles and the tool-result profile also runs the complete 22-scenario
-universal column against the staged release. The generated rows below come
+Codex is the most-used provider. Its release lane schedules both strict
+profiles, and the tool-result profile runs the complete 22-scenario universal
+column against the staged release. Claude's real-print profile now does the
+same, reusing its live-print harness result as the profile assertion instead
+of launching the paid canary twice. The generated rows below come
 from `provider_factory_model.plan_run()` against the live schema and registry
 constants:
 
@@ -244,7 +246,7 @@ uv run --directory server python scripts/render_provider_factory_status.py
 | codex | push | generated_fake | runs — 1 scenario |
 | codex | weekly_cron | generated_fake | runs — 22 scenarios |
 | codex | manual | observed_install | runs — 1 scenario |
-| claude | release_poll | staged_release | runs — 1 scenario |
+| claude | release_poll | staged_release | runs — 1 qualification scenario + 22 harness scenarios |
 | claude | push | generated_fake | runs — 4 scenarios |
 | claude | weekly_cron | generated_fake | runs — 22 scenarios |
 | claude | manual | observed_install | never runs — remaining capability-proof scenario_ids for claude are orphaned: ['claude_coordination_awareness_create', 'claude_coordination_awareness_post_compaction', 'claude_coordination_directed_input'] |
@@ -263,12 +265,12 @@ uv run --directory server python scripts/render_provider_factory_status.py
 
 **The diagonal** (`staged_release` binary x the release lane's full scenario
 set) — one row per provider, held by
-`test_render_provider_factory_status.py::test_codex_fills_the_staged_release_diagonal`:
+`test_render_provider_factory_status.py::test_harness_backed_profiles_fill_the_staged_release_diagonal`:
 
 | Provider | The diagonal (real binary x full scenario set) |
 |---|---|
 | codex | runs — 22 scenarios |
-| claude | never runs — release lane does not execute the full universal scenario set |
+| claude | runs — 22 scenarios |
 | opencode | never runs — release lane does not execute the full universal scenario set |
 | antigravity | never runs — release lane does not execute the full universal scenario set |
 | cursor | never runs — release lane does not execute the full universal scenario set |

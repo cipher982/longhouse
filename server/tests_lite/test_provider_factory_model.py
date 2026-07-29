@@ -91,6 +91,20 @@ def test_codex_release_poll_runs_both_profiles_and_the_full_staged_column(facts)
     )
 
 
+def test_claude_release_poll_runs_the_full_staged_column(facts) -> None:
+    cell = plan_run(facts, "claude", "staged_release", "release_poll")
+
+    assert cell.qualification_profiles == ("claude_real_print_v1",)
+    assert cell.harness_scenarios == facts.default_harness_scenarios
+
+
+@pytest.mark.parametrize("provider", ["opencode", "antigravity"])
+def test_unbridged_release_profiles_do_not_claim_a_full_column(facts, provider: str) -> None:
+    cell = plan_run(facts, provider, "staged_release", "release_poll")
+
+    assert cell.harness_scenarios == ()
+
+
 @pytest.mark.parametrize("provider", ALL_PROVIDERS)
 def test_push_runs_the_ci_scenario_set_for_every_provider(facts, provider: str) -> None:
     cell = plan_run(facts, provider, "generated_fake", "push")
