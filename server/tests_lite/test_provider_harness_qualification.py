@@ -157,6 +157,7 @@ def test_full_column_gate_rejects_one_regressed_scenario() -> None:
     assert gate["unexpected_coverage_gap_kinds"] == {"unexpected_failure": 1}
 
 
+@pytest.mark.timeout(30)
 def test_tool_call_result_legacy_and_harness_paths_agree_on_the_same_binary(tmp_path: Path, monkeypatch) -> None:
     """Equivalence check for the bridge/dispatcher design's item 3
     (docs/specs/provider-factory-coherence.md): the legacy release-lane
@@ -261,6 +262,7 @@ def test_helm_interrupt_legacy_and_harness_paths_agree_when_bridge_credentials_a
     assert legacy_bundle["coverage_manifest"]["evidence_class"] == harness_bundle["coverage_manifest"]["evidence_class"] == "live_no_token"
 
 
+@pytest.mark.timeout(30)
 def test_tool_call_result_end_to_end_pass(tmp_path: Path, monkeypatch) -> None:
     package_root, binary, identity = _codex_package(tmp_path, behavior="pass")
     build_identity = f"sha256:{_closure_digest(package_root)}"
@@ -292,6 +294,7 @@ def test_tool_call_result_end_to_end_pass(tmp_path: Path, monkeypatch) -> None:
         assert record["provider_build_granularity"] == "full_installed_tree"
 
 
+@pytest.mark.timeout(30)
 def test_tool_call_result_semantic_mismatch_is_not_infrastructure_error(tmp_path: Path, monkeypatch) -> None:
     package_root, binary, identity = _codex_package(tmp_path, behavior="semantic_mismatch")
     build_identity = f"sha256:{_closure_digest(package_root)}"
@@ -313,6 +316,7 @@ def test_tool_call_result_semantic_mismatch_is_not_infrastructure_error(tmp_path
     assert outcomes["exact_executable_identity_observed"] == "pass"
 
 
+@pytest.mark.timeout(30)
 def test_tool_call_result_blocked_without_api_key(tmp_path: Path, monkeypatch) -> None:
     package_root, binary, identity = _codex_package(tmp_path, behavior="pass")
     build_identity = f"sha256:{_closure_digest(package_root)}"
