@@ -1224,20 +1224,21 @@ merged releases each keep their own `qualification_profile` tag.
 of `run_tick`, and `--qualification-profile` accepts more than one value.
 516 passed, zero regressions.
 
-**Still not live, deliberately.** `service.py` — the actual container
-entrypoint clifford runs — still only ever emits one
-`--qualification-profile` flag from `PROVIDER_FACTORY_QUALIFICATION_PROFILE`
-(a single-value env var, validated against exactly the 3 known profiles).
-This commit changes nothing about clifford's live behavior by itself.
-Turning on a second codex profile for real needs two more decisions, both
-left open on purpose rather than rushed: (1) extend `service.py` to accept
-more than one profile from the env (a small, mechanical follow-on to this
-commit), and (2) decide to actually deploy that to clifford, which is a
-live production change to an unattended, every-15-minute, real-credentials
-process — exactly the kind of thing this epic's own "zero users" ethos
-still doesn't mean "skip verifying," it means "don't be afraid of cheap
-rollback," and this hasn't been shadow-verified against a real second
-profile running concurrently yet.
+**Still not live, deliberately — but now only by one decision, not two.**
+`service.py`'s side shipped 2026-07-29 (control-plane `ddfcbc8`):
+`PROVIDER_FACTORY_QUALIFICATION_PROFILE` now parses as a comma-separated
+list (a bare single value is unchanged — every clifford deploy today keeps
+running exactly as before), and `run_worker_tick` emits one
+`--qualification-profile` flag per entry. Proven with a test that sets the
+env var to both codex profiles and asserts both flags land in the actual
+subprocess command, plus a duplicate-rejection test; full control-plane
+suite 518 passed. This still changes nothing about clifford's live behavior
+by itself — the env var's current deployed value is still the single
+default. What remains is entirely the second decision, deliberately not
+taken here: deploy a changed `PROVIDER_FACTORY_QUALIFICATION_PROFILE` to
+clifford, a live production change to an unattended, every-15-minute,
+real-credentials process, not yet shadow-verified against a real second
+profile running concurrently.
 
 **What "coverage volume" still does not mean, even after this:** the
 Definition of Done's actual bar is "the full column runs green under
