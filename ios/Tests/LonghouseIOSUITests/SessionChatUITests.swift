@@ -48,16 +48,12 @@ final class SessionChatUITests: XCTestCase {
         )
     }
 
-    private static let marketingClosingLine =
-        "Done. Tokens now refresh silently a minute before expiry and tests pass. Want me to rebase onto main and open the PR?"
-
     func testCaptureToolsTranscriptLightScreenshot() throws {
         try captureSessionScreenshot(
             fixtureName: "marketing",
             eventCount: 10,
             appearance: .light,
-            outputName: "session-light.png",
-            expectText: Self.marketingClosingLine
+            outputName: "session-light.png"
         )
     }
 
@@ -66,8 +62,7 @@ final class SessionChatUITests: XCTestCase {
             fixtureName: "marketing",
             eventCount: 10,
             appearance: .dark,
-            outputName: "session-dark.png",
-            expectText: Self.marketingClosingLine
+            outputName: "session-dark.png"
         )
     }
 
@@ -238,18 +233,20 @@ final class SessionChatUITests: XCTestCase {
         eventCount: Int,
         appearance: Appearance,
         outputName: String,
-        expectText: String,
         file: StaticString = #filePath,
         line: UInt = #line
     ) throws {
         let app = launchChatFixture(name: fixtureName, eventCount: eventCount, appearance: appearance)
 
         XCTAssertTrue(transcriptElement(app).waitForExistence(timeout: 8), file: file, line: line)
-        // The SwiftUI container exists before WebKit publishes its text into
-        // the cross-process accessibility tree. Use the final row as the real
-        // render-ready signal and leave room for a loaded simulator host.
+        // WebKit does not reliably publish DOM text into XCUITest's
+        // cross-process accessibility tree. The native render beacon is the
+        // authoritative signal that the deterministic fixture reached the DOM.
+        let renderStatus = app.staticTexts["transcript-benchmark-status"]
+        XCTAssertTrue(renderStatus.waitForExistence(timeout: 8), file: file, line: line)
         XCTAssertTrue(
-            app.staticTexts[expectText].waitForExistence(timeout: Self.webTranscriptTimeout),
+            waitForLabel(renderStatus, containing: "stage=rendered", timeout: Self.webTranscriptTimeout),
+            renderStatus.label,
             file: file,
             line: line
         )
