@@ -143,7 +143,8 @@ def test_expired_activity_with_live_control_is_unknown_plus_live_control():
 
     assert facts.activity.state == "unknown"
     assert facts.presentation.primary is not None
-    assert facts.presentation.primary.label == "Activity unknown"
+    assert facts.presentation.primary.key == "no_recent_activity"
+    assert facts.presentation.primary.label == "No recent activity (last: running a tool)"
     assert facts.presentation.access is not None
     assert facts.presentation.access.label == "Live control"
     assert "Ready" not in facts.model_dump_json()

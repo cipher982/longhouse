@@ -258,6 +258,11 @@ def test_projector_expires_activity_and_derives_control_lease_from_ttl():
     )
 
     assert projection.activity.state == "unknown"
+    assert projection.activity.raw_kind == "running"
+    assert projection.activity.tool == "Shell"
+    assert projection.activity.observed_at == NOW
+    assert projection.activity.valid_until == NOW + timedelta(seconds=1)
+    assert projection.fact_sources["activity"].source == "provider_a"
     assert projection.control is not None
     assert projection.control.connection == "connected"
     assert projection.control.connection_id == "connection-1"
@@ -479,6 +484,32 @@ def test_served_projector_assembles_full_contract_at_snapshot_commit():
     assert served.presentation.primary.key == "executing"
     assert served.presentation.access is not None
     assert served.presentation.access.key == "live_control"
+
+
+def test_served_projector_describes_expired_activity_without_claiming_it_is_current():
+    served = project_served_session_state_facts(
+        session_id="session-1",
+        commit_seq=82,
+        catalog_facts=BOUND_CONTROL_CATALOG_FACTS,
+        heads=[
+            _activity(observed_at=NOW, valid_until=NOW + timedelta(seconds=1)),
+            _control(observed_at=NOW, grants=["interrupt", "send_input"]),
+        ],
+        supported_operations={"send_input", "interrupt"},
+        pending_interaction=None,
+        transcript=SessionTranscriptFacts(convergence="current", last_append_at=NOW),
+        host=SessionHostFacts(state="online", observed_at=NOW),
+        now=NOW + timedelta(seconds=30),
+    )
+
+    assert served.activity.state == "unknown"
+    assert served.activity.raw_kind == "running"
+    assert served.activity.observed_at == NOW
+    assert served.activity.valid_until == NOW + timedelta(seconds=1)
+    assert served.presentation.primary is not None
+    assert served.presentation.primary.key == "no_recent_activity"
+    assert served.presentation.primary.label == "No recent activity (last: running a tool)"
+    assert served.presentation.primary.observed_at == NOW
 
 
 def test_served_projector_without_control_head_fails_actions_closed():

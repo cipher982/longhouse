@@ -52,6 +52,7 @@ presentation:
     - blocked
     - idle
     - ended
+    - no_recent_activity
     - activity_unknown
   access_keys:
     - live_control

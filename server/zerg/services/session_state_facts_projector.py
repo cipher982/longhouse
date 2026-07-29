@@ -142,6 +142,7 @@ def project_shadow_session_state_facts(
         now=normalized_now,
         expected_run_id=durable_run_id,
         require_run_binding=True,
+        retain_expired=True,
     )
     control_head, rejected_control = _effective_head(
         heads,
@@ -164,7 +165,7 @@ def project_shadow_session_state_facts(
         disposition=_project_disposition(catalog_facts),
         launch=launch,
         run=_project_run(catalog_facts, launch=launch),
-        activity=_project_activity(activity_head),
+        activity=_project_activity(activity_head, now=normalized_now),
         control=_project_control(control_head, supported_operations=set(supported_operations)),
         control_run_id=_control_run_id(control_head),
         fact_sources=fact_sources,
@@ -473,6 +474,7 @@ def _effective_head(
     expected_run_id: str | None = None,
     require_run_binding: bool = False,
     allowed_control_coordinates: set[tuple[str, str, str]] | None = None,
+    retain_expired: bool = False,
 ) -> tuple[tuple[Mapping[str, Any], dict[str, Any], datetime, datetime] | None, int]:
     candidates: list[tuple[tuple[Any, ...], Mapping[str, Any], dict[str, Any], datetime, datetime]] = []
     rejected = 0
@@ -503,14 +505,18 @@ def _effective_head(
         except (TypeError, ValueError):
             rejected += 1
             continue
-        if valid_until <= now:
+        fresh = valid_until > now
+        if not fresh and not retain_expired:
             continue
         stable_coordinate = (
             str(head.get("source") or ""),
             str(head.get("source_epoch") or ""),
             str(head.get("evidence_hash") or ""),
         )
-        candidates.append(((rank, observed_at, stable_coordinate), head, value, observed_at, valid_until))
+        # Freshness dominates source authority. If every activity candidate is
+        # expired, callers may retain the strongest latest observation as
+        # historical evidence without treating it as current activity.
+        candidates.append(((fresh, rank, observed_at, stable_coordinate), head, value, observed_at, valid_until))
     if not candidates:
         return None, rejected
     _key, head, value, observed_at, valid_until = max(candidates, key=lambda candidate: candidate[0])
@@ -545,12 +551,14 @@ def _bound_control_coordinates(catalog_facts: Mapping[str, Any]) -> set[tuple[st
 
 def _project_activity(
     winner: tuple[Mapping[str, Any], dict[str, Any], datetime, datetime] | None,
+    *,
+    now: datetime,
 ) -> SessionActivityFacts:
     if winner is None:
         return SessionActivityFacts(state="unknown")
     head, value, observed_at, valid_until = winner
     raw_kind = str(value.get("raw_kind") or value.get("kind") or "").strip() or None
-    state = _ACTIVITY_STATE.get(str(value.get("kind") or ""), "unknown")
+    state = _ACTIVITY_STATE.get(str(value.get("kind") or ""), "unknown") if valid_until > now else "unknown"
     return SessionActivityFacts(
         state=state,
         raw_kind=raw_kind,

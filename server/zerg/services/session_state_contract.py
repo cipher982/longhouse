@@ -44,6 +44,7 @@ PRIMARY_PRESENTATION_KEYS: tuple[str, ...] = (
     "blocked",
     "idle",
     "ended",
+    "no_recent_activity",
     "activity_unknown",
 )
 ACCESS_PRESENTATION_KEYS: tuple[str, ...] = (
@@ -82,6 +83,14 @@ ActionState = Literal["available", "unavailable", "unknown"]
 TranscriptConvergence = Literal["current", "lagging", "unknown"]
 SessionMode = Literal["shadow", "helm", "console", "unknown"]
 
+_LAST_SEEN_LABEL: dict[str, str] = {
+    "thinking": "thinking",
+    "running": "running a tool",
+    "idle": "idle",
+    "needs_user": "idle",
+    "blocked": "blocked",
+    "stalled": "stalled",
+}
 _ENDED_RUNTIME_STATES = {"session_ended", "process_gone", *RUN_TERMINAL_STATES}
 _ACTIVITY_MAP: dict[str, ActivityState] = {
     "thinking": "thinking",
@@ -634,6 +643,7 @@ def assemble_session_state_facts(
         launch=launch,
         run=run,
         activity=activity,
+        control=control,
         interaction=pending_interaction,
     )
     access = _access(control=control, transcript=transcript)
@@ -668,6 +678,7 @@ def _primary(
     launch: SessionLaunchFacts | None,
     run: SessionRunFacts | None,
     activity: SessionActivityFacts,
+    control: SessionControlFacts,
     interaction: SessionPendingInteractionFacts | None,
 ) -> SessionPresentationLabel | None:
     if disposition.state == "closed":
@@ -703,6 +714,24 @@ def _primary(
         return SessionPresentationLabel(key="idle", label="Idle", tone="idle", observed_at=activity.observed_at)
     if run is not None and run.lifecycle == "ended":
         return SessionPresentationLabel(key="ended", label="Ended", tone="closed", observed_at=run.ended_at)
+    # Cross-axis composition: the activity axis is `unknown` (its evidence
+    # expired), but we still hold the expired observation and the control lease
+    # is live. Control does not create activity here; it only bounds how long an
+    # expired activity observation stays presentable.
+    if (
+        run is not None
+        and activity.state == "unknown"
+        and activity.raw_kind is not None
+        and control.connection in {"connected", "degraded"}
+    ):
+        last_seen = _LAST_SEEN_LABEL.get(activity.raw_kind)
+        if last_seen is not None:
+            return SessionPresentationLabel(
+                key="no_recent_activity",
+                label=f"No recent activity (last: {last_seen})",
+                tone="quiet",
+                observed_at=activity.observed_at,
+            )
     if run is not None:
         return SessionPresentationLabel(key="activity_unknown", label="Activity unknown", tone="quiet")
     return None
