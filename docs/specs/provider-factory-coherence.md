@@ -1170,18 +1170,39 @@ or startup scanning `provider_adapters/` and calling `discover_adapters()`
 over what it finds — is a small, real, still-open piece, correctly folded
 into the package-split task below rather than tracked as separately closed.
 
-**Not yet done:** all five provider classes still live in one file
-(`universal_agent_harness.py`, ~9500 lines) — the `provider_adapters/`
-package structure Sol's design calls for (one file per provider under
-`server/zerg/qa/provider_adapters/`), *and* the discovery wiring that makes
-`discover_adapters()` mean something outside a test, are still open and are
-one task, not two. Splitting each class across a file boundary means
-resolving every name each class's moved code references (imports,
-module-level helper functions, `EvidencePackage`/`HarnessOptions` types) per
-provider — real work Sol flagged as carrying the same per-provider
-name-resolution risk the Claude/Codex extraction slices already hit twice
-(a missing method override, a dangling cross-method rename, both caught only
-by running the full suite, not by the mechanical diff).
+**First provider extracted, pattern proven, 2026-07-29 (longhouse
+`56bec32d0`).** `cursor` — the provider with zero method
+overrides, deliberately chosen as the smallest possible slice — now lives
+in `server/zerg/qa/provider_adapters/cursor.py`, the first module under the
+package structure Sol's design calls for. This closes both halves of the
+"one task, not two" gap the multi-reviewer pass identified: the file split
+itself, and the import-ordering hazard Fable named (a package split alone
+does nothing if nothing imports the new module). `provider_adapters
+.load_all()` imports every provider submodule, called from
+`adapter_registry()` — the real production entry point, not a test-only
+path — via a function-body (not module-top-level) import to avoid the
+circular-import shape `provider_adapters/cursor.py` -> `universal_agent
+_harness` -> `provider_adapters` would otherwise create.
+
+Landing this immediately caught a real, exactly-predicted regression:
+`test_every_contract_provider_resolves_a_harness_adapter` read
+`ADAPTER_CLASS_BY_PROVIDER` directly, never calling `adapter_registry()`
+first, so its result depended on pytest's collection order — whether some
+other test had already forced cursor's lazy registration. Fixed by having
+that test call `load_all()` explicitly, and confirmed via grep that it was
+the only direct consumer of the registry dict anywhere outside
+`universal_agent_harness.py` and its own tests. This is the concrete shape
+of the risk Sol's review named in the abstract ("the same per-provider
+name-resolution risk the Claude/Codex extraction slices already hit
+twice") — caught by the full suite, not the mechanical diff, exactly as
+predicted.
+
+**Not yet done:** the remaining four providers (`claude`, `codex`,
+`opencode`, `antigravity`) still live in `universal_agent_harness.py`
+(~9500 lines) — same pattern, not yet moved, and each one is real,
+separate work: resolving every name that class's moved methods reference
+(module-level helper functions, `EvidencePackage`/`HarnessOptions` types,
+shared private helpers) per provider, not a mechanical bulk cut.
 
 **The rest of Sol's review, for the record (this session, 2026-07-29):**
 confirmed `control-plane`'s comma-separated `qualification_profiles` parsing
