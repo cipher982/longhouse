@@ -270,7 +270,17 @@ def test_select_managed_control_transport_supports_opencode_interrupt_engine_cha
     asyncio.run(_run())
 
 
-def test_select_managed_control_transport_routes_antigravity_send_over_engine_channel():
+def test_select_managed_control_transport_refuses_antigravity_send():
+    """Refuse locally rather than dispatch into a guaranteed engine refusal.
+
+    Even with a machine still advertising `antigravity.send`, the contract says
+    send_input is policy_disabled, so no capability resolves and the dispatcher
+    declines. The engine would refuse it anyway: handle_command_frame calls
+    reject_excluded_provider before dispatch and returns provider_shadow_only
+    without invoking anything (see
+    control_channel.rs handle_command_frame_refuses_antigravity_send_as_shadow_only).
+    """
+
     async def _run():
         await _clear_machine_registry()
         try:
@@ -285,7 +295,7 @@ def test_select_managed_control_transport_routes_antigravity_send_over_engine_ch
                     owner_id=42,
                     command_type=MANAGED_CONTROL_COMMAND_SEND_TEXT,
                 )
-                == MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL
+                is None
             )
         finally:
             await _clear_machine_registry()
@@ -433,11 +443,7 @@ def test_dispatch_managed_control_command_records_live_store_operation(tmp_path,
             assert result.ok is True
             command_id = f"managed-control:{session.id}:session.send_text:req-live-store"
             with LiveSession() as live_db:
-                operation = (
-                    live_db.query(LiveMachineControlOperation)
-                    .filter(LiveMachineControlOperation.command_id == command_id)
-                    .one()
-                )
+                operation = live_db.query(LiveMachineControlOperation).filter(LiveMachineControlOperation.command_id == command_id).one()
                 assert operation.owner_id == 42
                 assert operation.session_id == str(session.id)
                 assert operation.device_id == "cinder"
@@ -640,9 +646,7 @@ def test_dispatch_managed_control_command_routes_opencode_send_over_engine_chann
                 "provider": "opencode",
                 "text": "hello from browser",
             }
-            assert (
-                websocket.sent[0]["command_id"] == f"managed-control:{session.id}:session.send_text:req-opencode-send"
-            )
+            assert websocket.sent[0]["command_id"] == f"managed-control:{session.id}:session.send_text:req-opencode-send"
         finally:
             await _clear_machine_registry()
 
@@ -697,9 +701,7 @@ def test_dispatch_managed_control_command_routes_opencode_interrupt_over_engine_
             }
             assert websocket.sent[0]["command_type"] == MANAGED_CONTROL_COMMAND_INTERRUPT
             assert websocket.sent[0]["payload"] == {"provider": "opencode"}
-            assert websocket.sent[0]["command_id"] == (
-                f"managed-control:{session.id}:session.interrupt:req-opencode-interrupt"
-            )
+            assert websocket.sent[0]["command_id"] == (f"managed-control:{session.id}:session.interrupt:req-opencode-interrupt")
         finally:
             await _clear_machine_registry()
 
@@ -756,16 +758,23 @@ def test_dispatch_managed_control_command_routes_opencode_terminate_over_engine_
             }
             assert websocket.sent[0]["command_type"] == MANAGED_CONTROL_COMMAND_TERMINATE
             assert websocket.sent[0]["payload"] == {"provider": "opencode"}
-            assert websocket.sent[0]["command_id"] == (
-                f"managed-control:{session.id}:session.terminate:req-opencode-terminate"
-            )
+            assert websocket.sent[0]["command_id"] == (f"managed-control:{session.id}:session.terminate:req-opencode-terminate")
         finally:
             await _clear_machine_registry()
 
     asyncio.run(_run())
 
 
-def test_dispatch_managed_control_command_sends_antigravity_provider_to_engine_channel():
+def test_dispatch_managed_control_command_refuses_antigravity_before_the_engine():
+    """Antigravity send never reaches the engine, and must not pretend to.
+
+    This previously asserted a successful dispatch against a fake engine that
+    returns ok:true. The real engine returns provider_shadow_only from
+    reject_excluded_provider without invoking anything, so the fake was the only
+    reason the path looked alive. Opencode send/interrupt/terminate above cover
+    the frame-construction contract this test used to be the only proof of.
+    """
+
     async def _run():
         await _clear_machine_registry()
         try:
@@ -774,15 +783,6 @@ def test_dispatch_managed_control_command_sends_antigravity_provider_to_engine_c
                 provider="antigravity",
                 managed_transport="antigravity_hook_inbox",
                 source_runner_id=None,
-            )
-            completer = asyncio.create_task(
-                _complete_first_machine_command(
-                    websocket,
-                    {
-                        "ok": True,
-                        "result": {"stdout": "accepted", "exit_code": 0, "stderr": ""},
-                    },
-                )
             )
             result = await dispatch_managed_control_command(
                 db=object(),
@@ -793,14 +793,9 @@ def test_dispatch_managed_control_command_sends_antigravity_provider_to_engine_c
                 payload={"text": "continue"},
                 request_id="req-agy",
             )
-            await completer
 
-            assert result.ok is True
-            assert result.transport == MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL
-            assert result.data == {"stdout": "accepted", "exit_code": 0, "stderr": ""}
-            assert websocket.sent[0]["command_type"] == MANAGED_CONTROL_COMMAND_SEND_TEXT
-            assert websocket.sent[0]["payload"] == {"provider": "antigravity", "text": "continue"}
-            assert websocket.sent[0]["command_id"] == f"managed-control:{session.id}:session.send_text:req-agy"
+            assert result.ok is False
+            assert not websocket.sent, "no frame may be sent for a routed-away provider"
         finally:
             await _clear_machine_registry()
 

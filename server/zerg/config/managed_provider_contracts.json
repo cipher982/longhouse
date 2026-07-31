@@ -76,6 +76,7 @@
       "tail_output": true,
       "runtime_phase": true,
       "transcript_binding": true,
+      "live_proof": false,
       "startup_coordination_context": false,
       "capabilities": {
         "coordination.awareness.create": {
@@ -361,6 +362,7 @@
       "tail_output": true,
       "runtime_phase": true,
       "transcript_binding": true,
+      "live_proof": true,
       "startup_coordination_context": true,
       "capabilities": {
         "session.launch.helm": {
@@ -697,6 +699,7 @@
       "tail_output": true,
       "runtime_phase": true,
       "transcript_binding": true,
+      "live_proof": true,
       "startup_coordination_context": false,
       "capabilities": {
         "session.launch.helm": {
@@ -899,7 +902,7 @@
       "launch_local": true,
       "run_once": false,
       "reattach": false,
-      "send_input": true,
+      "send_input": false,
       "interrupt": false,
       "steer_active_turn": false,
       "answer_pause": false,
@@ -907,6 +910,7 @@
       "tail_output": true,
       "runtime_phase": true,
       "transcript_binding": true,
+      "live_proof": false,
       "startup_coordination_context": false,
       "capabilities": {
         "session.launch.helm": {
@@ -935,8 +939,8 @@
           ]
         },
         "session.input.send": {
-          "disposition": "implemented",
-          "reason_code": "semantic_proof_missing",
+          "disposition": "policy_disabled",
+          "reason_code": "policy_disabled",
           "policy_key": "provider.antigravity.send_input",
           "action_gate": "strict",
           "contexts": {
@@ -1011,9 +1015,11 @@
           "observed_provider_version": "1.1.5"
         },
         "send_input": {
-          "level": "live_token",
-          "source": "scripts/qa/provider-control-e2e-canary.py --provider antigravity --antigravity-real-agy-send proves real agy PreInvocation hook-inbox injection changes the model-visible turn",
-          "disposition": "implemented",
+          "level": "none",
+          "source": "routed away; see reason",
+          "disposition": "policy_disabled",
+          "reason": "Antigravity is maintenance tier. Five independent server gates zero its send capability (live_control_catalog._CANONICAL_AUTH_PROVIDERS, heartbeat ControlEvidenceIn, machine_evidence._RUN_EXIT_AUTHORITY, managed_control_state, live_catalog_launch) and control_channel.rs reject_excluded_provider refuses every antigravity command with provider_shadow_only before dispatch. The hook-inbox injection works; Longhouse does not route to it.",
+          "routed_to": "shadow_archive_only",
           "owner_action": "antigravity real agy hook-inbox injection canary"
         },
         "interrupt": {
@@ -1073,9 +1079,7 @@
           "owner_action": "antigravity turn-scoped Console adapter"
         }
       },
-      "machine_control_supports": [
-        "antigravity.send"
-      ],
+      "machine_control_supports": [],
       "adapter_digest": "3e3c17a7f8dfe07ccea203142cbd17e1109229b818f304c8187d40de143b36a9"
     },
     {
@@ -1137,6 +1141,7 @@
       "tail_output": true,
       "runtime_phase": true,
       "transcript_binding": true,
+      "live_proof": false,
       "startup_coordination_context": false,
       "capabilities": {
         "coordination.awareness.create": {
@@ -1327,7 +1332,7 @@
         "cursor.turn_start",
         "cursor.turn_interrupt"
       ],
-      "adapter_digest": "f4a1009dedd1a74e5631b4c061353a8ee2754e64a9842f6033cd01bfb0881b7a"
+      "adapter_digest": "d23cff4b3025d6d036c013d26df8e8aa4365b420eb48bd73215d2b2a2d6b09b0"
     }
   ]
 }

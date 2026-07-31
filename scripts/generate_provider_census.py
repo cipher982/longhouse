@@ -28,17 +28,29 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 SCHEMA_PATH = ROOT / "schemas" / "managed_providers.yml"
 OUTPUT_PATH = ROOT / "docs" / "generated" / "provider_census.json"
-EXTENSIONS = ("*.py", "*.ts", "*.tsx", "*.rs")
+# *.swift was absent until 2026-07-31, so the two Swift clients -- the iOS app
+# and the macOS menu bar -- were invisible to the guard whose whole job is
+# making the provider-literal claim checkable. Both carry provider tables
+# (ProviderGlyph, HealthSnapshot.preferredOrder, ActionSink's stop-adapter map).
+EXTENSIONS = ("*.py", "*.ts", "*.tsx", "*.rs", "*.swift")
 EXCLUDE_PATH_COMPONENTS = ("generated", "node_modules")
 
 
 def _provider_names() -> list[str]:
     payload = yaml.safe_load(SCHEMA_PATH.read_text(encoding="utf-8"))
     if not isinstance(payload, dict) or not isinstance(payload.get("providers"), list):
-        raise SystemExit(f"{SCHEMA_PATH} must contain a YAML mapping with a top-level 'providers' list")
-    names = [entry["provider"] for entry in payload["providers"] if isinstance(entry, dict) and "provider" in entry]
+        raise SystemExit(
+            f"{SCHEMA_PATH} must contain a YAML mapping with a top-level 'providers' list"
+        )
+    names = [
+        entry["provider"]
+        for entry in payload["providers"]
+        if isinstance(entry, dict) and "provider" in entry
+    ]
     if not names:
-        raise SystemExit(f"no provider entries found under 'providers' in {SCHEMA_PATH}")
+        raise SystemExit(
+            f"no provider entries found under 'providers' in {SCHEMA_PATH}"
+        )
     return sorted(set(names))
 
 
@@ -90,9 +102,13 @@ def render(census: dict) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--write", action="store_true", help="Write the generated census artifact.")
     parser.add_argument(
-        "--check", action="store_true", help="Fail if the generated census differs from the checked-in artifact."
+        "--write", action="store_true", help="Write the generated census artifact."
+    )
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="Fail if the generated census differs from the checked-in artifact.",
     )
     args = parser.parse_args()
 

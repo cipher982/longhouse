@@ -277,7 +277,7 @@ def test_opencode_server_bridge_projects_live_send_without_steer(db):
     assert caps.can_steer_active_turn is False
 
 
-def test_antigravity_hook_inbox_projects_live_send_without_interrupt_or_steer(db):
+def test_antigravity_hook_inbox_clamps_send_to_the_contract(db):
     s = _make_session(db, provider="antigravity")
     t = _make_thread(db, s)
     r = _make_run(db, t)
@@ -292,9 +292,11 @@ def test_antigravity_hook_inbox_projects_live_send_without_interrupt_or_steer(db
 
     caps = project_session_capabilities(db, session_id=s.id)
 
-    assert caps.live_control_available is True
     assert caps.managed_transport.value == "antigravity_hook_inbox"
-    assert caps.can_send_input is True
+    # The connection row still carries send=1 from an older launch, but the
+    # kernel clamps to the contract, where antigravity's send_input is
+    # policy_disabled. A stale row must not resurrect a routed-away capability.
+    assert caps.can_send_input is False
     assert caps.can_interrupt is False
     assert caps.can_terminate is False
     assert caps.can_tail_output is True
@@ -318,9 +320,10 @@ def test_known_provider_control_plane_clamps_capability_bits_to_contract(db):
     caps = project_session_capabilities(db, session_id=s.id)
     coverage = derive_provider_action_coverage("antigravity")
 
-    assert caps.live_control_available is True
-    assert caps.can_send_input is True
-    assert coverage["send_prompt"].state == ActionCoverageState.SUPPORTED
+    # Antigravity is Shadow-only: send_input is policy_disabled in the contract,
+    # so both the projected capability and the derived coverage must say so.
+    assert caps.can_send_input is False
+    assert coverage["send_prompt"].state == ActionCoverageState.UNSUPPORTED
     assert caps.can_interrupt is False
     assert coverage["abort"].state == ActionCoverageState.UNSUPPORTED
     assert caps.can_terminate is False
@@ -360,7 +363,7 @@ def test_all_manifest_control_planes_clamp_session_capabilities_to_contract(db, 
 @pytest.mark.parametrize(
     ("provider", "control_plane", "expected"),
     [
-        ("antigravity", "antigravity_process", {"send": True, "interrupt": False, "terminate": False, "resume": False}),
+        ("antigravity", "antigravity_process", {"send": False, "interrupt": False, "terminate": False, "resume": False}),
         ("opencode", "opencode_process", {"send": True, "interrupt": True, "terminate": True, "resume": True}),
     ],
 )

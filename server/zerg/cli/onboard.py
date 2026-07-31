@@ -28,11 +28,31 @@ from zerg.cli.config_file import load_config
 from zerg.cli.config_file import save_loaded_config
 from zerg.cli.serve import _get_longhouse_home
 from zerg.cli.serve import _is_server_running
+from zerg.native_device_entrypoints import available_native_managed_launch_commands
+from zerg.provider_cli_contract import PROVIDER_CLI_BINARY_BY_PROVIDER
 from zerg.services.local_runtime_installer import install_local_runtime
 from zerg.services.runtime_artifacts import desktop_app_canonical_bundle_path
 from zerg.services.shipper import load_token
 
 logger = logging.getLogger(__name__)
+
+
+# Display label and docs URL per provider. The set of providers comes from the
+# contract; only the human strings live here.
+_PROVIDER_ONBOARDING_LABELS = {
+    "claude": "Claude Code",
+    "codex": "Codex CLI",
+    "cursor": "Cursor Agent",
+    "opencode": "OpenCode",
+    "antigravity": "Antigravity",
+}
+_PROVIDER_ONBOARDING_DOCS = {
+    "claude": "https://docs.anthropic.com/en/docs/claude-code/overview",
+    "codex": "https://github.com/openai/codex",
+    "cursor": "https://cursor.com/cli",
+    "opencode": "https://opencode.ai",
+    "antigravity": "https://antigravity.google/product/antigravity-cli",
+}
 
 
 def _has_command(cmd: str) -> bool:
@@ -432,33 +452,31 @@ def onboard(
             skip_local_server = False
 
     typer.echo("")
-    typer.echo("Install Longhouse, open it, and find one prior session. " "Start Longhouse sessions later when you want control.")
+    typer.echo("Install Longhouse, open it, and find one prior session. Start Longhouse sessions later when you want control.")
     typer.echo("")
 
     # Step 1: Check dependencies
     typer.secho("Step 1: Checking dependencies", fg=typer.colors.BLUE, bold=True)
     typer.echo("")
 
-    # Check supported AI CLIs
-    has_claude = _has_command("claude")
-    has_codex = _has_command("codex")
-    has_antigravity = _has_command("agy")
-    has_any_cli = has_claude or has_codex or has_antigravity
+    # Check supported AI CLIs. Derived from the provider contract: this probed
+    # only claude/codex/agy, so a user whose one agent CLI was OpenCode or
+    # Cursor was told "No supported AI CLI found" and shown a list excluding
+    # what they actually had -- on the first screen of onboarding.
+    found_providers = [provider for provider, binary in sorted(PROVIDER_CLI_BINARY_BY_PROVIDER.items()) if _has_command(binary)]
+    has_any_cli = bool(found_providers)
 
-    if has_claude:
-        typer.secho("  [OK] Claude Code found", fg=typer.colors.GREEN)
-    if has_codex:
-        typer.secho("  [OK] Codex CLI found", fg=typer.colors.GREEN)
-    if has_antigravity:
-        typer.secho("  [OK] Antigravity CLI found", fg=typer.colors.GREEN)
+    for provider in found_providers:
+        typer.secho(f"  [OK] {_PROVIDER_ONBOARDING_LABELS.get(provider, provider)} found", fg=typer.colors.GREEN)
 
     if not has_any_cli:
         typer.secho("  [--] No supported AI CLI found", fg=typer.colors.YELLOW)
         typer.echo("")
         typer.echo("  Longhouse works with any of these CLI tools:")
-        typer.echo("    - Claude Code  https://docs.anthropic.com/en/docs/claude-code/overview")
-        typer.echo("    - Codex CLI    https://github.com/openai/codex")
-        typer.echo("    - Antigravity  https://antigravity.google/product/antigravity-cli")
+        for provider in sorted(PROVIDER_CLI_BINARY_BY_PROVIDER):
+            label = _PROVIDER_ONBOARDING_LABELS.get(provider, provider)
+            docs = _PROVIDER_ONBOARDING_DOCS.get(provider, "")
+            typer.echo(f"    - {label:<13} {docs}".rstrip())
         typer.echo("")
         typer.echo("  You can still set up the local runtime now and connect a CLI later.")
         typer.echo("  You can also import sessions manually via JSONL upload.")
@@ -622,19 +640,22 @@ def onboard(
         typer.echo("  2. Find one prior session in the timeline")
     else:
         typer.echo("  1. Open Longhouse")
-        typer.echo("  2. Install Claude Code, Codex CLI, or Antigravity CLI when you want real imports")
+        typer.echo("  2. Install a supported agent CLI when you want real imports")
     if installed_desktop_app:
         typer.echo("  3. Look for Longhouse.app in /Applications and your menu bar")
     typer.echo("")
     typer.echo("Next, when you want Longhouse-managed launch:")
-    if has_claude:
-        typer.echo("  longhouse claude   Start a Longhouse Claude session")
-    if has_codex:
-        typer.echo("  longhouse codex    Start a Longhouse Codex session")
-    if has_antigravity:
-        typer.echo("  longhouse agy      Start a Longhouse-managed agy session")
-    if not (has_claude or has_codex or has_antigravity):
-        typer.echo("  Install Claude Code, Codex CLI, or Antigravity CLI, then start a Longhouse session")
+    # config/native_device_entrypoints.json is the authority for which
+    # `longhouse <provider>` commands actually exist -- antigravity's is
+    # `excluded`, so suggesting it sends users to a command that does not run.
+    launchable = available_native_managed_launch_commands()
+    suggested = [(provider, command) for provider, command in launchable if _has_command(PROVIDER_CLI_BINARY_BY_PROVIDER[provider])]
+    for provider, command in suggested:
+        label = _PROVIDER_ONBOARDING_LABELS.get(provider, provider)
+        typer.echo(f"  {command:<19}Start a Longhouse {label} session")
+    if not suggested:
+        installable = ", ".join(_PROVIDER_ONBOARDING_LABELS.get(provider, provider) for provider, _ in launchable)
+        typer.echo(f"  Install one of {installable}, then start a Longhouse session")
     typer.echo("")
     typer.echo("Repair tools (only if you need them later):")
     typer.echo("  longhouse doctor            Diagnose local setup issues")

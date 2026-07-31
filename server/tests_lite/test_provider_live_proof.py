@@ -84,12 +84,17 @@ def test_mismatched_live_proof_is_informational_only(monkeypatch, tmp_path: Path
 
 
 def test_rejects_release_artifact_in_live_proof_dir(monkeypatch, tmp_path: Path) -> None:
+    # Subject was antigravity until SUPPORTED_LIVE_PROOF_PROVIDERS started
+    # deriving from the contract; antigravity never had a live-proof canary and
+    # the engine always refused it, so it has no statuses entry to assert on.
+    # The behavior under test -- rejecting a release artifact found in the
+    # live-proof directory -- is provider-agnostic.
     _write_proof(
         tmp_path,
-        "antigravity",
+        "opencode",
         {
             "schema_version": prs.PROVIDER_STATUS_SCHEMA_VERSION,
-            "provider": "antigravity",
+            "provider": "opencode",
             "provider_version": "1.0.2",
             "generated_at": _generated_at(),
             "verdict": "green",
@@ -101,12 +106,12 @@ def test_rejects_release_artifact_in_live_proof_dir(monkeypatch, tmp_path: Path)
         lambda path: ("1.0.2\n", None),
     )
 
-    proof = plp.collect_provider_live_proof({"antigravity": {"path": "/Users/test/.local/bin/agy"}})
+    proof = plp.collect_provider_live_proof({"opencode": {"path": "/Users/test/.local/bin/opencode"}})
 
-    antigravity = proof["statuses"]["antigravity"]
-    assert antigravity["status"] == "artifact_kind_mismatch"
-    assert antigravity["applies"] is False
-    assert antigravity["artifact_kind_status"] == "mismatch"
+    opencode = proof["statuses"]["opencode"]
+    assert opencode["status"] == "artifact_kind_mismatch"
+    assert opencode["applies"] is False
+    assert opencode["artifact_kind_status"] == "mismatch"
 
 
 def test_stale_live_proof_does_not_apply(monkeypatch, tmp_path: Path) -> None:

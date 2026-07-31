@@ -1060,8 +1060,10 @@ def test_action_matrix_marks_provider_specific_unsupported_actions(tmp_path: Pat
     assert by_provider["opencode"]["external_event_channel"]["status"] == "unsupported_gap"
     assert by_provider["antigravity"]["interrupt_cancel"]["status"] == "unsupported_gap"
     assert by_provider["antigravity"]["external_event_channel"]["status"] == "pass"
-    assert by_provider["antigravity"]["send_message"]["status"] == "pass"
-    assert by_provider["antigravity"]["send_message"]["evidence_level"] == "live_token"
+    # Antigravity send became policy_disabled on 2026-07-31 (Shadow-only), so
+    # the action matrix reports it as settled rather than proven.
+    assert by_provider["antigravity"]["send_message"]["status"] == "not_applicable"
+    assert by_provider["antigravity"]["send_message"]["disposition"] == "policy_disabled"
 
 
 def test_old_new_release_diff_blocks_without_explicit_artifacts(tmp_path: Path) -> None:
@@ -1301,9 +1303,8 @@ def test_control_surface_keeps_unsupported_and_live_token_rows_explicit(tmp_path
     assert by_provider["opencode"]["resume_reattach"]["status"] == "pass"
     assert by_provider["opencode"]["resume_reattach"]["evidence_level"] == "live_no_token"
     assert by_provider["antigravity"]["interrupt_cancel"]["status"] == "unsupported_gap"
-    assert by_provider["antigravity"]["send_message"]["status"] == "pass"
-    assert by_provider["antigravity"]["send_message"]["required_evidence"] == "hermetic"
-    assert by_provider["antigravity"]["send_message"]["evidence_level"] == "live_token"
+    assert by_provider["antigravity"]["send_message"]["status"] == "not_applicable"
+    assert by_provider["antigravity"]["send_message"]["disposition"] == "policy_disabled"
 
 
 @pytest.mark.timeout(60)

@@ -9,6 +9,11 @@ frontend:
 
 engine:
   - 'engine/**'
+  # The Makefile decides which engine tests run, so a change to it must trigger
+  # them. The ios: filter below already does this for the same reason.
+  - 'Makefile'
+  # The engine compiles this manifest in with include_str!.
+  - 'server/zerg/config/managed_provider_contracts.json'
 
 schemas:
   - 'schemas/**'

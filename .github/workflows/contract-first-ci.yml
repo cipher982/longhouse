@@ -119,6 +119,19 @@ jobs:
       timeout-minutes: 4
       run: make validate-managed-session-contract
 
+    - name: Validate generated provider contract manifest
+      timeout-minutes: 3
+      # The engine include_str!s this generated JSON, so the whole Rust-side
+      # provider authority rests on it matching schemas/managed_providers.yml.
+      # The generator's --check had no caller anywhere in the repo.
+      run: make validate-managed-provider-contracts
+
+    - name: Validate provider literal census
+      timeout-minutes: 3
+      # This target existed in the Makefile and no workflow ever invoked it, so
+      # the census artifact sat stale and nothing noticed.
+      run: make validate-provider-census
+
     - name: Validate provider CLI canaries
       timeout-minutes: 8
       run: make validate-provider-cli-canaries

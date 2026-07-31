@@ -62,6 +62,11 @@ providers:
   tail_output: true
   runtime_phase: true
   transcript_binding: true
+  # Whether `provider.live_proof` can run for this provider. The executable
+  # truth is scripts-side: server/zerg/qa/provider_live_canary.py implements
+  # claude and opencode only. Codex has its own release canary; Cursor is
+  # observed_only.
+  live_proof: false
   # Coordination awareness is durable MCP server metadata, not startup hook
   # context. This avoids Codex's deferred post-compaction SessionStart cards.
   startup_coordination_context: false
@@ -258,6 +263,11 @@ providers:
   tail_output: true
   runtime_phase: true
   transcript_binding: true
+  # Whether `provider.live_proof` can run for this provider. The executable
+  # truth is scripts-side: server/zerg/qa/provider_live_canary.py implements
+  # claude and opencode only. Codex has its own release canary; Cursor is
+  # observed_only.
+  live_proof: true
   startup_coordination_context: true
   capabilities:
     session.launch.helm:
@@ -484,6 +494,11 @@ providers:
   tail_output: true
   runtime_phase: true
   transcript_binding: true
+  # Whether `provider.live_proof` can run for this provider. The executable
+  # truth is scripts-side: server/zerg/qa/provider_live_canary.py implements
+  # claude and opencode only. Codex has its own release canary; Cursor is
+  # observed_only.
+  live_proof: true
   startup_coordination_context: false
   capabilities:
     session.launch.helm:
@@ -639,7 +654,7 @@ providers:
   launch_local: true
   run_once: false
   reattach: false
-  send_input: true
+  send_input: false
   interrupt: false
   steer_active_turn: false
   answer_pause: false
@@ -647,6 +662,11 @@ providers:
   tail_output: true
   runtime_phase: true
   transcript_binding: true
+  # Whether `provider.live_proof` can run for this provider. The executable
+  # truth is scripts-side: server/zerg/qa/provider_live_canary.py implements
+  # claude and opencode only. Codex has its own release canary; Cursor is
+  # observed_only.
+  live_proof: false
   startup_coordination_context: false
   capabilities:
     session.launch.helm:
@@ -665,8 +685,8 @@ providers:
         acceptable_evidence: [live_no_token]
         max_age_seconds: 604800
     session.input.send:
-      disposition: implemented
-      reason_code: semantic_proof_missing
+      disposition: policy_disabled
+      reason_code: policy_disabled
       policy_key: provider.antigravity.send_input
       action_gate: strict
       contexts:
@@ -716,11 +736,16 @@ providers:
       reason: "Antigravity exposes no stable reattach surface for an existing conversation."
       observed_provider_version: "1.1.5"
     send_input:
-      level: live_token
-      source: scripts/qa/provider-control-e2e-canary.py --provider antigravity --antigravity-real-agy-send
-        proves real agy PreInvocation hook-inbox injection changes the model-visible
-        turn
-      disposition: "implemented"
+      # level: none is required for a routed-away operation -- evidence for a
+      # path the product does not take is what made this cell read as a working
+      # capability. The proof itself was real: provider-control-e2e-canary.py
+      # --antigravity-real-agy-send showed PreInvocation hook-inbox injection
+      # changing the model-visible turn. Longhouse simply does not route there.
+      level: none
+      source: routed away; see reason
+      disposition: "policy_disabled"
+      reason: "Antigravity is maintenance tier. Five independent server gates zero its send capability (live_control_catalog._CANONICAL_AUTH_PROVIDERS, heartbeat ControlEvidenceIn, machine_evidence._RUN_EXIT_AUTHORITY, managed_control_state, live_catalog_launch) and control_channel.rs reject_excluded_provider refuses every antigravity command with provider_shadow_only before dispatch. The hook-inbox injection works; Longhouse does not route to it."
+      routed_to: "shadow_archive_only"
       owner_action: "antigravity real agy hook-inbox injection canary"
     interrupt:
       level: none
@@ -770,8 +795,10 @@ providers:
       disposition: "not_implemented"
       reason: "Antigravity has no turn-scoped Console adapter."
       owner_action: "antigravity turn-scoped Console adapter"
-  machine_control_supports:
-  - antigravity.send
+  # Emptied 2026-07-31: antigravity.send was advertised by the engine whenever
+  # `agy` was on PATH and rejected by reject_excluded_provider before dispatch,
+  # so the machines API listed a control that always failed.
+  machine_control_supports: []
 - provider: cursor
   provider_cli_binary: cursor-agent
   provider_cli_env: LONGHOUSE_CURSOR_BIN
@@ -824,6 +851,11 @@ providers:
   tail_output: true
   runtime_phase: true
   transcript_binding: true
+  # Whether `provider.live_proof` can run for this provider. The executable
+  # truth is scripts-side: server/zerg/qa/provider_live_canary.py implements
+  # claude and opencode only. Codex has its own release canary; Cursor is
+  # observed_only.
+  live_proof: false
   startup_coordination_context: false
   capabilities:
     coordination.awareness.create:

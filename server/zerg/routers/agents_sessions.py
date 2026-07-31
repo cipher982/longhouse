@@ -2293,6 +2293,18 @@ async def issue_session_coordination_token(
     session_device_id = str(getattr(session, "device_id", "") or "").strip()
     if not token_device_id or not session_device_id or token_device_id != session_device_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Session belongs to another device")
+    # Device match alone is not provenance. Without these, a device token could
+    # mint session-scoped coordination authority for any same-device session of
+    # a supported provider -- including a Shadow session Longhouse never
+    # launched, or one that ended weeks ago. This endpoint exists for one
+    # narrow case: a managed session being resumed.
+    if normalize_utc_datetime(getattr(session, "closed_at", None)) is not None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Session is closed")
+    if not _session_is_managed_for_coordination(session):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Coordination authority is only issued for managed sessions",
+        )
     token = issue_managed_session_token(
         owner_id=owner_id,
         session_id=str(session_id),
@@ -2301,6 +2313,23 @@ async def issue_session_coordination_token(
         scope=MANAGED_SESSION_SCOPE_COORDINATION,
     )
     return {"coordination_token": token}
+
+
+def _session_is_managed_for_coordination(session: object) -> bool:
+    """Whether Longhouse ever owned this session's control path.
+
+    Shadow sessions are discovered, not launched, so they never acquire a
+    SessionConnection. The catalog snapshot projects those rows into
+    ``catalog_facts["connections"]``; an empty list is the durable marker that
+    this session is unmanaged, which is exactly who must not receive
+    session-scoped coordination authority.
+    """
+
+    facts = getattr(session, "catalog_facts", None)
+    if not isinstance(facts, dict):
+        return False
+    connections = facts.get("connections")
+    return isinstance(connections, list) and bool(connections)
 
 
 def _directed_input_owner_id(auth: object) -> int:

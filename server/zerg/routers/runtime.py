@@ -41,6 +41,7 @@ from zerg.services.session_pause_requests import PAUSE_KIND_STRUCTURED_QUESTION
 from zerg.services.session_pause_requests import load_active_pause_request_map
 from zerg.services.session_runtime import RuntimeEventBatchIngest
 from zerg.services.session_runtime import RuntimeEventBatchResult
+from zerg.services.session_runtime import _is_bridge_transcript_event
 from zerg.services.session_runtime import ingest_live_runtime_events
 from zerg.services.session_runtime import ingest_runtime_events
 from zerg.services.session_runtime import load_runtime_state_map
@@ -666,13 +667,14 @@ async def ingest_runtime_observation_batch(
 
 
 def _is_bridge_live_transcript_event(event) -> bool:
-    payload = event.payload or {}
-    return (
-        (event.provider or "").strip().lower() == "codex"
-        and (event.source or "").strip().lower() in {"codex_bridge_live", "codex_console_live"}
-        and event.kind == "progress_signal"
-        and payload.get("progress_kind") in {"bridge_live_transcript_delta", "console_live_tool_item"}
-    )
+    # This was a codex-only copy of session_runtime._is_bridge_transcript_event,
+    # which covers codex, cursor, and opencode. Cursor and OpenCode stream
+    # batches therefore never took the live-transcript fast path: their previews
+    # still landed via the DB overlay, but they lost instant SSE fanout and paid
+    # the full notification/widget cost the fast path exists to skip. One
+    # predicate, so a new streaming source cannot be recognized by one and not
+    # the other.
+    return _is_bridge_transcript_event(event)
 
 
 def _publish_live_transcript_previews(events, *, now: datetime) -> None:

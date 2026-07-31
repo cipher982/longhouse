@@ -144,7 +144,7 @@ def test_onboard_without_cli_skips_initial_import(monkeypatch, tmp_path):
     ]
 
 
-def test_onboard_with_agy_points_to_longhouse_agy(monkeypatch, tmp_path):
+def test_onboard_does_not_suggest_an_excluded_native_entrypoint(monkeypatch, tmp_path):
     runner = CliRunner()
 
     monkeypatch.delenv("CI", raising=False)
@@ -170,8 +170,15 @@ def test_onboard_with_agy_points_to_longhouse_agy(monkeypatch, tmp_path):
     result = runner.invoke(app, ["onboard"])
 
     assert result.exit_code == 0, result.output
-    assert "[OK] Antigravity CLI found" in result.output
-    assert "longhouse agy      Start a Longhouse-managed agy session" in result.output
+    # Antigravity is still detected -- it imports into the timeline.
+    assert "[OK] Antigravity found" in result.output
+    # But it must not be offered as a managed launch. `longhouse agy` is not a
+    # subcommand of the facade (engine/src/longhouse.rs declares claude, codex,
+    # opencode, cursor only) and antigravity-managed is `excluded` in
+    # config/native_device_entrypoints.json. This test asserted the opposite
+    # until 2026-07-31, so onboarding told users to run a command that does not
+    # exist.
+    assert "longhouse agy" not in result.output
     assert "longhouse antigravity" not in result.output
 
 
@@ -332,3 +339,42 @@ def test_onboard_no_longer_prompts_for_manual_mode(monkeypatch, tmp_path):
     assert "Choice" not in result.output
     assert "Step 5: PATH verification" in result.output
     assert "longhouse claude" in result.output
+
+
+def test_onboard_suggests_cursor_and_opencode_managed_launch(monkeypatch, tmp_path):
+    """Both were absent from onboarding entirely.
+
+    A user whose only agent CLI was OpenCode or Cursor was told "No supported
+    AI CLI found" and shown a three-item list that excluded what they had.
+    """
+
+    runner = CliRunner()
+
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.setattr(onboard_cli, "_has_command", lambda cmd: cmd in {"cursor-agent", "opencode"})
+    monkeypatch.setattr(onboard_cli, "_has_launchd", lambda: True)
+    monkeypatch.setattr(onboard_cli, "_has_systemd", lambda: False)
+    monkeypatch.setattr(onboard_cli, "_is_server_running", lambda: (False, None))
+    monkeypatch.setattr(onboard_cli, "_check_server_health", lambda *args, **kwargs: True)
+    monkeypatch.setattr(onboard_cli, "_has_gui", lambda: False)
+    monkeypatch.setattr(onboard_cli.socket, "gethostname", lambda: "test-box")
+    monkeypatch.setattr(onboard_cli, "load_token", lambda: None)
+    monkeypatch.setattr(onboard_cli, "verify_shell_path", lambda: [])
+    monkeypatch.setattr(onboard_cli, "get_config_path", lambda: tmp_path / "config.toml")
+    monkeypatch.setattr(onboard_cli, "load_config", lambda config_path=None: config_file_cli.LonghouseConfig())
+    monkeypatch.setattr(onboard_cli, "save_loaded_config", lambda config, config_path=None: None)
+    monkeypatch.setattr(onboard_cli, "install_local_runtime", lambda **_kwargs: _install_result())
+    monkeypatch.setattr(
+        onboard_cli.subprocess,
+        "run",
+        lambda args, **kwargs: SimpleNamespace(returncode=0, stderr="", stdout=""),
+    )
+
+    result = runner.invoke(app, ["onboard"])
+
+    assert result.exit_code == 0, result.output
+    assert "No supported AI CLI found" not in result.output
+    assert "[OK] Cursor Agent found" in result.output
+    assert "[OK] OpenCode found" in result.output
+    assert "longhouse cursor" in result.output
+    assert "longhouse opencode" in result.output

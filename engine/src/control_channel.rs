@@ -51,6 +51,13 @@ const COMMAND_RUN_ONCE: &str = "session.run_once";
 const COMMAND_TURN_START: &str = "session.turn.start";
 const COMMAND_TURN_INTERRUPT: &str = "session.turn.interrupt";
 const COMMAND_PROVIDER_LIVE_PROOF: &str = "provider.live_proof";
+// A command frame that omits `provider` is routed here. This was five
+// unexplained copies of the literal "codex", which silently sent an unknown or
+// missing provider into the Codex bridge and contradicts the repo's
+// no-silent-fallbacks invariant. It stays for wire compatibility with older
+// callers that never sent the field; the constant makes the fallback one
+// reviewable decision instead of five invisible ones.
+const DEFAULT_COMMAND_PROVIDER: &str = "codex";
 const COMMAND_ARCHIVE_BACKLOG_CONTROL: &str = "archive.backlog_control";
 const COMMAND_ARCHIVE_BACKLOG_CONTROL_V2: &str = "archive.backlog_control.v2";
 const DEFAULT_CODEX_BIN: &str = "codex";
@@ -496,7 +503,18 @@ fn control_supports_for_path_with_env(
 }
 
 fn provider_live_proof_supported_provider(provider: &str) -> bool {
-    matches!(provider, "claude" | "opencode")
+    // Was `matches!(provider, "claude" | "opencode")`, one of three hand-copies
+    // of this set. The Python request body and provider_live_proof.py both said
+    // claude/opencode/antigravity, so an antigravity live proof was accepted on
+    // the wire and always failed here. The manifest now carries `live_proof`
+    // and every copy derives from it.
+    managed_provider_contract_items().iter().any(|item| {
+        item.get("provider").and_then(Value::as_str) == Some(provider)
+            && item
+                .get("live_proof")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+    })
 }
 
 fn control_supports_for_path(path_value: Option<&OsStr>) -> Vec<String> {
@@ -1003,7 +1021,7 @@ async fn execute_command(
         COMMAND_SEND_TEXT => {
             let text = payload_required_string(&payload, "text")?;
             let provider = payload_optional_string(&payload, "provider")
-                .unwrap_or_else(|| "codex".to_string());
+                .unwrap_or_else(|| DEFAULT_COMMAND_PROVIDER.to_string());
             if provider == "claude" {
                 let summary = claude_channel_send_text(ClaudeChannelSendConfig {
                     session_id: session_id.clone(),
@@ -1078,7 +1096,7 @@ async fn execute_command(
         }
         COMMAND_INTERRUPT => {
             let provider = payload_optional_string(&payload, "provider")
-                .unwrap_or_else(|| "codex".to_string());
+                .unwrap_or_else(|| DEFAULT_COMMAND_PROVIDER.to_string());
             if provider == "claude" {
                 claude_channel_interrupt(ClaudeChannelInterruptConfig {
                     session_id,
@@ -1142,7 +1160,7 @@ async fn execute_command(
         }
         COMMAND_TERMINATE => {
             let provider = payload_optional_string(&payload, "provider")
-                .unwrap_or_else(|| "codex".to_string());
+                .unwrap_or_else(|| DEFAULT_COMMAND_PROVIDER.to_string());
             if provider == "opencode" {
                 let summary = crate::opencode_control::stop_server_bridge(&session_id)
                     .map_err(CommandError::command_failed)?;
@@ -1179,7 +1197,7 @@ async fn execute_command(
         COMMAND_STEER_TEXT => {
             let text = payload_required_string(&payload, "text")?;
             let provider = payload_optional_string(&payload, "provider")
-                .unwrap_or_else(|| "codex".to_string());
+                .unwrap_or_else(|| DEFAULT_COMMAND_PROVIDER.to_string());
             if provider == "claude" {
                 let summary = claude_channel_send_text(ClaudeChannelSendConfig {
                     session_id: session_id.clone(),
@@ -1234,7 +1252,7 @@ async fn execute_command(
         }
         COMMAND_ANSWER_PAUSE => {
             let provider = payload_optional_string(&payload, "provider")
-                .unwrap_or_else(|| "codex".to_string());
+                .unwrap_or_else(|| DEFAULT_COMMAND_PROVIDER.to_string());
             if provider == "opencode" {
                 let request_id = payload_required_string(&payload, "provider_request_id")?;
                 let decision = payload_optional_string(&payload, "decision")
@@ -3136,7 +3154,12 @@ mod tests {
         assert!(!supports.contains(&"opencode.launch".to_string()));
         assert!(supports.contains(&"opencode.terminate".to_string()));
         assert!(supports.contains(&"opencode.turn_start".to_string()));
-        assert!(supports.contains(&"antigravity.send".to_string()));
+        // antigravity.send was advertised whenever `agy` was on PATH and then
+        // refused by reject_excluded_provider before dispatch, so the machines
+        // API listed a control that always failed. The manifest no longer
+        // declares it (operation_evidence.send_input is policy_disabled,
+        // machine_control_supports is empty), so it must not be advertised.
+        assert!(!supports.contains(&"antigravity.send".to_string()));
         assert!(supports.contains(&"claude.live_proof".to_string()));
         assert!(supports.contains(&"opencode.live_proof".to_string()));
         assert!(!supports.contains(&"antigravity.live_proof".to_string()));
@@ -3354,7 +3377,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn handle_command_frame_routes_antigravity_send_through_longhouse_cli() {
+    async fn handle_command_frame_refuses_antigravity_send_as_shadow_only() {
         let _guard = ENV_LOCK.lock().unwrap();
         let unique = format!(
             "lh-antigravity-send-{}-{}",

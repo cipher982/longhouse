@@ -7,8 +7,66 @@
     "cursor",
     "opencode"
   ],
-  "file_count": 198,
+  "file_count": 217,
   "files": [
+    {
+      "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
+      "providers": [
+        "codex",
+        "cursor",
+        "opencode"
+      ]
+    },
+    {
+      "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/HealthSnapshot.swift",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "cursor",
+        "opencode"
+      ]
+    },
+    {
+      "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/MenuBarPanelComponents.swift",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "cursor",
+        "opencode"
+      ]
+    },
+    {
+      "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ProviderBrands.generated.swift",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "cursor",
+        "opencode"
+      ]
+    },
+    {
+      "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ProviderGlyph.swift",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "cursor",
+        "opencode"
+      ]
+    },
+    {
+      "path": "desktop/LonghouseMenuBarHarness/Tests/LonghouseMenuBarCoreTests/LonghouseMenuBarCoreTests.swift",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "cursor",
+        "opencode"
+      ]
+    },
     {
       "path": "e2e/tests/core/sessions.spec.ts",
       "providers": [
@@ -85,6 +143,15 @@
       "providers": [
         "claude",
         "codex"
+      ]
+    },
+    {
+      "path": "engine/src/managed_launch_payload.rs",
+      "providers": [
+        "claude",
+        "codex",
+        "cursor",
+        "opencode"
       ]
     },
     {
@@ -213,6 +280,112 @@
     },
     {
       "path": "engine/tests/golden_parser_contract.rs",
+      "providers": [
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "ios/Sources/LonghouseApp/ChatUITestFixtureView.swift",
+      "providers": [
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "ios/Sources/LonghouseApp/InboxViewPreviews.swift",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "ios/Sources/LonghouseApp/LaunchSessionSheet.swift",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "cursor",
+        "opencode"
+      ]
+    },
+    {
+      "path": "ios/Sources/LonghouseApp/SessionView.swift",
+      "providers": [
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "ios/Sources/LonghouseApp/SessionViewPreviews.swift",
+      "providers": [
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "ios/Sources/LonghouseWidget/LonghouseWidget.swift",
+      "providers": [
+        "antigravity",
+        "codex"
+      ]
+    },
+    {
+      "path": "ios/Sources/Shared/ProviderBrands.generated.swift",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "cursor",
+        "opencode"
+      ]
+    },
+    {
+      "path": "ios/Sources/Shared/ProviderGlyph.swift",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "cursor",
+        "opencode"
+      ]
+    },
+    {
+      "path": "ios/Sources/Shared/SessionAPIAdapters.swift",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "ios/Tests/LonghouseIOSTests/LonghouseAPITests.swift",
+      "providers": [
+        "claude",
+        "codex",
+        "cursor",
+        "opencode"
+      ]
+    },
+    {
+      "path": "ios/Tests/LonghouseIOSTests/SessionLiveActivityModelsTests.swift",
+      "providers": [
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "ios/Tests/LonghouseIOSTests/SessionModelsTests.swift",
+      "providers": [
+        "claude",
+        "codex",
+        "cursor",
+        "opencode"
+      ]
+    },
+    {
+      "path": "ios/Tests/LonghouseIOSTests/SessionViewModelTests.swift",
       "providers": [
         "claude",
         "codex"
@@ -378,16 +551,6 @@
       "path": "scripts/tests/provider-release-proof-baseline.test.py",
       "providers": [
         "codex",
-        "opencode"
-      ]
-    },
-    {
-      "path": "scripts/tests/provider-release-proof-coverage.test.py",
-      "providers": [
-        "antigravity",
-        "claude",
-        "codex",
-        "cursor",
         "opencode"
       ]
     },
@@ -654,7 +817,6 @@
         "antigravity",
         "claude",
         "codex",
-        "cursor",
         "opencode"
       ]
     },
@@ -786,6 +948,13 @@
       ]
     },
     {
+      "path": "server/tests_lite/test_onboard_cli.py",
+      "providers": [
+        "claude",
+        "opencode"
+      ]
+    },
+    {
       "path": "server/tests_lite/test_permission_gate_routes.py",
       "providers": [
         "claude",
@@ -837,15 +1006,16 @@
     {
       "path": "server/tests_lite/test_provider_harness_qualification.py",
       "providers": [
+        "antigravity",
         "claude",
         "codex",
+        "cursor",
         "opencode"
       ]
     },
     {
       "path": "server/tests_lite/test_provider_live_proof.py",
       "providers": [
-        "antigravity",
         "claude",
         "opencode"
       ]
@@ -854,6 +1024,14 @@
       "path": "server/tests_lite/test_provider_live_route_e2e.py",
       "providers": [
         "claude",
+        "codex",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_provider_recognition_coverage.py",
+      "providers": [
+        "antigravity",
         "codex",
         "opencode"
       ]
@@ -904,6 +1082,7 @@
     {
       "path": "server/tests_lite/test_render_provider_factory_status.py",
       "providers": [
+        "antigravity",
         "claude",
         "codex",
         "cursor",
@@ -1243,8 +1422,11 @@
     {
       "path": "server/zerg/cli/onboard.py",
       "providers": [
+        "antigravity",
         "claude",
-        "codex"
+        "codex",
+        "cursor",
+        "opencode"
       ]
     },
     {
@@ -1265,14 +1447,6 @@
       ]
     },
     {
-      "path": "server/zerg/provider_live_proof.py",
-      "providers": [
-        "antigravity",
-        "claude",
-        "opencode"
-      ]
-    },
-    {
       "path": "server/zerg/qa/provider_factory_model.py",
       "providers": [
         "antigravity",
@@ -1285,8 +1459,10 @@
     {
       "path": "server/zerg/qa/provider_harness_qualification.py",
       "providers": [
+        "antigravity",
         "claude",
         "codex",
+        "cursor",
         "opencode"
       ]
     },
@@ -1332,14 +1508,6 @@
       "providers": [
         "claude",
         "cursor"
-      ]
-    },
-    {
-      "path": "server/zerg/schemas/machines.py",
-      "providers": [
-        "antigravity",
-        "claude",
-        "opencode"
       ]
     },
     {
@@ -1390,6 +1558,7 @@
       "providers": [
         "claude",
         "codex",
+        "cursor",
         "opencode"
       ]
     },
@@ -1423,6 +1592,7 @@
         "antigravity",
         "claude",
         "codex",
+        "cursor",
         "opencode"
       ]
     },

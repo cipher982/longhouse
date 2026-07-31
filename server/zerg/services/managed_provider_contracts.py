@@ -90,6 +90,7 @@ class ManagedProviderContract:
     can_resume: bool = False
     console_adapter: str | None = None
     turn_start: bool = False
+    live_proof: bool = False
     # Expected machine-control channel operation names. The engine still owns
     # the live supports[] handshake; this field documents the provider ceiling.
     machine_control_supports: tuple[str, ...] = ()
@@ -221,6 +222,7 @@ def _contract_from_manifest_item(item: dict[str, object]) -> ManagedProviderCont
         can_resume=bool(item.get("can_resume", False)),
         console_adapter=(str(item["console_adapter"]) if item.get("console_adapter") else None),
         turn_start=bool(item.get("turn_start", False)),
+        live_proof=bool(item.get("live_proof", False)),
         machine_control_supports=tuple(str(value) for value in item.get("machine_control_supports") or ()),
         operation_evidence={
             str(operation): {str(key): str(value) for key, value in dict(evidence).items()}
@@ -409,3 +411,17 @@ def machine_control_capability_for_command(provider: str | None, command_type: s
     if contract is None or operation is None:
         return None
     return contract.machine_control_capability_for_operation(operation)
+
+
+def live_proof_supported_providers() -> tuple[str, ...]:
+    """Providers `provider.live_proof` can actually run for.
+
+    Three hand-copies disagreed: `provider_live_proof.py` and the Pydantic
+    Literal on the public request body both said claude/opencode/antigravity,
+    while `control_channel.rs` -- the side that executes it -- said
+    claude/opencode. `provider_live_canary.py` implements exactly those two, so
+    the Rust set was right and the request body accepted a provider that always
+    failed `provider_unsupported`.
+    """
+
+    return tuple(contract.provider for contract in _CONTRACTS if contract.live_proof)

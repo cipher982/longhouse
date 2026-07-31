@@ -36,9 +36,7 @@ from zerg.models import User  # noqa: E402
 from zerg.models.device_token import DeviceToken  # noqa: E402
 from zerg.services.machine_control_channel import MachineControlChannelRegistry  # noqa: E402
 from zerg.services.machine_control_operations import create_provider_live_proof_operation  # noqa: E402
-from zerg.services.machine_control_operations import (
-    reconcile_machine_control_operation_from_command_result,  # noqa: E402
-)
+from zerg.services.machine_control_operations import reconcile_machine_control_operation_from_command_result  # noqa: E402
 from zerg.services.machines_directory import build_machines_directory  # noqa: E402
 
 OWNER_ID = 42
@@ -102,11 +100,7 @@ def _seed_device_token(
 
 def _enrollments(SessionLocal, *, owner_id: int = OWNER_ID):
     with SessionLocal() as db:
-        rows = (
-            db.query(DeviceToken)
-            .filter(DeviceToken.owner_id == owner_id, DeviceToken.revoked_at.is_(None))
-            .all()
-        )
+        rows = db.query(DeviceToken).filter(DeviceToken.owner_id == owner_id, DeviceToken.revoked_at.is_(None)).all()
         return [
             {
                 "device_id": row.device_id,
@@ -259,7 +253,17 @@ def test_directory_exposes_proven_opencode_console_adapter(tmp_path):
     assert len(entries) == 1
 
 
-def test_directory_reports_antigravity_send_without_launchability(tmp_path):
+def test_directory_does_not_report_antigravity_control(tmp_path):
+    """A machine advertising antigravity.send must not surface it as a control.
+
+    This asserted the opposite until 2026-07-31, which is how the machines API
+    came to list a control that always failed: the engine advertised
+    antigravity.send whenever `agy` was on PATH, and reject_excluded_provider
+    refused every antigravity command before dispatch. The contract now records
+    send_input as policy_disabled, so the projection drops it even when an older
+    machine still advertises it.
+    """
+
     SessionLocal = _make_db(tmp_path)
     _seed_user(SessionLocal)
     registry = MachineControlChannelRegistry()
@@ -268,7 +272,7 @@ def test_directory_reports_antigravity_send_without_launchability(tmp_path):
     entries = build_machines_directory(owner_id=OWNER_ID, enrollments=_enrollments(SessionLocal), registry=registry)
 
     assert len(entries) == 1
-    assert entries[0].control_operations_by_provider == {"antigravity": ("send",)}
+    assert entries[0].control_operations_by_provider == {}
     assert entries[0].launch.blocked_by == "no_launch_support"
 
 

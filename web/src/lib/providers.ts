@@ -78,7 +78,10 @@ const LAUNCH_PROVIDER_SUPPORT: Record<LaunchProviderId, LaunchProviderSupport> =
     id: "antigravity",
     nativeLaunchCommand: null,
     marketingName: "Antigravity CLI",
-    launchAndSend: true,
+    // Shadow-only. The engine advertised antigravity.send whenever `agy` was on
+    // PATH and reject_excluded_provider refused it before dispatch; the schema
+    // now records send_input as policy_disabled, so this claim goes with it.
+    launchAndSend: false,
     interrupt: false,
     steerMidTurn: false,
     resume: false,
