@@ -47,6 +47,7 @@ impl PermissionMode {
     /// provider's skip-permissions flag. Every launcher must derive its wire
     /// value from the same boolean it uses to build argv, so the two cannot
     /// disagree.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn from_bypass_flag(bypassing: bool) -> Self {
         if bypassing {
             PermissionMode::Bypass

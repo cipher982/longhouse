@@ -132,6 +132,14 @@ jobs:
       # the census artifact sat stale and nothing noticed.
       run: make validate-provider-census
 
+    - name: Managed launch lifecycle against a real Runtime Host
+      timeout-minutes: 15
+      # Real FastAPI server, real SQLite, real device-token auth, real request
+      # validation, scripted provider binaries. The installer smoke's fake
+      # Runtime Host answers every request identically and therefore cannot
+      # catch a provider gate -- the exact hole the cursor outage fell through.
+      run: make test-managed-launch-lifecycle
+
     - name: Validate provider CLI canaries
       timeout-minutes: 8
       run: make validate-provider-cli-canaries
