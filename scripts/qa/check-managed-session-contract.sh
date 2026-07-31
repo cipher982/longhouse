@@ -85,8 +85,12 @@ def require_contains(relative: str, label: str, pattern: str) -> None:
         fail(f"required managed-session contract reference is missing: {label} ({relative})")
 
 
+# docs/specs/managed-provider-session-contract.md was in this list until
+# 2026-07-31, when the specs moved to the private repo. Every other entry is
+# public code, which is what this validator actually checks -- the spec was
+# only ever a presence assertion, and asserting a file exists in a repo that
+# deliberately no longer contains it is not a contract check.
 for required in [
-    "docs/specs/managed-provider-session-contract.md",
     "server/zerg/cli/_common.py",
     "server/zerg/cli/_managed_contract.py",
     "server/zerg/cli/_managed_launch.py",
