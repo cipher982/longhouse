@@ -630,9 +630,28 @@ def write_synthetic_old_new_release_proofs(
 
 
 def write_maturity_rollup(
-    *, artifact_path: Path, evidence_root: Path
+    *, artifact_path: Path, evidence_root: Path, coverage_path: Path | None
 ) -> dict[str, Any]:
     maturity_path = evidence_root / "provider-release-proof-maturity.json"
+    if coverage_path is None:
+        # The coverage inventory is private (it records which contract
+        # surfaces are proven and which run in the private release lane), so a
+        # public clone has nothing to roll up. Say so explicitly rather than
+        # reporting a failure -- a missing private input is not a red proof --
+        # and rather than quietly skipping, which would let a real rollup
+        # regression read as success.
+        return {
+            "status": "unavailable",
+            "reason": "no coverage inventory supplied (--coverage); the release-proof coverage map is private",
+            "maturity_rollup_path": None,
+        }
+    if not coverage_path.is_file():
+        return {
+            "status": "fail",
+            "maturity_rollup_path": str(maturity_path),
+            "failure_code": "coverage_inventory_missing",
+            "stderr": f"coverage inventory not found: {coverage_path}",
+        }
     maturity_script = (
         Path(__file__).resolve().with_name("provider-release-proof-maturity.py")
     )
@@ -640,6 +659,8 @@ def write_maturity_rollup(
         [
             sys.executable,
             str(maturity_script),
+            "--coverage",
+            str(coverage_path),
             "--universal-artifact",
             str(artifact_path),
             "--artifact",
@@ -811,6 +832,7 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
     maturity_rollup = write_maturity_rollup(
         artifact_path=artifact_path,
         evidence_root=evidence_root,
+        coverage_path=getattr(args, "coverage", None),
     )
     artifact["maturity_rollup"] = maturity_rollup
     artifact["maturity_rollup_path"] = maturity_rollup.get("maturity_rollup_path")
@@ -874,6 +896,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--artifact", type=Path)
     parser.add_argument("--evidence-root", type=Path)
+    parser.add_argument(
+        "--coverage",
+        type=Path,
+        help=(
+            "Provider release-proof coverage inventory. Private (control-plane); "
+            "omit it and the maturity rollup reports status=unavailable."
+        ),
+    )
     parser.add_argument(
         "--provider",
         action="append",

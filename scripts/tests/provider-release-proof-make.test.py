@@ -304,8 +304,12 @@ def test_provider_release_proof_universal_smoke_make_emits_all_provider_artifact
         assert payload["result_count"] == len(expected_providers) * len(payload["scenarios"])
         assert Path(payload["universal_harness_artifact"]).is_file()
         assert Path(payload["provider_support_matrix_path"]).is_file()
-        assert Path(payload["maturity_rollup_path"]).is_file()
-        assert payload["maturity_rollup"]["status"] == "pass"
+        # No COVERAGE= supplied: the coverage inventory is private, so the
+        # rollup reports unavailable rather than passing or failing. The
+        # COVERAGE-supplied path is covered by
+        # test_provider_release_proof_maturity_make_emits_rollup above.
+        assert payload["maturity_rollup"]["status"] == "unavailable"
+        assert payload["maturity_rollup_path"] is None
         support_matrix = payload["provider_support_matrix"]
         assert support_matrix["action_count"] > 20
         assert support_matrix["missing_provider_actions"] == []

@@ -29,10 +29,10 @@ EXPECTED_COPY = {
         "Terminal-originated OpenCode Helm send/interrupt/terminate exists",
         "Managed OpenCode Helm send/interrupt is a product contract",
     ],
-    "docs/specs/managed-provider-session-contract.md": [
-        "OpenCode server-bridge Helm sessions support managed send, interrupt, and",
-        "terminate through the local `opencode serve` bridge",
-    ],
+    # docs/specs/managed-provider-session-contract.md carried the same claim
+    # until 2026-07-31, when the specs moved to the private repo. The public
+    # repo cannot assert copy in a file it no longer contains; the six public
+    # surfaces above are the ones a user actually reads.
 }
 
 
@@ -68,9 +68,8 @@ FORBIDDEN_COPY = {
         "OpenCode managed launch/control is not first-class enough",
         "Remote send/interrupt is not a defined OpenCode product contract yet",
     ],
-    "docs/specs/managed-provider-session-contract.md": [
-        "OpenCode server-bridge sessions support live send and interrupt",
-    ],
+    # See the note in EXPECTED_COPY: the spec moved to the private repo on
+    # 2026-07-31 and is no longer checkable from here.
 }
 
 

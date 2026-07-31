@@ -525,7 +525,6 @@ validate-native-device-entrypoints: ## @internal Guard native replacements for P
 validate-provider-cli-canaries: ## @internal Provider release canary wrapper tests
 	@python3 scripts/tests/codex-provider-release-canary.test.py
 	@python3 scripts/tests/provider-release-profile-canary.test.py
-	@python3 scripts/tests/provider-release-proof-coverage.test.py
 	@python3 scripts/tests/provider-release-proof.test.py
 	@python3 scripts/tests/provider-release-proof-baseline.test.py
 	@python3 scripts/tests/provider-release-proof-old-new.test.py

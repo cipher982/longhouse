@@ -19,12 +19,10 @@ from typing import Any
 
 SCHEMA_VERSION = 1
 DEFAULT_BASELINE_ROOT = Path(".provider-release-proofs")
-DEFAULT_COVERAGE_PATH = (
-    Path(__file__).resolve().parents[2]
-    / "docs"
-    / "specs"
-    / "provider-release-proof-coverage.json"
-)
+# No default coverage path: the inventory moved to the private repo on
+# 2026-07-31. `status-all` takes --coverage explicitly. See
+# provider-release-proof-maturity.py for why a sibling-checkout fallback was
+# rejected rather than added.
 COMPARABLE_ARTIFACT_KEYS = (
     "normalized_contract",
     "provider_contract",
@@ -1280,7 +1278,7 @@ def build_parser() -> argparse.ArgumentParser:
         "status-all",
         help="Inspect every accepted provider proof scenario listed in the coverage inventory",
     )
-    status_all.add_argument("--coverage", type=Path, default=DEFAULT_COVERAGE_PATH)
+    status_all.add_argument("--coverage", type=Path, required=True)
     status_all.add_argument("--baseline-root", type=Path, default=DEFAULT_BASELINE_ROOT)
     status_all.add_argument("--artifact", type=Path)
     status_all.add_argument("--json", action="store_true")

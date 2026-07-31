@@ -4199,9 +4199,14 @@ def test_universal_smoke_can_select_real_provider_live_token_mode(tmp_path: Path
     assert artifact["provider_bin_sources"] == resolved_sources
     assert artifact["token_spending_scenarios"] == ["live_token_streaming"]
     assert artifact["artifact_path"] == str((tmp_path / "smoke.json").resolve())
-    assert Path(artifact["maturity_rollup_path"]).is_file()
-    assert artifact["maturity_rollup"]["status"] == "pass"
-    assert artifact["maturity_rollup"]["universal_harness"]["run_modes"]["token_spending_scenarios"] == ["live_token_streaming"]
+    # No --coverage passed: the release-proof coverage inventory is private
+    # (control-plane), so a public clone has nothing to roll up. The rollup
+    # must say that explicitly rather than failing or silently passing. The
+    # rollup math itself is covered by
+    # scripts/tests/provider-release-proof-maturity.test.py, which builds its
+    # own coverage fixture and passes --coverage.
+    assert artifact["maturity_rollup"]["status"] == "unavailable"
+    assert artifact["maturity_rollup_path"] is None
 
 
 def test_sixth_provider_is_discoverable_without_editing_this_module(tmp_path: Path) -> None:

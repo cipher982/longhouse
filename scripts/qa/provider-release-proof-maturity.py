@@ -23,12 +23,13 @@ from provider_release_proof_rollups import pct
 from provider_release_proof_rollups import record_execution_cell
 
 SCHEMA_VERSION = 1
-DEFAULT_COVERAGE_PATH = (
-    Path(__file__).resolve().parents[2]
-    / "docs"
-    / "specs"
-    / "provider-release-proof-coverage.json"
-)
+# The coverage inventory is a per-provider record of which contract surfaces
+# are proven, which run in CI, and which run in the private release lane. It
+# moved to the private repo on 2026-07-31, so there is deliberately no default
+# path here: callers pass --coverage (Makefile: COVERAGE=...). Auto-discovering
+# a sibling control-plane checkout was rejected -- it would make the same
+# command produce different artifacts on an operator laptop and in CI, which is
+# exactly the silent mode switch this repo's contract forbids.
 DEFAULT_OUTPUT_PATH = Path(".build/provider-release-proof-maturity.json")
 COVERAGE_WEIGHTS = {"yes": 1.0, "partial": 0.5, "no": 0.0}
 
@@ -589,7 +590,7 @@ def compute_rollup(
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--coverage", type=Path, default=DEFAULT_COVERAGE_PATH)
+    parser.add_argument("--coverage", type=Path, required=True)
     parser.add_argument("--baseline-root", type=Path)
     parser.add_argument("--universal-artifact", type=Path, action="append", default=[])
     parser.add_argument("--artifact", type=Path, default=DEFAULT_OUTPUT_PATH)
