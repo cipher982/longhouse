@@ -630,7 +630,23 @@ fn register(
         .filter(|value| !value.trim().is_empty())
         .map(str::to_owned)
         .unwrap_or_else(|| std::env::var("HOSTNAME").unwrap_or_else(|_| "unknown".into()));
-    let payload = json!({"cwd":cwd,"provider":"cursor","project":config.project,"display_name":config.name,"loop_mode":config.loop_mode,"permission_mode":permission_wire_mode(permission_mode),"session_id":session_id,"machine_name":machine_name});
+    let payload = crate::managed_launch_payload::ManagedLaunchRegistration {
+        provider: "cursor",
+        cwd,
+        project: config.project.as_deref(),
+        display_name: config.name.as_deref(),
+        loop_mode: &config.loop_mode,
+        machine_name: &machine_name,
+        permission_mode: if permission_wire_mode(permission_mode) == "remote_approve" {
+            crate::managed_launch_payload::PermissionMode::RemoteApprove
+        } else {
+            crate::managed_launch_payload::PermissionMode::Bypass
+        },
+        // Cursor mints its own session id before registering, so the Runtime
+        // Host must be told which one to bind rather than allocating its own.
+        extra: vec![("session_id", json!(session_id))],
+    }
+    .to_json();
     tokio::runtime::Runtime::new()
         .ok()?
         .block_on(async {

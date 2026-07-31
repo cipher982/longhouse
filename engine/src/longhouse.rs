@@ -6,9 +6,12 @@
 
 #[path = "build_identity.rs"]
 mod build_identity;
+#[path = "managed_launch_payload.rs"]
+mod managed_launch_payload;
 
 use anyhow::Context;
 use clap::{Args, Parser, Subcommand};
+use managed_launch_payload::{ManagedLaunchRegistration, PermissionMode};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::io::{BufRead, BufReader};
@@ -889,18 +892,6 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
         "--claude-bin",
     )?;
     ensure_claude_channel_prerequisite(&binary)?;
-    let git = |args: &[&str]| {
-        Command::new("git")
-            .arg("-C")
-            .arg(&cwd)
-            .args(args)
-            .output()
-            .ok()
-            .filter(|output| output.status.success())
-            .and_then(|output| String::from_utf8(output.stdout).ok())
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
-    };
     let (launch_actor, launch_surface) = interactive_human_shell_provenance();
     let runtime = tokio::runtime::Runtime::new()?;
     let resuming = args.resume.is_some();
@@ -910,7 +901,19 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
         cwd = session_cwd;
         response
     } else {
-        let mut payload = json!({"cwd":cwd,"provider":"claude","project":args.project,"git_repo":git(&["rev-parse", "--show-toplevel"]),"git_branch":git(&["rev-parse", "--abbrev-ref", "HEAD"]),"display_name":args.name,"loop_mode":args.loop_mode,"machine_name":machine_name,"permission_mode":if args.remote_approve {"remote_approve"} else {"bypass"},"native_claude_channels_available":true});
+        let mut payload = ManagedLaunchRegistration {
+            provider: "claude",
+            cwd: &cwd,
+            project: args.project.as_deref(),
+            display_name: args.name.as_deref(),
+            loop_mode: &args.loop_mode,
+            machine_name: &machine_name,
+            // Claude passes --dangerously-skip-permissions unless remote
+            // approval was requested, so the flag and the wire value agree.
+            permission_mode: PermissionMode::from_bypass_flag(!args.remote_approve),
+            extra: vec![("native_claude_channels_available", json!(true))],
+        }
+        .to_json();
         if let Some(actor) = launch_actor {
             payload["launch_actor"] = json!(actor);
         }
@@ -1018,7 +1021,19 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
         "--opencode-bin",
     )?;
     let (launch_actor, launch_surface) = interactive_human_shell_provenance();
-    let mut payload = json!({"cwd": cwd, "provider":"opencode", "project":args.project, "display_name":args.name, "loop_mode":args.loop_mode, "machine_name":machine_name});
+    let mut payload = ManagedLaunchRegistration {
+        provider: "opencode",
+        cwd: &cwd,
+        project: args.project.as_deref(),
+        display_name: args.name.as_deref(),
+        loop_mode: &args.loop_mode,
+        machine_name: &machine_name,
+        // OpenCode has no remote-approval surface: control_channel rejects any
+        // non-bypass permission mode for it outright.
+        permission_mode: PermissionMode::Bypass,
+        extra: vec![],
+    }
+    .to_json();
     if let Some(actor) = launch_actor {
         payload["launch_actor"] = json!(actor);
     }
@@ -1513,23 +1528,24 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
     let (url, token, machine_name) = resolve_codex_config(args.url, args.token)?;
     configure_codex_coordination_mcp()?;
     let codex_bin = resolve_codex_binary(args.codex_bin)?;
-    let git = |args: &[&str]| {
-        Command::new("git")
-            .arg("-C")
-            .arg(&cwd)
-            .args(args)
-            .output()
-            .ok()
-            .filter(|output| output.status.success())
-            .and_then(|output| String::from_utf8(output.stdout).ok())
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
-    };
-    let payload = json!({
-        "cwd": cwd, "provider": "codex", "project": args.project, "git_repo": git(&["rev-parse", "--show-toplevel"]),
-        "git_branch": git(&["rev-parse", "--abbrev-ref", "HEAD"]), "display_name": args.name,
-        "loop_mode": args.loop_mode, "machine_name": machine_name, "permission_mode": "bypass"
-    });
+    let payload = ManagedLaunchRegistration {
+        provider: "codex",
+        cwd: &cwd,
+        project: args.project.as_deref(),
+        display_name: args.name.as_deref(),
+        loop_mode: &args.loop_mode,
+        machine_name: &machine_name,
+        // This must follow the same boolean that builds argv below. It used to
+        // be the literal "bypass" while
+        // --dangerously-bypass-approvals-and-sandbox is opt-in and off by
+        // default, so Longhouse recorded "bypasses approvals" for every managed
+        // Codex session including the ones where Codex was enforcing them.
+        permission_mode: PermissionMode::from_bypass_flag(
+            args.dangerously_bypass_approvals_and_sandbox,
+        ),
+        extra: vec![],
+    }
+    .to_json();
     let endpoint = format!(
         "{}/api/sessions/managed-local/this-device",
         url.trim_end_matches('/')
