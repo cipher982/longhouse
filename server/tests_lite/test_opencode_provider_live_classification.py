@@ -156,3 +156,28 @@ def test_opencode_normal_workspace_does_not_reclassify_machine_environment(tmp_p
     session = db.get(AgentSession, session_id)
     assert session is not None
     assert session.environment == "cinder"
+
+
+def test_cursor_product_e2e_default_workspace_is_classified_as_proof_traffic():
+    """The cursor Helm product E2E must not ship as ordinary user work.
+
+    Its old default workspace (/tmp/longhouse-cursor-product-e2e) matched none
+    of the proof signals, so fourteen canary runs landed at the top of a real
+    dogfood timeline. The prompts cannot carry the `_NOREPLY_` marker instead:
+    that pattern is anchored at the start of the first user message and these
+    prompts open with "Reply with exactly ...".
+    """
+    from pathlib import Path
+
+    from zerg.qa.cursor_helm_product_e2e import build_arg_parser
+    from zerg.services.internal_sessions import classify_provider_proof_environment
+
+    default_workspace = build_arg_parser().get_default("workspace")
+    assert isinstance(default_workspace, Path)
+    assert (
+        classify_provider_proof_environment(
+            cwd=str(default_workspace),
+            first_user_text="Reply with exactly LONGHOUSE_CURSOR_PRODUCT_ONE_deadbeef",
+        )
+        == "test"
+    )
