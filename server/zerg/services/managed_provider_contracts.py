@@ -107,13 +107,36 @@ class ManagedProviderContract:
     def connection_capabilities(self) -> dict[str, int]:
         # SessionConnection.can_resume is the host reattach bit. The provider
         # contract's can_resume flag records provider-native resume support.
+        #
+        # send/interrupt/terminate are remote-control capabilities: the value a
+        # client reads to decide whether to offer the control. They are only
+        # true when the machine control channel will actually carry the command,
+        # which is `machine_control_supports`, not the bare operation flag.
+        # Claude and Codex declare `terminate: true` and carry no
+        # `<provider>.terminate` support, so the flag advertised a control the
+        # dispatcher refuses before the engine is ever contacted
+        # (managed_control_dispatcher.py `_session_uses_engine_control`).
+        # tail_output and resume have no machine-control operation; they stay on
+        # the flag.
         return {
-            "can_send_input": int(self.send_input),
-            "can_interrupt": int(self.interrupt),
-            "can_terminate": int(self.terminate),
+            "can_send_input": int(self.dispatchable_operation("send_input")),
+            "can_interrupt": int(self.dispatchable_operation("interrupt")),
+            "can_terminate": int(self.dispatchable_operation("terminate")),
             "can_tail_output": int(self.tail_output),
             "can_resume": int(self.reattach),
         }
+
+    def dispatchable_operation(self, operation: str) -> bool:
+        """Whether the operation flag is set AND some advertised machine-control
+        support maps to it, i.e. whether a remote command can actually be
+        dispatched for it."""
+
+        if not self.supports_contract_operation(operation):
+            return False
+        return any(
+            MACHINE_CONTROL_SUPPORT_OPERATION_BY_SUFFIX.get(support.partition(".")[2]) == operation
+            for support in self.machine_control_supports
+        )
 
     def operation_evidence_for(self, operation: str) -> Mapping[str, str]:
         return self.operation_evidence.get(operation, {})
