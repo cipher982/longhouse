@@ -1535,14 +1535,23 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
         display_name: args.name.as_deref(),
         loop_mode: &args.loop_mode,
         machine_name: &machine_name,
-        // This must follow the same boolean that builds argv below. It used to
-        // be the literal "bypass" while
-        // --dangerously-bypass-approvals-and-sandbox is opt-in and off by
-        // default, so Longhouse recorded "bypasses approvals" for every managed
-        // Codex session including the ones where Codex was enforcing them.
-        permission_mode: PermissionMode::from_bypass_flag(
-            args.dangerously_bypass_approvals_and_sandbox,
-        ),
+        // Deliberately still "bypass", and deliberately still not the whole
+        // truth. `--dangerously-bypass-approvals-and-sandbox` is opt-in and off
+        // by default, so a default managed Codex session records "bypasses
+        // approvals" while Codex is enforcing them locally.
+        //
+        // Mapping the absent flag to `remote_approve` -- the obvious fix, and
+        // what this line briefly did -- is worse. The Runtime Host mints a
+        // remote permission hook token for remote_approve
+        // (session_chat_impl.py), and the Codex bridge is never handed that
+        // token, so Longhouse would advertise a remote approval surface nothing
+        // can consume. An inert wrong label beats an actionable wrong label.
+        //
+        // The honest fix needs a third posture -- provider-local approval --
+        // which is a vocabulary change across the server and both clients, or
+        // codex remote approval actually wired. Tracked as the permission half
+        // of the launch-lifecycle work.
+        permission_mode: PermissionMode::Bypass,
         extra: vec![],
     }
     .to_json();

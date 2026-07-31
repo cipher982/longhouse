@@ -57,35 +57,58 @@ cp "$ROOT_DIR/engine/target/ci/longhouse-engine" "$BIN_DIR/longhouse-engine"
 # ---------------------------------------------------------------------------
 # Start a real Runtime Host
 # ---------------------------------------------------------------------------
-if [[ "$PORT" == "0" ]]; then
-  PORT="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')"
-fi
-BASE_URL="http://127.0.0.1:$PORT"
+# Picking an ephemeral port by bind-then-close leaves a window where another
+# process can take it before the Runtime Host binds, which is a sporadic CI
+# failure rather than a real one. Try a few times instead of assuming the race
+# does not happen.
+start_runtime_host() {
+  local attempt
+  for attempt in 1 2 3 4 5; do
+    if [[ "${LONGHOUSE_LIFECYCLE_SMOKE_PORT:-0}" != "0" ]]; then
+      PORT="$LONGHOUSE_LIFECYCLE_SMOKE_PORT"
+    else
+      PORT="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')"
+    fi
+    BASE_URL="http://127.0.0.1:$PORT"
+    (
+      cd "$ROOT_DIR/server"
+      # Deliberately NOT TESTING=1: that forces live_catalog_enabled() false,
+      # which short-circuits the coordination-token endpoint at its 503 guard
+      # before the provider check and leaves the live store unused. A
+      # counterpart that refuses for the wrong reason is only marginally better
+      # than one that never refuses.
+      AUTH_DISABLED=1 \
+      LLM_DISABLED=1 \
+      LOG_LEVEL=WARNING \
+      DATABASE_URL="sqlite:///$TEST_ROOT/longhouse.db" \
+      JWT_SECRET="lifecycle-smoke-jwt-secret" \
+      FERNET_SECRET="$FERNET" \
+      INTERNAL_API_SECRET="lifecycle-smoke-internal-secret" \
+      uv run python -m zerg.cli.main serve --host 127.0.0.1 --port "$PORT" >"$SERVER_LOG" 2>&1
+    ) &
+    SERVER_PID=$!
+
+    local _
+    for _ in $(seq 1 120); do
+      if curl -fsS -o /dev/null "$BASE_URL/api/health" 2>/dev/null; then return 0; fi
+      if ! kill -0 "$SERVER_PID" 2>/dev/null; then break; fi
+      sleep 0.5
+    done
+
+    kill "$SERVER_PID" 2>/dev/null || true
+    wait "$SERVER_PID" 2>/dev/null || true
+    SERVER_PID=""
+    if [[ "${LONGHOUSE_LIFECYCLE_SMOKE_PORT:-0}" != "0" ]]; then
+      break
+    fi
+    echo "runtime host did not come up on port $PORT; retrying on a new port" >&2
+  done
+  return 1
+}
 
 FERNET="$(cd "$ROOT_DIR/server" && uv run python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())')"
 
-(
-  cd "$ROOT_DIR/server"
-  # Deliberately NOT TESTING=1: that forces live_catalog_enabled() false, which
-  # short-circuits the coordination-token endpoint at its 503 guard before the
-  # provider check and leaves the live store unused. A counterpart that refuses
-  # for the wrong reason is only marginally better than one that never refuses.
-  AUTH_DISABLED=1 \
-  LLM_DISABLED=1 \
-  LOG_LEVEL=WARNING \
-  DATABASE_URL="sqlite:///$TEST_ROOT/longhouse.db" \
-  JWT_SECRET="lifecycle-smoke-jwt-secret" \
-  FERNET_SECRET="$FERNET" \
-  INTERNAL_API_SECRET="lifecycle-smoke-internal-secret" \
-  uv run python -m zerg.cli.main serve --host 127.0.0.1 --port "$PORT" >"$SERVER_LOG" 2>&1
-) &
-SERVER_PID=$!
-
-for _ in $(seq 1 120); do
-  if curl -fsS -o /dev/null "$BASE_URL/api/health" 2>/dev/null; then break; fi
-  sleep 0.5
-done
-curl -fsS -o /dev/null "$BASE_URL/api/health" || fail "Runtime Host never became healthy"
+start_runtime_host || fail "Runtime Host never became healthy"
 echo "runtime host up on $BASE_URL"
 
 DEVICE_TOKEN="$(curl -fsS -X POST "$BASE_URL/api/devices/tokens" \
