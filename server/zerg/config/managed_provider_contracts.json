@@ -16,6 +16,7 @@
         "server/zerg/cli/codex.py",
         "server/zerg/mcp_server/server.py",
         "engine/src/codex_bridge.rs",
+        "engine/src/codex_bridge_ownership.rs",
         "engine/src/codex_exec.rs",
         "engine/src/codex_ws_relay.rs"
       ],
@@ -296,7 +297,7 @@
         "codex.resume_run_once",
         "codex.turn_start"
       ],
-      "adapter_digest": "909b5fd1ae77ea59f247ab512cc017e7bcf5966be4898445cf25871ef031cd86"
+      "adapter_digest": "9576f61d6a5932f71628eb54806375ac60c6340aa307d523023d529d566ea194"
     },
     {
       "provider": "claude",
