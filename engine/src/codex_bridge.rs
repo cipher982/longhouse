@@ -1498,16 +1498,28 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
                 emit_runtime_keepalive(&config, &mut context).await;
             }
             _ = ownership_check.tick() => {
-                let inputs = crate::codex_bridge_ownership::OwnershipInputs {
-                    headless_launch: config.launch_mode != BridgeLaunchMode::Tui,
-                    terminal_attached: terminal_is_attached(context.state.ws_url.as_deref()),
-                    owner_recorded: config.owner_pid.is_some(),
-                    owner_alive: owner_is_alive(
-                        config.owner_pid,
-                        owner_process_start_time.as_deref(),
-                    ),
+                let observed = observe_ownership(
+                    config.owner_pid,
+                    owner_process_start_time.as_deref(),
+                    context.state.ws_url.as_deref(),
+                );
+                let should_stop = match observed {
+                    // `ps` failed. Hold the previous observation rather than
+                    // counting a failed look as evidence of absence.
+                    None => {
+                        ownership_watch.observation_failed();
+                        false
+                    }
+                    Some((owner_alive, terminal_attached)) => {
+                        ownership_watch.observe(crate::codex_bridge_ownership::OwnershipInputs {
+                            headless_launch: config.launch_mode != BridgeLaunchMode::Tui,
+                            terminal_attached,
+                            owner_recorded: config.owner_pid.is_some(),
+                            owner_alive,
+                        })
+                    }
                 };
-                if ownership_watch.observe(inputs) {
+                if should_stop {
                     // Nothing owns this bridge: no terminal, and the wrapper
                     // that launched it is gone. Route through the ordinary
                     // stop path so terminal state is committed and published
@@ -4594,37 +4606,51 @@ async fn emit_runtime_updates(
 /// pid that happened to match would keep debris alive indefinitely. A bridge
 /// with no recorded owner returns false here; the ownership rule treats that
 /// case as unprovable rather than dead, so it is never killed on this alone.
-fn owner_is_alive(owner_pid: Option<u32>, recorded_start_time: Option<&str>) -> bool {
-    let Some(pid) = owner_pid else {
-        return false;
-    };
-    let Some(fact) = crate::process_identity::try_collect_process_fact(pid) else {
-        return false;
-    };
-    match recorded_start_time {
-        Some(recorded) if !recorded.trim().is_empty() => {
-            crate::process_identity::lstart_matches_recorded(&fact, recorded)
-        }
-        // No recorded start time means we could not read one at launch. The pid
-        // existing is the only evidence available, and treating it as dead
-        // would risk ending a live session on missing evidence.
-        _ => true,
-    }
-}
-
-/// True when a provider TUI currently holds this bridge's websocket.
+/// Observe ownership from one coherent process inventory.
 ///
-/// Mirrors the daemon's attachment scan in `managed_bridge_scan`: a codex TUI
-/// is launched with `--remote <ws_url>`, so a live process carrying both
-/// strings is an attached terminal. Checked against raw socket state across
-/// nine live bridges with no disagreement.
-fn terminal_is_attached(ws_url: Option<&str>) -> bool {
-    let Some(ws_url) = ws_url.map(str::trim).filter(|value| !value.is_empty()) else {
-        return false;
+/// Returns `None` when `ps` itself failed. That is the difference between "the
+/// wrapper is gone" and "we could not look", and conflating them is how a
+/// transient scan failure would terminate live work. `process_identity`
+/// documents the same rule for durable reconcilers.
+fn observe_ownership(
+    owner_pid: Option<u32>,
+    recorded_start_time: Option<&str>,
+    ws_url: Option<&str>,
+) -> Option<(bool, bool)> {
+    let facts = crate::process_identity::try_collect_process_facts_by_pid()?;
+
+    let owner_alive = match owner_pid {
+        None => false,
+        Some(pid) => match facts.get(&pid) {
+            None => false,
+            Some(fact) => match recorded_start_time {
+                Some(recorded) if !recorded.trim().is_empty() => {
+                    crate::process_identity::lstart_matches_recorded(fact, recorded)
+                }
+                // No start time was readable at launch, so pid presence is the
+                // only evidence there is. Treating that as dead would end a
+                // live session on missing evidence.
+                _ => true,
+            },
+        },
     };
-    crate::process_identity::collect_process_facts_by_pid()
-        .values()
-        .any(|fact| fact.command.contains(ws_url) && fact.command.contains("--remote"))
+
+    // A codex TUI is launched with `--remote <ws_url>`, so a live process
+    // carrying both strings is an attached terminal. This is an argv proxy
+    // rather than a socket check: it can keep a bridge alive for a hung or
+    // stopped TUI, which errs toward preserving a session rather than ending
+    // one. Cross-checked against raw socket state across nine live bridges
+    // with no disagreement.
+    let terminal_attached = ws_url
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_some_and(|ws| {
+            facts
+                .values()
+                .any(|fact| fact.command.contains(ws) && fact.command.contains("--remote"))
+        });
+
+    Some((owner_alive, terminal_attached))
 }
 
 async fn emit_runtime_keepalive(config: &BridgeRunConfig, context: &mut BridgeContext) {

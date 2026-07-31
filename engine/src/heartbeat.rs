@@ -1420,7 +1420,12 @@ pub(crate) fn machine_evidence_from_observations(
             control.push(ControlEvidence {
                 authority_class: "provider_control".to_string(),
                 provider: "cursor".to_string(),
-                terminal_attached: None,
+                // Cursor Helm's launcher is the process the user runs in their
+                // terminal, so its liveness is the attachment signal: close the
+                // terminal and it dies. Reporting None here instead dropped
+                // open-but-idle Cursor terminals into History, since the
+                // working-set rule only promotes an explicit true.
+                terminal_attached: Some(obs.launcher_alive),
                 session_id: obs.session_id.clone(),
                 provider_session_id: None,
                 connection_id: obs.connection_id.clone(),

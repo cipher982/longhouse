@@ -128,6 +128,14 @@ impl OwnershipWatch {
         }
     }
 
+    /// Record that the process inventory could not be read.
+    ///
+    /// A failed `ps` is not evidence of absence. Holding the previous count —
+    /// rather than incrementing or resetting — means a sustained scan failure
+    /// can never accumulate into a termination, while a genuine departure
+    /// already counted still needs fresh confirmations to reach the threshold.
+    pub fn observation_failed(&mut self) {}
+
     #[cfg(test)]
     fn consecutive_unowned(&self) -> u32 {
         self.consecutive_unowned
@@ -206,6 +214,31 @@ mod tests {
         for _ in 1..UNOWNED_OBSERVATIONS_BEFORE_EXIT {
             assert!(!watch.observe(tui(false, false)));
         }
+        assert!(watch.observe(tui(false, false)));
+    }
+
+    #[test]
+    fn a_failed_process_scan_never_accumulates_into_a_termination() {
+        // Sol review: converting a failed `ps` into "owner absent" meant three
+        // scan failures in a row would terminate a live session. A failed look
+        // is not evidence of absence.
+        let mut watch = OwnershipWatch::new();
+        for _ in 0..(UNOWNED_OBSERVATIONS_BEFORE_EXIT * 5) {
+            watch.observation_failed();
+        }
+        assert_eq!(watch.consecutive_unowned(), 0);
+        // And a live session observed right after the outage is untouched.
+        assert!(!watch.observe(tui(true, false)));
+    }
+
+    #[test]
+    fn scan_failures_do_not_reset_a_genuine_departure() {
+        let mut watch = OwnershipWatch::new();
+        assert!(!watch.observe(tui(false, false)));
+        assert!(!watch.observe(tui(false, false)));
+        watch.observation_failed();
+        assert_eq!(watch.consecutive_unowned(), UNOWNED_OBSERVATIONS_BEFORE_EXIT - 1);
+        // The next real confirmation completes the count.
         assert!(watch.observe(tui(false, false)));
     }
 
