@@ -9,23 +9,15 @@ provider behavior can be proven before Longhouse advertises it.
 from __future__ import annotations
 
 import argparse
-import fcntl
 import hashlib
 import json
 import os
-import pty
-import select
 import shutil
-import signal
 import sqlite3
-import struct
 import subprocess
 import tempfile
-import termios
-import threading
 import time
 import traceback
-from dataclasses import dataclass
 from datetime import UTC
 from datetime import datetime
 from pathlib import Path
@@ -33,9 +25,11 @@ from typing import Any
 from uuid import UUID
 from uuid import uuid4
 
+from zerg.qa.conversation_reset import classify_identity_transition
+from zerg.qa.conversation_reset import evaluate_reset_observation
+from zerg.qa.pty_session import ProviderPtySession as CursorPtySession
+
 _DEFAULT_TIMEOUT_SECONDS = 90.0
-_INJECT_TEXT_SETTLE_SECONDS = 0.3
-_INJECT_ESCAPE_SETTLE_SECONDS = 0.1
 _HOOK_EVENTS = (
     "sessionStart",
     "sessionEnd",
@@ -298,6 +292,27 @@ def wait_for_hook(
     raise TimeoutError(f"Cursor hook did not produce event={event!r} conversation_id={conversation_id!r}")
 
 
+def wait_for_hook_match(
+    path: Path,
+    *,
+    longhouse_session_id: str,
+    predicate: Any,
+    after_count: int = 0,
+    timeout: float = _DEFAULT_TIMEOUT_SECONDS,
+) -> dict[str, Any]:
+    """Wait for a structured hook row matching a provider-specific predicate."""
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        for row in read_hook_events(path)[after_count:]:
+            if row.get("longhouse_session_id") != longhouse_session_id:
+                continue
+            if predicate(row):
+                return row
+        time.sleep(0.1)
+    raise TimeoutError("Cursor hook did not produce the requested structured event")
+
+
 def wait_for_store(agent_id: str, *, timeout: float = _DEFAULT_TIMEOUT_SECONDS) -> Path:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -306,131 +321,6 @@ def wait_for_store(agent_id: str, *, timeout: float = _DEFAULT_TIMEOUT_SECONDS) 
             return path
         time.sleep(0.2)
     raise TimeoutError(f"Cursor store was not created for agent {agent_id}")
-
-
-@dataclass
-class CursorPtySession:
-    process: subprocess.Popen[bytes]
-    master_fd: int
-    terminal_path: Path
-    _reader: threading.Thread
-    _stop_reader: threading.Event
-    _write_lock: threading.Lock
-
-    @classmethod
-    def start(
-        cls,
-        *,
-        argv: list[str],
-        cwd: Path,
-        env: dict[str, str],
-        terminal_path: Path,
-    ) -> CursorPtySession:
-        master_fd, slave_fd = pty.openpty()
-        fcntl.ioctl(slave_fd, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 132, 0, 0))
-
-        def child_setup() -> None:
-            os.setsid()
-            fcntl.ioctl(slave_fd, termios.TIOCSCTTY, 0)
-
-        process = subprocess.Popen(
-            argv,
-            cwd=cwd,
-            env=env,
-            stdin=slave_fd,
-            stdout=slave_fd,
-            stderr=slave_fd,
-            close_fds=True,
-            preexec_fn=child_setup,
-        )
-        os.close(slave_fd)
-        stop_reader = threading.Event()
-        terminal_path.parent.mkdir(parents=True, exist_ok=True)
-
-        def drain() -> None:
-            with terminal_path.open("ab", buffering=0) as output:
-                while not stop_reader.is_set():
-                    try:
-                        ready, _, _ = select.select([master_fd], [], [], 0.2)
-                    except (OSError, ValueError):
-                        return
-                    if not ready:
-                        if process.poll() is not None:
-                            return
-                        continue
-                    try:
-                        chunk = os.read(master_fd, 65536)
-                    except OSError:
-                        return
-                    if not chunk:
-                        return
-                    output.write(chunk)
-
-        reader = threading.Thread(target=drain, daemon=True, name="cursor-gate0-terminal-drain")
-        reader.start()
-        return cls(
-            process=process,
-            master_fd=master_fd,
-            terminal_path=terminal_path,
-            _reader=reader,
-            _stop_reader=stop_reader,
-            _write_lock=threading.Lock(),
-        )
-
-    def alive(self) -> bool:
-        return self.process.poll() is None
-
-    def submit_idle(self, text: str) -> None:
-        if not self.alive():
-            raise RuntimeError(f"Cursor process exited before submit ({self.process.returncode})")
-        with self._write_lock:
-            os.write(self.master_fd, text.encode("utf-8"))
-            time.sleep(_INJECT_TEXT_SETTLE_SECONDS)
-            os.write(self.master_fd, b"\x1b")
-            time.sleep(_INJECT_ESCAPE_SETTLE_SECONDS)
-            os.write(self.master_fd, b"\r")
-
-    def interrupt(self) -> None:
-        if not self.alive():
-            raise RuntimeError(f"Cursor process exited before Ctrl-C ({self.process.returncode})")
-        with self._write_lock:
-            os.write(self.master_fd, b"\x03")
-
-    def submit_active(self, text: str) -> None:
-        if not self.alive():
-            raise RuntimeError(f"Cursor process exited before active steer ({self.process.returncode})")
-        with self._write_lock:
-            os.write(self.master_fd, text.encode("utf-8"))
-            time.sleep(_INJECT_TEXT_SETTLE_SECONDS)
-            os.write(self.master_fd, b"\r")
-
-    def close(self) -> None:
-        self._stop_reader.set()
-        if self.alive():
-            process_group: int | None = None
-            try:
-                process_group = os.getpgid(self.process.pid)
-                os.killpg(process_group, signal.SIGTERM)
-            except (PermissionError, ProcessLookupError):
-                self.process.terminate()
-            try:
-                self.process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                try:
-                    if process_group is None:
-                        process_group = os.getpgid(self.process.pid)
-                    os.killpg(process_group, signal.SIGKILL)
-                except (PermissionError, ProcessLookupError):
-                    self.process.kill()
-                try:
-                    self.process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    pass
-        try:
-            os.close(self.master_fd)
-        except OSError:
-            pass
-        self._reader.join(timeout=2)
 
 
 def _child_env(longhouse_session_id: str, events_path: Path) -> dict[str, str]:
@@ -755,6 +645,165 @@ def _resume_scenario(
         session.close()
 
 
+def _conversation_reset_scenario(
+    *,
+    binary: str,
+    workspace: Path,
+    events_path: Path,
+    terminal_path: Path,
+    provider_id: str,
+    timeout: float,
+    model: str | None,
+) -> dict[str, Any]:
+    longhouse_session_id = str(uuid4())
+    marker_a = f"LONGHOUSE_CURSOR_RESET_A_{uuid4().hex[:10]}"
+    marker_b = f"LONGHOUSE_CURSOR_RESET_B_{uuid4().hex[:10]}"
+    prompt_a = f"Reply with exactly {marker_a} and nothing else."
+    prompt_b = f"Reply with exactly {marker_b} and nothing else."
+    argv = [binary, "--resume", provider_id, "--workspace", str(workspace), "--force"]
+    if model:
+        argv.extend(["--model", model])
+    argv.append(prompt_a)
+    before = len(read_hook_events(events_path))
+    session = CursorPtySession.start(
+        argv=argv,
+        cwd=workspace,
+        env=_child_env(longhouse_session_id, events_path),
+        terminal_path=terminal_path,
+    )
+    try:
+        prompt_a_event = wait_for_hook(
+            events_path,
+            longhouse_session_id=longhouse_session_id,
+            event="beforeSubmitPrompt",
+            conversation_id=provider_id,
+            after_count=before,
+            timeout=timeout,
+        )
+        wait_for_hook(
+            events_path,
+            longhouse_session_id=longhouse_session_id,
+            event="stop",
+            conversation_id=provider_id,
+            generation_id=str(prompt_a_event.get("generation_id") or ""),
+            after_count=before,
+            timeout=timeout,
+        )
+        old_store = wait_for_store(provider_id, timeout=timeout)
+        reset_start = len(read_hook_events(events_path))
+        session.submit_idle("/clear")
+
+        eager_deadline = time.monotonic() + min(3.0, timeout)
+        eager_event: dict[str, Any] | None = None
+        while time.monotonic() < eager_deadline and eager_event is None:
+            eager_event = next(
+                (
+                    row
+                    for row in read_hook_events(events_path)[reset_start:]
+                    if row.get("longhouse_session_id") == longhouse_session_id
+                    and row.get("event") == "sessionStart"
+                    and row.get("conversation_id")
+                    and row.get("conversation_id") != provider_id
+                ),
+                None,
+            )
+            if eager_event is None:
+                time.sleep(0.1)
+
+        marker_b_start = len(read_hook_events(events_path))
+        session.submit_idle(prompt_b)
+        prompt_b_event = wait_for_hook_match(
+            events_path,
+            longhouse_session_id=longhouse_session_id,
+            after_count=marker_b_start,
+            timeout=timeout,
+            predicate=lambda row: row.get("event") == "beforeSubmitPrompt"
+            and row.get("conversation_id")
+            and row.get("conversation_id") != provider_id
+            and row.get("prompt_sha256") == _marker_digest(prompt_b),
+        )
+        new_provider_id = str(prompt_b_event.get("conversation_id") or "")
+        response_b = wait_for_hook(
+            events_path,
+            longhouse_session_id=longhouse_session_id,
+            event="afterAgentResponse",
+            conversation_id=new_provider_id,
+            generation_id=str(prompt_b_event.get("generation_id") or ""),
+            after_count=marker_b_start,
+            timeout=timeout,
+        )
+        stop_b = wait_for_hook(
+            events_path,
+            longhouse_session_id=longhouse_session_id,
+            event="stop",
+            conversation_id=new_provider_id,
+            generation_id=str(prompt_b_event.get("generation_id") or ""),
+            after_count=marker_b_start,
+            timeout=timeout,
+        )
+        new_store = wait_for_store(new_provider_id, timeout=timeout)
+        reset_events = read_hook_events(events_path)[reset_start:]
+        marker_a_digest = _marker_digest(prompt_a)
+        reset_boundary = next(
+            (row for row in reset_events if row.get("event") == "sessionStart" and row.get("conversation_id") == new_provider_id),
+            None,
+        )
+        copied_marker_a = any(
+            row.get("conversation_id") == new_provider_id and row.get("prompt_sha256") == marker_a_digest for row in reset_events
+        )
+        return {
+            "status": "passed",
+            "provider_conversation_id": new_provider_id,
+            "longhouse_session_id": longhouse_session_id,
+            "reset_command": "/clear",
+            "reset_command_accepted": (reset_boundary is not None and response_b.get("conversation_id") == new_provider_id),
+            "identity_transition": classify_identity_transition(provider_id, new_provider_id),
+            "identity_allocation": "eager" if eager_event is not None else "lazy",
+            "before": {
+                "provider_session_id": provider_id,
+                "longhouse_session_id": longhouse_session_id,
+                "provider_process_id": str(session.process.pid),
+                "run_id": str(prompt_a_event.get("generation_id") or ""),
+                "raw_source_ids": [str(old_store)],
+                "raw_source_hashes": [_file_sha256(old_store)],
+                "marker_digest": marker_a_digest,
+            },
+            "after": {
+                "provider_session_id": new_provider_id,
+                "longhouse_session_id": longhouse_session_id,
+                "provider_process_id": str(session.process.pid),
+                "run_id": str(prompt_b_event.get("generation_id") or ""),
+                "raw_source_ids": [str(new_store)],
+                "raw_source_hashes": [_file_sha256(new_store)],
+                "marker_digest": _marker_digest(prompt_b),
+            },
+            "provider_transition": {
+                "pre_reset_history_retained": old_store.exists() and _cursor_store_agent_id(old_store) == provider_id,
+                "post_reset_turn_bound_to_active_identity": response_b.get("conversation_id") == new_provider_id
+                and stop_b.get("conversation_id") == new_provider_id,
+                "pre_reset_messages_not_copied": not copied_marker_a,
+            },
+            "archive": {
+                "pre_reset_raw_preserved": old_store.exists(),
+                "post_reset_raw_preserved": new_store.exists(),
+                "reset_boundary_observable": reset_boundary is not None,
+                "tail_marker_order": [marker_a_digest, "reset", _marker_digest(prompt_b)] if reset_boundary is not None else [],
+                "source_identity_preserved": old_store != new_store,
+                "archive_evidence_source": "cursor_hooks_and_store",
+                "archive_artifact": str(events_path),
+            },
+            "longhouse": {
+                "provider_alias_ids": [provider_id],
+                "timeline_session_ids": [longhouse_session_id],
+                "provider_alias_matches_before": True,
+                "provider_alias_matches_after": provider_id == new_provider_id,
+            },
+            "process_alive_after_reset": session.alive(),
+        }
+    finally:
+        session.close()
+
+
 def _permission_scenario(
     *,
     decision: str,
@@ -898,6 +947,28 @@ def run_gate0(args: argparse.Namespace) -> dict[str, Any]:
         "scenarios": {},
     }
     output_path = artifact_root / "gate0.json"
+
+    def record_reset_observation(value: dict[str, Any]) -> dict[str, Any]:
+        observation = {
+            **value,
+            "schema_version": 1,
+            "scenario": "conversation_reset",
+            "provider": "cursor",
+            "evidence_class": "live_token",
+            "provider_version": version,
+            "provider_executable_identity": report["provider_executable_identity"],
+        }
+        reset_path = artifact_root / "conversation-reset-observation.json"
+        reset_path.write_text(json.dumps(observation, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        report["conversation_reset_observation_path"] = str(reset_path)
+        report["conversation_reset_evaluation"] = evaluate_reset_observation(observation)
+        if report["conversation_reset_evaluation"]["status"] != "pass":
+            raise RuntimeError(
+                "Cursor conversation-reset semantic assertions failed: "
+                + ", ".join(report["conversation_reset_evaluation"]["failed_assertions"])
+            )
+        return observation
+
     try:
         if auth.get("isAuthenticated") is not True:
             raise RuntimeError("cursor-agent is not authenticated")
@@ -908,6 +979,25 @@ def run_gate0(args: argparse.Namespace) -> dict[str, Any]:
             model=args.model,
             timeout=args.timeout,
         )
+        if args.conversation_reset_only:
+            reset_provider_id = _create_chat(binary, workspace)
+            report["scenarios"]["conversation_reset"] = record_reset_observation(
+                _conversation_reset_scenario(
+                    binary=binary,
+                    workspace=workspace,
+                    events_path=events_path,
+                    terminal_path=artifact_root / "conversation-reset.terminal.raw",
+                    provider_id=reset_provider_id,
+                    timeout=args.timeout,
+                    model=args.model,
+                )
+            )
+            report["selected_identity_path"] = "conversation_reset"
+            report["status"] = "passed"
+            report["failure_code"] = None
+            report["finished_at"] = _now()
+            output_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            return report
         provider_id = _create_chat(binary, workspace)
         report["scenarios"]["create_chat_resume"] = _identity_scenario(
             name="create_chat_resume",
@@ -930,6 +1020,18 @@ def run_gate0(args: argparse.Namespace) -> dict[str, Any]:
             longhouse_session_id=str(first_identity["longhouse_session_id"]),
             timeout=args.timeout,
             model=args.model,
+        )
+        reset_provider_id = _create_chat(binary, workspace)
+        report["scenarios"]["conversation_reset"] = record_reset_observation(
+            _conversation_reset_scenario(
+                binary=binary,
+                workspace=workspace,
+                events_path=events_path,
+                terminal_path=artifact_root / "conversation-reset.terminal.raw",
+                provider_id=reset_provider_id,
+                timeout=args.timeout,
+                model=args.model,
+            )
         )
         requested_id = str(uuid4())
         report["scenarios"]["new_session_id"] = _identity_scenario(
@@ -1014,6 +1116,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--cursor-bin", help="Explicit stock cursor-agent binary")
     parser.add_argument("--model", help="Optional model override for low-cost proof turns")
     parser.add_argument("--timeout", type=float, default=_DEFAULT_TIMEOUT_SECONDS)
+    parser.add_argument(
+        "--conversation-reset-only",
+        action="store_true",
+        help="Run workspace trust plus the conversation-reset scenario only.",
+    )
     parser.add_argument(
         "--artifact-root",
         default=str(Path.home() / ".longhouse" / "canaries" / "provider-live" / "cursor"),

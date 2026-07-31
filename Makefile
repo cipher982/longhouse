@@ -18,6 +18,7 @@ CLAUDE_DEVICE_ID ?=
 PERF_PROOF_OUTPUT ?= artifacts/perf-proof/perf-proof.json
 
 .PHONY: help check-push-readiness dev dev-demo stop test test-session-state test-ios test-ios-perf test-ios-session-open profile-ios-live-cold benchmark-ios-transcript ios-marketing test-mobile-chat test-mobile-chat-stress test-mobile-chat-replay test-ios-helper test-frontend test-engine test-codex-console-warm-canary test-claude-console-live-canary test-cursor-console-live-canary test-opencode-console-live-canary test-opencode-console-product-e2e test-cursor-helm-gate0 test-cursor-helm-product-e2e test-cursor-helm-gate0-unit test-runner test-e2e test-e2e-core test-e2e-a11y test-e2e-single test-ci test-full install-engine install-cli validate validate-ws validate-tools validate-sdk validate-ios-api validate-provider-brands validate-makefile validate-build-identity validate-public-surface validate-managed-codex-contract validate-managed-session-contract validate-session-state-contract validate-provider-census validate-provider-factory-plan validate-session-state-fault-matrix validate-session-state-deep-health validate-no-python-device-path validate-provider-cli-canaries validate-ship-monitor provider-release-proof provider-release-proof-accept provider-release-proof-diff provider-release-proof-old-new provider-release-proof-staged-old-new provider-release-proof-universal-smoke provider-release-proof-status provider-release-proof-status-all provider-release-proof-maturity regen-ws generate-tools generate-sdk generate-ios-api generate-provider-brands generate-provider-census generate-provider-factory-plan qa-live hosted-shipper-mixed-bench qa-unmanaged render-canary session-propagation-sla managed-claude-truth-probe managed-claude-poc provider-live-route-e2e provider-live-route-e2e-opencode-transcript reprovision deploy-status launch-readiness ship-watch ship release ui-capture marketing-screenshots demo-render qa-ui-workbench qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-visual-compare test-shipper-e2e test-shipper-synthetic-bench test-shipper-premerge test-wheel-package test-install test-install-first-run test-install-macos-ambient test-install-runner test-hosted-instance test-web-entrypoint test-runtime-packaging-macos test-e2e-onboarding test-readmes test-codex-bridge-e2e test-hooks onboarding-funnel launch-gate-local lint-test-patterns import-smoke ensure-js-deps ensure-playwright-browser demo-db menubar-harness qa-oss vibetest dogfood dogfood-refresh dogfood-check observability-up observability-down
+.PHONY: test-antigravity-conversation-reset test-claude-conversation-reset test-codex-conversation-reset test-cursor-conversation-reset test-opencode-conversation-reset
 .PHONY: validate-dogfood-runtime test-storage-v2-b2 test-shipper-synthetic-live-bench
 .PHONY: validate-playwright-install
 .PHONY: test-cursor-console-product-e2e cursor-observed-install-qualification
@@ -254,17 +255,32 @@ test-codex-console-warm-canary: ## Real stock-Codex Console warm-path canary
 	@python3 scripts/build/generate_build_identity.py
 	cd engine && cargo test --profile $(or $(CARGO_PROFILE),release) --bin longhouse-engine codex_exec::tests::installed_codex_completes_through_production_console_adapter -- --ignored --exact --nocapture
 
+test-codex-conversation-reset: ## Real managed-Codex /clear characterization canary
+	@cd server && uv run python -m zerg.qa.codex_conversation_reset $(ARGS)
+
 test-claude-console-live-canary: ## Real stock-Claude native Console create/resume canary
 	@python3 scripts/build/generate_build_identity.py
 	cd engine && cargo test --profile $(or $(CARGO_PROFILE),release) --bin longhouse-engine claude_print::tests::installed_claude_completes_and_resumes_through_production_console_adapter -- --ignored --exact --nocapture
+
+test-claude-conversation-reset: ## Real managed-Claude /clear characterization canary
+	@cd server && uv run python -m zerg.qa.claude_conversation_reset $(ARGS)
 
 test-cursor-console-live-canary: ## Real stock-Cursor native Console create/resume canary
 	@python3 scripts/build/generate_build_identity.py
 	cd engine && cargo test --profile $(or $(CARGO_PROFILE),release) --bin longhouse-engine cursor_print::tests::installed_cursor_completes_and_resumes_through_production_console_adapter -- --ignored --exact --nocapture
 
+test-cursor-conversation-reset: ## Real Cursor /clear characterization canary
+	@$(MAKE) test-cursor-helm-gate0 ARGS="--conversation-reset-only $(ARGS)"
+
 test-opencode-console-live-canary: ## Real stock-OpenCode native Console create/resume canary
 	@python3 scripts/build/generate_build_identity.py
 	cd engine && cargo test --profile $(or $(CARGO_PROFILE),release) --bin longhouse-engine opencode_run::tests::installed_opencode_completes_and_resumes_through_production_console_adapter -- --ignored --exact --nocapture
+
+test-opencode-conversation-reset: ## Real managed-OpenCode /new characterization canary
+	@cd server && uv run python -m zerg.qa.opencode_conversation_reset $(ARGS)
+
+test-antigravity-conversation-reset: ## Isolated-worker Antigravity /clear characterization canary
+	@cd server && uv run python -m zerg.qa.antigravity_conversation_reset $(ARGS)
 
 test-opencode-console-product-e2e: ## Hosted Runtime Host -> Machine Agent -> stock OpenCode Console proof
 	@uv run --project server python scripts/qa/opencode-console-product-e2e.py $(ARGS)
@@ -539,6 +555,13 @@ validate-provider-cli-canaries: ## @internal Provider release canary wrapper tes
 provider-release-proof: ## Emit provider release proof artifact; set PROVIDER=... and optional PROVIDER_BIN=...
 	@set -eu; \
 	if [ -z "$(PROVIDER)" ]; then echo "PROVIDER is required" >&2; exit 2; fi; \
+	if [ -n "$(QUALIFICATION_PROFILE)" ]; then \
+		if [ -z "$(PROVIDER_BIN)" ]; then echo "PROVIDER_BIN is required with QUALIFICATION_PROFILE" >&2; exit 2; fi; \
+		output_root="$(EVIDENCE_ROOT)"; \
+		if [ -z "$$output_root" ]; then output_root=".build/canaries/provider-qualification/$(PROVIDER)-$(QUALIFICATION_PROFILE)"; fi; \
+		uv run --project server python scripts/qa/provider-qualification.py --provider "$(PROVIDER)" --profile "$(QUALIFICATION_PROFILE)" --provider-bin "$(PROVIDER_BIN)" --output-root "$$output_root" --json; \
+		exit $$?; \
+	fi; \
 	set -- scripts/qa/provider-release-proof.py \
 		--provider "$(PROVIDER)" \
 		--source-review-status "$(SOURCE_REVIEW_STATUS)" \
@@ -642,9 +665,11 @@ provider-release-proof-universal-smoke: ## Run all-provider fake/no-token univer
 
 provider-release-proof-universal-live-smoke: ## Run all-provider real-bin universal smoke including live-token streaming
 	@set -eu; \
-	set -- scripts/qa/provider-release-proof-universal-smoke.py --use-real-provider-bins --include-live-token-streaming; \
+	set -- scripts/qa/provider-release-proof-universal-smoke.py --use-real-provider-bins; \
+	if [ -z "$(UNIVERSAL_SCENARIO)" ] || [ -n "$(INCLUDE_LIVE_TOKEN_STREAMING)" ]; then set -- "$$@" --include-live-token-streaming; fi; \
 	if [ -n "$(ARTIFACT)" ]; then set -- "$$@" --artifact "$(ARTIFACT)"; fi; \
 	if [ -n "$(EVIDENCE_ROOT)" ]; then set -- "$$@" --evidence-root "$(EVIDENCE_ROOT)"; fi; \
+	if [ -n "$(UNIVERSAL_PROVIDER)" ]; then for provider in $(UNIVERSAL_PROVIDER); do set -- "$$@" --provider "$$provider"; done; fi; \
 	if [ -n "$(JSON)" ]; then set -- "$$@" --json; fi; \
 	if [ -n "$(UNIVERSAL_SCENARIO)" ]; then for scenario in $(UNIVERSAL_SCENARIO); do set -- "$$@" --scenario "$$scenario"; done; fi; \
 	uv run --project server python "$$@"

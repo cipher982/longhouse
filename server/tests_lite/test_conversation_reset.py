@@ -1,11 +1,30 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
 
 from zerg.qa.conversation_reset import classify_identity_transition
 from zerg.qa.conversation_reset import evaluate_reset_observation
+from zerg.qa.conversation_reset import execution_summary
 from zerg.qa.conversation_reset import generated_fake_observation
+from zerg.qa.conversation_reset import produce_live_reset_artifact
+from zerg.qa.conversation_reset import reset_artifact_env
+from zerg.qa.conversation_reset import tail_sequence
+from zerg.qa.conversation_reset_qualification import ASSERTIONS as QUALIFICATION_ASSERTIONS
+from zerg.qa.conversation_reset_qualification import PROFILE_BY_PROVIDER
+from zerg.qa.conversation_reset_qualification import _executor as qualification_executor
+from zerg.qa.antigravity_conversation_reset import ISOLATED_WORKER_ENABLE_ENV
+from zerg.qa.antigravity_conversation_reset import run as run_antigravity_reset
+from zerg.qa.provider_adapters.antigravity import AntigravityHarnessAdapter
+from zerg.qa.provider_adapters.claude import ClaudeCodeHarnessAdapter
+from zerg.qa.provider_adapters.codex import CodexOpenAIHarnessAdapter
 from zerg.qa.provider_build_store import ProviderBuildRef
+from zerg.qa.provider_adapters.cursor import CursorHarnessAdapter
+from zerg.qa.provider_adapters.opencode import OpenCodeHarnessAdapter
 from zerg.qa.universal_agent_harness import AdapterConfig
 from zerg.qa.universal_agent_harness import UniversalProviderAdapter
 from zerg.qa.universal_agent_harness import run_scenario
@@ -70,6 +89,20 @@ def test_reset_oracle_reports_independent_archive_and_provider_failures() -> Non
     ]
 
 
+def test_reset_oracle_reports_stale_active_alias() -> None:
+    observation = generated_fake_observation("claude")
+    observation["longhouse"].update(
+        provider_alias_ids=[observation["before"]["provider_session_id"]],
+        provider_alias_matches_before=True,
+        provider_alias_matches_after=False,
+    )
+
+    result = evaluate_reset_observation(observation)
+
+    assert result["status"] == "fail"
+    assert result["failed_assertions"] == ["longhouse_alias_targets_active_identity"]
+
+
 def test_generated_fake_harness_runs_reset_for_every_provider(tmp_path: Path) -> None:
     for provider in ("codex", "claude", "opencode", "antigravity", "cursor"):
         provider_root = tmp_path / "builds" / provider
@@ -106,6 +139,66 @@ def test_reset_resume_is_not_applicable_for_antigravity(tmp_path: Path) -> None:
     assert result.failure_code is None
 
 
+def test_real_reset_resume_fails_closed_until_targeted_live_evidence_exists(tmp_path: Path) -> None:
+    build_root = tmp_path / "builds" / "claude"
+    build_root.mkdir(parents=True)
+    result = run_scenario(
+        _adapter("claude", build_root, provenance="staged_release"),
+        "conversation_reset_resume",
+        evidence_root=tmp_path / "evidence",
+    )
+
+    assert result.status == "blocked"
+    assert result.failure_code == "conversation_reset_resume_live_adapter_missing"
+
+
+def test_tail_sequence_uses_event_order_not_json_metadata() -> None:
+    marker_a = "RESET_MARKER_A"
+    marker_b = "RESET_MARKER_B"
+    payload = {
+        "metadata": f"{marker_b} /clear {marker_a}",
+        "events": [
+            {"content": marker_a},
+            {"content": "<command-name>/clear</command-name>"},
+            {"content": marker_b},
+        ],
+    }
+
+    result = tail_sequence(payload, marker_a, "/clear", marker_b)
+
+    assert result["reset_boundary_observable"] is True
+    assert result["event_indices"] == {"marker_a": 0, "reset": 1, "marker_b": 2}
+    assert result["tail_marker_order"][1] == "reset"
+
+
+def test_execution_summary_distinguishes_completed_canary_from_semantic_failure(tmp_path: Path) -> None:
+    observation = generated_fake_observation("codex")
+    observation["archive"]["reset_boundary_observable"] = False
+    summary = execution_summary(
+        observation,
+        observation_path=tmp_path / "observation.json",
+        terminal_path=tmp_path / "terminal.raw",
+    )
+
+    assert summary["execution_status"] == "completed"
+    assert summary["semantic_status"] == "fail"
+    assert summary["failed_assertions"] == ["reset_boundary_observable"]
+
+
+def test_live_producer_does_not_reuse_a_stale_observation(tmp_path: Path, monkeypatch) -> None:
+    stale = tmp_path / "20260731T000000Z" / "conversation-reset-observation.json"
+    stale.parent.mkdir()
+    stale.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(
+        "zerg.qa.conversation_reset.subprocess.run",
+        lambda *_args, **_kwargs: SimpleNamespace(stdout="failed", stderr="boom", returncode=1),
+    )
+
+    produced = produce_live_reset_artifact("claude", tmp_path / "claude", tmp_path)
+
+    assert produced is None
+
+
 def test_real_build_fails_closed_without_provider_adapter(tmp_path: Path) -> None:
     build_root = tmp_path / "builds" / "claude"
     build_root.mkdir(parents=True)
@@ -117,3 +210,129 @@ def test_real_build_fails_closed_without_provider_adapter(tmp_path: Path) -> Non
 
     assert result.status == "blocked"
     assert result.failure_code == "conversation_reset_live_adapter_missing"
+
+
+def test_cursor_adapter_projects_live_reset_observation(tmp_path: Path, monkeypatch) -> None:
+    binary = tmp_path / "cursor-agent"
+    binary.write_text(
+        "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 2026.07.23-test; exit 0; fi\nexit 2\n",
+        encoding="utf-8",
+    )
+    binary.chmod(0o755)
+    observation = generated_fake_observation("cursor")
+    observation.update(
+        evidence_class="live_token",
+        provider_version="2026.07.23-test",
+        provider_executable_identity=f"sha256:{hashlib.sha256(binary.read_bytes()).hexdigest()}",
+    )
+    artifact = tmp_path / "cursor-reset.json"
+    artifact.write_text(json.dumps(observation), encoding="utf-8")
+    monkeypatch.setenv(reset_artifact_env("cursor"), str(artifact))
+    adapter = CursorHarnessAdapter(
+        AdapterConfig(provider="cursor", binary_name="cursor-agent", binary_env=None),
+        provider_bin=binary,
+    )
+
+    result = run_scenario(adapter, "conversation_reset", evidence_root=tmp_path / "evidence")
+
+    assert result.status == "pass"
+    assert result.data is not None
+    assert result.data["synthetic"] is False
+    assert result.data["operation_evidence"]["conversation_reset"]["level"] == "live_token"
+
+
+@pytest.mark.parametrize(
+    ("provider", "adapter_type"),
+    (
+        ("claude", ClaudeCodeHarnessAdapter),
+        ("codex", CodexOpenAIHarnessAdapter),
+        ("opencode", OpenCodeHarnessAdapter),
+        ("antigravity", AntigravityHarnessAdapter),
+    ),
+)
+def test_provider_adapter_consumes_exact_binary_live_reset_artifact(
+    provider: str,
+    adapter_type: type[UniversalProviderAdapter],
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    binary = tmp_path / provider
+    binary.write_text(
+        "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 1.2.3-test; exit 0; fi\nexit 2\n",
+        encoding="utf-8",
+    )
+    binary.chmod(0o755)
+    observation = generated_fake_observation(provider)
+    observation.update(
+        evidence_class="live_token",
+        provider_version="1.2.3-test",
+        provider_executable_identity=f"sha256:{hashlib.sha256(binary.read_bytes()).hexdigest()}",
+    )
+    artifact = tmp_path / f"{provider}-reset.json"
+    artifact.write_text(json.dumps(observation), encoding="utf-8")
+    monkeypatch.setenv(reset_artifact_env(provider), str(artifact))
+    adapter = adapter_type(
+        AdapterConfig(provider=provider, binary_name=provider, binary_env=None),
+        provider_bin=binary,
+    )
+
+    result = run_scenario(adapter, "conversation_reset", evidence_root=tmp_path / "evidence")
+
+    assert result.status == "pass"
+    assert result.data is not None
+    assert result.data["synthetic"] is False
+    assert result.data["operation_evidence"]["conversation_reset"]["level"] == "live_token"
+
+
+def test_strict_profile_executor_emits_three_independent_live_axes(tmp_path: Path, monkeypatch) -> None:
+    binary = tmp_path / "claude"
+    binary.write_text("exact provider bytes", encoding="utf-8")
+    observation = generated_fake_observation("claude")
+    observation.update(
+        evidence_class="live_token",
+        provider_version="2.1.219",
+        provider_executable_identity=f"sha256:{hashlib.sha256(binary.read_bytes()).hexdigest()}",
+    )
+    artifact = tmp_path / "claude-reset.json"
+    artifact.write_text(json.dumps(observation), encoding="utf-8")
+    monkeypatch.setenv(reset_artifact_env("claude"), str(artifact))
+
+    result, assertions, secrets = qualification_executor("claude", binary, tmp_path / "evidence")
+
+    assert result["status"] == "pass"
+    assert tuple(item.assertion_id for item in assertions) == QUALIFICATION_ASSERTIONS
+    assert {item.outcome.value for item in assertions} == {"pass"}
+    assert {item.evidence_class.value for item in assertions} == {"live_token"}
+    assert secrets == ()
+    assert PROFILE_BY_PROVIDER["claude"] == "claude_conversation_reset_v1"
+
+
+def test_strict_profile_reports_stale_longhouse_alias_independently(tmp_path: Path, monkeypatch) -> None:
+    binary = tmp_path / "claude"
+    binary.write_text("exact provider bytes", encoding="utf-8")
+    observation = generated_fake_observation("claude")
+    observation.update(
+        evidence_class="live_token",
+        provider_version="2.1.219",
+        provider_executable_identity=f"sha256:{hashlib.sha256(binary.read_bytes()).hexdigest()}",
+    )
+    observation["longhouse"].update(
+        provider_alias_ids=[observation["before"]["provider_session_id"]],
+        provider_alias_matches_before=True,
+        provider_alias_matches_after=False,
+    )
+    artifact = tmp_path / "claude-reset-stale-alias.json"
+    artifact.write_text(json.dumps(observation), encoding="utf-8")
+    monkeypatch.setenv(reset_artifact_env("claude"), str(artifact))
+
+    result, assertions, _secrets = qualification_executor("claude", binary, tmp_path / "evidence")
+
+    assert result["status"] == "fail"
+    assert [item.outcome.value for item in assertions] == ["pass", "pass", "semantic_fail"]
+
+
+def test_antigravity_live_reset_fails_closed_outside_isolated_worker(monkeypatch) -> None:
+    monkeypatch.delenv(ISOLATED_WORKER_ENABLE_ENV, raising=False)
+
+    with pytest.raises(RuntimeError, match="isolated unwatched worker"):
+        run_antigravity_reset(SimpleNamespace(longhouse_session_id="factory-session"))

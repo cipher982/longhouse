@@ -250,6 +250,11 @@ class AntigravityHarnessAdapter(UniversalProviderAdapter):
     any of these five methods.
     """
 
+    def conversation_reset(self, package: EvidencePackage) -> dict[str, Any]:
+        from zerg.qa.conversation_reset import consume_live_reset_artifact
+
+        return consume_live_reset_artifact(self, package, provider="antigravity") or super().conversation_reset(package)
+
     def launch_managed_session(self, package: EvidencePackage) -> dict[str, Any]:
         binary, binary_error = self._require_binary(package, "launch_managed_session")
         if binary_error is not None:

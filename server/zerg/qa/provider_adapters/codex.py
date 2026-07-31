@@ -258,6 +258,11 @@ class CodexOpenAIHarnessAdapter(UniversalProviderAdapter):
     launch-critical provider path.
     """
 
+    def conversation_reset(self, package: EvidencePackage) -> dict[str, Any]:
+        from zerg.qa.conversation_reset import consume_live_reset_artifact
+
+        return consume_live_reset_artifact(self, package, provider="codex") or super().conversation_reset(package)
+
     def permission_prompt(self, package: EvidencePackage) -> dict[str, Any]:
         binary, binary_error = self._require_binary(package, "permission_prompt")
         if binary_error is not None:

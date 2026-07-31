@@ -678,6 +678,9 @@ def _run_native_codex_tui(
     cmd += ["--enable", "tui_app_server", "--remote", ws_url]
     env = os.environ.copy()
     env["LONGHOUSE_MANAGED_SESSION_ID"] = session_id
+    isolated_tui_home = str(env.get("LONGHOUSE_CODEX_TUI_HOME") or "").strip()
+    if isolated_tui_home:
+        env["CODEX_HOME"] = isolated_tui_home
     add_interactive_human_shell_launch_env(env)
     if os.name == "posix" and _stdio_ttys():
         return _run_foreground_process_group(cmd=cmd, cwd=cwd, env=env)

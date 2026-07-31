@@ -242,6 +242,11 @@ class OpenCodeHarnessAdapter(UniversalProviderAdapter):
     design review 2026-07-28.
     """
 
+    def conversation_reset(self, package: EvidencePackage) -> dict[str, Any]:
+        from zerg.qa.conversation_reset import consume_live_reset_artifact
+
+        return consume_live_reset_artifact(self, package, provider="opencode") or super().conversation_reset(package)
+
     def permission_prompt(self, package: EvidencePackage) -> dict[str, Any]:
         from zerg.cli.opencode_bridge import permission_reply
         from zerg.services.opencode_bridge_state import write_opencode_bridge_state

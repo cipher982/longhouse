@@ -15,6 +15,14 @@ ASSERTIONS_BY_SCENARIO = {
         "hook_inbox_contract_preserved",
         "real_print_injection_observed",
     ),
+    **{
+        f"{provider}_conversation_reset": (
+            "provider_conversation_reset_observed",
+            "raw_history_conserved_across_reset",
+            "longhouse_reset_binding_current",
+        )
+        for provider in ("codex", "claude", "opencode", "antigravity", "cursor")
+    },
 }
 
 

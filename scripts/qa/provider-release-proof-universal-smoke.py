@@ -24,8 +24,14 @@ SERVER_PATH = Path(__file__).resolve().parents[2] / "server"
 sys.path.insert(0, str(SERVER_PATH))
 
 from zerg.qa.provider_build_store import materialize_generated_fake_builds
+from zerg.qa.conversation_reset import produce_live_reset_artifact
+from zerg.qa.conversation_reset import reset_artifact_env
 from zerg.qa.provider_factory_model import DEFAULT_HARNESS_SCENARIOS as DEFAULT_SCENARIOS
 from zerg.qa.provider_factory_model import LIVE_TOKEN_HARNESS_SCENARIO as LIVE_TOKEN_SCENARIO
+
+TOKEN_SPENDING_SCENARIOS = frozenset(
+    {LIVE_TOKEN_SCENARIO, "conversation_reset"}
+)
 from zerg.qa.universal_agent_harness import SUPPORTED_PROVIDERS
 from zerg.qa.universal_agent_harness import HarnessOptions
 from zerg.qa.universal_agent_harness import provider_configs
@@ -400,6 +406,29 @@ def resolve_installed_provider_bins(
     return bins, sources
 
 
+def produce_live_reset_artifacts(
+    providers: tuple[str, ...], provider_bins: dict[str, Path], evidence_root: Path
+) -> dict[str, str]:
+    """Run each provider-owned reset canary before the neutral harness consumes it."""
+
+    produced: dict[str, str] = {}
+    for provider in providers:
+        env_name = reset_artifact_env(provider)
+        if existing := str(os.environ.get(env_name) or "").strip():
+            produced[provider] = existing
+            continue
+        artifact = produce_live_reset_artifact(
+            provider, provider_bins[provider], evidence_root / "reset-producers" / provider
+        )
+        if artifact is None:
+            if provider == "antigravity":
+                produced[provider] = "blocked:LONGHOUSE_ANTIGRAVITY_RESET_SESSION_ID"
+            continue
+        os.environ[env_name] = str(artifact)
+        produced[provider] = str(artifact)
+    return produced
+
+
 def write_parse_fixture(root: Path) -> Path:
     fixture_path = root / "fixtures" / "provider-events.jsonl"
     rows = (
@@ -735,6 +764,11 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
                 for provider in missing_providers
             )
             raise ValueError(f"real provider acquisition is incomplete: {details}")
+        reset_artifacts = (
+            produce_live_reset_artifacts(providers, provider_bins, evidence_root)
+            if "conversation_reset" in scenarios
+            else {}
+        )
     else:
         generated_bins = {
             provider: binary
@@ -757,6 +791,7 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
             provider: build.artifact_provenance
             for provider, build in provider_builds.items()
         }
+        reset_artifacts = {}
     fixture_path = write_parse_fixture(evidence_root)
     old_proof_paths, new_proof_paths = write_synthetic_old_new_release_proofs(
         evidence_root
@@ -786,6 +821,7 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
         "scenarios": list(scenarios),
         "provider_bin_mode": "path_or_env" if args.use_real_provider_bins else "fake",
         "provider_bin_sources": provider_bin_sources,
+        "conversation_reset_artifacts": reset_artifacts,
         "provider_builds": (
             {
                 provider: build.to_evidence()
@@ -804,9 +840,11 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
             if provider_builds is not None
             else {"status": "not_applicable"}
         ),
-        "token_spending_scenarios": [LIVE_TOKEN_SCENARIO]
-        if LIVE_TOKEN_SCENARIO in scenarios
-        else [],
+        "token_spending_scenarios": (
+            sorted(TOKEN_SPENDING_SCENARIOS.intersection(scenarios))
+            if args.use_real_provider_bins
+            else []
+        ),
         "result_count": len(harness.get("results") or []),
         "evidence_root": str(evidence_root),
         "synthetic_old_proof_paths": {

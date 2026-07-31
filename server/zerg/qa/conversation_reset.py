@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import subprocess
+import sys
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -15,8 +18,87 @@ IDENTITY_TRANSITIONS = ("rotated", "reused", "unobserved")
 IDENTITY_ALLOCATIONS = ("eager", "lazy", "not_applicable", "unobserved")
 
 
+def reset_artifact_env(provider: str) -> str:
+    return f"LONGHOUSE_{provider.upper()}_CONVERSATION_RESET_ARTIFACT"
+
+
+def produce_live_reset_artifact(provider: str, binary: Path, artifact_root: Path) -> Path | None:
+    """Run a provider-owned canary and return its neutral observation artifact."""
+
+    modules = {
+        "claude": "zerg.qa.claude_conversation_reset",
+        "codex": "zerg.qa.codex_conversation_reset",
+        "opencode": "zerg.qa.opencode_conversation_reset",
+        "antigravity": "zerg.qa.antigravity_conversation_reset",
+        "cursor": "zerg.qa.cursor_helm_gate0",
+    }
+    try:
+        module = modules[provider]
+    except KeyError:
+        return None
+    command = [sys.executable, "-m", module, "--artifact-root", str(artifact_root)]
+    if provider == "cursor":
+        command.extend(("--cursor-bin", str(binary), "--conversation-reset-only"))
+    else:
+        command.extend(("--provider-bin", str(binary)))
+    if provider == "antigravity":
+        session_id = str(os.environ.get("LONGHOUSE_ANTIGRAVITY_RESET_SESSION_ID") or "").strip()
+        if not session_id:
+            return None
+        command.extend(("--longhouse-session-id", session_id))
+    artifact_root.mkdir(parents=True, exist_ok=True)
+    existing = set(artifact_root.glob("*/conversation-reset-observation.json"))
+    completed = subprocess.run(command, text=True, capture_output=True, check=False)
+    (artifact_root / "producer.stdout.log").write_text(completed.stdout, encoding="utf-8")
+    (artifact_root / "producer.stderr.log").write_text(completed.stderr, encoding="utf-8")
+    observations = sorted(set(artifact_root.glob("*/conversation-reset-observation.json")) - existing)
+    return observations[-1].resolve() if observations else None
+
+
 def marker_digest(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def tail_sequence(payload: Mapping[str, Any], marker_a: str, reset_command: str, marker_b: str) -> dict[str, Any]:
+    """Measure marker/reset order from individual archived events.
+
+    Event-by-event matching avoids accidental ordering from JSON object metadata.
+    """
+
+    events = payload.get("events")
+    rows = events if isinstance(events, list) else []
+    rendered = [json.dumps(row, ensure_ascii=False, sort_keys=True) for row in rows]
+
+    def first(value: str, *, after: int = -1) -> int:
+        return next((index for index, row in enumerate(rendered) if index > after and value in row), -1)
+
+    marker_a_index = first(marker_a)
+    reset_index = first(reset_command, after=marker_a_index)
+    marker_b_index = first(marker_b, after=max(marker_a_index, reset_index))
+    ordered = 0 <= marker_a_index < reset_index < marker_b_index
+    return {
+        "pre_reset_raw_preserved": marker_a_index >= 0,
+        "post_reset_raw_preserved": marker_b_index >= 0,
+        "reset_boundary_observable": reset_index >= 0,
+        "tail_marker_order": [marker_digest(marker_a), "reset", marker_digest(marker_b)] if ordered else [],
+        "event_indices": {
+            "marker_a": marker_a_index,
+            "reset": reset_index,
+            "marker_b": marker_b_index,
+        },
+    }
+
+
+def execution_summary(observation: Mapping[str, Any] | None, *, observation_path: Path, terminal_path: Path) -> dict[str, Any]:
+    evaluation = evaluate_reset_observation(observation) if observation else None
+    return {
+        "status": "completed" if observation else "failed",
+        "execution_status": "completed" if observation else "failed",
+        "semantic_status": evaluation.get("status") if evaluation else "not_evaluated",
+        "failed_assertions": evaluation.get("failed_assertions", []) if evaluation else [],
+        "observation_path": str(observation_path),
+        "terminal_path": str(terminal_path),
+    }
 
 
 def classify_identity_transition(before: str | None, after: str | None) -> str:
@@ -85,8 +167,10 @@ def generated_fake_observation(
             "source_identity_preserved": True,
         },
         "longhouse": {
-            "provider_alias_ids": [before_id],
+            "provider_alias_ids": [after_id or before_id],
             "timeline_session_ids": [f"longhouse-{provider}-managed"],
+            "provider_alias_matches_before": transition == "reused",
+            "provider_alias_matches_after": True,
         },
     }
 
@@ -96,6 +180,7 @@ def evaluate_reset_observation(observation: Mapping[str, Any]) -> dict[str, Any]
     after = observation.get("after") if isinstance(observation.get("after"), Mapping) else {}
     provider = observation.get("provider_transition") if isinstance(observation.get("provider_transition"), Mapping) else {}
     archive = observation.get("archive") if isinstance(observation.get("archive"), Mapping) else {}
+    longhouse = observation.get("longhouse") if isinstance(observation.get("longhouse"), Mapping) else {}
     observed_transition = classify_identity_transition(
         _optional_text(before.get("provider_session_id")),
         _optional_text(after.get("provider_session_id")),
@@ -116,6 +201,11 @@ def evaluate_reset_observation(observation: Mapping[str, Any]) -> dict[str, Any]
         "reset_boundary_observable": archive.get("reset_boundary_observable") is True,
         "tail_order_conserved": _tail_order_conserved(archive.get("tail_marker_order")),
         "source_identity_preserved": archive.get("source_identity_preserved") is True,
+        "longhouse_alias_targets_active_identity": bool(
+            _optional_text(after.get("provider_session_id"))
+            and _optional_text(after.get("provider_session_id")) in (longhouse.get("provider_alias_ids") or [])
+            and longhouse.get("provider_alias_matches_after") is True
+        ),
     }
     failed = sorted(name for name, passed in assertions.items() if not passed)
     return {
@@ -158,6 +248,137 @@ def load_reset_observation(path: Path) -> dict[str, Any]:
     if not isinstance(payload, dict) or payload.get("schema_version") != RESET_SCHEMA_VERSION:
         raise ValueError(f"unsupported conversation-reset observation: {path}")
     return payload
+
+
+def consume_live_reset_artifact(
+    adapter: Any,
+    package: Any,
+    *,
+    provider: str,
+) -> dict[str, Any] | None:
+    """Verify and project a provider-owned live reset observation.
+
+    Live producers remain provider-specific. This consumer is deliberately
+    shared so exact-binary binding, the neutral oracle, and Longhouse ingest
+    assertions cannot drift between adapter columns.
+    """
+
+    from zerg.qa.universal_agent_harness import STATUS_FAIL
+    from zerg.qa.universal_agent_harness import STATUS_PASS
+
+    artifact_value = str(os.environ.get(reset_artifact_env(provider)) or "").strip()
+    if not artifact_value:
+        return None
+    artifact_path = Path(artifact_value).expanduser()
+    try:
+        observation = load_reset_observation(artifact_path)
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
+        payload = {
+            "status": STATUS_FAIL,
+            "scenario": RESET_SCENARIO,
+            "failure_code": "conversation_reset_artifact_invalid",
+            "message": f"{type(exc).__name__}: {exc}",
+        }
+        package.write_json("assertions/conversation_reset.json", payload)
+        return payload
+
+    if observation.get("provider") != provider or observation.get("evidence_class") != "live_token":
+        payload = {
+            "status": STATUS_FAIL,
+            "scenario": RESET_SCENARIO,
+            "failure_code": "conversation_reset_artifact_invalid",
+            "message": f"Expected provider={provider} live_token conversation-reset evidence.",
+        }
+        package.write_json("assertions/conversation_reset.json", payload)
+        return payload
+
+    binary, binary_error = adapter._require_binary(package, RESET_SCENARIO)
+    if binary_error is not None:
+        return binary_error
+    assert binary is not None
+    resolved_binary = binary.expanduser().resolve(strict=True)
+    executable_identity = f"sha256:{_file_digest(resolved_binary)}"
+    probe = adapter.probe(package)
+    probe_version = str(probe.get("version") or "").strip()
+    observed_version = str(observation.get("provider_version") or "").strip()
+    observed_identity = str(observation.get("provider_executable_identity") or "").strip()
+    identity_failure: tuple[str, str] | None = None
+    if probe.get("status") != STATUS_PASS or not probe_version:
+        identity_failure = ("conversation_reset_binary_probe_failed", "Provider binary probe failed.")
+    elif probe_version != observed_version and not probe_version.startswith(f"{observed_version} "):
+        identity_failure = (
+            "conversation_reset_version_mismatch",
+            f"Reset artifact proved {observed_version!r}; declared binary reports {probe_version!r}.",
+        )
+    elif executable_identity != observed_identity:
+        identity_failure = (
+            "conversation_reset_identity_mismatch",
+            "Reset artifact did not prove the exact declared provider executable.",
+        )
+
+    evaluation = evaluate_reset_observation(observation)
+    passed = identity_failure is None and evaluation["status"] == STATUS_PASS
+    before = observation.get("before") if isinstance(observation.get("before"), Mapping) else {}
+    after = observation.get("after") if isinstance(observation.get("after"), Mapping) else {}
+    longhouse_session_id = str(after.get("longhouse_session_id") or before.get("longhouse_session_id") or adapter._session_id(package))
+    evidence = {
+        RESET_SCENARIO: {
+            "status": STATUS_PASS if passed else STATUS_FAIL,
+            "level": "live_token",
+            "canary": f"{provider}_conversation_reset",
+            "failure_code": identity_failure[0] if identity_failure else evaluation.get("failure_code"),
+        }
+    }
+    raw_events = [
+        {
+            "type": "conversation_reset",
+            "role": "system",
+            "text": f"{provider} conversation reset observation",
+            "provider_session_id": str(after.get("provider_session_id") or before.get("provider_session_id") or ""),
+            "longhouse_session_id": longhouse_session_id,
+            "before_provider_session_id": before.get("provider_session_id"),
+            "after_provider_session_id": after.get("provider_session_id"),
+            "source_canary": f"{provider}_conversation_reset",
+            "evidence_origin": "provider_live_canary",
+        }
+    ]
+    projection, evidence, db_ingest = adapter._project_ingest_and_merge(
+        package,
+        operation_evidence=evidence,
+        raw_events=raw_events,
+        provider_session_id=longhouse_session_id,
+    )
+    if db_ingest.get("status") != STATUS_PASS:
+        passed = False
+    copied_observation = package.write_json("observations/conversation_reset.json", observation)
+    payload = {
+        **projection,
+        **evaluation,
+        "status": STATUS_PASS if passed else STATUS_FAIL,
+        "scenario": RESET_SCENARIO,
+        "artifact_path": str(artifact_path.resolve(strict=False)),
+        "observation_path": str(copied_observation),
+        "identity_transition": observation.get("identity_transition"),
+        "identity_allocation": observation.get("identity_allocation"),
+        "synthetic": False,
+        "operation_evidence": evidence,
+        "longhouse_ingest": adapter._longhouse_ingest_block(db_ingest),
+    }
+    if identity_failure:
+        payload["failure_code"], payload["message"] = identity_failure
+    elif db_ingest.get("status") != STATUS_PASS:
+        payload["failure_code"] = db_ingest.get("failure_code") or "conversation_reset_db_ingest_failed"
+        payload["message"] = "Conversation-reset evidence did not pass Longhouse DB ingest assertions."
+    package.write_json("assertions/conversation_reset.json", payload)
+    return payload
+
+
+def _file_digest(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _optional_text(value: Any) -> str | None:

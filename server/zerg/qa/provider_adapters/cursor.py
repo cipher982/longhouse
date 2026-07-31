@@ -133,9 +133,12 @@ class CursorHarnessAdapter(UniversalProviderAdapter):
         elif gate_identity != executable_identity:
             payload["failure_code"] = "cursor_gate0_identity_mismatch"
             payload["message"] = "Gate 0 did not prove the exact declared Cursor executable identity."
-        elif failed_scenarios or artifact.get("status") != "passed":
+        elif artifact.get("status") != "passed":
+            payload["failure_code"] = str(artifact.get("failure_code") or "cursor_gate0_failed")
+            payload["message"] = str(artifact.get("error") or "Cursor Gate 0 did not complete successfully.")
+        elif failed_scenarios:
             payload["failure_code"] = "cursor_gate0_contract_failed"
-            payload["message"] = "Cursor Gate 0 did not pass every required scenario."
+            payload["message"] = "Cursor Gate 0 did not pass every scenario required by this harness scenario."
         elif db_ingest.get("status") != STATUS_PASS:
             payload["failure_code"] = db_ingest.get("failure_code") or "cursor_gate0_db_ingest_failed"
             payload["message"] = "Cursor Gate 0 evidence did not pass Longhouse DB ingest assertions."
@@ -212,3 +215,8 @@ class CursorHarnessAdapter(UniversalProviderAdapter):
             required_scenarios=("create_chat_resume",),
             operations=("send_input", "live_token_behavior"),
         ) or super().live_token_streaming(package)
+
+    def conversation_reset(self, package: EvidencePackage) -> dict[str, Any]:
+        from zerg.qa.conversation_reset import consume_live_reset_artifact
+
+        return consume_live_reset_artifact(self, package, provider="cursor") or super().conversation_reset(package)
