@@ -266,6 +266,43 @@ code="$(curl -s -o /dev/null -w '%{http_code}' -X POST \
 echo "ok: resume path refuses a provider with no coordination tools (409 from the provider gate)"
 
 # ---------------------------------------------------------------------------
+# 3b. Claude launches for real too. Its prerequisite (`claude auth status
+#     --json` reporting loggedIn) is cheap to script, so there is no reason to
+#     leave the highest-traffic provider proven only at the HTTP layer.
+#
+#     Codex and OpenCode are deliberately not launched here: codex-bridge waits
+#     on a real WebSocket app-server and opencode-bridge on a real HTTP server,
+#     so a faithful fake is a protocol implementation rather than a shell
+#     script. Both are covered above on the registration and resume paths --
+#     the layer the outage lived in -- and their transports already have
+#     hermetic Rust canaries (codex_app_server_canary, opencode_control).
+# ---------------------------------------------------------------------------
+cat > "$BIN_DIR/claude" <<'EOF'
+#!/usr/bin/env sh
+if [ "$1" = "auth" ]; then
+  printf '%s\n' '{"loggedIn": true}'
+  exit 0
+fi
+printf '%s\n' 'CLAUDE_LIFECYCLE_PTY_OK'
+exit "${LONGHOUSE_FAKE_CLAUDE_EXIT:-0}"
+EOF
+chmod 755 "$BIN_DIR/claude"
+
+claude_out="$TEST_ROOT/claude-launch.out"
+set +e
+run_launch_bounded "$claude_out" 90 \
+  "$BIN_DIR/longhouse" claude --cwd "$HOME_DIR" --claude-bin "$BIN_DIR/claude"
+claude_status=$?
+set -e
+if [[ "$claude_status" != "0" ]]; then
+  echo "--- claude launch output ---" >&2
+  cat "$claude_out" >&2
+  fail "longhouse claude exited $claude_status against a real Runtime Host"
+fi
+grep -q 'CLAUDE_LIFECYCLE_PTY_OK' "$claude_out" || fail "the scripted claude never ran under the PTY"
+echo "ok: longhouse claude launched against a real Runtime Host"
+
+# ---------------------------------------------------------------------------
 # 4. A non-zero provider exit propagates rather than being swallowed.
 # ---------------------------------------------------------------------------
 set +e
