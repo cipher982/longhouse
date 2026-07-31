@@ -148,4 +148,5 @@ def test_cursor_remote_approval_token_does_not_require_coordination_tools():
     response = _managed_local_launch_response_from_plan(plan, run_id=str(uuid4()), owner_id=42)
 
     assert response.hook_token and response.hook_token.startswith("zst_")
-    assert response.coordination_token is None
+    # Cursor Helm bails out of the launch when this is missing.
+    assert response.coordination_token and response.coordination_token.startswith("zst_")

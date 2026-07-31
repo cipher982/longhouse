@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-DIRECTED_INPUT_PROVIDERS = frozenset({"claude", "codex", "opencode"})
+DIRECTED_INPUT_PROVIDERS = frozenset({"claude", "codex", "opencode", "cursor"})
 
 
 def provider_supports_coordination_tools(provider: object) -> bool:

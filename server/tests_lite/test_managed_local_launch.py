@@ -1056,7 +1056,9 @@ def test_this_device_launch_response_contract_matrix(monkeypatch, tmp_path, prov
     assert payload["managed_transport"] == expected_transport
     assert payload["source_runner_name"] == "cinder"
     assert payload["provider"] == provider
-    if provider in {"claude", "codex", "opencode"}:
+    # Cursor Helm refuses to launch without one, so this list is load-bearing
+    # rather than descriptive.
+    if provider in {"claude", "codex", "opencode", "cursor"}:
         assert payload["coordination_token"]
     else:
         assert payload["coordination_token"] is None

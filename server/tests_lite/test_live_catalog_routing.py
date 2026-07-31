@@ -314,7 +314,7 @@ def test_directed_input_delivery_links_real_input_receipt(monkeypatch, provider)
     assert '"type":"longhouse_directed_input"' in observed["input"].text
 
 
-@pytest.mark.parametrize("provider", ["cursor", "antigravity"])
+@pytest.mark.parametrize("provider", ["antigravity", "gemini"])
 def test_directed_input_to_unsupported_provider_stays_durable_without_attempt(monkeypatch, provider):
     directed_input = {"id": 16, "text": "store only"}
     monkeypatch.setattr(
