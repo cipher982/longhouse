@@ -415,6 +415,11 @@ def _start_native_codex_bridge(
         cmd.append("--create-initial-thread")
     if launch_mode != "tui":
         cmd += ["--launch-mode", launch_mode]
+    if launch_mode == "tui":
+        # This process supervises the TUI, so it is what owns the bridge while
+        # no terminal is attached. The bridge exits once neither remains, which
+        # is the only teardown that survives SIGKILL of this wrapper.
+        cmd += ["--owner-pid", str(os.getpid())]
     cmd.append("--json")
     env = os.environ.copy()
     env[_CODEX_BRIDGE_TOKEN_ENV] = token

@@ -135,6 +135,9 @@ pub struct BridgeStartConfig {
     /// Existing Codex rollout/transcript path paired with `resume_thread_id`.
     pub resume_thread_path: Option<String>,
     pub launch_mode: BridgeLaunchMode,
+    /// Pid of the CLI wrapper launching this bridge. Recorded so the bridge can
+    /// exit when nothing owns it. See codex_bridge_ownership.
+    pub owner_pid: Option<u32>,
 }
 
 #[derive(Debug, Clone)]
@@ -174,6 +177,10 @@ pub struct BridgeRunConfig {
     /// Existing Codex rollout/transcript path paired with `resume_thread_id`.
     pub resume_thread_path: Option<String>,
     pub launch_mode: BridgeLaunchMode,
+    /// Pid of the CLI wrapper that launched this bridge, if any. The bridge
+    /// watches it and commits terminal state once neither it nor a terminal
+    /// remains. See codex_bridge_ownership.
+    pub owner_pid: Option<u32>,
 }
 
 #[derive(Debug, Clone)]
@@ -269,6 +276,17 @@ pub struct BridgeStateFile {
     /// cold restart.
     #[serde(default)]
     pub bridge_process_start_time: Option<String>,
+    /// Pid of the CLI wrapper that launched this bridge, when one did.
+    ///
+    /// A `tui` bridge is owned by this wrapper whenever no terminal is
+    /// attached. Absent for headless launches and for bridges started by a CLI
+    /// predating the flag; see codex_bridge_ownership.
+    #[serde(default)]
+    pub owner_pid: Option<u32>,
+    /// OS process-start identity for `owner_pid`, so a recycled pid cannot
+    /// masquerade as a live wrapper.
+    #[serde(default)]
+    pub owner_process_start_time: Option<String>,
     #[serde(default)]
     pub app_server_pid: Option<u32>,
     #[serde(default)]
@@ -887,6 +905,11 @@ pub async fn cmd_codex_bridge_start(config: BridgeStartConfig) -> Result<BridgeS
             .arg("--launch-mode")
             .arg(config.launch_mode.cli_value());
     }
+    // The daemon outlives this `start` process, so ownership must name the CLI
+    // wrapper that is waiting on the TUI, never this short-lived launcher.
+    if let Some(owner_pid) = config.owner_pid {
+        child.arg("--owner-pid").arg(owner_pid.to_string());
+    }
 
     #[cfg(unix)]
     {
@@ -958,6 +981,11 @@ pub async fn cmd_codex_bridge_start(config: BridgeStartConfig) -> Result<BridgeS
 pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
     let pid = std::process::id();
     let bridge_process_start_time = crate::turn_claims::process_start_time_for_pid(Some(pid));
+    // Capture the wrapper's start time now, while it is certainly alive. Pids
+    // are recycled; without this a later check could mistake an unrelated
+    // process for a live owner and keep debris running forever.
+    let owner_process_start_time =
+        crate::turn_claims::process_start_time_for_pid(config.owner_pid);
     crate::codex_attachments::cleanup_session_tmpdir(&config.session_id);
     let resume_thread_id = normalize_optional_string(config.resume_thread_id.clone());
     let resume_thread_path = normalize_optional_string(config.resume_thread_path.clone());
@@ -1198,6 +1226,8 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
             thread_path: initial_thread_path.clone(),
             pid,
             bridge_process_start_time,
+            owner_pid: config.owner_pid,
+            owner_process_start_time: owner_process_start_time.clone(),
             app_server_pid: client.child_pid,
             app_server_process_start_time,
             app_server_pgid: client.child_pgid,
@@ -1250,6 +1280,9 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
     // Spawn IPC socket listener so `send` routes through the daemon's persistent connection
     let sock_path = ipc_socket_path(&context.state_file);
     let (ipc_tx, mut ipc_rx) = mpsc::unbounded_channel::<IpcCommand>();
+    // The ownership watcher stops this bridge through the same queue an
+    // explicit `codex-bridge stop` uses, so there is exactly one teardown path.
+    let ipc_self_tx = ipc_tx.clone();
     let pause_responder = PauseRequestResponder {
         pending: context.pending_pause_requests.clone(),
         outbound: websocket_outbound_sender(&client),
@@ -1273,6 +1306,15 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
         tokio::time::interval(Duration::from_millis(ACTIVE_PHASE_KEEPALIVE_MS));
     runtime_keepalive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     runtime_keepalive.tick().await;
+    // Ownership: a `tui` bridge outlives its terminal only while the launching
+    // wrapper is still supervising. Once neither remains it is debris and must
+    // end itself; nothing else can, because it is a setsid daemon with no
+    // parent and no controlling TTY. See codex_bridge_ownership.
+    let mut ownership_check =
+        tokio::time::interval(crate::codex_bridge_ownership::OWNERSHIP_CHECK_INTERVAL);
+    ownership_check.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    ownership_check.tick().await;
+    let mut ownership_watch = crate::codex_bridge_ownership::OwnershipWatch::new();
     let mut thread_subscribe_retry =
         tokio::time::interval(Duration::from_millis(THREAD_SUBSCRIBE_BACKGROUND_RETRY_MS));
     thread_subscribe_retry.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -1454,6 +1496,32 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
             }
             _ = runtime_keepalive.tick() => {
                 emit_runtime_keepalive(&config, &mut context).await;
+            }
+            _ = ownership_check.tick() => {
+                let inputs = crate::codex_bridge_ownership::OwnershipInputs {
+                    headless_launch: config.launch_mode != BridgeLaunchMode::Tui,
+                    terminal_attached: terminal_is_attached(context.state.ws_url.as_deref()),
+                    owner_recorded: config.owner_pid.is_some(),
+                    owner_alive: owner_is_alive(
+                        config.owner_pid,
+                        owner_process_start_time.as_deref(),
+                    ),
+                };
+                if ownership_watch.observe(inputs) {
+                    // Nothing owns this bridge: no terminal, and the wrapper
+                    // that launched it is gone. Route through the ordinary
+                    // stop path so terminal state is committed and published
+                    // exactly as an explicit close would.
+                    eprintln!(
+                        "[codex-bridge] no terminal and no launching wrapper remain; committing terminal state"
+                    );
+                    let (reply_tx, _reply_rx) = oneshot::channel();
+                    let _ = ipc_self_tx.send(IpcCommand::Stop {
+                        terminal_reason: crate::codex_bridge_ownership::TERMINAL_REASON_OWNER_GONE
+                            .to_string(),
+                        reply: reply_tx,
+                    });
+                }
             }
         }
     }
@@ -4520,6 +4588,45 @@ async fn emit_runtime_updates(
     }
 }
 
+/// True when the recorded wrapper pid is still running as the same process.
+///
+/// Start-time matching is what makes this safe: pids recycle, and a recycled
+/// pid that happened to match would keep debris alive indefinitely. A bridge
+/// with no recorded owner returns false here; the ownership rule treats that
+/// case as unprovable rather than dead, so it is never killed on this alone.
+fn owner_is_alive(owner_pid: Option<u32>, recorded_start_time: Option<&str>) -> bool {
+    let Some(pid) = owner_pid else {
+        return false;
+    };
+    let Some(fact) = crate::process_identity::try_collect_process_fact(pid) else {
+        return false;
+    };
+    match recorded_start_time {
+        Some(recorded) if !recorded.trim().is_empty() => {
+            crate::process_identity::lstart_matches_recorded(&fact, recorded)
+        }
+        // No recorded start time means we could not read one at launch. The pid
+        // existing is the only evidence available, and treating it as dead
+        // would risk ending a live session on missing evidence.
+        _ => true,
+    }
+}
+
+/// True when a provider TUI currently holds this bridge's websocket.
+///
+/// Mirrors the daemon's attachment scan in `managed_bridge_scan`: a codex TUI
+/// is launched with `--remote <ws_url>`, so a live process carrying both
+/// strings is an attached terminal. Checked against raw socket state across
+/// nine live bridges with no disagreement.
+fn terminal_is_attached(ws_url: Option<&str>) -> bool {
+    let Some(ws_url) = ws_url.map(str::trim).filter(|value| !value.is_empty()) else {
+        return false;
+    };
+    crate::process_identity::collect_process_facts_by_pid()
+        .values()
+        .any(|fact| fact.command.contains(ws_url) && fact.command.contains("--remote"))
+}
+
 async fn emit_runtime_keepalive(config: &BridgeRunConfig, context: &mut BridgeContext) {
     if let Some(update) = context.runtime_tracker.keepalive_update() {
         emit_runtime_updates(config, context, vec![update]).await;
@@ -5788,6 +5895,7 @@ mod tests {
 
     fn make_test_run_config(temp: &tempfile::TempDir) -> BridgeRunConfig {
         BridgeRunConfig {
+            owner_pid: None,
             session_id: "session-123".to_string(),
             run_id: None,
             connection_id: None,
