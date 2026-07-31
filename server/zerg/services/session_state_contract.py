@@ -82,6 +82,9 @@ ConnectionState = Literal["connected", "degraded", "disconnected", "unknown", "n
 ActionState = Literal["available", "unavailable", "unknown"]
 TranscriptConvergence = Literal["current", "lagging", "unknown"]
 SessionMode = Literal["shadow", "helm", "console", "unknown"]
+# Which tier of the timeline a session belongs to. "open" is what the user
+# would say they have going right now; everything else is history.
+WorkingSet = Literal["open", "history"]
 
 _LAST_SEEN_LABEL: dict[str, str] = {
     "thinking": "thinking",
@@ -220,6 +223,7 @@ class SessionStateFacts(_FrozenModel):
     pending_interaction: SessionPendingInteractionFacts | None = None
     transcript: SessionTranscriptFacts
     host: SessionHostFacts
+    working_set: WorkingSet = "history"
     presentation: SessionPresentation
     commit_seq: int | None = None
 
@@ -676,9 +680,58 @@ def assemble_session_state_facts(
         pending_interaction=pending_interaction,
         transcript=transcript,
         host=host,
+        working_set=_working_set(
+            disposition=disposition,
+            activity=activity,
+            control=control,
+            interaction=pending_interaction,
+        ),
         presentation=SessionPresentation(primary=primary, access=access, transcript=transcript_label),
         commit_seq=commit_seq,
     )
+
+
+def _working_set(
+    *,
+    disposition: SessionDispositionFacts,
+    activity: SessionActivityFacts,
+    control: SessionControlFacts,
+    interaction: SessionPendingInteractionFacts | None,
+) -> WorkingSet:
+    """Is this session part of what the user is currently carrying?
+
+    The timeline's top tier must equal what a person would say they have
+    going right now. That is *not* "sessions Longhouse could steer": control
+    capability never expires while terminals close constantly, so ranking on
+    capability grows without bound and buries the handful that matter.
+
+    Three positive conditions, each an observation rather than an inference:
+
+    - a terminal is attached (the user has it open)
+    - the agent is mid-flight (thinking or executing)
+    - the agent is blocked on the user (nothing moves until they act)
+
+    Absence of all three means history. Note that idle-with-no-terminal is
+    history even when a control path still answers, which is the whole point.
+
+    Not yet represented: a headless Console turn that finished while nobody
+    was watching. For a terminal session the user consumed the output at the
+    terminal, so there is nothing to acknowledge; for Console the result is
+    produced in an empty room, and the working set can only shrink once a
+    human has seen it. That needs a durable "acknowledged" fact this contract
+    does not carry yet, so such sessions currently fall to history as soon as
+    the turn ends.
+    """
+
+    if disposition.state == "closed":
+        return "history"
+    if interaction is not None:
+        return "open"
+    if activity.state in {"thinking", "executing"}:
+        return "open"
+    if control.terminal_attached is True:
+        return "open"
+    return "history"
 
 
 def _primary(

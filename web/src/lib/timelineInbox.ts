@@ -44,15 +44,22 @@ function isCardClosed(card: TimelineSessionCard): boolean {
   return isSessionClosed(session);
 }
 
-export function isOnShelf(card: TimelineSessionCard, nowMs: number): boolean {
+/**
+ * Is this card part of what the user is currently carrying?
+ *
+ * Reads the server's `working_set` tier rather than deciding locally. The
+ * previous local predicate promoted a card when any control action was
+ * available, or when it merely started within 24h. Both are the same mistake:
+ * they rank on capability and age instead of on evidence the session is live.
+ * Control grants never expire while terminals close constantly, so the shelf
+ * grew without bound — 51 of 60 rows on a dogfood instance.
+ *
+ * `nowMs` is retained for signature stability with callers and tests; the
+ * decision is no longer time-based.
+ */
+export function isOnShelf(card: TimelineSessionCard, _nowMs?: number): boolean {
   if (isCardClosed(card)) return false;
-  const actions = card.head?.session_state.control.actions;
-  if (
-    actions?.send_input.state === "available"
-    || actions?.start_turn?.state === "available"
-    || actions?.reattach.state === "available"
-  ) return true;
-  return (nowMs - startedAtMs(card)) < SHELF_RECENCY_MS;
+  return card.head?.session_state.working_set === "open";
 }
 
 /**

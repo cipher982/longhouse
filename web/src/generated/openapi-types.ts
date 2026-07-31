@@ -5001,6 +5001,8 @@ export interface components {
              * @enum {string}
              */
             state: "attached" | "detached" | "degraded";
+            /** Terminal Attached */
+            terminal_attached?: boolean | null;
             /** Bridge Status */
             bridge_status?: string | null;
             /** Thread Subscription Status */
@@ -8620,6 +8622,8 @@ export interface components {
             lease_generation?: string | null;
             /** Control Plane */
             control_plane?: string | null;
+            /** Terminal Attached */
+            terminal_attached?: boolean | null;
             /** Observed At */
             observed_at?: string | null;
             /** Valid Until */
@@ -9841,6 +9845,12 @@ export interface components {
             pending_interaction?: components["schemas"]["SessionPendingInteractionFacts"] | null;
             transcript: components["schemas"]["SessionTranscriptFacts"];
             host: components["schemas"]["SessionHostFacts"];
+            /**
+             * Working Set
+             * @default history
+             * @enum {string}
+             */
+            working_set: "open" | "history";
             presentation: components["schemas"]["SessionPresentation"];
             /** Commit Seq */
             commit_seq?: number | null;

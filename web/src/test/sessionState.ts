@@ -11,6 +11,7 @@ type SessionStateOptions = {
   startTurnAvailable?: boolean;
   interruptAvailable?: boolean;
   mode?: SessionStateFacts["mode"];
+  terminalAttached?: boolean | null;
 };
 
 export function makeSessionStateFacts(options: SessionStateOptions = {}): SessionStateFacts {
@@ -40,6 +41,17 @@ export function makeSessionStateFacts(options: SessionStateOptions = {}): Sessio
     search_only: { label: "Search only", tone: "search" },
   } as const;
 
+  // Mirror the server's _working_set rule so fixtures cannot drift from it.
+  const terminalAttached = options.terminalAttached ?? null;
+  const workingSet: SessionStateFacts["working_set"] = options.closed
+    ? "history"
+    : options.pendingInteraction
+      || activity === "thinking"
+      || activity === "executing"
+      || terminalAttached === true
+      ? "open"
+      : "history";
+
   return {
     state_contract_version: 1,
     presentation_policy_version: 1,
@@ -54,8 +66,10 @@ export function makeSessionStateFacts(options: SessionStateOptions = {}): Sessio
       observed_at: options.observedAt,
       tool: options.tool ?? (activity === "executing" ? "Shell" : null),
     },
+    working_set: workingSet,
     control: {
       ownership: access === "live_control" || access === "reattach" ? "owned" : "unowned",
+      terminal_attached: terminalAttached,
       connection: mode === "console"
         ? "not_applicable"
         : access === "live_control"
