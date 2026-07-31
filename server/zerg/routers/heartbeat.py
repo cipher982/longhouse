@@ -209,6 +209,11 @@ class ControlEvidenceIn(UTCBaseModel):
     provider_session_id: str | None = Field(None, max_length=255)
     ownership: Literal["managed"]
     state: Literal["attached", "detached", "degraded"]
+    # Whether a human terminal is attached right now. Independent of `state`: a
+    # bridge can hold a healthy control path with no terminal on it. None means
+    # the provider cannot observe attachment, which is not the same as
+    # observing that nothing is attached.
+    terminal_attached: bool | None = None
     bridge_status: str | None = Field(None, max_length=64)
     thread_subscription_status: str | None = Field(None, max_length=64)
     lease_ttl_ms: int = Field(..., ge=1, le=MAX_MANAGED_SESSION_LEASE_TTL_MS)

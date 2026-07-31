@@ -343,6 +343,15 @@ pub struct ControlEvidence {
     pub lease_generation: Option<String>,
     pub ownership: String,
     pub state: String,
+    /// Whether a human terminal is attached to this session right now.
+    ///
+    /// Distinct from `state`: a bridge can hold a healthy control path with no
+    /// terminal on it. This is the axis that maps to what a user counts as
+    /// "sessions I have open", so it must not be inferred from control
+    /// liveness. `None` means the provider has no way to observe attachment,
+    /// which is different from observing that nothing is attached.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub terminal_attached: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bridge_status: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1128,6 +1137,7 @@ pub(crate) fn machine_evidence_from_observations(
             control.push(ControlEvidence {
                 authority_class: "provider_control".to_string(),
                 provider: "codex".to_string(),
+                terminal_attached: Some(obs.has_tui_attachment),
                 session_id: obs.session_id.clone(),
                 provider_session_id: obs.thread_id.clone(),
                 connection_id: obs.connection_id.clone(),
@@ -1227,6 +1237,7 @@ pub(crate) fn machine_evidence_from_observations(
             control.push(ControlEvidence {
                 authority_class: "provider_control".to_string(),
                 provider: "claude".to_string(),
+                terminal_attached: Some(obs.claude_foreground_tui),
                 session_id: obs.session_id.clone(),
                 provider_session_id: obs.provider_session_id.clone(),
                 connection_id: obs.connection_id.clone(),
@@ -1318,6 +1329,7 @@ pub(crate) fn machine_evidence_from_observations(
             control.push(ControlEvidence {
                 authority_class: "provider_control".to_string(),
                 provider: "opencode".to_string(),
+                terminal_attached: Some(obs.has_tui_attachment),
                 session_id: obs.session_id.clone(),
                 provider_session_id: Some(obs.provider_session_id.clone()),
                 connection_id: obs.connection_id.clone(),
@@ -1408,6 +1420,7 @@ pub(crate) fn machine_evidence_from_observations(
             control.push(ControlEvidence {
                 authority_class: "provider_control".to_string(),
                 provider: "cursor".to_string(),
+                terminal_attached: None,
                 session_id: obs.session_id.clone(),
                 provider_session_id: None,
                 connection_id: obs.connection_id.clone(),

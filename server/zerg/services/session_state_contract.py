@@ -157,6 +157,15 @@ class SessionControlFacts(_FrozenModel):
     connection_id: int | str | None = None
     lease_generation: str | None = None
     control_plane: str | None = None
+    # Is a human terminal attached to this session right now?
+    #
+    # A separate axis from `connection`, and the one that matches how people
+    # count their own work: users count open terminals, not control grants.
+    # Capability must never promote a row on its own — control liveness
+    # outlives terminals, which is how dead sessions used to pin themselves to
+    # the top of the timeline. None means the provider cannot observe
+    # attachment; that is not the same as observing nothing attached.
+    terminal_attached: bool | None = None
     observed_at: datetime | None = None
     valid_until: datetime | None = None
     actions: SessionControlActions
