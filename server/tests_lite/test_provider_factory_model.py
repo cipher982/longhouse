@@ -16,9 +16,14 @@ def facts():
 
 
 def test_capability_assertions_match_schema_scenario_count(facts) -> None:
+    # 13 -> 11 scenarios and 21 -> 19 assertions on 2026-07-31: the two
+    # `session.input.steer_active` capability cells were removed. They restated
+    # a fact `steer_active_turn` and `operation_evidence` already carry, and
+    # their oracle had no caller anywhere, so the assertions could never be
+    # satisfied or refuted.
     scenario_ids = {a.scenario_id for a in facts.capability_assertions}
-    assert len(scenario_ids) == 13
-    assert len(facts.capability_assertions) == 21
+    assert len(scenario_ids) == 11
+    assert len(facts.capability_assertions) == 19
 
 
 def test_orphaned_scenario_ids_are_a_subset_of_schema_scenario_ids(facts) -> None:

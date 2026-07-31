@@ -7,7 +7,7 @@
     "cursor",
     "opencode"
   ],
-  "file_count": 217,
+  "file_count": 218,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -741,6 +741,16 @@
       ]
     },
     {
+      "path": "server/tests_lite/test_coordination_token_endpoint.py",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "cursor",
+        "opencode"
+      ]
+    },
+    {
       "path": "server/tests_lite/test_cursor_role_backfill.py",
       "providers": [
         "claude",
@@ -854,7 +864,6 @@
     {
       "path": "server/tests_lite/test_machines_directory.py",
       "providers": [
-        "antigravity",
         "claude",
         "codex",
         "cursor"
@@ -911,14 +920,6 @@
         "antigravity",
         "claude",
         "codex",
-        "opencode"
-      ]
-    },
-    {
-      "path": "server/tests_lite/test_managed_provider_capability_decisions.py",
-      "providers": [
-        "claude",
-        "cursor",
         "opencode"
       ]
     },
@@ -1375,6 +1376,13 @@
         "antigravity",
         "claude",
         "codex",
+        "cursor",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_unmanaged_snapshot_coverage.py",
+      "providers": [
         "cursor",
         "opencode"
       ]

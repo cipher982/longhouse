@@ -964,31 +964,6 @@
               "oracle_digest": "8343df3ac1c1b437f8dc9f9d5e8ca21c64259afc29546363625420a139b686d8"
             }
           ]
-        },
-        "session.input.steer_active": {
-          "disposition": "upstream_absent",
-          "reason_code": "upstream_unavailable",
-          "policy_key": "provider.antigravity.steer_active_turn",
-          "action_gate": "strict",
-          "contexts": {
-            "modes": [
-              "helm"
-            ]
-          },
-          "runtime_prerequisites": [],
-          "required_assertions": [
-            {
-              "id": "rejected_before_control_write",
-              "scenario_id": "antigravity_steer_rejection",
-              "oracle_source": "server/zerg/qa/provider_control_oracles.py",
-              "minimum_scenario_revision": 1,
-              "acceptable_evidence": [
-                "hermetic"
-              ],
-              "max_age_seconds": 604800,
-              "oracle_digest": "12d58e296eef2f2042c5474b43a633601aa1a6130a4c9c9b7f4725a60f7b7d28"
-            }
-          ]
         }
       },
       "can_resume": false,
@@ -1224,32 +1199,6 @@
               ],
               "max_age_seconds": 604800,
               "oracle_digest": "ddf0aae0c879c9b48dea816c64742d052cbd3e6ef2e832deee67b723f5e3bcee"
-            }
-          ]
-        },
-        "session.input.steer_active": {
-          "disposition": "upstream_absent",
-          "reason_code": "upstream_unavailable",
-          "policy_key": "provider.cursor.steer_active_turn",
-          "action_gate": "strict",
-          "contexts": {
-            "modes": [
-              "helm",
-              "console"
-            ]
-          },
-          "runtime_prerequisites": [],
-          "required_assertions": [
-            {
-              "id": "rejected_before_control_write",
-              "scenario_id": "cursor_steer_rejection",
-              "oracle_source": "server/zerg/qa/provider_control_oracles.py",
-              "minimum_scenario_revision": 1,
-              "acceptable_evidence": [
-                "hermetic"
-              ],
-              "max_age_seconds": 604800,
-              "oracle_digest": "12d58e296eef2f2042c5474b43a633601aa1a6130a4c9c9b7f4725a60f7b7d28"
             }
           ]
         }

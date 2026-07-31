@@ -79,19 +79,38 @@ def test_support_state_provider_capability_axes_match_manifest_contracts() -> No
         assert capabilities["machine_control_operations"] == _expected_machine_operations(contract)
         assert capabilities["live_control_operations"] == _expected_live_operations(contract)
         assert capabilities["missing_live_control_operations"] == []
-        semantic_shadow = capabilities["semantic_capability_shadow"]
-        assert capabilities["operation_decisions"] == semantic_shadow
-        assert capabilities["available_operations"] == capabilities["available_capabilities"]
-        assert set(semantic_shadow) == set(contract.capabilities)
-        assert capabilities["available_capabilities"] == []
-        for capability_id, decision in semantic_shadow.items():
-            declaration = contract.capabilities[capability_id]
-            expected_runtime = "unknown" if declaration["runtime_prerequisites"] else "not_required"
-            assert decision["runtime"] == expected_runtime
-            assert decision["action"] == "hidden"
+        # semantic_capability_shadow / operation_decisions / available_operations
+        # / available_capabilities were removed on 2026-07-31. They were the
+        # serialized output of provider_capability_evaluator, whose
+        # ProductAction (enabled/disabled/hidden) had no consumer anywhere --
+        # not the web app, not iOS, not Desktop, not the engine, not any API
+        # handler. Four keys on the wire that nothing read.
+        for dropped in (
+            "semantic_capability_shadow",
+            "operation_decisions",
+            "available_operations",
+            "available_capabilities",
+        ):
+            assert dropped not in capabilities, f"{dropped} is back; it gates nothing"
 
 
-def test_support_state_consumes_matching_v2_proof_without_enabling_machine_wide_action() -> None:
+def test_support_state_counts_capability_proof_records() -> None:
+    """What survives from the two evaluator-verdict tests deleted on 2026-07-31.
+
+    Both asserted fields of `semantic_capability_shadow`: that a matching v2
+    proof read as "proven", and that a locally forged record read as
+    "inconclusive" with proof_untrusted_producer. Those verdicts came from
+    provider_capability_evaluator and provider_capability_ci_trust, whose output
+    reached exactly one place -- the shadow -- which no client, endpoint, or
+    engine path ever read. Deleting them removes an opinion nobody consumed, not
+    an enforcement point: `verify_ci_proof_bundle` had no non-test caller in the
+    repository.
+
+    The proof records themselves are still real and still counted, and
+    /api/agents/provider-capabilities still serves the declared-assertion ->
+    proof-record join through provider_capability_projection.
+    """
+
     contract = next(contract for contract in all_managed_provider_contracts() if contract.provider == "codex")
     declaration = contract.capabilities["coordination.directed_input.send"]
     assertion = declaration["required_assertions"][0]
@@ -120,48 +139,9 @@ def test_support_state_consumes_matching_v2_proof_without_enabling_machine_wide_
         observed_at=datetime(2026, 7, 22, 17, 0, tzinfo=UTC),
         capability_proof_records={"codex": (record,)},
         provider_executable_identities={"codex": "sha256:provider"},
-        trusted_capability_artifact_ids=frozenset({record.artifact_id}),
     )
 
-    decision = support["providers"]["codex"]["capabilities"]["semantic_capability_shadow"]["coordination.directed_input.send"]
-    assert decision["verification"] == "proven"
-    assert decision["action"] == "hidden"
     assert support["providers"]["codex"]["capabilities"]["capability_proof_record_count"] == 1
-
-
-def test_local_record_cannot_self_assert_release_ci_trust() -> None:
-    contract = next(contract for contract in all_managed_provider_contracts() if contract.provider == "codex")
-    declaration = contract.capabilities["coordination.directed_input.send"]
-    assertion = declaration["required_assertions"][0]
-    record = ProviderCapabilityProofRecord(
-        provider="codex",
-        provider_version="0.145.0",
-        provider_executable_identity="sha256:provider",
-        provider_contract_digest=contract.contract_entry_digest,
-        adapter_digest=contract.adapter_digest,
-        scenario_id=assertion["scenario_id"],
-        scenario_revision=assertion["minimum_scenario_revision"],
-        oracle_digest=assertion["oracle_digest"],
-        assertion_id=assertion["id"],
-        outcome=AssertionOutcome.PASS,
-        evidence_class=EvidenceClass.HERMETIC,
-        generated_at="2026-07-22T16:00:00Z",
-        producer_class="release_ci",
-        producer_version="2",
-        invocation_id="forged-local-record",
-    )
-    support = collect_provider_support_state(
-        provider_clis={"codex": {"path": "/usr/local/bin/codex", "source": "PATH"}},
-        provider_release_status={"statuses": {"codex": {"current_version": "0.145.0"}}},
-        control_channel={"status": "connected", "control_operations_by_provider": {}},
-        observed_at=datetime(2026, 7, 22, 17, 0, tzinfo=UTC),
-        capability_proof_records={"codex": (record,)},
-        provider_executable_identities={"codex": "sha256:provider"},
-    )
-
-    decision = support["providers"]["codex"]["capabilities"]["semantic_capability_shadow"]["coordination.directed_input.send"]
-    assert decision["verification"] == "inconclusive"
-    assert "proof_untrusted_producer" in decision["reason_codes"]
 
 
 def test_support_state_separates_candidate_release_from_local_readiness() -> None:

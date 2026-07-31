@@ -699,21 +699,6 @@ providers:
         minimum_scenario_revision: 1
         acceptable_evidence: [live_token]
         max_age_seconds: 86400
-    session.input.steer_active:
-      disposition: upstream_absent
-      reason_code: upstream_unavailable
-      policy_key: provider.antigravity.steer_active_turn
-      action_gate: strict
-      contexts:
-        modes: [helm]
-      runtime_prerequisites: []
-      required_assertions:
-      - id: rejected_before_control_write
-        scenario_id: antigravity_steer_rejection
-        oracle_source: server/zerg/qa/provider_control_oracles.py
-        minimum_scenario_revision: 1
-        acceptable_evidence: [hermetic]
-        max_age_seconds: 604800
   can_resume: false
   turn_start: false
   operation_evidence:
@@ -902,21 +887,6 @@ providers:
         oracle_source: server/zerg/qa/provider_coordination_oracles.py
         minimum_scenario_revision: 1
         acceptable_evidence: [hermetic, live_token]
-        max_age_seconds: 604800
-    session.input.steer_active:
-      disposition: upstream_absent
-      reason_code: upstream_unavailable
-      policy_key: provider.cursor.steer_active_turn
-      action_gate: strict
-      contexts:
-        modes: [helm, console]
-      runtime_prerequisites: []
-      required_assertions:
-      - id: rejected_before_control_write
-        scenario_id: cursor_steer_rejection
-        oracle_source: server/zerg/qa/provider_control_oracles.py
-        minimum_scenario_revision: 1
-        acceptable_evidence: [hermetic]
         max_age_seconds: 604800
   can_resume: true
   turn_start: true

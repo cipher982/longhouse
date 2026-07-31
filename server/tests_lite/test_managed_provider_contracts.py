@@ -204,17 +204,30 @@ def test_semantic_capabilities_include_exact_coordination_and_steer_limitations(
         "coordination.awareness.create",
         "coordination.directed_input.send",
         "coordination.directed_input.receive",
-        "session.input.steer_active",
     }
     assert set(antigravity.capabilities) == {
-        "session.input.steer_active",
         "session.launch.helm",
         "session.input.send",
     }
+    # The `session.input.steer_active` capability cells were removed on
+    # 2026-07-31. They were a fourth statement of a fact the schema already
+    # carries twice -- `steer_active_turn: false` and
+    # `operation_evidence.steer_active_turn.disposition: upstream_absent`, which
+    # the manifest validator forces to agree -- and their required assertion
+    # named an oracle with no producer, so the cell could never be proven or
+    # disproven. The two representations that remain are load-bearing.
     for contract in (cursor, antigravity):
-        declaration = contract.capabilities["session.input.steer_active"]
-        assert declaration["disposition"] == "upstream_absent"
-        assert declaration["reason_code"] == "upstream_unavailable"
+        assert "session.input.steer_active" not in contract.capabilities
+        assert contract.steer_active_turn is False
+        # The surviving disposition is per-provider and stays meaningful:
+        # Cursor has no upstream steer surface, Longhouse has not built one for
+        # Antigravity. The deleted cell flattened both to one string.
+        assert contract.operation_evidence_for("steer_active_turn")["disposition"] in {
+            "upstream_absent",
+            "not_implemented",
+        }
+    assert cursor.operation_evidence_for("steer_active_turn")["disposition"] == "upstream_absent"
+    assert antigravity.operation_evidence_for("steer_active_turn")["disposition"] == "not_implemented"
     assert claude.capabilities["coordination.awareness.create"]["contexts"]["modes"] == ["helm", "console"]
     assert claude.contract_entry_digest == managed_provider_contract_entry_digest("claude")
     assert claude.contract_entry_digest != codex.contract_entry_digest
