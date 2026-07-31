@@ -126,6 +126,10 @@ jobs:
       # The generator's --check had no caller anywhere in the repo.
       run: make validate-managed-provider-contracts
 
+    - name: Validate generated web provider capabilities
+      timeout-minutes: 3
+      run: make validate-provider-capabilities
+
     - name: Validate provider literal census
       timeout-minutes: 3
       # This target existed in the Makefile and no workflow ever invoked it, so
