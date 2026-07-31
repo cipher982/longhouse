@@ -3,14 +3,14 @@ from __future__ import annotations
 from datetime import UTC
 from datetime import datetime
 
-from zerg.qa.capability_projection import NEVER_PROVEN
-from zerg.qa.capability_projection import STALE
-from zerg.qa.capability_projection import UNACCEPTABLE_EVIDENCE
-from zerg.qa.capability_projection import project_capabilities
-from zerg.qa.provider_factory_model import CapabilityAssertion
+from zerg.services.provider_capability_projection import NEVER_PROVEN
+from zerg.services.provider_capability_projection import STALE
+from zerg.services.provider_capability_projection import UNACCEPTABLE_EVIDENCE
+from zerg.services.provider_capability_projection import project_capabilities
 from zerg.services.provider_capability_proof import AssertionOutcome
 from zerg.services.provider_capability_proof import EvidenceClass
 from zerg.services.provider_capability_proof import ProviderCapabilityProofRecord
+from zerg.services.provider_capability_schema import CapabilityAssertion
 
 
 def _assertion(

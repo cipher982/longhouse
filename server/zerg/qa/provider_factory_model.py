@@ -39,39 +39,20 @@ from pathlib import Path
 
 import yaml
 
+# The declared-contract slice (schema resolution, CapabilityAssertion, the
+# assertion loader) lives in zerg/services/ because the served capability
+# endpoint needs it and zerg/qa/ is excluded from the published wheel. Only
+# the public surface is re-exported here, so the factory keeps one import
+# surface; anything reaching for the schema-resolution internals should
+# import zerg.services.provider_capability_schema directly rather than
+# monkeypatching a name that is only an alias of another module's global.
+from zerg.services.provider_capability_schema import CapabilityAssertion
+from zerg.services.provider_capability_schema import _load_capability_assertions
+from zerg.services.provider_capability_schema import load_capability_assertions  # noqa: F401
+
 ROOT = Path(__file__).resolve().parents[3]
 MAKEFILE_PATH = ROOT / "Makefile"
 WEEKLY_SCHEDULE_PATH = ROOT / "config" / "provider-release-schedule.yml"
-
-
-def _resolve_schema_path() -> Path:
-    """Where schemas/managed_providers.yml actually lives, in either of the
-    two environments this module runs in.
-
-    Found live in production (2026-07-29): this repo's local/CI checkout has
-    server/zerg/qa/<this file>, four levels below the repo root, so
-    `ROOT = parents[3]` lands on the repo root and `ROOT / "schemas" / ...`
-    is correct there. The deployed Runtime Host image is not a full repo
-    checkout -- docker/runtime.dockerfile copies only server/'s *contents*
-    into /app (so this file lives at /app/zerg/qa/..., one level shallower),
-    which makes the exact same `parents[3]` arithmetic land on `/` by
-    accident, and schemas/ was never copied there at all -- a real
-    FileNotFoundError the first live call to this endpoint hit. Explicit
-    candidates instead of relying on that directory-depth coincidence to
-    keep meaning "the repo root" in two structurally different layouts.
-    """
-    candidates = _schema_path_candidates()
-    for candidate in candidates:
-        if candidate.is_file():
-            return candidate
-    raise FileNotFoundError("schemas/managed_providers.yml not found at any known location: " + ", ".join(str(c) for c in candidates))
-
-
-def _schema_path_candidates() -> tuple[Path, ...]:
-    return (
-        ROOT / "schemas" / "managed_providers.yml",  # local dev / CI checkout
-        Path("/schemas/managed_providers.yml"),  # deployed runtime image (docker/runtime.dockerfile)
-    )
 
 
 class BuildProvenance(StrEnum):
@@ -232,17 +213,6 @@ CREDENTIAL_REQUIREMENT_BY_PROFILE: dict[str, tuple[str, ...]] = {
 
 
 @dataclass(frozen=True)
-class CapabilityAssertion:
-    scenario_id: str
-    assertion_id: str
-    provider: str
-    capability: str
-    oracle_source: str
-    acceptable_evidence: tuple[str, ...]
-    max_age_seconds: int
-
-
-@dataclass(frozen=True)
 class AssertionStatus:
     assertion_id: str
     scenario_id: str
@@ -272,51 +242,6 @@ class ProviderFactoryFacts:
     default_harness_scenarios: tuple[str, ...]
     push_harness_scenarios: tuple[str, ...]
     weekly_cron_providers: tuple[str, ...]
-
-
-def _load_schema() -> dict:
-    schema_path = _resolve_schema_path()
-    payload = yaml.safe_load(schema_path.read_text(encoding="utf-8"))
-    if not isinstance(payload, dict) or not isinstance(payload.get("providers"), list):
-        raise SystemExit(f"{schema_path} must contain a YAML mapping with a top-level 'providers' list")
-    return payload
-
-
-def _iter_capabilities(node: object, prefix: str = "") -> list[tuple[str, dict]]:
-    """Walk the schema's nested capability tree, yielding (dotted_key, entry)
-    for every dict that declares `required_assertions`."""
-    out: list[tuple[str, dict]] = []
-    if isinstance(node, dict):
-        if "required_assertions" in node:
-            out.append((prefix, node))
-        for key, value in node.items():
-            if key == "required_assertions":
-                continue
-            child_prefix = f"{prefix}.{key}" if prefix else key
-            out.extend(_iter_capabilities(value, child_prefix))
-    return out
-
-
-def _load_capability_assertions() -> tuple[CapabilityAssertion, ...]:
-    schema = _load_schema()
-    out: list[CapabilityAssertion] = []
-    for provider_entry in schema["providers"]:
-        provider = provider_entry["provider"]
-        capabilities = provider_entry.get("capabilities") or {}
-        for capability, capability_entry in _iter_capabilities(capabilities):
-            for assertion in capability_entry.get("required_assertions") or []:
-                out.append(
-                    CapabilityAssertion(
-                        scenario_id=assertion["scenario_id"],
-                        assertion_id=assertion["id"],
-                        provider=provider,
-                        capability=capability,
-                        oracle_source=assertion["oracle_source"],
-                        acceptable_evidence=tuple(assertion.get("acceptable_evidence") or ()),
-                        max_age_seconds=int(assertion["max_age_seconds"]),
-                    )
-                )
-    return tuple(out)
 
 
 def _load_default_harness_scenarios() -> tuple[str, ...]:
@@ -353,20 +278,6 @@ def _load_weekly_cron_providers() -> tuple[str, ...]:
     payload = yaml.safe_load(WEEKLY_SCHEDULE_PATH.read_text(encoding="utf-8"))
     providers = payload.get("providers") or []
     return tuple(row["provider"] for row in providers if row.get("weekly_unconditional") is True)
-
-
-def load_capability_assertions() -> tuple[CapabilityAssertion, ...]:
-    """Public, narrow entry point for callers that only need the declared
-    capability -> assertion mapping (schemas/managed_providers.yml), not the
-    rest of `load_facts()`'s I/O (Makefile parsing, the weekly release
-    schedule). Used by the live capability-projection endpoint
-    (zerg/routers/provider_capability_proofs.py) -- a Runtime Host serving
-    real traffic has no reason to depend on the Makefile or the weekly-cron
-    schedule file being present just to answer "what does the contract
-    declare," and `load_facts()`'s other three I/O calls have their own,
-    separate real-environment assumptions this endpoint should not inherit
-    silently."""
-    return _load_capability_assertions()
 
 
 def load_facts() -> ProviderFactoryFacts:

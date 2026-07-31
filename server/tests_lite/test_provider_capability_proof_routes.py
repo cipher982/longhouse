@@ -360,7 +360,7 @@ def test_admin_provider_capabilities_mirrors_the_agents_surface(monkeypatch, tmp
 
 
 def test_capability_projection_translates_malformed_schema_to_a_clean_500(monkeypatch, tmp_path: Path) -> None:
-    # Review 2026-07-29: provider_factory_model._load_schema() raises
+    # Review 2026-07-29: provider_capability_schema._load_schema() raises
     # SystemExit for a malformed schema -- correct for the Makefile-driven
     # CLI callers it predates, wrong for this endpoint, which is now a live
     # Runtime Host request path. SystemExit is a BaseException; left

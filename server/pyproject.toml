@@ -82,8 +82,26 @@ allow-direct-references = true
 
 [tool.hatch.build]
 packages = ["zerg"]
+# zerg/qa/ is the provider factory's test machinery (~940 KB: the universal
+# agent harness, per-provider adapters, release canaries, qualification
+# profiles). It is repo/CI-only — nothing a Longhouse user installs ever runs
+# it, and the hosted Runtime Host image builds from server/ source rather than
+# this wheel (docker/runtime.dockerfile), so excluding it here costs hosted
+# nothing. zerg/cli/provider_live.py goes with it: it imports the canary
+# modules and is not registered on the user-facing CLI.
+# Enforced by scripts/qa/check-wheel.py via `make test-wheel-package`.
+exclude = [
+    "zerg/qa/**",
+    "zerg/cli/provider_live.py",
+]
 
 [tool.hatch.build.targets.wheel.force-include]
+# The declared provider contract, read at request time by
+# zerg/services/provider_capability_schema.py to serve
+# /api/agents/provider-capabilities. A pip-installed wheel has neither a repo
+# checkout above it nor the image's /schemas, so without this the endpoint
+# 500s for every self-hoster.
+"../schemas/managed_providers.yml" = "zerg/_config/managed_providers.yml"
 # Bundle the frontend dist into the package for pip install deployment
 # This allows `longhouse serve` to serve the UI without needing the repo
 "../web/dist" = "zerg/_frontend_dist"
@@ -103,6 +121,7 @@ packages = ["zerg"]
 
 [tool.hatch.build.targets.sdist.force-include]
 # Also include frontend in sdist so building from source works
+"../schemas/managed_providers.yml" = "zerg/_config/managed_providers.yml"
 "../web/dist" = "zerg/_frontend_dist"
 "../desktop/LonghouseMenuBarHarness/Package.swift" = "zerg/_desktop/LonghouseMenuBarHarness/Package.swift"
 "../desktop/LonghouseMenuBarHarness/Sources" = "zerg/_desktop/LonghouseMenuBarHarness/Sources"

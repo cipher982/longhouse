@@ -10,7 +10,21 @@ FORBIDDEN_PREFIXES = (
     "control_plane/",
     "control-plane/",
     "longhouse_shared/",
+    # The provider factory's test machinery — the universal agent harness,
+    # per-provider adapters, release canaries, qualification profiles. Repo
+    # and CI only; no Longhouse user ever runs it, and the hosted Runtime Host
+    # builds from server/ source rather than this wheel. Excluded in
+    # pyproject; asserted here so a new zerg/qa module that a shipped module
+    # happens to import cannot quietly put ~940 KB of it back on PyPI.
+    "zerg/qa/",
 )
+
+# Files a shipped module must be able to import at runtime. The capability
+# endpoint reads the declared provider contract on every request, and a
+# pip-installed wheel has neither a repo checkout above it nor the runtime
+# image's /schemas — so if this is missing, /api/agents/provider-capabilities
+# 500s for every self-hoster.
+REQUIRED_MEMBERS = ("zerg/_config/managed_providers.yml",)
 
 
 def parse_args() -> argparse.Namespace:
@@ -36,6 +50,12 @@ def validate_wheel(path: Path) -> None:
     if forbidden:
         joined = "\n".join(f"  - {name}" for name in forbidden)
         raise SystemExit(f"{path} contains hosted/control-plane-only files:\n{joined}")
+
+    present = set(names)
+    missing = sorted(member for member in REQUIRED_MEMBERS if member not in present)
+    if missing:
+        joined = "\n".join(f"  - {name}" for name in missing)
+        raise SystemExit(f"{path} is missing files a shipped module imports at runtime:\n{joined}")
 
 
 def main() -> int:

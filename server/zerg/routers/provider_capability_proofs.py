@@ -15,12 +15,12 @@ from fastapi import status
 from zerg.config import get_settings
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
-from zerg.qa.capability_projection import project_capabilities
-from zerg.qa.provider_factory_model import load_capability_assertions
 from zerg.services.managed_provider_contracts import managed_provider_names
+from zerg.services.provider_capability_projection import project_capabilities
 from zerg.services.provider_capability_proof import ProviderCapabilityProofRecord
 from zerg.services.provider_capability_proof import proof_record_from_mapping
 from zerg.services.provider_capability_proof_store import ProviderCapabilityProofStore
+from zerg.services.provider_capability_schema import load_capability_assertions
 
 router = APIRouter(tags=["provider-capability-proofs"])
 
@@ -179,7 +179,7 @@ def build_capability_projection_payload() -> dict[str, Any]:
     try:
         assertions = load_capability_assertions()
     except SystemExit as exc:
-        # provider_factory_model.py's schema loader predates this endpoint
+        # provider_capability_schema.py's schema loader predates this endpoint
         # and raises SystemExit -- a BaseException, not caught by normal
         # exception handling -- for a malformed schema. That is the right
         # behavior for the Makefile-driven CLI callers it was written for

@@ -5,7 +5,7 @@ from the contract, proof status attached separately, both rendered." The
 serving pieces on either side of this join already existed before this
 module: `schemas/managed_providers.yml`'s per-capability `required_assertions`
 list is parsed into `CapabilityAssertion` tuples by
-`provider_factory_model._load_capability_assertions()` (Phase 1), and real
+`provider_capability_schema._load_capability_assertions()` (Phase 1), and real
 proof evidence already flows factory -> `TrustedProofPublisher` ->
 `POST /internal/provider-capability-proofs` -> `ProviderCapabilityProofStore`
 -> `GET /agents/provider-capability-proofs` (raw records, unjoined). Nothing
@@ -22,8 +22,8 @@ from datetime import UTC
 from datetime import datetime
 from typing import Mapping
 
-from zerg.qa.provider_factory_model import CapabilityAssertion
 from zerg.services.provider_capability_proof import ProviderCapabilityProofRecord
+from zerg.services.provider_capability_schema import CapabilityAssertion
 
 # A capability whose latest proof predates this epic's own tracked history,
 # or that has never been proven at all, is not "unknown" in some vague sense
@@ -92,7 +92,7 @@ def project_capabilities(
     """Join declared capability assertions against real proof records.
 
     Pure: no I/O. Callers load `assertions` from
-    `provider_factory_model.load_facts().capability_assertions` and
+    `provider_capability_schema.load_capability_assertions()` and
     `proof_records` from `ProviderCapabilityProofStore`/the publication
     endpoint themselves. Every declared assertion produces exactly one
     `CapabilityProjection`, even when no proof exists for it at all
