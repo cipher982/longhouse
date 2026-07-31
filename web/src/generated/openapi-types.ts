@@ -7030,18 +7030,16 @@ export interface components {
             /**
              * Provider
              * @description Provider that will be proved.
-             * @enum {string}
              */
-            provider: "claude" | "opencode" | "antigravity";
+            provider: string;
         };
         /** ProviderLiveProofRequest */
         ProviderLiveProofRequest: {
             /**
              * Provider
              * @description Provider CLI to prove on the target machine.
-             * @enum {string}
              */
-            provider: "claude" | "opencode" | "antigravity";
+            provider: string;
             /**
              * Expected Provider Version
              * @description Optional release/version the returned provider-live artifact must prove.
