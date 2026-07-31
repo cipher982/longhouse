@@ -44,6 +44,12 @@ func makeSessionStateFacts(
         activityValidUntil: nil,
         controlOwnership: owned ? "owned" : "unowned",
         controlConnection: owned ? "connected" : "not_applicable",
+        // Mirror the server's _working_set rule so fixtures cannot drift.
+        workingSet: closed
+            ? "history"
+            : (pendingInteractionKind != nil || activity == "thinking" || activity == "executing")
+                ? "open"
+                : "history",
         startTurn: startTurnAvailable ? available : unavailable,
         sendInput: (sendInputAvailable ?? owned) ? available : unavailable,
         interrupt: owned ? available : unavailable,

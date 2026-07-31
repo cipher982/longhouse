@@ -109,6 +109,9 @@ private extension APISessionStateFacts {
             activityValidUntil: activity.validUntil,
             controlOwnership: control.ownership,
             controlConnection: control.connection,
+            // Absent on pre-tier servers; history is the safe default because
+            // it never manufactures a top-tier row from missing evidence.
+            workingSet: workingSet ?? "history",
             startTurn: control.actions.startTurn?.sessionStateAction,
             sendInput: control.actions.sendInput.sessionStateAction,
             interrupt: control.actions.interrupt.sessionStateAction,

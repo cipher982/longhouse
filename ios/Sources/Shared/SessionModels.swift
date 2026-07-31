@@ -30,6 +30,9 @@ struct SessionStateFacts: Hashable, Codable, Sendable {
     let activityValidUntil: String?
     let controlOwnership: String
     let controlConnection: String
+    /// Which timeline tier this session belongs to, decided server-side.
+    /// "open" is what the user would say they have going right now.
+    let workingSet: String
     let startTurn: SessionStateAction?
     let sendInput: SessionStateAction
     let interrupt: SessionStateAction
@@ -57,6 +60,7 @@ struct SessionStateFacts: Hashable, Codable, Sendable {
         activityValidUntil: nil,
         controlOwnership: "unowned",
         controlConnection: "unknown",
+        workingSet: "history",
         startTurn: SessionStateAction(state: "unknown", reason: "missing_state_facts"),
         sendInput: SessionStateAction(state: "unknown", reason: "missing_state_facts"),
         interrupt: SessionStateAction(state: "unknown", reason: "missing_state_facts"),
