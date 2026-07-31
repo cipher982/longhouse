@@ -29,6 +29,7 @@ from uuid import uuid5
 
 from zerg.provider_cli_contract import PROVIDER_CLI_BINARY_BY_PROVIDER
 from zerg.provider_cli_contract import PROVIDER_CLI_ENV_BY_PROVIDER
+from zerg.qa.provider_build_store import GENERATED_FAKE_PROVENANCE
 from zerg.qa.provider_build_store import ProviderBuildRef
 from zerg.qa.provider_build_store import verify_provider_builds
 from zerg.qa.provider_evidence_measurement import measure_evidence_package
@@ -131,6 +132,8 @@ SCENARIOS = (
     "runtime_phase",
     "transcript_binding",
     "multi_turn_continuity",
+    "conversation_reset",
+    "conversation_reset_resume",
     "external_event_channel",
     "permission_prompt",
     "crash_timeout_cleanup",
@@ -195,6 +198,8 @@ MVP_METHODS = (
     "runtime_phase",
     "transcript_binding",
     "multi_turn_continuity",
+    "conversation_reset",
+    "conversation_reset_resume",
     "external_event_channel",
     "permission_prompt",
     "crash_timeout_cleanup",
@@ -218,6 +223,7 @@ COMPOSITE_PROFILES = {
     "normalize_and_project": ("parse_ingest_project", "db_ingest_project", "session_projection", "timeline_projection"),
     "present_and_disclose": ("tool_presentation_projection",),
     "control_surface": ("control_surface",),
+    "conversation_reset": ("conversation_reset", "conversation_reset_resume"),
     "drift_compare": ("baseline_compare", "old_new_release_diff"),
 }
 FULL_ACTION_SUITE_SCENARIOS = (
@@ -781,6 +787,10 @@ class AgentHarnessAdapter(Protocol):
 
     def multi_turn_continuity(self, package: "EvidencePackage") -> dict[str, Any]: ...
 
+    def conversation_reset(self, package: "EvidencePackage") -> dict[str, Any]: ...
+
+    def conversation_reset_resume(self, package: "EvidencePackage") -> dict[str, Any]: ...
+
     def external_event_channel(self, package: "EvidencePackage") -> dict[str, Any]: ...
 
     def permission_prompt(self, package: "EvidencePackage") -> dict[str, Any]: ...
@@ -849,9 +859,16 @@ class EvidencePackage:
 
 
 class UniversalProviderAdapter:
-    def __init__(self, config: AdapterConfig, *, provider_bin: Path | None = None) -> None:
+    def __init__(
+        self,
+        config: AdapterConfig,
+        *,
+        provider_bin: Path | None = None,
+        provider_build: ProviderBuildRef | None = None,
+    ) -> None:
         self.config = config
         self.provider_bin = provider_bin
+        self.provider_build = provider_build
         self._probe_cache: dict[str, Any] | None = None
 
     @property
@@ -1735,6 +1752,128 @@ class UniversalProviderAdapter:
             session_projection["operation_statuses"] = operation_evidence
             package.write_json("longhouse/session-projection.json", session_projection)
         package.write_json("assertions/multi_turn_continuity.json", payload)
+        return payload
+
+    def conversation_reset(self, package: EvidencePackage) -> dict[str, Any]:
+        if self.provider_build is None or self.provider_build.artifact_provenance != GENERATED_FAKE_PROVENANCE:
+            payload = {
+                "status": STATUS_BLOCKED,
+                "scenario": "conversation_reset",
+                "failure_code": "conversation_reset_live_adapter_missing",
+                "message": "Real conversation-reset evidence requires a provider-specific interactive adapter.",
+                "operation_evidence": {
+                    "conversation_reset": {
+                        "status": STATUS_BLOCKED,
+                        "level": "none",
+                        "canary": "universal_conversation_reset",
+                        "failure_code": "conversation_reset_live_adapter_missing",
+                    }
+                },
+            }
+            package.write_json("assertions/conversation_reset.json", payload)
+            return payload
+
+        from zerg.qa.conversation_reset import evaluate_reset_observation
+        from zerg.qa.conversation_reset import generated_fake_observation
+
+        observation = generated_fake_observation(
+            self.config.provider,
+            allocation=str(os.environ.get("LONGHOUSE_FAKE_RESET_ALLOCATION") or "eager"),
+            transition=str(os.environ.get("LONGHOUSE_FAKE_RESET_TRANSITION") or "rotated"),
+        )
+        evaluation = evaluate_reset_observation(observation)
+        observation_path = package.write_json("observations/conversation_reset.json", observation)
+        payload = {
+            **evaluation,
+            "scenario": "conversation_reset",
+            "observation_path": str(observation_path),
+            "identity_transition": observation["identity_transition"],
+            "identity_allocation": observation["identity_allocation"],
+            "synthetic": True,
+            "operation_evidence": {
+                "conversation_reset": {
+                    "status": evaluation["status"],
+                    "level": "hermetic",
+                    "canary": "universal_conversation_reset_generated_fake",
+                    "failure_code": evaluation.get("failure_code"),
+                }
+            },
+        }
+        package.write_json("assertions/conversation_reset.json", payload)
+        return payload
+
+    def conversation_reset_resume(self, package: EvidencePackage) -> dict[str, Any]:
+        contract = contract_for_provider(self.config.provider)
+        if contract is None or not (contract.reattach or contract.can_resume):
+            payload = {
+                "status": STATUS_NOT_APPLICABLE,
+                "scenario": "conversation_reset_resume",
+                "message": "The managed-provider contract declares resume/reattach unsupported.",
+                "operation_evidence": {
+                    "conversation_reset_resume": {
+                        "status": STATUS_NOT_APPLICABLE,
+                        "level": "none",
+                        "canary": "universal_conversation_reset_resume",
+                    }
+                },
+            }
+            package.write_json("assertions/conversation_reset_resume.json", payload)
+            return payload
+        if self.provider_build is None or self.provider_build.artifact_provenance != GENERATED_FAKE_PROVENANCE:
+            payload = {
+                "status": STATUS_BLOCKED,
+                "scenario": "conversation_reset_resume",
+                "failure_code": "conversation_reset_resume_live_adapter_missing",
+                "message": "Real reset-resume evidence requires a provider-specific reattach adapter.",
+                "operation_evidence": {
+                    "conversation_reset_resume": {
+                        "status": STATUS_BLOCKED,
+                        "level": "none",
+                        "canary": "universal_conversation_reset_resume",
+                        "failure_code": "conversation_reset_resume_live_adapter_missing",
+                    }
+                },
+            }
+            package.write_json("assertions/conversation_reset_resume.json", payload)
+            return payload
+
+        from zerg.qa.conversation_reset import evaluate_resume_observation
+        from zerg.qa.conversation_reset import generated_fake_observation
+
+        reset_observation = generated_fake_observation(self.config.provider)
+        after = reset_observation["after"]
+        provider_id = after["provider_session_id"]
+        resume_observation = {
+            "longhouse_requested_provider_id": provider_id,
+            "provider_opened_id": provider_id,
+            "post_resume_longhouse_session_id": after["longhouse_session_id"],
+        }
+        evaluation = evaluate_resume_observation(reset_observation, resume_observation)
+        observation_path = package.write_json(
+            "observations/conversation_reset_resume.json",
+            {
+                "schema_version": 1,
+                "scenario": "conversation_reset_resume",
+                "provider": self.config.provider,
+                "reset": reset_observation,
+                "resume": resume_observation,
+            },
+        )
+        payload = {
+            **evaluation,
+            "scenario": "conversation_reset_resume",
+            "observation_path": str(observation_path),
+            "synthetic": True,
+            "operation_evidence": {
+                "conversation_reset_resume": {
+                    "status": evaluation["status"],
+                    "level": "hermetic",
+                    "canary": "universal_conversation_reset_resume_generated_fake",
+                    "failure_code": evaluation.get("failure_code"),
+                }
+            },
+        }
+        package.write_json("assertions/conversation_reset_resume.json", payload)
         return payload
 
     def external_event_channel(self, package: EvidencePackage) -> dict[str, Any]:
@@ -4994,7 +5133,10 @@ def provider_configs() -> dict[str, AdapterConfig]:
     return configs
 
 
-def adapter_registry(provider_bins: Mapping[str, Path] | None = None) -> dict[str, AgentHarnessAdapter]:
+def adapter_registry(
+    provider_bins: Mapping[str, Path] | None = None,
+    provider_builds: Mapping[str, ProviderBuildRef] | None = None,
+) -> dict[str, AgentHarnessAdapter]:
     # Lazy, function-body import (not module-level): provider_adapters
     # submodules import UniversalProviderAdapter/register_adapter from this
     # module, so importing the package at this module's own top level would
@@ -5007,10 +5149,15 @@ def adapter_registry(provider_bins: Mapping[str, Path] | None = None) -> dict[st
 
     provider_adapters.load_all()
     bins = dict(provider_bins or {})
+    builds = dict(provider_builds or {})
     registry: dict[str, AgentHarnessAdapter] = {}
     for provider, config in provider_configs().items():
         adapter_class = ADAPTER_CLASS_BY_PROVIDER.get(provider, UniversalProviderAdapter)
-        registry[provider] = adapter_class(config, provider_bin=bins.get(provider))
+        registry[provider] = adapter_class(
+            config,
+            provider_bin=bins.get(provider),
+            provider_build=builds.get(provider),
+        )
     return registry
 
 
@@ -5844,6 +5991,30 @@ def run_multi_turn_continuity(adapter: AgentHarnessAdapter, package: EvidencePac
     )
 
 
+def run_conversation_reset(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
+    adapter.prepare(package)
+    payload = adapter.conversation_reset(package)
+    adapter.cleanup(package)
+    return scenario_result(
+        provider=adapter.config.provider,
+        scenario="conversation_reset",
+        package=package,
+        payload=payload,
+    )
+
+
+def run_conversation_reset_resume(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
+    adapter.prepare(package)
+    payload = adapter.conversation_reset_resume(package)
+    adapter.cleanup(package)
+    return scenario_result(
+        provider=adapter.config.provider,
+        scenario="conversation_reset_resume",
+        package=package,
+        payload=payload,
+    )
+
+
 def run_external_event_channel(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
     adapter.prepare(package)
     payload = adapter.external_event_channel(package)
@@ -5975,6 +6146,8 @@ SCENARIO_RUNNERS = {
     "runtime_phase": run_runtime_phase,
     "transcript_binding": run_transcript_binding,
     "multi_turn_continuity": run_multi_turn_continuity,
+    "conversation_reset": run_conversation_reset,
+    "conversation_reset_resume": run_conversation_reset_resume,
     "external_event_channel": run_external_event_channel,
     "permission_prompt": run_permission_prompt,
     "crash_timeout_cleanup": run_crash_timeout_cleanup,
@@ -6278,7 +6451,7 @@ def run_harness(options: HarnessOptions) -> dict[str, Any]:
         if options.provider_builds is not None
         else options.provider_bins
     )
-    registry = adapter_registry(provider_bins)
+    registry = adapter_registry(provider_bins, options.provider_builds)
     results: list[ScenarioResult] = []
     for provider in options.providers:
         # A complete column is self-contained: baseline_compare emits the two
