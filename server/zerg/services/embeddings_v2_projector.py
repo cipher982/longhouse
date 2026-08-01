@@ -271,6 +271,13 @@ class EmbeddingsV2Projector:
                             "episode_ordinal": chunk.chunk_index,
                             "event_index_start": chunk.event_index_start,
                             "event_index_end": chunk.event_index_end,
+                            # Clean-message indices are unresolvable outside this
+                            # module. The chunker hands back the source record id
+                            # of the episode's first event, and the ids assigned
+                            # above are positions in `records`, so the record's
+                            # own order time is the locator searchd can use to
+                            # place the episode in the published generation.
+                            "start_order_time_us": _record_order_time(records, chunk.source_event_id_start),
                             "content_hash": chunk.content_hash,
                             "embedding": base64.b64encode(embedding_to_bytes(vector)).decode("ascii"),
                         }
@@ -294,6 +301,22 @@ class EmbeddingsV2Projector:
                 },
             )
         return complete
+
+
+def _record_order_time(records: list[dict], record_index: object) -> int | None:
+    """Order time of the record a chunk starts at, or None if it cannot be placed.
+
+    ``record_index`` is a position in the sorted ``records`` list because the
+    caller stamps ``record["id"] = index`` before chunking. Returning None on a
+    miss is deliberate: an unplaceable episode must report unavailable evidence
+    rather than borrow some other event's position.
+    """
+
+    if not isinstance(record_index, int) or isinstance(record_index, bool):
+        return None
+    if record_index < 0 or record_index >= len(records):
+        return None
+    return int(records[record_index]["timestamp"])
 
 
 def _uuid(value: object) -> str:

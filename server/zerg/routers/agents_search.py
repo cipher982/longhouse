@@ -26,10 +26,11 @@ from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.services.live_catalog_timeline import read_live_catalog_session
 from zerg.services.searchd_supervisor import get_searchd_client
+from zerg.services.session_views import MachineSessionsListResponse
 from zerg.services.session_views import RecallMatch
 from zerg.services.session_views import RecallResponse
-from zerg.services.session_views import SemanticSearchResponse
 from zerg.services.session_views import SessionResponse
+from zerg.services.session_views import project_machine_session
 from zerg.utils.server_timing import ServerTimingRecorder
 
 router = APIRouter(prefix="/agents", tags=["agents"])
@@ -111,11 +112,16 @@ async def search_storage_v2_context(
     owner_id: int,
     session_id: str,
     generation_id: str,
-    search_event_id: int,
+    search_event_id: int | None = None,
+    start_order_time_us: int | None = None,
     context_turns: int,
     timeout_seconds: float,
 ) -> dict[str, object]:
-    """Read bounded neighbor evidence from the same generation as a search hit."""
+    """Read bounded neighbor evidence from the same generation as a search hit.
+
+    Lexical hits locate by searchd event id; semantic episode hits locate by
+    their start position in the published ordering. Exactly one applies.
+    """
 
     search = get_searchd_client()
     if search is None:
@@ -131,6 +137,7 @@ async def search_storage_v2_context(
                 "session_id": session_id,
                 "generation_id": generation_id,
                 "search_event_id": search_event_id,
+                "start_order_time_us": start_order_time_us,
                 "context_turns": context_turns,
             },
             timeout_seconds=timeout_seconds,
@@ -343,6 +350,7 @@ async def _semantic_recall_matches(
             if not session_id or session_id in seen:
                 continue
             seen.add(session_id)
+            start_order_time_us = row.get("start_order_time_us")
             matches.append(
                 RecallMatch(
                     session_id=session_id,
@@ -350,6 +358,11 @@ async def _semantic_recall_matches(
                     score=float(row.get("score") or 0.0),
                     event_index_start=row.get("event_index_start"),
                     event_index_end=row.get("event_index_end"),
+                    # Carrying the generation the episode was embedded from is
+                    # what lets hydration refuse a superseded transcript instead
+                    # of showing neighbours that have since moved.
+                    generation_id=str(row.get("generation_id") or "") or None,
+                    start_order_time_us=int(start_order_time_us) if start_order_time_us is not None else None,
                 )
             )
             if len(matches) >= max_results:
@@ -360,6 +373,57 @@ async def _semantic_recall_matches(
         return await asyncio.wait_for(_run(), timeout=timeout_seconds)
     except Exception:
         return []
+
+
+async def _hydrate_recall_match(
+    match: RecallMatch,
+    *,
+    owner_id: int,
+    context_turns: int,
+    timeout_seconds: float,
+) -> None:
+    """Attach neighbour evidence to a match and record how well that went.
+
+    Every exit sets ``evidence_status`` explicitly. Nothing here may leave it at
+    the model default, because a default is a claim nobody checked.
+    """
+
+    if match.generation_id is None or (match.match_event_id is None and match.start_order_time_us is None):
+        match.evidence_status = "unavailable"
+        match.evidence_reason = "search_hit_missing_locator"
+        return
+    try:
+        evidence = await search_storage_v2_context(
+            owner_id=owner_id,
+            session_id=match.session_id,
+            generation_id=match.generation_id,
+            search_event_id=match.match_event_id,
+            # An event id is exact; a position is an anchor. Prefer the exact one
+            # when a match somehow carries both.
+            start_order_time_us=None if match.match_event_id is not None else match.start_order_time_us,
+            context_turns=context_turns,
+            timeout_seconds=timeout_seconds,
+        )
+    except HTTPException as exc:
+        detail = exc.detail if isinstance(exc.detail, dict) else {}
+        match.evidence_status = "partial"
+        match.evidence_reason = str(detail.get("code") or "search_evidence_unavailable")
+        return
+    match.context = [item for item in (evidence.get("context") or []) if isinstance(item, dict)]
+    match.total_events = int(evidence.get("total_events") or match.total_events)
+    # Only the store may declare completeness. An absent status means the
+    # response did not carry one, which is not evidence that everything arrived
+    # — reading it as "complete" is how a silent contract change would look
+    # like a healthy result.
+    reported = str(evidence.get("evidence_status") or "")
+    match.evidence_status = reported if reported in {"complete", "partial", "unavailable"} else "partial"
+    reason = evidence.get("evidence_reason")
+    if reason is not None:
+        match.evidence_reason = str(reason)
+    elif not reported:
+        match.evidence_reason = "search_evidence_status_absent"
+    else:
+        match.evidence_reason = None
 
 
 def _rrf_merge_recall_matches(
@@ -392,10 +456,19 @@ def _rrf_merge_recall_matches(
             best_rank[sid] = (rank, match)
 
     ordered_ids = sorted(scores, key=lambda sid: scores[sid], reverse=True)
-    return [best_rank[sid][1] for sid in ordered_ids[:limit]]
+    merged = []
+    for sid in ordered_ids[:limit]:
+        match = best_rank[sid][1]
+        # Report the value the ordering was actually made from. The lanes score
+        # on incomparable scales — lexical is 1/(1+|bm25|), semantic is cosine —
+        # so passing the winner's raw lane score through made a fused list look
+        # arbitrarily ordered to anyone reading the numbers.
+        match.score = scores[sid]
+        merged.append(match)
+    return merged
 
 
-@router.get("/sessions/semantic", response_model=SemanticSearchResponse)
+@router.get("/sessions/semantic", response_model=MachineSessionsListResponse)
 async def semantic_search_sessions(
     response: Response = None,
     query: str = Query(..., description="Search query"),
@@ -408,7 +481,7 @@ async def semantic_search_sessions(
     context_mode: str = Query("forensic", description="Context projection mode: forensic|active_context"),
     _auth: object = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
-) -> SemanticSearchResponse:
+) -> MachineSessionsListResponse:
     """Search sessions by semantic similarity, scoped to the owner's storage-v2 catalog."""
     timing = ServerTimingRecorder(surface="search")
     if context_mode not in {"forensic", "active_context"}:
@@ -436,7 +509,14 @@ async def semantic_search_sessions(
             include_test=include_test,
             hide_autonomous=True,
         )
-    result = SemanticSearchResponse(sessions=sessions, total=len(sessions), has_real_sessions=bool(sessions))
+    # Machine surface: identity and provenance, none of the browser's control
+    # or presentation state. Ten full session payloads exceeded the MCP token
+    # cap before any transcript content came back.
+    result = MachineSessionsListResponse(
+        sessions=[project_machine_session(session) for session in sessions],
+        total=len(sessions),
+        has_real_sessions=bool(sessions),
+    )
     timing.apply(response)
     return result
 
@@ -529,34 +609,6 @@ async def recall_sessions(
         if len(matches) >= max_results:
             break
 
-    async def hydrate(match: RecallMatch) -> None:
-        if match.match_event_id is None or match.generation_id is None:
-            match.evidence_status = "unavailable"
-            match.evidence_reason = "search_hit_missing_locator"
-            return
-        try:
-            evidence = await search_storage_v2_context(
-                owner_id=owner_id,
-                session_id=match.session_id,
-                generation_id=match.generation_id,
-                search_event_id=match.match_event_id,
-                context_turns=context_turns,
-                timeout_seconds=remaining_budget(),
-            )
-        except HTTPException as exc:
-            detail = exc.detail if isinstance(exc.detail, dict) else {}
-            match.evidence_status = "partial"
-            match.evidence_reason = str(detail.get("code") or "search_evidence_unavailable")
-            return
-        match.context = [item for item in (evidence.get("context") or []) if isinstance(item, dict)]
-        match.total_events = int(evidence.get("total_events") or match.total_events)
-        match.evidence_status = str(evidence.get("evidence_status") or "complete")
-        reason = evidence.get("evidence_reason")
-        match.evidence_reason = str(reason) if reason is not None else None
-
-    with timing.span("hydrate"):
-        await asyncio.gather(*(hydrate(match) for match in matches))
-
     if mode in {"auto", "semantic"}:
         with timing.span("semantic"):
             semantic_matches = await _semantic_recall_matches(
@@ -571,6 +623,23 @@ async def recall_sessions(
                 owner_id=owner_id,
             )
         matches = _rrf_merge_recall_matches(matches, semantic_matches, limit=max_results)
+
+    # Hydrate after fusion, not before. Hydrating the lexical list first meant
+    # semantic matches never reached the hydrator at all — they were appended
+    # afterwards and went out with empty evidence — while lexical matches that
+    # fusion then dropped were hydrated for nothing.
+    with timing.span("hydrate"):
+        await asyncio.gather(
+            *(
+                _hydrate_recall_match(
+                    match,
+                    owner_id=owner_id,
+                    context_turns=context_turns,
+                    timeout_seconds=remaining_budget(),
+                )
+                for match in matches
+            )
+        )
 
     timing.apply(response)
     return RecallResponse(matches=matches, total=len(matches))

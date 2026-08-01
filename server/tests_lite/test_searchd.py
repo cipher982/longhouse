@@ -107,6 +107,7 @@ def test_embedding_write_contract_accepts_full_desired_episode_set():
                     "episode_ordinal": 2,
                     "event_index_start": 4,
                     "event_index_end": 5,
+                    "start_order_time_us": None,
                     "content_hash": "c" * 64,
                     "embedding": base64.b64encode(
                         np.array([0, 0], dtype=np.float32).tobytes()
@@ -214,6 +215,7 @@ def test_episode_embeddings_dedup_and_cosine_query(tmp_path):
                     "episode_ordinal": 0,
                     "event_index_start": 0,
                     "event_index_end": 1,
+                    "start_order_time_us": None,
                     "content_hash": "a" * 64,
                     "embedding": np.array([1, 0], dtype=np.float32).tobytes(),
                 },
@@ -221,6 +223,7 @@ def test_episode_embeddings_dedup_and_cosine_query(tmp_path):
                     "episode_ordinal": 1,
                     "event_index_start": 2,
                     "event_index_end": 3,
+                    "start_order_time_us": None,
                     "content_hash": "b" * 64,
                     "embedding": np.array([0, 1], dtype=np.float32).tobytes(),
                 },
@@ -240,6 +243,7 @@ def test_episode_embeddings_dedup_and_cosine_query(tmp_path):
                     "episode_ordinal": 0,
                     "event_index_start": 0,
                     "event_index_end": 1,
+                    "start_order_time_us": None,
                     "content_hash": "a" * 64,
                     "embedding": np.array([1, 0], dtype=np.float32).tobytes(),
                 }
@@ -306,6 +310,7 @@ def test_complete_write_preserves_untouched_episodes_via_desired_ordinals(tmp_pa
                     "episode_ordinal": 0,
                     "event_index_start": 0,
                     "event_index_end": 1,
+                    "start_order_time_us": None,
                     "content_hash": "a" * 64,
                     "embedding": np.array([1, 0], dtype=np.float32).tobytes(),
                 },
@@ -313,6 +318,7 @@ def test_complete_write_preserves_untouched_episodes_via_desired_ordinals(tmp_pa
                     "episode_ordinal": 1,
                     "event_index_start": 2,
                     "event_index_end": 3,
+                    "start_order_time_us": None,
                     "content_hash": "b" * 64,
                     "embedding": np.array([0, 1], dtype=np.float32).tobytes(),
                 },
@@ -335,6 +341,7 @@ def test_complete_write_preserves_untouched_episodes_via_desired_ordinals(tmp_pa
                     "episode_ordinal": 2,
                     "event_index_start": 4,
                     "event_index_end": 5,
+                    "start_order_time_us": None,
                     "content_hash": "c" * 64,
                     "embedding": np.array([0, 0], dtype=np.float32).tobytes(),
                 }
@@ -380,6 +387,7 @@ def test_complete_write_without_desired_ordinals_still_prunes_stale_rows(tmp_pat
                     "episode_ordinal": 0,
                     "event_index_start": 0,
                     "event_index_end": 1,
+                    "start_order_time_us": None,
                     "content_hash": "a" * 64,
                     "embedding": np.array([1, 0], dtype=np.float32).tobytes(),
                 },
@@ -387,6 +395,7 @@ def test_complete_write_without_desired_ordinals_still_prunes_stale_rows(tmp_pat
                     "episode_ordinal": 1,
                     "event_index_start": 2,
                     "event_index_end": 3,
+                    "start_order_time_us": None,
                     "content_hash": "b" * 64,
                     "embedding": np.array([0, 1], dtype=np.float32).tobytes(),
                 },
@@ -406,6 +415,7 @@ def test_complete_write_without_desired_ordinals_still_prunes_stale_rows(tmp_pat
                     "episode_ordinal": 0,
                     "event_index_start": 0,
                     "event_index_end": 1,
+                    "start_order_time_us": None,
                     "content_hash": "a" * 64,
                     "embedding": np.array([1, 0], dtype=np.float32).tobytes(),
                 }
@@ -694,6 +704,7 @@ async def test_searchd_publishes_only_complete_generations_and_serves_search_wor
                 "session_id": session_id,
                 "generation_id": generation_id,
                 "search_event_id": search["results"][0]["search_event_id"],
+                "start_order_time_us": None,
                 "context_turns": 1,
             },
         )

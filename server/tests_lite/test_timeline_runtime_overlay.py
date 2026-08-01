@@ -30,13 +30,15 @@ from zerg.database import Base
 from zerg.database import get_db
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
+from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
+from zerg.dependencies.browser_auth import get_current_browser_user
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentHeartbeat
 from zerg.models.agents import AgentSession
 from zerg.models.agents import AgentSourceLine
-from zerg.models.agents import SessionObservation
 from zerg.models.agents import SessionConnection
+from zerg.models.agents import SessionObservation
 from zerg.models.agents import SessionRun
 from zerg.models.agents import SessionRuntimeState
 from zerg.models.agents import TimelineCard
@@ -44,10 +46,10 @@ from zerg.services.agents import AgentsStore
 from zerg.services.agents import EventIngest
 from zerg.services.agents import SessionIngest
 from zerg.services.session_hot_cards import upsert_timeline_card_from_session
-from zerg.services.session_observations import OBS_KIND_BRIDGE_TRANSCRIPT_DELTA
-from zerg.services.session_pause_requests import upsert_pause_request
 from zerg.services.session_listing import SessionListParams
 from zerg.services.session_listing import list_agent_sessions
+from zerg.services.session_observations import OBS_KIND_BRIDGE_TRANSCRIPT_DELTA
+from zerg.services.session_pause_requests import upsert_pause_request
 from zerg.services.session_runtime import RuntimeEventIngest
 from zerg.services.session_runtime import ingest_runtime_events
 from zerg.services.session_turns import materialize_recent_managed_transcript_turns
@@ -212,12 +214,21 @@ def _client(factory):
     def override_verify_agents_token():
         return SimpleNamespace(device_id="timeline-runtime", id="token-1", owner_id=1)
 
+    def override_browser_user():
+        return SimpleNamespace(id=1)
+
     api_app.dependency_overrides[get_db] = override
     api_app.dependency_overrides[verify_agents_token] = override_verify_agents_token
+    api_app.dependency_overrides[get_current_browser_user] = override_browser_user
+    api_app.dependency_overrides[require_single_tenant] = lambda: None
     try:
         yield TestClient(api_app)
     finally:
         api_app.dependency_overrides.clear()
+
+
+def _timeline_details(response):
+    return [card["detail"] for card in response.json()["sessions"]]
 
 
 @pytest.mark.parametrize("terminal_state", ["session_ended", "process_gone", "user_closed"])
@@ -260,9 +271,9 @@ def test_terminal_signals_separate_run_end_from_session_closure(tmp_path, termin
         db.close()
 
     for client in _client(factory):
-        resp = client.get("/agents/sessions?days_back=7&limit=1", headers={"X-Agents-Token": "dev"})
+        resp = client.get("/timeline/sessions?days_back=7&limit=1")
         assert resp.status_code == 200, resp.text
-        row = resp.json()["sessions"][0]
+        row = _timeline_details(resp)[0]
         assert row["id"] == session_id
         expected_label = "Closed" if terminal_state == "user_closed" else "Activity unknown"
         assert row["session_state"]["disposition"]["state"] == ("closed" if terminal_state == "user_closed" else "open")
@@ -303,9 +314,9 @@ def test_reversible_or_turn_terminal_signals_do_not_close_session(tmp_path, term
         db.close()
 
     for client in _client(factory):
-        resp = client.get("/agents/sessions?days_back=7&limit=1", headers={"X-Agents-Token": "dev"})
+        resp = client.get("/timeline/sessions?days_back=7&limit=1")
         assert resp.status_code == 200, resp.text
-        row = resp.json()["sessions"][0]
+        row = _timeline_details(resp)[0]
         assert row["id"] == session_id
         assert row["runtime_display"]["lifecycle"] == "open"
         assert row["timeline_card"]["status"]["label"] == "Activity unknown"
@@ -500,9 +511,9 @@ def test_progress_after_host_expired_reopens_runtime_projection(tmp_path):
         db.close()
 
     for client in _client(factory):
-        resp = client.get("/agents/sessions?days_back=7&limit=1", headers={"X-Agents-Token": "dev"})
+        resp = client.get("/timeline/sessions?days_back=7&limit=1")
         assert resp.status_code == 200, resp.text
-        row = resp.json()["sessions"][0]
+        row = _timeline_details(resp)[0]
         assert row["id"] == session_id
         assert row["timeline_card"]["status"]["label"] == "Activity unknown"
 
@@ -652,9 +663,9 @@ def test_sessions_list_preserves_ingested_stalled_runtime_phase(tmp_path):
         db.close()
 
     for client in _client(factory):
-        resp = client.get("/agents/sessions?days_back=1&limit=10", headers={"X-Agents-Token": "dev"})
+        resp = client.get("/timeline/sessions?days_back=1&limit=10")
         assert resp.status_code == 200, resp.text
-        row = next(item for item in resp.json()["sessions"] if item["id"] == session_id)
+        row = next(item for item in _timeline_details(resp) if item["id"] == session_id)
         assert row["presence_state"] is None
         assert row["session_state"]["activity"]["state"] == "unknown"
         assert row["runtime_display"]["state"] is None
@@ -690,11 +701,11 @@ def test_archive_recency_ignores_old_runtime_only_activity(tmp_path):
         db.close()
 
     for client in _client(factory):
-        resp = client.get("/agents/sessions?days_back=14&limit=1", headers={"X-Agents-Token": "dev"})
+        resp = client.get("/timeline/sessions?days_back=14&limit=1")
         assert resp.status_code == 200, resp.text
         payload = resp.json()
         assert payload["total"] >= 1
-        top = payload["sessions"][0]
+        top = _timeline_details(resp)[0]
         assert top["id"] == str(recent_idle.id)
         assert top["project"] == "recent-idle"
         assert top["status"] is None
@@ -743,11 +754,10 @@ def test_bridge_transcript_preview_is_timeline_card_only(tmp_path):
 
     for client in _client(factory):
         resp = client.get(
-            "/agents/sessions?project=codex-bridge-preview&provider=codex&limit=5",
-            headers={"X-Agents-Token": "dev"},
+            "/timeline/sessions?project=codex-bridge-preview&provider=codex&limit=5",
         )
         assert resp.status_code == 200, resp.text
-        session_payload = resp.json()["sessions"][0]
+        session_payload = _timeline_details(resp)[0]
 
     assert session_payload["id"] == str(session.id)
     assert session_payload["transcript_preview"]["text"] == "hello world"
@@ -1173,11 +1183,10 @@ def test_sessions_list_hides_bridge_transcript_preview_after_durable_activity_ca
 
     for client in _client(factory):
         resp = client.get(
-            "/agents/sessions?project=codex-bridge-preview-superseded&provider=codex&limit=5",
-            headers={"X-Agents-Token": "dev"},
+            "/timeline/sessions?project=codex-bridge-preview-superseded&provider=codex&limit=5",
         )
         assert resp.status_code == 200, resp.text
-        session_payload = resp.json()["sessions"][0]
+        session_payload = _timeline_details(resp)[0]
 
     assert session_payload["id"] == str(session.id)
     assert session_payload["last_activity_at"] == (now - timedelta(seconds=1)).isoformat().replace("+00:00", "Z")
@@ -1283,9 +1292,9 @@ def test_sessions_list_marks_old_open_session_idle_without_live_signal(tmp_path)
         db.close()
 
     for client in _client(factory):
-        resp = client.get("/agents/sessions?days_back=14", headers={"X-Agents-Token": "dev"})
+        resp = client.get("/timeline/sessions?days_back=14")
         assert resp.status_code == 200, resp.text
-        data = resp.json()["sessions"][0]
+        data = _timeline_details(resp)[0]
         assert data["id"] == str(session.id)
         assert data["status"] is None
         assert data["display_phase"] is None
@@ -1320,9 +1329,9 @@ def test_sessions_list_exposes_home_label_from_existing_session_metadata(tmp_pat
         db.close()
 
     for client in _client(factory):
-        resp = client.get("/agents/sessions?days_back=7&limit=10", headers={"X-Agents-Token": "dev"})
+        resp = client.get("/timeline/sessions?days_back=7&limit=10")
         assert resp.status_code == 200, resp.text
-        rows = {row["project"]: row for row in resp.json()["sessions"]}
+        rows = {row["project"]: row for row in _timeline_details(resp)}
         assert rows["unmanaged-local"]["id"] == str(unmanaged.id)
         assert rows["unmanaged-local"]["home_label"] is None
         assert rows["cloud-branch"]["id"] == str(cloud.id)
@@ -1355,9 +1364,9 @@ def test_claude_channel_kernel_truth_marks_non_runner_session_online(tmp_path):
         db.close()
 
     for client in _client(factory):
-        resp = client.get("/agents/sessions?days_back=1", headers={"X-Agents-Token": "dev"})
+        resp = client.get("/timeline/sessions?days_back=1")
         assert resp.status_code == 200, resp.text
-        data = resp.json()["sessions"][0]
+        data = _timeline_details(resp)[0]
         assert data["id"] == str(session.id)
         assert data["runtime_display"]["control_path"] == "unmanaged"
         assert data["runtime_display"]["activity_recency"] == "none"
@@ -1393,9 +1402,9 @@ def test_sessions_list_uses_fresh_managed_control_when_provider_phase_expires(tm
         db.close()
 
     for client in _client(factory):
-        live_resp = client.get("/agents/sessions?days_back=1", headers={"X-Agents-Token": "dev"})
+        live_resp = client.get("/timeline/sessions?days_back=1")
         assert live_resp.status_code == 200, live_resp.text
-        live = live_resp.json()["sessions"][0]
+        live = _timeline_details(live_resp)[0]
         assert live["capabilities"]["live_control_available"] is False
         assert live["runtime_display"]["state"] is None
         assert live["runtime_display"]["phase_label"] == "Inactive"
@@ -1414,9 +1423,9 @@ def test_sessions_list_uses_fresh_managed_control_when_provider_phase_expires(tm
         finally:
             db.close()
 
-        stale_resp = client.get("/agents/sessions?days_back=1", headers={"X-Agents-Token": "dev"})
+        stale_resp = client.get("/timeline/sessions?days_back=1")
         assert stale_resp.status_code == 200, stale_resp.text
-        stale = stale_resp.json()["sessions"][0]
+        stale = _timeline_details(stale_resp)[0]
         assert stale["capabilities"]["live_control_available"] is False
         assert stale["timeline_card"]["status"]["label"] == "Activity unknown"
         assert stale["session_state"]["presentation"]["access"]["label"] == "Search only"
@@ -1500,11 +1509,11 @@ def test_archive_sessions_ignore_runtime_only_recency_anchor(tmp_path):
         db.close()
 
     for client in _client(factory):
-        resp = client.get("/agents/sessions?days_back=14&limit=1", headers={"X-Agents-Token": "dev"})
+        resp = client.get("/timeline/sessions?days_back=14&limit=1")
         assert resp.status_code == 200, resp.text
         payload = resp.json()
         assert payload["total"] >= 1
-        row = payload["sessions"][0]
+        row = _timeline_details(resp)[0]
         assert row["id"] == str(recent_history.id)
         assert row["project"] == "recent-history"
         assert row["status"] is None
@@ -1593,9 +1602,9 @@ def test_sessions_list_prefers_materialized_runtime_state_when_present(tmp_path)
         db.close()
 
     for client in _client(factory):
-        resp = client.get("/agents/sessions?days_back=14&limit=1", headers={"X-Agents-Token": "dev"})
+        resp = client.get("/timeline/sessions?days_back=14&limit=1")
         assert resp.status_code == 200, resp.text
-        row = resp.json()["sessions"][0]
+        row = _timeline_details(resp)[0]
         assert row["id"] == str(session.id)
         assert row["status"] is None
         assert row["presence_state"] is None
@@ -1644,9 +1653,9 @@ def test_sessions_list_keeps_progress_runtime_overlay_for_recent_closed_session(
         db.close()
 
     for client in _client(factory):
-        resp = client.get("/agents/sessions?days_back=7&limit=1", headers={"X-Agents-Token": "dev"})
+        resp = client.get("/timeline/sessions?days_back=7&limit=1")
         assert resp.status_code == 200, resp.text
-        row = resp.json()["sessions"][0]
+        row = _timeline_details(resp)[0]
         assert row["id"] == str(session.id)
         assert row["status"] is None
         assert row["display_phase"] is None
@@ -1695,9 +1704,9 @@ def test_sessions_list_suppresses_stale_progress_running_phase(tmp_path):
         db.close()
 
     for client in _client(factory):
-        resp = client.get("/agents/sessions?days_back=7&limit=1", headers={"X-Agents-Token": "dev"})
+        resp = client.get("/timeline/sessions?days_back=7&limit=1")
         assert resp.status_code == 200, resp.text
-        row = resp.json()["sessions"][0]
+        row = _timeline_details(resp)[0]
         assert row["id"] == str(session.id)
         assert row["status"] is None
         assert row["presence_state"] is None
@@ -1757,9 +1766,9 @@ def test_sessions_list_uses_activity_unknown_when_phase_signal_is_stale(tmp_path
         db.close()
 
     for client in _client(factory):
-        resp = client.get("/agents/sessions?days_back=7&limit=1", headers={"X-Agents-Token": "dev"})
+        resp = client.get("/timeline/sessions?days_back=7&limit=1")
         assert resp.status_code == 200, resp.text
-        row = resp.json()["sessions"][0]
+        row = _timeline_details(resp)[0]
         assert row["id"] == str(session.id)
         assert row["confidence"] is None
         assert row["runtime_phase"] is None
@@ -1810,9 +1819,9 @@ def test_sessions_list_marks_materialized_needs_user_as_idle(tmp_path):
         db.close()
 
     for client in _client(factory):
-        resp = client.get("/agents/sessions?days_back=14&limit=1", headers={"X-Agents-Token": "dev"})
+        resp = client.get("/timeline/sessions?days_back=14&limit=1")
         assert resp.status_code == 200, resp.text
-        row = resp.json()["sessions"][0]
+        row = _timeline_details(resp)[0]
         assert row["id"] == str(session.id)
         assert row["status"] is None
         assert row["presence_state"] is None
@@ -1892,9 +1901,9 @@ def test_sessions_list_marks_pending_structured_question_as_needs_answer(tmp_pat
         db.close()
 
     for client in _client(factory):
-        resp = client.get("/agents/sessions?days_back=14&limit=1", headers={"X-Agents-Token": "dev"})
+        resp = client.get("/timeline/sessions?days_back=14&limit=1")
         assert resp.status_code == 200, resp.text
-        row = resp.json()["sessions"][0]
+        row = _timeline_details(resp)[0]
         assert row["id"] == str(session.id)
         assert row["presence_state"] is None
         assert row["session_state"]["pending_interaction"] is None
@@ -1962,9 +1971,9 @@ def test_sessions_list_keeps_stale_structured_question_visible(tmp_path):
         db.close()
 
     for client in _client(factory):
-        resp = client.get("/agents/sessions?days_back=14&limit=1", headers={"X-Agents-Token": "dev"})
+        resp = client.get("/timeline/sessions?days_back=14&limit=1")
         assert resp.status_code == 200, resp.text
-        row = resp.json()["sessions"][0]
+        row = _timeline_details(resp)[0]
         assert row["runtime_phase"] is None
         assert row["presence_state"] is None
         assert row["runtime_display"]["state"] is None
@@ -2019,9 +2028,9 @@ def test_sessions_list_keeps_activity_idle_while_transcript_is_lagging(tmp_path)
         db.close()
 
     for client in _client(factory):
-        resp = client.get("/agents/sessions?days_back=14&limit=1", headers={"X-Agents-Token": "dev"})
+        resp = client.get("/timeline/sessions?days_back=14&limit=1")
         assert resp.status_code == 200, resp.text
-        row = resp.json()["sessions"][0]
+        row = _timeline_details(resp)[0]
         assert row["id"] == str(session.id)
         assert row["presence_state"] is None
         assert row["runtime_display"]["state"] is None
@@ -2128,11 +2137,10 @@ def test_sessions_list_keeps_idle_after_pending_turn_materialization(tmp_path):
 
     for client in _client(factory):
         resp = client.get(
-            "/agents/sessions?project=runtime-syncing-unanswered&provider=claude&limit=5",
-            headers={"X-Agents-Token": "dev"},
+            "/timeline/sessions?project=runtime-syncing-unanswered&provider=claude&limit=5",
         )
         assert resp.status_code == 200, resp.text
-        row = resp.json()["sessions"][0]
+        row = _timeline_details(resp)[0]
         assert row["assistant_messages"] == 113
         assert row["user_messages"] == 45
         assert row["presence_state"] is None
@@ -2204,11 +2212,10 @@ def test_sessions_list_does_not_infer_syncing_without_post_prompt_active_phase(t
 
     for client in _client(factory):
         resp = client.get(
-            "/agents/sessions?project=runtime-not-syncing-unanswered&provider=claude&limit=5",
-            headers={"X-Agents-Token": "dev"},
+            "/timeline/sessions?project=runtime-not-syncing-unanswered&provider=claude&limit=5",
         )
         assert resp.status_code == 200, resp.text
-        row = resp.json()["sessions"][0]
+        row = _timeline_details(resp)[0]
         assert row["presence_state"] is None
         assert row["runtime_display"]["state"] is None
         assert row["runtime_display"]["phase_label"] == "Inactive"
@@ -2271,9 +2278,9 @@ def test_active_sessions_online_process_binding_keeps_needs_user_idle(tmp_path):
         assert row["runtime_display"]["phase_label"] == "Idle"
         assert row["runtime_display"]["needs_attention"] is False
 
-        list_resp = client.get("/agents/sessions?days_back=14&limit=5", headers={"X-Agents-Token": "dev"})
+        list_resp = client.get("/timeline/sessions?days_back=14&limit=5")
         assert list_resp.status_code == 200, list_resp.text
-        list_row = next(item for item in list_resp.json()["sessions"] if item["id"] == str(session.id))
+        list_row = next(item for item in _timeline_details(list_resp) if item["id"] == str(session.id))
         assert list_row["timeline_card"]["status"]["label"] == "Idle"
 
 
@@ -2317,9 +2324,9 @@ def test_sessions_list_process_observed_without_phase_renders_running_process(tm
         db.close()
 
     for client in _client(factory):
-        resp = client.get("/agents/sessions?days_back=14&limit=5", headers={"X-Agents-Token": "dev"})
+        resp = client.get("/timeline/sessions?days_back=14&limit=5")
         assert resp.status_code == 200, resp.text
-        row = next(item for item in resp.json()["sessions"] if item["id"] == str(session.id))
+        row = next(item for item in _timeline_details(resp) if item["id"] == str(session.id))
         assert row["timeline_card"]["status"]["label"] == "Running"
         assert row["timeline_card"]["status"]["seen_at_prefix"] == "Verified"
 
@@ -2406,8 +2413,8 @@ def test_sessions_surfaces_ignore_stale_presence_payload_after_newer_blocked_sig
         assert active_row["runtime_phase"] is None
         assert active_row["confidence"] is None
 
-        list_resp = client.get("/agents/sessions?days_back=14&limit=5", headers={"X-Agents-Token": "dev"})
+        list_resp = client.get("/timeline/sessions?days_back=14&limit=5")
         assert list_resp.status_code == 200, list_resp.text
-        list_row = next(item for item in list_resp.json()["sessions"] if item["id"] == str(session.id))
+        list_row = next(item for item in _timeline_details(list_resp) if item["id"] == str(session.id))
         assert list_row["presence_state"] is None
         assert list_row["display_phase"] is None

@@ -74,9 +74,91 @@ def _workspace(session_id):
     }
 
 
+def _session_response(session_id):
+    """A browser-shaped session detail, which is what the catalog read returns.
+
+    The machine route narrows this before serving, so the stub has to be the
+    real model — a SimpleNamespace would pass a test that the projection could
+    not actually satisfy.
+    """
+    from datetime import datetime
+
+    from zerg.services.session_views import SessionResponse
+
+    return SessionResponse(
+        id=str(session_id),
+        provider="claude",
+        provider_session_id="0ea239d0-e6b9-43d1-bb07-e4c9f03ee67f",
+        project="zerg",
+        cwd="/Users/davidrose/git/zerg",
+        started_at=datetime(2026, 7, 30, 21, 56, 42),
+        ended_at=datetime(2026, 8, 1, 2, 49, 49),
+        user_messages=39,
+        assistant_messages=178,
+        tool_calls=526,
+        timeline_title="Session UX and Reattach Logic",
+        thread_root_session_id=str(session_id),
+        thread_head_session_id=str(session_id),
+        thread_continuation_count=1,
+        capabilities={
+            "live_control_available": False,
+            "host_reattach_available": True,
+            "reply_to_live_session_available": False,
+            "composer_placeholder": "Type a message...",
+        },
+        session_state={
+            "mode": "helm",
+            "disposition": {"state": "open"},
+            "activity": {"state": "unknown"},
+            "control": {
+                "ownership": "owned",
+                "connection": "unknown",
+                "actions": {
+                    "start_turn": {"state": "unavailable", "reason": "not_console"},
+                    "send_input": {"state": "unavailable", "reason": "control_unknown"},
+                    "interrupt": {"state": "unavailable", "reason": "control_unknown"},
+                    "terminate": {"state": "unavailable", "reason": "control_unknown"},
+                    "reattach": {"state": "available", "reason": None},
+                    "resume": {"state": "available", "reason": None},
+                },
+            },
+            "transcript": {"convergence": "current", "searchable": True},
+            "host": {"state": "online"},
+            "presentation": {},
+        },
+        runtime_display={
+            "truth_tier": "none",
+            "signal_tier": "none",
+            "state": None,
+            "tone": "closed",
+            "headline": "Ended",
+            "detail": None,
+            "phase_label": "Ended",
+            "compact_tool_label": None,
+            "is_live": False,
+            "is_executing": False,
+            "needs_attention": False,
+            "is_idle": False,
+            "is_stalled": False,
+            "is_managed_local_truth": True,
+            "has_signal": True,
+            "control_path": "managed",
+            "activity_recency": "none",
+            "lifecycle": "open",
+            "host_state": "online",
+            "terminal_reason": None,
+        },
+        timeline_card={
+            "ownership": {"label": "Managed", "tone": "neutral"},
+            "status": {"label": "Ended", "tone": "closed", "seen_at_prefix": "Updated"},
+            "border_tone": "closed",
+        },
+    )
+
+
 def test_machine_session_detail_uses_token_owner_and_marks_canonical_serve(monkeypatch):
     session_id = uuid4()
-    projected = SimpleNamespace(id=str(session_id))
+    projected = _session_response(session_id)
     call = {}
     monkeypatch.setattr(agents_sessions.database_module, "live_catalog_enabled", lambda: True)
 
@@ -96,11 +178,19 @@ def test_machine_session_detail_uses_token_owner_and_marks_canonical_serve(monke
         owner_id=None,
     )
 
-    assert result is projected
+    assert result.id == str(session_id)
     assert call == {"session_id": session_id, "owner_id": 42}
     assert response.headers["X-Catalog-Commit-Seq"] == "31"
     assert response.headers["X-Provider-Session-ID"] == "provider-thread"
     assert response.headers["X-Session-State-Serve"] == "canonical_session_detail"
+    # The machine surface serves an archival projection: identity, provenance
+    # and size, none of the browser's control or presentation state.
+    served = result.model_dump()
+    assert served["provider_session_id"] == "0ea239d0-e6b9-43d1-bb07-e4c9f03ee67f"
+    assert served["title"] == "Session UX and Reattach Logic"
+    assert served["searchable"] is True
+    assert not {"capabilities", "session_state", "runtime_display", "timeline_card", "control"} & set(served)
+    assert "composer_placeholder" not in repr(served)
 
 
 @pytest.mark.parametrize(

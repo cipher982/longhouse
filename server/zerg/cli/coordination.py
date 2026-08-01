@@ -95,6 +95,12 @@ def _print_tail_event(event: dict) -> None:
     typer.secho(header, fg=typer.colors.CYAN, bold=True)
     if content:
         typer.echo(content)
+    if event.get("_content_truncated"):
+        full_chars = event.get("_content_full_chars")
+        typer.secho(
+            f"[truncated — {full_chars} chars total; re-run with a larger --max-content-chars]",
+            fg=typer.colors.YELLOW,
+        )
 
 
 def _resolve_session_context(raw: str | None, *, label: str, guidance: str) -> str:
@@ -384,6 +390,13 @@ def tail(
         help="Comma-separated roles to include: user, assistant, system, tool. Tool output "
         "dominates most transcripts, so --roles user,assistant reads decisions.",
     ),
+    max_content_chars: int = typer.Option(
+        4000,
+        "--max-content-chars",
+        min=200,
+        max=100_000,
+        help="Per-event content budget. Over-budget events are marked truncated, not cut silently.",
+    ),
     output_json: bool = typer.Option(
         False,
         "--json",
@@ -418,7 +431,11 @@ def tail(
             response = client.get(
                 f"{base_url.rstrip('/')}/api/agents/sessions/{resolved_session_id}/tail",
                 headers={"X-Agents-Token": resolved_token},
-                params={"limit": limit, **({"roles": roles} if roles else {})},
+                params={
+                    "limit": limit,
+                    "max_content_chars": max_content_chars,
+                    **({"roles": roles} if roles else {}),
+                },
             )
     except httpx.ConnectError:
         typer.secho(f"Could not connect to {base_url}", fg=typer.colors.RED)

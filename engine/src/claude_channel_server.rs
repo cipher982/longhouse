@@ -312,11 +312,14 @@ fn coordination_tools() -> Vec<Value> {
             "tail",
             "Read the last events from another session transcript. Pass \
              roles=\"user,assistant\" to skip tool-call noise, which dominates most \
-             sessions.",
+             sessions. Events over the content budget are marked with \
+             _content_truncated and _content_full_chars; re-request with a larger \
+             max_content_chars to read the rest.",
             json!({
                 "session_id":{"type":"string"},
                 "limit":{"type":"integer","default":30,"minimum":1,"maximum":100},
                 "roles":{"type":"string","description":"Comma-separated roles to include: user, assistant, system, tool. Defaults to user, assistant, and tool."},
+                "max_content_chars":{"type":"integer","default":4000,"minimum":200,"maximum":100000,"description":"Per-event content budget. Truncated events are annotated rather than silently cut."},
             }),
         ),
         tool(
@@ -457,6 +460,10 @@ async fn call_coordination_tool(id: Value, params: Option<&Value>, state: &Bridg
                 .query(&[(
                     "limit",
                     clamp_i64(arguments.get("limit"), 30, 1, 100).to_string(),
+                )])
+                .query(&[(
+                    "max_content_chars",
+                    clamp_i64(arguments.get("max_content_chars"), 4000, 200, 100_000).to_string(),
                 )]);
             if let Some(roles) = arguments.get("roles").and_then(Value::as_str) {
                 request = request.query(&[("roles", roles)]);

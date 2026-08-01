@@ -146,6 +146,7 @@ async def test_semantic_recall_matches_uses_live_catalog_embedding_rpc(monkeypat
                 "score": 0.9,
                 "event_index_start": 4,
                 "event_index_end": 5,
+                "start_order_time_us": None,
             }
         ]
 

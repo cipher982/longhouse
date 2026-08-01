@@ -7,7 +7,7 @@
     "cursor",
     "opencode"
   ],
-  "file_count": 217,
+  "file_count": 218,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -641,6 +641,13 @@
       "path": "server/tests_lite/test_agents_storage_v2.py",
       "providers": [
         "codex",
+        "cursor"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_agents_storage_v2_session_reads.py",
+      "providers": [
+        "claude",
         "cursor"
       ]
     },

@@ -63,6 +63,10 @@ class EmbeddingChunk:
     content_hash: str
     event_index_start: int | None = None
     event_index_end: int | None = None
+    # See _TranscriptTurn.source_event_id_start: the resolvable half of the
+    # locator, carried so a stored episode can be pointed back at a transcript
+    # position without reproducing the clean-index projection.
+    source_event_id_start: int | None = None
 
 
 @dataclass(frozen=True)
@@ -184,6 +188,11 @@ class _TranscriptTurn:
     combined_text: str
     event_index_start: int
     event_index_end: int
+    # Source event id of the turn's first clean event. The index fields are
+    # clean-message ordinals, which nothing downstream can resolve back to a
+    # transcript position without re-running this module's sanitization; the
+    # source id survives that projection and is what makes a chunk locatable.
+    source_event_id_start: int | None = None
 
 
 def _event_sort_key(event: Mapping[str, object]) -> tuple[datetime, int]:
@@ -237,6 +246,7 @@ def _iter_clean_turns(events: list[Mapping[str, object]]) -> Iterator[_Transcrip
     current_role: str | None = None
     current_texts: list[str] = []
     current_start = 0
+    current_source_id: int | None = None
 
     for clean_event in iter_clean_transcript_events(ordered):
         content = clean_event.content
@@ -245,6 +255,7 @@ def _iter_clean_turns(events: list[Mapping[str, object]]) -> Iterator[_Transcrip
             current_role = role
             current_texts = [content]
             current_start = clean_event.index
+            current_source_id = clean_event.event_id
         elif role == current_role:
             current_texts.append(content)
         else:
@@ -254,10 +265,12 @@ def _iter_clean_turns(events: list[Mapping[str, object]]) -> Iterator[_Transcrip
                     combined_text="\n".join(current_texts),
                     event_index_start=current_start,
                     event_index_end=clean_event.index - 1,
+                    source_event_id_start=current_source_id,
                 )
             current_role = role
             current_texts = [content]
             current_start = clean_event.index
+            current_source_id = clean_event.event_id
 
     if current_role is not None and current_texts:
         yield _TranscriptTurn(
@@ -265,6 +278,7 @@ def _iter_clean_turns(events: list[Mapping[str, object]]) -> Iterator[_Transcrip
             combined_text="\n".join(current_texts),
             event_index_start=current_start,
             event_index_end=current_start + len(current_texts) - 1,
+            source_event_id_start=current_source_id,
         )
 
 
@@ -283,6 +297,7 @@ def iter_turn_chunks(events: list[dict]) -> Iterator[EmbeddingChunk]:
     pending_texts: list[str] = []
     pending_start: int | None = None
     pending_end: int | None = None
+    pending_source_id: int | None = None
 
     def _flush() -> EmbeddingChunk | None:
         nonlocal chunk_idx
@@ -303,6 +318,7 @@ def iter_turn_chunks(events: list[dict]) -> Iterator[EmbeddingChunk]:
             content_hash=content_hash(combined),
             event_index_start=pending_start,
             event_index_end=pending_end,
+            source_event_id_start=pending_source_id,
         )
         chunk_idx += 1
         return chunk
@@ -314,9 +330,11 @@ def iter_turn_chunks(events: list[dict]) -> Iterator[EmbeddingChunk]:
                 yield chunk
             pending_texts = []
             pending_start = None
+            pending_source_id = None
 
         if pending_start is None:
             pending_start = turn.event_index_start
+            pending_source_id = turn.source_event_id_start
         pending_texts.append(turn.combined_text)
         pending_end = turn.event_index_end
 

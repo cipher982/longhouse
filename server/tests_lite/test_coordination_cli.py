@@ -116,7 +116,9 @@ def test_tail_reads_recent_session_events_with_device_token(monkeypatch):
         "method": "GET",
         "url": f"https://longhouse.test/api/agents/sessions/{TARGET_ID}/tail",
         "headers": {"X-Agents-Token": "zdt_device"},
-        "params": {"limit": 1},
+        # The content budget is always sent so the server annotates rather than
+        # silently cutting a long final message.
+        "params": {"limit": 1, "max_content_chars": 4000},
     }
 
 

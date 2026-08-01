@@ -604,6 +604,7 @@ def _embedding_write_params(value: dict) -> dict:
             "episode_ordinal",
             "event_index_start",
             "event_index_end",
+            "start_order_time_us",
             "content_hash",
             "embedding",
         }:
@@ -611,6 +612,9 @@ def _embedding_write_params(value: dict) -> dict:
         encoded = episode["embedding"]
         if type(episode["episode_ordinal"]) is not int or episode["episode_ordinal"] < 0:
             raise ValueError("embedding episode ordinal is invalid")
+        start_order_time_us = episode["start_order_time_us"]
+        if start_order_time_us is not None and (type(start_order_time_us) is not int or start_order_time_us < 0):
+            raise ValueError("embedding episode start order time is invalid")
         if not isinstance(episode["content_hash"], str) or _HASH.fullmatch(episode["content_hash"]) is None:
             raise ValueError("embedding content hash is invalid")
         if not isinstance(encoded, str):
@@ -715,16 +719,29 @@ def _search_params(value: dict) -> dict:
 
 
 def _context_params(value: dict) -> dict:
-    _exact_keys(value, {"owner_id", "session_id", "generation_id", "search_event_id", "context_turns"})
-    if type(value["search_event_id"]) is not int or value["search_event_id"] <= 0:
+    _exact_keys(
+        value,
+        {"owner_id", "session_id", "generation_id", "search_event_id", "start_order_time_us", "context_turns"},
+    )
+    search_event_id = value["search_event_id"]
+    start_order_time_us = value["start_order_time_us"]
+    if search_event_id is not None and (type(search_event_id) is not int or search_event_id <= 0):
         raise ValueError("search_event_id is invalid")
+    if start_order_time_us is not None and (type(start_order_time_us) is not int or start_order_time_us < 0):
+        raise ValueError("start_order_time_us is invalid")
+    # One locator or the other. Accepting neither would ask the store to guess
+    # which event the caller meant; accepting both would let two disagreeing
+    # locators resolve to whichever the store happened to check first.
+    if (search_event_id is None) == (start_order_time_us is None):
+        raise ValueError("exactly one of search_event_id or start_order_time_us is required")
     if type(value["context_turns"]) is not int or not 0 <= value["context_turns"] <= 10:
         raise ValueError("context_turns is invalid")
     return {
         "owner_id": _text(value["owner_id"], "owner_id", 64),
         "session_id": _uuid(value["session_id"], "session_id"),
         "generation_id": _uuid(value["generation_id"], "generation_id"),
-        "search_event_id": value["search_event_id"],
+        "search_event_id": search_event_id,
+        "start_order_time_us": start_order_time_us,
         "context_turns": value["context_turns"],
     }
 

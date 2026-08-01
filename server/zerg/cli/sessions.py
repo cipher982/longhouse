@@ -201,11 +201,14 @@ def get(
         return
 
     typer.secho(str(payload.get("id") or session_id), fg=typer.colors.CYAN, bold=True)
+    # The machine surface serves an archival projection, so there is no derived
+    # runtime status here. Whether the session has ended is the fact this view
+    # was using it for anyway.
     typer.echo(
-        "  provider: {provider}  project: {project}  status: {status}".format(
+        "  provider: {provider}  project: {project}  state: {state}".format(
             provider=payload.get("provider") or "-",
             project=payload.get("project") or "-",
-            status=payload.get("status") or "-",
+            state="ended" if payload.get("ended_at") else "open",
         )
     )
     typer.echo(
@@ -219,9 +222,13 @@ def get(
     if git_repo:
         typer.echo(f"  repo: {git_repo}")
 
-    summary_title = str(payload.get("summary_title") or "").strip()
-    if summary_title:
-        typer.echo(f"  title: {summary_title}")
+    provider_session_id = str(payload.get("provider_session_id") or "").strip()
+    if provider_session_id:
+        typer.echo(f"  provider session: {provider_session_id}")
+
+    title = str(payload.get("title") or "").strip()
+    if title:
+        typer.echo(f"  title: {title}")
 
     first_user_message = str(payload.get("first_user_message") or "").strip()
     if first_user_message:

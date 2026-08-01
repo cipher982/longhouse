@@ -3142,6 +3142,9 @@ export interface paths {
          *     ``roles`` filters before the limit applies. Tool output dominates most
          *     transcripts, so an unfiltered tail of a tool-heavy session can be almost
          *     entirely noise; ``roles=user,assistant`` returns that many real turns.
+         *
+         *     Content over ``max_content_chars`` is cut and annotated rather than dropped
+         *     silently — the last message is usually the point of reading a tail at all.
          */
         get: operations["session_tail_agents_sessions__session_id__tail_get"];
         put?: never;
@@ -3369,7 +3372,7 @@ export interface paths {
         };
         /**
          * Get Session
-         * @description Get a single session by ID.
+         * @description Get a single session by ID, projected for the machine surface.
          */
         get: operations["get_session_agents_sessions__session_id__get"];
         put?: never;
@@ -6233,6 +6236,180 @@ export interface components {
             changed: boolean;
         };
         /**
+         * MachineSessionResponse
+         * @description A session as an agent reading the archive needs it.
+         *
+         *     ``SessionResponse`` is the browser's shape. Roughly four fifths of its bytes
+         *     are control and presentation state — composer placeholder copy, control
+         *     leases, per-action availability reasons, timeline card tones — which describe
+         *     what a UI may offer for a session that is usually already over. Ten of those
+         *     on a search response exceeded the MCP token cap before a single transcript
+         *     line came back, so the machine surface projects only what answers a question
+         *     an agent actually asks: which session is this, is it mine, when was it, how
+         *     big is it, and why did it match.
+         */
+        MachineSessionResponse: {
+            /**
+             * Id
+             * @description Session UUID
+             */
+            id: string;
+            /**
+             * Provider
+             * @description AI provider
+             */
+            provider: string;
+            /**
+             * Provider Session Id
+             * @description Provider-native session id when bound; null when the Longhouse id is the native id.
+             */
+            provider_session_id?: string | null;
+            /**
+             * Origin Kind
+             * @description Canonical session origin
+             */
+            origin_kind?: string | null;
+            /**
+             * Project
+             * @description Project name
+             */
+            project?: string | null;
+            /**
+             * Device Id
+             * @description Device ID
+             */
+            device_id?: string | null;
+            /**
+             * Environment
+             * @description Environment
+             */
+            environment?: string | null;
+            /**
+             * Cwd
+             * @description Working directory
+             */
+            cwd?: string | null;
+            /**
+             * Git Repo
+             * @description Git remote URL
+             */
+            git_repo?: string | null;
+            /**
+             * Git Branch
+             * @description Git branch
+             */
+            git_branch?: string | null;
+            /**
+             * Started At
+             * Format: date-time
+             * @description Session start time
+             */
+            started_at: string;
+            /**
+             * Ended At
+             * @description Session end time
+             */
+            ended_at?: string | null;
+            /**
+             * Last Activity At
+             * @description Most recent transcript activity
+             */
+            last_activity_at?: string | null;
+            /**
+             * User Messages
+             * @description User message count
+             */
+            user_messages: number;
+            /**
+             * Assistant Messages
+             * @description Assistant message count
+             */
+            assistant_messages: number;
+            /**
+             * Tool Calls
+             * @description Tool call count
+             */
+            tool_calls: number;
+            /**
+             * Title
+             * @description Resolved headline for this session
+             */
+            title?: string | null;
+            /**
+             * Summary
+             * @description Session summary when one exists
+             */
+            summary?: string | null;
+            /**
+             * First User Message
+             * @description First user message (truncated)
+             */
+            first_user_message?: string | null;
+            /**
+             * Is Sidechain
+             * @description True when session is a sub-agent, not human-initiated
+             * @default false
+             */
+            is_sidechain: boolean;
+            /**
+             * Searchable
+             * @description True when the archived transcript is indexed for search
+             * @default false
+             */
+            searchable: boolean;
+            /**
+             * Thread Root Session Id
+             * @description Logical thread root session UUID
+             */
+            thread_root_session_id?: string | null;
+            /**
+             * Thread Head Session Id
+             * @description Current writable head session UUID
+             */
+            thread_head_session_id?: string | null;
+            /**
+             * Continued From Session Id
+             * @description Parent continuation session UUID
+             */
+            continued_from_session_id?: string | null;
+            /**
+             * Match Event Id
+             * @description Matching event id when this came from a search
+             */
+            match_event_id?: number | null;
+            /**
+             * Match Snippet
+             * @description Snippet of matching content
+             */
+            match_snippet?: string | null;
+            /**
+             * Match Role
+             * @description Role of the matching event
+             */
+            match_role?: string | null;
+            /**
+             * Match Score
+             * @description Match score when the result came from vector search
+             */
+            match_score?: number | null;
+        };
+        /**
+         * MachineSessionsListResponse
+         * @description Session list for the machine surface.
+         */
+        MachineSessionsListResponse: {
+            /** Sessions */
+            sessions: components["schemas"]["MachineSessionResponse"][];
+            /** Total */
+            total: number;
+            /**
+             * Has Real Sessions
+             * @description True if any non-demo sessions exist.
+             * @default true
+             */
+            has_real_sessions: boolean;
+        };
+        /**
          * ManagedLocalLaunchOutcomeRequest
          * @description Provider-observed result for a registered Helm launch transaction.
          */
@@ -7557,7 +7734,7 @@ export interface components {
             record_ordinal?: number | null;
             /**
              * Evidence Status
-             * @default complete
+             * @default unavailable
              */
             evidence_status: string;
             /** Evidence Reason */
@@ -10537,22 +10714,6 @@ export interface components {
              * @description Hash of the complete durable viewport signature
              */
             fingerprint: string;
-        };
-        /**
-         * SessionsListResponse
-         * @description Response for session list.
-         */
-        SessionsListResponse: {
-            /** Sessions */
-            sessions: components["schemas"]["SessionResponse"][];
-            /** Total */
-            total: number;
-            /**
-             * Has Real Sessions
-             * @description True if any non-demo sessions exist (device_id != 'demo-mac'). False means only demo-seeded data is present.
-             * @default true
-             */
-            has_real_sessions: boolean;
         };
         /**
          * SessionsSummaryResponse
@@ -16903,7 +17064,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["SemanticSearchResponse"];
+                    "application/json": components["schemas"]["MachineSessionsListResponse"];
                 };
             };
             /** @description Validation Error */
@@ -17081,7 +17242,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["SessionsListResponse"];
+                    "application/json": components["schemas"]["MachineSessionsListResponse"];
                 };
             };
             /** @description Validation Error */
@@ -17404,6 +17565,8 @@ export interface operations {
                 limit?: number;
                 /** @description Comma-separated roles to include: user, assistant, system, tool. Defaults to user, assistant, and tool. */
                 roles?: string | null;
+                /** @description Per-event content budget. Longer content is cut and annotated with _content_truncated and _content_full_chars so the caller can re-request it. */
+                max_content_chars?: number;
             };
             header?: never;
             path: {
@@ -17840,7 +18003,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["SessionResponse"];
+                    "application/json": components["schemas"]["MachineSessionResponse"];
                 };
             };
             /** @description Validation Error */

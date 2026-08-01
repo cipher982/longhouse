@@ -341,6 +341,7 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
         session_id: str,
         limit: int = 30,
         roles: str | None = None,
+        max_content_chars: int = 4000,
     ) -> str:
         """Read the last N events from another session's transcript.
 
@@ -356,11 +357,17 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
             roles: Comma-separated roles to include: user, assistant, system, tool.
                 Tool output dominates most transcripts, so pass
                 "user,assistant" to read decisions instead of command spam.
+            max_content_chars: Per-event content budget (default 4000). Events over
+                budget are cut and marked with _content_truncated and
+                _content_full_chars — re-request with a larger budget to get the rest.
         """
         if not _UUID_RE.match(session_id):
             return json.dumps({"error": "Invalid session_id format — expected UUID"})
 
-        params: dict = {"limit": max(1, min(limit, 100))}
+        params: dict = {
+            "limit": max(1, min(limit, 100)),
+            "max_content_chars": max(200, min(max_content_chars, 100_000)),
+        }
         if roles:
             params["roles"] = roles
         try:

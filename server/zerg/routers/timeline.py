@@ -415,6 +415,11 @@ async def recall_timeline_sessions(
                     evidence=snippet or None,
                     total_events=0,
                     context=[],
+                    # This path returns the match snippet and never hydrates
+                    # neighbour turns, so it is partial by construction rather
+                    # than by anything going wrong.
+                    evidence_status="partial",
+                    evidence_reason="snippet_only",
                 )
             )
         return RecallResponse(matches=matches, total=len(matches))
@@ -902,12 +907,14 @@ def get_timeline_session(
     db: Session | None = Depends(_sessions_router.session_detail_db_dependency),
     current_user=Depends(get_current_browser_user),
 ):
-    return _sessions_router.get_session(
+    # Deliberately not the machine route: that one narrows the payload to the
+    # archival projection an agent needs, and the browser needs the control and
+    # presentation state this drops.
+    return _sessions_router.session_detail_payload(
         session_id=session_id,
         response=response,
         db=db,
         _auth=None,
-        _single=None,
         owner_id=_browser_owner_id(current_user),
     )
 

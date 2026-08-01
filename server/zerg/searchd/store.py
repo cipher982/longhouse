@@ -19,7 +19,7 @@ from uuid import uuid4
 import numpy as np
 
 SCHEMA_VERSION = 1
-SCHEMA_GENERATION = "searchd-v2-published-searchable-corpus-with-fenced-embeddings"
+SCHEMA_GENERATION = "searchd-v2-published-searchable-corpus-with-locatable-episodes"
 SEARCHABLE_RETENTION_DAYS = 91
 SEARCHABLE_FAST_WINDOW_DAYS = 90
 SEARCHABLE_FAST_WINDOW_MARGIN_SECONDS = 300
@@ -153,6 +153,26 @@ _CONTEXT_TARGET_SQL = """
      AND m.desired_revision = s.indexed_through
      AND m.object_id = e.source_object_id
     WHERE e.id = ? AND e.session_id = ? AND e.generation_id = ? AND s.owner_id = ?
+"""
+
+# Same target row, located by transcript position instead of event id. The
+# semantic lane knows where an episode starts in the published ordering but not
+# which searchd row that is, so it anchors on the first event at or after that
+# position. Ordering matches _CONTEXT_ROWS_SQL so the neighbour walk stays
+# consistent with a lexical hit's.
+_CONTEXT_TARGET_BY_POSITION_SQL = """
+    SELECT e.order_time_us, e.event_key, s.event_count
+    FROM events e
+    JOIN session_index s ON s.session_id = e.session_id AND s.generation_id = e.generation_id
+    JOIN projection_membership m
+      ON m.session_id = e.session_id
+     AND m.generation_id = e.generation_id
+     AND m.desired_revision = s.indexed_through
+     AND m.object_id = e.source_object_id
+    WHERE e.session_id = ? AND e.generation_id = ? AND s.owner_id = ?
+      AND e.order_time_us >= ?
+    ORDER BY e.order_time_us ASC, e.event_key ASC
+    LIMIT 1
 """
 
 _CONTEXT_ROWS_SQL = """
@@ -438,6 +458,12 @@ def _initialize_schema(connection: sqlite3.Connection) -> None:
             episode_ordinal INTEGER NOT NULL,
             event_index_start INTEGER,
             event_index_end INTEGER,
+            -- Position of the episode's first event in the published generation.
+            -- The index columns above are clean-message ordinals produced by the
+            -- embedding sanitizer and cannot be resolved back to a transcript
+            -- position here; without this an episode match can never carry
+            -- evidence.
+            start_order_time_us INTEGER,
             model TEXT NOT NULL,
             dims INTEGER NOT NULL,
             content_hash TEXT NOT NULL,
@@ -659,12 +685,13 @@ class SearchStore:
                     """
                     INSERT INTO episode_embeddings(
                         session_id, owner_id, generation_id, revision, episode_ordinal, event_index_start, event_index_end,
-                        model, dims, content_hash, embedding, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        start_order_time_us, model, dims, content_hash, embedding, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(session_id, episode_ordinal, model) DO UPDATE SET
                         owner_id=excluded.owner_id, generation_id=excluded.generation_id, revision=excluded.revision,
                         event_index_start=excluded.event_index_start,
                         event_index_end=excluded.event_index_end,
+                        start_order_time_us=excluded.start_order_time_us,
                         dims=excluded.dims,
                         content_hash=excluded.content_hash,
                         embedding=excluded.embedding,
@@ -678,6 +705,7 @@ class SearchStore:
                         episode["episode_ordinal"],
                         episode["event_index_start"],
                         episode["event_index_end"],
+                        episode.get("start_order_time_us"),
                         model,
                         dims,
                         episode["content_hash"],
@@ -745,7 +773,8 @@ class SearchStore:
         no enumeration, no cap, scales with an index instead of a page limit.
         """
         sql = (
-            "SELECT e.session_id, e.episode_ordinal, e.event_index_start, e.event_index_end, e.embedding "
+            "SELECT e.session_id, e.episode_ordinal, e.event_index_start, e.event_index_end, "
+            "e.generation_id, e.start_order_time_us, e.embedding "
             "FROM episode_embeddings e "
             "JOIN session_index si ON si.session_id = e.session_id "
             "WHERE e.model = ? AND e.dims = ? AND e.owner_id = ? AND si.owner_id = ?"
@@ -779,6 +808,12 @@ class SearchStore:
                     "score": float(scores[index]),
                     "event_index_start": rows[index]["event_index_start"],
                     "event_index_end": rows[index]["event_index_end"],
+                    # An episode is only locatable within the generation it was
+                    # embedded from. Returning the generation lets the caller
+                    # refuse to hydrate against a superseded one rather than
+                    # showing neighbours from a transcript that has since moved.
+                    "generation_id": str(rows[index]["generation_id"]),
+                    "start_order_time_us": rows[index]["start_order_time_us"],
                 }
                 for index in indices
             ]
@@ -1102,15 +1137,34 @@ class SearchStore:
         owner_id: str,
         session_id: str,
         generation_id: str,
-        search_event_id: int,
+        search_event_id: int | None = None,
+        start_order_time_us: int | None = None,
         context_turns: int,
     ) -> dict[str, object]:
-        """Return bounded clean neighbor evidence from the hit's published generation."""
+        """Return bounded clean neighbor evidence from the hit's published generation.
 
-        target = self.connection.execute(
-            _CONTEXT_TARGET_SQL,
-            (search_event_id, session_id, generation_id, owner_id),
-        ).fetchone()
+        A hit is located either by its searchd event id (lexical) or by its
+        position in the published ordering (semantic episodes, which know where
+        they start but not which row that is).
+        """
+
+        if search_event_id is not None:
+            target = self.connection.execute(
+                _CONTEXT_TARGET_SQL,
+                (search_event_id, session_id, generation_id, owner_id),
+            ).fetchone()
+        elif start_order_time_us is not None:
+            target = self.connection.execute(
+                _CONTEXT_TARGET_BY_POSITION_SQL,
+                (session_id, generation_id, owner_id, start_order_time_us),
+            ).fetchone()
+        else:
+            return {
+                "evidence_status": "unavailable",
+                "evidence_reason": "hit_missing_locator",
+                "context": [],
+                "total_events": 0,
+            }
         if target is None:
             return {
                 "evidence_status": "unavailable",

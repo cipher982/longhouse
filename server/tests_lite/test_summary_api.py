@@ -20,6 +20,7 @@ from zerg.database import get_db
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.dependencies.agents_auth import verify_agents_token
+from zerg.dependencies.browser_auth import get_current_browser_user
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.services.agents import AgentsStore
@@ -88,8 +89,12 @@ def _get_client(session_factory):
     def override_verify_agents_token():
         return SimpleNamespace(device_id="summary-api", id="token-1", owner_id=1)
 
+    def override_browser_user():
+        return SimpleNamespace(id=1)
+
     api_app.dependency_overrides[get_db] = override_get_db
     api_app.dependency_overrides[verify_agents_token] = override_verify_agents_token
+    api_app.dependency_overrides[get_current_browser_user] = override_browser_user
     client = TestClient(api_app)
     yield client
     api_app.dependency_overrides.clear()
@@ -101,7 +106,7 @@ def _get_client(session_factory):
 
 
 def test_list_sessions_includes_summary(tmp_path):
-    """GET /agents/sessions returns summary and summary_title fields."""
+    """The browser session list returns summary and summary_title fields."""
     factory = _make_db(tmp_path)
     db = factory()
     try:
@@ -115,11 +120,11 @@ def test_list_sessions_includes_summary(tmp_path):
         db.close()
 
     for client in _get_client(factory):
-        resp = client.get("/agents/sessions?days_back=1")
+        resp = client.get("/timeline/sessions?days_back=1")
         assert resp.status_code == 200
         data = resp.json()
         assert len(data["sessions"]) >= 1
-        session = data["sessions"][0]
+        session = data["sessions"][0]["detail"]
         assert session["summary"] == "Implemented JWT auth and rate limiting."
         assert session["summary_title"] == "Auth and Rate Limiting"
         assert session["environment"] == "work-macbook"
@@ -190,7 +195,7 @@ def test_list_sessions_rejects_balanced_sort_without_query(tmp_path):
 
 
 def test_get_session_includes_summary(tmp_path):
-    """GET /agents/sessions/{id} returns summary and summary_title fields."""
+    """The browser session detail returns summary and summary_title fields."""
     factory = _make_db(tmp_path)
     db = factory()
     try:
@@ -205,7 +210,7 @@ def test_get_session_includes_summary(tmp_path):
         db.close()
 
     for client in _get_client(factory):
-        resp = client.get(f"/agents/sessions/{session_id}")
+        resp = client.get(f"/timeline/sessions/{session_id}")
         assert resp.status_code == 200
         data = resp.json()
         assert data["summary"] == "Fixed critical database bug."
@@ -230,7 +235,7 @@ def test_summary_null_when_missing(tmp_path):
         db.close()
 
     for client in _get_client(factory):
-        resp = client.get(f"/agents/sessions/{session_id}")
+        resp = client.get(f"/timeline/sessions/{session_id}")
         assert resp.status_code == 200
         data = resp.json()
         assert data["summary"] is None

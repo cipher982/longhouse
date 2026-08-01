@@ -95,6 +95,8 @@ from zerg.services.session_views import ActiveSessionResponse
 from zerg.services.session_views import ActiveSessionsResponse
 from zerg.services.session_views import EventsListResponse
 from zerg.services.session_views import FiltersResponse
+from zerg.services.session_views import MachineSessionResponse
+from zerg.services.session_views import MachineSessionsListResponse
 from zerg.services.session_views import SessionActionRequest
 from zerg.services.session_views import SessionActionResponse
 from zerg.services.session_views import SessionLoopModeRequest
@@ -133,6 +135,7 @@ from zerg.services.session_views import is_session_closed
 from zerg.services.session_views import latest_launch_attempts
 from zerg.services.session_views import latest_live_launch_readiness
 from zerg.services.session_views import normalize_utc_datetime
+from zerg.services.session_views import project_machine_session
 from zerg.services.session_workspace import build_session_workspace
 from zerg.services.session_workspace import get_legacy_workspace_session_factory
 from zerg.services.startup_context import STARTUP_CONTEXT_DEFAULT_DAYS_BACK
@@ -535,7 +538,23 @@ def _resolve_directed_input_actor(
     return session
 
 
-@router.get("/sessions", response_model=SessionsListResponse)
+def _machine_sessions_list(listing: SessionsListResponse) -> MachineSessionsListResponse:
+    """Project a browser session listing onto the machine surface.
+
+    The listing is still built browser-shaped upstream; narrowing it here is
+    what keeps control leases and composer copy out of an agent's context
+    window. Building it slim in the first place would also save the work, but
+    that reaches into the catalog projection and is a separate change.
+    """
+
+    return MachineSessionsListResponse(
+        sessions=[project_machine_session(session) for session in listing.sessions],
+        total=listing.total,
+        has_real_sessions=listing.has_real_sessions,
+    )
+
+
+@router.get("/sessions", response_model=MachineSessionsListResponse)
 async def list_sessions(
     project: Optional[str] = Query(None, description="Filter by project"),
     provider: Optional[str] = Query(None, description="Filter by provider"),
@@ -566,7 +585,7 @@ async def list_sessions(
     db: Session | None = Depends(session_detail_db_dependency),
     _auth: object = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
-) -> SessionsListResponse:
+) -> MachineSessionsListResponse:
     """List sessions with optional filters."""
     # A blank query is an absent query. Searching FTS for "" matches nothing
     # and reads as "empty corpus" rather than "bad call"; the listing path is
@@ -630,21 +649,22 @@ async def list_sessions(
                     detail={"code": "search_query_required", "message": "Semantic and hybrid modes require a query."},
                 )
             owner_id = getattr(_auth, "owner_id", None)
-            return await asyncio.to_thread(
+            listing = await asyncio.to_thread(
                 list_live_catalog_sessions,
                 params=params,
                 owner_id=owner_id if isinstance(owner_id, int) else None,
             )
+            return _machine_sessions_list(listing)
         assert db is not None
         owner_id = _owner_id_from_agents_auth(db, _auth)
         result = await list_agent_sessions(db=db, auth=_auth, params=params, owner_id=owner_id)
         if result.headers:
             return JSONResponse(
-                content=result.response.model_dump(mode="json"),
+                content=_machine_sessions_list(result.response).model_dump(mode="json"),
                 headers=result.headers,
             )
 
-        return result.response
+        return _machine_sessions_list(result.response)
     except SessionListingError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
     except CatalogReadError as exc:
@@ -973,8 +993,45 @@ def get_session_graph(
 
 _TAIL_ALL_ROLES = frozenset({"user", "assistant", "tool"})
 _TAIL_VALID_ROLES = _TAIL_ALL_ROLES | {"system"}
-# A tool-heavy transcript can be ~96% tool events, so a narrowed tail scans wider.
-_TAIL_ROLE_SCAN_FACTOR = 25
+# A tool-heavy transcript can be ~96% tool events, so a narrowed read scans wider.
+# The storage-v2 workspace builder has no filter predicate, so any endpoint that
+# filters in Python has to over-collect or it returns a page of nothing.
+_FILTERED_SCAN_FACTOR = 25
+_FILTERED_SCAN_CEILING = 1000
+_TAIL_DEFAULT_CONTENT_CHARS = 4000
+_TAIL_MAX_CONTENT_CHARS = 100_000
+
+
+def _parse_tail_content_budget(raw: object) -> int:
+    """Resolve the per-event content budget.
+
+    Accepts any non-int as "use the default" for the same reason
+    ``_parse_tail_roles`` does: tests_lite calls the endpoint directly, so the
+    declared ``Query`` default arrives unresolved.
+    """
+
+    if not isinstance(raw, int) or isinstance(raw, bool):
+        return _TAIL_DEFAULT_CONTENT_CHARS
+    return max(200, min(raw, _TAIL_MAX_CONTENT_CHARS))
+
+
+def _apply_tail_content_budget(events: list[dict], max_chars: int) -> list[dict]:
+    """Cap per-event content and record that it happened.
+
+    A bare slice silently loses the end of the most valuable event — the final
+    message — mid-word, and the caller cannot tell it happened or ask for the
+    rest. Annotate instead, using the same ``_<field>_truncated`` /
+    ``_<field>_full_chars`` convention the MCP layer already applies to
+    ``get_session_detail`` events.
+    """
+
+    for event in events:
+        content = event.get("content")
+        if isinstance(content, str) and len(content) > max_chars:
+            event["content"] = content[:max_chars]
+            event["_content_truncated"] = True
+            event["_content_full_chars"] = len(content)
+    return events
 
 
 def _parse_tail_roles(raw: object) -> frozenset[str]:
@@ -1059,6 +1116,15 @@ async def session_tail(
         None,
         description="Comma-separated roles to include: user, assistant, system, tool. Defaults to user, assistant, and tool.",
     ),
+    max_content_chars: int = Query(
+        _TAIL_DEFAULT_CONTENT_CHARS,
+        ge=200,
+        le=_TAIL_MAX_CONTENT_CHARS,
+        description=(
+            "Per-event content budget. Longer content is cut and annotated with "
+            "_content_truncated and _content_full_chars so the caller can re-request it."
+        ),
+    ),
     db: Session | None = Depends(machine_session_read_db_dependency),
     _auth: object = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
@@ -1072,8 +1138,12 @@ async def session_tail(
     ``roles`` filters before the limit applies. Tool output dominates most
     transcripts, so an unfiltered tail of a tool-heavy session can be almost
     entirely noise; ``roles=user,assistant`` returns that many real turns.
+
+    Content over ``max_content_chars`` is cut and annotated rather than dropped
+    silently — the last message is usually the point of reading a tail at all.
     """
     requested_roles = _parse_tail_roles(roles)
+    content_budget = _parse_tail_content_budget(max_content_chars)
     if database_module.live_catalog_enabled():
         owner_id = getattr(_auth, "owner_id", None)
         if owner_id is None:
@@ -1084,7 +1154,7 @@ async def session_tail(
         # The workspace builder has no role predicate, so a narrowed request scans a
         # bounded larger window and trims after filtering. Without this, roles= would
         # return a handful of turns out of `limit` mostly-tool events.
-        scan_limit = limit if requested_roles == _TAIL_ALL_ROLES else min(limit * _TAIL_ROLE_SCAN_FACTOR, 1000)
+        scan_limit = limit if requested_roles == _TAIL_ALL_ROLES else min(limit * _FILTERED_SCAN_FACTOR, _FILTERED_SCAN_CEILING)
         workspace = await build_storage_v2_workspace(
             session_id=session_id,
             owner_id=int(owner_id),
@@ -1115,15 +1185,16 @@ async def session_tail(
             {
                 "id": event["id"],
                 "role": event["role"],
-                "content": str(event.get("content_text") or event.get("tool_output_text") or "")[:4000],
+                "content": str(event.get("content_text") or event.get("tool_output_text") or ""),
                 "tool_name": event.get("tool_name"),
                 "timestamp": event["timestamp"],
             }
             for event in scanned
             if event.get("role") in requested_roles and (event.get("content_text") is not None or event.get("tool_output_text") is not None)
         ]
-        # Tail-biased: keep the newest events when the scan over-collected.
-        events = events[-limit:]
+        # Tail-biased: keep the newest events when the scan over-collected. Budget
+        # after trimming so dropped events cannot consume it.
+        events = _apply_tail_content_budget(events[-limit:], content_budget)
         return _tail_response(
             session_id,
             events,
@@ -1147,6 +1218,7 @@ async def session_tail(
 
     # The legacy path filters by role in SQL over the whole session, so there is
     # no scan window to report and no ambiguity about why results ran out.
+    events = _apply_tail_content_budget(events, content_budget)
     return _tail_response(session_id, events, requested_roles, scan_window=None, window_exhausted=False)
 
 
@@ -1674,7 +1746,7 @@ async def set_session_timeline_visibility(
     return SessionTimelineVisibilityResponse(session_id=str(session_id), hidden=bool(session.user_hidden_from_timeline))
 
 
-@router.get("/sessions/{session_id}", response_model=SessionResponse)
+@router.get("/sessions/{session_id}", response_model=MachineSessionResponse)
 def get_session(
     session_id: UUID,
     response: Response,
@@ -1682,8 +1754,33 @@ def get_session(
     _auth: object = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
     owner_id: int | None = Depends(_no_viewer_owner_id),
+) -> MachineSessionResponse:
+    """Get a single session by ID, projected for the machine surface."""
+    return project_machine_session(
+        session_detail_payload(
+            session_id=session_id,
+            response=response,
+            db=db,
+            _auth=_auth,
+            owner_id=owner_id,
+        )
+    )
+
+
+def session_detail_payload(
+    *,
+    session_id: UUID,
+    response: Response,
+    db: Session | None,
+    _auth: object,
+    owner_id: int | None,
 ) -> SessionResponse:
-    """Get a single session by ID."""
+    """Build the full session detail.
+
+    The browser's timeline detail route delegates here, so this stays the
+    browser shape; only the machine route narrows it. Collapsing the two would
+    hand web and iOS an archival projection with no control state.
+    """
     if database_module.live_catalog_enabled():
         effective_owner_id = owner_id
         if effective_owner_id is None:
@@ -1900,18 +1997,25 @@ async def get_session_events(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Storage-v2 reads require an owner-scoped token",
             )
+        role_filter = {value.strip() for value in roles.split(",") if value.strip()} if roles else None
+        # The workspace builder has no filter predicate, so filtering a page-sized
+        # window drops matches that were never fetched. `max_events=3,
+        # roles=assistant` on a transcript that opens with user and system events
+        # returned zero events beside a total of 1286. Over-collect, filter, then
+        # trim — same shape as the tail endpoint.
+        filtered = role_filter is not None or tool_name is not None or query is not None
+        scan_limit = min(limit * _FILTERED_SCAN_FACTOR, _FILTERED_SCAN_CEILING) if filtered else limit
         workspace = await build_storage_v2_workspace(
             session_id=session_id,
             owner_id=int(owner_id),
             branch_mode=branch_mode,
-            limit=limit,
+            limit=scan_limit,
             cursor=cursor,
             anchor=anchor,
         )
         if workspace is None:
             raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
         projection = workspace["projection"]
-        role_filter = {value.strip() for value in roles.split(",") if value.strip()} if roles else None
         events = [item["event"] for item in projection["items"] if item.get("kind") == "event" and item.get("event")]
         if role_filter is not None:
             events = [event for event in events if event.get("role") in role_filter]
@@ -1920,14 +2024,25 @@ async def get_session_events(
         if query is not None:
             needle = query.casefold()
             events = [event for event in events if needle in str(event.get("content_text") or "").casefold()]
+
+        next_cursor = projection.get("next_cursor")
+        has_more = projection.get("has_more") is True
+        if filtered and len(events) > limit:
+            # Keep the end of the window when the caller anchored at the tail, the
+            # start otherwise. Resume from the last event actually returned so the
+            # next page cannot skip matches that this trim discarded.
+            events = events[-limit:] if anchor == "tail" else events[:limit]
+            has_more = True
+            if anchor != "tail":
+                next_cursor = events[-1].get("cursor") or next_cursor
         return EventsListResponse(
             events=events,
             total=int(projection["total"]),
             branch_mode=branch_mode,
             abandoned_events=int(projection["abandoned_events"]),
             generation_id=projection.get("generation_id"),
-            next_cursor=projection.get("next_cursor"),
-            has_more=projection.get("has_more") is True,
+            next_cursor=next_cursor,
+            has_more=has_more,
         )
 
     assert db is not None

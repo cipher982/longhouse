@@ -266,6 +266,10 @@ def load_session_tail(
 
     ``roles`` narrows which event roles count toward ``limit``, so a caller can
     ask for real turns instead of tool output.
+
+    Content is returned whole. The per-event budget belongs to the caller that
+    knows what the requester asked for, so the router owns the single
+    truncation site.
     """
     session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
     if session is None:
@@ -288,7 +292,7 @@ def load_session_tail(
         {
             "id": event.id,
             "role": event.role,
-            "content": (event.content_text or "")[:4000],
+            "content": event.content_text or "",
             "tool_name": event.tool_name,
             "timestamp": event.timestamp.isoformat() if event.timestamp else None,
         }

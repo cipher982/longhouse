@@ -15,6 +15,7 @@ from zerg.database import get_db
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.dependencies.agents_auth import verify_agents_token
+from zerg.dependencies.browser_auth import get_current_browser_user
 from zerg.models.agents import AgentSession
 from zerg.services.session_hot_cards import upsert_timeline_card_from_session
 
@@ -61,8 +62,12 @@ def _client(factory):
     def override_verify_agents_token():
         return SimpleNamespace(device_id="session-loop-mode", id="token-1", owner_id=1)
 
+    def override_browser_user():
+        return SimpleNamespace(id=1)
+
     api_app.dependency_overrides[get_db] = override
     api_app.dependency_overrides[verify_agents_token] = override_verify_agents_token
+    api_app.dependency_overrides[get_current_browser_user] = override_browser_user
     return TestClient(api_app)
 
 
@@ -80,7 +85,9 @@ def test_get_session_exposes_loop_mode(tmp_path):
     client = _client(factory)
 
     try:
-        response = client.get(f"/agents/sessions/{session_id}", headers={"X-Agents-Token": "dev"})
+        # loop_mode is a product preference the browser renders, not part of
+        # the archival projection the machine surface serves.
+        response = client.get(f"/timeline/sessions/{session_id}")
         assert response.status_code == 200
         assert response.json()["loop_mode"] == "assist"
     finally:
@@ -184,7 +191,9 @@ def test_legacy_manual_loop_mode_reads_as_assist(tmp_path):
     client = _client(factory)
 
     try:
-        response = client.get(f"/agents/sessions/{session_id}", headers={"X-Agents-Token": "dev"})
+        # loop_mode is a product preference the browser renders, not part of
+        # the archival projection the machine surface serves.
+        response = client.get(f"/timeline/sessions/{session_id}")
         assert response.status_code == 200
         assert response.json()["loop_mode"] == "assist"
     finally:

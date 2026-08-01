@@ -1064,6 +1064,100 @@ class SessionsSummaryResponse(BaseModel):
     total: int
 
 
+class MachineSessionResponse(UTCBaseModel):
+    """A session as an agent reading the archive needs it.
+
+    ``SessionResponse`` is the browser's shape. Roughly four fifths of its bytes
+    are control and presentation state — composer placeholder copy, control
+    leases, per-action availability reasons, timeline card tones — which describe
+    what a UI may offer for a session that is usually already over. Ten of those
+    on a search response exceeded the MCP token cap before a single transcript
+    line came back, so the machine surface projects only what answers a question
+    an agent actually asks: which session is this, is it mine, when was it, how
+    big is it, and why did it match.
+    """
+
+    id: str = Field(..., description="Session UUID")
+    provider: str = Field(..., description="AI provider")
+    provider_session_id: Optional[str] = Field(
+        None,
+        description="Provider-native session id when bound; null when the Longhouse id is the native id.",
+    )
+    origin_kind: Optional[str] = Field(None, description="Canonical session origin")
+    project: Optional[str] = Field(None, description="Project name")
+    device_id: Optional[str] = Field(None, description="Device ID")
+    environment: Optional[str] = Field(None, description="Environment")
+    cwd: Optional[str] = Field(None, description="Working directory")
+    git_repo: Optional[str] = Field(None, description="Git remote URL")
+    git_branch: Optional[str] = Field(None, description="Git branch")
+    started_at: datetime = Field(..., description="Session start time")
+    ended_at: Optional[datetime] = Field(None, description="Session end time")
+    last_activity_at: Optional[datetime] = Field(None, description="Most recent transcript activity")
+    user_messages: int = Field(..., description="User message count")
+    assistant_messages: int = Field(..., description="Assistant message count")
+    tool_calls: int = Field(..., description="Tool call count")
+    title: Optional[str] = Field(None, description="Resolved headline for this session")
+    summary: Optional[str] = Field(None, description="Session summary when one exists")
+    first_user_message: Optional[str] = Field(None, description="First user message (truncated)")
+    is_sidechain: bool = Field(False, description="True when session is a sub-agent, not human-initiated")
+    searchable: bool = Field(False, description="True when the archived transcript is indexed for search")
+    thread_root_session_id: Optional[str] = Field(None, description="Logical thread root session UUID")
+    thread_head_session_id: Optional[str] = Field(None, description="Current writable head session UUID")
+    continued_from_session_id: Optional[str] = Field(None, description="Parent continuation session UUID")
+    match_event_id: Optional[int] = Field(None, description="Matching event id when this came from a search")
+    match_snippet: Optional[str] = Field(None, description="Snippet of matching content")
+    match_role: Optional[str] = Field(None, description="Role of the matching event")
+    match_score: Optional[float] = Field(None, description="Match score when the result came from vector search")
+
+
+def project_machine_session(session: SessionResponse) -> MachineSessionResponse:
+    """Narrow a browser session payload to the machine surface's fields."""
+
+    return MachineSessionResponse(
+        id=session.id,
+        provider=session.provider,
+        provider_session_id=session.provider_session_id,
+        origin_kind=session.origin_kind,
+        project=session.project,
+        device_id=session.device_id,
+        environment=session.environment,
+        cwd=session.cwd,
+        git_repo=session.git_repo,
+        git_branch=session.git_branch,
+        started_at=session.started_at,
+        ended_at=session.ended_at,
+        last_activity_at=session.last_activity_at,
+        user_messages=session.user_messages,
+        assistant_messages=session.assistant_messages,
+        tool_calls=session.tool_calls,
+        title=session.timeline_title or session.anchor_title or session.summary_title,
+        summary=session.summary,
+        first_user_message=session.first_user_message,
+        is_sidechain=session.is_sidechain,
+        # The one state fact that changes what an agent can do next: whether the
+        # transcript can be searched or only read.
+        searchable=bool(getattr(session.session_state.transcript, "searchable", False)),
+        thread_root_session_id=session.thread_root_session_id,
+        thread_head_session_id=session.thread_head_session_id,
+        continued_from_session_id=session.continued_from_session_id,
+        match_event_id=session.match_event_id,
+        match_snippet=session.match_snippet,
+        match_role=session.match_role,
+        match_score=session.match_score,
+    )
+
+
+class MachineSessionsListResponse(BaseModel):
+    """Session list for the machine surface."""
+
+    sessions: List[MachineSessionResponse]
+    total: int
+    has_real_sessions: bool = Field(
+        True,
+        description="True if any non-demo sessions exist.",
+    )
+
+
 class SessionsListResponse(BaseModel):
     """Response for session list."""
 
@@ -1725,8 +1819,17 @@ class RecallMatch(BaseModel):
     generation_id: Optional[str] = None
     source_object_id: Optional[str] = None
     record_ordinal: Optional[int] = None
-    evidence_status: str = "complete"
+    # Completeness is something a hydrator asserts, never something a match
+    # inherits by being constructed. Defaulting to "complete" let the semantic
+    # lane — which never reaches the hydrator — report complete evidence beside
+    # a null context, so the highest-scoring recall results claimed to be the
+    # most trustworthy while carrying nothing at all.
+    evidence_status: str = "unavailable"
     evidence_reason: Optional[str] = None
+    # Internal routing only. A semantic episode locates itself by position in the
+    # published ordering rather than by event id; the hydrator needs that, the
+    # caller does not, so it never reaches the wire.
+    start_order_time_us: Optional[int] = Field(default=None, exclude=True)
 
 
 class RecallResponse(BaseModel):
