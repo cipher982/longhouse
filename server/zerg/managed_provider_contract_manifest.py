@@ -470,17 +470,22 @@ def _validated_contract_items(payload: dict[str, Any]) -> list[dict[str, Any]]:
     return items
 
 
-def normalize_contract_manifest(payload: dict[str, Any]) -> dict[str, Any]:
+def normalize_contract_manifest(
+    payload: dict[str, Any],
+    *,
+    source_root: Path | None = None,
+) -> dict[str, Any]:
     items: list[dict[str, Any]] = []
     for item in _validated_contract_items(payload):
         normalized_item = deepcopy(item)
-        normalized_item["adapter_digest"] = _adapter_digest(item)
+        normalized_item["adapter_digest"] = _adapter_digest(item, source_root=source_root)
         for declaration in normalized_item.get("capabilities", {}).values():
             for assertion in declaration.get("required_assertions", []):
                 assertion["oracle_digest"] = _source_digest(
                     provider=str(item["provider"]),
                     raw_path=str(assertion["oracle_source"]),
                     label="oracle source",
+                    source_root=source_root,
                 )
         items.append(normalized_item)
     return {
@@ -506,8 +511,8 @@ def validate_generated_contract_manifest(payload: dict[str, Any]) -> dict[str, A
     return {"schema_version": 1, "providers": items}
 
 
-def render_contract_manifest_json(payload: dict[str, Any]) -> str:
-    return json.dumps(normalize_contract_manifest(payload), indent=2, ensure_ascii=False) + "\n"
+def render_contract_manifest_json(payload: dict[str, Any], *, source_root: Path | None = None) -> str:
+    return json.dumps(normalize_contract_manifest(payload, source_root=source_root), indent=2, ensure_ascii=False) + "\n"
 
 
 @lru_cache(maxsize=1)
@@ -531,9 +536,9 @@ def managed_provider_contract_entry_digest(provider: str) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def _adapter_digest(item: dict[str, Any]) -> str:
+def _adapter_digest(item: dict[str, Any], *, source_root: Path | None = None) -> str:
     provider = str(item.get("provider") or "<unknown>")
-    root = Path(__file__).resolve().parents[2]
+    root = source_root or Path(__file__).resolve().parents[2]
     digest = hashlib.sha256()
     for raw_path in item.get("adapter_sources") or ():
         relative = Path(str(raw_path))
@@ -549,11 +554,11 @@ def _adapter_digest(item: dict[str, Any]) -> str:
     return digest.hexdigest()
 
 
-def _source_digest(*, provider: str, raw_path: str, label: str) -> str:
+def _source_digest(*, provider: str, raw_path: str, label: str, source_root: Path | None = None) -> str:
     relative = Path(raw_path)
     if relative.is_absolute() or ".." in relative.parts:
         raise ValueError(f"managed provider contract {provider}: unsafe {label} {raw_path!r}")
-    path = Path(__file__).resolve().parents[2] / relative
+    path = (source_root or Path(__file__).resolve().parents[2]) / relative
     if not path.is_file():
         raise ValueError(f"managed provider contract {provider}: {label} not found: {raw_path}")
     return hashlib.sha256(path.read_bytes()).hexdigest()

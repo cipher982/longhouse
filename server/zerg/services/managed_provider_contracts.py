@@ -177,7 +177,7 @@ class ManagedProviderContract:
         )
 
 
-def _contract_from_manifest_item(item: dict[str, object]) -> ManagedProviderContract:
+def managed_provider_contract_from_item(item: dict[str, object]) -> ManagedProviderContract:
     release_item = dict(item.get("release_channel") or {})
     return ManagedProviderContract(
         provider=str(item["provider"]),
@@ -241,7 +241,9 @@ def _contract_from_manifest_item(item: dict[str, object]) -> ManagedProviderCont
     )
 
 
-_CONTRACTS: tuple[ManagedProviderContract, ...] = tuple(_contract_from_manifest_item(item) for item in managed_provider_contract_items())
+_CONTRACTS: tuple[ManagedProviderContract, ...] = tuple(
+    managed_provider_contract_from_item(item) for item in managed_provider_contract_items()
+)
 
 _BY_PROVIDER = {contract.provider: contract for contract in _CONTRACTS}
 
