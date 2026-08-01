@@ -20,7 +20,10 @@ from zerg.qa.claude_conversation_reset import _tail
 from zerg.qa.claude_conversation_reset import _wait
 from zerg.qa.conversation_reset import classify_identity_transition
 from zerg.qa.conversation_reset import execution_summary
+from zerg.qa.conversation_reset import longhouse_provider_aliases
+from zerg.qa.conversation_reset import longhouse_source_binding
 from zerg.qa.conversation_reset import marker_digest
+from zerg.qa.conversation_reset import observation_exit_code
 from zerg.qa.conversation_reset import tail_sequence
 from zerg.qa.pty_session import ProviderPtySession
 from zerg.qa.pty_session import wait_for_terminal_quiescence
@@ -148,10 +151,14 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                         and (state.get("ready") is True or state.get("server_url"))
                         and Path(str(state.get("cwd") or "")).resolve() == workspace
                     ):
-                        return str(state.get("session_id") or path.stem), state
+                        return str(state.get("session_id") or path.stem), state, path
             return None
 
-        longhouse_session_id, state = _wait(launched_state, timeout=args.timeout, message="OpenCode managed bridge did not become ready")
+        longhouse_session_id, state, state_path = _wait(
+            launched_state,
+            timeout=args.timeout,
+            message="OpenCode managed bridge did not become ready",
+        )
         provider_pid = str(state.get("opencode_pid") or state.get("pid") or session.process.pid)
         wait_for_terminal_quiescence(session, timeout=args.timeout)
         session.submit_line(prompt_a)
@@ -177,6 +184,31 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             message="OpenCode marker B assistant response was not observed",
         )
         after_text, after_hash = _session_snapshot(db, after_provider_id)
+        active_state = _wait(
+            lambda: (
+                candidate
+                if (candidate := _read_json(state_path)) and str(candidate.get("provider_session_id") or "") == after_provider_id
+                else None
+            ),
+            timeout=args.timeout,
+            message="Longhouse did not rotate the active OpenCode provider identity",
+        )
+        bound_session_id = _wait(
+            lambda: longhouse_source_binding("opencode", after_provider_id),
+            timeout=args.timeout,
+            message="Longhouse did not bind the post-reset OpenCode source to the managed session",
+        )
+        provider_aliases = _wait(
+            lambda: (
+                aliases
+                if {before_provider_id, after_provider_id}.issubset(
+                    aliases := set(longhouse_provider_aliases("opencode", longhouse_session_id))
+                )
+                else None
+            ),
+            timeout=args.timeout,
+            message="Longhouse did not retain both OpenCode provider aliases",
+        )
         tail_payload = _observe_longhouse_tail(
             longhouse_session_id,
             marker_a,
@@ -184,7 +216,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             timeout=args.archive_timeout,
         )
         sequence = tail_sequence(tail_payload, marker_a, "/new", marker_b)
-        provider_alias = str(state.get("provider_session_id") or "").strip()
+        provider_alias = str(active_state.get("provider_session_id") or "").strip()
         observation = {
             "schema_version": 1,
             "scenario": "conversation_reset",
@@ -227,10 +259,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "tail_artifact": str(output_root / "longhouse-tail.json"),
             },
             "longhouse": {
-                "provider_alias_ids": [provider_alias] if provider_alias else [],
+                "provider_alias_ids": sorted(provider_aliases),
                 "timeline_session_ids": [longhouse_session_id],
-                "provider_alias_matches_before": provider_alias == before_provider_id,
+                "provider_alias_matches_before": before_provider_id in provider_aliases,
                 "provider_alias_matches_after": provider_alias == after_provider_id,
+                "source_bound_session_id": bound_session_id,
+                "source_binding_matches": bound_session_id == longhouse_session_id,
             },
         }
         (output_root / "longhouse-tail.json").write_text(json.dumps(tail_payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -277,7 +311,7 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"status": "failed", "error": f"{type(exc).__name__}: {exc}"}, indent=2))
         return 1
     print(json.dumps(observation, indent=2, sort_keys=True))
-    return 0
+    return observation_exit_code(observation)
 
 
 if __name__ == "__main__":

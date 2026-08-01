@@ -71,8 +71,10 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import subprocess
 import tempfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -323,6 +325,32 @@ elif event == "Stop":
 
 if state and session_id:
     hook_observed_at = now_iso()
+    # Bind before publishing state. The engine can discover a new Antigravity
+    # transcript as soon as the state file appears; publishing first races an
+    # unmanaged storage envelope ahead of the durable managed-session binding.
+    if managed_session_id and transcript:
+        bind_env = os.environ.copy()
+        if longhouse_home:
+            bind_env["LONGHOUSE_HOME"] = longhouse_home
+        bind_args = [
+            os.environ.get("LONGHOUSE_HOOK_ENGINE") or "longhouse-engine",
+            "bind",
+            "--path",
+            transcript,
+            "--session-id",
+            managed_session_id,
+            "--provider",
+            "antigravity",
+        ]
+        if longhouse_home:
+            bind_args.extend(["--db", str(Path(longhouse_home) / "agent" / "longhouse-shipper.db")])
+        subprocess.run(
+            bind_args,
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env=bind_env,
+        )
     write_presence_outbox(
         longhouse_home,
         {
@@ -351,33 +379,28 @@ if state and session_id:
             "last_hook_observed_at": hook_observed_at,
         },
     )
-    if managed_session_id and transcript:
+    if event == "Stop" and transcript:
+        wake_socket = Path(longhouse_home) / "agent" / "transcript-wake.sock"
+        wake = {
+            "provider": "antigravity",
+            "path": transcript,
+            "phase": "idle",
+            "session_id": session_id,
+            "turn_id": step_index,
+            "wake_reason": "turn_completed",
+            "observed_at_ms": int(time.time() * 1000),
+        }
         try:
-            bind_env = os.environ.copy()
-            if longhouse_home:
-                bind_env["LONGHOUSE_HOME"] = longhouse_home
-            bind_args = [
-                os.environ.get("LONGHOUSE_HOOK_ENGINE") or "longhouse-engine",
-                "bind",
-                "--path",
-                transcript,
-                "--session-id",
-                managed_session_id,
-                "--provider",
-                "antigravity",
-            ]
-            if longhouse_home:
-                bind_args.extend(["--db", str(Path(longhouse_home) / "agent" / "longhouse-shipper.db")])
-            subprocess.run(
-                bind_args,
-                check=False,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                env=bind_env,
-            )
-        except Exception:
+            wake["file_len_hint"] = Path(transcript).stat().st_size
+        except OSError:
             pass
-
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as stream:
+                stream.settimeout(0.075)
+                stream.connect(str(wake_socket))
+                stream.sendall(json.dumps(wake, separators=(",", ":")).encode())
+        except OSError:
+            pass
 claimed_receipts: list[dict] = []
 if event in {"PreInvocation", "PostInvocation"}:
     claimed_receipts = claim_inbox_messages(
@@ -423,6 +446,7 @@ if [ "$HOOK_RC" -ne 0 ]; then
   printf 'longhouse-antigravity-hook: python hook failed with exit %s
 ' "$HOOK_RC" >&2
   emit_default_response
+  exit "$HOOK_RC"
 fi
 exit 0
 """

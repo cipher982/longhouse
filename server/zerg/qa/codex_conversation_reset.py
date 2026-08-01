@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import time
 from datetime import UTC
@@ -19,7 +20,9 @@ from zerg.qa.claude_conversation_reset import _tail
 from zerg.qa.claude_conversation_reset import _wait
 from zerg.qa.conversation_reset import classify_identity_transition
 from zerg.qa.conversation_reset import execution_summary
+from zerg.qa.conversation_reset import longhouse_source_binding
 from zerg.qa.conversation_reset import marker_digest
+from zerg.qa.conversation_reset import observation_exit_code
 from zerg.qa.conversation_reset import tail_sequence
 from zerg.qa.pty_session import ProviderPtySession
 from zerg.qa.pty_session import wait_for_terminal_quiescence
@@ -101,6 +104,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     if not source_auth.is_file():
         raise RuntimeError("Codex auth.json is required for the isolated qualification home")
     auth_link.symlink_to(source_auth)
+    engine_bin = shutil.which("longhouse-engine")
+    if not engine_bin:
+        raise RuntimeError("longhouse-engine is required for the isolated Codex coordination MCP")
+    (codex_home / "config.toml").write_text(
+        f'[mcp_servers.longhouse]\ncommand = {json.dumps(engine_bin)}\nargs = ["claude-channel", "serve"]\n',
+        encoding="utf-8",
+    )
     invocation = uuid4().hex
     marker_a = f"LONGHOUSE_RESET_CODEX_A_{invocation}"
     marker_b = f"LONGHOUSE_RESET_CODEX_B_{invocation}"
@@ -108,6 +118,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     env = os.environ.copy()
     env["LONGHOUSE_CODEX_BIN"] = str(provider_bin)
     env["LONGHOUSE_CODEX_TUI_HOME"] = str(codex_home)
+    env["CODEX_HOME"] = str(codex_home)
     argv = [
         "longhouse",
         "codex",
@@ -186,6 +197,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         before_text = before_path.read_text(encoding="utf-8", errors="replace")
         after_text = after_path.read_text(encoding="utf-8", errors="replace")
         final_state = _read_json(state_path) or state
+        bound_session_id = _wait(
+            lambda: longhouse_source_binding("codex", after_provider_id),
+            timeout=args.timeout,
+            message="Longhouse did not bind the post-reset Codex source to the managed session",
+        )
         tail_payload = _observe_longhouse_tail(longhouse_session_id, marker_a, marker_b, timeout=args.archive_timeout)
         sequence = tail_sequence(tail_payload, marker_a, "/clear", marker_b)
         provider_alias = str(final_state.get("thread_id") or "").strip()
@@ -236,6 +252,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "bridge_thread_path": final_state.get("thread_path"),
                 "provider_alias_matches_before": provider_alias == before_provider_id,
                 "provider_alias_matches_after": provider_alias == after_provider_id,
+                "source_bound_session_id": bound_session_id,
+                "source_binding_matches": bound_session_id == longhouse_session_id,
             },
         }
         (output_root / "longhouse-tail.json").write_text(json.dumps(tail_payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -283,7 +301,7 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"status": "failed", "error": f"{type(exc).__name__}: {exc}"}, indent=2))
         return 1
     print(json.dumps(observation, indent=2, sort_keys=True))
-    return 0
+    return observation_exit_code(observation)
 
 
 if __name__ == "__main__":

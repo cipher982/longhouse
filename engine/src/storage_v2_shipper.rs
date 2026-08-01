@@ -138,6 +138,10 @@ fn prepare_next_envelope_with_limit(
     let canonical_path = stable_source_path(path);
     let path_text = canonical_path.to_string_lossy();
     let opaque_source_id = opaque_source_id(&path_text);
+    let durable_session_id = match session_id_override {
+        Some(value) => Some(value.to_string()),
+        None => crate::state::session_binding::SessionBinding::new(conn).get(&path_text)?,
+    };
     if let Some(pending) =
         pending_source_envelope::load_for_source(conn, provider, &opaque_source_id)?
     {
@@ -154,10 +158,22 @@ fn prepare_next_envelope_with_limit(
             return pending_to_prepared(pending).map(Some);
         }
     }
-    let durable_session_id = match session_id_override {
-        Some(value) => Some(value.to_string()),
-        None => crate::state::session_binding::SessionBinding::new(conn).get(&path_text)?,
-    };
+    if provider.eq_ignore_ascii_case("antigravity")
+        && durable_session_id.is_none()
+        && path
+            .metadata()
+            .and_then(|metadata| metadata.modified())
+            .ok()
+            .and_then(|modified| modified.elapsed().ok())
+            .is_some_and(|age| age <= Duration::from_secs(5))
+    {
+        // Antigravity creates the transcript immediately before its first
+        // synchronous hook records the managed binding. Avoid freezing a new
+        // unmanaged envelope in that short discovery race. Exact pending
+        // retries above remain authoritative, and historical sources fall
+        // through once their ordinary freshness window has elapsed.
+        return Ok(None);
+    }
     let session_id_override = durable_session_id.as_deref();
     let legacy_offset = validated_legacy_offset(conn, &path_text, &canonical_path)?;
     let source_revision = if provider.eq_ignore_ascii_case("antigravity") {
@@ -4321,6 +4337,70 @@ mod tests {
         assert_eq!(
             source_epoch::lane_position(&conn, prepared.source_epoch, SourceLane::Durable).unwrap(),
             0
+        );
+    }
+
+    #[test]
+    fn fresh_antigravity_source_waits_for_managed_binding() {
+        let dir = tempfile::tempdir().unwrap();
+        let provider_id = "018f0c3a-7b2d-7f10-8a11-123456789abc";
+        let path = dir
+            .path()
+            .join("brain")
+            .join(provider_id)
+            .join(".system_generated/logs/transcript_full.jsonl");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            concat!(
+                r#"{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","created_at":"2026-07-12T12:00:00Z","content":"hello"}"#,
+                "\n",
+                r#"{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-07-12T12:00:01Z","content":"hi"}"#,
+                "\n"
+            ),
+        )
+        .unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+
+        assert!(
+            prepare_next_envelope(&mut conn, &capabilities(), &path, "antigravity", None)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(pending_source_envelope::count(&conn).unwrap(), 0);
+
+        let managed_session_id = "018f0c3a-7b2d-7f10-8a11-123456789abd";
+        crate::state::session_binding::SessionBinding::new(&conn)
+            .bind(
+                &stable_source_path(&path).to_string_lossy(),
+                managed_session_id,
+                "antigravity",
+            )
+            .unwrap();
+        let prepared =
+            prepare_next_envelope(&mut conn, &capabilities(), &path, "antigravity", None)
+                .unwrap()
+                .unwrap();
+
+        assert_eq!(prepared.envelope.session_id, managed_session_id);
+        assert_eq!(
+            source_epoch::resolution_for_epoch(&conn, prepared.source_epoch)
+                .unwrap()
+                .bound_session_id
+                .as_deref(),
+            Some(managed_session_id)
+        );
+
+        crate::state::session_binding::SessionBinding::new(&conn)
+            .unbind(&stable_source_path(&path).to_string_lossy())
+            .unwrap();
+        let exact_retry =
+            prepare_next_envelope(&mut conn, &capabilities(), &path, "antigravity", None)
+                .unwrap()
+                .unwrap();
+        assert_eq!(
+            exact_retry.envelope.expected_envelope_id,
+            prepared.envelope.expected_envelope_id
         );
     }
 

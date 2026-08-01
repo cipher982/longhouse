@@ -149,7 +149,7 @@ pub fn lifecycle(event: &str) {
     }
     let now = Utc::now().to_rfc3339();
     if claim.get("conversation_uuid").and_then(Value::as_str) != Some(conversation) {
-        if !is_top_level_conversation_start(event, &payload)
+        if !is_foreground_conversation_rollover(event, &payload)
             || !rotate_cursor_conversation(
                 &root,
                 &claim_path,
@@ -228,9 +228,26 @@ pub fn lifecycle(event: &str) {
     println!("{{}}");
 }
 
-fn is_top_level_conversation_start(event: &str, payload: &Value) -> bool {
-    event == "sessionStart"
-        && payload.get("is_background_agent").and_then(Value::as_bool) == Some(false)
+fn is_foreground_conversation_rollover(event: &str, payload: &Value) -> bool {
+    match event {
+        "sessionStart" => {
+            payload.get("is_background_agent").and_then(Value::as_bool) == Some(false)
+        }
+        // Cursor 2026.07.23 does not emit sessionStart after `/clear`. Its
+        // first event for the replacement top-level conversation is the
+        // human prompt, and that foreground payload omits is_background_agent.
+        // One cursor-agent Helm process owns one foreground conversation;
+        // background hooks explicitly set the flag. Reject those and empty
+        // prompts; later thought/tool/response hooks cannot rotate identity.
+        "beforeSubmitPrompt" => {
+            payload.get("is_background_agent").and_then(Value::as_bool) != Some(true)
+                && payload
+                    .get("prompt")
+                    .and_then(Value::as_str)
+                    .is_some_and(|value| !value.trim().is_empty())
+        }
+        _ => false,
+    }
 }
 
 fn rotate_cursor_conversation(
@@ -608,19 +625,34 @@ mod tests {
     }
 
     #[test]
-    fn conversation_rotation_requires_an_explicit_foreground_session_start() {
-        assert!(is_top_level_conversation_start(
+    fn conversation_rotation_requires_explicit_foreground_evidence() {
+        assert!(is_foreground_conversation_rollover(
             "sessionStart",
             &json!({"is_background_agent": false})
         ));
-        assert!(!is_top_level_conversation_start(
+        assert!(!is_foreground_conversation_rollover(
             "sessionStart",
             &json!({"is_background_agent": true})
         ));
-        assert!(!is_top_level_conversation_start("sessionStart", &json!({})));
-        assert!(!is_top_level_conversation_start(
+        assert!(!is_foreground_conversation_rollover(
+            "sessionStart",
+            &json!({})
+        ));
+        assert!(is_foreground_conversation_rollover(
             "beforeSubmitPrompt",
-            &json!({"is_background_agent": false})
+            &json!({"prompt": "post-reset prompt"})
+        ));
+        assert!(!is_foreground_conversation_rollover(
+            "beforeSubmitPrompt",
+            &json!({"prompt": "background", "is_background_agent": true})
+        ));
+        assert!(!is_foreground_conversation_rollover(
+            "beforeSubmitPrompt",
+            &json!({"prompt": ""})
+        ));
+        assert!(!is_foreground_conversation_rollover(
+            "afterAgentThought",
+            &json!({})
         ));
     }
 }

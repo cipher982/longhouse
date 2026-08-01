@@ -17,7 +17,9 @@ from uuid import uuid4
 
 from zerg.qa.conversation_reset import classify_identity_transition
 from zerg.qa.conversation_reset import execution_summary
+from zerg.qa.conversation_reset import longhouse_source_binding
 from zerg.qa.conversation_reset import marker_digest
+from zerg.qa.conversation_reset import observation_exit_code
 from zerg.qa.conversation_reset import tail_sequence
 from zerg.qa.managed_claude_live import strip_terminal_controls
 from zerg.qa.pty_session import ProviderPtySession
@@ -97,6 +99,20 @@ def _tail(session_id: str) -> dict[str, Any] | None:
     return payload if isinstance(payload, dict) else None
 
 
+def _observe_longhouse_tail(session_id: str, marker_a: str, marker_b: str, *, timeout: float) -> dict[str, Any]:
+    deadline = time.monotonic() + timeout
+    last: dict[str, Any] = {}
+    while time.monotonic() < deadline:
+        payload = _tail(session_id)
+        if payload:
+            last = payload
+            raw = json.dumps(payload, ensure_ascii=False)
+            if marker_a in raw and marker_b in raw:
+                break
+        time.sleep(1.0)
+    return last
+
+
 def run(args: argparse.Namespace) -> dict[str, Any]:
     provider_bin = Path(args.provider_bin or os.environ.get("LONGHOUSE_CLAUDE_BIN") or "claude").expanduser()
     if not provider_bin.is_absolute():
@@ -170,14 +186,15 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     and Path(str(candidate.get("cwd") or "")).resolve() == workspace
                     and str(candidate.get("provider_session_id") or "")
                 ):
-                    return path.stem, candidate
+                    return path.stem, candidate, path
             match = _SESSION_ID.search(text)
             if not match:
                 return None
             state = _read_json(_state_path(match.group(1)))
-            return (match.group(1), state) if state and state.get("ready") else None
+            path = _state_path(match.group(1))
+            return (match.group(1), state, path) if state and state.get("ready") else None
 
-        longhouse_session_id, state = _wait(
+        longhouse_session_id, state, state_path = _wait(
             launched_state,
             timeout=args.timeout,
             message="Claude managed session did not become ready",
@@ -211,12 +228,25 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         after_provider_id = after_path.stem
         before_text = before_path.read_text(encoding="utf-8", errors="replace")
         after_text = after_path.read_text(encoding="utf-8", errors="replace")
-        tail_payload = _wait(
-            lambda: (payload if marker_a in raw and marker_b in raw else None)
-            if (payload := _tail(longhouse_session_id)) and (raw := json.dumps(payload, ensure_ascii=False))
-            else None,
+        active_state = _wait(
+            lambda: (
+                candidate
+                if (candidate := _read_json(state_path)) and str(candidate.get("provider_session_id") or "") == after_provider_id
+                else None
+            ),
+            timeout=args.timeout,
+            message="Longhouse did not rotate the active Claude provider identity",
+        )
+        bound_session_id = _wait(
+            lambda: longhouse_source_binding("claude", after_provider_id),
+            timeout=args.timeout,
+            message="Longhouse did not bind the post-reset Claude source to the managed session",
+        )
+        tail_payload = _observe_longhouse_tail(
+            longhouse_session_id,
+            marker_a,
+            marker_b,
             timeout=args.archive_timeout,
-            message="Longhouse tail did not conserve both reset markers",
         )
         sequence = tail_sequence(tail_payload, marker_a, "/clear", marker_b)
         observation = {
@@ -259,11 +289,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "tail_artifact": str(output_root / "longhouse-tail.json"),
             },
             "longhouse": {
-                "provider_alias_ids": [str(state.get("provider_session_id") or "")],
+                "provider_alias_ids": [str(active_state.get("provider_session_id") or "")],
                 "timeline_session_ids": [longhouse_session_id],
-                "channel_state_provider_session_id": state.get("provider_session_id"),
-                "provider_alias_matches_before": state.get("provider_session_id") == before_provider_id,
-                "provider_alias_matches_after": state.get("provider_session_id") == after_provider_id,
+                "channel_state_provider_session_id": active_state.get("provider_session_id"),
+                "provider_alias_matches_before": active_state.get("provider_session_id") == before_provider_id,
+                "provider_alias_matches_after": active_state.get("provider_session_id") == after_provider_id,
+                "source_bound_session_id": bound_session_id,
+                "source_binding_matches": bound_session_id == longhouse_session_id,
             },
         }
         (output_root / "longhouse-tail.json").write_text(json.dumps(tail_payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -304,7 +336,7 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"status": "failed", "error": f"{type(exc).__name__}: {exc}"}, indent=2))
         return 1
     print(json.dumps(observation, indent=2, sort_keys=True))
-    return 0
+    return observation_exit_code(observation)
 
 
 if __name__ == "__main__":

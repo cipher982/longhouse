@@ -294,6 +294,9 @@ fn list_opencode_sessions_inner(
 
 fn opencode_state_roots() -> Vec<PathBuf> {
     let mut roots = Vec::new();
+    if let Ok(longhouse_home) = get_longhouse_home() {
+        roots.push(longhouse_home.join("managed-local/opencode/bridge/sessions"));
+    }
     if let Some(root) = std::env::var_os("LONGHOUSE_OPENCODE_STATE_ROOT") {
         roots.push(PathBuf::from(root));
     }
@@ -326,6 +329,7 @@ fn opencode_state_roots() -> Vec<PathBuf> {
                 .join("opencode"),
         );
     }
+    roots.dedup();
     roots
 }
 

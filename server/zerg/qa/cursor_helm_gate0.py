@@ -2,8 +2,9 @@
 
 The harness owns a real PTY but treats terminal bytes as liveness evidence
 only. Cursor hooks, provider-native store metadata, and process identity are
-the assertion surfaces. It intentionally bypasses Runtime Host registration so
-provider behavior can be proven before Longhouse advertises it.
+the assertion surfaces. Most scenarios bypass Runtime Host registration;
+conversation reset uses the production Helm wrapper so alias rotation and
+source binding are measured too.
 """
 
 from __future__ import annotations
@@ -16,10 +17,13 @@ import shutil
 import sqlite3
 import subprocess
 import tempfile
+import threading
 import time
 import traceback
 from datetime import UTC
 from datetime import datetime
+from http.server import BaseHTTPRequestHandler
+from http.server import ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -27,6 +31,8 @@ from uuid import uuid4
 
 from zerg.qa.conversation_reset import classify_identity_transition
 from zerg.qa.conversation_reset import evaluate_reset_observation
+from zerg.qa.conversation_reset import longhouse_provider_aliases
+from zerg.qa.conversation_reset import longhouse_source_binding
 from zerg.qa.pty_session import ProviderPtySession as CursorPtySession
 
 _DEFAULT_TIMEOUT_SECONDS = 90.0
@@ -804,6 +810,314 @@ def _conversation_reset_scenario(
         session.close()
 
 
+def _managed_conversation_reset_scenario(
+    *,
+    binary: str,
+    workspace: Path,
+    events_path: Path,
+    terminal_path: Path,
+    timeout: float,
+    model: str | None,
+) -> dict[str, Any]:
+    engine = shutil.which("longhouse-engine")
+    if not engine:
+        raise RuntimeError("longhouse-engine was not found on PATH")
+    hook_configuration = subprocess.run(
+        [engine, "cursor-helm", "configure-hooks"],
+        cwd=workspace,
+        text=True,
+        capture_output=True,
+        timeout=15,
+        check=False,
+    )
+    if hook_configuration.returncode != 0:
+        detail = (hook_configuration.stderr or hook_configuration.stdout).strip()
+        raise RuntimeError(f"native Cursor hook configuration failed: {detail}")
+
+    marker_a = f"LONGHOUSE_CURSOR_RESET_A_{uuid4().hex[:10]}"
+    marker_b = f"LONGHOUSE_CURSOR_RESET_B_{uuid4().hex[:10]}"
+    prompt_a = f"Reply with exactly {marker_a} and nothing else."
+    prompt_b = f"Reply with exactly {marker_b} and nothing else."
+    registration_run_id = str(uuid4())
+
+    class RegistrationHandler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802 - stdlib handler API
+            length = int(self.headers.get("content-length") or 0)
+            try:
+                body = json.loads(self.rfile.read(length)) if length else {}
+            except json.JSONDecodeError:
+                body = {}
+            if self.path == "/api/sessions/managed-local/this-device":
+                payload = {
+                    "session_id": str(body.get("session_id") or ""),
+                    "run_id": registration_run_id,
+                    "hook_token": "test-hook-authority",
+                    "coordination_token": "test-coordination-authority",
+                }
+                encoded = json.dumps(payload).encode("utf-8")
+                self.send_response(200)
+            else:
+                encoded = b"{}"
+                self.send_response(202)
+            self.send_header("content-type", "application/json")
+            self.send_header("content-length", str(len(encoded)))
+            self.end_headers()
+            self.wfile.write(encoded)
+
+        def log_message(self, _format: str, *_args: object) -> None:
+            return
+
+    registration_server = ThreadingHTTPServer(("127.0.0.1", 0), RegistrationHandler)
+    registration_thread = threading.Thread(
+        target=registration_server.serve_forever,
+        name="cursor-reset-registration-stub",
+        daemon=True,
+    )
+    registration_thread.start()
+    registration_url = f"http://127.0.0.1:{registration_server.server_address[1]}"
+    argv = [
+        "longhouse",
+        "cursor",
+        "--cwd",
+        str(workspace),
+        "--project",
+        "zerg",
+        "--name",
+        "Cursor conversation reset qualification",
+        "--cursor-bin",
+        binary,
+        "--permission-mode",
+        "auto_approve",
+        "--url",
+        registration_url,
+        "--token",
+        "test-device-authority",
+        "--",
+    ]
+    if model:
+        argv.extend(["--model", model])
+    argv.append(prompt_a)
+    before = len(read_hook_events(events_path))
+    started_at = time.time()
+    session = CursorPtySession.start(
+        argv=argv,
+        cwd=workspace,
+        env=_child_env("", events_path),
+        terminal_path=terminal_path,
+    )
+    state_root = Path.home() / ".longhouse" / "managed-local" / "cursor-helm"
+
+    def wait_value(predicate, message: str):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            value = predicate()
+            if value:
+                return value
+            if not session.alive():
+                raise RuntimeError(f"managed Cursor exited before {message} ({session.process.returncode})")
+            time.sleep(0.2)
+        raise TimeoutError(message)
+
+    def launched_state():
+        for path in state_root.glob("*.json"):
+            try:
+                if path.stat().st_mtime < started_at - 1:
+                    continue
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if (
+                payload.get("ready") is True
+                and Path(str(payload.get("cwd") or "")).resolve() == workspace
+                and str(payload.get("provider_session_id") or "")
+            ):
+                return path, payload
+        return None
+
+    try:
+        state_path, initial_state = wait_value(launched_state, "Longhouse Cursor Helm state did not become ready")
+        longhouse_session_id = str(initial_state.get("session_id") or state_path.stem)
+        provider_id = str(initial_state.get("provider_session_id") or "")
+        provider_pid = str(initial_state.get("cursor_pid") or session.process.pid)
+        prompt_a_event = wait_for_hook(
+            events_path,
+            longhouse_session_id=longhouse_session_id,
+            event="beforeSubmitPrompt",
+            conversation_id=provider_id,
+            after_count=before,
+            timeout=timeout,
+        )
+        wait_for_hook(
+            events_path,
+            longhouse_session_id=longhouse_session_id,
+            event="afterAgentResponse",
+            conversation_id=provider_id,
+            generation_id=str(prompt_a_event.get("generation_id") or ""),
+            after_count=before,
+            timeout=timeout,
+        )
+        wait_for_hook(
+            events_path,
+            longhouse_session_id=longhouse_session_id,
+            event="stop",
+            conversation_id=provider_id,
+            generation_id=str(prompt_a_event.get("generation_id") or ""),
+            after_count=before,
+            timeout=timeout,
+        )
+        old_store = wait_for_store(provider_id, timeout=timeout)
+        reset_start = len(read_hook_events(events_path))
+        session.submit_idle("/clear")
+        eager_deadline = time.monotonic() + min(3.0, timeout)
+        eager_event: dict[str, Any] | None = None
+        while time.monotonic() < eager_deadline and eager_event is None:
+            eager_event = next(
+                (
+                    row
+                    for row in read_hook_events(events_path)[reset_start:]
+                    if row.get("longhouse_session_id") == longhouse_session_id
+                    and row.get("event") == "sessionStart"
+                    and row.get("conversation_id")
+                    and row.get("conversation_id") != provider_id
+                ),
+                None,
+            )
+            if eager_event is None:
+                time.sleep(0.1)
+
+        marker_b_start = len(read_hook_events(events_path))
+        session.submit_idle(prompt_b)
+        prompt_b_event = wait_for_hook_match(
+            events_path,
+            longhouse_session_id=longhouse_session_id,
+            after_count=marker_b_start,
+            timeout=timeout,
+            predicate=lambda row: row.get("event") == "beforeSubmitPrompt"
+            and row.get("conversation_id")
+            and row.get("conversation_id") != provider_id
+            and row.get("prompt_sha256") == _marker_digest(prompt_b),
+        )
+        new_provider_id = str(prompt_b_event.get("conversation_id") or "")
+        response_b = wait_for_hook(
+            events_path,
+            longhouse_session_id=longhouse_session_id,
+            event="afterAgentResponse",
+            conversation_id=new_provider_id,
+            generation_id=str(prompt_b_event.get("generation_id") or ""),
+            after_count=marker_b_start,
+            timeout=timeout,
+        )
+        stop_b = wait_for_hook(
+            events_path,
+            longhouse_session_id=longhouse_session_id,
+            event="stop",
+            conversation_id=new_provider_id,
+            generation_id=str(prompt_b_event.get("generation_id") or ""),
+            after_count=marker_b_start,
+            timeout=timeout,
+        )
+        new_store = wait_for_store(new_provider_id, timeout=timeout)
+
+        def rotated_state():
+            try:
+                payload = json.loads(state_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                return None
+            return payload if payload.get("provider_session_id") == new_provider_id else None
+
+        final_state = wait_value(rotated_state, "Longhouse did not rotate the active Cursor provider identity")
+        claim_path = state_root / "binding-probes" / f"{longhouse_session_id}.json"
+
+        def rotated_claim():
+            try:
+                payload = json.loads(claim_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                return None
+            history = payload.get("previous_conversation_uuids") or []
+            return payload if payload.get("conversation_uuid") == new_provider_id and provider_id in history else None
+
+        wait_value(rotated_claim, "Longhouse did not preserve the Cursor conversation predecessor")
+        bound_session_id = wait_value(
+            lambda: longhouse_source_binding("cursor", new_provider_id),
+            "Longhouse did not bind the post-reset Cursor source to the managed session",
+        )
+        aliases = wait_value(
+            lambda: (
+                values
+                if provider_id in (values := longhouse_provider_aliases("cursor", longhouse_session_id)) and new_provider_id in values
+                else None
+            ),
+            "Longhouse did not retain both Cursor provider aliases",
+        )
+        reset_boundary = provider_id in aliases and final_state.get("provider_session_id") == new_provider_id
+        marker_a_digest = _marker_digest(prompt_a)
+        marker_b_digest = _marker_digest(prompt_b)
+        copied_marker_a = any(
+            row.get("conversation_id") == new_provider_id and row.get("prompt_sha256") == marker_a_digest
+            for row in read_hook_events(events_path)[reset_start:]
+        )
+        observation = {
+            "status": "passed",
+            "provider_conversation_id": new_provider_id,
+            "longhouse_session_id": longhouse_session_id,
+            "reset_command": "/clear",
+            "reset_command_accepted": reset_boundary
+            and response_b.get("conversation_id") == new_provider_id
+            and stop_b.get("status") == "completed",
+            "identity_transition": classify_identity_transition(provider_id, new_provider_id),
+            "identity_allocation": "eager" if eager_event is not None else "lazy",
+            "before": {
+                "provider_session_id": provider_id,
+                "longhouse_session_id": longhouse_session_id,
+                "provider_process_id": provider_pid,
+                "run_id": str(initial_state.get("run_id") or ""),
+                "raw_source_ids": [str(old_store)],
+                "raw_source_hashes": [_file_sha256(old_store)],
+                "marker_digest": marker_a_digest,
+            },
+            "after": {
+                "provider_session_id": new_provider_id,
+                "longhouse_session_id": longhouse_session_id,
+                "provider_process_id": str(final_state.get("cursor_pid") or provider_pid),
+                "run_id": str(final_state.get("run_id") or ""),
+                "raw_source_ids": [str(new_store)],
+                "raw_source_hashes": [_file_sha256(new_store)],
+                "marker_digest": marker_b_digest,
+            },
+            "provider_transition": {
+                "pre_reset_history_retained": old_store.exists() and _cursor_store_agent_id(old_store) == provider_id,
+                "post_reset_turn_bound_to_active_identity": response_b.get("conversation_id") == new_provider_id
+                and stop_b.get("conversation_id") == new_provider_id,
+                "pre_reset_messages_not_copied": not copied_marker_a,
+            },
+            "archive": {
+                "pre_reset_raw_preserved": old_store.exists(),
+                "post_reset_raw_preserved": new_store.exists(),
+                "reset_boundary_observable": reset_boundary,
+                "tail_marker_order": [marker_a_digest, "reset", marker_b_digest] if reset_boundary else [],
+                "source_identity_preserved": old_store != new_store,
+                "archive_evidence_source": "cursor_hooks_binding_claim_and_store",
+                "archive_artifact": str(events_path),
+            },
+            "longhouse": {
+                "provider_alias_ids": list(aliases),
+                "timeline_session_ids": [longhouse_session_id],
+                "provider_alias_matches_before": provider_id in aliases,
+                "provider_alias_matches_after": new_provider_id in aliases,
+                "source_bound_session_id": bound_session_id,
+                "source_binding_matches": bound_session_id == longhouse_session_id,
+            },
+            "process_alive_after_reset": session.alive(),
+        }
+        session.submit_idle("/exit")
+        return observation
+    finally:
+        session.close()
+        registration_server.shutdown()
+        registration_server.server_close()
+        registration_thread.join(timeout=2.0)
+
+
 def _permission_scenario(
     *,
     decision: str,
@@ -980,14 +1294,12 @@ def run_gate0(args: argparse.Namespace) -> dict[str, Any]:
             timeout=args.timeout,
         )
         if args.conversation_reset_only:
-            reset_provider_id = _create_chat(binary, workspace)
             report["scenarios"]["conversation_reset"] = record_reset_observation(
-                _conversation_reset_scenario(
+                _managed_conversation_reset_scenario(
                     binary=binary,
                     workspace=workspace,
                     events_path=events_path,
                     terminal_path=artifact_root / "conversation-reset.terminal.raw",
-                    provider_id=reset_provider_id,
                     timeout=args.timeout,
                     model=args.model,
                 )
@@ -1021,14 +1333,12 @@ def run_gate0(args: argparse.Namespace) -> dict[str, Any]:
             timeout=args.timeout,
             model=args.model,
         )
-        reset_provider_id = _create_chat(binary, workspace)
         report["scenarios"]["conversation_reset"] = record_reset_observation(
-            _conversation_reset_scenario(
+            _managed_conversation_reset_scenario(
                 binary=binary,
                 workspace=workspace,
                 events_path=events_path,
                 terminal_path=artifact_root / "conversation-reset.terminal.raw",
-                provider_id=reset_provider_id,
                 timeout=args.timeout,
                 model=args.model,
             )

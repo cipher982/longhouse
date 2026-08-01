@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from io import BytesIO
 from pathlib import Path
 from uuid import UUID
 from uuid import uuid4
@@ -629,6 +630,46 @@ def test_state_with_missing_optional_fields_reads_as_empty(tmp_path):
     assert state.launch_mode == ""
     assert state.owner_wrapper_pid == 0
     assert state.process_command == ""
+    assert state.previous_provider_session_ids == ()
+
+
+def test_opencode_event_monitor_rotates_top_level_session_identity(tmp_path):
+    session_id = str(uuid4())
+    _write_state(tmp_path, session_id=session_id)
+    stream = BytesIO(
+        b'data: {"payload":{"type":"session.created","properties":{"sessionID":"ses_child","info":{"id":"ses_child","parentID":"ses_parent"}}}}\n\n'
+        b'data: {"directory":"/wrong","payload":{"type":"session.created","properties":{"sessionID":"ses_wrong","info":{"id":"ses_wrong"}}}}\n\n'
+        + f'data: {{"directory":{json.dumps(str(tmp_path))},"payload":{{"type":"session.created","properties":{{"sessionID":"ses_new","info":{{"id":"ses_new"}}}}}}}}\n\n'.encode()
+    )
+    errors: list[Exception] = []
+
+    opencode_channel._monitor_opencode_session_events(
+        response=stream,
+        session_id=session_id,
+        expected_directory=str(tmp_path),
+        config_dir=tmp_path / "config",
+        errors=errors,
+    )
+
+    assert errors == []
+    state = opencode_channel.read_opencode_server_bridge_state(session_id, config_dir=tmp_path / "config")
+    assert state.provider_session_id == "ses_new"
+    assert state.previous_provider_session_ids == ("ses_test123",)
+    binding = json.loads(
+        opencode_channel._opencode_provider_binding_path(session_id, tmp_path / "config").read_text(encoding="utf-8")
+    )
+    assert binding["longhouse_session_id"] == session_id
+    assert binding["provider_session_id"] == "ses_new"
+    assert binding["previous_provider_session_ids"] == ["ses_test123"]
+    assert "password" not in binding
+
+
+def test_default_opencode_binding_path_honors_longhouse_home(tmp_path, monkeypatch):
+    monkeypatch.setenv("LONGHOUSE_HOME", str(tmp_path))
+
+    assert opencode_channel._opencode_provider_binding_path("session-id") == (
+        tmp_path / "managed-local" / "opencode" / "bridge" / "sessions" / "session-id.json"
+    )
 
 
 def test_run_opencode_attach_uses_state_password_in_env_not_argv(monkeypatch, tmp_path):
@@ -650,6 +691,18 @@ def test_run_opencode_attach_uses_state_password_in_env_not_argv(monkeypatch, tm
         lambda explicit=None: "/opt/homebrew/bin/opencode",
     )
     monkeypatch.setattr(opencode_channel, "_assert_health_ready", lambda **kwargs: health_calls.append(kwargs))
+    monitor_response = BytesIO()
+    monitor_thread = type("MonitorThread", (), {"join": lambda self, timeout: None})()
+    monkeypatch.setattr(
+        opencode_channel,
+        "_start_opencode_session_monitor",
+        lambda **_kwargs: (
+            monitor_response,
+            monitor_thread,
+            [],
+            type("Stop", (), {"set": lambda self: None})(),
+        ),
+    )
     monkeypatch.setattr(opencode_channel.subprocess, "run", fake_run)
 
     code = opencode_channel.run_opencode_attach(

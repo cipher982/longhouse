@@ -11,6 +11,7 @@ import re
 import secrets
 import signal
 import subprocess
+import threading
 import time
 from dataclasses import asdict
 from dataclasses import dataclass
@@ -32,6 +33,8 @@ from zerg.cli.opencode import _managed_runtime_events_url
 from zerg.cli.opencode import _OpenCodeLaunchError
 from zerg.cli.opencode import _resolve_opencode_binary
 from zerg.cli.opencode import _write_opencode_runtime_config_content
+from zerg.services.longhouse_paths import resolve_longhouse_home
+from zerg.services.longhouse_paths import resolve_longhouse_home_from_provider_home
 
 app = typer.Typer(no_args_is_help=True)
 
@@ -82,6 +85,7 @@ class OpenCodeServerBridgeState:
     run_id: str = ""
     connection_id: str = ""
     lease_generation: str = ""
+    previous_provider_session_ids: tuple[str, ...] = ()
 
     @classmethod
     def from_mapping(cls, payload: dict) -> "OpenCodeServerBridgeState":
@@ -106,6 +110,9 @@ class OpenCodeServerBridgeState:
             run_id=str(payload.get("run_id") or ""),
             connection_id=str(payload.get("connection_id") or ""),
             lease_generation=str(payload.get("lease_generation") or ""),
+            previous_provider_session_ids=tuple(
+                str(value).strip() for value in (payload.get("previous_provider_session_ids") or ()) if str(value).strip()
+            ),
         )
 
     def redacted(self) -> dict:
@@ -148,6 +155,11 @@ def _opencode_server_lock_path(session_id: str, config_dir: Path | None = None) 
     return _opencode_server_state_dir(config_dir) / f"{session_id}.lock"
 
 
+def _opencode_provider_binding_path(session_id: str, config_dir: Path | None = None) -> Path:
+    longhouse_home = resolve_longhouse_home_from_provider_home(config_dir) if config_dir is not None else resolve_longhouse_home()
+    return longhouse_home / "managed-local" / "opencode" / "bridge" / "sessions" / f"{session_id}.json"
+
+
 @contextlib.contextmanager
 def _opencode_server_launch_lock(session_id: str, config_dir: Path | None = None):
     path = _opencode_server_lock_path(session_id, config_dir)
@@ -186,6 +198,24 @@ def _write_private_json(path: Path, payload: dict) -> None:
         with contextlib.suppress(OSError):
             os.unlink(tmp_path)
         raise
+
+
+def _write_opencode_provider_binding(state: OpenCodeServerBridgeState, *, config_dir: Path | None) -> None:
+    """Persist the secret-free provider aliases after live bridge state is removed."""
+
+    _write_private_json(
+        _opencode_provider_binding_path(state.session_id, config_dir),
+        {
+            "schema_version": 1,
+            "provider": "opencode",
+            "adapter": OPENCODE_SERVER_BRIDGE_TRANSPORT,
+            "longhouse_session_id": state.session_id,
+            "provider_session_id": state.provider_session_id,
+            "previous_provider_session_ids": list(state.previous_provider_session_ids),
+            "cwd": state.cwd,
+            "updated_at": state.updated_at,
+        },
+    )
 
 
 def read_opencode_server_bridge_state(
@@ -262,6 +292,121 @@ def _request_opencode_json(
         return json.loads(body.decode("utf-8"))
     except json.JSONDecodeError as exc:
         raise OpenCodeServerBridgeError("OpenCode server returned invalid JSON") from exc
+
+
+def _top_level_created_session_id(event: object) -> str | None:
+    if not isinstance(event, dict):
+        return None
+    payload = event.get("payload")
+    if not isinstance(payload, dict) or payload.get("type") != "session.created":
+        return None
+    properties = payload.get("properties")
+    if not isinstance(properties, dict):
+        return None
+    info = properties.get("info")
+    if not isinstance(info, dict):
+        return None
+    if str(info.get("parentID") or "").strip():
+        return None
+    provider_session_id = str(properties.get("sessionID") or info.get("id") or "").strip()
+    return provider_session_id or None
+
+
+def _update_opencode_provider_session_id(
+    *,
+    session_id: str,
+    provider_session_id: str,
+    config_dir: Path | None,
+) -> None:
+    with _opencode_server_launch_lock(session_id, config_dir):
+        state = read_opencode_server_bridge_state(session_id, config_dir=config_dir)
+        if state.provider_session_id == provider_session_id:
+            return
+        history = list(state.previous_provider_session_ids)
+        if state.provider_session_id and state.provider_session_id not in history:
+            history.append(state.provider_session_id)
+        payload = asdict(state)
+        payload["provider_session_id"] = provider_session_id
+        payload["previous_provider_session_ids"] = history
+        payload["updated_at"] = _utc_now()
+        _write_private_json(_opencode_server_state_path(session_id, config_dir), payload)
+        _write_opencode_provider_binding(OpenCodeServerBridgeState.from_mapping(payload), config_dir=config_dir)
+
+
+def _monitor_opencode_session_events(
+    *,
+    response,
+    session_id: str,
+    expected_directory: str,
+    config_dir: Path | None,
+    errors: list[Exception],
+    stopping: threading.Event | None = None,
+) -> None:
+    data_lines: list[str] = []
+    try:
+        for raw_line in response:
+            line = raw_line.decode("utf-8", errors="replace").rstrip("\r\n")
+            if line:
+                if line.startswith("data:"):
+                    data_lines.append(line.removeprefix("data:").lstrip())
+                continue
+            if not data_lines:
+                continue
+            raw_event = "\n".join(data_lines)
+            data_lines.clear()
+            try:
+                event = json.loads(raw_event)
+            except json.JSONDecodeError:
+                continue
+            event_directory = str(event.get("directory") or "").strip()
+            if not event_directory or Path(event_directory).resolve() != Path(expected_directory).resolve():
+                continue
+            provider_session_id = _top_level_created_session_id(event)
+            if provider_session_id:
+                _update_opencode_provider_session_id(
+                    session_id=session_id,
+                    provider_session_id=provider_session_id,
+                    config_dir=config_dir,
+                )
+    except Exception as exc:  # noqa: BLE001 - background monitor reports through its owner
+        if stopping is None or not stopping.is_set():
+            errors.append(exc)
+
+
+def _start_opencode_session_monitor(
+    *,
+    state: OpenCodeServerBridgeState,
+    config_dir: Path | None,
+):
+    request = Request(
+        _api_url(state.server_url, "/global/event"),
+        method="GET",
+        headers={
+            "Accept": "text/event-stream",
+            "Authorization": _authorization_header(state.username, state.password),
+        },
+    )
+    try:
+        response = urlopen(request)
+    except (HTTPError, URLError, TimeoutError, OSError) as exc:
+        raise OpenCodeServerBridgeError(f"OpenCode event stream failed: {exc}") from exc
+    errors: list[Exception] = []
+    stopping = threading.Event()
+    thread = threading.Thread(
+        target=_monitor_opencode_session_events,
+        kwargs={
+            "response": response,
+            "session_id": state.session_id,
+            "expected_directory": state.cwd,
+            "config_dir": config_dir,
+            "errors": errors,
+            "stopping": stopping,
+        },
+        name="opencode-session-identity-monitor",
+        daemon=True,
+    )
+    thread.start()
+    return response, thread, errors, stopping
 
 
 def _tail_text(path: Path, *, max_chars: int = 4000) -> str:
@@ -588,6 +733,7 @@ def launch_opencode_server_bridge(
                 lease_generation=str(uuid4()),
             )
             _write_private_json(_opencode_server_state_path(normalized_session_id, config_dir), asdict(state))
+            _write_opencode_provider_binding(state, config_dir=config_dir)
         except Exception:
             if process is not None and process.poll() is None:
                 try:
@@ -740,7 +886,22 @@ def run_opencode_attach(
         state.provider_session_id,
         *extra_args,
     ]
-    completed = subprocess.run(cmd, cwd=state.cwd, env=env, check=False)
+    event_response, event_thread, event_errors, event_stopping = _start_opencode_session_monitor(
+        state=state,
+        config_dir=config_dir,
+    )
+    try:
+        completed = subprocess.run(cmd, cwd=state.cwd, env=env, check=False)
+    finally:
+        event_stopping.set()
+        event_response.close()
+        event_thread.join(timeout=2.0)
+    if event_errors:
+        typer.secho(
+            f"Longhouse warning: OpenCode conversation identity monitor stopped: {event_errors[-1]}",
+            fg=typer.colors.YELLOW,
+            err=True,
+        )
     return int(completed.returncode)
 
 

@@ -178,7 +178,10 @@ fn native_engine_owns_idempotent_cursor_hook_configuration() {
         cursor.join("hooks.json"),
         serde_json::to_vec(&json!({
             "version": 1,
-            "hooks": {"beforeShellExecution": [{"command":"./user-hook","timeout":3}]}
+            "hooks": {"beforeShellExecution": [
+                {"command":"./user-hook","timeout":3},
+                {"command":"/tmp/longhouse-cursor-hook.py beforeShellExecution","timeout":5}
+            ]}
         }))
         .unwrap(),
     )
@@ -219,6 +222,9 @@ fn native_engine_owns_idempotent_cursor_hook_configuration() {
             .count(),
         1
     );
+    assert!(shell.iter().all(|entry| !entry["command"]
+        .as_str()
+        .is_some_and(|value| value.contains("longhouse-cursor-hook.py"))));
 }
 
 #[test]

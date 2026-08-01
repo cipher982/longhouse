@@ -164,6 +164,7 @@ pub fn start(config: StartConfig) -> Result<StartResult> {
             "launch_mode": config.launch_mode, "owner_wrapper_pid": 0, "owner_wrapper_start_time": ""
         });
         write_private_json(&state_path, &payload)?;
+        write_provider_binding(&provider_binding_path(&session_id)?, &payload)?;
         Ok(StartResult {
             session_id,
             provider_session_id,
@@ -276,12 +277,14 @@ pub fn attach(
     let monitor_server_url = state.server_url.clone();
     let monitor_username = state.username.clone();
     let monitor_password = state.password.clone();
+    let monitor_cwd = state.cwd.clone();
     let monitor_session_id = normalize_uuid(session_id, "session_id")?;
     let monitor = thread::spawn(move || {
         monitor_opencode_session_rollovers(
             &monitor_server_url,
             &monitor_username,
             &monitor_password,
+            &monitor_cwd,
             &state_path,
             &monitor_session_id,
             stop_rx,
@@ -303,6 +306,7 @@ fn monitor_opencode_session_rollovers(
     server_url: &str,
     username: &str,
     password: &str,
+    expected_directory: &str,
     state_path: &Path,
     longhouse_session_id: &str,
     mut stop: tokio::sync::watch::Receiver<bool>,
@@ -314,6 +318,7 @@ fn monitor_opencode_session_rollovers(
                 server_url,
                 username,
                 password,
+                expected_directory,
                 state_path,
                 longhouse_session_id,
                 &mut stop,
@@ -344,6 +349,7 @@ async fn monitor_opencode_events_once(
     server_url: &str,
     username: &str,
     password: &str,
+    expected_directory: &str,
     state_path: &Path,
     longhouse_session_id: &str,
     stop: &mut tokio::sync::watch::Receiver<bool>,
@@ -383,11 +389,15 @@ async fn monitor_opencode_events_once(
                 let Ok(event) = serde_json::from_str::<Value>(data.trim()) else {
                     continue;
                 };
+                if !event_matches_directory(&event, expected_directory) {
+                    continue;
+                }
                 if let Some(provider_session_id) = top_level_created_session_id(&event) {
                     update_provider_session_id(
                         state_path,
                         longhouse_session_id,
                         provider_session_id,
+                        Some(&provider_binding_path(longhouse_session_id)?),
                     )?;
                 }
             }
@@ -431,6 +441,7 @@ fn update_provider_session_id(
     state_path: &Path,
     longhouse_session_id: &str,
     provider_session_id: &str,
+    binding_path: Option<&Path>,
 ) -> Result<()> {
     let raw = fs::read(state_path)
         .with_context(|| format!("read OpenCode bridge state {}", state_path.display()))?;
@@ -465,7 +476,60 @@ fn update_provider_session_id(
     }
     state["provider_session_id"] = Value::String(provider_session_id.to_string());
     state["updated_at"] = Value::String(chrono::Utc::now().to_rfc3339());
-    write_private_json(state_path, &state)
+    write_private_json(state_path, &state)?;
+    if let Some(path) = binding_path {
+        write_provider_binding(path, &state)?;
+    }
+    Ok(())
+}
+
+fn provider_binding_path(longhouse_session_id: &str) -> Result<PathBuf> {
+    Ok(crate::config::get_longhouse_home()?
+        .join("managed-local/opencode/bridge/sessions")
+        .join(format!("{longhouse_session_id}.json")))
+}
+
+fn write_provider_binding(path: &Path, state: &Value) -> Result<()> {
+    let longhouse_session_id = state
+        .get("session_id")
+        .and_then(Value::as_str)
+        .context("OpenCode bridge state has no Longhouse session id")?;
+    let provider_session_id = state
+        .get("provider_session_id")
+        .and_then(Value::as_str)
+        .context("OpenCode bridge state has no provider session id")?;
+    write_private_json(
+        path,
+        &json!({
+            "schema_version": 1,
+            "provider": "opencode",
+            "adapter": "opencode_server_bridge",
+            "longhouse_session_id": longhouse_session_id,
+            "provider_session_id": provider_session_id,
+            "previous_provider_session_ids": state
+                .get("previous_provider_session_ids")
+                .cloned()
+                .unwrap_or_else(|| json!([])),
+            "cwd": state.get("cwd").cloned().unwrap_or(Value::Null),
+            "updated_at": state.get("updated_at").cloned().unwrap_or(Value::Null),
+        }),
+    )
+}
+
+fn paths_resolve_equal(left: &str, right: &str) -> bool {
+    match (fs::canonicalize(left), fs::canonicalize(right)) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => Path::new(left) == Path::new(right),
+    }
+}
+
+fn event_matches_directory(event: &Value, expected_directory: &str) -> bool {
+    event
+        .get("directory")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_some_and(|value| paths_resolve_equal(value, expected_directory))
 }
 
 fn state_dir(claude_dir: Option<&Path>) -> Result<PathBuf> {
@@ -759,19 +823,45 @@ mod tests {
         )
         .unwrap();
 
-        update_provider_session_id(&path, "11111111-1111-4111-8111-111111111111", "ses_new")
-            .unwrap();
+        let binding = temp.path().join("binding.json");
+        update_provider_session_id(
+            &path,
+            "11111111-1111-4111-8111-111111111111",
+            "ses_new",
+            Some(&binding),
+        )
+        .unwrap();
 
         let state: Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
         assert_eq!(state["provider_session_id"], "ses_new");
         assert_eq!(state["previous_provider_session_ids"], json!(["ses_old"]));
         assert_eq!(state["password"], "secret");
         assert_ne!(state["updated_at"], "before");
+        let binding: Value = serde_json::from_slice(&fs::read(binding).unwrap()).unwrap();
+        assert_eq!(binding["provider_session_id"], "ses_new");
+        assert_eq!(binding["previous_provider_session_ids"], json!(["ses_old"]));
+        assert!(binding.get("password").is_none());
     }
 
     #[test]
     fn accepts_lf_and_crlf_sse_boundaries() {
         assert_eq!(sse_frame_boundary("data: one\n\nnext"), Some((9, 2)));
         assert_eq!(sse_frame_boundary("data: one\r\n\r\nnext"), Some((9, 4)));
+    }
+
+    #[test]
+    fn global_events_require_the_managed_workspace() {
+        let temp = tempfile::tempdir().unwrap();
+        let expected = temp.path().to_string_lossy();
+
+        assert!(event_matches_directory(
+            &json!({"directory": expected.as_ref()}),
+            expected.as_ref()
+        ));
+        assert!(!event_matches_directory(
+            &json!({"directory": "/different"}),
+            expected.as_ref()
+        ));
+        assert!(!event_matches_directory(&json!({}), expected.as_ref()));
     }
 }

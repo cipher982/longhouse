@@ -5,11 +5,15 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 from collections.abc import Mapping
+from contextlib import closing
 from pathlib import Path
 from typing import Any
+
+from zerg.services.longhouse_paths import resolve_longhouse_home
 
 RESET_SCHEMA_VERSION = 1
 RESET_SCENARIO = "conversation_reset"
@@ -59,6 +63,52 @@ def marker_digest(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
+def longhouse_source_binding(provider: str, provider_session_id: str) -> str | None:
+    shipper_db = resolve_longhouse_home() / "agent" / "longhouse-shipper.db"
+    if not shipper_db.is_file():
+        return None
+    try:
+        with closing(sqlite3.connect(shipper_db)) as conn:
+            row = conn.execute(
+                """
+                SELECT bound_session_id
+                FROM source_epoch_registry
+                WHERE provider = ? AND provider_session_id = ?
+                ORDER BY updated_at DESC
+                LIMIT 1
+                """,
+                (provider, provider_session_id),
+            ).fetchone()
+    except sqlite3.Error:
+        return None
+    return str(row[0]).strip() if row and row[0] else None
+
+
+def longhouse_provider_aliases(provider: str, session_id: str) -> tuple[str, ...]:
+    """Return provider identities durably bound to one local Longhouse session."""
+
+    shipper_db = resolve_longhouse_home() / "agent" / "longhouse-shipper.db"
+    if not shipper_db.is_file():
+        return ()
+    try:
+        with closing(sqlite3.connect(shipper_db)) as conn:
+            rows = conn.execute(
+                """
+                SELECT provider_session_id
+                FROM source_epoch_registry
+                WHERE provider = ?
+                  AND bound_session_id = ?
+                  AND provider_session_id IS NOT NULL
+                  AND provider_session_id != ''
+                ORDER BY created_at, source_epoch
+                """,
+                (provider, session_id),
+            ).fetchall()
+    except sqlite3.Error:
+        return ()
+    return tuple(dict.fromkeys(str(row[0]).strip() for row in rows if row and str(row[0]).strip()))
+
+
 def tail_sequence(payload: Mapping[str, Any], marker_a: str, reset_command: str, marker_b: str) -> dict[str, Any]:
     """Measure marker/reset order from individual archived events.
 
@@ -99,6 +149,12 @@ def execution_summary(observation: Mapping[str, Any] | None, *, observation_path
         "observation_path": str(observation_path),
         "terminal_path": str(terminal_path),
     }
+
+
+def observation_exit_code(observation: Mapping[str, Any]) -> int:
+    """Make direct canary targets fail when their semantic assertions fail."""
+
+    return 0 if evaluate_reset_observation(observation)["status"] == "pass" else 1
 
 
 def classify_identity_transition(before: str | None, after: str | None) -> str:
@@ -207,6 +263,8 @@ def evaluate_reset_observation(observation: Mapping[str, Any]) -> dict[str, Any]
             and longhouse.get("provider_alias_matches_after") is True
         ),
     }
+    if "source_binding_matches" in longhouse:
+        assertions["longhouse_source_bound_to_managed_session"] = longhouse.get("source_binding_matches") is True
     failed = sorted(name for name, passed in assertions.items() if not passed)
     return {
         "status": "pass" if not failed else "fail",

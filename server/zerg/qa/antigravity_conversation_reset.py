@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import subprocess
+import time
 from datetime import UTC
 from datetime import datetime
 from pathlib import Path
@@ -18,12 +19,36 @@ from zerg.qa.claude_conversation_reset import _wait
 from zerg.qa.codex_conversation_reset import _observe_longhouse_tail
 from zerg.qa.conversation_reset import classify_identity_transition
 from zerg.qa.conversation_reset import execution_summary
+from zerg.qa.conversation_reset import longhouse_provider_aliases
+from zerg.qa.conversation_reset import longhouse_source_binding
 from zerg.qa.conversation_reset import marker_digest
+from zerg.qa.conversation_reset import observation_exit_code
 from zerg.qa.conversation_reset import tail_sequence
 from zerg.qa.pty_session import ProviderPtySession
 from zerg.qa.pty_session import wait_for_terminal_quiescence
 
 ISOLATED_WORKER_ENABLE_ENV = "LONGHOUSE_ANTIGRAVITY_RESET_ISOLATED_WORKER"
+
+
+def _accept_workspace_trust_if_prompted(
+    session: ProviderPtySession,
+    terminal_path: Path,
+    *,
+    timeout: float,
+) -> bool:
+    deadline = time.monotonic() + min(timeout, 30.0)
+    while time.monotonic() < deadline:
+        try:
+            terminal = terminal_path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            terminal = ""
+        if "Do you trust the contents of this project?" in terminal:
+            session.submit_line("")
+            return True
+        if not session.alive():
+            raise RuntimeError("Antigravity exited during workspace trust preflight")
+        time.sleep(0.1)
+    return False
 
 
 def _state_for_managed_session(state_root: Path, session_id: str) -> tuple[Path, dict[str, Any]] | None:
@@ -87,6 +112,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     )
     observation: dict[str, Any] | None = None
     try:
+        _accept_workspace_trust_if_prompted(session, terminal_path, timeout=args.timeout)
         wait_for_terminal_quiescence(session, timeout=args.timeout)
         session.submit_line(f"Reply with exactly {marker_a}")
         _before_state_path, before_state, before_path = _wait(
@@ -119,6 +145,26 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         )
         after_provider_id = str(after_state.get("conversation_id") or after_state.get("provider_session_id") or "")
         after_text = after_path.read_text(encoding="utf-8", errors="replace")
+        before_bound_session_id = _wait(
+            lambda: longhouse_source_binding("antigravity", before_provider_id),
+            timeout=args.timeout,
+            message="Longhouse did not bind the pre-reset Antigravity source",
+        )
+        after_bound_session_id = _wait(
+            lambda: longhouse_source_binding("antigravity", after_provider_id),
+            timeout=args.timeout,
+            message="Longhouse did not bind the post-reset Antigravity source",
+        )
+        aliases = _wait(
+            lambda: (
+                values
+                if before_provider_id in (values := longhouse_provider_aliases("antigravity", args.longhouse_session_id))
+                and after_provider_id in values
+                else None
+            ),
+            timeout=args.timeout,
+            message="Longhouse did not retain both Antigravity provider aliases",
+        )
         tail_payload = _observe_longhouse_tail(args.longhouse_session_id, marker_a, marker_b, timeout=args.archive_timeout)
         sequence = tail_sequence(tail_payload, marker_a, "/clear", marker_b)
         observation = {
@@ -161,13 +207,14 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "tail_artifact": str(output_root / "longhouse-tail.json"),
             },
             "longhouse": {
-                "provider_alias_ids": [str(after_state.get("provider_session_id") or after_state.get("conversation_id") or "")],
+                "provider_alias_ids": list(aliases),
                 "timeline_session_ids": [args.longhouse_session_id],
                 "isolated_worker": True,
-                "provider_alias_matches_before": str(after_state.get("provider_session_id") or after_state.get("conversation_id") or "")
-                == before_provider_id,
-                "provider_alias_matches_after": str(after_state.get("provider_session_id") or after_state.get("conversation_id") or "")
-                == after_provider_id,
+                "provider_alias_matches_before": before_provider_id in aliases,
+                "provider_alias_matches_after": after_provider_id in aliases,
+                "source_bound_session_id": after_bound_session_id,
+                "source_binding_matches": before_bound_session_id == args.longhouse_session_id
+                and after_bound_session_id == args.longhouse_session_id,
             },
         }
         (output_root / "longhouse-tail.json").write_text(json.dumps(tail_payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -218,7 +265,7 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"status": "failed", "error": f"{type(exc).__name__}: {exc}"}, indent=2))
         return 1
     print(json.dumps(observation, indent=2, sort_keys=True))
-    return 0
+    return observation_exit_code(observation)
 
 
 if __name__ == "__main__":
