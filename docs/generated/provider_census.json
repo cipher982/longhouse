@@ -720,7 +720,8 @@
       "providers": [
         "antigravity",
         "claude",
-        "cursor"
+        "cursor",
+        "opencode"
       ]
     },
     {
@@ -967,6 +968,7 @@
       "path": "server/tests_lite/test_permission_mode_launch.py",
       "providers": [
         "claude",
+        "codex",
         "cursor"
       ]
     },
