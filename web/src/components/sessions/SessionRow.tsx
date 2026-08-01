@@ -39,6 +39,8 @@ export interface SessionRowProps {
   highlightQuery?: string;
   relativeNowMs: number;
   closed?: boolean;
+  /** Unread band row: unacknowledged Console result (email semantics). */
+  unread?: boolean;
   /** True when this row is currently being dragged (visual hint). */
   dragging?: boolean;
   /** dnd-kit `setNodeRef`. */
@@ -59,6 +61,7 @@ export function SessionRow({
   relativeNowMs,
   highlightQuery,
   closed = false,
+  unread = false,
   dragging = false,
   forwardedRef,
   style,
@@ -74,15 +77,19 @@ export function SessionRow({
   const provider = session.provider;
   const control = getRowControlPresentation(session.session_state);
   const startedAtIso = thread.root?.started_at || session.started_at;
+  // Unread rows label by result completion, not generic activity: the band is
+  // "results waiting for you" and the row says what landed and when.
+  const unreadOutcome = session.session_state.last_result_outcome;
+  const unreadOutcomeLabel = unreadOutcome === "failed" ? "Failed" : unreadOutcome === "cancelled" ? "Cancelled" : "Finished";
   const timeLabel = getRowTimeLabel({
-    seenAt: timelineStatus?.observed_at ?? null,
-    seenAtPrefix: timelineStatus ? "Updated" : null,
+    seenAt: unread ? (session.session_state.last_result_at ?? null) : (timelineStatus?.observed_at ?? null),
+    seenAtPrefix: unread ? unreadOutcomeLabel : timelineStatus ? "Updated" : null,
     startedAt: startedAtIso,
     relativeNowMs,
   });
 
-  const statusTone = isClosed ? "closed" : (timelineStatus?.tone ?? "inactive");
-  const statusLabel = isClosed ? "Closed" : (timelineStatus?.label ?? "");
+  const statusTone = unread ? (unreadOutcome === "failed" ? "blocked" : "idle") : isClosed ? "closed" : (timelineStatus?.tone ?? "inactive");
+  const statusLabel = unread ? unreadOutcomeLabel : isClosed ? "Closed" : (timelineStatus?.label ?? "");
   // 3-stop attention signal (amber=waiting / teal=working / grey=quiet), shared
   // with iOS. Drives the dot color + the a11y label so amber isn't sight-only.
   const signal = resolveTimelineSignal(session);
@@ -131,6 +138,7 @@ export function SessionRow({
       data-thread-id={thread.thread_id}
       data-status={statusTone}
       data-closed={isClosed ? "true" : "false"}
+      data-unread={unread ? "true" : undefined}
       data-dragging={dragging ? "true" : undefined}
       style={style}
       {...(sortableAttributes ?? {})}

@@ -39,6 +39,7 @@ import { useReadinessFlag } from "../lib/readiness-contract";
 import { getRuntimeElapsedLabel } from "../lib/sessionTiming";
 import { getSessionCardText } from "../lib/sessionUtils";
 import { buildSessionShareUrl, copyToClipboard } from "../lib/clipboard";
+import { useMarkSessionRead } from "../hooks/useMarkSessionRead";
 import {
   createSessionShare,
   respondToPauseRequest,
@@ -101,6 +102,14 @@ function SessionDetailWorkspaceRoute({
     registerTimelineList,
   } = workspace;
   const nowMs = useSecondClock(Boolean(session && !isSessionClosed(session)));
+
+  // Read-on-open acknowledgement for Console results; shared viewers never
+  // acknowledge (console-unread-acknowledgement spec).
+  useMarkSessionRead({
+    sessionId,
+    sessionState: session?.session_state,
+    disabled: sharedByUserId != null || shareToken != null,
+  });
   const runtimeElapsedLabel = useMemo(
     () => getRuntimeElapsedLabel(session, turns, nowMs),
     [session, turns, nowMs],

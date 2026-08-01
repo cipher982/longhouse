@@ -58,6 +58,48 @@
     opacity: 0.62;
   }
 
+  /* ---------- Unread band ----------
+   * Email semantics: unacknowledged Console results sit between the shelf and
+   * the archive. Bold title + accent dot; clears read-on-open.
+   */
+  .inbox-unread-divider {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-2) 0 var(--space-1);
+    margin-top: var(--space-2);
+    border-top: 1px solid var(--color-border-muted);
+    color: var(--text-muted);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+
+  .inbox-unread-divider-label {
+    color: var(--color-brand-primary, var(--color-text-secondary));
+    font-weight: 700;
+  }
+
+  .inbox-unread-divider-count {
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .inbox-row[data-unread="true"] .inbox-row-title {
+    font-weight: 700;
+  }
+
+  .inbox-row[data-unread="true"] .inbox-row-title::before {
+    content: "";
+    display: inline-block;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--color-brand-primary, #3b82f6);
+    margin-right: var(--space-2);
+    vertical-align: middle;
+  }
+
   .inbox-closed-divider {
     display: flex;
     align-items: center;

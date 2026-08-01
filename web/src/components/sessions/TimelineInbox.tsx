@@ -115,11 +115,16 @@ export function TimelineInbox({
     [layout.active, layout.closed],
   );
 
-  if (layout.shelf.length === 0 && layout.active.length === 0 && layout.closed.length === 0) {
+  if (
+    layout.shelf.length === 0 &&
+    layout.unread.length === 0 &&
+    layout.active.length === 0 &&
+    layout.closed.length === 0
+  ) {
     return null;
   }
 
-  const showArchiveDivider = layout.shelf.length > 0 && layout.active.length > 0;
+  const showArchiveDivider = (layout.shelf.length > 0 || layout.unread.length > 0) && layout.active.length > 0;
 
   return (
     <div className="inbox" data-testid="timeline-inbox">
@@ -133,6 +138,29 @@ export function TimelineInbox({
           highlightQuery={highlightQuery}
           onMoveSession={moveShelf}
         />
+      ) : null}
+
+      {layout.unread.length > 0 ? (
+        <div className="inbox-section inbox-section--unread" data-testid="timeline-unread">
+          <div className="inbox-unread-divider" role="separator">
+            <span className="inbox-unread-divider-label">Unread</span>
+            <span className="inbox-unread-divider-count">{layout.unread.length}</span>
+          </div>
+          <div className="inbox-repo-rows">
+            {layout.unread.map((thread) => (
+              <SessionRow
+                key={thread.thread_id}
+                thread={thread}
+                unread
+                onClick={() => onSessionClick(thread)}
+                onPrefetch={onSessionPrefetch ? () => onSessionPrefetch(thread) : undefined}
+                allowHoverPrefetch={allowHoverPrefetch}
+                relativeNowMs={relativeNowMs}
+                highlightQuery={highlightQuery}
+              />
+            ))}
+          </div>
+        </div>
       ) : null}
 
       {showArchiveDivider ? (

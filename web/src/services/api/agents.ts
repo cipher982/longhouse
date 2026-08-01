@@ -1297,6 +1297,16 @@ export async function setSessionAction(
   });
 }
 
+export async function markSessionRead(
+  sessionId: string,
+  readThrough: string,
+): Promise<{ session_id: string; last_read_at: string | null }> {
+  return request(`${TIMELINE_SESSIONS_PREFIX}/${sessionId}/read`, {
+    method: "POST",
+    body: JSON.stringify({ read_through: readThrough }),
+  });
+}
+
 export async function setSessionTimelineVisibility(
   sessionId: string,
   hidden: boolean,

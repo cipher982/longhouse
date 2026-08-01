@@ -2203,6 +2203,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/timeline/sessions/{session_id}/read": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Mark Timeline Session Read */
+        post: operations["mark_timeline_session_read_timeline_sessions__session_id__read_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/timeline/sessions/{session_id}/loop-mode": {
         parameters: {
             query?: never;
@@ -3253,6 +3270,30 @@ export interface paths {
          * @description Set user-driven bucket state for a session (park/snooze/archive/resume).
          */
         post: operations["set_session_action_agents_sessions__session_id__action_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/sessions/{session_id}/read": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Mark Session Read
+         * @description Acknowledge a session's Console results up to the observed read_through.
+         *
+         *     Max-write: last_read_at only moves forward, and only as far as the client
+         *     actually saw (docs/specs/console-unread-acknowledgement.md). Idempotent —
+         *     acknowledging an already-read session is a no-op, not an error.
+         */
+        post: operations["mark_session_read_agents_sessions__session_id__read_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -9240,6 +9281,22 @@ export interface components {
              */
             has_more: boolean;
         };
+        /** SessionReadRequest */
+        SessionReadRequest: {
+            /**
+             * Read Through
+             * Format: date-time
+             * @description Result timestamp the client observed
+             */
+            read_through: string;
+        };
+        /** SessionReadResponse */
+        SessionReadResponse: {
+            /** Session Id */
+            session_id: string;
+            /** Last Read At */
+            last_read_at: string | null;
+        };
         /**
          * SessionResponse
          * @description Response for a single session.
@@ -9862,7 +9919,7 @@ export interface components {
         SessionStateFacts: {
             /**
              * State Contract Version
-             * @default 1
+             * @default 2
              */
             state_contract_version: number;
             /**
@@ -9889,6 +9946,15 @@ export interface components {
              * @enum {string}
              */
             working_set: "open" | "history";
+            /**
+             * Unread
+             * @default false
+             */
+            unread: boolean;
+            /** Last Result At */
+            last_result_at?: string | null;
+            /** Last Result Outcome */
+            last_result_outcome?: string | null;
             presentation: components["schemas"]["SessionPresentation"];
             /** Commit Seq */
             commit_seq?: number | null;
@@ -10498,7 +10564,7 @@ export interface components {
         ShadowSessionStateProjection: {
             /**
              * State Contract Version
-             * @default 1
+             * @default 2
              */
             state_contract_version: number;
             /** Commit Seq */
@@ -15583,6 +15649,41 @@ export interface operations {
             };
         };
     };
+    mark_timeline_session_read_timeline_sessions__session_id__read_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SessionReadRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionReadResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     set_timeline_session_loop_mode_timeline_sessions__session_id__loop_mode_patch: {
         parameters: {
             query?: never;
@@ -17562,6 +17663,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SessionActionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    mark_session_read_agents_sessions__session_id__read_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SessionReadRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionReadResponse"];
                 };
             };
             /** @description Validation Error */

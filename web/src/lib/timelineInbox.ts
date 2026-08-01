@@ -10,6 +10,7 @@ export interface InboxRepoGroup {
 
 export interface InboxLayout {
   shelf: TimelineSessionCard[];
+  unread: TimelineSessionCard[];
   active: InboxRepoGroup[];
   closed: InboxRepoGroup[];
   closedCount: number;
@@ -63,6 +64,24 @@ export function isOnShelf(card: TimelineSessionCard, _nowMs?: number): boolean {
 }
 
 /**
+ * Is this card carrying an unacknowledged Console result?
+ *
+ * Server-derived (session_state.unread): a Console turn settled and no human
+ * has opened the session since. Unread is an overlay on the tiers, not a tier —
+ * a running unread session stays on the shelf; everything else moves into the
+ * unread band until read-on-open clears it. See
+ * control-plane/docs/specs/console-unread-acknowledgement.md.
+ */
+export function isUnread(card: TimelineSessionCard): boolean {
+  return card.head?.session_state.unread === true;
+}
+
+/** Completion time of the unread result, for band sort and the row label. */
+export function unreadResultAtMs(card: TimelineSessionCard): number {
+  return parseMs(card.head?.session_state.last_result_at);
+}
+
+/**
  * Build the three-tier inbox layout:
  *   - Shelf: flat list of steerable or recent (<24h) open sessions,
  *     sorted by start time desc (frozen). Ordered by shelfOrder.
@@ -88,17 +107,24 @@ export function buildInboxLayout(
   const now = nowMs ?? Date.now();
 
   const shelfCards: TimelineSessionCard[] = [];
+  const unreadCards: TimelineSessionCard[] = [];
   const activeByRepo = new Map<string, TimelineSessionCard[]>();
   const closedByRepo = new Map<string, TimelineSessionCard[]>();
 
   for (const card of cards) {
-    if (isCardClosed(card)) {
+    // The unread band carves the card out of whichever bucket it would
+    // otherwise land in — active AND closed — never duplicates it. A running
+    // unread session stays on the shelf; its band membership re-derives when
+    // the new turn settles.
+    if (isOnShelf(card, now)) {
+      shelfCards.push(card);
+    } else if (isUnread(card)) {
+      unreadCards.push(card);
+    } else if (isCardClosed(card)) {
       const repo = getProjectLabel(card.head);
       const list = closedByRepo.get(repo);
       if (list) list.push(card);
       else closedByRepo.set(repo, [card]);
-    } else if (isOnShelf(card, now)) {
-      shelfCards.push(card);
     } else {
       const repo = getProjectLabel(card.head);
       const list = activeByRepo.get(repo);
@@ -108,6 +134,8 @@ export function buildInboxLayout(
   }
 
   shelfCards.sort((a, b) => startedAtMs(b) - startedAtMs(a));
+  // The result that just landed goes on top (matches the closed-sort rationale).
+  unreadCards.sort((a, b) => unreadResultAtMs(b) - unreadResultAtMs(a));
 
   const toGroups = (
     byRepo: Map<string, TimelineSessionCard[]>,
@@ -153,6 +181,7 @@ export function buildInboxLayout(
 
   return {
     shelf: shelfOrdered,
+    unread: unreadCards,
     active,
     closed,
     closedCount,
