@@ -1,4 +1,4 @@
-// @generated from config/provider-brands.json — do not edit by hand.
+// @generated from schemas/managed_providers.yml and config/provider-brands.json — do not edit by hand.
 // Run: python3 scripts/generate/provider_brands.py
 
 import Foundation
