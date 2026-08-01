@@ -173,3 +173,84 @@ async def test_tail_anchor_keeps_the_newest_matches(monkeypatch):
 
     assert [event.id for event in result.events] == ["legacy:19", "legacy:20"]
     assert result.has_more is True
+
+
+@pytest.mark.asyncio
+async def test_search_branch_projects_instead_of_relying_on_response_model(monkeypatch):
+    """The query branch has its own return and must narrow it explicitly.
+
+    Returning the browser listing here still produced a slim-looking payload,
+    because FastAPI coerces it to the response model by field name — so `title`
+    and `searchable`, which exist only on the machine projection, silently came
+    back as their defaults instead of the values they were meant to carry.
+    """
+    from datetime import datetime
+
+    from zerg.services.session_views import SessionResponse
+
+    session = SessionResponse(
+        id=str(uuid4()),
+        provider="claude",
+        project="zerg",
+        started_at=datetime(2026, 8, 1, 15, 7, 18),
+        user_messages=2,
+        assistant_messages=26,
+        tool_calls=154,
+        timeline_title="Implement Group C Spec",
+        thread_root_session_id=str(uuid4()),
+        thread_head_session_id=str(uuid4()),
+        thread_continuation_count=1,
+        capabilities={"live_control_available": False, "host_reattach_available": False, "reply_to_live_session_available": False},
+        session_state={
+            "mode": "shadow",
+            "disposition": {"state": "open"},
+            "activity": {"state": "unknown"},
+            "control": {
+                "ownership": "unowned",
+                "connection": "not_applicable",
+                "actions": {
+                    "start_turn": {"state": "unavailable", "reason": "not_console"},
+                    "send_input": {"state": "unavailable", "reason": "observe_only"},
+                    "interrupt": {"state": "unavailable", "reason": "observe_only"},
+                    "terminate": {"state": "unavailable", "reason": "observe_only"},
+                    "reattach": {"state": "unavailable", "reason": "observe_only"},
+                    "resume": {"state": "unavailable", "reason": "observe_only"},
+                },
+            },
+            "transcript": {"convergence": "current", "searchable": True},
+            "host": {"state": "online"},
+            "presentation": {},
+        },
+        runtime_display={
+            "truth_tier": "none", "signal_tier": "none", "state": None, "tone": "inactive",
+            "headline": "Inactive", "detail": None, "phase_label": "Inactive", "compact_tool_label": None,
+            "is_live": False, "is_executing": False, "needs_attention": False, "is_idle": False,
+            "is_stalled": False, "is_managed_local_truth": False, "has_signal": False,
+            "control_path": "unmanaged", "activity_recency": "none", "lifecycle": "open",
+            "host_state": "online", "terminal_reason": None,
+        },
+        timeline_card={
+            "ownership": {"label": "Unmanaged", "tone": "neutral"},
+            "status": {"label": "Activity unknown", "tone": "inactive", "seen_at_prefix": "Checked"},
+            "border_tone": "inactive",
+        },
+    )
+
+    monkeypatch.setattr(agents_sessions.database_module, "live_catalog_enabled", lambda: True)
+
+    async def fake_search(**_kwargs):
+        return [session]
+
+    monkeypatch.setattr(agents_sessions, "search_storage_v2_sessions", fake_search)
+
+    result = await agents_sessions.list_sessions(
+        project="zerg", provider=None, environment=None, include_test=False,
+        hide_autonomous=True, include_automation=False, device_id=None, days_back=7,
+        query="group c", limit=20, offset=0, sort=None, mode=None,
+        context_mode="forensic", db=None,
+        _auth=SimpleNamespace(owner_id=42), _single=None,
+    )
+
+    served = result.sessions[0]
+    assert served.title == "Implement Group C Spec", "the search branch must project, not defer to the response model"
+    assert served.searchable is True

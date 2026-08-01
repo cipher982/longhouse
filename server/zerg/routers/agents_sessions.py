@@ -642,7 +642,7 @@ async def list_sessions(
                     device_id=device_id,
                 )
                 page = sessions[offset : offset + limit]
-                return SessionsListResponse(sessions=page, total=len(sessions), has_real_sessions=bool(sessions))
+                return _machine_sessions_list(SessionsListResponse(sessions=page, total=len(sessions), has_real_sessions=bool(sessions)))
             if (mode or "lexical") != "lexical":
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
