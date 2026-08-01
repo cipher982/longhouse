@@ -103,38 +103,23 @@ def test_absent_control_path_is_transient():
     "error",
     [
         "Failed to send command to Machine Agent control channel",
-        "Machine control channel was replaced",
-        "Machine Agent control channel is offline",
+        "Machine Agent control command timed out after 15 seconds",
     ],
 )
-def test_unsent_transport_failures_are_transient_whatever_the_wording(error: str):
-    # Regression on the first implementation, which classified by substring and
-    # therefore consumed real transport errors. Classification comes from typed
-    # fields so rewording a message cannot start eating input.
+def test_transport_failures_are_never_retried(error: str):
+    """Past the send, the input is consumed even though it may not have landed.
+
+    A transport failure has already created a control operation, and the socket
+    may have written the frame before failing. Replaying needs durable engine
+    dedupe (today an in-memory cache) and a grant that survived the reconnect
+    (today a new lease generation revokes it). Neither holds, so retrying risks
+    delivering the prompt twice — worse than dropping it.
+    """
     result = ManagedControlDispatchResult(
         ok=False,
         transport="engine_channel",
         error=error,
         failure_kind=DISPATCH_FAILURE_TRANSPORT,
-        failure_reason="not_sent",
-    )
-    assert _is_transient_delivery_failure(result) is True
-
-
-def test_ambiguous_timeout_is_not_retried():
-    """A timeout must consume the input until dedupe survives engine restart.
-
-    We stopped waiting; the engine may already have accepted and run the
-    command. Engine dedupe is an in-memory cache, so a retry across a restart
-    could inject the same prompt twice. Duplicating a user's message is worse
-    than dropping it, so this deliberately does not retry.
-    """
-    result = ManagedControlDispatchResult(
-        ok=False,
-        transport="engine_channel",
-        error="Machine Agent control command timed out after 15 seconds",
-        failure_kind=DISPATCH_FAILURE_TRANSPORT,
-        failure_reason="ambiguous",
     )
     assert _is_transient_delivery_failure(result) is False
 
@@ -379,10 +364,10 @@ async def test_transient_dispatch_failure_requeues_then_delivers(monkeypatch):
         if len(seen_request_ids) == 1:
             return ManagedControlDispatchResult(
                 ok=False,
-                transport="engine_channel",
-                error="Machine control channel was replaced",
-                failure_kind=DISPATCH_FAILURE_TRANSPORT,
-                failure_reason="not_sent",
+                transport=MANAGED_CONTROL_TRANSPORT_NONE,
+                error=MANAGED_CONTROL_UNAVAILABLE_ERROR,
+                failure_kind=DISPATCH_FAILURE_PRECONDITION,
+                failure_reason="control_unavailable",
             )
         return ManagedControlDispatchResult(ok=True, transport="engine_channel", data={"exit_code": 0})
 
@@ -419,3 +404,57 @@ async def test_transient_dispatch_failure_requeues_then_delivers(monkeypatch):
     assert finish_statuses == ["queued", "delivered"]
     # And both attempts seeded the engine command id from the durable receipt.
     assert seen_request_ids == [receipt_id, receipt_id]
+
+
+def test_claiming_skips_an_input_that_aged_out_while_unclaimable(orm: Session):
+    """Age is enforced at claim, not only after a failed dispatch.
+
+    A receipt on an offline machine is never claimed at all, so it never burns
+    an attempt and never reaches the requeue path. Without an age predicate on
+    the claim it would be delivered the moment the session woke up — a prompt
+    sent this morning arriving after lunch.
+    """
+    from zerg.services.live_session_inputs import claim_next_live_queued_receipt
+
+    session_id = str(uuid4())
+    stale = LiveSessionInputReceipt(
+        id=str(uuid4()),
+        owner_id=1,
+        session_id=session_id,
+        provider="claude",
+        intent="queue",
+        status="queued",
+        text="sent hours ago",
+        created_at=datetime.now(UTC) - MAX_DELIVERY_AGE - timedelta(minutes=5),
+        updated_at=datetime.now(UTC),
+    )
+    orm.add(stale)
+    orm.commit()
+
+    claimed = claim_next_live_queued_receipt(orm, session_id=session_id, delivery_request_id="attempt-1")
+
+    assert claimed is None
+
+
+def test_claiming_still_takes_a_fresh_input(orm: Session):
+    from zerg.services.live_session_inputs import claim_next_live_queued_receipt
+
+    session_id = str(uuid4())
+    fresh = LiveSessionInputReceipt(
+        id=str(uuid4()),
+        owner_id=1,
+        session_id=session_id,
+        provider="claude",
+        intent="queue",
+        status="queued",
+        text="sent a minute ago",
+        created_at=datetime.now(UTC) - timedelta(minutes=1),
+        updated_at=datetime.now(UTC),
+    )
+    orm.add(fresh)
+    orm.commit()
+
+    claimed = claim_next_live_queued_receipt(orm, session_id=session_id, delivery_request_id="attempt-1")
+
+    assert claimed is not None
+    assert claimed.id == fresh.id

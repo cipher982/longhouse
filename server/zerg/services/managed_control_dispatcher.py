@@ -499,30 +499,24 @@ async def _dispatch_engine_channel(
         command_id=command_id,
     )
     if not response.transport_ok:
-        certainty = getattr(response, "delivery_certainty", None)
-        never_sent = certainty == "not_sent"
-        if not never_sent:
-            # Ambiguous: the engine may already have accepted and run this.
-            # Finalize so a retry cannot duplicate it — engine dedupe is an
-            # in-memory cache and does not survive restart, so replay is not
-            # safe here yet.
-            await _finish_live_managed_control_operation(
-                operation_id=live_operation_id,
-                status="failed",
-                error={
-                    "code": "machine_control_transport_failed",
-                    "message": response.error or "Machine Agent control channel dispatch failed",
-                },
-            )
+        # Always terminal. A dispatch that reached the channel may have been
+        # accepted before failing, and the operation is already created, so
+        # replaying it would need both durable engine dedupe and a grant that
+        # survived the reconnect. Neither holds today. Retry is confined to
+        # precondition failures, which occur before any operation exists.
+        await _finish_live_managed_control_operation(
+            operation_id=live_operation_id,
+            status="failed",
+            error={
+                "code": "machine_control_transport_failed",
+                "message": response.error or "Machine Agent control channel dispatch failed",
+            },
+        )
         return ManagedControlDispatchResult(
             ok=False,
             transport=MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL,
             error=response.error or "Machine Agent control channel dispatch failed",
             failure_kind=DISPATCH_FAILURE_TRANSPORT,
-            # Only a provably-unsent command may be retried. Leaving its
-            # operation un-finalized is what lets the deterministic id replay
-            # instead of coming back as operation_finished.
-            failure_reason="not_sent" if never_sent else "ambiguous",
         )
 
     message = response.message or {}

@@ -209,11 +209,18 @@ def claim_next_live_queued_receipt(
     session_id: UUID | str,
     delivery_request_id: str,
 ) -> LiveInputReceiptSnapshot | None:
+    # Age is enforced here, not only after a failed dispatch. A receipt that was
+    # never claimable — offline machine, activity that never became drainable —
+    # would otherwise sit untouched for hours and then be injected the moment
+    # the session woke up. Nobody wants a prompt they sent this morning arriving
+    # after lunch.
+    cutoff = datetime.now(timezone.utc) - MAX_DELIVERY_AGE
     candidate = (
         db.query(LiveSessionInputReceipt)
         .filter(
             LiveSessionInputReceipt.session_id == _session_key(session_id),
             LiveSessionInputReceipt.status == INPUT_STATUS_QUEUED,
+            LiveSessionInputReceipt.created_at >= cutoff,
         )
         .order_by(LiveSessionInputReceipt.created_at.asc(), LiveSessionInputReceipt.id.asc())
         .first()

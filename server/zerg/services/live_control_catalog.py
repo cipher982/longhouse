@@ -448,42 +448,37 @@ def _is_transient_delivery_failure(result: "ManagedControlDispatchResult") -> bo
     Read from typed fields, never error text: matching prose is how a reworded
     message silently starts eating user input.
 
-    Retry only when the command provably never reached the provider. Two cases
-    qualify:
+    Retry is confined to *precondition* failures — the control path was not
+    available, so nothing was prepared and nothing was sent. That is the only
+    surface where retry is unambiguously safe, and it is the one the reported
+    incident lands on: a peer whose channel was momentarily down.
 
-    - transport with reason "not_sent": no channel, or the send itself failed.
-      The operation is left un-finalized so the retry replays it.
-    - a precondition a later attempt could plausibly satisfy — the machine is
-      offline, the lease lapsed, control has not reconverged.
+    Everything past that point is consumed, deliberately:
 
-    Everything else consumes the input. Notably an *ambiguous* transport
-    failure (a timeout) does not retry: the engine may already have accepted
-    and run the command, and its dedupe is an in-memory cache that does not
-    survive restart. Retrying there would risk injecting the same prompt twice,
-    which is worse than dropping it. Revisit once dedupe is durable.
+    - A transport failure has already created a control operation, and the
+      websocket may have written the frame before raising. Replaying needs both
+      durable engine dedupe (today an in-memory cache) and a grant that survived
+      the reconnect (today a new lease generation revokes it). Neither holds, so
+      a retry would risk injecting the prompt twice.
+    - A provider that saw the input and refused it should not be retried at all.
+
+    Dropping a message is bad; delivering it twice is worse.
     """
 
     from zerg.services.managed_control_dispatcher import DISPATCH_FAILURE_PRECONDITION
-    from zerg.services.managed_control_dispatcher import DISPATCH_FAILURE_TRANSPORT
 
-    kind = getattr(result, "failure_kind", None)
-    reason = str(getattr(result, "failure_reason", "") or "")
-    if kind == DISPATCH_FAILURE_TRANSPORT:
-        return reason == "not_sent"
-    if kind == DISPATCH_FAILURE_PRECONDITION:
-        return reason in _RETRYABLE_PRECONDITIONS
-    return False
+    if getattr(result, "failure_kind", None) != DISPATCH_FAILURE_PRECONDITION:
+        return False
+    return str(getattr(result, "failure_reason", "") or "") in _RETRYABLE_PRECONDITIONS
 
 
 # catalogd prepare reasons a later attempt can plausibly satisfy.
 #
-# Enumerated against the real vocabulary rather than guessed: control_unavailable,
-# connection_unavailable, control_head_missing, lease_expired and identity_unbound
-# all describe a control path that has not (yet) converged, and converge on
+# All describe a control path that has not converged yet and does converge on
 # reconnect. Deliberately excluded: idempotency_conflict and operation_finished
-# (a retry can never satisfy them and would burn the budget), unsupported,
-# session_closed, run_ended, identity_diverged, control_head_rejected, not_granted
-# and grant_revoked (all decisions about this session that waiting will not change).
+# (a retry can never satisfy them), and unsupported, session_closed, run_ended,
+# identity_diverged, control_head_rejected, not_granted, grant_revoked — all
+# decisions about this session that waiting will not change.
 _RETRYABLE_PRECONDITIONS = frozenset(
     {
         "control_unavailable",
