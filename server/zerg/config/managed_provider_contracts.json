@@ -80,6 +80,34 @@
       "live_proof": false,
       "startup_coordination_context": false,
       "capabilities": {
+        "session.activity.turn_boundary": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.codex.activity_turn_boundary",
+          "action_gate": "ceiling",
+          "contexts": {
+            "modes": [
+              "helm",
+              "console"
+            ]
+          },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
+          "required_assertions": [
+            {
+              "id": "activity_returns_to_quiescent_at_turn_boundary",
+              "scenario_id": "codex_turn_boundary_quiescent",
+              "oracle_source": "server/zerg/qa/codex_provider_release_canary.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "cb9d50f46e84858fa988d01540d45b64020146063bf589e19cdf64f55fd33b3e"
+            }
+          ]
+        },
         "coordination.awareness.create": {
           "disposition": "implemented",
           "reason_code": "semantic_proof_missing",
@@ -368,6 +396,34 @@
       "live_proof": true,
       "startup_coordination_context": true,
       "capabilities": {
+        "session.activity.turn_boundary": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.claude.activity_turn_boundary",
+          "action_gate": "ceiling",
+          "contexts": {
+            "modes": [
+              "helm",
+              "console"
+            ]
+          },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
+          "required_assertions": [
+            {
+              "id": "activity_returns_to_quiescent_at_turn_boundary",
+              "scenario_id": "claude_turn_boundary_quiescent",
+              "oracle_source": "server/zerg/qa/managed_claude_live.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "b74425734e664313283479705688cb7c1594ee290ab50e83db499c8863ded38a"
+            }
+          ]
+        },
         "session.launch.helm": {
           "disposition": "implemented",
           "reason_code": "semantic_proof_missing",
@@ -705,6 +761,34 @@
       "live_proof": true,
       "startup_coordination_context": false,
       "capabilities": {
+        "session.activity.turn_boundary": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.opencode.activity_turn_boundary",
+          "action_gate": "ceiling",
+          "contexts": {
+            "modes": [
+              "helm",
+              "console"
+            ]
+          },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
+          "required_assertions": [
+            {
+              "id": "activity_returns_to_quiescent_at_turn_boundary",
+              "scenario_id": "opencode_turn_boundary_quiescent",
+              "oracle_source": "server/zerg/qa/opencode_server_qualification.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "9acae2657018ba644824392e9aa28d76e4ed8633fc3e245b246656497cbb0f20"
+            }
+          ]
+        },
         "session.launch.helm": {
           "disposition": "implemented",
           "reason_code": "semantic_proof_missing",
@@ -916,6 +1000,33 @@
       "live_proof": false,
       "startup_coordination_context": false,
       "capabilities": {
+        "session.activity.turn_boundary": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.antigravity.activity_turn_boundary",
+          "action_gate": "ceiling",
+          "contexts": {
+            "modes": [
+              "helm"
+            ]
+          },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
+          "required_assertions": [
+            {
+              "id": "activity_returns_to_quiescent_at_turn_boundary",
+              "scenario_id": "antigravity_turn_boundary_quiescent",
+              "oracle_source": "server/zerg/qa/antigravity_hook_qualification.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "83e04690e1871918ea99447feb6be2cad56e1d302a73d96dc31bbd15f1b5f318"
+            }
+          ]
+        },
         "session.launch.helm": {
           "disposition": "implemented",
           "reason_code": "semantic_proof_missing",
@@ -1124,6 +1235,33 @@
       "live_proof": false,
       "startup_coordination_context": false,
       "capabilities": {
+        "session.activity.turn_boundary": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.cursor.activity_turn_boundary",
+          "action_gate": "ceiling",
+          "contexts": {
+            "modes": [
+              "helm"
+            ]
+          },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
+          "required_assertions": [
+            {
+              "id": "activity_returns_to_quiescent_at_turn_boundary",
+              "scenario_id": "cursor_turn_boundary_quiescent",
+              "oracle_source": "server/zerg/qa/cursor_helm_product_e2e.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "faafbccd0d3ddd5c1daae9e41c0bb120c2ae9aafde7f695aa3adc41f13c69a0f"
+            }
+          ]
+        },
         "coordination.awareness.create": {
           "disposition": "implemented",
           "reason_code": "semantic_proof_missing",

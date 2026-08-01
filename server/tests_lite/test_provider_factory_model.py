@@ -21,9 +21,13 @@ def test_capability_assertions_match_schema_scenario_count(facts) -> None:
     # a fact `steer_active_turn` and `operation_evidence` already carry, and
     # their oracle had no caller anywhere, so the assertions could never be
     # satisfied or refuted.
+    # 11 -> 16 scenarios and 19 -> 24 assertions on 2026-08-01: every provider
+    # gained a `session.activity.turn_boundary` cell. None of the five has an
+    # automated producer yet, so they all surface in the manual lane rather than
+    # silently reading as covered.
     scenario_ids = {a.scenario_id for a in facts.capability_assertions}
-    assert len(scenario_ids) == 11
-    assert len(facts.capability_assertions) == 19
+    assert len(scenario_ids) == 16
+    assert len(facts.capability_assertions) == 24
 
 
 def test_orphaned_scenario_ids_are_a_subset_of_schema_scenario_ids(facts) -> None:
@@ -176,7 +180,7 @@ def test_manual_trigger_runs_for_codex_because_of_the_live_token_gap(facts) -> N
     # manual run even though the scenario_id also has an automated CI producer.
     cell = plan_run(facts, "codex", "observed_install", "manual")
     assert cell.status == "runs"
-    assert cell.scenario_ids == (PUSH_CODEX_COORDINATION_SCENARIO_ID,)
+    assert cell.scenario_ids == (PUSH_CODEX_COORDINATION_SCENARIO_ID, "codex_turn_boundary_quiescent")
 
 
 def test_manual_trigger_runs_for_antigravity_because_live_print_is_permanently_blocked(facts) -> None:

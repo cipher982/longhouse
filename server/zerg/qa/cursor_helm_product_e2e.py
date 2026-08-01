@@ -208,6 +208,21 @@ def _can_send_live(payload: dict[str, Any]) -> bool:
     return isinstance(capabilities, dict) and capabilities.get("can_send_input") is True
 
 
+def _activity_state(state: dict[str, Any] | None) -> str | None:
+    activity = (state or {}).get("activity")
+    return activity.get("state") if isinstance(activity, dict) else None
+
+
+def _run_lifecycle(state: dict[str, Any] | None) -> str | None:
+    run = (state or {}).get("run")
+    return run.get("lifecycle") if isinstance(run, dict) else None
+
+
+def _run_id(state: dict[str, Any] | None) -> str | None:
+    run = (state or {}).get("run")
+    return run.get("id") if isinstance(run, dict) else None
+
+
 def _session_locked(response: httpx.Response) -> bool:
     if response.status_code != 409:
         return False
@@ -346,12 +361,36 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
                 params={"context_mode": "forensic", "branch_mode": "head", "limit": 100},
             )
 
+        def session_state() -> dict[str, Any] | None:
+            payload = api_get(f"/api/agents/sessions/{session_id}")
+            state = payload.get("session_state") if payload else None
+            return state if isinstance(state, dict) else None
+
+        def settled(deadline: float) -> dict[str, Any]:
+            """Served activity must return to quiescent once a turn is done.
+
+            Transcript arrival and the activity axis are independent. Waiting
+            only for reply text is what let a finished turn keep reading as
+            `Thinking` on every surface: the last shipped activity fact stayed
+            `thinking` until its TTL expired, then went to `unknown` instead of
+            quiescent. Assert the state the user actually sees, not just that
+            the words showed up.
+            """
+
+            return _wait_until(
+                lambda: (state if _activity_state(state) == "quiescent" else None) if (state := session_state()) else None,
+                timeout=deadline,
+                description="served Cursor activity settling to quiescent after the turn",
+            )
+
         first = _wait_until(
             lambda: (payload if marker_one in _assistant_texts(payload) else None) if (payload := hosted_events()) else None,
             timeout=args.timeout,
             description="first Cursor reply in hosted archive",
         )
         first_archive_lag = (datetime.now(UTC) - _response_observed_at(_hook_rows(root, session_id), marker_one)).total_seconds()
+        first_settled = settled(args.timeout)
+        bound_run_id = _run_id(first_settled)
         _wait_until(
             lambda: (payload if _can_send_live(payload) else None) if (payload := api_get(f"/api/agents/sessions/{session_id}")) else None,
             timeout=args.timeout,
@@ -364,6 +403,7 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
             description="remote Cursor reply in hosted archive",
         )
         second_archive_lag = (datetime.now(UTC) - _response_observed_at(_hook_rows(root, session_id), marker_two)).total_seconds()
+        settled(args.timeout)
 
         machine_agent_restart = None
         restart_archive_lag = None
@@ -476,6 +516,7 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
             description="post-cancel Cursor recovery in hosted archive",
         )
         recovery_archive_lag = (datetime.now(UTC) - _response_observed_at(_hook_rows(root, session_id), recovery)).total_seconds()
+        settled(args.timeout)
         archive_lags = [first_archive_lag, second_archive_lag, recovery_archive_lag]
         if restart_archive_lag is not None:
             archive_lags.append(restart_archive_lag)
@@ -483,9 +524,29 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
             raise RuntimeError(
                 f"Cursor archive lag exceeded {args.max_archive_lag:.1f}s: " + ", ".join(f"{value:.2f}s" for value in archive_lags)
             )
+
+        # Everything above happens while the session is alive. Teardown is its
+        # own failure surface and used to be unobservable here: the canary sent
+        # `stop` and wrote its report without ever reading the session again,
+        # so a run that outlived the session, or a session left reading
+        # `running` forever, passed clean.
+        _engine_command(engine, session_id, "stop")
+        ended = _wait_until(
+            lambda: (state if _run_lifecycle(state) == "ended" else None) if (state := session_state()) else None,
+            timeout=args.timeout,
+            description="Cursor run reaching ended after session teardown",
+        )
+        if bound_run_id is not None and _run_id(ended) != bound_run_id:
+            raise RuntimeError(f"Cursor session changed runs across its life: started on {bound_run_id}, ended on {_run_id(ended)}")
+        if _activity_state(ended) == "thinking":
+            raise RuntimeError("Cursor session still reports thinking after teardown")
+        settled_state = _activity_state(ended)
         report.update(
             {
                 "status": "passed",
+                "run_lifecycle_after_teardown": "ended",
+                "activity_after_teardown": settled_state,
+                "run_id_stable_across_session": True,
                 "finished_at": _now(),
                 "session_id": session_id,
                 "provider_conversation_id": claim["conversation_uuid"],

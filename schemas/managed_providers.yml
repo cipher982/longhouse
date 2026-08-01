@@ -72,6 +72,21 @@ providers:
   # context. This avoids Codex's deferred post-compaction SessionStart cards.
   startup_coordination_context: false
   capabilities:
+    session.activity.turn_boundary:
+      disposition: implemented
+      reason_code: semantic_proof_missing
+      policy_key: provider.codex.activity_turn_boundary
+      action_gate: ceiling
+      contexts:
+        modes: [helm, console]
+      runtime_prerequisites: [session_context]
+      required_assertions:
+      - id: activity_returns_to_quiescent_at_turn_boundary
+        scenario_id: codex_turn_boundary_quiescent
+        oracle_source: server/zerg/qa/codex_provider_release_canary.py
+        minimum_scenario_revision: 1
+        acceptable_evidence: [live_token]
+        max_age_seconds: 604800
     coordination.awareness.create:
       disposition: implemented
       reason_code: semantic_proof_missing
@@ -273,6 +288,21 @@ providers:
   live_proof: true
   startup_coordination_context: true
   capabilities:
+    session.activity.turn_boundary:
+      disposition: implemented
+      reason_code: semantic_proof_missing
+      policy_key: provider.claude.activity_turn_boundary
+      action_gate: ceiling
+      contexts:
+        modes: [helm, console]
+      runtime_prerequisites: [session_context]
+      required_assertions:
+      - id: activity_returns_to_quiescent_at_turn_boundary
+        scenario_id: claude_turn_boundary_quiescent
+        oracle_source: server/zerg/qa/managed_claude_live.py
+        minimum_scenario_revision: 1
+        acceptable_evidence: [live_token]
+        max_age_seconds: 604800
     session.launch.helm:
       disposition: implemented
       reason_code: semantic_proof_missing
@@ -504,6 +534,21 @@ providers:
   live_proof: true
   startup_coordination_context: false
   capabilities:
+    session.activity.turn_boundary:
+      disposition: implemented
+      reason_code: semantic_proof_missing
+      policy_key: provider.opencode.activity_turn_boundary
+      action_gate: ceiling
+      contexts:
+        modes: [helm, console]
+      runtime_prerequisites: [session_context]
+      required_assertions:
+      - id: activity_returns_to_quiescent_at_turn_boundary
+        scenario_id: opencode_turn_boundary_quiescent
+        oracle_source: server/zerg/qa/opencode_server_qualification.py
+        minimum_scenario_revision: 1
+        acceptable_evidence: [live_token]
+        max_age_seconds: 604800
     session.launch.helm:
       disposition: implemented
       reason_code: semantic_proof_missing
@@ -672,6 +717,21 @@ providers:
   live_proof: false
   startup_coordination_context: false
   capabilities:
+    session.activity.turn_boundary:
+      disposition: implemented
+      reason_code: semantic_proof_missing
+      policy_key: provider.antigravity.activity_turn_boundary
+      action_gate: ceiling
+      contexts:
+        modes: [helm]
+      runtime_prerequisites: [session_context]
+      required_assertions:
+      - id: activity_returns_to_quiescent_at_turn_boundary
+        scenario_id: antigravity_turn_boundary_quiescent
+        oracle_source: server/zerg/qa/antigravity_hook_qualification.py
+        minimum_scenario_revision: 1
+        acceptable_evidence: [live_token]
+        max_age_seconds: 604800
     session.launch.helm:
       disposition: implemented
       reason_code: semantic_proof_missing
@@ -848,6 +908,21 @@ providers:
   live_proof: false
   startup_coordination_context: false
   capabilities:
+    session.activity.turn_boundary:
+      disposition: implemented
+      reason_code: semantic_proof_missing
+      policy_key: provider.cursor.activity_turn_boundary
+      action_gate: ceiling
+      contexts:
+        modes: [helm]
+      runtime_prerequisites: [session_context]
+      required_assertions:
+      - id: activity_returns_to_quiescent_at_turn_boundary
+        scenario_id: cursor_turn_boundary_quiescent
+        oracle_source: server/zerg/qa/cursor_helm_product_e2e.py
+        minimum_scenario_revision: 1
+        acceptable_evidence: [live_token]
+        max_age_seconds: 604800
     coordination.awareness.create:
       disposition: implemented
       reason_code: semantic_proof_missing

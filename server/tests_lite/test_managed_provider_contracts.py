@@ -191,21 +191,26 @@ def test_semantic_capabilities_include_exact_coordination_and_steer_limitations(
         "coordination.directed_input.send",
         "coordination.directed_input.receive",
     }
-    assert set(claude.capabilities) == expected | {"session.launch.helm", "session.turn.start"}
-    assert set(codex.capabilities) == expected
-    assert set(opencode.capabilities) == {"session.launch.helm", "session.reattach.helm"}
+    # Every provider declares the turn-boundary cell: a finished turn must stop
+    # reading as working. It was a bare `runtime_phase: true` boolean with no
+    # oracle behind it until 2026-08-01, which is how a Cursor session sat in
+    # `Thinking` for 86 seconds after replying without any lane noticing.
+    turn_boundary = {"session.activity.turn_boundary"}
+    assert set(claude.capabilities) == expected | turn_boundary | {"session.launch.helm", "session.turn.start"}
+    assert set(codex.capabilities) == expected | turn_boundary
+    assert set(opencode.capabilities) == turn_boundary | {"session.launch.helm", "session.reattach.helm"}
     cursor = contract_for_provider("cursor")
     antigravity = contract_for_provider("antigravity")
     assert cursor is not None and antigravity is not None
     # Cursor gained coordination once its launcher wired an MCP entry that
     # resolves per-session authority. post_compaction is absent because Cursor
     # has no compaction hook to bootstrap from.
-    assert set(cursor.capabilities) == {
+    assert set(cursor.capabilities) == turn_boundary | {
         "coordination.awareness.create",
         "coordination.directed_input.send",
         "coordination.directed_input.receive",
     }
-    assert set(antigravity.capabilities) == {
+    assert set(antigravity.capabilities) == turn_boundary | {
         "session.launch.helm",
         "session.input.send",
     }

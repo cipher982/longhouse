@@ -18,8 +18,8 @@
     "weekly_cron",
     "manual"
   ],
-  "never_run_count": 39,
-  "runs_count": 21,
+  "never_run_count": 33,
+  "runs_count": 27,
   "cells": [
     {
       "provider": "antigravity",
@@ -30,11 +30,21 @@
       "qualification_profile": null,
       "qualification_profiles": [],
       "scenario_ids": [
-        "antigravity_hook_inbox"
+        "antigravity_hook_inbox",
+        "antigravity_turn_boundary_quiescent"
       ],
       "harness_scenarios": [],
       "credential_requirement": [],
       "assertion_status": [
+        {
+          "assertion_id": "activity_returns_to_quiescent_at_turn_boundary",
+          "scenario_id": "antigravity_turn_boundary_quiescent",
+          "acceptable_evidence": [
+            "live_token"
+          ],
+          "producible_evidence": [],
+          "satisfiable": false
+        },
         {
           "assertion_id": "real_print_injection_observed",
           "scenario_id": "antigravity_hook_inbox",
@@ -122,11 +132,21 @@
       "qualification_profile": null,
       "qualification_profiles": [],
       "scenario_ids": [
-        "antigravity_hook_inbox"
+        "antigravity_hook_inbox",
+        "antigravity_turn_boundary_quiescent"
       ],
       "harness_scenarios": [],
       "credential_requirement": [],
       "assertion_status": [
+        {
+          "assertion_id": "activity_returns_to_quiescent_at_turn_boundary",
+          "scenario_id": "antigravity_turn_boundary_quiescent",
+          "acceptable_evidence": [
+            "live_token"
+          ],
+          "producible_evidence": [],
+          "satisfiable": false
+        },
         {
           "assertion_id": "real_print_injection_observed",
           "scenario_id": "antigravity_hook_inbox",
@@ -186,11 +206,21 @@
       "qualification_profile": null,
       "qualification_profiles": [],
       "scenario_ids": [
-        "antigravity_hook_inbox"
+        "antigravity_hook_inbox",
+        "antigravity_turn_boundary_quiescent"
       ],
       "harness_scenarios": [],
       "credential_requirement": [],
       "assertion_status": [
+        {
+          "assertion_id": "activity_returns_to_quiescent_at_turn_boundary",
+          "scenario_id": "antigravity_turn_boundary_quiescent",
+          "acceptable_evidence": [
+            "live_token"
+          ],
+          "producible_evidence": [],
+          "satisfiable": false
+        },
         {
           "assertion_id": "real_print_injection_observed",
           "scenario_id": "antigravity_hook_inbox",
@@ -293,14 +323,26 @@
       "provider": "claude",
       "build_provenance": "generated_fake",
       "trigger": "manual",
-      "status": "never_run",
-      "reason": "remaining capability-proof scenario_ids for claude are orphaned: ['claude_coordination_awareness_create', 'claude_coordination_awareness_post_compaction', 'claude_coordination_directed_input']",
+      "status": "runs",
+      "reason": "has at least one capability-proof assertion no automated trigger can satisfy",
       "qualification_profile": null,
       "qualification_profiles": [],
-      "scenario_ids": [],
+      "scenario_ids": [
+        "claude_turn_boundary_quiescent"
+      ],
       "harness_scenarios": [],
       "credential_requirement": [],
-      "assertion_status": []
+      "assertion_status": [
+        {
+          "assertion_id": "activity_returns_to_quiescent_at_turn_boundary",
+          "scenario_id": "claude_turn_boundary_quiescent",
+          "acceptable_evidence": [
+            "live_token"
+          ],
+          "producible_evidence": [],
+          "satisfiable": false
+        }
+      ]
     },
     {
       "provider": "claude",
@@ -373,14 +415,26 @@
       "provider": "claude",
       "build_provenance": "observed_install",
       "trigger": "manual",
-      "status": "never_run",
-      "reason": "remaining capability-proof scenario_ids for claude are orphaned: ['claude_coordination_awareness_create', 'claude_coordination_awareness_post_compaction', 'claude_coordination_directed_input']",
+      "status": "runs",
+      "reason": "has at least one capability-proof assertion no automated trigger can satisfy",
       "qualification_profile": null,
       "qualification_profiles": [],
-      "scenario_ids": [],
+      "scenario_ids": [
+        "claude_turn_boundary_quiescent"
+      ],
       "harness_scenarios": [],
       "credential_requirement": [],
-      "assertion_status": []
+      "assertion_status": [
+        {
+          "assertion_id": "activity_returns_to_quiescent_at_turn_boundary",
+          "scenario_id": "claude_turn_boundary_quiescent",
+          "acceptable_evidence": [
+            "live_token"
+          ],
+          "producible_evidence": [],
+          "satisfiable": false
+        }
+      ]
     },
     {
       "provider": "claude",
@@ -425,14 +479,26 @@
       "provider": "claude",
       "build_provenance": "staged_release",
       "trigger": "manual",
-      "status": "never_run",
-      "reason": "remaining capability-proof scenario_ids for claude are orphaned: ['claude_coordination_awareness_create', 'claude_coordination_awareness_post_compaction', 'claude_coordination_directed_input']",
+      "status": "runs",
+      "reason": "has at least one capability-proof assertion no automated trigger can satisfy",
       "qualification_profile": null,
       "qualification_profiles": [],
-      "scenario_ids": [],
+      "scenario_ids": [
+        "claude_turn_boundary_quiescent"
+      ],
       "harness_scenarios": [],
       "credential_requirement": [],
-      "assertion_status": []
+      "assertion_status": [
+        {
+          "assertion_id": "activity_returns_to_quiescent_at_turn_boundary",
+          "scenario_id": "claude_turn_boundary_quiescent",
+          "acceptable_evidence": [
+            "live_token"
+          ],
+          "producible_evidence": [],
+          "satisfiable": false
+        }
+      ]
     },
     {
       "provider": "claude",
@@ -537,11 +603,21 @@
       "qualification_profile": null,
       "qualification_profiles": [],
       "scenario_ids": [
-        "codex_coordination_awareness_post_compaction"
+        "codex_coordination_awareness_post_compaction",
+        "codex_turn_boundary_quiescent"
       ],
       "harness_scenarios": [],
       "credential_requirement": [],
       "assertion_status": [
+        {
+          "assertion_id": "activity_returns_to_quiescent_at_turn_boundary",
+          "scenario_id": "codex_turn_boundary_quiescent",
+          "acceptable_evidence": [
+            "live_token"
+          ],
+          "producible_evidence": [],
+          "satisfiable": false
+        },
         {
           "assertion_id": "coordination_instructions_model_visible_after_compaction",
           "scenario_id": "codex_coordination_awareness_post_compaction",
@@ -653,11 +729,21 @@
       "qualification_profile": null,
       "qualification_profiles": [],
       "scenario_ids": [
-        "codex_coordination_awareness_post_compaction"
+        "codex_coordination_awareness_post_compaction",
+        "codex_turn_boundary_quiescent"
       ],
       "harness_scenarios": [],
       "credential_requirement": [],
       "assertion_status": [
+        {
+          "assertion_id": "activity_returns_to_quiescent_at_turn_boundary",
+          "scenario_id": "codex_turn_boundary_quiescent",
+          "acceptable_evidence": [
+            "live_token"
+          ],
+          "producible_evidence": [],
+          "satisfiable": false
+        },
         {
           "assertion_id": "coordination_instructions_model_visible_after_compaction",
           "scenario_id": "codex_coordination_awareness_post_compaction",
@@ -717,11 +803,21 @@
       "qualification_profile": null,
       "qualification_profiles": [],
       "scenario_ids": [
-        "codex_coordination_awareness_post_compaction"
+        "codex_coordination_awareness_post_compaction",
+        "codex_turn_boundary_quiescent"
       ],
       "harness_scenarios": [],
       "credential_requirement": [],
       "assertion_status": [
+        {
+          "assertion_id": "activity_returns_to_quiescent_at_turn_boundary",
+          "scenario_id": "codex_turn_boundary_quiescent",
+          "acceptable_evidence": [
+            "live_token"
+          ],
+          "producible_evidence": [],
+          "satisfiable": false
+        },
         {
           "assertion_id": "coordination_instructions_model_visible_after_compaction",
           "scenario_id": "codex_coordination_awareness_post_compaction",
@@ -1017,14 +1113,26 @@
       "provider": "opencode",
       "build_provenance": "generated_fake",
       "trigger": "manual",
-      "status": "never_run",
-      "reason": "every capability-proof assertion declared for opencode is already satisfiable by an automated trigger",
+      "status": "runs",
+      "reason": "has at least one capability-proof assertion no automated trigger can satisfy",
       "qualification_profile": null,
       "qualification_profiles": [],
-      "scenario_ids": [],
+      "scenario_ids": [
+        "opencode_turn_boundary_quiescent"
+      ],
       "harness_scenarios": [],
       "credential_requirement": [],
-      "assertion_status": []
+      "assertion_status": [
+        {
+          "assertion_id": "activity_returns_to_quiescent_at_turn_boundary",
+          "scenario_id": "opencode_turn_boundary_quiescent",
+          "acceptable_evidence": [
+            "live_token"
+          ],
+          "producible_evidence": [],
+          "satisfiable": false
+        }
+      ]
     },
     {
       "provider": "opencode",
@@ -1097,14 +1205,26 @@
       "provider": "opencode",
       "build_provenance": "observed_install",
       "trigger": "manual",
-      "status": "never_run",
-      "reason": "every capability-proof assertion declared for opencode is already satisfiable by an automated trigger",
+      "status": "runs",
+      "reason": "has at least one capability-proof assertion no automated trigger can satisfy",
       "qualification_profile": null,
       "qualification_profiles": [],
-      "scenario_ids": [],
+      "scenario_ids": [
+        "opencode_turn_boundary_quiescent"
+      ],
       "harness_scenarios": [],
       "credential_requirement": [],
-      "assertion_status": []
+      "assertion_status": [
+        {
+          "assertion_id": "activity_returns_to_quiescent_at_turn_boundary",
+          "scenario_id": "opencode_turn_boundary_quiescent",
+          "acceptable_evidence": [
+            "live_token"
+          ],
+          "producible_evidence": [],
+          "satisfiable": false
+        }
+      ]
     },
     {
       "provider": "opencode",
@@ -1149,14 +1269,26 @@
       "provider": "opencode",
       "build_provenance": "staged_release",
       "trigger": "manual",
-      "status": "never_run",
-      "reason": "every capability-proof assertion declared for opencode is already satisfiable by an automated trigger",
+      "status": "runs",
+      "reason": "has at least one capability-proof assertion no automated trigger can satisfy",
       "qualification_profile": null,
       "qualification_profiles": [],
-      "scenario_ids": [],
+      "scenario_ids": [
+        "opencode_turn_boundary_quiescent"
+      ],
       "harness_scenarios": [],
       "credential_requirement": [],
-      "assertion_status": []
+      "assertion_status": [
+        {
+          "assertion_id": "activity_returns_to_quiescent_at_turn_boundary",
+          "scenario_id": "opencode_turn_boundary_quiescent",
+          "acceptable_evidence": [
+            "live_token"
+          ],
+          "producible_evidence": [],
+          "satisfiable": false
+        }
+      ]
     },
     {
       "provider": "opencode",
