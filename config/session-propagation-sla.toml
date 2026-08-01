@@ -49,6 +49,50 @@ hard_alarm_ms = 250
 description = "Browser reaction time after timeline SSE delivered the live-output update."
 
 [[metrics]]
+id = "browser_workspace_stream_to_first_paint_ms"
+profile_class = "warm_realtime"
+layer = "browser_card"
+diagnostic = true
+target_ms = 100
+hard_alarm_ms = 250
+description = "Detail-workspace transcript paint after the workspace SSE wake is received."
+
+[[metrics]]
+id = "browser_runtime_state_stream_to_paint_ms"
+profile_class = "warm_realtime"
+layer = "browser_card"
+diagnostic = true
+target_ms = 1000
+hard_alarm_ms = 2000
+description = "Canonical runtime-state DOM settlement after a catalog-commit workspace wake."
+
+[[metrics]]
+id = "browser_runtime_state_fanout_to_paint_ms"
+profile_class = "warm_realtime"
+layer = "browser_card"
+diagnostic = true
+target_ms = 1000
+hard_alarm_ms = 2000
+description = "Canonical runtime-state DOM settlement after the Runtime Host fanout timestamp."
+
+[[metrics]]
+id = "web_state_render_beacon_p50_ms"
+profile_class = "warm_realtime"
+layer = "browser_card"
+target_ms = 1000
+hard_alarm_ms = 2000
+description = "Web state beacon p50 after a catalog-commit workspace wake, using persisted or captured accepted beacon payloads."
+
+[[metrics]]
+id = "web_state_render_beacon_p95_ms"
+profile_class = "warm_realtime"
+layer = "browser_card"
+diagnostic = true
+target_ms = 1000
+hard_alarm_ms = 2000
+description = "Web state beacon p95 after a catalog-commit workspace wake."
+
+[[metrics]]
 id = "warm_close_local_to_sse_ms"
 profile_class = "warm_realtime"
 layer = "timeline_sse"
@@ -120,15 +164,36 @@ ci_mode = "gate"
 launch = "longhouse codex --no-attach"
 shutdown = "longhouse-engine codex-bridge stop"
 truth_source = "codex_bridge"
-required_observers = ["managed_sessions_snapshot", "timeline_sse", "browser_card", "hosted_db"]
+required_observers = ["managed_sessions_snapshot", "timeline_sse", "browser_card", "client_render_beacon", "hosted_db"]
 metrics = [
-  "warm_session_created_to_card_paint_ms",
   "warm_live_output_local_to_paint_ms",
   "warm_live_output_sse_to_paint_ms",
   "warm_close_local_to_paint_ms",
   "warm_close_local_to_db_ms",
+  "browser_workspace_stream_to_first_paint_ms",
+  "browser_runtime_state_stream_to_paint_ms",
+  "browser_runtime_state_fanout_to_paint_ms",
+  "web_state_render_beacon_p50_ms",
+  "web_state_render_beacon_p95_ms",
 ]
-notes = "Current optimized happy path for already-open timeline realtime truth. Close is gated on browser-card paint and Runtime Host state, not the profiler's diagnostic close-SSE watcher. Durable archive is tracked as a separate case."
+notes = "Required gate for an already-attached detail workspace. New-session card promotion and durable archive remain reported by separate experimental cases; the profiler still records them on every run. Close is gated on browser-card paint and Runtime Host state, not the diagnostic close-SSE watcher."
+
+[[cases]]
+id = "managed_codex_created_session_card_promotion"
+status = "experimental"
+provider = "codex"
+control_path = "managed"
+topology = "hosted_runtime_host"
+profile = "warm-live"
+profile_class = "warm_realtime"
+profiler_driver = "managed_codex_warm_live"
+ci_mode = "report"
+launch = "longhouse codex --no-attach"
+shutdown = "longhouse-engine codex-bridge stop"
+truth_source = "timeline_card"
+required_observers = ["managed_sessions_snapshot", "timeline_sse", "browser_card", "hosted_db"]
+metrics = ["warm_session_created_to_card_paint_ms"]
+notes = "New-session promotion is intentionally separate from the already-attached warm interaction SLA. Keep the 500ms target visible while measuring the archive/listing path that currently takes seconds."
 
 [[cases]]
 id = "managed_codex_cold_timeline_closed"

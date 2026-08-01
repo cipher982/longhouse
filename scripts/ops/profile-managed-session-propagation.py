@@ -1135,7 +1135,20 @@ def session_from_event(data):
     if not isinstance(obj, dict):
         return None
     session = obj.get("session")
-    if isinstance(session, dict) and session.get("thread_id") == sid:
+    if not isinstance(session, dict):
+        return None
+    candidates = [
+        session.get("id"),
+        session.get("thread_id"),
+        session.get("session_id"),
+    ]
+    for child_key in ("head", "current", "latest"):
+        child = session.get(child_key)
+        if isinstance(child, dict):
+            candidates.extend(
+                [child.get("id"), child.get("thread_id"), child.get("session_id")]
+            )
+    if sid in {str(candidate) for candidate in candidates if candidate is not None}:
         return session
     return None
 
@@ -1362,6 +1375,15 @@ except Exception as exc:
             "session_id_received": "browser_session_id_received",
             "detail_navigation_started": "browser_detail_navigation_started",
             "detail_loaded": "browser_detail_loaded",
+            "detail_workspace_request": "browser_detail_workspace_request",
+            "detail_workspace_response": "browser_detail_workspace_response",
+            "detail_workspace_failed": "browser_detail_workspace_failed",
+            "detail_workspace_root_ready": "browser_detail_workspace_root_ready",
+            "detail_workspace_stream_ready": "browser_detail_workspace_stream_ready",
+            "client_render_beacon_request": "browser_client_render_beacon_request",
+            "client_render_beacon_response": "browser_client_render_beacon_response",
+            "client_render_beacon_failed": "browser_client_render_beacon_failed",
+            "client_render_beacon_payload": "browser_client_render_beacon_payload",
             "timeline_page_closed_after_card": "browser_timeline_page_closed_after_card",
             "timeline_stream_connected": "browser_timeline_stream_connected",
             "timeline_stream_heartbeat": "browser_timeline_stream_heartbeat",
@@ -1382,6 +1404,7 @@ except Exception as exc:
             "close_painted_timeout": "browser_close_card_painted_timeout",
             "live_transcript_first_painted_timeout": "browser_live_transcript_first_painted_timeout",
             "live_transcript_nonce_painted_timeout": "browser_live_transcript_nonce_painted_timeout",
+            "detail_workspace_root_ready_timeout": "browser_detail_workspace_root_ready_timeout",
             "runtime_state_timeout": "browser_runtime_state_painted_timeout",
         }
         if observer_kind == "cold":
@@ -1755,11 +1778,17 @@ except Exception as exc:
                 ownership=ownership,
             )
         if self.args.profile == "warm-live":
-            browser_ready = self.wait_for_observation(
+            browser_session_ready = self.wait_for_observation(
                 case_id,
                 session_id,
                 "browser_session_id_received",
                 timeout=15,
+            )
+            browser_workspace_ready = self.wait_for_observation(
+                case_id,
+                session_id,
+                "browser_detail_workspace_stream_ready",
+                timeout=45,
             )
             sse_ready = self.wait_for_observation(
                 case_id,
@@ -1767,7 +1796,7 @@ except Exception as exc:
                 "timeline_transcript_preview_sse_ready",
                 timeout=10,
             )
-            if browser_ready and sse_ready:
+            if browser_session_ready and browser_workspace_ready and sse_ready:
                 self.observe(
                     case_id=case_id,
                     provider="codex",
@@ -1776,7 +1805,8 @@ except Exception as exc:
                     event="warm_ready_at",
                     session_id=session_id,
                     payload={
-                        "browser_card_ready": True,
+                        "browser_session_ready": True,
+                        "browser_workspace_stream_ready": True,
                         "timeline_sse_ready": True,
                     },
                 )
@@ -1790,7 +1820,8 @@ except Exception as exc:
                     session_id=session_id,
                     payload={
                         "reason": "warm_live_precondition_timeout",
-                        "browser_card_ready": browser_ready,
+                        "browser_session_ready": browser_session_ready,
+                        "browser_workspace_stream_ready": browser_workspace_ready,
                         "timeline_sse_ready": sse_ready,
                     },
                 )
@@ -1823,7 +1854,8 @@ except Exception as exc:
                     "thread_path": str(thread_path) if thread_path else None,
                     "precondition": {
                         "reason": "warm_live_precondition_timeout",
-                        "browser_card_ready": browser_ready,
+                        "browser_session_ready": browser_session_ready,
+                        "browser_workspace_stream_ready": browser_workspace_ready,
                         "timeline_sse_ready": sse_ready,
                     },
                 }
@@ -2583,7 +2615,10 @@ except Exception as exc:
         session = hosted.get("session") or {}
         runtime = hosted.get("runtime_state") or {}
         state_settlement = self.runtime_state_settlement_metrics(case_id, session_id)
-        client_state = state_render_beacon_metrics(hosted)
+        client_state = state_render_beacon_metrics(
+            hosted,
+            self.browser_client_render_beacons(case_id, session_id),
+        )
         contains = hosted_assistant_events_contain(hosted, nonce)
         closed = lifecycle_closed(hosted)
         transcript_latency = self.event_delta_ms(
@@ -2952,6 +2987,7 @@ except Exception as exc:
             "web_state_render_beacon_count": client_state.get("web_count", 0),
             "web_state_render_beacon_p50_ms": client_state.get("web_p50_ms"),
             "web_state_render_beacon_p95_ms": client_state.get("web_p95_ms"),
+            "web_state_render_beacon_source": client_state.get("source"),
             "ios_state_render_beacon_count": client_state.get("ios_count", 0),
             "ios_state_render_beacon_p50_ms": client_state.get("ios_p50_ms"),
             "ios_state_render_beacon_p95_ms": client_state.get("ios_p95_ms"),
@@ -3352,6 +3388,31 @@ except Exception as exc:
             f"ownership={ownership}, transport={transport}"
         )
         return "pass", metrics["notes"], metrics
+
+    def browser_client_render_beacons(self, case_id: str, session_id: str) -> list[dict[str, Any]]:
+        """Return browser beacon payloads when live-catalog persistence is unavailable."""
+        beacons: list[dict[str, Any]] = []
+        for row in self.observations:
+            if row.get("case_id") != case_id or row.get("session_id") != session_id:
+                continue
+            if row.get("event") not in {
+                "browser_client_render_beacon_request",
+                "browser_cold_client_render_beacon_request",
+                "browser_client_render_beacon_payload",
+                "browser_cold_client_render_beacon_payload",
+            }:
+                continue
+            payload = row.get("payload")
+            values = payload.get("beacons") if isinstance(payload, dict) else None
+            if not isinstance(values, list):
+                continue
+            for value in values:
+                if not isinstance(value, dict):
+                    continue
+                if str(value.get("session_id") or "") != session_id:
+                    continue
+                beacons.append(value)
+        return beacons
 
     def event_delta_ms(self, case_id: str, session_id: str, start_event: str, end_event: str) -> int | None:
         start = None
@@ -4056,9 +4117,13 @@ def compact_hosted(data: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def state_render_beacon_metrics(data: dict[str, Any]) -> dict[str, Any]:
+def state_render_beacon_metrics(
+    data: dict[str, Any],
+    browser_beacons: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     rows = data.get("client_render_observations") or data.get("recent_client_render_observations") or []
     by_surface: dict[str, list[int]] = {"web": [], "ios": []}
+    source = "persisted"
     for row in rows:
         if not isinstance(row, dict):
             continue
@@ -4069,8 +4134,26 @@ def state_render_beacon_metrics(data: dict[str, Any]) -> dict[str, Any]:
         latency = int_or_none(payload.get("latency_ms"))
         if surface in by_surface and latency is not None and latency >= 0:
             by_surface[surface].append(latency)
+    # Live-catalog tenants intentionally do not persist client observations in
+    # the legacy SQL store. The browser observer captures the exact beacon
+    # request instead, preserving a real client-side settlement measurement.
+    if not any(by_surface.values()):
+        source = "browser_request"
+        for payload in browser_beacons or []:
+            if str(payload.get("render_kind") or "") != "state":
+                continue
+            surface = str(payload.get("surface") or "").strip().lower()
+            emitted = int_or_none(payload.get("emitted_at_ms"))
+            rendered = int_or_none(payload.get("rendered_at_ms"))
+            skew = int_or_none(payload.get("clock_skew_ms")) or 0
+            if surface not in by_surface or emitted is None or rendered is None:
+                continue
+            latency = rendered - skew - emitted
+            if latency >= 0:
+                by_surface[surface].append(latency)
     all_values = by_surface["web"] + by_surface["ios"]
     return {
+        "source": source if any(by_surface.values()) else None,
         "count": len(all_values),
         "web_count": len(by_surface["web"]),
         "web_p50_ms": percentile(by_surface["web"], 50),

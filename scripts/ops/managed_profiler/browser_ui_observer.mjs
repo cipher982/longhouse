@@ -25,6 +25,11 @@ const onceKinds = new Set([
   "close_painted",
   "detail_loaded",
   "detail_navigation_started",
+  "detail_workspace_request",
+  "detail_workspace_response",
+  "detail_workspace_failed",
+  "detail_workspace_root_ready",
+  "detail_workspace_stream_ready",
   "timeline_page_closed_after_card",
 ]);
 const emitted = new Set();
@@ -34,6 +39,7 @@ let browser;
 let page;
 let detailPage;
 let closeObserved = false;
+let observerClosing = false;
 const runtimeSettlementTargets = new Set();
 let runtimeSettlementChain = Promise.resolve();
 
@@ -56,6 +62,34 @@ function emit(kind, payload = {}) {
       ...payload,
     }),
   );
+}
+
+function clientRenderBeaconPayload(request) {
+  const raw = request.postData();
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    const values = Array.isArray(parsed) ? parsed : [parsed];
+    return values
+      .filter((value) => value && typeof value === "object")
+      .map((value) => ({
+        event_id: value.event_id ?? null,
+        session_id: value.session_id ?? null,
+        surface: value.surface ?? null,
+        render_kind: value.render_kind ?? null,
+        emitted_at_ms: value.emitted_at_ms ?? null,
+        rendered_at_ms: value.rendered_at_ms ?? null,
+        clock_skew_ms: value.clock_skew_ms ?? null,
+        server_fanout_at_ms: value.server_fanout_at_ms ?? null,
+        client_received_at_ms: value.client_received_at_ms ?? null,
+        pubsub_seq: value.pubsub_seq ?? null,
+        state_commit_seq: value.state_commit_seq ?? null,
+        state_phase: value.state_phase ?? null,
+        state_observed_at_ms: value.state_observed_at_ms ?? null,
+      }));
+  } catch {
+    return [];
+  }
 }
 
 async function afterPaintOn(targetPage) {
@@ -163,6 +197,9 @@ async function waitForCard(kind, timeoutMs) {
 }
 
 function observeRuntimeStateAfterStream(detail) {
+  if (observerClosing) {
+    return;
+  }
   const targetCommitSeq = Number(detail?.catalog_commit_seq);
   const targetSessionId = String(detail?.session_id || sessionId);
   if (!Number.isFinite(targetCommitSeq) || targetCommitSeq <= 0) {
@@ -176,14 +213,19 @@ function observeRuntimeStateAfterStream(detail) {
 
   runtimeSettlementChain = runtimeSettlementChain
     .then(async () => {
+      if (observerClosing) {
+        return;
+      }
       const targetPage =
         detail?.page_pathname && detail.page_pathname !== "/timeline" ? detailPage : page;
       if (!targetPage || targetPage.isClosed()) {
-        emit("runtime_state_timeout", {
-          error: "target page is closed",
-          detail,
-          catalog_commit_seq: targetCommitSeq,
-        });
+        if (!observerClosing) {
+          emit("runtime_state_timeout", {
+            error: "target page is closed",
+            detail,
+            catalog_commit_seq: targetCommitSeq,
+          });
+        }
         return;
       }
       try {
@@ -232,19 +274,23 @@ function observeRuntimeStateAfterStream(detail) {
           card: { ...card, ...paintStamp },
         });
       } catch (error) {
+        if (!observerClosing) {
+          emit("runtime_state_timeout", {
+            detail,
+            stream_catalog_commit_seq: targetCommitSeq,
+            error: String(error).slice(0, 500),
+          });
+        }
+      }
+    })
+    .catch((error) => {
+      if (!observerClosing) {
         emit("runtime_state_timeout", {
           detail,
           stream_catalog_commit_seq: targetCommitSeq,
           error: String(error).slice(0, 500),
         });
       }
-    })
-    .catch((error) => {
-      emit("runtime_state_timeout", {
-        detail,
-        stream_catalog_commit_seq: targetCommitSeq,
-        error: String(error).slice(0, 500),
-      });
     });
 }
 
@@ -294,8 +340,71 @@ async function waitForDetailTranscript(kind, timeoutMs) {
   }
 }
 
+async function waitForDetailWorkspaceRoot(timeoutMs) {
+  try {
+    const handle = await detailPage.waitForFunction(
+      ({ sessionId }) => {
+        const root = document.querySelector(
+          `.session-workspace-route[data-session-id="${CSS.escape(sessionId)}"]`,
+        );
+        if (!root) return false;
+        return {
+          session_id: root.getAttribute("data-session-id"),
+          state_commit_seq: root.getAttribute("data-state-commit-seq"),
+          activity_state: root.getAttribute("data-activity-state"),
+          activity_observed_at: root.getAttribute("data-activity-observed-at"),
+          page_observed_at_wall: new Date().toISOString(),
+          page_performance_now_ms: performance.now(),
+        };
+      },
+      { sessionId },
+      { timeout: timeoutMs, polling: "raf" },
+    );
+    const domMatchedElapsedMs = elapsedMs();
+    const root = await handle.jsonValue();
+    await handle.dispose();
+    await afterPaintOn(detailPage);
+    const paintStamp = await detailPage.evaluate(() => ({
+      page_painted_at_wall: new Date().toISOString(),
+      page_painted_performance_now_ms: performance.now(),
+    }));
+    emit("detail_workspace_root_ready", {
+      dom_matched_elapsed_ms: domMatchedElapsedMs,
+      root: { ...root, ...paintStamp },
+    });
+    return true;
+  } catch (error) {
+    emit("detail_workspace_root_ready_timeout", { error: String(error).slice(0, 500) });
+    return false;
+  }
+}
+
 async function openDetailObserver(context) {
   detailPage = await context.newPage();
+  detailPage.on("request", (request) => {
+    if (request.url().includes("/workspace/stream")) {
+      emit("detail_workspace_request", {
+        method: request.method(),
+        url: request.url(),
+      });
+    }
+  });
+  detailPage.on("response", (response) => {
+    if (response.url().includes("/workspace/stream")) {
+      emit("detail_workspace_response", {
+        status: response.status(),
+        url: response.url(),
+      });
+    }
+  });
+  detailPage.on("requestfailed", (request) => {
+    if (request.url().includes("/workspace/stream")) {
+      emit("detail_workspace_failed", {
+        error: request.failure()?.errorText || "request failed",
+        url: request.url(),
+      });
+    }
+  });
   detailPage.on("console", (message) => {
     const type = message.type();
     if (type === "error" || type === "warning") {
@@ -311,6 +420,7 @@ async function openDetailObserver(context) {
   await detailPage.goto(url.toString(), { waitUntil: "domcontentloaded", timeout: 30000 });
   await afterPaintOn(detailPage);
   emit("detail_loaded", { url: detailPage.url() });
+  void waitForDetailWorkspaceRoot(90000);
 }
 
 async function waitForSessionIdFile(timeoutMs) {
@@ -332,6 +442,35 @@ async function waitForSessionIdFile(timeoutMs) {
 try {
   browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+  context.on("request", (request) => {
+    if (request.url().includes("/telemetry/client-render")) {
+      emit("client_render_beacon_request", {
+        method: request.method(),
+        url: request.url(),
+        beacons: clientRenderBeaconPayload(request),
+      });
+    }
+  });
+  context.on("response", (response) => {
+    if (response.url().includes("/telemetry/client-render")) {
+      emit("client_render_beacon_response", {
+        status: response.status(),
+        url: response.url(),
+      });
+    }
+  });
+  context.on("requestfailed", (request) => {
+    if (request.url().includes("/telemetry/client-render")) {
+      emit("client_render_beacon_failed", {
+        error: request.failure()?.errorText || "request failed",
+        url: request.url(),
+      });
+    }
+  });
+  await context.exposeFunction("__longhouseProfilerClientRenderBeacon", (payload) => {
+    if (!payload || typeof payload !== "object") return;
+    emit("client_render_beacon_payload", payload);
+  });
   await context.exposeFunction("__longhouseProfilerTimelineStreamEvent", (detail) => {
     if (!detail || typeof detail !== "object") {
       return;
@@ -348,8 +487,39 @@ try {
     if (kind === "workspace_changed" && detail.catalog_commit_seq != null) {
       observeRuntimeStateAfterStream(detail);
     }
+    if (kind === "workspace_connected" && detail.page_pathname !== "/timeline") {
+      emit("detail_workspace_stream_ready", { detail });
+    }
   });
   await context.addInitScript(() => {
+    const reportClientRenderBeacon = (url, data) => {
+      const report = (raw) => {
+        try {
+          const parsed = JSON.parse(raw);
+          const values = Array.isArray(parsed) ? parsed : [parsed];
+          window.__longhouseProfilerClientRenderBeacon?.({
+            url: String(url),
+            beacons: values.filter((value) => value && typeof value === "object"),
+          });
+        } catch {
+          // Ignore non-JSON telemetry payloads.
+        }
+      };
+      if (typeof data === "string") {
+        report(data);
+      } else if (data instanceof Blob) {
+        void data.text().then(report);
+      }
+    };
+    const nativeSendBeacon = navigator.sendBeacon?.bind(navigator);
+    if (nativeSendBeacon) {
+      navigator.sendBeacon = (url, data) => {
+        if (String(url).includes("/telemetry/client-render")) {
+          reportClientRenderBeacon(url, data);
+        }
+        return nativeSendBeacon(url, data);
+      };
+    }
     window.addEventListener("longhouse:timeline-stream", (event) => {
       window.__longhouseProfilerTimelineStreamEvent?.({
         ...(event.detail || {}),
@@ -422,6 +592,7 @@ try {
 } catch (error) {
   emit("error", { error: String(error).slice(0, 1000) });
 } finally {
+  observerClosing = true;
   if (browser) {
     await browser.close();
   }
