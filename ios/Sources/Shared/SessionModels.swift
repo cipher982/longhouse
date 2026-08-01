@@ -136,6 +136,8 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
     let summary: String?
     let summaryStatus: String?
     let firstUserMessage: String?
+    /// Canonical machine identifier from the session record.
+    let deviceId: String?
     /// Server-projected archive-search context. Nil on ordinary timeline rows.
     let matchSnippet: String?
     // Live, drifting summary title — used for the subordinate "now:" drift line,
@@ -170,6 +172,7 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
         summary: String? = nil,
         summaryStatus: String? = nil,
         firstUserMessage: String? = nil,
+        deviceId: String? = nil,
         matchSnippet: String? = nil,
         summaryTitle: String? = nil,
         userState: String? = nil,
@@ -200,6 +203,7 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
         self.summary = summary
         self.summaryStatus = summaryStatus
         self.firstUserMessage = firstUserMessage
+        self.deviceId = deviceId
         self.matchSnippet = matchSnippet
         self.summaryTitle = summaryTitle
         self.userState = userState
@@ -258,7 +262,7 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
     }
 
     var timelineMachineLabel: String? {
-        for candidate in [homeLabel, headOriginLabel] {
+        for candidate in [deviceId, headOriginLabel, homeLabel] {
             guard let label = candidate?.trimmingCharacters(in: .whitespacesAndNewlines), !label.isEmpty else {
                 continue
             }

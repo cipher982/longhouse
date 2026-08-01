@@ -152,6 +152,9 @@ struct TimelineView: View {
             .background(Color(.systemGroupedBackground))
             .navigationTitle("Timeline")
             .searchable(text: $searchText, prompt: "Search all sessions")
+            .navigationDestination(for: SessionRoute.self) { route in
+                SessionView(sessionId: route.sessionId, fallbackTitle: route.fallbackTitle)
+            }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
@@ -213,6 +216,7 @@ struct TimelineView: View {
                     viewModel.clearSearch()
                     return
                 }
+                viewModel.beginSearchTransition()
                 do {
                     try await Task.sleep(nanoseconds: 300_000_000)
                 } catch {
@@ -260,9 +264,6 @@ struct TimelineView: View {
 
     private func timelineBody(sessions: [SessionSummary]) -> some View {
         TimelineSessionList(sessions: sessions, connectivityBanner: effectiveConnectionBanner)
-        .navigationDestination(for: SessionRoute.self) { route in
-            SessionView(sessionId: route.sessionId, fallbackTitle: route.fallbackTitle)
-        }
     }
 
     private func searchBody(sessions: [SessionSummary]) -> some View {
@@ -271,9 +272,6 @@ struct TimelineView: View {
             query: normalizedSearch,
             connectivityBanner: effectiveConnectionBanner
         )
-        .navigationDestination(for: SessionRoute.self) { route in
-            SessionView(sessionId: route.sessionId, fallbackTitle: route.fallbackTitle)
-        }
     }
 
     private var emptyView: some View {
@@ -360,6 +358,7 @@ struct TimelineSessionList: View {
             HStack {
                 Text(title)
                     .font(.headline.weight(.semibold))
+                    .accessibilityAddTraits(.isHeader)
                 Spacer(minLength: 8)
                 Text("\(sessions.count)")
                     .font(.caption.weight(.semibold))
@@ -826,7 +825,13 @@ final class TimelineViewModel: ObservableObject {
 
     func load(using appState: AppState) async {
         startConnectivityClock()
-        guard isInitial else { return }
+        guard isInitial else {
+            // A pushed detail stops this screen's stream. Refresh on return so
+            // a read acknowledgement emitted while the detail was visible is
+            // reflected immediately instead of waiting for the safety poll.
+            await refresh(using: appState, reloadWidget: true)
+            return
+        }
         if let cached = TimelineCacheStore.load(serverURL: appState.serverURL) {
             applySessions(cached.sessions, source: "cache")
             applyConnectivity(.cacheLoaded(hasLoadedData: !cached.sessions.isEmpty, savedAt: cached.savedAt))
@@ -843,6 +848,11 @@ final class TimelineViewModel: ObservableObject {
     func clearSearch() {
         searchGeneration &+= 1
         searchState = .idle
+    }
+
+    func beginSearchTransition() {
+        searchGeneration &+= 1
+        searchState = .loading
     }
 
     func search(query: String, using appState: AppState) async {
@@ -1267,6 +1277,9 @@ private func rowAccessibilityLabel(
 ) -> String {
     if role == .newResult {
         return "\(session.title), new result, \(newResultStatusText(for: session))"
+    }
+    if role == .needsYou {
+        return "\(session.title), needs you, \(signal.accessibilityState)"
     }
     return "\(session.title), \(signal.accessibilityState)"
 }

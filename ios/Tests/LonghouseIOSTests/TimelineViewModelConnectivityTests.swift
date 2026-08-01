@@ -171,6 +171,38 @@ struct TimelineViewModelConnectivityTests {
         #expect(model.searchState == .idle)
     }
 
+    @Test
+    func archiveSearchInvalidatesOldRowsBeforeDebounceCompletes() async {
+        let session = makeSession(id: "old-result")
+        let api = FakeTimelineSessionsClient([], searchResponse: .success([session]))
+        let model = makeModel(api: api, stream: TimelineStreamRecorder())
+
+        await model.search(query: "old query", using: makeAppState())
+        #expect(model.searchState == .loaded([session]))
+
+        model.beginSearchTransition()
+        #expect(model.searchState == .loading)
+    }
+
+    @Test
+    func loadingAgainRefreshesStateMissedWhileDetailWasVisible() async {
+        let session = makeSession()
+        let api = FakeTimelineSessionsClient([
+            .success([session]),
+            .success([]),
+        ])
+        let model = makeModel(api: api, stream: TimelineStreamRecorder())
+        let appState = makeAppState()
+        appState.serverURL = "https://refresh-\(UUID().uuidString).example"
+
+        await model.load(using: appState)
+        #expect(model.state == .loaded([session]))
+
+        await model.load(using: appState)
+        #expect(model.state == .empty)
+        #expect(await api.requestCount() == 2)
+    }
+
     private func makeModel(
         api: FakeTimelineSessionsClient,
         stream: TimelineStreamRecorder

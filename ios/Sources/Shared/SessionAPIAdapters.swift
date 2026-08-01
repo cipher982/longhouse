@@ -593,6 +593,7 @@ private extension APISessionResponse {
             summary: summary,
             summaryStatus: summaryStatus,
             firstUserMessage: firstUserMessage,
+            deviceId: deviceId,
             matchSnippet: matchSnippet,
             summaryTitle: summaryTitle,
             userState: userState,
