@@ -139,6 +139,16 @@ repos:
         pass_filenames: false
 
       # -----------------------------------------------------------------------
+      # Regenerate the managed-provider contract digest when an adapter changes
+      # -----------------------------------------------------------------------
+      - id: check-provider-contract-digest
+        name: Managed provider contract digest
+        entry: scripts/qa/check-provider-contract-digest.sh
+        language: system
+        files: '^(engine/src/claude_print\.rs|engine/src/codex_bridge\.rs|engine/src/codex_bridge_ownership\.rs|engine/src/codex_exec\.rs|engine/src/codex_ws_relay\.rs|engine/src/cursor_helm_control\.rs|engine/src/cursor_helm_launcher\.rs|engine/src/cursor_hooks\.rs|engine/src/cursor_print\.rs|engine/src/managed_antigravity_scan\.rs|engine/src/opencode_control\.rs|engine/src/opencode_run\.rs|server/zerg/mcp_server/server\.py|server/zerg/services/managed_local_control\.py|server/zerg/services/shipper/hooks\.py|schemas/managed_providers\.yml)$'
+        pass_filenames: false
+
+      # -----------------------------------------------------------------------
       # Warn on new db.commit() in routers (prefer WriteSerializer)
       # -----------------------------------------------------------------------
       - id: check-db-commits
