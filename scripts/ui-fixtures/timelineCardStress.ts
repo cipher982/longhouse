@@ -935,10 +935,85 @@ export function buildTimelineCardStressFixture(): {
     },
   );
 
+  // Console unread acknowledgement: a finished Console session whose result
+  // nobody has opened. Renders in the unread band between shelf and archive.
+  const stampUnread = (session: AgentSession, outcome: string, resultAt: string): AgentSession => ({
+    ...session,
+    session_state: {
+      ...session.session_state,
+      mode: "console",
+      unread: true,
+      last_result_at: resultAt,
+      last_result_outcome: outcome,
+    },
+  });
+  const unreadBase = makeTimelineCard(
+    {
+      id: "unread-console-head",
+      thread_root_session_id: "thread-unread-console",
+      thread_head_session_id: "thread-unread-console",
+      provider: "claude",
+      project: "zerg",
+      git_branch: "main",
+      started_at: "2026-04-15T15:40:00Z",
+      last_activity_at: "2026-04-15T16:05:00Z",
+      timeline_anchor_at: "2026-04-15T16:05:00Z",
+      user_messages: 1,
+      assistant_messages: 4,
+      tool_calls: 9,
+      summary_title: "Nightly dependency audit",
+      anchor_title: "Nightly dependency audit",
+      timeline_title: "Nightly dependency audit",
+      summary: "Audited outdated dependencies and drafted the upgrade plan.",
+      first_user_message: "Audit our outdated dependencies and draft an upgrade plan.",
+      origin_label: "cinder",
+      home_label: "On this Mac",
+    },
+    { head_origin_label: "cinder", started_origin_label: "cinder" },
+  );
+  const unreadConsole: TimelineSessionCard = {
+    ...unreadBase,
+    head: stampUnread(unreadBase.head, "completed", "2026-04-15T16:05:00Z"),
+    detail: stampUnread(unreadBase.detail, "completed", "2026-04-15T16:05:00Z"),
+    root: stampUnread(unreadBase.root, "completed", "2026-04-15T16:05:00Z"),
+  };
+  const unreadFailedBase = makeTimelineCard(
+    {
+      id: "unread-console-failed",
+      thread_root_session_id: "thread-unread-console-failed",
+      thread_head_session_id: "thread-unread-console-failed",
+      provider: "codex",
+      project: "demo-vpn",
+      git_branch: "main",
+      started_at: "2026-04-15T14:10:00Z",
+      last_activity_at: "2026-04-15T15:32:00Z",
+      timeline_anchor_at: "2026-04-15T15:32:00Z",
+      user_messages: 1,
+      assistant_messages: 2,
+      tool_calls: 3,
+      summary_title: "Rotate VPN certificates",
+      anchor_title: "Rotate VPN certificates",
+      timeline_title: "Rotate VPN certificates",
+      summary: "Certificate rotation failed on the second peer.",
+      first_user_message: "Rotate the VPN certificates on both peers.",
+      origin_label: "studio",
+      home_label: "studio",
+    },
+    { head_origin_label: "studio", started_origin_label: "studio" },
+  );
+  const unreadConsoleFailed: TimelineSessionCard = {
+    ...unreadFailedBase,
+    head: stampUnread(unreadFailedBase.head, "failed", "2026-04-15T15:32:00Z"),
+    detail: stampUnread(unreadFailedBase.detail, "failed", "2026-04-15T15:32:00Z"),
+    root: stampUnread(unreadFailedBase.root, "failed", "2026-04-15T15:32:00Z"),
+  };
+
   const sessions = [
     liveCodex,
     closedCodex,
     idleClaude,
+    unreadConsole,
+    unreadConsoleFailed,
     unmanagedCodex,
     unmanagedClaude,
     continuationCard,
