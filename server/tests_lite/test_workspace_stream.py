@@ -151,6 +151,33 @@ def test_workspace_stream_skips_when_unchanged(tmp_path):
 
 
 @patch.object(timeline_mod, "_wait_for_session_change", lambda _sub: _noop_coro())
+def test_live_catalog_workspace_stream_does_not_skip_unverified_initial_snapshot():
+    """Fresh live-catalog attaches must reconcile before waiting for a wake."""
+    from zerg.services.session_pubsub import reset_pubsub_for_test
+
+    reset_pubsub_for_test()
+    session_id = uuid4()
+
+    async def _run():
+        events: list[dict] = []
+        async for event in timeline_mod._live_catalog_workspace_stream(
+            _DisconnectAfterNCycles(2),
+            session_id=session_id,
+            skip_initial=True,
+            last_event_id=None,
+            known_workspace_fingerprint="snapshot-before-attach",
+        ):
+            events.append(event)
+        return events
+
+    grouped = _collect_stream_events(asyncio.run(_run()))
+
+    assert len(grouped.get("workspace_changed", [])) == 1
+    assert grouped["workspace_changed"][0]["session_id"] == str(session_id)
+    assert grouped["workspace_changed"][0]["pubsub_seq"] == 0
+
+
+@patch.object(timeline_mod, "_wait_for_session_change", lambda _sub: _noop_coro())
 def test_workspace_stream_detects_new_event(tmp_path):
     """Stream should emit workspace_changed when new events are ingested."""
     sf = _make_db(tmp_path)

@@ -1717,8 +1717,15 @@ async def _live_catalog_workspace_stream(
     session_id: UUID,
     skip_initial: bool,
     last_event_id: int | None,
+    known_workspace_fingerprint: str | None = None,
 ):
-    """Live-only invalidation stream; archive detail is fetched via a child."""
+    """Live-only invalidation stream; archive detail is fetched via a child.
+
+    The storage-v2 workspace fingerprint is not the same coordinate as the
+    live-catalog commit sequence, so it cannot safely authorize skipping the
+    first invalidation here. A reconnect with a Last-Event-ID can use replay;
+    a fresh attachment takes the conservative initial-fetch path.
+    """
 
     from zerg.services.session_pubsub import get_pubsub
     from zerg.services.session_pubsub import topic_session
@@ -1737,6 +1744,12 @@ async def _live_catalog_workspace_stream(
     replay_gap = bus.replay_gap(topic, since_seq=last_event_id)
     subscribe_since_seq = None if replay_gap else last_event_id
     with bus.subscribe(topic, since_seq=subscribe_since_seq) as subscription:
+        if skip_initial and last_event_id is None:
+            # Keep the snapshot-to-stream handoff safe until both surfaces use
+            # one comparable live workspace coordinate. The fingerprint is
+            # intentionally accepted by this path for contract symmetry, but
+            # it is not comparable to the live catalog commit yet.
+            skip_initial = False
         if replay_gap:
             yield {
                 "event": "replay_gap",
@@ -1823,6 +1836,7 @@ async def stream_session_workspace(
                 session_id=session_id,
                 skip_initial=skip_initial,
                 last_event_id=last_event_id,
+                known_workspace_fingerprint=known_workspace_fingerprint,
             )
         )
     return EventSourceResponse(
@@ -1878,6 +1892,7 @@ async def stream_canary_workspace(
                 session_id=session_id,
                 skip_initial=skip_initial,
                 last_event_id=last_event_id,
+                known_workspace_fingerprint=known_workspace_fingerprint,
             )
         )
     return EventSourceResponse(
