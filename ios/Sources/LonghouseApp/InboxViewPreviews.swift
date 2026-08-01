@@ -10,6 +10,72 @@ private func iso(_ secondsAgo: TimeInterval) -> String {
     return f.string(from: d)
 }
 
+private func previewStateFacts(
+    statusLabel: String,
+    statusTone: String,
+    isManaged: Bool,
+    unread: Bool,
+    resultSecondsAgo: TimeInterval?,
+    lastResultOutcome: String?,
+    workingSet overrideWorkingSet: String?,
+    pendingInteractionKind explicitPendingInteraction: String?
+) -> SessionStateFacts {
+    let available = SessionStateAction(state: "available", reason: nil)
+    let unavailable = SessionStateAction(state: "unavailable", reason: "preview_not_granted")
+    let closed = statusLabel == "Closed"
+    let activity: String = switch statusTone {
+    case "thinking": "thinking"
+    case "running": "executing"
+    case "blocked": "blocked"
+    case "stalled": "stalled"
+    case "idle": "quiescent"
+    default: closed ? "quiescent" : "unknown"
+    }
+    let pendingInteractionKind = explicitPendingInteraction
+        ?? (statusTone == "blocked" ? "permission" : nil)
+    let workingSet = overrideWorkingSet
+        ?? ((!closed && (pendingInteractionKind != nil || activity == "thinking" || activity == "executing"))
+            ? "open"
+            : "history")
+
+    return SessionStateFacts(
+        contractVersion: 2,
+        presentationPolicyVersion: 1,
+        mode: unread ? "console" : (isManaged ? "helm" : "shadow"),
+        dispositionState: closed ? "closed" : "open",
+        launchState: nil,
+        runLifecycle: closed ? "ended" : "running",
+        activityState: activity,
+        activityRawKind: nil,
+        activityTool: nil,
+        activitySource: "preview",
+        activityObservedAt: nil,
+        activityValidUntil: nil,
+        controlOwnership: isManaged ? "owned" : "unowned",
+        controlConnection: isManaged ? "connected" : "not_applicable",
+        workingSet: workingSet,
+        unread: unread,
+        lastResultAt: resultSecondsAgo.map(iso),
+        lastResultOutcome: lastResultOutcome,
+        startTurn: isManaged ? available : unavailable,
+        sendInput: isManaged ? available : unavailable,
+        interrupt: isManaged ? available : unavailable,
+        terminate: isManaged ? available : unavailable,
+        reattach: unavailable,
+        resume: unavailable,
+        pendingInteractionKind: pendingInteractionKind,
+        transcriptConvergence: "current",
+        primary: SessionStateLabel(
+            key: statusTone,
+            label: statusLabel,
+            tone: statusTone,
+            observedAt: nil
+        ),
+        access: nil,
+        transcript: nil
+    )
+}
+
 private func mockSession(
     id: String,
     project: String,
@@ -17,8 +83,10 @@ private func mockSession(
     summary: String,
     summaryStatus: String? = nil,
     summaryTitle: String? = nil,
+    matchSnippet: String? = nil,
     provider: String = "claude",
     branch: String? = "main",
+    machine: String? = "macbook-pro",
     statusLabel: String,
     statusTone: String,
     activityRecency: String,
@@ -27,6 +95,11 @@ private func mockSession(
     seenAtPrefix: String = "Updated",
     phaseExpiresInSeconds: TimeInterval? = 12,
     isManaged: Bool = true,
+    unread: Bool = false,
+    resultSecondsAgo: TimeInterval? = nil,
+    lastResultOutcome: String? = nil,
+    workingSet: String? = nil,
+    pendingInteractionKind: String? = nil,
     turns: Int = 4,
     tools: Int = 12
 ) -> SessionSummary {
@@ -35,6 +108,16 @@ private func mockSession(
         tone: statusTone,
         seenAt: seenAtSecondsAgo.map(iso),
         seenAtPrefix: seenAtPrefix
+    )
+    let stateFacts = previewStateFacts(
+        statusLabel: statusLabel,
+        statusTone: statusTone,
+        isManaged: isManaged,
+        unread: unread,
+        resultSecondsAgo: resultSecondsAgo,
+        lastResultOutcome: lastResultOutcome,
+        workingSet: workingSet,
+        pendingInteractionKind: pendingInteractionKind
     )
     let card = TimelineCardPresentation(
         ownership: TimelineBadgePresentation(label: isManaged ? "Managed" : "Unmanaged", tone: "neutral"),
@@ -73,6 +156,7 @@ private func mockSession(
         lastActivityAt: iso(anchorSecondsAgo),
         summary: summary,
         summaryStatus: summaryStatus,
+        matchSnippet: matchSnippet,
         summaryTitle: summaryTitle,
         userState: "active",
         status: nil,
@@ -80,7 +164,7 @@ private func mockSession(
         presenceTool: nil,
         activeTool: nil,
         gitBranch: branch,
-        homeLabel: nil,
+        homeLabel: machine,
         headOriginLabel: nil,
         timelineAnchorAt: iso(anchorSecondsAgo),
         userMessages: turns,
@@ -89,7 +173,8 @@ private func mockSession(
         hostReattachAvailable: false,
         replyToLiveSessionAvailable: isManaged,
         runtimeDisplay: display,
-        timelineCard: card
+        timelineCard: card,
+        stateFacts: stateFacts
     )
 }
 
@@ -203,7 +288,7 @@ private func mockSession(
     return ScrollView {
         VStack(spacing: 12) {
             ForEach(sessions) { session in
-                TimelineSessionCardRow(session: session, emphasized: false, connectivityBanner: .none)
+                TimelineSessionCardRow(session: session, role: .recent, connectivityBanner: .none)
             }
         }
         .padding(16)
@@ -267,7 +352,7 @@ private func mockSession(
     return ScrollView {
         VStack(spacing: 12) {
             ForEach(sessions) { session in
-                TimelineSessionCardRow(session: session, emphasized: false, connectivityBanner: .none)
+                TimelineSessionCardRow(session: session, role: .recent, connectivityBanner: .none)
             }
         }
         .padding(16)
@@ -332,7 +417,7 @@ private func mockSession(
     return ScrollView {
         VStack(spacing: 12) {
             ForEach(sessions) { session in
-                TimelineSessionCardRow(session: session, emphasized: false, connectivityBanner: .none)
+                TimelineSessionCardRow(session: session, role: .recent, connectivityBanner: .none)
             }
         }
         .padding(16)
@@ -369,7 +454,7 @@ private func mockSession(
                         .foregroundStyle(.secondary)
                         .padding(.bottom, 4)
                     ConnectionStatusStrip(banner: banner)
-                    TimelineSessionCardRow(session: session, emphasized: false, connectivityBanner: banner)
+                    TimelineSessionCardRow(session: session, role: .open, connectivityBanner: banner)
                         .padding(.top, 8)
                 }
             }
@@ -386,72 +471,143 @@ private func mockSession(
         .environmentObject(AppState())
 }
 
-// MARK: - Working-set tiers
+// MARK: - Obligation-ranked timeline
 
-/// The timeline's two tiers, which is the whole point of the screen: what the
-/// user has going right now, separated from everything else. Before this split
-/// iOS rendered one flat "Recent" list, so a session abandoned last week sat at
-/// the same visual weight as one mid-turn.
-#Preview("Timeline tiers — open and history") {
-    let open: [SessionSummary] = [
+#Preview("Timeline triage — obligations and results") {
+    let sessions: [SessionSummary] = [
         mockSession(
-            id: "open-1",
-            project: "zerg",
-            title: "Session UX and Reattach Logic",
-            summary: "Working through the timeline tiering and the ownership rule for managed bridges.",
-            statusLabel: "Thinking",
-            statusTone: "thinking",
+            id: "needs-1",
+            project: "longhouse",
+            title: "Approve hosted smoke test",
+            summary: "The session is waiting for permission before it can run the hosted smoke test.",
+            provider: "codex",
+            machine: "clifford",
+            statusLabel: "Permission required",
+            statusTone: "blocked",
             activityRecency: "live",
-            anchorSecondsAgo: 4,
-            seenAtSecondsAgo: 4
+            anchorSecondsAgo: 120,
+            seenAtSecondsAgo: 120
         ),
         mockSession(
-            id: "open-2",
-            project: "sauron",
-            title: "Sauron Autonomous Agent Development",
-            summary: "Running the shell to reproduce the cron failure before changing the scheduler.",
+            id: "result-complete",
+            project: "site-optimizer",
+            title: "Evaluate candidate quality regression",
+            summary: "Compared the latest candidate set against the known-good scoring distribution.",
             provider: "codex",
-            statusLabel: "Using shell",
-            statusTone: "running",
-            activityRecency: "live",
-            anchorSecondsAgo: 9,
-            seenAtSecondsAgo: 9
-        ),
-    ]
-    let history: [SessionSummary] = [
-        mockSession(
-            id: "hist-1",
-            project: "g55",
-            title: "NAG TCU Telem and Adaptations",
-            summary: "Captured a two-second log excerpt and the learned A1 row for the firmware PR.",
-            provider: "codex",
+            branch: nil,
+            machine: "ml-gpu-02",
             statusLabel: "Idle",
             statusTone: "idle",
             activityRecency: "stale",
-            anchorSecondsAgo: 5 * 24 * 3600,
-            seenAtSecondsAgo: 5 * 24 * 3600
+            anchorSecondsAgo: 7 * 60,
+            unread: true,
+            resultSecondsAgo: 7 * 60,
+            lastResultOutcome: "completed"
+        ),
+        mockSession(
+            id: "result-failed",
+            project: "sauron",
+            title: "Repair nightly location refresh",
+            summary: "The refresh failed while reconnecting to the source mirror.",
+            branch: nil,
+            machine: "clifford",
+            statusLabel: "Closed",
+            statusTone: "closed",
+            activityRecency: "none",
+            anchorSecondsAgo: 18 * 60,
+            unread: true,
+            resultSecondsAgo: 18 * 60,
+            lastResultOutcome: "failed"
+        ),
+        mockSession(
+            id: "open-working",
+            project: "zerg",
+            title: "Build iOS unread result states",
+            summary: "Rendering canonical preview states and validating the timeline layout.",
+            machine: "cube",
+            statusLabel: "Running preview tests",
+            statusTone: "running",
+            activityRecency: "live",
+            anchorSecondsAgo: 38,
+            seenAtSecondsAgo: 38
+        ),
+        mockSession(
+            id: "open-ready",
+            project: "agent-home",
+            title: "Provider registry cleanup",
+            summary: "The managed session is quiet but still ready to continue on its recorded machine.",
+            provider: "codex",
+            branch: nil,
+            machine: "macbook-pro",
+            statusLabel: "Idle",
+            statusTone: "idle",
+            activityRecency: "live",
+            anchorSecondsAgo: 12 * 60,
+            seenAtSecondsAgo: 12 * 60,
+            workingSet: "open"
+        ),
+        mockSession(
+            id: "recent-1",
+            project: "g55",
+            title: "NAG TCU telemetry and adaptations",
+            summary: "Captured a short log and the learned adaptation row.",
+            provider: "codex",
+            machine: "garage-mac",
+            statusLabel: "Closed",
+            statusTone: "closed",
+            activityRecency: "none",
+            anchorSecondsAgo: 5 * 24 * 3600
         ),
     ]
 
-    ScrollView {
-        LazyVStack(alignment: .leading, spacing: 14) {
-            Text("Open")
-                .font(.headline.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 2)
-            ForEach(open) { session in
-                TimelineSessionCardRow(session: session, emphasized: true, connectivityBanner: .none)
-            }
-            Text("History")
-                .font(.headline.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 2)
-                .padding(.top, 6)
-            ForEach(history) { session in
-                TimelineSessionCardRow(session: session, emphasized: false, connectivityBanner: .none)
-            }
-        }
-        .padding(.horizontal, 16)
-        .padding(.top, 8)
+    NavigationStack {
+        TimelineSessionList(sessions: sessions, connectivityBanner: .none)
+            .background(Color(.systemGroupedBackground))
+            .navigationTitle("Timeline")
     }
+    .preferredColorScheme(.dark)
+}
+
+#Preview("Timeline search — archive results") {
+    let sessions: [SessionSummary] = [
+        mockSession(
+            id: "search-1",
+            project: "longhouse",
+            title: "Native provider channel hardening",
+            summary: "Verified the managed channel after an engine restart.",
+            matchSnippet: "Verified the provider channel stays attached through a cold engine restart.",
+            provider: "codex",
+            machine: "cube",
+            statusLabel: "Closed",
+            statusTone: "closed",
+            activityRecency: "none",
+            anchorSecondsAgo: 24 * 3600,
+            turns: 46
+        ),
+        mockSession(
+            id: "search-2",
+            project: "agent-home",
+            title: "Managed CLI registry cleanup",
+            summary: "Moved capability declarations into one schema.",
+            matchSnippet: "Moved provider channel declarations into one schema so every client reads the same truth.",
+            provider: "codex",
+            machine: "clifford",
+            statusLabel: "Closed",
+            statusTone: "closed",
+            activityRecency: "none",
+            anchorSecondsAgo: 7 * 24 * 3600,
+            turns: 19
+        ),
+    ]
+
+    NavigationStack {
+        TimelineSearchResultsList(
+            sessions: sessions,
+            query: "provider channel",
+            connectivityBanner: .none
+        )
+        .background(Color(.systemGroupedBackground))
+        .navigationTitle("Timeline")
+    }
+    .preferredColorScheme(.dark)
 }

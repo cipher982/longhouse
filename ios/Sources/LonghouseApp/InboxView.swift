@@ -2,6 +2,61 @@ import OSLog
 import SwiftUI
 import WidgetKit
 
+enum TimelineRowRole: Equatable {
+    case needsYou
+    case newResult
+    case open
+    case recent
+}
+
+struct TimelineInboxLayout: Equatable {
+    let needsYou: [SessionSummary]
+    let newResults: [SessionSummary]
+    let open: [SessionSummary]
+    let recent: [SessionSummary]
+}
+
+/// Obligation-ranked presentation over canonical server facts. This does not
+/// create another state model: `working_set`, explicit interaction facts, and
+/// `unread` remain authoritative.
+func buildTimelineInboxLayout(_ sessions: [SessionSummary]) -> TimelineInboxLayout {
+    var needsYou: [SessionSummary] = []
+    var newResults: [SessionSummary] = []
+    var open: [SessionSummary] = []
+    var recent: [SessionSummary] = []
+
+    for session in sessions {
+        if session.stateFacts.workingSet == "open" {
+            if session.needsAttention {
+                needsYou.append(session)
+            } else {
+                open.append(session)
+            }
+        } else if session.stateFacts.unread {
+            newResults.append(session)
+        } else {
+            recent.append(session)
+        }
+    }
+
+    newResults.sort {
+        resultDate(for: $0) > resultDate(for: $1)
+    }
+    return TimelineInboxLayout(
+        needsYou: needsYou,
+        newResults: newResults,
+        open: open,
+        recent: recent
+    )
+}
+
+private func resultDate(for session: SessionSummary) -> Date {
+    guard let value = session.stateFacts.lastResultAt else {
+        return .distantPast
+    }
+    return LonghouseDateParser.parse(value) ?? .distantPast
+}
+
 @MainActor
 struct TimelineView: View {
     @EnvironmentObject var appState: AppState
@@ -10,6 +65,7 @@ struct TimelineView: View {
     @State private var path: [SessionRoute] = []
     @State private var launchSheetPresented = false
     @State private var settingsPresented = false
+    @State private var searchText = ""
     #if DEBUG
     @State private var forcedConnectionBanner: TimelineConnectivityBanner?
     #endif
@@ -22,26 +78,57 @@ struct TimelineView: View {
         #endif
     }
 
+    private var normalizedSearch: String {
+        searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     @ViewBuilder
     private var content: some View {
-        switch viewModel.state {
-        case .initial:
+        if normalizedSearch.isEmpty {
+            switch viewModel.state {
+            case .initial:
+                nonScrollingShell {
+                    ProgressView().controlSize(.large)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            case .empty:
+                nonScrollingShell {
+                    emptyView
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            case .error(let message):
+                nonScrollingShell {
+                    errorView(message)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            case .loaded(let sessions):
+                timelineBody(sessions: sessions)
+            }
+        } else {
+            searchContent
+        }
+    }
+
+    @ViewBuilder
+    private var searchContent: some View {
+        switch viewModel.searchState {
+        case .idle, .loading:
             nonScrollingShell {
                 ProgressView().controlSize(.large)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         case .empty:
             nonScrollingShell {
-                emptyView
+                ContentUnavailableView.search(text: normalizedSearch)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         case .error(let message):
             nonScrollingShell {
-                errorView(message)
+                searchErrorView(message)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         case .loaded(let sessions):
-            timelineBody(sessions: sessions)
+            searchBody(sessions: sessions)
         }
     }
 
@@ -64,6 +151,7 @@ struct TimelineView: View {
             content
             .background(Color(.systemGroupedBackground))
             .navigationTitle("Timeline")
+            .searchable(text: $searchText, prompt: "Search all sessions")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
@@ -113,7 +201,25 @@ struct TimelineView: View {
                     path.append(SessionRoute(sessionId: sessionId, fallbackTitle: "New session"))
                 }
             }
-            .refreshable { await viewModel.refresh(using: appState, reloadWidget: true, force: true) }
+            .refreshable {
+                if normalizedSearch.isEmpty {
+                    await viewModel.refresh(using: appState, reloadWidget: true, force: true)
+                } else {
+                    await viewModel.search(query: normalizedSearch, using: appState)
+                }
+            }
+            .task(id: normalizedSearch) {
+                guard !normalizedSearch.isEmpty else {
+                    viewModel.clearSearch()
+                    return
+                }
+                do {
+                    try await Task.sleep(nanoseconds: 300_000_000)
+                } catch {
+                    return
+                }
+                await viewModel.search(query: normalizedSearch, using: appState)
+            }
             .task {
                 await viewModel.load(using: appState)
                 if scenePhase == .active {
@@ -132,6 +238,9 @@ struct TimelineView: View {
                     Task {
                         await viewModel.refresh(using: appState, reloadWidget: true)
                         viewModel.startStream(using: appState)
+                        if !normalizedSearch.isEmpty {
+                            await viewModel.search(query: normalizedSearch, using: appState)
+                        }
                         consumePendingPushIfNeeded()
                     }
                 } else {
@@ -150,81 +259,20 @@ struct TimelineView: View {
     }
 
     private func timelineBody(sessions: [SessionSummary]) -> some View {
-        ScrollView {
-            // Strip lives inside the scroll content so it scrolls up with
-            // the large title and tucks under the compact nav bar instead
-            // of pinning awkwardly under it like a stuck banner.
-            LazyVStack(alignment: .leading, spacing: 14) {
-                ConnectionStatusStrip(banner: effectiveConnectionBanner)
-                    .padding(.horizontal, 0)
-
-                // Two tiers, decided server-side, matching web. A phone user is
-                // by definition away from the machine, so an undifferentiated
-                // list cannot answer "what do I have going right now" — the
-                // only question this screen exists for.
-                if openSessions(sessions).isEmpty {
-                    tierHeader("Nothing running")
-                } else {
-                    tierHeader("Open")
-                    tierRows(openSessions(sessions), emphasized: true)
-                }
-
-                // Unacknowledged Console results, email-unread semantics.
-                // Carved out of History (and never duplicated with Open);
-                // cleared read-on-open server-side.
-                if !unreadSessions(sessions).isEmpty {
-                    tierHeader("Unread").padding(.top, 6)
-                    tierRows(unreadSessions(sessions), emphasized: true)
-                }
-
-                if !historySessions(sessions).isEmpty {
-                    tierHeader("History").padding(.top, 6)
-                    tierRows(historySessions(sessions), emphasized: false)
-                }
-            }
-            .padding(.horizontal, 16)
-            .padding(.top, 8)
-            .padding(.bottom, 18)
-        }
+        TimelineSessionList(sessions: sessions, connectivityBanner: effectiveConnectionBanner)
         .navigationDestination(for: SessionRoute.self) { route in
             SessionView(sessionId: route.sessionId, fallbackTitle: route.fallbackTitle)
         }
     }
 
-    /// The sessions the user would say they have going right now.
-    ///
-    /// The tier is decided server-side (`working_set`) so web and iOS cannot
-    /// drift; the client only splits the list.
-    private func openSessions(_ sessions: [SessionSummary]) -> [SessionSummary] {
-        sessions.filter { $0.stateFacts.workingSet == "open" }
-    }
-
-    private func unreadSessions(_ sessions: [SessionSummary]) -> [SessionSummary] {
-        sessions.filter { $0.stateFacts.workingSet != "open" && $0.stateFacts.unread }
-    }
-
-    private func historySessions(_ sessions: [SessionSummary]) -> [SessionSummary] {
-        sessions.filter { $0.stateFacts.workingSet != "open" && !$0.stateFacts.unread }
-    }
-
-    private func tierHeader(_ title: String) -> some View {
-        Text(title)
-            .font(.headline.weight(.semibold))
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 2)
-    }
-
-    @ViewBuilder
-    private func tierRows(_ sessions: [SessionSummary], emphasized: Bool) -> some View {
-        ForEach(sessions) { session in
-            NavigationLink(value: SessionRoute(sessionId: session.id, fallbackTitle: session.title)) {
-                TimelineSessionCardRow(
-                    session: session,
-                    emphasized: emphasized,
-                    connectivityBanner: viewModel.connectionBanner
-                )
-            }
-            .buttonStyle(.plain)
+    private func searchBody(sessions: [SessionSummary]) -> some View {
+        TimelineSearchResultsList(
+            sessions: sessions,
+            query: normalizedSearch,
+            connectivityBanner: effectiveConnectionBanner
+        )
+        .navigationDestination(for: SessionRoute.self) { route in
+            SessionView(sessionId: route.sessionId, fallbackTitle: route.fallbackTitle)
         }
     }
 
@@ -252,6 +300,22 @@ struct TimelineView: View {
         .padding()
     }
 
+    private func searchErrorView(_ message: String) -> some View {
+        VStack(spacing: 12) {
+            Image(systemName: "wifi.exclamationmark")
+                .font(.system(size: 36))
+                .foregroundStyle(.orange)
+            Text(message)
+                .multilineTextAlignment(.center)
+                .foregroundStyle(.secondary)
+            Button("Try again") {
+                Task { await viewModel.search(query: normalizedSearch, using: appState) }
+            }
+            .buttonStyle(.borderedProminent)
+        }
+        .padding()
+    }
+
     private func consumePendingPushIfNeeded() {
         if let sessionID = PushNotificationStore.consumePendingSessionID(), !sessionID.isEmpty {
             openSession(sessionID: sessionID)
@@ -266,6 +330,88 @@ struct TimelineView: View {
     }
 }
 
+struct TimelineSessionList: View {
+    let sessions: [SessionSummary]
+    let connectivityBanner: TimelineConnectivityBanner
+
+    private var layout: TimelineInboxLayout {
+        buildTimelineInboxLayout(sessions)
+    }
+
+    var body: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 14) {
+                ConnectionStatusStrip(banner: connectivityBanner)
+
+                section(title: "Needs you", sessions: layout.needsYou, role: .needsYou)
+                section(title: "New results", sessions: layout.newResults, role: .newResult)
+                section(title: "Open", sessions: layout.open, role: .open)
+                section(title: "Recent", sessions: layout.recent, role: .recent)
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 8)
+            .padding(.bottom, 18)
+        }
+    }
+
+    @ViewBuilder
+    private func section(title: String, sessions: [SessionSummary], role: TimelineRowRole) -> some View {
+        if !sessions.isEmpty {
+            HStack {
+                Text(title)
+                    .font(.headline.weight(.semibold))
+                Spacer(minLength: 8)
+                Text("\(sessions.count)")
+                    .font(.caption.weight(.semibold))
+                    .monospacedDigit()
+            }
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 2)
+            .padding(.top, role == .needsYou ? 0 : 6)
+
+            ForEach(sessions) { session in
+                NavigationLink(value: SessionRoute(sessionId: session.id, fallbackTitle: session.title)) {
+                    TimelineSessionCardRow(
+                        session: session,
+                        role: role,
+                        connectivityBanner: connectivityBanner
+                    )
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+}
+
+struct TimelineSearchResultsList: View {
+    let sessions: [SessionSummary]
+    let query: String
+    let connectivityBanner: TimelineConnectivityBanner
+
+    var body: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 10) {
+                ConnectionStatusStrip(banner: connectivityBanner)
+                Text("\(sessions.count) \(sessions.count == 1 ? "session" : "sessions")")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .textCase(.uppercase)
+                    .padding(.horizontal, 2)
+
+                ForEach(sessions) { session in
+                    NavigationLink(value: SessionRoute(sessionId: session.id, fallbackTitle: session.title)) {
+                        TimelineSearchResultRow(session: session, query: query)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 8)
+            .padding(.bottom, 18)
+        }
+    }
+}
+
 private struct SessionRoute: Hashable {
     let sessionId: String
     let fallbackTitle: String
@@ -273,15 +419,20 @@ private struct SessionRoute: Hashable {
 
 struct TimelineSessionCardRow: View {
     let session: SessionSummary
-    let emphasized: Bool
+    let role: TimelineRowRole
     var connectivityBanner: TimelineConnectivityBanner = .none
 
     var body: some View {
         let signal = TimelineSignal.resolve(for: session, suppressed: connectivityBanner != .none)
-        let cardAccent = signal.accentColor
+        let isNewResult = role == .newResult
+        let cardAccent = isNewResult ? Color.accentColor : signal.accentColor
+        let dotColor = isNewResult ? Color.accentColor : signal.dotColor
+        let dotPulses = !isNewResult && signal.pulses
+        let titleWeight: Font.Weight = isNewResult ? .bold : .semibold
+        let titleLineLimit = role == .needsYou || isNewResult ? 2 : 1
 
         // Three-line row built for glanceability:
-        //  - kicker: project · branch ........................ when
+        //  - kicker: project · machine · branch ............... when
         //  - headline: ● <frozen server-resolved title>
         //  - status: demoted runtime state, colored by signal
         // The frozen `title` (server timeline_title) is the muscle-memory anchor;
@@ -296,15 +447,22 @@ struct TimelineSessionCardRow: View {
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
+                    if let machine = session.timelineMachineLabel {
+                        Text("· \(machine)")
+                            .font(.caption2.weight(.medium))
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                            .layoutPriority(-1)
+                    }
                     if let branch = session.timelineBranchBadgeLabel {
-                        Text(branch)
+                        Text("· \(branch)")
                             .font(.caption2.weight(.medium))
                             .foregroundStyle(.tertiary)
                             .lineLimit(1)
                             .layoutPriority(-1)
                     }
                     Spacer(minLength: 6)
-                    if let duration = stateDurationLabel(for: session) {
+                    if !isNewResult, let duration = stateDurationLabel(for: session) {
                         Text(duration)
                             .font(.caption2.weight(.medium))
                             .foregroundStyle(.tertiary)
@@ -313,27 +471,31 @@ struct TimelineSessionCardRow: View {
                 }
 
                 HStack(alignment: .firstTextBaseline, spacing: 7) {
-                    LivenessDot(color: signal.dotColor, pulsing: signal.pulses)
+                    LivenessDot(color: dotColor, pulsing: dotPulses)
                         .alignmentGuide(.firstTextBaseline) { d in d[VerticalAlignment.center] + 4 }
                     Text(session.title)
-                        .font(.subheadline.weight(.semibold))
+                        .font(.subheadline.weight(titleWeight))
                         .foregroundStyle(.primary)
-                        .lineLimit(1)
+                        .lineLimit(titleLineLimit)
                 }
                 // The dot is color-only; fold its meaning into the headline so
                 // VoiceOver announces "Waiting on you" / "Working" rather than
                 // leaving amber as the sole, invisible-to-VoiceOver code.
                 .accessibilityElement(children: .combine)
-                .accessibilityLabel("\(session.title), \(signal.accessibilityState)")
+                .accessibilityLabel(rowAccessibilityLabel(session: session, role: role, signal: signal))
 
-                CompactRuntimeLine(session: session, signal: signal)
+                if isNewResult {
+                    NewResultLine(session: session)
+                } else {
+                    CompactRuntimeLine(session: session, signal: signal)
+                }
 
                 // B-lite drift line: the live, drifting summary title parked on a
                 // demoted, low-contrast line where movement is legitimate. The
                 // frozen headline above stays put (muscle memory); this is the
                 // "what is it doing now" channel, shown only while actively
                 // working so it never churns under a resting row.
-                if signal == .working, let drift = session.driftTitle {
+                if role == .open, signal == .working, let drift = session.driftTitle {
                     Text("now: \(drift)")
                         .font(.caption2)
                         .italic()
@@ -348,12 +510,83 @@ struct TimelineSessionCardRow: View {
         .overlay(alignment: .leading) {
             RoundedRectangle(cornerRadius: 2)
                 .fill(cardAccent)
-                .frame(width: emphasized ? 4 : 3)
+                .frame(width: role == .recent ? 3 : 4)
                 .padding(.vertical, 10)
         }
         .overlay {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(cardAccent.opacity(emphasized ? 0.45 : 0.16), lineWidth: emphasized ? 1.2 : 0.8)
+                .stroke(
+                    cardAccent.opacity(role == .recent ? 0.16 : 0.42),
+                    lineWidth: role == .recent ? 0.8 : 1.1
+                )
+        }
+    }
+}
+
+private struct NewResultLine: View {
+    let session: SessionSummary
+
+    var body: some View {
+        Text(newResultStatusText(for: session))
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(newResultStatusColor(for: session))
+            .lineLimit(1)
+            .accessibilityLabel(newResultStatusText(for: session))
+    }
+}
+
+private struct TimelineSearchResultRow: View {
+    let session: SessionSummary
+    let query: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 11) {
+            ProviderGlyph(provider: session.provider, size: 30)
+
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Text(session.projectLabel)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    if let machine = session.timelineMachineLabel {
+                        Text("· \(machine)")
+                            .font(.caption2.weight(.medium))
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                    }
+                    Spacer(minLength: 6)
+                    Text(relativeTime(session.timelineAnchor))
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(.tertiary)
+                }
+
+                Text(session.title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(2)
+
+                if let snippet = nonEmpty(session.matchSnippet) {
+                    Text(highlightedSnippet(snippet, query: query))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+
+                Text("\(session.providerLabel) · \(session.turnCount) turns")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .padding(.vertical, 11)
+        .padding(.horizontal, 12)
+        .background(
+            Color(.secondarySystemGroupedBackground),
+            in: RoundedRectangle(cornerRadius: 14, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(Color.secondary.opacity(0.16), lineWidth: 0.8)
         }
     }
 }
@@ -493,6 +726,7 @@ private struct LivenessDot: View {
 
 protocol TimelineSessionsClient: Sendable {
     func recentSessions(limit: Int) async throws -> [SessionSummary]
+    func searchSessions(query: String, limit: Int) async throws -> [SessionSummary]
 }
 
 extension LonghouseAPI: TimelineSessionsClient {}
@@ -521,9 +755,18 @@ enum TimelineLoadState: Equatable {
     case loaded([SessionSummary])
 }
 
+enum TimelineSearchState: Equatable {
+    case idle
+    case loading
+    case empty
+    case error(String)
+    case loaded([SessionSummary])
+}
+
 @MainActor
 final class TimelineViewModel: ObservableObject {
     @Published private(set) var state: TimelineLoadState = .initial
+    @Published private(set) var searchState: TimelineSearchState = .idle
     @Published private(set) var connectivity = TimelineConnectivityState()
     @Published private(set) var connectivityNow = Date()
 
@@ -538,6 +781,7 @@ final class TimelineViewModel: ObservableObject {
     private var streamGeneration: UInt64 = 0
     private var hasReceivedFirstConnect = false
     private var streamAuthRefreshAttempted = false
+    private var searchGeneration: UInt64 = 0
     private let apiFactory: (String) -> TimelineSessionsClient?
     private let streamFactory: (URL, Int) -> TimelineSessionsStreamSource
     private let enableRealtime: Bool
@@ -594,6 +838,43 @@ final class TimelineViewModel: ObservableObject {
         }
         logger.info("timeline cache miss")
         await refresh(using: appState, reloadWidget: true)
+    }
+
+    func clearSearch() {
+        searchGeneration &+= 1
+        searchState = .idle
+    }
+
+    func search(query: String, using appState: AppState) async {
+        let normalized = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else {
+            clearSearch()
+            return
+        }
+        searchGeneration &+= 1
+        let generation = searchGeneration
+        guard let api = apiFactory(appState.serverURL) else {
+            searchState = .error("Invalid server URL")
+            return
+        }
+
+        searchState = .loading
+        do {
+            let sessions = try await api.searchSessions(query: normalized, limit: 30)
+            guard !Task.isCancelled, generation == searchGeneration else { return }
+            searchState = sessions.isEmpty ? .empty : .loaded(sessions)
+        } catch LonghouseAPIError.notAuthenticated {
+            guard !Task.isCancelled, generation == searchGeneration else { return }
+            applyConnectivity(.authFailed)
+            appState.handleExpiredSession()
+            searchState = .error("Sign in to search your sessions.")
+        } catch {
+            guard !Task.isCancelled, generation == searchGeneration else { return }
+            let message = connectionBanner == .offline
+                ? "Search needs a connection."
+                : "Search unavailable: \(error.localizedDescription)"
+            searchState = .error(message)
+        }
     }
 
     func refresh(using appState: AppState, reloadWidget: Bool = false, force: Bool = false) async {
@@ -955,6 +1236,61 @@ private func relativeTime(_ value: String?) -> String {
     let formatter = RelativeDateTimeFormatter()
     formatter.unitsStyle = .abbreviated
     return formatter.localizedString(for: date, relativeTo: Date())
+}
+
+private func newResultOutcomeLabel(for session: SessionSummary) -> String {
+    switch session.stateFacts.lastResultOutcome?.lowercased() {
+    case "failed": return "Failed"
+    case "cancelled": return "Cancelled"
+    default: return "Finished"
+    }
+}
+
+private func newResultStatusText(for session: SessionSummary) -> String {
+    let outcome = newResultOutcomeLabel(for: session)
+    guard let date = parseLonghouseDate(session.stateFacts.lastResultAt) else { return outcome }
+    return "\(outcome) · \(compactDuration(since: date)) ago"
+}
+
+private func newResultStatusColor(for session: SessionSummary) -> Color {
+    switch session.stateFacts.lastResultOutcome?.lowercased() {
+    case "failed": return .red
+    case "cancelled": return .secondary
+    default: return .accentColor
+    }
+}
+
+private func rowAccessibilityLabel(
+    session: SessionSummary,
+    role: TimelineRowRole,
+    signal: TimelineSignal
+) -> String {
+    if role == .newResult {
+        return "\(session.title), new result, \(newResultStatusText(for: session))"
+    }
+    return "\(session.title), \(signal.accessibilityState)"
+}
+
+private func highlightedSnippet(_ value: String, query: String) -> AttributedString {
+    var attributed = AttributedString(value)
+    let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !needle.isEmpty else { return attributed }
+
+    var searchStart = value.startIndex
+    while searchStart < value.endIndex,
+          let match = value.range(
+              of: needle,
+              options: [.caseInsensitive, .diacriticInsensitive],
+              range: searchStart..<value.endIndex
+          ) {
+        if let lower = AttributedString.Index(match.lowerBound, within: attributed),
+           let upper = AttributedString.Index(match.upperBound, within: attributed) {
+            attributed[lower..<upper].foregroundColor = .primary
+            attributed[lower..<upper].backgroundColor = Color.accentColor.opacity(0.28)
+        }
+        searchStart = match.upperBound
+    }
+    return attributed
 }
 
 private func parseLonghouseDate(_ value: String?) -> Date? {

@@ -236,7 +236,7 @@ struct TimelineOpenUITestFixtureView: View {
                         NavigationLink {
                             destination(for: session)
                         } label: {
-                            TimelineSessionCardRow(session: session.summary, emphasized: false)
+                            TimelineSessionCardRow(session: session.summary, role: .recent)
                         }
                         .buttonStyle(.plain)
                         .accessibilityIdentifier("timeline-open-session-\(session.index)")

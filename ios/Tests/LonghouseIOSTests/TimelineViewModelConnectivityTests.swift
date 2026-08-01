@@ -156,6 +156,21 @@ struct TimelineViewModelConnectivityTests {
         #expect(model.connectionBanner == .none)
     }
 
+    @Test
+    func archiveSearchUsesDedicatedResultsState() async {
+        let session = makeSession(id: "search-result")
+        let api = FakeTimelineSessionsClient([], searchResponse: .success([session]))
+        let stream = TimelineStreamRecorder()
+        let model = makeModel(api: api, stream: stream)
+
+        await model.search(query: "provider channel", using: makeAppState())
+
+        #expect(model.searchState == .loaded([session]))
+        #expect(await api.searchRequestCount() == 1)
+        model.clearSearch()
+        #expect(model.searchState == .idle)
+    }
+
     private func makeModel(
         api: FakeTimelineSessionsClient,
         stream: TimelineStreamRecorder
@@ -258,20 +273,42 @@ private enum FakeTimelineResponse: Sendable {
 
 private actor FakeTimelineSessionsClient: TimelineSessionsClient {
     private var responses: [FakeTimelineResponse]
+    private var searchResponse: FakeTimelineResponse
     private var requests = 0
+    private var searchRequests = 0
 
-    init(_ responses: [FakeTimelineResponse]) {
+    init(
+        _ responses: [FakeTimelineResponse],
+        searchResponse: FakeTimelineResponse = .success([])
+    ) {
         self.responses = responses
+        self.searchResponse = searchResponse
     }
 
     func requestCount() -> Int {
         requests
     }
 
+    func searchRequestCount() -> Int {
+        searchRequests
+    }
+
     func recentSessions(limit: Int) async throws -> [SessionSummary] {
         requests += 1
         guard !responses.isEmpty else { return [] }
         switch responses.removeFirst() {
+        case .success(let sessions):
+            return sessions
+        case .failure:
+            throw URLError(.timedOut)
+        case .notAuthenticated:
+            throw LonghouseAPIError.notAuthenticated
+        }
+    }
+
+    func searchSessions(query: String, limit: Int) async throws -> [SessionSummary] {
+        searchRequests += 1
+        switch searchResponse {
         case .success(let sessions):
             return sessions
         case .failure:

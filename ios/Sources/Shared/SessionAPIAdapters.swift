@@ -576,37 +576,58 @@ extension APISessionTurnsListResponse {
     }
 }
 
+private extension APISessionResponse {
+    func sessionSummary(
+        threadId: String? = nil,
+        headOriginLabel: String? = nil,
+        timelineAnchorAt projectedTimelineAnchorAt: String? = nil
+    ) -> SessionSummary {
+        SessionSummary(
+            id: id,
+            threadId: threadId,
+            title: timelineCardTitle(for: self),
+            presenceState: presenceState ?? "unknown",
+            provider: provider,
+            project: project,
+            lastActivityAt: lastActivityAt,
+            summary: summary,
+            summaryStatus: summaryStatus,
+            firstUserMessage: firstUserMessage,
+            matchSnippet: matchSnippet,
+            summaryTitle: summaryTitle,
+            userState: userState,
+            status: status,
+            displayPhase: displayPhase,
+            presenceTool: presenceTool,
+            activeTool: activeTool,
+            gitBranch: gitBranch,
+            homeLabel: homeLabel,
+            headOriginLabel: headOriginLabel,
+            timelineAnchorAt: projectedTimelineAnchorAt ?? timelineAnchorAt,
+            userMessages: userMessages,
+            toolCalls: toolCalls,
+            liveControlAvailable: capabilities.liveControlAvailable,
+            hostReattachAvailable: capabilities.hostReattachAvailable,
+            replyToLiveSessionAvailable: capabilities.replyToLiveSessionAvailable,
+            runtimeDisplay: runtimeDisplay.sessionRuntimeDisplay,
+            timelineCard: timelineCard.timelineCardPresentation,
+            stateFacts: sessionState.sessionStateFacts
+        )
+    }
+}
+
 extension APITimelineSessionCardResponse {
     var sessionSummary: SessionSummary {
-        SessionSummary(
-            id: head.id,
+        head.sessionSummary(
             threadId: threadId,
-            title: timelineCardTitle(for: head),
-            presenceState: head.presenceState ?? "unknown",
-            provider: head.provider,
-            project: head.project,
-            lastActivityAt: head.lastActivityAt,
-            summary: head.summary,
-            summaryStatus: head.summaryStatus,
-            firstUserMessage: head.firstUserMessage,
-            summaryTitle: head.summaryTitle,
-            userState: head.userState,
-            status: head.status,
-            displayPhase: head.displayPhase,
-            presenceTool: head.presenceTool,
-            activeTool: head.activeTool,
-            gitBranch: head.gitBranch,
-            homeLabel: head.homeLabel,
             headOriginLabel: headOriginLabel,
-            timelineAnchorAt: timelineAnchorAt ?? head.timelineAnchorAt,
-            userMessages: head.userMessages,
-            toolCalls: head.toolCalls,
-            liveControlAvailable: head.capabilities.liveControlAvailable,
-            hostReattachAvailable: head.capabilities.hostReattachAvailable,
-            replyToLiveSessionAvailable: head.capabilities.replyToLiveSessionAvailable,
-            runtimeDisplay: head.runtimeDisplay.sessionRuntimeDisplay,
-            timelineCard: head.timelineCard.timelineCardPresentation,
-            stateFacts: head.sessionState.sessionStateFacts
+            timelineAnchorAt: timelineAnchorAt
         )
+    }
+}
+
+extension APISessionResponse {
+    var searchSessionSummary: SessionSummary {
+        sessionSummary(headOriginLabel: originLabel)
     }
 }

@@ -97,7 +97,11 @@ struct SessionView: View {
             // Console sends both reuse a ready document.
             WebTranscriptWebViewPool.prewarm()
             await viewModel.start(sessionId: sessionId, appState: appState)
-            await viewModel.acknowledgeUnreadIfNeeded(sessionId: sessionId, appState: appState)
+            await viewModel.acknowledgeUnreadIfNeeded(
+                sessionId: sessionId,
+                appState: appState,
+                sceneIsActive: scenePhase == .active
+            )
         }
         .onDisappear {
             viewModel.pauseRealtime()
@@ -110,11 +114,28 @@ struct SessionView: View {
             // so that path must be non-destructive too.
             switch newPhase {
             case .active:
-                Task { await viewModel.start(sessionId: sessionId, appState: appState) }
+                Task {
+                    await viewModel.start(sessionId: sessionId, appState: appState)
+                    await viewModel.acknowledgeUnreadIfNeeded(
+                        sessionId: sessionId,
+                        appState: appState,
+                        sceneIsActive: true
+                    )
+                }
             case .background, .inactive:
                 viewModel.pauseRealtime()
             @unknown default:
                 break
+            }
+        }
+        .onChange(of: viewModel.detail?.stateFacts.lastResultAt) { previous, current in
+            guard current != previous, scenePhase == .active else { return }
+            Task {
+                await viewModel.acknowledgeUnreadIfNeeded(
+                    sessionId: sessionId,
+                    appState: appState,
+                    sceneIsActive: true
+                )
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
@@ -2042,8 +2063,20 @@ final class SessionViewModel: ObservableObject {
     /// (console-unread-acknowledgement spec): acknowledge exactly the result
     /// this client rendered. Fire-and-forget; the server is a max-write no-op
     /// when already read.
-    func acknowledgeUnreadIfNeeded(sessionId: String, appState: AppState) async {
-        guard let facts = detail?.stateFacts, facts.unread, let readThrough = facts.lastResultAt else { return }
+    static func unreadReadThrough(facts: SessionStateFacts?, sceneIsActive: Bool) -> String? {
+        guard sceneIsActive, let facts, facts.unread else { return nil }
+        return facts.lastResultAt
+    }
+
+    func acknowledgeUnreadIfNeeded(
+        sessionId: String,
+        appState: AppState,
+        sceneIsActive: Bool
+    ) async {
+        guard let readThrough = Self.unreadReadThrough(
+            facts: detail?.stateFacts,
+            sceneIsActive: sceneIsActive
+        ) else { return }
         guard let api = apiFactory(appState.serverURL) else { return }
         try? await api.markSessionRead(id: sessionId, readThrough: readThrough)
     }
