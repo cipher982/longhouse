@@ -1552,8 +1552,11 @@ class CatalogDaemon:
         if not _is_string(delivery_request_id, maximum=64):
             return self._error(request, "invalid_request", "delivery_request_id must contain 1 to 64 characters")
         status = request.params["status"]
-        if status not in {"delivered", "failed"}:
-            return self._error(request, "invalid_request", "status must be delivered or failed")
+        # "queued" returns a claimed receipt to the queue after a transient
+        # transport failure, so a disconnected machine makes delivery late
+        # rather than losing the input.
+        if status not in {"delivered", "failed", "queued"}:
+            return self._error(request, "invalid_request", "status must be delivered, failed, or queued")
         error = request.params["error"]
         if error is not None and (not isinstance(error, str) or not error or len(error) > 500):
             return self._error(request, "invalid_request", "error must be null or contain 1 to 500 characters")

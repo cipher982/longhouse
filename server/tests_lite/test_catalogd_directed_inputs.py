@@ -16,6 +16,7 @@ from zerg.catalogd.schema import initialize_catalog_schema
 from zerg.catalogd.server import CatalogDaemon
 from zerg.catalogd.store import CatalogStore
 from zerg.models.live_store import LiveSession
+from zerg.models.live_store import LiveSessionInputReceipt
 from zerg.models.live_store import LiveUser
 from zerg.services.live_session_inputs import upsert_live_input_receipt
 
@@ -249,3 +250,97 @@ def test_directed_input_projects_linked_receipt(receipt_status, error, daemon_pa
     expected_error = json.dumps({"message": error}) if error else None
     assert read["directed_input"]["input_receipt"]["error_json"] == expected_error
     engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_finish_queued_input_can_return_a_receipt_to_the_queue(daemon_paths):
+    """A transient transport failure must not consume the input.
+
+    The wake loop reaches requeue through this RPC, so the contract has to
+    accept "queued" as an attempt outcome distinct from "failed". Before this
+    existed, every control failure — including a channel that was simply not
+    connected — finalized the receipt as failed and the message was gone.
+
+    Seeds a `delivering` receipt directly rather than going through
+    session.input.claim.v2: claiming gates on projected activity and send
+    availability, which is pre-existing behaviour this change does not touch.
+    """
+    database_path, socket_path = daemon_paths
+    _source_id, target_id, _foreign_id = _seed_owner_sessions(database_path)
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        # Seed through catalogd so the daemon's own connection sees the row.
+        upserted = await client.call(
+            "session.input.receipt.upsert.v2",
+            {
+                "receipt": {
+                    "owner_id": 7,
+                    "session_id": target_id,
+                    "provider": "claude",
+                    "text": "deliver me later",
+                    "intent": "queue",
+                    "status": "delivering",
+                    "client_request_id": "requeue-1",
+                    "delivery_request_id": "attempt-1",
+                    "device_id": None,
+                    "thread_id": None,
+                    "control_command_id": None,
+                    "archive_session_input_id": None,
+                    "enqueue_archive_projection": False,
+                    "error": None,
+                    "expires_at": None,
+                }
+            },
+        )
+        receipt_id = upserted["receipt"]["id"]
+
+        finished = await client.call(
+            "session.input.finish.v2",
+            {
+                "receipt_id": receipt_id,
+                "delivery_request_id": "attempt-1",
+                "status": "queued",
+                "error": "Managed control channel is not connected",
+            },
+        )
+        assert finished.get("changed") is True, finished
+
+        engine = create_catalog_engine(database_path)
+        orm = Session(bind=engine, expire_on_commit=False)
+        try:
+            row = orm.get(LiveSessionInputReceipt, receipt_id)
+            assert row.status == "queued"
+            # Clearing the claim token is what lets a later wake take it again.
+            assert row.delivery_request_id is None
+            assert row.delivery_attempts == 1
+        finally:
+            orm.close()
+            engine.dispose()
+    finally:
+        await client.close()
+        await daemon.close()
+
+
+@pytest.mark.asyncio
+async def test_finish_queued_input_still_rejects_unknown_statuses(daemon_paths):
+    database_path, socket_path = daemon_paths
+    _source_id, target_id, _foreign_id = _seed_owner_sessions(database_path)
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        with pytest.raises(CatalogRemoteError):
+            await client.call(
+                "session.input.finish.v2",
+                {
+                    "receipt_id": str(uuid4()),
+                    "delivery_request_id": "attempt-1",
+                    "status": "sideways",
+                    "error": None,
+                },
+            )
+    finally:
+        await client.close()
+        await daemon.close()

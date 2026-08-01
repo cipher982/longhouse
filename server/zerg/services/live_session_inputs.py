@@ -274,6 +274,50 @@ def mark_live_receipt_failed(
     return _snapshot(row)
 
 
+# How many times a receipt may be returned to the queue before we stop.
+#
+# Transient failures make delivery late, not lost — but only up to a point. A
+# machine that never comes back would otherwise hold its queue open forever, and
+# an input the user sent hours ago is no longer something they want injected.
+MAX_DELIVERY_ATTEMPTS = 5
+
+
+def requeue_live_receipt(
+    db: Session,
+    *,
+    receipt_id: str,
+    error: str,
+) -> tuple[LiveInputReceiptSnapshot | None, bool]:
+    """Return a claimed receipt to the queue after a transient failure.
+
+    Returns ``(snapshot, requeued)``. ``requeued`` is False once the receipt has
+    exhausted ``MAX_DELIVERY_ATTEMPTS``, in which case it is failed instead so
+    the queue can move past it rather than blocking every later input behind one
+    undeliverable message.
+
+    Clearing ``delivery_request_id`` is what makes the receipt claimable again;
+    the next wake takes it in ``created_at`` order like any other queued input.
+    """
+
+    row = db.query(LiveSessionInputReceipt).filter(LiveSessionInputReceipt.id == str(receipt_id)).first()
+    if row is None:
+        return None, False
+    attempts = int(row.delivery_attempts or 0) + 1
+    row.delivery_attempts = attempts
+    row.updated_at = datetime.now(timezone.utc)
+    message = str(error or "session input delivery failed")[:500]
+    if attempts >= MAX_DELIVERY_ATTEMPTS:
+        row.status = INPUT_STATUS_FAILED
+        row.error_json = _json_or_none({"message": message, "attempts": attempts, "reason": "max_delivery_attempts"})
+        db.commit()
+        return _snapshot(row), False
+    row.status = INPUT_STATUS_QUEUED
+    row.delivery_request_id = None
+    row.error_json = _json_or_none({"message": message, "attempts": attempts, "reason": "transient"})
+    db.commit()
+    return _snapshot(row), True
+
+
 def upsert_live_input_receipt(
     db: Session,
     *,

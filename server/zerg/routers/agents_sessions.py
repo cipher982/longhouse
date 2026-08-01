@@ -2448,15 +2448,18 @@ async def _attempt_directed_input_delivery(
         text=str(directed_input["text"]),
     )
     try:
-        from zerg.routers.session_chat import INPUT_INTENT_AUTO
         from zerg.routers.session_chat import INPUT_INTENT_QUEUE
         from zerg.routers.session_chat import SessionInputRequest
         from zerg.routers.session_chat import _create_catalog_session_input_response
 
-        facts = getattr(target_session, "catalog_facts", None)
-        runtime = facts.get("runtime") if isinstance(facts, dict) else None
-        target_phase = str(runtime.get("phase") or "").strip() if isinstance(runtime, dict) else ""
-        intent = INPUT_INTENT_AUTO if target_phase in {"idle", "needs_user"} else INPUT_INTENT_QUEUE
+        # Directed input is always durable. It used to pick `auto` when the
+        # target looked idle, which dispatched live and failed terminally if the
+        # control channel happened to be down — so a message to an idle peer was
+        # dropped while the same message to a busy peer was queued safely. The
+        # target's phase is a fact about timing, never about whether the message
+        # survives; the sender chose to send, and that choice owns the
+        # semantics.
+        intent = INPUT_INTENT_QUEUE
 
         response = await _create_catalog_session_input_response(
             source_session=target_session,

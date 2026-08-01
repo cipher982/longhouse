@@ -3334,6 +3334,7 @@ class CatalogStore:
         from zerg.services.live_session_inputs import _snapshot
         from zerg.services.live_session_inputs import mark_live_receipt_delivered_with_projection
         from zerg.services.live_session_inputs import mark_live_receipt_failed
+        from zerg.services.live_session_inputs import requeue_live_receipt
 
         observed_at = datetime.now(UTC)
         with _write_transaction(self.engine) as connection:
@@ -3369,6 +3370,18 @@ class CatalogStore:
                         orm,
                         receipt_id=receipt_id,
                         delivery_request_id=delivery_request_id,
+                    )
+                elif status == "queued":
+                    # Transient transport failure: the input is late, not lost.
+                    # Returning it to the queue is what makes a disconnected
+                    # machine delay delivery instead of dropping it.
+                    # requeue_live_receipt fails the receipt itself once
+                    # attempts are exhausted, so one undeliverable input cannot
+                    # block every later one behind it.
+                    snapshot, _requeued = requeue_live_receipt(
+                        orm,
+                        receipt_id=receipt_id,
+                        error=error or "session input delivery deferred",
                     )
                 else:
                     snapshot = mark_live_receipt_failed(

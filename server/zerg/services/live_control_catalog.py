@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
+from typing import TYPE_CHECKING
 from typing import Literal
 from uuid import UUID
 from uuid import uuid4
@@ -24,6 +25,9 @@ from zerg.services.managed_control_state import DEFAULT_MANAGED_CONTROL_LEASE_TT
 from zerg.services.managed_provider_contracts import contract_for_provider
 from zerg.services.session_state_facts_projector import authorize_exact_control_fact
 from zerg.utils.time import normalize_utc
+
+if TYPE_CHECKING:  # pragma: no cover - typing only, avoids a runtime import cycle
+    from zerg.services.managed_control_dispatcher import ManagedControlDispatchResult
 
 logger = logging.getLogger(__name__)
 _CONTROL_ACQUISITION_KINDS = ("spawned_control", "adopted_control")
@@ -438,6 +442,36 @@ def live_session_closed_for_input(db: Session, session: LiveControlSession) -> b
     return live_session_input_block_reason(db, session) is not None
 
 
+def _is_transient_delivery_failure(result: "ManagedControlDispatchResult") -> bool:
+    """Did this dispatch fail because nothing received it, rather than refused it?
+
+    Transient means the input never reached the provider: no control channel,
+    no transport, or a timeout where acceptance is unknown. Those must not
+    consume the message — the machine may simply be asleep.
+
+    A non-transient failure is a provider that saw the input and rejected it.
+    Consuming that one is correct; retrying it forever would block the queue.
+
+    Timeouts count as transient deliberately. That admits a redelivery of
+    something the provider may already have accepted, which is why the command
+    id is seeded from the durable receipt id: the engine dedupes a repeat of the
+    same command.
+    """
+
+    from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_TRANSPORT_NONE
+    from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_UNAVAILABLE_ERROR
+
+    if getattr(result, "transport", None) == MANAGED_CONTROL_TRANSPORT_NONE:
+        return True
+    error = str(getattr(result, "error", "") or "")
+    if not error:
+        return False
+    if error == MANAGED_CONTROL_UNAVAILABLE_ERROR:
+        return True
+    lowered = error.lower()
+    return any(marker in lowered for marker in ("timed out", "timeout", "not connected", "disconnected"))
+
+
 async def wake_next_live_catalog_input(session_id: UUID | str) -> bool:
     """Claim and dispatch one queued hot receipt after a terminal signal."""
 
@@ -496,19 +530,28 @@ async def wake_next_live_catalog_input(session_id: UUID | str) -> bool:
         timeout_secs=15,
         command_type=MANAGED_CONTROL_COMMAND_SEND_TEXT,
         payload={"text": str(receipt.get("text") or "")},
-        request_id=request_id,
+        # Seed the engine command id from the durable receipt, not this
+        # attempt's claim token. Retrying a transient failure must reuse the
+        # same command id, or an ambiguous acceptance followed by a retry
+        # injects the same prompt twice.
+        request_id=str(receipt["id"]),
         run_id=None,
     )
     data = dict(result.data or {})
     if not result.ok or int(data.get("exit_code", 1)) != 0:
         delivery_error = str(result.error or data.get("stderr") or "queued send failed")[:500]
+        # A transport that was never reachable did not reject the input; it
+        # never saw it. Returning the receipt to the queue makes an offline or
+        # briefly-disconnected machine deliver late instead of dropping the
+        # message. A provider that actually refused the input is terminal.
+        outcome = "queued" if _is_transient_delivery_failure(result) else "failed"
         try:
             await catalogd.call(
                 "session.input.finish.v2",
                 {
                     "receipt_id": str(receipt["id"]),
                     "delivery_request_id": request_id,
-                    "status": "failed",
+                    "status": outcome,
                     "error": delivery_error,
                 },
                 timeout_seconds=1.0,
