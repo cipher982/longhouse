@@ -179,8 +179,16 @@ def attach_live_catalog_control(
     launch_origin: str = "longhouse_spawned",
     force_new_run: bool = False,
     observed_at: datetime | None = None,
-) -> LiveSessionConnection:
-    """Materialize live kernel control from launch/lease evidence."""
+) -> LiveSessionConnection | None:
+    """Materialize live kernel control from launch/lease evidence.
+
+    Returns None when there is nothing to attach to. Only a caller that names a
+    run (launch) or explicitly asks for a fresh one may create one. Lease
+    observers call this with no run_id, including on the teardown path that
+    marks a vanished lease detached — inventing a run there produced a second,
+    never-ending run that outlived the session and permanently unbound every
+    activity and control fact from the durable latest run.
+    """
 
     now = observed_at or datetime.now(timezone.utc)
     session = db.get(LiveSessionCatalog, str(session_id))
@@ -197,6 +205,8 @@ def attach_live_catalog_control(
             .order_by(LiveSessionRun.started_at.desc(), LiveSessionRun.id.desc())
             .first()
         )
+    if run is None and run_id is None and not force_new_run:
+        return None
     if run is None:
         if force_new_run:
             open_runs = db.query(LiveSessionRun).filter(LiveSessionRun.thread_id == thread_id, LiveSessionRun.ended_at.is_(None)).all()
@@ -250,7 +260,10 @@ def attach_live_catalog_control(
     connection.can_resume = caps["can_resume"]
     connection.last_health_at = now
     connection.released_at = now if state in {"released", "ended"} else None
-    session.ended_at = None
+    # Only live control un-ends a session. A detach/release observation is the
+    # opposite evidence and must never resurrect one.
+    if state not in {"detached", "released", "ended"}:
+        session.ended_at = None
     session.updated_at = now
     _upsert_live_thread_alias(
         db,
