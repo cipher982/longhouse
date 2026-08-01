@@ -7,19 +7,22 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 EXPECTED_COPY = {
     "README.md": [
-        "OpenCode Helm supports send, interrupt, and terminate but not active-turn steer or pause-answer",
+        "OpenCode Helm supports send, interrupt, terminate, and pause-answer but not active-turn steer",
     ],
     "web/src/pages/docs/IntegrationsPage.tsx": [
         "remote send,",
-        "interrupt, and lifecycle terminate",
-        "Active-turn steer and pause-answer",
+        "interrupt, lifecycle terminate, and pause-answer",
+        "permission reply endpoint",
+        "Active-turn steer is not advertised",
     ],
     "web/src/pages/docs/QuickStartPage.tsx": [
-        "OpenCode Helm supports managed send, interrupt, and terminate but",
+        "OpenCode Helm supports managed send, interrupt, terminate, and",
+        "pause-answer but not active-turn steer",
         "not active-turn steer",
     ],
     "web/src/pages/docs/CLIReferencePage.tsx": [
-        "OpenCode Helm supports managed send, interrupt, and terminate but",
+        "OpenCode Helm supports managed send, interrupt, terminate, and",
+        "pause-answer but not active-turn steer",
         "not active-turn steer",
     ],
     ".agents/skills/managed-provider-cli/SKILL.md": [

@@ -103,8 +103,9 @@ export default function IntegrationsPage() {
         OpenCode lands in the timeline alongside the other CLIs. Launch through
         Longhouse with <code>longhouse opencode</code> for a managed-control
         session: archive, transcript, process-level health, remote send,
-        interrupt, and lifecycle terminate. Active-turn steer and pause-answer
-        are not advertised yet.
+        interrupt, lifecycle terminate, and pause-answer through OpenCode&apos;s
+        permission reply endpoint. Active-turn steer is not advertised because
+        OpenCode does not expose a stable mid-turn injection semantic.
       </p>
       <CodeBlock title="terminal">
         {`longhouse opencode             # start OpenCode with Longhouse session ownership`}
@@ -145,7 +146,8 @@ export default function IntegrationsPage() {
           <tr><td>Headless launch (Console / ACP)</td><td>Supported</td></tr>
           <tr><td>Live control</td><td>Send, interrupt, terminate, and reattach</td></tr>
           <tr><td>Live transcript</td><td>Supported</td></tr>
-          <tr><td>Active-turn steer / pause-answer</td><td>Not supported</td></tr>
+          <tr><td>Pause-answer</td><td>Supported</td></tr>
+          <tr><td>Active-turn steer</td><td>Not supported</td></tr>
         </tbody>
       </table>
 
