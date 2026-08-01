@@ -14,7 +14,6 @@ providers:
   control_plane_aliases:
   - codex_app_server
   adapter_sources:
-  - server/zerg/cli/codex.py
   - server/zerg/mcp_server/server.py
   - engine/src/codex_bridge.rs
   - engine/src/codex_bridge_ownership.rs
@@ -456,7 +455,6 @@ providers:
   control_plane: opencode_server_bridge
   control_plane_aliases: []
   adapter_sources:
-  - server/zerg/cli/opencode.py
   - server/zerg/cli/opencode_bridge.py
   - server/zerg/mcp_server/server.py
   - engine/src/opencode_control.rs
@@ -623,7 +621,6 @@ providers:
   control_plane: antigravity_hook_inbox
   control_plane_aliases: []
   adapter_sources:
-  - server/zerg/cli/antigravity.py
   - server/zerg/cli/antigravity_channel.py
   - server/zerg/services/managed_local_control.py
   - engine/src/managed_antigravity_scan.rs

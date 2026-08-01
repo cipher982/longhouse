@@ -7,7 +7,7 @@
     "cursor",
     "opencode"
   ],
-  "file_count": 218,
+  "file_count": 215,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -501,15 +501,6 @@
       ]
     },
     {
-      "path": "scripts/tests/managed-session-contract.test.py",
-      "providers": [
-        "antigravity",
-        "claude",
-        "codex",
-        "opencode"
-      ]
-    },
-    {
       "path": "scripts/tests/provider-control-e2e-canary.test.py",
       "providers": [
         "antigravity",
@@ -721,14 +712,6 @@
         "antigravity",
         "claude",
         "cursor",
-        "opencode"
-      ]
-    },
-    {
-      "path": "server/tests_lite/test_cli_server_contract.py",
-      "providers": [
-        "claude",
-        "codex",
         "opencode"
       ]
     },
@@ -1415,16 +1398,6 @@
       "path": "server/zerg/catalogd/store.py",
       "providers": [
         "claude",
-        "cursor",
-        "opencode"
-      ]
-    },
-    {
-      "path": "server/zerg/cli/_launch_ui.py",
-      "providers": [
-        "antigravity",
-        "claude",
-        "codex",
         "cursor",
         "opencode"
       ]

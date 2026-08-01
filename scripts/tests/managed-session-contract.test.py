@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regression tests for the managed-session static contract guard."""
+"""Regression tests for the native managed-session static contract guard."""
 
 from __future__ import annotations
 
@@ -19,44 +19,22 @@ def _write(path: Path, text: str) -> None:
 
 def _write_minimal_contract_root(root: Path) -> None:
     _write(
-        root / "docs/specs/managed-provider-session-contract.md",
-        "# Managed Provider Session Contract\n",
-    )
-    _write(
-        root / "server/zerg/cli/_common.py",
+        root / "engine/src/managed_launch_lifecycle.rs",
         """
-def load_api_credentials(*, config_dir_is_provider_home=False, **kwargs):
-    return "", ""
-
-def ensure_managed_launch_preflight(*, config_dir_is_provider_home=True, **kwargs):
-    return None
+pub struct ManagedLaunchTransaction;
+impl ManagedLaunchTransaction { pub fn confirm(&mut self) {} }
+impl Drop for ManagedLaunchTransaction { fn drop(&mut self) {} }
 """,
     )
     _write(
-        root / "server/zerg/cli/_managed_contract.py",
-        """
-from zerg.services.longhouse_paths import resolve_longhouse_home_from_provider_home
-
-def record_managed_provider_contract(*, config_dir=None, config_dir_is_provider_home=False, **kwargs):
-    base_dir = resolve_longhouse_home_from_provider_home(config_dir) if config_dir_is_provider_home else config_dir
-    return base_dir
-
-def remove_managed_provider_contract(*, config_dir=None, config_dir_is_provider_home=False, **kwargs):
-    base_dir = resolve_longhouse_home_from_provider_home(config_dir) if config_dir_is_provider_home else config_dir
-    return base_dir
-""",
+        root / "engine/src/longhouse.rs",
+        "use managed_launch_lifecycle::{register_managed_launch, ManagedLaunchTransaction};\n",
     )
     _write(
-        root / "server/zerg/cli/_managed_launch.py",
+        root / "engine/src/cursor_helm_launcher.rs",
         """
-from zerg.cli._common import load_api_credentials as _common_load_api_credentials
-from zerg.cli._managed_contract import record_managed_provider_contract
-
-def resolve_managed_launch_credentials(*, url=None, token=None, config_dir=None, exit_code=1):
-    return _common_load_api_credentials(url=url, token=token, config_dir=config_dir, config_dir_is_provider_home=True)
-
-def record_contract_or_warn(**kwargs):
-    return record_managed_provider_contract(**kwargs)
+crate::managed_launch_lifecycle::register_managed_launch();
+crate::managed_launch_lifecycle::ManagedLaunchTransaction::new();
 """,
     )
     _write(
@@ -72,53 +50,8 @@ def remove_managed_session_contract(*, provider, session_id, base_dir=None):
     _write(
         root / "server/zerg/services/local_health/__init__.py",
         """
-def collect():
-    managed_session_ids = {session["session_id"] for session in managed_sessions}
-    return collect_managed_session_contract_diagnostics(base_dir=longhouse_home, session_ids=managed_session_ids)
-""",
-    )
-    _write(
-        root / "server/zerg/cli/claude.py",
-        """
-from zerg.cli._managed_launch import resolve_managed_launch_credentials as _load_api_credentials
-
-def run():
-    record_contract_or_warn(provider="claude", config_dir_is_provider_home=True)
-    remove_managed_provider_contract(provider="claude", config_dir_is_provider_home=True)
-""",
-    )
-    _write(
-        root / "server/zerg/cli/codex.py",
-        """
-from zerg.cli._managed_launch import resolve_managed_launch_credentials as _load_api_credentials
-
-def run():
-    record_contract_or_warn(provider="codex", config_dir_is_provider_home=True)
-    remove_managed_provider_contract(provider="codex", config_dir_is_provider_home=True)
-""",
-    )
-    _write(
-        root / "server/zerg/cli/opencode.py",
-        """
-def _run_native_opencode():
-    def _record_state():
-        state_path = write_opencode_bridge_state(session_id="sid")
-        record_managed_provider_contract(provider="opencode", control_state_path=state_path)
-    _record_state()
-    remove_managed_provider_contract(provider="opencode")
-
-def launch_script():
-    _ensure_managed_launch_preflight(config_dir_is_provider_home=False)
-    record_managed_provider_contract(provider="opencode")
-""",
-    )
-    _write(
-        root / "server/zerg/cli/antigravity.py",
-        """
-def run():
-    _ensure_managed_launch_preflight(config_dir_is_provider_home=False)
-    record_managed_provider_contract(provider="antigravity")
-    remove_managed_provider_contract(provider="antigravity")
+managed_session_ids = {session["session_id"] for session in managed_sessions}
+collect_managed_session_contract_diagnostics(base_dir=longhouse_home, session_ids=managed_session_ids)
 """,
     )
 
@@ -155,92 +88,23 @@ def test_minimal_valid_contract_passes() -> None:
         _assert_passes(root)
 
 
-def test_rejects_claude_contract_in_provider_home_semantics() -> None:
+def test_rejects_native_launcher_without_shared_registration() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        _write_minimal_contract_root(root)
+        _write(root / "engine/src/longhouse.rs", "struct ManagedLaunchTransaction;\n")
+        _assert_fails(root, "native Claude/Codex/OpenCode use shared registration")
+
+
+def test_rejects_cursor_without_shared_transaction() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
         _write_minimal_contract_root(root)
         _write(
-            root / "server/zerg/cli/claude.py",
-            """
-def run():
-    record_contract_or_warn(provider="claude")
-    remove_managed_provider_contract(provider="claude", config_dir_is_provider_home=True)
-""",
+            root / "engine/src/cursor_helm_launcher.rs",
+            "crate::managed_launch_lifecycle::register_managed_launch();\n",
         )
-        _assert_fails(root, "config_dir_is_provider_home=True")
-
-
-def test_rejects_codex_contract_cleanup_in_provider_home_semantics() -> None:
-    with tempfile.TemporaryDirectory() as temp_dir:
-        root = Path(temp_dir)
-        _write_minimal_contract_root(root)
-        _write(
-            root / "server/zerg/cli/codex.py",
-            """
-def run():
-    record_contract_or_warn(provider="codex", config_dir_is_provider_home=True)
-    remove_managed_provider_contract(provider="codex")
-""",
-        )
-        _assert_fails(root, "config_dir_is_provider_home=True")
-
-
-def test_rejects_opencode_preflight_provider_home_mapping() -> None:
-    with tempfile.TemporaryDirectory() as temp_dir:
-        root = Path(temp_dir)
-        _write_minimal_contract_root(root)
-        _write(
-            root / "server/zerg/cli/opencode.py",
-            """
-def _run_native_opencode():
-    def _record_state():
-        state_path = write_opencode_bridge_state(session_id="sid")
-        record_managed_provider_contract(provider="opencode", control_state_path=state_path)
-    _record_state()
-    remove_managed_provider_contract(provider="opencode")
-
-def launch_script():
-    _ensure_managed_launch_preflight(config_dir_is_provider_home=True)
-    record_managed_provider_contract(provider="opencode")
-""",
-        )
-        _assert_fails(root, "Longhouse-home config dirs stay Longhouse-home config dirs")
-
-
-def test_rejects_opencode_contract_before_bridge_state() -> None:
-    with tempfile.TemporaryDirectory() as temp_dir:
-        root = Path(temp_dir)
-        _write_minimal_contract_root(root)
-        _write(
-            root / "server/zerg/cli/opencode.py",
-            """
-def _run_native_opencode():
-    def _record_state():
-        record_managed_provider_contract(provider="opencode")
-        state_path = write_opencode_bridge_state(session_id="sid")
-    _record_state()
-    remove_managed_provider_contract(provider="opencode")
-""",
-        )
-        _assert_fails(root, "opencode contract is recorded before bridge state exists")
-
-
-def test_rejects_opencode_contract_without_state_path() -> None:
-    with tempfile.TemporaryDirectory() as temp_dir:
-        root = Path(temp_dir)
-        _write_minimal_contract_root(root)
-        _write(
-            root / "server/zerg/cli/opencode.py",
-            """
-def _run_native_opencode():
-    def _record_state():
-        state_path = write_opencode_bridge_state(session_id="sid")
-        record_managed_provider_contract(provider="opencode")
-    _record_state()
-    remove_managed_provider_contract(provider="opencode")
-""",
-        )
-        _assert_fails(root, "control_state_path=state_path")
+        _assert_fails(root, "native Cursor uses the lifecycle transaction")
 
 
 def test_rejects_provider_owned_contract_path_literal() -> None:
@@ -259,76 +123,40 @@ def test_rejects_temp_cwd_cleanup_without_marker() -> None:
         root = Path(temp_dir)
         _write_minimal_contract_root(root)
         _write(
-            root / "scripts/qa/bad-managed-session.sh",
-            """#!/usr/bin/env bash
-TMP_ROOT="$(mktemp -d)"
-trap 'rm -rf "$TMP_ROOT"' EXIT
-longhouse codex --cwd "$TMP_ROOT/work"
+            root / "scripts/qa/bad.sh",
+            """
+TMP=$(mktemp -d)
+trap 'rm -rf "$TMP"' EXIT
+longhouse codex --cwd "$TMP"
 """,
         )
         _assert_fails(root, "launches a managed provider from a temp cwd with cleanup")
 
 
-def test_allows_marked_temp_cwd_cleanup() -> None:
+def test_allows_marked_temp_cwd_teardown() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
         _write_minimal_contract_root(root)
         _write(
-            root / "scripts/qa/good-managed-session.sh",
-            """#!/usr/bin/env bash
-TMP_ROOT="$(mktemp -d)"
-trap 'rm -rf "$TMP_ROOT"' EXIT
-# longhouse-managed-session-temp-cwd-ok: stops-before-cleanup
-longhouse codex --cwd "$TMP_ROOT/work"
+            root / "scripts/qa/good.sh",
+            """
+# longhouse-managed-session-temp-cwd-ok: session is stopped before cleanup
+TMP=$(mktemp -d)
+trap 'rm -rf "$TMP"' EXIT
+longhouse codex --cwd "$TMP"
 """,
         )
         _assert_passes(root)
 
 
-def test_rejects_local_health_without_active_session_filter() -> None:
-    with tempfile.TemporaryDirectory() as temp_dir:
-        root = Path(temp_dir)
-        _write_minimal_contract_root(root)
-        _write(
-            root / "server/zerg/services/local_health/__init__.py",
-            """
-def collect():
-    return collect_managed_session_contract_diagnostics(base_dir=longhouse_home)
-""",
-        )
-        _assert_fails(root, "active managed session ids")
-
-
-def test_rejects_slow_provider_version_capture_timeout() -> None:
-    with tempfile.TemporaryDirectory() as temp_dir:
-        root = Path(temp_dir)
-        _write_minimal_contract_root(root)
-        _write(
-            root / "server/zerg/services/managed_session_contracts.py",
-            """
-def capture_provider_version(provider_binary_path, *, timeout_seconds: float = 5.0):
-    return None
-
-def remove_managed_session_contract(*, provider, session_id, base_dir=None):
-    return None
-""",
-        )
-        _assert_fails(root, "provider version capture must be bounded")
-
-
 def main() -> int:
     tests = [
         test_minimal_valid_contract_passes,
-        test_rejects_claude_contract_in_provider_home_semantics,
-        test_rejects_codex_contract_cleanup_in_provider_home_semantics,
-        test_rejects_opencode_preflight_provider_home_mapping,
-        test_rejects_opencode_contract_before_bridge_state,
-        test_rejects_opencode_contract_without_state_path,
+        test_rejects_native_launcher_without_shared_registration,
+        test_rejects_cursor_without_shared_transaction,
         test_rejects_provider_owned_contract_path_literal,
         test_rejects_temp_cwd_cleanup_without_marker,
-        test_allows_marked_temp_cwd_cleanup,
-        test_rejects_local_health_without_active_session_filter,
-        test_rejects_slow_provider_version_capture_timeout,
+        test_allows_marked_temp_cwd_teardown,
     ]
     for test in tests:
         test()

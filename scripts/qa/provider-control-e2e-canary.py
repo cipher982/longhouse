@@ -1689,7 +1689,7 @@ def _install_antigravity_hook(args: argparse.Namespace, root: Path, config_dir: 
     code = textwrap.dedent(
         f"""
         from pathlib import Path
-        from zerg.cli.antigravity import _ensure_antigravity_runtime_plugin
+        from zerg.services.antigravity_hook_inbox import _ensure_antigravity_runtime_plugin
         path = _ensure_antigravity_runtime_plugin(
             config_dir=Path({str(config_dir)!r}),
             antigravity_cli_root=Path({str(root / "ag-cli")!r}),
@@ -1728,9 +1728,9 @@ def _resolve_antigravity_binary() -> str | None:
 def _install_real_antigravity_hook(args: argparse.Namespace, binary: str) -> Path:
     code = textwrap.dedent(
         f"""
-        from zerg.cli.antigravity import _ANTIGRAVITY_HOOK_SCRIPT_NAME
-        from zerg.cli.antigravity import _antigravity_plugin_source_root
-        from zerg.cli.antigravity import _ensure_antigravity_runtime_plugin
+        from zerg.services.antigravity_hook_inbox import _ANTIGRAVITY_HOOK_SCRIPT_NAME
+        from zerg.services.antigravity_hook_inbox import _antigravity_plugin_source_root
+        from zerg.services.antigravity_hook_inbox import _ensure_antigravity_runtime_plugin
         _ensure_antigravity_runtime_plugin(antigravity_bin={binary!r})
         print(_antigravity_plugin_source_root() / _ANTIGRAVITY_HOOK_SCRIPT_NAME)
         """

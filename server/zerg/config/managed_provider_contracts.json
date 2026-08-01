@@ -13,7 +13,6 @@
         "codex_app_server"
       ],
       "adapter_sources": [
-        "server/zerg/cli/codex.py",
         "server/zerg/mcp_server/server.py",
         "engine/src/codex_bridge.rs",
         "engine/src/codex_bridge_ownership.rs",
@@ -298,7 +297,7 @@
         "codex.resume_run_once",
         "codex.turn_start"
       ],
-      "adapter_digest": "1ec4b69d1a2eeb01fa952bcddc656850b4a84bee1c4d6b5f3cfdfeaf7537cff0"
+      "adapter_digest": "9c43f41df434acd702a9c178a2c14870d305d4ecb3aa22d5cf02b8b343906577"
     },
     {
       "provider": "claude",
@@ -645,7 +644,6 @@
       "control_plane": "opencode_server_bridge",
       "control_plane_aliases": [],
       "adapter_sources": [
-        "server/zerg/cli/opencode.py",
         "server/zerg/cli/opencode_bridge.py",
         "server/zerg/mcp_server/server.py",
         "engine/src/opencode_control.rs",
@@ -846,7 +844,7 @@
         "opencode.turn_start",
         "opencode.turn_interrupt"
       ],
-      "adapter_digest": "a4dd99d2c6331b1ff4045ac5111539aa142f4c448ecddb73c6f15c14d70851c5"
+      "adapter_digest": "0520958a031871cdbb1dc26a5ea6639c10793b86ac8033ef17f648e65f79b50d"
     },
     {
       "provider": "antigravity",
@@ -858,7 +856,6 @@
       "control_plane": "antigravity_hook_inbox",
       "control_plane_aliases": [],
       "adapter_sources": [
-        "server/zerg/cli/antigravity.py",
         "server/zerg/cli/antigravity_channel.py",
         "server/zerg/services/managed_local_control.py",
         "engine/src/managed_antigravity_scan.rs"
@@ -1055,7 +1052,7 @@
         }
       },
       "machine_control_supports": [],
-      "adapter_digest": "3e3c17a7f8dfe07ccea203142cbd17e1109229b818f304c8187d40de143b36a9"
+      "adapter_digest": "a32e2ce0f13fc50176afc9f5ad12a8a9f04498f150f9a844e6ffd12976eb7aa3"
     },
     {
       "provider": "cursor",

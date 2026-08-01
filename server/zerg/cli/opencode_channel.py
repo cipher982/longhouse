@@ -9,6 +9,7 @@ import json
 import os
 import re
 import secrets
+import shutil
 import signal
 import subprocess
 import time
@@ -27,11 +28,6 @@ from uuid import UUID
 from uuid import uuid4
 
 import typer
-
-from zerg.cli.opencode import _managed_runtime_events_url
-from zerg.cli.opencode import _OpenCodeLaunchError
-from zerg.cli.opencode import _resolve_opencode_binary
-from zerg.cli.opencode import _write_opencode_runtime_config_content
 
 app = typer.Typer(no_args_is_help=True)
 
@@ -54,6 +50,44 @@ _HTTP_TIMEOUT_SECONDS = 10
 
 class OpenCodeServerBridgeError(RuntimeError):
     """Expected OpenCode server-bridge failure."""
+
+
+def _resolve_opencode_binary(explicit: str | None = None) -> str | None:
+    candidate = str(explicit or os.environ.get("LONGHOUSE_OPENCODE_BIN") or "").strip()
+    if candidate:
+        path = Path(candidate).expanduser()
+        if path.is_file():
+            return str(path)
+        return shutil.which(candidate)
+    return shutil.which("opencode")
+
+
+def _write_opencode_runtime_config_content(
+    *,
+    config_dir: Path | None,
+    session_id: str,
+    model: str | None,
+) -> Path:
+    """Write the minimal config needed by the legacy hermetic bridge canary.
+
+    The shipped Rust bridge owns real OpenCode configuration. This Python QA
+    bridge remains only until its canary moves to the native binary, so it must
+    not preserve the removed Python launcher's runtime-plugin implementation.
+    """
+
+    existing = str(os.environ.get("OPENCODE_CONFIG_CONTENT") or "").strip()
+    try:
+        payload = json.loads(existing) if existing else {}
+    except json.JSONDecodeError as exc:
+        raise OpenCodeServerBridgeError("OPENCODE_CONFIG_CONTENT is not valid JSON") from exc
+    if not isinstance(payload, dict):
+        raise OpenCodeServerBridgeError("OPENCODE_CONFIG_CONTENT must be a JSON object")
+    normalized_model = str(model or "").strip()
+    if normalized_model:
+        payload["model"] = normalized_model
+    path = _opencode_server_state_dir(config_dir) / "config" / f"{session_id}.json"
+    _write_private_json(path, payload)
+    return path
 
 
 @dataclass(frozen=True)
@@ -514,10 +548,7 @@ def launch_opencode_server_bridge(
         log_path = logs_dir / f"{normalized_session_id}.log"
         config_content_path = _write_opencode_runtime_config_content(
             config_dir=config_dir,
-            runtime_events_url=_managed_runtime_events_url(api_url),
-            token=api_token,
             session_id=normalized_session_id,
-            device_id=device_id,
             model=model,
         )
 
@@ -797,7 +828,7 @@ def attach_command(
             config_dir=resolved_config_dir,
             extra_args=tuple(str(arg) for arg in (ctx.args or ())),
         )
-    except (_OpenCodeLaunchError, OpenCodeServerBridgeError) as exc:
+    except OpenCodeServerBridgeError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from exc
     finally:
