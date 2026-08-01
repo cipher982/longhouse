@@ -507,6 +507,37 @@ def _parse_envelope(
     }
 
 
+def _conversation_resets(render_spec: RenderObjectSpec | None) -> list[dict[str, str | None]]:
+    """Extract native-id rotations from conversation_reset boundary records.
+
+    The engine emits a ``branch_kind="conversation_reset"`` render record when a
+    provider rotates its native session id inside the same transcript (raw
+    ``claude --resume`` outside Longhouse). Both ids ride in the record's
+    ``tool_input_json``; the catalog commit uses them to alias the new native id
+    back to this session so it resolves on the group-A read path.
+    """
+
+    if render_spec is None:
+        return []
+    resets: list[dict[str, str | None]] = []
+    seen: set[tuple[str | None, str]] = set()
+    for record in render_spec.records:
+        if record.branch_kind != "conversation_reset" or not isinstance(record.tool_input_json, dict):
+            continue
+        new_id = str(record.tool_input_json.get("provider_session_id") or "").strip()
+        previous_id = str(record.tool_input_json.get("previous_provider_session_id") or "").strip() or None
+        if not new_id:
+            continue
+        key = (previous_id, new_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        resets.append({"previous_provider_session_id": previous_id, "provider_session_id": new_id})
+        if len(resets) == 32:  # matches the RPC bound; one rotation per epoch in practice
+            break
+    return resets
+
+
 def _authenticated_machine_id(auth_token: DeviceToken | object | None, payload: dict[str, Any]) -> str:
     if auth_token is not None:
         machine_id = getattr(auth_token, "device_id", None)
@@ -976,6 +1007,7 @@ async def _commit_admitted_envelope(
                 "projectors": list(KNOWN_PROJECTORS) if render_manifest is not None else ["render-v2"],
                 "render_manifest": render_manifest,
                 "session_facts": parsed["session_facts"],
+                "conversation_resets": _conversation_resets(render_spec),
                 "sealed_at": datetime.now(UTC).isoformat(),
             },
             timeout_seconds=2.0,

@@ -4846,6 +4846,7 @@ class CatalogStore:
         render_manifest: dict[str, Any] | None,
         session_facts: dict[str, Any],
         sealed_at: datetime,
+        conversation_resets: tuple[dict[str, Any], ...] = (),
     ) -> dict[str, Any]:
         del protocol_version  # validated as v2 by the RPC boundary
         identity = EnvelopeIdentity(
@@ -5465,33 +5466,59 @@ class CatalogStore:
                     session_facts["last_activity_at"],
                 )
                 connection.execute(update(storage_session).where(storage_session.c.session_id == session_key).values(**session_values))
+            alias_values: list[str] = []
             provider_session_id = str(session_facts.get("provider_session_id") or "").strip()
             if provider_session_id:
+                alias_values.append(provider_session_id)
+            # Rotation capture (spec group C): a conversation_reset boundary
+            # means the provider rotated its native session id inside the same
+            # transcript (raw `claude --resume` outside Longhouse). Aliasing the
+            # new id here is what makes it resolvable via the group-A read path
+            # (session.alias.resolve.v2); before this the id existed only hashed
+            # inside the reset record's event_id. Cross-thread collisions cannot
+            # crash: the live alias table is unique only per
+            # (thread_id, provider, alias_kind, alias_value), and readers order
+            # duplicates by last_seen_at with primary-key lookups winning first.
+            # Remaining fork-linkage work (deliberately not built here): the
+            # live serving path has no SessionEdge equivalent and hardcodes
+            # continued_from_session_id=None (services/storage_v2_workspace.py),
+            # and the archive-side SessionEdge/lineage projection
+            # (session_kernel_projection._source_session_id_for_thread) lives in
+            # a different database this single-writer commit cannot reach.
+            # Wiring reset linkage into served lineage therefore needs an
+            # archive-outbox projection or a live edge store — new machinery,
+            # tracked in the session-identity spec, not smuggled into ingest.
+            for reset in conversation_resets:
+                rotated = str(reset.get("provider_session_id") or "").strip()
+                if rotated and rotated not in alias_values:
+                    alias_values.append(rotated)
+            if alias_values:
                 primary_thread_id = connection.execute(
                     select(live_session_catalog.c.primary_thread_id).where(live_session_catalog.c.session_id == session_key)
                 ).scalar_one_or_none()
                 if primary_thread_id:
                     alias_table = LiveSessionThreadAlias.__table__
                     alias_seen_at = _as_aware_utc(session_facts["last_activity_at"]) or commit_time
-                    alias_upsert = sqlite_insert(alias_table).values(
-                        thread_id=str(primary_thread_id),
-                        provider=provider,
-                        alias_kind="provider_session_id",
-                        alias_value=provider_session_id,
-                        first_seen_at=alias_seen_at,
-                        last_seen_at=alias_seen_at,
-                    )
-                    connection.execute(
-                        alias_upsert.on_conflict_do_update(
-                            index_elements=["thread_id", "provider", "alias_kind", "alias_value"],
-                            set_={
-                                "last_seen_at": func.max(
-                                    alias_table.c.last_seen_at,
-                                    alias_upsert.excluded.last_seen_at,
-                                )
-                            },
+                    for alias_value in alias_values:
+                        alias_upsert = sqlite_insert(alias_table).values(
+                            thread_id=str(primary_thread_id),
+                            provider=provider,
+                            alias_kind="provider_session_id",
+                            alias_value=alias_value,
+                            first_seen_at=alias_seen_at,
+                            last_seen_at=alias_seen_at,
                         )
-                    )
+                        connection.execute(
+                            alias_upsert.on_conflict_do_update(
+                                index_elements=["thread_id", "provider", "alias_kind", "alias_value"],
+                                set_={
+                                    "last_seen_at": func.max(
+                                        alias_table.c.last_seen_at,
+                                        alias_upsert.excluded.last_seen_at,
+                                    )
+                                },
+                            )
+                        )
             if render_manifest is not None:
                 generation_key = str(render_manifest["generation_id"])
                 publish_render = render_state == "ready"

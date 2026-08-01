@@ -1978,9 +1978,14 @@ class CatalogDaemon:
             "session_facts",
             "sealed_at",
         }
-        if set(request.params) != expected:
+        # Optional so pre-rotation callers (legacy replay, direct commits) stay
+        # valid; absent means the envelope carried no conversation_reset records.
+        optional = {"conversation_resets"}
+        provided = set(request.params)
+        if provided - expected - optional or expected - provided:
             return self._error(request, "invalid_request", "storage.raw_object.commit.v2 has invalid parameters")
         params = dict(request.params)
+        params.setdefault("conversation_resets", [])
         try:
             _validate_raw_object_commit(params)
         except ValueError as exc:
@@ -2992,7 +2997,25 @@ def _validate_raw_object_commit(params: dict) -> None:
     if owner_id is not None:
         params["owner_id"] = _canonical_storage_text(owner_id, field="owner_id", maximum_bytes=64)
     params["session_facts"] = _validate_storage_session_facts(params["session_facts"])
+    params["conversation_resets"] = _validate_conversation_resets(params["conversation_resets"])
     params["sealed_at"] = _parse_datetime(params["sealed_at"], "sealed_at")
+
+
+def _validate_conversation_resets(value: object) -> tuple[dict, ...]:
+    """Validate native-id rotations extracted from conversation_reset records."""
+
+    if not isinstance(value, list) or len(value) > 32:
+        raise ValueError("conversation_resets must contain at most 32 rotations")
+    resets: list[dict] = []
+    for item in value:
+        if not isinstance(item, dict) or set(item) != {"previous_provider_session_id", "provider_session_id"}:
+            raise ValueError("conversation_resets contains an invalid rotation")
+        new_id = _canonical_storage_text(item["provider_session_id"], field="provider_session_id", maximum_bytes=255)
+        previous = item["previous_provider_session_id"]
+        if previous is not None:
+            previous = _canonical_storage_text(previous, field="previous_provider_session_id", maximum_bytes=255)
+        resets.append({"previous_provider_session_id": previous, "provider_session_id": new_id})
+    return tuple(resets)
 
 
 def _validate_storage_session_facts(value: object) -> dict:
