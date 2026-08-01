@@ -1,4 +1,5 @@
 import os
+from types import SimpleNamespace
 
 import pytest
 
@@ -6,12 +7,29 @@ os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 
 from zerg.routers.agents_control import CONTROL_HEARTBEAT_TIMEOUT_SECS
+from zerg.routers.agents_control import _control_identity
 from zerg.routers.agents_control import _reconcile_console_turns_after_register
 from zerg.routers.agents_control import _reconcile_machine_control_operation_result
 
 
 def test_control_heartbeat_timeout_is_a_watchdog_not_a_stale_socket_lease():
     assert 30 <= CONTROL_HEARTBEAT_TIMEOUT_SECS <= 120
+
+
+def test_auth_disabled_control_channel_preserves_valid_device_token_identity():
+    token = SimpleNamespace(owner_id=7, device_id="device-7")
+
+    assert _control_identity({"device_id": "device-7"}, token, auth_disabled=True) == (7, "device-7")
+
+
+def test_auth_disabled_control_channel_keeps_tokenless_dev_fallback():
+    assert _control_identity({"device_id": "dev-machine"}, None, auth_disabled=True) == (0, "dev-machine")
+
+
+def test_control_channel_rejects_token_device_mismatch():
+    token = SimpleNamespace(owner_id=7, device_id="device-7")
+
+    assert _control_identity({"device_id": "other-device"}, token, auth_disabled=True) is None
 
 
 @pytest.mark.asyncio

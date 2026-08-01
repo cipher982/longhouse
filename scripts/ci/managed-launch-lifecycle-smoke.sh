@@ -28,9 +28,15 @@ HOME_DIR="$TEST_ROOT/home"
 BIN_DIR="$TEST_ROOT/bin"
 SERVER_LOG="$TEST_ROOT/server.log"
 SERVER_PID=""
+ENGINE_LOG="$TEST_ROOT/engine.log"
+ENGINE_PID=""
 PORT="${LONGHOUSE_LIFECYCLE_SMOKE_PORT:-0}"
 
 cleanup() {
+  if [[ -n "$ENGINE_PID" ]]; then
+    kill "$ENGINE_PID" 2>/dev/null || true
+    wait "$ENGINE_PID" 2>/dev/null || true
+  fi
   if [[ -n "$SERVER_PID" ]]; then
     kill "$SERVER_PID" 2>/dev/null || true
     wait "$SERVER_PID" 2>/dev/null || true
@@ -118,9 +124,10 @@ FERNET="$(cd "$ROOT_DIR/server" && uv run python -c 'from cryptography.fernet im
 start_runtime_host || fail "Runtime Host never became healthy"
 echo "runtime host up on $BASE_URL"
 
+DEVICE_ID="11111111-1111-4111-8111-111111111111"
 DEVICE_TOKEN="$(curl -fsS -X POST "$BASE_URL/api/devices/tokens" \
   -H 'content-type: application/json' \
-  -d '{"name":"lifecycle-smoke","device_id":"lifecycle-smoke-host"}' \
+  -d '{"name":"lifecycle-smoke","device_id":"11111111-1111-4111-8111-111111111111"}' \
   | python3 -c 'import sys, json; print(json.load(sys.stdin)["token"])')"
 [[ "$DEVICE_TOKEN" == zdt_* ]] || fail "expected a real device token, got ${DEVICE_TOKEN:0:8}"
 
@@ -162,6 +169,81 @@ launch_attempt_state() {
 latest_launch_session_id() {
   sqlite3 "$TEST_ROOT/longhouse-live.db" \
     "SELECT session_id FROM live_session_launch_attempts ORDER BY id DESC LIMIT 1;"
+}
+
+runtime_terminal_state() {
+  sqlite3 "$TEST_ROOT/longhouse-live.db" \
+    "SELECT terminal_state FROM live_runtime_state WHERE session_id = '$1' ORDER BY updated_at DESC LIMIT 1;"
+}
+
+wait_for_value() {
+  local description="$1" expected="$2" timeout_secs="$3"
+  shift 3
+  local deadline=$((SECONDS + timeout_secs)) value=""
+  while ((SECONDS < deadline)); do
+    value="$("$@" 2>/dev/null || true)"
+    if [[ "$value" == "$expected" ]]; then
+      return 0
+    fi
+    sleep 0.2
+  done
+  fail "$description stayed '${value:-empty}', expected '$expected'"
+}
+
+send_live() {
+  local session_id="$1" message="$2"
+  local deadline=$((SECONDS + 30)) response code body
+  while ((SECONDS < deadline)); do
+    response="$(curl -sS --max-time 40 -w $'\n%{http_code}' -X POST \
+      "$BASE_URL/api/agents/sessions/$session_id/send-live" \
+      -H "X-Agents-Token: $DEVICE_TOKEN" \
+      -H 'content-type: application/json' \
+      -d "$(python3 -c 'import json,sys; print(json.dumps({"message":sys.argv[1]}))' "$message")")"
+    code="${response##*$'\n'}"
+    body="${response%$'\n'*}"
+    if [[ "$code" == "200" ]]; then
+      printf '%s' "$body"
+      return 0
+    fi
+    if [[ "$body" == *"Managed control channel is not connected or does not advertise this capability"* ]]; then
+      sleep 0.25
+      continue
+    fi
+    if [[ "$code" != "409" || "$body" != *"does not have a live Longhouse control channel"* ]]; then
+      printf '%s\n' "$body" >&2
+      return 1
+    fi
+    sleep 0.25
+  done
+  printf '%s\n' "$body" >&2
+  return 1
+}
+
+post_live_action() {
+  local session_id="$1" action="$2"
+  local deadline=$((SECONDS + 30)) response code body
+  while ((SECONDS < deadline)); do
+    response="$(curl -sS --max-time 40 -w $'\n%{http_code}' -X POST \
+      "$BASE_URL/api/agents/sessions/$session_id/$action-live" \
+      -H "X-Agents-Token: $DEVICE_TOKEN")"
+    code="${response##*$'\n'}"
+    body="${response%$'\n'*}"
+    if [[ "$code" == "200" ]]; then
+      printf '%s' "$body"
+      return 0
+    fi
+    if [[ "$body" == *"Managed control channel is not connected or does not advertise this capability"* ]]; then
+      sleep 0.25
+      continue
+    fi
+    if [[ "$code" != "409" || "$body" != *"does not have a live Longhouse control channel"* ]]; then
+      printf '%s\n' "$body" >&2
+      return 1
+    fi
+    sleep 0.25
+  done
+  printf '%s\n' "$body" >&2
+  return 1
 }
 
 # Keep provider launches bounded and use the shared PTY harness. The harness
@@ -362,10 +444,40 @@ def handle(websocket):
             }
         elif method == "thread/start":
             result = {"thread": {"id": "thr_lifecycle_fake"}}
+        elif method == "turn/start":
+            result = {
+                "turn": {
+                    "id": "turn_lifecycle_fake",
+                    "status": "inProgress",
+                    "items": [],
+                }
+            }
+        elif method == "turn/interrupt":
+            result = {}
         else:
             result = {}
         if request_id is not None:
             websocket.send(json.dumps({"id": request_id, "result": result}))
+        if method == "turn/start":
+            websocket.send(json.dumps({
+                "method": "turn/started",
+                "params": {
+                    "threadId": "thr_lifecycle_fake",
+                    "turn": result["turn"],
+                },
+            }))
+        elif method == "turn/interrupt":
+            websocket.send(json.dumps({
+                "method": "turn/completed",
+                "params": {
+                    "threadId": "thr_lifecycle_fake",
+                    "turn": {
+                        "id": "turn_lifecycle_fake",
+                        "status": "interrupted",
+                        "items": [],
+                    },
+                },
+            }))
 
 
 server = serve(handle, "127.0.0.1", 0)
@@ -412,8 +524,11 @@ import base64
 import http.server
 import json
 import os
+import pathlib
 import signal
 import sys
+import time
+import uuid
 from urllib.parse import urlparse
 
 if os.environ.get("LONGHOUSE_FAKE_OPENCODE_START_FAIL") == "1":
@@ -426,6 +541,28 @@ if not sys.argv[1:] or sys.argv[1] != "serve":
 
 username = os.environ.get("OPENCODE_SERVER_USERNAME", "opencode")
 password = os.environ.get("OPENCODE_SERVER_PASSWORD", "")
+session_id = os.environ.get("LONGHOUSE_MANAGED_SESSION_ID", "")
+
+
+def write_runtime_phase():
+    outbox = pathlib.Path.home() / ".longhouse/agent/runtime-events-outbox"
+    outbox.mkdir(parents=True, exist_ok=True)
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    payload = {
+        "runtime_key": f"opencode:{session_id}",
+        "session_id": session_id,
+        "provider": "opencode",
+        "source": "lifecycle_protocol_fake",
+        "kind": "phase_signal",
+        "phase": "running",
+        "occurred_at": now,
+        "dedupe_key": f"opencode-lifecycle:{session_id}:{uuid.uuid4()}",
+        "payload": {"managed_transport": "opencode_server_bridge"},
+    }
+    temporary = outbox / f".tmp.{uuid.uuid4()}"
+    final = outbox / f"rte.{uuid.uuid4()}.json"
+    temporary.write_text(json.dumps(payload))
+    temporary.replace(final)
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -439,6 +576,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_header("content-length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def send_empty(self):
+        self.send_response(204)
+        self.send_header("content-length", "0")
+        self.end_headers()
 
     def authorized(self):
         value = base64.b64encode(f"{username}:{password}".encode()).decode()
@@ -457,6 +599,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_json({"error": "forbidden"}, 403)
         elif urlparse(self.path).path == "/session":
             self.send_json({"id": "ses_lifecycle_fake"})
+        elif urlparse(self.path).path == "/session/ses_lifecycle_fake/prompt_async":
+            length = int(self.headers.get("content-length") or "0")
+            if length:
+                self.rfile.read(length)
+            write_runtime_phase()
+            self.send_empty()
+        elif urlparse(self.path).path == "/session/ses_lifecycle_fake/abort":
+            self.send_json(True)
         else:
             self.send_json({"error": "not found"}, 404)
 
@@ -497,6 +647,74 @@ opencode_failed_session_id="$(latest_launch_session_id)"
 [[ "$(launch_attempt_state "$opencode_failed_session_id")" == "failed" ]] \
   || fail "failed OpenCode startup did not abort its launch transaction"
 echo "ok: OpenCode server startup failure aborts the registered launch"
+
+# ---------------------------------------------------------------------------
+# 3e. Start the real Machine Agent control channel and drive provider control
+#     through the Runtime Host. These requests cross browser/API policy,
+#     catalog authority, the machine WebSocket, native provider control, and
+#     back again before the HTTP response succeeds.
+# ---------------------------------------------------------------------------
+"$BIN_DIR/longhouse" codex --no-attach --cwd "$HOME_DIR" --codex-bin "$BIN_DIR/codex" \
+  >"$TEST_ROOT/codex-control-launch.out" 2>&1 \
+  || fail "Codex control-cycle launch failed"
+codex_control_session_id="$(latest_launch_session_id)"
+
+"$BIN_DIR/longhouse" opencode --no-attach --cwd "$HOME_DIR" --opencode-bin "$BIN_DIR/opencode" \
+  >"$TEST_ROOT/opencode-control-launch.out" 2>&1 \
+  || fail "OpenCode control-cycle launch failed"
+opencode_control_session_id="$(latest_launch_session_id)"
+
+# Launch the Machine Agent after both provider bridges exist. Its mandatory
+# startup scan then publishes their control leases without depending on the
+# slower periodic reconciliation path.
+RUST_LOG=info "$BIN_DIR/longhouse-engine" connect \
+  --url "$BASE_URL" \
+  --token "$DEVICE_TOKEN" \
+  --db "$TEST_ROOT/agent.db" \
+  --machine-name "$DEVICE_ID" \
+  --fallback-scan-secs 3600 \
+  --spool-replay-secs 1 \
+  >"$ENGINE_LOG" 2>&1 &
+ENGINE_PID=$!
+for _ in $(seq 1 100); do
+  if grep -q 'WebSocket /api/agents/control/ws.*accepted' "$SERVER_LOG" 2>/dev/null; then
+    break
+  fi
+  kill -0 "$ENGINE_PID" 2>/dev/null || fail "Machine Agent exited before its control channel connected"
+  sleep 0.2
+done
+grep -q 'WebSocket /api/agents/control/ws.*accepted' "$SERVER_LOG" \
+  || fail "Machine Agent control channel never connected"
+
+codex_send="$(send_live "$codex_control_session_id" 'CODEX_LIFECYCLE_CONTROL')" \
+  || fail "Runtime Host failed to send through the Codex bridge"
+[[ "$(printf '%s' "$codex_send" | json_field accepted)" == "True" ]] \
+  || fail "Runtime Host did not accept the Codex send: $codex_send"
+codex_interrupt="$(post_live_action "$codex_control_session_id" interrupt)" \
+  || fail "Runtime Host failed to interrupt the Codex bridge"
+[[ "$(printf '%s' "$codex_interrupt" | json_field interrupt_dispatched)" == "True" ]] \
+  || fail "Runtime Host did not dispatch the Codex interrupt: $codex_interrupt"
+"$BIN_DIR/longhouse" codex stop --session-id "$codex_control_session_id" \
+  || fail "Codex control-cycle cleanup failed"
+wait_for_value "Codex terminal state" session_ended 20 \
+  runtime_terminal_state "$codex_control_session_id"
+echo "ok: Codex send, interrupt, and terminal state crossed the real Runtime Host"
+
+opencode_send="$(send_live "$opencode_control_session_id" 'OPENCODE_LIFECYCLE_CONTROL')" \
+  || fail "Runtime Host failed to send through the OpenCode bridge"
+[[ "$(printf '%s' "$opencode_send" | json_field accepted)" == "True" ]] \
+  || fail "Runtime Host did not accept the OpenCode send: $opencode_send"
+opencode_interrupt="$(post_live_action "$opencode_control_session_id" interrupt)" \
+  || fail "Runtime Host failed to interrupt the OpenCode bridge"
+[[ "$(printf '%s' "$opencode_interrupt" | json_field interrupt_dispatched)" == "True" ]] \
+  || fail "Runtime Host did not dispatch the OpenCode interrupt: $opencode_interrupt"
+opencode_terminate="$(post_live_action "$opencode_control_session_id" terminate)" \
+  || fail "Runtime Host failed to terminate the OpenCode bridge"
+[[ "$(printf '%s' "$opencode_terminate" | json_field terminate_dispatched)" == "True" ]] \
+  || fail "Runtime Host did not dispatch OpenCode termination: $opencode_terminate"
+wait_for_value "OpenCode terminal state" session_ended 20 \
+  runtime_terminal_state "$opencode_control_session_id"
+echo "ok: OpenCode send, interrupt, terminate, and terminal state crossed the real Runtime Host"
 
 # ---------------------------------------------------------------------------
 # 4. A non-zero provider exit propagates rather than being swallowed.
