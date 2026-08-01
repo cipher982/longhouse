@@ -445,31 +445,44 @@ def live_session_closed_for_input(db: Session, session: LiveControlSession) -> b
 def _is_transient_delivery_failure(result: "ManagedControlDispatchResult") -> bool:
     """Did this dispatch fail because nothing received it, rather than refused it?
 
-    Transient means the input never reached the provider: no control channel,
-    no transport, or a timeout where acceptance is unknown. Those must not
-    consume the message — the machine may simply be asleep.
+    Classified from the dispatcher's typed failure kind, never from error text.
+    Matching prose here is how a renamed message silently starts consuming a
+    user's input: "Failed to send command to Machine Agent control channel" and
+    "Machine control channel was replaced" are both transport failures that no
+    substring list reliably catches.
 
-    A non-transient failure is a provider that saw the input and rejected it.
-    Consuming that one is correct; retrying it forever would block the queue.
-
-    Timeouts count as transient deliberately. That admits a redelivery of
-    something the provider may already have accepted, which is why the command
-    id is seeded from the durable receipt id: the engine dedupes a repeat of the
-    same command.
+    - transport: the command never reached the provider. Retry.
+    - rejected: the provider saw it and refused. Consume it; retrying forever
+      would wedge every later input behind one that will never land.
+    - precondition: we never got as far as sending. Only some of these are
+      worth retrying — a missing control path may come back, but an
+      idempotency conflict or a finished operation will not, and treating
+      those as transient burns the attempt budget in seconds.
     """
 
-    from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_TRANSPORT_NONE
-    from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_UNAVAILABLE_ERROR
+    from zerg.services.managed_control_dispatcher import DISPATCH_FAILURE_PRECONDITION
+    from zerg.services.managed_control_dispatcher import DISPATCH_FAILURE_TRANSPORT
 
-    if getattr(result, "transport", None) == MANAGED_CONTROL_TRANSPORT_NONE:
+    kind = getattr(result, "failure_kind", None)
+    if kind == DISPATCH_FAILURE_TRANSPORT:
         return True
-    error = str(getattr(result, "error", "") or "")
-    if not error:
-        return False
-    if error == MANAGED_CONTROL_UNAVAILABLE_ERROR:
-        return True
-    lowered = error.lower()
-    return any(marker in lowered for marker in ("timed out", "timeout", "not connected", "disconnected"))
+    if kind == DISPATCH_FAILURE_PRECONDITION:
+        return str(getattr(result, "failure_reason", "") or "") in _RETRYABLE_PRECONDITIONS
+    return False
+
+
+# Preconditions that a later attempt can plausibly satisfy: the machine is
+# offline, asleep, or has not yet re-established control. Everything else —
+# notably idempotency_conflict and operation_finished — means retrying is
+# pointless and would consume the budget without ever reaching the engine.
+_RETRYABLE_PRECONDITIONS = frozenset(
+    {
+        "control_unavailable",
+        "grant_revoked",
+        "session_not_found",
+        "device_offline",
+    }
+)
 
 
 async def wake_next_live_catalog_input(session_id: UUID | str) -> bool:

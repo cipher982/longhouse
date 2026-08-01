@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 from datetime import UTC
 from datetime import datetime
+from datetime import timedelta
 from pathlib import Path
 from uuid import uuid4
 
@@ -25,8 +26,12 @@ from zerg.catalogd.schema import create_catalog_engine
 from zerg.catalogd.schema import initialize_catalog_schema
 from zerg.models.live_store import LiveSessionInputReceipt
 from zerg.services.live_control_catalog import _is_transient_delivery_failure
+from zerg.services.live_session_inputs import MAX_DELIVERY_AGE
 from zerg.services.live_session_inputs import MAX_DELIVERY_ATTEMPTS
 from zerg.services.live_session_inputs import requeue_live_receipt
+from zerg.services.managed_control_dispatcher import DISPATCH_FAILURE_PRECONDITION
+from zerg.services.managed_control_dispatcher import DISPATCH_FAILURE_REJECTED
+from zerg.services.managed_control_dispatcher import DISPATCH_FAILURE_TRANSPORT
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_TRANSPORT_NONE
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_UNAVAILABLE_ERROR
 from zerg.services.managed_control_dispatcher import ManagedControlDispatchResult
@@ -66,13 +71,13 @@ def _receipt(orm: Session, *, status: str = "delivering", attempts: int | None =
 # --- Which failures may consume a message -----------------------------------
 
 
-def test_absent_transport_is_transient():
-    # Nothing received the input, so nothing rejected it. The machine may be
-    # asleep; consuming the message here is what caused the incident.
+def test_absent_control_path_is_transient():
     result = ManagedControlDispatchResult(
         ok=False,
         transport=MANAGED_CONTROL_TRANSPORT_NONE,
         error=MANAGED_CONTROL_UNAVAILABLE_ERROR,
+        failure_kind=DISPATCH_FAILURE_PRECONDITION,
+        failure_reason="control_unavailable",
     )
     assert _is_transient_delivery_failure(result) is True
 
@@ -80,32 +85,47 @@ def test_absent_transport_is_transient():
 @pytest.mark.parametrize(
     "error",
     [
+        "Failed to send command to Machine Agent control channel",
+        "Machine control channel was replaced",
         "command timed out after 15s",
-        "engine channel not connected",
-        "peer disconnected mid-command",
     ],
 )
-def test_ambiguous_transport_errors_are_transient(error: str):
-    # Acceptance is unknown. Redelivery is safe only because the command id is
-    # seeded from the durable receipt, so the engine dedupes a repeat.
-    result = ManagedControlDispatchResult(ok=False, transport="engine_channel", error=error)
+def test_transport_failures_are_transient_whatever_the_wording(error: str):
+    # Regression on the first implementation, which classified by substring and
+    # therefore consumed both real transport errors above. Classification comes
+    # from the typed kind so rewording a message cannot start eating input.
+    result = ManagedControlDispatchResult(
+        ok=False, transport="engine_channel", error=error, failure_kind=DISPATCH_FAILURE_TRANSPORT
+    )
     assert _is_transient_delivery_failure(result) is True
 
 
-def test_provider_rejection_is_terminal():
-    # The provider saw the input and refused it. Retrying forever would block
-    # every later input behind a message that will never land.
+@pytest.mark.parametrize("reason", ["idempotency_conflict", "operation_finished"])
+def test_unretryable_preconditions_are_terminal(reason: str):
+    # Waiting cannot satisfy these. Treating them as transient burns the whole
+    # budget without the command ever reaching the engine.
     result = ManagedControlDispatchResult(
         ok=False,
-        transport="engine_channel",
-        error="provider rejected the request: malformed payload",
+        transport=MANAGED_CONTROL_TRANSPORT_NONE,
+        error="conflict",
+        failure_kind=DISPATCH_FAILURE_PRECONDITION,
+        failure_reason=reason,
     )
     assert _is_transient_delivery_failure(result) is False
 
 
-def test_missing_error_on_a_live_transport_is_terminal():
-    # A non-zero exit with no transport error is a real refusal, not a gap.
-    result = ManagedControlDispatchResult(ok=False, transport="engine_channel", error=None)
+def test_provider_rejection_is_terminal():
+    result = ManagedControlDispatchResult(
+        ok=False,
+        transport="engine_channel",
+        error="provider rejected the request",
+        failure_kind=DISPATCH_FAILURE_REJECTED,
+    )
+    assert _is_transient_delivery_failure(result) is False
+
+
+def test_unclassified_failure_is_terminal():
+    result = ManagedControlDispatchResult(ok=False, transport="engine_channel", error="something")
     assert _is_transient_delivery_failure(result) is False
 
 
@@ -138,27 +158,41 @@ def test_requeue_records_why_without_failing_the_receipt(orm: Session):
     assert row.status == "queued"
 
 
-def test_requeue_gives_up_after_the_attempt_bound(orm: Session):
-    # An unreachable machine must not hold its queue open forever, and an input
-    # sent hours ago is no longer something the user wants injected.
-    receipt_id = _receipt(orm, attempts=MAX_DELIVERY_ATTEMPTS - 1)
+def test_requeue_gives_up_once_the_input_has_aged_out(orm: Session):
+    # Age is the real bound. The recovery loop wakes every 5s, so an attempt
+    # budget would expire in under a minute for a machine that is merely asleep,
+    # and would never expire at all for a session whose activity never becomes
+    # drainable.
+    receipt_id = _receipt(orm)
+    later = datetime.now(UTC) + MAX_DELIVERY_AGE + timedelta(minutes=1)
 
-    snapshot, requeued = requeue_live_receipt(orm, receipt_id=receipt_id, error="still down")
+    snapshot, requeued = requeue_live_receipt(orm, receipt_id=receipt_id, error="still down", now=later)
 
     assert requeued is False
     assert snapshot is not None
     assert snapshot.status == "failed"
     payload = json.loads(orm.get(LiveSessionInputReceipt, receipt_id).error_json)
-    assert payload["reason"] == "max_delivery_attempts"
-    assert payload["attempts"] == MAX_DELIVERY_ATTEMPTS
+    assert payload["reason"] == "delivery_expired"
 
 
-def test_exhausted_receipt_stops_blocking_the_queue(orm: Session):
+def test_requeue_keeps_retrying_inside_the_age_window(orm: Session):
+    # A machine asleep for ten minutes must still get its message.
+    receipt_id = _receipt(orm)
+    later = datetime.now(UTC) + timedelta(minutes=10)
+
+    _snapshot, requeued = requeue_live_receipt(orm, receipt_id=receipt_id, error="asleep", now=later)
+
+    assert requeued is True
+    assert orm.get(LiveSessionInputReceipt, receipt_id).status == "queued"
+
+
+def test_expired_receipt_stops_blocking_the_queue(orm: Session):
     # The bound exists so a poison message cannot wedge everything behind it:
     # once failed, it is no longer claimable.
-    receipt_id = _receipt(orm, attempts=MAX_DELIVERY_ATTEMPTS - 1)
+    receipt_id = _receipt(orm)
+    later = datetime.now(UTC) + MAX_DELIVERY_AGE + timedelta(minutes=1)
 
-    requeue_live_receipt(orm, receipt_id=receipt_id, error="still down")
+    requeue_live_receipt(orm, receipt_id=receipt_id, error="still down", now=later)
 
     remaining = (
         orm.query(LiveSessionInputReceipt)
@@ -177,17 +211,23 @@ def test_requeue_survives_a_vanished_receipt(orm: Session):
 def test_attempts_accumulate_across_separate_failures(orm: Session):
     receipt_id = _receipt(orm)
 
-    for expected in range(1, MAX_DELIVERY_ATTEMPTS):
+    for expected in (1, 2, 3):
         orm.get(LiveSessionInputReceipt, receipt_id).status = "delivering"
         orm.commit()
         _snapshot, requeued = requeue_live_receipt(orm, receipt_id=receipt_id, error="down")
         assert requeued is True
         assert orm.get(LiveSessionInputReceipt, receipt_id).delivery_attempts == expected
 
-    orm.get(LiveSessionInputReceipt, receipt_id).status = "delivering"
-    orm.commit()
+
+def test_attempt_backstop_stops_a_hot_spin(orm: Session):
+    # Age is the policy bound; this only guards churn that never ages out.
+    receipt_id = _receipt(orm, attempts=MAX_DELIVERY_ATTEMPTS - 1)
+
     _snapshot, requeued = requeue_live_receipt(orm, receipt_id=receipt_id, error="down")
+
     assert requeued is False
+    payload = json.loads(orm.get(LiveSessionInputReceipt, receipt_id).error_json)
+    assert payload["reason"] == "max_delivery_attempts"
 
 
 # --- The intent regression itself -------------------------------------------
@@ -242,3 +282,97 @@ def test_command_id_is_stable_across_delivery_attempts():
         session=session, command_type="session.send_text", request_id=str(uuid4()), run_id=None
     )
     assert other != first
+
+
+# --- The retry actually reaching the engine ----------------------------------
+
+
+def test_a_retry_prepares_the_same_operation_id():
+    """A retry must be an exact replay, not a new operation.
+
+    This is the defect Sol's review caught in the first implementation: the
+    command id was made stable (good) while the operation id stayed a fresh
+    uuid4 per attempt. catalogd treats a known command_id arriving with a *new*
+    operation id as `idempotency_conflict`, so every retry was refused before it
+    reached the engine and simply burned the budget. Both ids have to be
+    deterministic for a retry to replay.
+    """
+
+    from uuid import uuid5
+
+    from zerg.services.managed_control_dispatcher import _CONTROL_OPERATION_NAMESPACE
+
+    command_id = "managed-control:sess-1:session.send_text:receipt-1"
+    first = uuid5(_CONTROL_OPERATION_NAMESPACE, command_id)
+    second = uuid5(_CONTROL_OPERATION_NAMESPACE, command_id)
+    other = uuid5(_CONTROL_OPERATION_NAMESPACE, "managed-control:sess-1:session.send_text:receipt-2")
+
+    assert first == second, "a retry of the same command must reuse its operation id"
+    assert first != other, "different receipts must not share an operation id"
+
+
+@pytest.mark.asyncio
+async def test_transient_dispatch_failure_requeues_then_delivers(monkeypatch):
+    """End to end through wake_next_live_catalog_input: fail, requeue, deliver.
+
+    This is the sequence the unit tests cannot cover, and the one that exposed
+    the operation-id conflict in the first implementation. It asserts the two
+    things that matter across a retry: the receipt is returned to the queue
+    rather than failed, and both attempts present the same request_id, because
+    that is what the engine command id is seeded from.
+    """
+
+    from uuid import uuid4 as _uuid4
+
+    from zerg.services import live_control_catalog as lcc
+    from zerg.services.managed_control_dispatcher import DISPATCH_FAILURE_TRANSPORT
+
+    session_id = str(_uuid4())
+    receipt_id = str(_uuid4())
+    seen_request_ids: list[str] = []
+    finish_statuses: list[str] = []
+
+    async def fake_dispatch(**kwargs):
+        seen_request_ids.append(str(kwargs["request_id"]))
+        if len(seen_request_ids) == 1:
+            return ManagedControlDispatchResult(
+                ok=False,
+                transport="engine_channel",
+                error="Machine control channel was replaced",
+                failure_kind=DISPATCH_FAILURE_TRANSPORT,
+            )
+        return ManagedControlDispatchResult(ok=True, transport="engine_channel", data={"exit_code": 0})
+
+    class _Catalogd:
+        async def call(self, method, params, timeout_seconds=None):
+            if method == "session.input.claim.v2":
+                return {
+                    "claimed": True,
+                    "session": {"id": session_id, "provider": "claude", "device_id": "cinder"},
+                    "receipt": {"id": receipt_id, "owner_id": 1, "text": "hello"},
+                }
+            if method == "session.input.finish.v2":
+                finish_statuses.append(str(params["status"]))
+                return {"found": True, "changed": True}
+            return {}
+
+    class _Locks:
+        async def acquire(self, **_kwargs):
+            return True
+
+        async def release(self, *_args):
+            return None
+
+    monkeypatch.setattr("zerg.services.catalogd_supervisor.get_catalogd_client", lambda: _Catalogd())
+    monkeypatch.setattr("zerg.services.managed_control_dispatcher.dispatch_managed_control_command", fake_dispatch)
+    monkeypatch.setattr("zerg.services.session_locks.session_lock_manager", _Locks())
+
+    first = await lcc.wake_next_live_catalog_input(session_id)
+    second = await lcc.wake_next_live_catalog_input(session_id)
+
+    assert first is False, "a transient failure does not count as delivered"
+    assert second is True, "the retry must actually deliver"
+    # The whole point: the first failure returned the input to the queue.
+    assert finish_statuses == ["queued", "delivered"]
+    # And both attempts seeded the engine command id from the durable receipt.
+    assert seen_request_ids == [receipt_id, receipt_id]
