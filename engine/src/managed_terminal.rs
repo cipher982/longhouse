@@ -26,6 +26,14 @@ pub struct ManagedTerminalEvent<'a> {
     pub exit_code: Option<i32>,
 }
 
+pub fn terminal_state_for_exit(exit_code: i32) -> &'static str {
+    if exit_code == 0 {
+        "session_ended"
+    } else {
+        "process_gone"
+    }
+}
+
 impl ManagedTerminalEvent<'_> {
     pub fn to_json(&self) -> Value {
         json!({
@@ -113,5 +121,11 @@ mod tests {
         );
         let event: Value = serde_json::from_slice(&std::fs::read(&entries[0]).unwrap()).unwrap();
         assert_eq!(event["kind"], "terminal_signal");
+    }
+
+    #[test]
+    fn nonzero_provider_exit_is_not_reported_as_a_clean_end() {
+        assert_eq!(terminal_state_for_exit(0), "session_ended");
+        assert_eq!(terminal_state_for_exit(7), "process_gone");
     }
 }

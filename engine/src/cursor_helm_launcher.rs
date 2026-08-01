@@ -664,14 +664,34 @@ fn enqueue_terminal_event(
     let Ok(root) = home(config.config_dir.as_deref()) else {
         return;
     };
-    let now = Utc::now().to_rfc3339();
-    let event = json!({"runtime_key":format!("cursor:{session_id}"),"session_id":session_id,"run_id":run_id,"provider":"cursor","device_id":std::env::var("HOSTNAME").unwrap_or_else(|_| "unknown".into()),"source":"cursor_helm","kind":"terminal_signal","phase":"finished","occurred_at":now,"dedupe_key":format!("cursor-helm-terminal:{session_id}:{}",run_id.unwrap_or("unbound")),"payload":{"terminal_state":"session_ended","terminal_reason":"provider_exit","terminal_source":"cursor_helm","exit_code":exit_code}});
-    let _ = write_json(
-        &root
-            .join("agent/runtime-events-outbox")
-            .join(format!("{}.json", Uuid::new_v4())),
-        &event,
-    );
+    let Some(run_id) = run_id.filter(|value| !value.trim().is_empty()) else {
+        eprintln!(
+            "Longhouse warning: Cursor stopped without a run identity; terminal state was not queued"
+        );
+        return;
+    };
+    let runtime_key = format!("cursor:{session_id}");
+    let device_id = std::env::var("HOSTNAME").ok();
+    let event = crate::managed_terminal::ManagedTerminalEvent {
+        runtime_key: &runtime_key,
+        session_id,
+        run_id,
+        provider: "cursor",
+        managed_transport: crate::cursor_helm_control::CURSOR_HELM_TRANSPORT,
+        provider_session_id: None,
+        device_id: device_id.as_deref(),
+        source: "cursor_helm",
+        dedupe_prefix: "cursor-helm-terminal",
+        terminal_state: crate::managed_terminal::terminal_state_for_exit(exit_code),
+        terminal_reason: "provider_exit",
+        exit_code: Some(exit_code),
+    }
+    .to_json();
+    if let Err(error) =
+        crate::managed_terminal::enqueue(&root.join("agent/runtime-events-outbox"), &event)
+    {
+        eprintln!("Longhouse warning: could not queue Cursor terminal event: {error:#}");
+    }
 }
 fn response(stream: &mut UnixStream, value: Value) {
     let _ = stream.write_all(format!("{}\n", value).as_bytes());

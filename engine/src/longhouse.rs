@@ -10,6 +10,8 @@ mod build_identity;
 mod managed_launch_lifecycle;
 #[path = "managed_launch_payload.rs"]
 mod managed_launch_payload;
+#[path = "managed_terminal.rs"]
+mod managed_terminal;
 
 use anyhow::Context;
 use clap::{Args, Parser, Subcommand};
@@ -1196,31 +1198,23 @@ fn record_claude_terminal_event(
     machine_name: &str,
     exit_code: i32,
 ) -> anyhow::Result<()> {
-    let occurred_at = chrono::Utc::now().to_rfc3339();
-    let terminal_state = if exit_code == 0 {
-        "session_ended"
-    } else {
-        "process_gone"
-    };
-    let event = json!({
-        "runtime_key": format!("claude:{provider_session_id}"),
-        "session_id": session_id,
-        "run_id": run_id,
-        "provider": "claude",
-        "device_id": machine_name,
-        "source": "claude_channel_wrapper",
-        "kind": "terminal_signal",
-        "occurred_at": occurred_at,
-        "dedupe_key": format!("claude-terminal:{session_id}:{run_id}"),
-        "payload": {
-            "terminal_state": terminal_state,
-            "terminal_reason": "provider_exit",
-            "terminal_source": "claude_channel_wrapper",
-            "provider_session_id": provider_session_id,
-            "exit_code": exit_code,
-        },
-    });
-    enqueue_runtime_event(
+    let runtime_key = format!("claude:{provider_session_id}");
+    let event = managed_terminal::ManagedTerminalEvent {
+        runtime_key: &runtime_key,
+        session_id,
+        run_id,
+        provider: "claude",
+        managed_transport: "claude_channel_bridge",
+        provider_session_id: Some(provider_session_id),
+        device_id: Some(machine_name),
+        source: "claude_channel_wrapper",
+        dedupe_prefix: "claude-terminal",
+        terminal_state: managed_terminal::terminal_state_for_exit(exit_code),
+        terminal_reason: "provider_exit",
+        exit_code: Some(exit_code),
+    }
+    .to_json();
+    managed_terminal::enqueue(
         &longhouse_home()?.join("agent/runtime-events-outbox"),
         &event,
     )
@@ -1333,21 +1327,6 @@ fn remove_claude_contract(session_id: &str) -> anyhow::Result<()> {
             Err(error).with_context(|| format!("remove managed Claude contract {}", path.display()))
         }
     }
-}
-
-fn enqueue_runtime_event(dir: &Path, event: &serde_json::Value) -> anyhow::Result<()> {
-    std::fs::create_dir_all(dir)?;
-    let temporary = dir.join(format!(".{}.tmp", Uuid::new_v4()));
-    let ready = dir.join(format!("{}.json", Uuid::new_v4()));
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&temporary)?;
-    file.write_all(&serde_json::to_vec(event)?)?;
-    file.sync_all()?;
-    drop(file);
-    std::fs::rename(temporary, ready)?;
-    Ok(())
 }
 
 fn resolve_codex_config(
