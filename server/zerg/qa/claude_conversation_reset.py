@@ -17,6 +17,7 @@ from uuid import uuid4
 
 from zerg.qa.conversation_reset import classify_identity_transition
 from zerg.qa.conversation_reset import execution_summary
+from zerg.qa.conversation_reset import longhouse_provider_aliases
 from zerg.qa.conversation_reset import longhouse_source_binding
 from zerg.qa.conversation_reset import marker_digest
 from zerg.qa.conversation_reset import observation_exit_code
@@ -251,6 +252,17 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             timeout=args.timeout,
             message="Longhouse did not bind the post-reset Claude source to the managed session",
         )
+        provider_aliases = _wait(
+            lambda: (
+                aliases
+                if {before_provider_id, after_provider_id}.issubset(
+                    aliases := set(longhouse_provider_aliases("claude", longhouse_session_id))
+                )
+                else None
+            ),
+            timeout=args.timeout,
+            message="Longhouse did not retain both Claude provider aliases",
+        )
         tail_payload = _observe_longhouse_tail(
             longhouse_session_id,
             marker_a,
@@ -298,11 +310,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "tail_artifact": str(output_root / "longhouse-tail.json"),
             },
             "longhouse": {
-                "provider_alias_ids": [str(active_state.get("provider_session_id") or "")],
+                "provider_alias_ids": sorted(provider_aliases),
                 "timeline_session_ids": [longhouse_session_id],
                 "channel_state_provider_session_id": active_state.get("provider_session_id"),
-                "provider_alias_matches_before": active_state.get("provider_session_id") == before_provider_id,
-                "provider_alias_matches_after": active_state.get("provider_session_id") == after_provider_id,
+                "provider_alias_matches_before": before_provider_id in provider_aliases,
+                "provider_alias_matches_after": after_provider_id in provider_aliases,
                 "source_bound_session_id": bound_session_id,
                 "source_binding_matches": bound_session_id == longhouse_session_id,
             },
