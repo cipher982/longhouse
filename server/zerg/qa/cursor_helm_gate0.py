@@ -820,6 +820,10 @@ def _managed_reset_registration_payload(body: dict[str, Any], run_id: str) -> di
     }
 
 
+def _managed_reset_outcome_payload() -> dict[str, bool]:
+    return {"recorded": True}
+
+
 def _managed_conversation_reset_scenario(
     *,
     binary: str,
@@ -860,6 +864,9 @@ def _managed_conversation_reset_scenario(
             if self.path == "/api/sessions/managed-local/this-device":
                 payload = _managed_reset_registration_payload(body, registration_run_id)
                 encoded = json.dumps(payload).encode("utf-8")
+                self.send_response(200)
+            elif self.path.endswith("/launch-outcome"):
+                encoded = json.dumps(_managed_reset_outcome_payload()).encode("utf-8")
                 self.send_response(200)
             else:
                 encoded = b"{}"

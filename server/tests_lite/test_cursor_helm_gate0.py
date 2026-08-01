@@ -7,6 +7,7 @@ from pathlib import Path
 from zerg.qa.cursor_helm_gate0 import _cursor_store_agent_id
 from zerg.qa.cursor_helm_gate0 import _decode_cursor_meta_value
 from zerg.qa.cursor_helm_gate0 import _managed_reset_registration_payload
+from zerg.qa.cursor_helm_gate0 import _managed_reset_outcome_payload
 from zerg.qa.cursor_helm_gate0 import read_hook_events
 from zerg.qa.cursor_helm_gate0 import write_project_hooks
 
@@ -63,3 +64,7 @@ def test_reset_registration_stub_matches_cursor_helm_contract() -> None:
     assert payload["run_id"] == "run-id"
     assert payload["managed_transport"] == "cursor_helm"
     assert payload["coordination_token"] == "test-coordination-authority"
+
+
+def test_reset_registration_stub_acknowledges_launch_outcome() -> None:
+    assert _managed_reset_outcome_payload() == {"recorded": True}
