@@ -136,13 +136,16 @@ async function findTranscriptBackedSessionIdsViaAgentsApi(
 async function findEngineControlSessionIdViaAgentsApi(
   request: APIRequestContext,
 ): Promise<string | null> {
-  const response = await request.get("/api/agents/sessions?limit=25");
+  // runtime_display/capabilities live on the browser projection, not the
+  // machine surface.
+  const response = await request.get("/api/timeline/sessions?limit=25");
   if (!response.ok()) {
     return null;
   }
 
   const body = await response.json();
-  const sessions = Array.isArray(body?.sessions) ? body.sessions : [];
+  const cards = Array.isArray(body?.sessions) ? body.sessions : [];
+  const sessions = cards.map((card: any) => card?.detail).filter(Boolean);
   for (const session of sessions) {
     const controlPath = session?.runtime_display?.control_path;
     const hostState = session?.runtime_display?.host_state;
@@ -163,13 +166,14 @@ async function findEngineControlSessionIdViaAgentsApi(
 async function findClosedSessionIdViaAgentsApi(
   request: APIRequestContext,
 ): Promise<string | null> {
-  const response = await request.get("/api/agents/sessions?limit=100");
+  const response = await request.get("/api/timeline/sessions?limit=100");
   if (!response.ok()) {
     return null;
   }
 
   const body = await response.json();
-  const sessions = Array.isArray(body?.sessions) ? body.sessions : [];
+  const cards = Array.isArray(body?.sessions) ? body.sessions : [];
+  const sessions = cards.map((card: any) => card?.detail).filter(Boolean);
   for (const session of sessions) {
     const lifecycle = session?.runtime_display?.lifecycle;
     if (typeof session?.id === "string" && lifecycle === "closed") {

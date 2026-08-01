@@ -71,7 +71,9 @@ async function getSession(
   request: APIRequestContext,
   sessionId: string,
 ): Promise<any> {
-  const response = await request.get(`/api/agents/sessions/${sessionId}`);
+  // Control and capability state is the browser projection. The machine
+  // surface serves an archival payload that deliberately omits it.
+  const response = await request.get(`/api/timeline/sessions/${sessionId}`);
   expect(
     response.ok(),
     `get session failed: ${response.status()} ${await response.text()}`,
