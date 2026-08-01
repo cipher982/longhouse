@@ -810,6 +810,16 @@ def _conversation_reset_scenario(
         session.close()
 
 
+def _managed_reset_registration_payload(body: dict[str, Any], run_id: str) -> dict[str, Any]:
+    return {
+        "session_id": str(body.get("session_id") or ""),
+        "run_id": run_id,
+        "managed_transport": "cursor_helm",
+        "hook_token": "test-hook-authority",
+        "coordination_token": "test-coordination-authority",
+    }
+
+
 def _managed_conversation_reset_scenario(
     *,
     binary: str,
@@ -848,12 +858,7 @@ def _managed_conversation_reset_scenario(
             except json.JSONDecodeError:
                 body = {}
             if self.path == "/api/sessions/managed-local/this-device":
-                payload = {
-                    "session_id": str(body.get("session_id") or ""),
-                    "run_id": registration_run_id,
-                    "hook_token": "test-hook-authority",
-                    "coordination_token": "test-coordination-authority",
-                }
+                payload = _managed_reset_registration_payload(body, registration_run_id)
                 encoded = json.dumps(payload).encode("utf-8")
                 self.send_response(200)
             else:

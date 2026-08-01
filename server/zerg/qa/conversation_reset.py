@@ -123,7 +123,18 @@ def tail_sequence(payload: Mapping[str, Any], marker_a: str, reset_command: str,
         return next((index for index, row in enumerate(rendered) if index > after and value in row), -1)
 
     marker_a_index = first(marker_a)
-    reset_index = first(reset_command, after=marker_a_index)
+    reset_index = next(
+        (
+            index
+            for index, row in enumerate(rows)
+            if index > marker_a_index
+            and (
+                reset_command in rendered[index]
+                or (isinstance(row, Mapping) and row.get("role") == "system" and row.get("content") == "Conversation reset")
+            )
+        ),
+        -1,
+    )
     marker_b_index = first(marker_b, after=max(marker_a_index, reset_index))
     ordered = 0 <= marker_a_index < reset_index < marker_b_index
     return {

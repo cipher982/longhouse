@@ -180,6 +180,21 @@ def test_tail_sequence_uses_event_order_not_json_metadata() -> None:
     assert result["tail_marker_order"][1] == "reset"
 
 
+def test_tail_sequence_recognizes_projected_reset_boundary() -> None:
+    payload = {
+        "events": [
+            {"role": "assistant", "content": "RESET_MARKER_A"},
+            {"role": "system", "content": "Conversation reset"},
+            {"role": "assistant", "content": "RESET_MARKER_B"},
+        ]
+    }
+
+    result = tail_sequence(payload, "RESET_MARKER_A", "/new", "RESET_MARKER_B")
+
+    assert result["event_indices"] == {"marker_a": 0, "reset": 1, "marker_b": 2}
+    assert result["tail_marker_order"][1] == "reset"
+
+
 def test_execution_summary_distinguishes_completed_canary_from_semantic_failure(tmp_path: Path) -> None:
     observation = generated_fake_observation("codex")
     observation["archive"]["reset_boundary_observable"] = False

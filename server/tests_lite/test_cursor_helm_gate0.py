@@ -6,6 +6,7 @@ from pathlib import Path
 
 from zerg.qa.cursor_helm_gate0 import _cursor_store_agent_id
 from zerg.qa.cursor_helm_gate0 import _decode_cursor_meta_value
+from zerg.qa.cursor_helm_gate0 import _managed_reset_registration_payload
 from zerg.qa.cursor_helm_gate0 import read_hook_events
 from zerg.qa.cursor_helm_gate0 import write_project_hooks
 
@@ -53,3 +54,12 @@ def test_hook_event_reader_ignores_partial_or_invalid_lines(tmp_path: Path) -> N
     path.write_text('{"event":"sessionStart"}\nnot-json\n{"partial":', encoding="utf-8")
 
     assert read_hook_events(path) == [{"event": "sessionStart"}]
+
+
+def test_reset_registration_stub_matches_cursor_helm_contract() -> None:
+    payload = _managed_reset_registration_payload({"session_id": "session-id"}, "run-id")
+
+    assert payload["session_id"] == "session-id"
+    assert payload["run_id"] == "run-id"
+    assert payload["managed_transport"] == "cursor_helm"
+    assert payload["coordination_token"] == "test-coordination-authority"
