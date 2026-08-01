@@ -644,7 +644,6 @@
       "control_plane": "opencode_server_bridge",
       "control_plane_aliases": [],
       "adapter_sources": [
-        "server/zerg/cli/opencode_bridge.py",
         "server/zerg/mcp_server/server.py",
         "engine/src/opencode_control.rs",
         "engine/src/opencode_run.rs"
@@ -844,7 +843,7 @@
         "opencode.turn_start",
         "opencode.turn_interrupt"
       ],
-      "adapter_digest": "0520958a031871cdbb1dc26a5ea6639c10793b86ac8033ef17f648e65f79b50d"
+      "adapter_digest": "c7b6de0df1dbcbca4bfa82519e313f4161b6c42f587b0d7411da31d48021142c"
     },
     {
       "provider": "antigravity",
@@ -856,7 +855,6 @@
       "control_plane": "antigravity_hook_inbox",
       "control_plane_aliases": [],
       "adapter_sources": [
-        "server/zerg/cli/antigravity_channel.py",
         "server/zerg/services/managed_local_control.py",
         "engine/src/managed_antigravity_scan.rs"
       ],
@@ -1052,7 +1050,7 @@
         }
       },
       "machine_control_supports": [],
-      "adapter_digest": "a32e2ce0f13fc50176afc9f5ad12a8a9f04498f150f9a844e6ffd12976eb7aa3"
+      "adapter_digest": "331c2bd00409db548d13cbc47c7da8d3873fba1f223bd515e157669f769ef000"
     },
     {
       "provider": "cursor",

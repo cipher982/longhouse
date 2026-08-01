@@ -3720,12 +3720,13 @@ def _derived_action_status(*, action: ActionDefinition, provider: str) -> dict[s
             }
         if provider == "opencode":
             return {
-                "status": STATUS_PASS,
+                "status": STATUS_BLOCKED,
+                "failure_code": "opencode_native_permission_canary_required",
                 "evidence_level": "hermetic",
-                "proof_scope": "opencode_bridge_permission_reply",
-                "source": "zerg.cli.opencode_bridge permission-reply against a held fake permission request",
-                "canary": "opencode_bridge_permission_reply",
-                "next": "Promote with a live held-permission OpenCode provider canary.",
+                "proof_scope": "opencode_native_permission_canary_required",
+                "source": "native OpenCode permission adapter requires an executable canary",
+                "canary": "opencode_native_permission_canary_required",
+                "next": "Add a held-permission canary through the native Machine Agent control path.",
             }
         if provider == "claude":
             return {

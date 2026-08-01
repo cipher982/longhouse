@@ -1009,8 +1009,8 @@ def test_action_matrix_emits_same_longhouse_actions_for_all_providers(tmp_path: 
             assert actions["permission_prompt"]["status"] == "pass"
             assert actions["permission_prompt"]["canary"] == "codex_fake_app_server_permission_approval"
         elif result["provider"] == "opencode":
-            assert actions["permission_prompt"]["status"] == "pass"
-            assert actions["permission_prompt"]["canary"] == "opencode_bridge_permission_reply"
+            assert actions["permission_prompt"]["status"] == "blocked"
+            assert actions["permission_prompt"]["canary"] == "opencode_native_permission_canary_required"
         elif result["provider"] == "antigravity":
             assert actions["permission_prompt"]["status"] == "unsupported_gap"
             assert actions["permission_prompt"]["failure_code"] == "permission_prompt_unsupported"
@@ -2759,17 +2759,11 @@ def test_remaining_surface_scenarios_emit_honest_results_for_all_providers(tmp_p
             assert permission["data"]["operation_evidence"]["permission_prompt"]["canary"] == "codex_fake_app_server_permission_approval"
             assert Path(permission["data"]["codex_canary_artifact_path"]).is_file()
         elif provider == "opencode":
-            assert permission["status"] == "pass"
-            assert permission["data"]["operation_evidence"]["permission_prompt"]["status"] == "pass"
+            assert permission["status"] == "blocked"
+            assert permission["failure_code"] == "opencode_native_permission_canary_required"
+            assert permission["data"]["operation_evidence"]["permission_prompt"]["status"] == "blocked"
             assert permission["data"]["operation_evidence"]["permission_prompt"]["level"] == "hermetic"
-            assert permission["data"]["assertions"] == {
-                "auth_header_matches_state": True,
-                "command_returned": True,
-                "decision_forwarded": True,
-                "request_path_matches": True,
-                "request_received": True,
-            }
-            assert Path(permission["data"]["raw_permission_reply_path"]).is_file()
+            assert permission["data"]["operation_evidence"]["permission_prompt"]["canary"] == "opencode_native_permission_canary_required"
         elif provider == "antigravity":
             assert permission["status"] == "unsupported_gap"
             assert permission["failure_code"] == "permission_prompt_unsupported"
@@ -3921,8 +3915,8 @@ def test_script_entrypoint_runs_all_provider_action_e2e(tmp_path: Path) -> None:
     assert support_rows["steer_active_turn"]["providers"]["opencode"]["status"] == "not_applicable"
     assert support_rows["permission_prompt"]["providers"]["codex"]["status"] == "pass"
     assert support_rows["permission_prompt"]["providers"]["codex"]["canary"] == "codex_fake_app_server_permission_approval"
-    assert support_rows["permission_prompt"]["providers"]["opencode"]["status"] == "pass"
-    assert support_rows["permission_prompt"]["providers"]["opencode"]["canary"] == "opencode_bridge_permission_reply"
+    assert support_rows["permission_prompt"]["providers"]["opencode"]["status"] == "blocked"
+    assert support_rows["permission_prompt"]["providers"]["opencode"]["canary"] == "opencode_native_permission_canary_required"
     assert support_rows["permission_prompt"]["providers"]["claude"]["status"] == "pass"
     assert support_rows["permission_prompt"]["providers"]["claude"]["canary"] == "claude_permission_gate_reply"
     assert support_rows["permission_prompt"]["providers"]["antigravity"]["status"] == "unsupported_gap"

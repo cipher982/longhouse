@@ -455,7 +455,6 @@ providers:
   control_plane: opencode_server_bridge
   control_plane_aliases: []
   adapter_sources:
-  - server/zerg/cli/opencode_bridge.py
   - server/zerg/mcp_server/server.py
   - engine/src/opencode_control.rs
   - engine/src/opencode_run.rs
@@ -621,7 +620,6 @@ providers:
   control_plane: antigravity_hook_inbox
   control_plane_aliases: []
   adapter_sources:
-  - server/zerg/cli/antigravity_channel.py
   - server/zerg/services/managed_local_control.py
   - engine/src/managed_antigravity_scan.rs
   wire_families: [antigravity_conversations, antigravity_hooks]

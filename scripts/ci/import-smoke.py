@@ -53,7 +53,6 @@ def import_check():
         ("CLI onboard", "zerg.cli.onboard"),
         ("CLI doctor", "zerg.cli.doctor"),
         ("CLI mcp-server", "zerg.cli.mcp_serve"),
-        ("CLI claude-channel", "zerg.cli.claude_channel"),
         ("Demo sessions", "zerg.services.demo_sessions"),
         ("Local health", "zerg.services.local_health"),
     ]

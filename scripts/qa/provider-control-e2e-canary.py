@@ -111,19 +111,16 @@ def _runtime_env(args: argparse.Namespace, extra: dict[str, str] | None = None) 
     return env
 
 
-_CHANNEL_COMMAND_MODULES = {
-    "antigravity-channel": "zerg.cli.antigravity_channel",
-    "claude-channel": "zerg.cli.claude_channel",
-    "opencode-channel": "zerg.cli.opencode_channel",
-}
-
-
-def _longhouse_command(args: argparse.Namespace, command: list[str]) -> list[str]:
+def _longhouse_command(
+    args: argparse.Namespace,
+    command: list[str],
+    *,
+    engine_bin: str | None = None,
+) -> list[str]:
+    if engine_bin:
+        return [engine_bin, *command]
     if args.longhouse_bin:
         return [args.longhouse_bin, *command]
-    module = _CHANNEL_COMMAND_MODULES.get(command[0]) if command else None
-    if module is not None:
-        return [*_server_python_cmd(args), "-m", module, *command[1:]]
     return [*_server_python_cmd(args), "-m", "zerg.cli.main", *command]
 
 
@@ -133,9 +130,10 @@ def _run_longhouse(
     *,
     env: dict[str, str] | None = None,
     timeout: int = 30,
+    engine_bin: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        _longhouse_command(args, command),
+        _longhouse_command(args, command, engine_bin=engine_bin),
         cwd=str(_server_cwd(args)),
         env=_runtime_env(args, env),
         text=True,
@@ -544,10 +542,7 @@ def run_claude_channel_canary(args: argparse.Namespace, root: Path) -> dict[str,
     interrupt_marker = root / "claude-interrupted.txt"
     fake_claude = _fake_interruptible_process(interrupt_marker)
     fake_engine = _fake_claude_channel_engine(root / "bin" / "longhouse-engine")
-    channel_env = {
-        "LONGHOUSE_CHANNEL_AUTH_TOKEN": "canary-token",
-        "LONGHOUSE_ENGINE_BIN": str(fake_engine),
-    }
+    channel_env = {"LONGHOUSE_CHANNEL_AUTH_TOKEN": "canary-token"}
     bridge: subprocess.Popen[str] | None = None
     bridge_command: list[str] | None = None
     try:
@@ -573,6 +568,7 @@ def run_claude_channel_canary(args: argparse.Namespace, root: Path) -> dict[str,
                 "--claude-pid",
                 str(fake_claude.pid),
             ],
+            engine_bin=str(fake_engine),
         )
         bridge = subprocess.Popen(
             bridge_command,
@@ -630,6 +626,7 @@ def run_claude_channel_canary(args: argparse.Namespace, root: Path) -> dict[str,
                 "hello from provider control canary",
             ],
             env=channel_env,
+            engine_bin=str(fake_engine),
         )
         if send.returncode != 0:
             return _fail(
@@ -670,6 +667,7 @@ def run_claude_channel_canary(args: argparse.Namespace, root: Path) -> dict[str,
                 "intent=steer",
             ],
             env=channel_env,
+            engine_bin=str(fake_engine),
         )
         if steer.returncode != 0:
             return _fail(
@@ -707,6 +705,7 @@ def run_claude_channel_canary(args: argparse.Namespace, root: Path) -> dict[str,
                 str(state_root),
             ],
             env=channel_env,
+            engine_bin=str(fake_engine),
         )
         if interrupt.returncode != 0:
             return _fail(
@@ -1126,175 +1125,13 @@ server.serve_forever()
 
 
 def run_opencode_canary(args: argparse.Namespace, root: Path) -> dict[str, Any]:
-    session_id = str(uuid.uuid4())
-    run_id = str(uuid.uuid4())
-    workspace = root / "workspace"
-    workspace.mkdir(parents=True, exist_ok=True)
-    config_dir = root / ".claude"
-    events_path = root / "opencode-events.jsonl"
-    fake_bin = _fake_opencode(root / "bin" / "opencode")
-    env = {"FAKE_OPENCODE_EVENTS": str(events_path)}
-    try:
-        # Helm creation is terminal-originated; start the hermetic local bridge
-        # as test setup, then prove the supported control commands.
-        launch_script = """
-import json
-import sys
-from pathlib import Path
-from zerg.cli.opencode_channel import launch_opencode_server_bridge
-
-payload = launch_opencode_server_bridge(
-    session_id=sys.argv[1],
-    run_id=sys.argv[2],
-    cwd=Path(sys.argv[3]),
-    api_url="http://longhouse.test",
-    api_token="canary-token",
-    device_id="provider-control-canary",
-    config_dir=Path(sys.argv[4]),
-    opencode_bin=sys.argv[5],
-    wait_ready_secs=10,
-)
-print(json.dumps(payload, sort_keys=True))
-"""
-        launch = subprocess.run(
-            [*_server_python_cmd(args), "-c", launch_script, session_id, run_id, str(workspace), str(config_dir), str(fake_bin)],
-            cwd=str(_server_cwd(args)),
-            env=_runtime_env(args, env),
-            text=True,
-            capture_output=True,
-            check=False,
-            timeout=20,
-        )
-        if launch.returncode != 0:
-            return _fail(
-                "opencode_launch_failed",
-                "OpenCode bridge launch seam failed",
-                evidence=_command_evidence(launch),
-            )
-        launch_payload = json.loads(launch.stdout)
-        if launch_payload.get("run_id") != run_id:
-            return _fail(
-                "opencode_run_identity_mismatch",
-                "OpenCode bridge launch did not preserve the requested run identity",
-                requested_run_id=run_id,
-                observed_run_id=launch_payload.get("run_id"),
-            )
-
-        send = _run_longhouse(
-            args,
-            [
-                "opencode-channel",
-                "send",
-                "--session-id",
-                session_id,
-                "--config-dir",
-                str(config_dir),
-                "--text",
-                "hello",
-            ],
-            env=env,
-        )
-        if send.returncode != 0:
-            return _fail(
-                "opencode_send_failed",
-                "opencode-channel send failed",
-                evidence=_command_evidence(send),
-            )
-
-        interrupt = _run_longhouse(
-            args,
-            [
-                "opencode-channel",
-                "interrupt",
-                "--session-id",
-                session_id,
-                "--config-dir",
-                str(config_dir),
-            ],
-            env=env,
-        )
-        if interrupt.returncode != 0:
-            return _fail(
-                "opencode_interrupt_failed",
-                "opencode-channel interrupt failed",
-                evidence=_command_evidence(interrupt),
-            )
-
-        attach = _run_longhouse(
-            args,
-            [
-                "opencode-channel",
-                "attach",
-                "--session-id",
-                session_id,
-                "--config-dir",
-                str(config_dir),
-                "--opencode-bin",
-                str(fake_bin),
-                "--",
-                "--canary-attach",
-            ],
-            env=env,
-        )
-        if attach.returncode != 0:
-            return _fail(
-                "opencode_attach_failed",
-                "opencode-channel attach failed",
-                evidence=_command_evidence(attach),
-            )
-
-        events = _read_json_lines(events_path)
-        observed = {row.get("event") for row in events}
-        expected = {"serve", "session.create", "prompt_async", "abort", "attach"}
-        missing = sorted(expected - observed)
-        if missing:
-            return _fail(
-                "opencode_events_missing",
-                "fake OpenCode server did not observe all events",
-                missing=missing,
-                events=events,
-            )
-        prompt_event = _first_event(events, "prompt_async") or {}
-        if prompt_event.get("payload") != {
-            "noReply": True,
-            "parts": [{"type": "text", "text": "hello"}],
-        }:
-            return _fail(
-                "opencode_prompt_payload_mismatch",
-                "OpenCode prompt_async payload did not match the managed send contract",
-                event=prompt_event,
-            )
-        attach_event = _first_event(events, "attach") or {}
-        if attach_event.get("username") != "opencode" or attach_event.get("password_present") is not True:
-            return _fail(
-                "opencode_attach_env_mismatch",
-                "OpenCode attach did not receive server credentials in the process environment",
-                event=attach_event,
-            )
-
-        return _status(
-            "pass",
-            session_id=session_id,
-            run_id=launch_payload.get("run_id"),
-            provider_session_id=launch_payload.get("provider_session_id"),
-            observed_events=sorted(observed),
-        )
-    except Exception as exc:  # noqa: BLE001
-        return _exception_failure("opencode_canary_exception", exc)
-    finally:
-        _run_longhouse(
-            args,
-            [
-                "opencode-channel",
-                "stop",
-                "--session-id",
-                session_id,
-                "--config-dir",
-                str(config_dir),
-            ],
-            env=env,
-            timeout=10,
-        )
+    return _status(
+        "blocked",
+        failure_code="opencode_native_control_canary_required",
+        message=(
+            "The obsolete Python OpenCode bridge canary was retired. Run the native engine bridge/control integration canary instead."
+        ),
+    )
 
 
 def _resolve_opencode_binary() -> str | None:
@@ -1827,7 +1664,7 @@ def _enqueue_antigravity_direct(
         f"""
         import json
         from pathlib import Path
-        from zerg.cli.antigravity_channel import enqueue_antigravity_message
+        from zerg.services.antigravity_hook_inbox import enqueue_antigravity_message
         print(json.dumps(enqueue_antigravity_message(
             session_id={session_id!r},
             text={text!r},
@@ -1999,95 +1836,11 @@ def _run_antigravity_claim_cycle(
 
 
 def run_antigravity_canary(args: argparse.Namespace, root: Path) -> dict[str, Any]:
-    session_id = "antigravity-canary-session"
-    config_dir = root / ".claude"
-    hook_payload = {
-        "conversationId": "antigravity-provider-canary",
-        "workspacePaths": [str(root / "workspace")],
-        "transcriptPath": str(root / "transcript.jsonl"),
-        "stepIdx": 7,
-    }
-    try:
-        (root / "workspace").mkdir(parents=True, exist_ok=True)
-        script = _install_antigravity_hook(args, root, config_dir)
-
-        pre_cycle = _run_antigravity_claim_cycle(
-            args,
-            script=script,
-            event="PreInvocation",
-            session_id=session_id,
-            config_dir=config_dir,
-            hook_payload=hook_payload,
-            text="pre invocation canary input",
-        )
-        if not pre_cycle["ok"]:
-            return _fail(
-                "antigravity_send_claim_failed",
-                "antigravity-channel send did not observe a claim",
-                cycle=pre_cycle,
-            )
-        pre_payload = pre_cycle["payload"]
-        if pre_payload.get("injectSteps") != [{"userMessage": "pre invocation canary input"}]:
-            return _fail(
-                "antigravity_pre_injection_missing",
-                "PreInvocation did not inject queued input",
-                output=pre_payload,
-                cycle=pre_cycle,
-            )
-
-        post_cycle = _run_antigravity_claim_cycle(
-            args,
-            script=script,
-            event="PostInvocation",
-            session_id=session_id,
-            config_dir=config_dir,
-            hook_payload=hook_payload,
-            text="post invocation canary input",
-        )
-        if not post_cycle["ok"]:
-            return _fail(
-                "antigravity_post_claim_failed",
-                "PostInvocation did not claim queued CLI input",
-                cycle=post_cycle,
-            )
-        post_payload = post_cycle["payload"]
-        if post_payload.get("terminationBehavior") != "force_continue":
-            return _fail(
-                "antigravity_force_continue_missing",
-                "PostInvocation did not request force_continue",
-                output=post_payload,
-                cycle=post_cycle,
-            )
-
-        _enqueue_antigravity_direct(args, session_id, "stop canary input", config_dir)
-        stop = _invoke_antigravity_hook(
-            args,
-            script,
-            "Stop",
-            session_id=session_id,
-            config_dir=config_dir,
-            payload=hook_payload,
-        )
-        stop_payload = json.loads(stop.stdout or "{}")
-        if stop_payload.get("decision") != "continue":
-            return _fail(
-                "antigravity_stop_continue_missing",
-                "Stop did not continue with pending inbox input",
-                output=stop_payload,
-                pending_files=_antigravity_pending_files(config_dir, session_id),
-            )
-
-        return _status(
-            "pass",
-            session_id=session_id,
-            pre_injection=pre_payload,
-            post_injection=post_payload,
-            stop_decision=stop_payload,
-            pre_claim_attempts=pre_cycle["attempts"],
-            post_claim_attempts=post_cycle["attempts"],
-        )
-    except Exception as exc:  # noqa: BLE001
-        return _exception_failure("antigravity_canary_exception", exc)
+    return _status(
+        "blocked",
+        failure_code="antigravity_shadow_only",
+        message="Antigravity is maintenance-tier Shadow and has no supported managed control canary.",
+    )
 
 
 def _claimed_antigravity_loop_messages(inbox_dir: Path) -> list[dict[str, Any]]:
