@@ -3000,7 +3000,15 @@ fn insert_conversation_reset_boundary(
         role: "system".to_string(),
         content_text: Some("Conversation reset".to_string()),
         tool_name: None,
-        tool_input_json: None,
+        // Both native ids ride as structured data so ingest can alias the new
+        // id back to this session (the rotation used to be recoverable only by
+        // reversing the hashed event_id, i.e. not at all). The event_id
+        // derivation above must stay untouched: replay idempotency depends on
+        // it remaining stable for identical transitions.
+        tool_input_json: Some(serde_json::json!({
+            "previous_provider_session_id": previous_provider_session_id,
+            "provider_session_id": provider_session_id,
+        })),
         tool_output_text: None,
         tool_call_id: None,
         thread_id: None,
@@ -3207,6 +3215,19 @@ mod tests {
             records[0].branch_kind.as_deref(),
             Some("conversation_reset")
         );
+        // The rotation ids must be recoverable as data, not only hashed into
+        // the event_id: server ingest reads them to alias the new native id.
+        assert_eq!(
+            records[0].tool_input_json,
+            Some(serde_json::json!({
+                "previous_provider_session_id": "provider-old",
+                "provider_session_id": "provider-new",
+            }))
+        );
+        // Replay idempotency: the event_id derivation is frozen. This exact
+        // value is uuid5(NAMESPACE_URL, "longhouse:conversation-reset:<session>
+        // :<epoch>:<position>:<previous>:<new>") for the inputs above.
+        assert_eq!(records[0].event_id, "49e83858-bb4b-57a5-8745-01ae48cecf04");
         assert_eq!(records[1].event_subordinal, 1);
         assert!(records[0].order_time_us < records[1].order_time_us);
 
@@ -5279,6 +5300,19 @@ mod tests {
                 .filter(|record| record.branch_kind.as_deref() == Some("conversation_reset"))
                 .count(),
             1
+        );
+        // The detected rotation must ship both native ids as data so server
+        // ingest can alias the new id back to this session.
+        let boundary = reset_records
+            .iter()
+            .find(|record| record.branch_kind.as_deref() == Some("conversation_reset"))
+            .unwrap();
+        assert_eq!(
+            boundary.tool_input_json,
+            Some(serde_json::json!({
+                "previous_provider_session_id": old_provider_id,
+                "provider_session_id": new_provider_id,
+            }))
         );
         let retry = prepare_next_envelope(&mut conn, &capabilities(), &new_path, "claude", None)
             .unwrap()
