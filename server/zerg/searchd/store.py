@@ -19,7 +19,7 @@ from uuid import uuid4
 import numpy as np
 
 SCHEMA_VERSION = 1
-SCHEMA_GENERATION = "searchd-v2-published-searchable-corpus-with-locatable-episodes"
+SCHEMA_GENERATION = "searchd-v2-published-searchable-corpus-with-fenced-embeddings"
 SEARCHABLE_RETENTION_DAYS = 91
 SEARCHABLE_FAST_WINDOW_DAYS = 90
 SEARCHABLE_FAST_WINDOW_MARGIN_SECONDS = 300
@@ -277,6 +277,23 @@ def _existing_store_is_incompatible(connection: sqlite3.Connection) -> bool:
         return True
 
 
+def _add_missing_episode_columns(connection: sqlite3.Connection) -> None:
+    """Add nullable episode columns in place rather than rebuilding the store.
+
+    Discarding is the store's normal answer to a schema change, and it is the
+    right answer when existing rows would be wrong. A nullable locator is not
+    that: old rows are merely incomplete, and they say so — a match with no
+    locator reports unavailable evidence. Rebuilding to avoid a NULL would mean
+    re-publishing every session and re-embedding every episode, which on the
+    real corpus is a 17GB index and 82k embedding calls to add one derivable
+    integer.
+    """
+
+    columns = {str(row["name"]) for row in connection.execute("PRAGMA table_info(episode_embeddings)").fetchall()}
+    if "start_order_time_us" not in columns:
+        connection.execute("ALTER TABLE episode_embeddings ADD COLUMN start_order_time_us INTEGER")
+
+
 def _discard_derived_store(path: Path) -> None:
     for candidate in (path, Path(f"{path}-wal"), Path(f"{path}-shm")):
         candidate.unlink(missing_ok=True)
@@ -475,6 +492,7 @@ def _initialize_schema(connection: sqlite3.Connection) -> None:
             ON episode_embeddings(session_id);
         """
     )
+    _add_missing_episode_columns(connection)
     now = datetime.now(UTC).isoformat()
     existing = connection.execute("SELECT schema_version, schema_generation, store_id FROM search_meta WHERE singleton = 1").fetchone()
     if existing is None:

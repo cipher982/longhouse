@@ -182,6 +182,38 @@ def test_searchd_rebuilds_an_incompatible_disposable_store(tmp_path):
         rebuilt.close()
 
 
+def test_nullable_episode_column_is_added_without_discarding_the_store(tmp_path):
+    """Adding a nullable locator must not cost a full re-index and re-embed.
+
+    On the real corpus a discard means republishing 22k sessions into a 17GB
+    index and re-embedding 82k episodes, all to add one integer that old rows
+    are allowed to be missing. Old rows without a locator report unavailable
+    evidence, which is honest; losing them is not.
+    """
+    path = tmp_path / "search.db"
+    connection = open_search_database(path)
+    store_id = connection.execute("SELECT store_id FROM search_meta").fetchone()[0]
+    connection.execute("ALTER TABLE episode_embeddings DROP COLUMN start_order_time_us")
+    connection.execute(
+        """
+        INSERT INTO episode_embeddings(
+            session_id, owner_id, generation_id, revision, episode_ordinal,
+            event_index_start, event_index_end, model, dims, content_hash, embedding, updated_at
+        ) VALUES ('s', '42', 'g', 1, 0, 0, 1, 'm', 2, 'h', X'0000', '2026-08-01T00:00:00+00:00')
+        """
+    )
+    connection.commit()
+    connection.close()
+
+    upgraded = open_search_database(path)
+    try:
+        assert upgraded.execute("SELECT store_id FROM search_meta").fetchone()[0] == store_id
+        row = upgraded.execute("SELECT episode_ordinal, start_order_time_us FROM episode_embeddings").fetchone()
+        assert tuple(row) == (0, None)
+    finally:
+        upgraded.close()
+
+
 def test_episode_embeddings_dedup_and_cosine_query(tmp_path):
     connection = open_search_database(tmp_path / "search.db")
     store = SearchStore(connection)
