@@ -149,6 +149,16 @@ repos:
         pass_filenames: false
 
       # -----------------------------------------------------------------------
+      # Regenerate the provider literal census when source files change
+      # -----------------------------------------------------------------------
+      - id: check-provider-census
+        name: Provider literal census
+        entry: scripts/qa/check-provider-census.sh
+        language: system
+        files: '\.(py|rs|swift|ts|tsx)$'
+        pass_filenames: false
+
+      # -----------------------------------------------------------------------
       # Warn on new db.commit() in routers (prefer WriteSerializer)
       # -----------------------------------------------------------------------
       - id: check-db-commits
