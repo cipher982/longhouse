@@ -11,9 +11,10 @@ from dataclasses import dataclass
 from dataclasses import field
 from datetime import datetime
 
-from .content import is_tool_result
-from .content import redact_secrets as _redact_secrets
-from .content import strip_noise as _strip_noise
+from zerg.services.clean_events import extract_content as _extract_content
+from zerg.services.transcript_content import redact_secrets as _redact_secrets
+from zerg.services.transcript_content import strip_noise as _strip_noise
+
 from .tokens import count_tokens
 from .tokens import truncate
 
@@ -113,40 +114,6 @@ def detect_turns(messages: list[SessionMessage]) -> list[Turn]:
 # ---------------------------------------------------------------------------
 # Transcript building
 # ---------------------------------------------------------------------------
-
-
-def _extract_content(
-    event: dict,
-    include_tool_calls: bool,
-    tool_output_max_chars: int,
-) -> str | None:
-    """Extract displayable text from an event dict.
-
-    Returns ``None`` if the event should be skipped.
-    """
-    # Tool-result events: skip unless caller wants them
-    if is_tool_result(event) and not include_tool_calls:
-        return None
-
-    parts: list[str] = []
-
-    content_text = event.get("content_text") or ""
-    if content_text.strip():
-        parts.append(content_text)
-
-    # Append truncated tool output when present
-    tool_output = event.get("tool_output_text") or ""
-    if tool_output.strip() and include_tool_calls:
-        truncated = tool_output[:tool_output_max_chars]
-        if len(tool_output) > tool_output_max_chars:
-            truncated += "..."
-        parts.append(f"Tool output: {truncated}")
-
-    combined = "\n".join(parts).strip()
-    if not combined:
-        return None
-
-    return combined
 
 
 def build_transcript(

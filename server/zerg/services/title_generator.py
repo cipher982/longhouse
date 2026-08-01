@@ -15,8 +15,8 @@ from openai import AsyncOpenAI
 from zerg.config import get_settings
 from zerg.models_config import get_llm_client_for_use_case
 from zerg.services.session_processing import safe_parse_json
-from zerg.services.session_processing.content import redact_secrets
-from zerg.services.session_processing.content import strip_noise
+from zerg.services.transcript_content import redact_secrets
+from zerg.services.transcript_content import strip_noise
 
 # System prompt for title generation
 TITLE_SYSTEM_PROMPT = (

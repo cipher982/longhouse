@@ -175,6 +175,27 @@ _CONTEXT_TARGET_BY_POSITION_SQL = """
     LIMIT 1
 """
 
+# Every field the clean projection reads, in the order the embeddings projector
+# assembled its records. That projector sorted catalog records by
+# (order_time, machine, provider, source, epoch, position, subordinal) and then
+# numbered them, so reproducing this order here reproduces its clean indices.
+# `source_position` is stored zero-padded, which sorts identically to the
+# projector's integer compare.
+_EPISODE_LOCATOR_EVENTS_SQL = """
+    SELECT e.order_time_us, e.role, e.content_text, e.tool_output_text, e.tool_name
+    FROM events e
+    JOIN session_index s ON s.session_id = e.session_id AND s.generation_id = e.generation_id
+    JOIN projection_membership m
+      ON m.session_id = e.session_id
+     AND m.generation_id = e.generation_id
+     AND m.desired_revision = s.indexed_through
+     AND m.object_id = e.source_object_id
+    WHERE e.session_id = ? AND e.generation_id = ?
+    ORDER BY e.order_time_us ASC, e.machine_id ASC, e.provider ASC,
+             e.opaque_source_id ASC, e.source_epoch ASC,
+             e.source_position ASC, e.event_subordinal ASC
+"""
+
 _CONTEXT_ROWS_SQL = """
     SELECT e.id AS search_event_id, e.event_id, e.source_object_id, e.record_ordinal,
            e.order_time_us, e.role, e.content_text, e.tool_name
@@ -764,6 +785,111 @@ class SearchStore:
         rows = self.connection.execute(sql, params).fetchall()
         # JSON object keys are strings; the projector converts them back to ordinals.
         return {"hashes": {str(row["episode_ordinal"]): str(row["content_hash"]) for row in rows}}
+
+    def backfill_episode_locators(
+        self,
+        *,
+        limit: int,
+        verify: bool = False,
+    ) -> dict[str, object]:
+        """Resolve start positions for episodes embedded before locators existed.
+
+        The locator is derived from the transcript, so it needs no model call and
+        no catalog read: this store already holds every field the clean
+        projection reads. Re-running that projection over the published events
+        reproduces the clean-message indices the projector recorded, which is
+        what turns ``event_index_start`` back into a transcript position.
+
+        ``verify`` recomputes locators for episodes that already have one and
+        reports whether the derivation agrees with what the projector wrote,
+        instead of writing anything. Run that first — if the two disagree, the
+        ordering assumption is wrong and a write pass would corrupt 80k rows
+        with plausible-looking positions.
+        """
+
+        episodes = self.connection.execute(
+            f"""
+            SELECT e.id, e.session_id, e.generation_id, e.episode_ordinal,
+                   e.event_index_start, e.start_order_time_us
+            FROM episode_embeddings e
+            JOIN session_index s
+              ON s.session_id = e.session_id AND s.generation_id = e.generation_id
+            WHERE e.event_index_start IS NOT NULL
+              AND e.start_order_time_us IS {"NOT NULL" if verify else "NULL"}
+            ORDER BY e.session_id ASC, e.episode_ordinal ASC
+            LIMIT ?
+            """,
+            (max(1, limit),),
+        ).fetchall()
+
+        scanned = 0
+        resolved = 0
+        unresolved = 0
+        agreed = 0
+        disagreed = 0
+        clean_cache: dict[tuple[str, str], dict[int, int]] = {}
+
+        for episode in episodes:
+            scanned += 1
+            key = (str(episode["session_id"]), str(episode["generation_id"]))
+            positions = clean_cache.get(key)
+            if positions is None:
+                positions = self._clean_index_positions(session_id=key[0], generation_id=key[1])
+                clean_cache[key] = positions
+            order_time = positions.get(int(episode["event_index_start"]))
+            if order_time is None:
+                unresolved += 1
+                continue
+            if verify:
+                if int(episode["start_order_time_us"]) == order_time:
+                    agreed += 1
+                else:
+                    disagreed += 1
+                continue
+            self.connection.execute(
+                "UPDATE episode_embeddings SET start_order_time_us = ? WHERE id = ?",
+                (order_time, episode["id"]),
+            )
+            resolved += 1
+
+        result: dict[str, object] = {
+            "scanned": scanned,
+            "unresolved": unresolved,
+            "exhausted": scanned < max(1, limit),
+        }
+        if verify:
+            result["agreed"] = agreed
+            result["disagreed"] = disagreed
+        else:
+            result["resolved"] = resolved
+        return result
+
+    def _clean_index_positions(self, *, session_id: str, generation_id: str) -> dict[int, int]:
+        """Map clean-message index to order time for one published generation."""
+
+        from zerg.services.clean_events import iter_clean_transcript_events
+
+        rows = self.connection.execute(_EPISODE_LOCATOR_EVENTS_SQL, (session_id, generation_id)).fetchall()
+        # The projector fed the chunker an integer order time and a sequential
+        # id, which makes its sort a no-op over this order. Feeding the same
+        # shapes keeps the clean indices identical rather than merely similar.
+        records = [
+            {
+                "id": index,
+                "timestamp": int(row["order_time_us"]),
+                "role": row["role"],
+                "content_text": row["content_text"],
+                "tool_output_text": row["tool_output_text"],
+                "tool_name": row["tool_name"],
+            }
+            for index, row in enumerate(rows)
+        ]
+        positions: dict[int, int] = {}
+        for clean_event in iter_clean_transcript_events(records):
+            if clean_event.event_id is None:
+                continue
+            positions[clean_event.index] = int(records[clean_event.event_id]["timestamp"])
+        return positions
 
     def query_episode_embeddings(
         self,

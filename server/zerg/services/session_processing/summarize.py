@@ -21,8 +21,9 @@ from dataclasses import dataclass
 
 from openai import AsyncOpenAI
 
-from .content import redact_secrets
-from .content import strip_noise
+from zerg.services.transcript_content import redact_secrets
+from zerg.services.transcript_content import strip_noise
+
 from .transcript import SessionTranscript
 from .transcript import build_transcript
 
