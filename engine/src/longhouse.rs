@@ -1448,50 +1448,6 @@ fn resolve_codex_binary(explicit: Option<String>) -> anyhow::Result<String> {
     )
 }
 
-fn configure_codex_coordination_mcp() -> anyhow::Result<()> {
-    let home = std::env::var_os("HOME").context("HOME is required for Codex MCP configuration")?;
-    let path = PathBuf::from(home).join(".codex/config.toml");
-    let engine = paired_engine_path()?;
-    let section = format!(
-        "[mcp_servers.longhouse]\ncommand = \"{}\"\nargs = [\"claude-channel\", \"serve\"]\n",
-        engine
-            .display()
-            .to_string()
-            .replace('\\', "\\\\")
-            .replace('"', "\\\"")
-    );
-    let existing = std::fs::read_to_string(&path).unwrap_or_default();
-    let mut lines = existing.lines().peekable();
-    let mut retained = String::new();
-    while let Some(line) = lines.next() {
-        if line.trim() == "[mcp_servers.longhouse]" {
-            while let Some(next) = lines.peek() {
-                if next.trim_start().starts_with('[') {
-                    break;
-                }
-                lines.next();
-            }
-            continue;
-        }
-        retained.push_str(line);
-        retained.push('\n');
-    }
-    std::fs::create_dir_all(path.parent().context("Codex config has no parent")?)?;
-    std::fs::write(
-        &path,
-        format!(
-            "{}{}",
-            retained.trim_end(),
-            if retained.trim().is_empty() {
-                format!("{section}")
-            } else {
-                format!("\n\n{section}")
-            }
-        ),
-    )?;
-    Ok(())
-}
-
 fn resolve_provider_binary(
     explicit: Option<String>,
     default: &str,
@@ -1615,7 +1571,6 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
     if response.run_id.trim().is_empty() {
         anyhow::bail!("Longhouse server did not return the managed run identity");
     }
-    configure_codex_coordination_mcp()?;
     let attach = args.attach && !args.no_attach && interactive_stdio();
     let launch_mode = if attach { "tui" } else { "detached_ui" };
     let engine = paired_engine_path()?;

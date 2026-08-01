@@ -2544,7 +2544,9 @@ fn read_log_tail(path: &Path, max_chars: usize) -> String {
 
 async fn spawn_app_server_client(config: &BridgeRunConfig) -> Result<RpcClient> {
     let mut command = Command::new(&config.codex_bin);
-    command.args(codex_app_server_args(config));
+    let coordination_command =
+        std::env::current_exe().context("resolving Longhouse engine for Codex coordination MCP")?;
+    command.args(codex_app_server_args(config, &coordination_command));
     command
         .env_remove("LONGHOUSE_COORDINATION_TOKEN")
         .env("LONGHOUSE_MANAGED_SESSION_ID", &config.session_id)
@@ -2679,10 +2681,18 @@ async fn spawn_app_server_client(config: &BridgeRunConfig) -> Result<RpcClient> 
     })
 }
 
-fn codex_app_server_args(config: &BridgeRunConfig) -> Vec<OsString> {
+fn codex_app_server_args(config: &BridgeRunConfig, coordination_command: &Path) -> Vec<OsString> {
     let mut args = vec![
         OsString::from("-c"),
         OsString::from(CODEX_DISABLE_UPDATE_CHECK_CONFIG),
+        OsString::from("-c"),
+        OsString::from(format!(
+            "mcp_servers.longhouse.command={}",
+            serde_json::to_string(&coordination_command.display().to_string())
+                .expect("coordination command is serializable")
+        )),
+        OsString::from("-c"),
+        OsString::from("mcp_servers.longhouse.args=[\"claude-channel\",\"serve\"]"),
     ];
     for tool in LONGHOUSE_COORDINATION_TOOLS {
         args.push(OsString::from("-c"));
@@ -5991,8 +6001,9 @@ mod tests {
         let mut config = make_test_run_config(&temp);
         config.approval_policy = Some("never".to_string());
         config.sandbox = Some("danger-full-access".to_string());
+        let coordination_command = temp.path().join("longhouse-engine");
 
-        let args = codex_app_server_args(&config)
+        let args = codex_app_server_args(&config, &coordination_command)
             .into_iter()
             .map(|arg| arg.to_string_lossy().into_owned())
             .collect::<Vec<_>>();
@@ -6000,6 +6011,13 @@ mod tests {
         let mut expected = vec![
             "-c".to_string(),
             CODEX_DISABLE_UPDATE_CHECK_CONFIG.to_string(),
+            "-c".to_string(),
+            format!(
+                "mcp_servers.longhouse.command={}",
+                serde_json::to_string(&coordination_command.display().to_string()).unwrap()
+            ),
+            "-c".to_string(),
+            "mcp_servers.longhouse.args=[\"claude-channel\",\"serve\"]".to_string(),
         ];
         for tool in LONGHOUSE_COORDINATION_TOOLS {
             expected.extend([
