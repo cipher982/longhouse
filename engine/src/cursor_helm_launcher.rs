@@ -1091,14 +1091,14 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
     let cwd_c = CString::new(cwd.as_os_str().as_bytes())
         .context("Cursor working directory cannot contain NUL")?;
     let mut master = -1;
-    let pid = unsafe {
-        libc::forkpty(
-            &mut master,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            &mut size,
-        )
+    let mut slave_name = [0 as libc::c_char; 1024];
+    let slave_name_ptr = if cfg!(target_os = "macos") {
+        slave_name.as_mut_ptr()
+    } else {
+        std::ptr::null_mut()
     };
+    let pid =
+        unsafe { libc::forkpty(&mut master, slave_name_ptr, std::ptr::null_mut(), &mut size) };
     if pid < 0 {
         anyhow::bail!("forkpty failed: {}", std::io::Error::last_os_error());
     }
@@ -1108,6 +1108,25 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
             libc::execve(argv[0].as_ptr(), argv_ptrs.as_ptr(), env_ptrs.as_ptr());
             libc::_exit(127)
         }
+    }
+    // XNU can discard queued PTY output or hold a session-leader child in the
+    // exiting state until the master reads it. Keeping the slave open in the
+    // parent makes POLLIN observable; the relay loop drains it and reaps with
+    // WNOHANG before releasing this hold.
+    #[cfg(target_os = "macos")]
+    let slave_hold = unsafe { libc::open(slave_name.as_ptr(), libc::O_RDWR | libc::O_NOCTTY) };
+    #[cfg(not(target_os = "macos"))]
+    let slave_hold = -1;
+    if cfg!(target_os = "macos") && slave_hold < 0 {
+        unsafe {
+            libc::kill(pid, libc::SIGKILL);
+            libc::close(master);
+            libc::waitpid(pid, std::ptr::null_mut(), 0);
+        }
+        anyhow::bail!(
+            "open Cursor PTY slave hold failed: {}",
+            std::io::Error::last_os_error()
+        );
     }
     let stop = Arc::new(AtomicBool::new(false));
     let resized = Arc::new(AtomicBool::new(true));
@@ -1134,8 +1153,11 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
         Err(error) => {
             unsafe {
                 libc::kill(pid, libc::SIGKILL);
-                libc::waitpid(pid, std::ptr::null_mut(), 0);
+                if slave_hold >= 0 {
+                    libc::close(slave_hold);
+                }
                 libc::close(master);
+                libc::waitpid(pid, std::ptr::null_mut(), 0);
             }
             return Err(error);
         }
@@ -1145,8 +1167,11 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
             drop(terminal);
             unsafe {
                 libc::kill(pid, libc::SIGKILL);
-                libc::waitpid(pid, std::ptr::null_mut(), 0);
+                if slave_hold >= 0 {
+                    libc::close(slave_hold);
+                }
                 libc::close(master);
+                libc::waitpid(pid, std::ptr::null_mut(), 0);
             }
             return Err(error);
         }
@@ -1184,6 +1209,7 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
     });
     let mut input = [0u8; 8192];
     let mut output = [0u8; 65536];
+    let mut reaped_status = None;
     loop {
         if stop.load(Ordering::Relaxed) {
             break;
@@ -1218,7 +1244,7 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
                 }
             }
         }
-        if fds[1].revents & libc::POLLIN != 0 {
+        if fds[1].revents & (libc::POLLIN | libc::POLLHUP | libc::POLLERR | libc::POLLNVAL) != 0 {
             let count = unsafe { libc::read(master, output.as_mut_ptr().cast(), output.len()) };
             if count > 0 {
                 if write_all(1, &output[..count as usize]).is_err() {
@@ -1228,7 +1254,11 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
                 break;
             }
         }
-        if fds[1].revents & (libc::POLLHUP | libc::POLLERR | libc::POLLNVAL) != 0 {
+        let mut status = 0;
+        if cfg!(target_os = "macos")
+            && unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) } == pid
+        {
+            reaped_status = Some(status);
             break;
         }
     }
@@ -1236,23 +1266,30 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
     drop(terminal);
     stop.store(true, Ordering::Relaxed);
     let _ = server.join();
+    if slave_hold >= 0 {
+        unsafe {
+            libc::close(slave_hold);
+        }
+    }
     let exit_code = unsafe {
-        let mut status = 0;
-        if launcher_requested_stop {
-            let mut observed = libc::waitpid(pid, &mut status, libc::WNOHANG);
-            for _ in 0..25 {
-                if observed != 0 {
-                    break;
+        let mut status = reaped_status.unwrap_or(0);
+        if reaped_status.is_none() {
+            if launcher_requested_stop {
+                let mut observed = libc::waitpid(pid, &mut status, libc::WNOHANG);
+                for _ in 0..25 {
+                    if observed != 0 {
+                        break;
+                    }
+                    thread::sleep(std::time::Duration::from_millis(10));
+                    observed = libc::waitpid(pid, &mut status, libc::WNOHANG);
                 }
-                thread::sleep(std::time::Duration::from_millis(10));
-                observed = libc::waitpid(pid, &mut status, libc::WNOHANG);
-            }
-            if observed == 0 {
-                libc::kill(pid, libc::SIGKILL);
+                if observed == 0 {
+                    libc::kill(pid, libc::SIGKILL);
+                    libc::waitpid(pid, &mut status, 0);
+                }
+            } else {
                 libc::waitpid(pid, &mut status, 0);
             }
-        } else {
-            libc::waitpid(pid, &mut status, 0);
         }
         if libc::WIFEXITED(status) {
             libc::WEXITSTATUS(status)

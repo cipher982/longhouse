@@ -152,61 +152,14 @@ launch_attempt_state() {
     "SELECT state FROM live_session_launch_attempts WHERE session_id = '$1' ORDER BY id DESC LIMIT 1;"
 }
 
-# `longhouse <provider>` exits cleanly, but the PTY master does not always reach
-# EOF: something in the managed launch keeps the slave fd open after the child
-# is reaped, so a plain `run-in-pty.py` invocation can block forever waiting to
-# read. That is a real teardown observation (recorded for the launch-lifecycle
-# work) and it must never become an unbounded CI hang, so every launch here is
-# bounded and judged on observable outcomes -- what the provider printed, what
-# reached the Runtime Host, and the exit status -- rather than on the wrapper
-# seeing EOF.
+# Keep provider launches bounded and use the shared PTY harness. The harness
+# completes from child status rather than waiting for macOS PTY EOF, which can
+# remain unreadable after the child has already been reaped.
 run_launch_bounded() {
   local out_file="$1" timeout_secs="$2"
   shift 2
-  python3 - "$out_file" "$timeout_secs" "$@" <<'PYEOF'
-import os, pty, select, subprocess, sys, time
-
-out_path, timeout_secs = sys.argv[1], float(sys.argv[2])
-argv = sys.argv[3:]
-master, slave = pty.openpty()
-proc = subprocess.Popen(argv, stdin=slave, stdout=slave, stderr=slave, close_fds=True)
-os.close(slave)
-chunks, deadline = [], time.time() + timeout_secs
-while time.time() < deadline:
-    ready, _, _ = select.select([master], [], [], 0.25)
-    if ready:
-        try:
-            data = os.read(master, 65536)
-        except OSError:
-            break
-        if not data:
-            break
-        chunks.append(data)
-    if proc.poll() is not None:
-        # Drain briefly, then stop: another fd holder can keep the master open.
-        drain_until = time.time() + 0.5
-        while time.time() < drain_until:
-            ready, _, _ = select.select([master], [], [], 0.1)
-            if not ready:
-                break
-            try:
-                data = os.read(master, 65536)
-            except OSError:
-                break
-            if not data:
-                break
-            chunks.append(data)
-        break
-os.close(master)
-code = proc.poll()
-if code is None:
-    proc.kill()
-    proc.wait()
-    code = 124
-with open(out_path, "wb") as handle:
-    handle.write(b"".join(chunks))
-sys.exit(code if code >= 0 else 128 - code)
-PYEOF
+  python3 "$ROOT_DIR/scripts/ci/run-in-pty.py" --timeout "$timeout_secs" "$@" \
+    >"$out_file" 2>&1
 }
 
 # ---------------------------------------------------------------------------
