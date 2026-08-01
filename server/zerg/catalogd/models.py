@@ -189,6 +189,10 @@ class StorageSession(CatalogBase):
     media_state = Column(String(16), nullable=False, server_default=text("'complete'"), index=True)
     missing_media_hashes_json = Column(Text, nullable=False, server_default=text("'[]'"))
     user_state = Column(String(20), nullable=False, server_default=text("'active'"), index=True)
+    # Console unread acknowledgement — see docs/specs/console-unread-acknowledgement.md
+    last_console_result_at = Column(DateTime(timezone=True), nullable=True)
+    last_console_result_outcome = Column(String(20), nullable=True)
+    last_read_at = Column(DateTime(timezone=True), nullable=True)
     loop_mode = Column(String(32), nullable=False, server_default=text("'assist'"))
     notification_muted = Column(Integer, nullable=False, server_default=text("0"))
     origin_kind = Column(String(64), nullable=True, index=True)

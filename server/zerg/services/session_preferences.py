@@ -16,6 +16,7 @@ class SessionPreferences:
     loop_mode: str = "assist"
     notification_muted: bool = False
     user_hidden_from_timeline: bool = False
+    last_read_at: datetime | None = None
 
 
 def load_session_preferences(session_id: UUID | str, *, standalone_session=None) -> SessionPreferences:
@@ -77,6 +78,7 @@ async def update_session_preferences(
     loop_mode: str | None = None,
     notification_muted: bool | None = None,
     user_hidden_from_timeline: bool | None = None,
+    last_read_at: datetime | None = None,
 ) -> SessionPreferences | None:
     """Update session preferences through catalogd without opening SQLite here."""
 
@@ -93,6 +95,7 @@ async def update_session_preferences(
             "loop_mode": loop_mode,
             "notification_muted": notification_muted,
             "user_hidden_from_timeline": user_hidden_from_timeline,
+            "last_read_at": last_read_at.isoformat() if last_read_at is not None else None,
             "observed_at": datetime.now(timezone.utc).isoformat(),
         },
         timeout_seconds=1.0,
@@ -107,4 +110,14 @@ async def update_session_preferences(
         loop_mode=str(preferences.get("loop_mode") or "assist"),
         notification_muted=preferences.get("notification_muted") is True,
         user_hidden_from_timeline=preferences.get("user_hidden_from_timeline") is True,
+        last_read_at=_parse_optional_datetime(preferences.get("last_read_at")),
     )
+
+
+def _parse_optional_datetime(value) -> datetime | None:
+    if not value or not isinstance(value, str):
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None

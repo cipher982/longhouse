@@ -2828,6 +2828,14 @@ class CatalogStore:
                 next_turn_result = None
                 if next_state in {"completed", "failed", "cancelled"}:
                     turn.terminal_at = now
+                    # Console unread acknowledgement: denormalize the terminal
+                    # result onto the catalog row so unread derives from two
+                    # session-row columns (spec: console-unread-acknowledgement.md).
+                    catalog_row = orm.get(LiveSessionCatalog, turn.session_id)
+                    if catalog_row is not None:
+                        catalog_row.last_console_result_at = now
+                        catalog_row.last_console_result_outcome = next_state
+                        catalog_row.updated_at = now
                     run = orm.get(LiveSessionRun, turn.run_id)
                     if run is not None:
                         run.ended_at = now
@@ -3637,15 +3645,32 @@ class CatalogStore:
         storage = StorageSession.__table__
         tombstones = LiveSessionTombstone.__table__
         with _read_snapshot(self.engine) as connection:
+            # Unread sessions must survive the recency window and pagination:
+            # a Console result nobody has acknowledged stays listed until it is
+            # read or archived (docs/specs/console-unread-acknowledgement.md).
+            legacy_unread = and_(
+                catalog.c.last_console_result_at.isnot(None),
+                or_(
+                    catalog.c.last_read_at.is_(None),
+                    catalog.c.last_console_result_at > catalog.c.last_read_at,
+                ),
+            )
+            storage_unread = and_(
+                storage.c.last_console_result_at.isnot(None),
+                or_(
+                    storage.c.last_read_at.is_(None),
+                    storage.c.last_console_result_at > storage.c.last_read_at,
+                ),
+            )
             legacy_where = [
-                func.coalesce(card.c.last_activity_at, card.c.started_at) >= since,
+                or_(func.coalesce(card.c.last_activity_at, card.c.started_at) >= since, legacy_unread),
                 card.c.hidden_from_default_timeline == 0,
                 card.c.user_hidden_from_timeline == 0,
                 catalog.c.user_state.notin_(("archived", "snoozed", "deleted")),
                 ~select(storage.c.session_id).where(storage.c.session_id == card.c.session_id).exists(),
             ]
             storage_where = [
-                storage.c.last_activity_at >= since,
+                or_(storage.c.last_activity_at >= since, storage_unread),
                 storage.c.hidden_from_default_timeline == 0,
                 storage.c.user_hidden_from_timeline == 0,
                 storage.c.user_state.notin_(("archived", "snoozed", "deleted")),
@@ -3704,17 +3729,24 @@ class CatalogStore:
                 select(
                     card.c.session_id.label("session_id"),
                     func.coalesce(card.c.last_activity_at, card.c.started_at).label("order_at"),
+                    case((legacy_unread, 1), else_=0).label("unread"),
                 )
                 .select_from(joined)
                 .where(*legacy_where),
-                select(storage.c.session_id.label("session_id"), storage.c.last_activity_at.label("order_at")).where(*storage_where),
+                select(
+                    storage.c.session_id.label("session_id"),
+                    storage.c.last_activity_at.label("order_at"),
+                    case((storage_unread, 1), else_=0).label("unread"),
+                ).where(*storage_where),
             ).subquery()
             total = int(connection.execute(select(func.count()).select_from(candidates)).scalar_one())
+            # Unread first so acknowledgement-pending sessions can never be
+            # paged out of the first window; clients do their own visual sort.
             session_ids = [
                 str(value)
                 for value in connection.execute(
                     select(candidates.c.session_id)
-                    .order_by(candidates.c.order_at.desc(), candidates.c.session_id.desc())
+                    .order_by(candidates.c.unread.desc(), candidates.c.order_at.desc(), candidates.c.session_id.desc())
                     .limit(limit)
                     .offset(offset)
                 ).scalars()
@@ -4361,6 +4393,7 @@ class CatalogStore:
         notification_muted: bool | None,
         user_hidden_from_timeline: bool | None,
         observed_at: datetime,
+        last_read_at: datetime | None = None,
     ) -> dict[str, Any]:
         """Update bounded user-owned session state in one catalog transaction."""
 
@@ -4375,6 +4408,7 @@ class CatalogStore:
                         table.c.notification_muted,
                         table.c.user_hidden_from_timeline,
                         table.c.user_hidden_at,
+                        table.c.last_read_at,
                     ).where(table.c.session_id == session_id)
                 )
                 .mappings()
@@ -4388,17 +4422,20 @@ class CatalogStore:
                             StorageSession.__table__.c.loop_mode,
                             StorageSession.__table__.c.notification_muted,
                             StorageSession.__table__.c.user_hidden_from_timeline,
+                            StorageSession.__table__.c.last_read_at,
                         ).where(StorageSession.__table__.c.session_id == session_id)
                     )
                     .mappings()
                     .first()
                 )
-                if storage_current is not None and user_hidden_from_timeline is not None:
-                    storage_values = {
-                        "user_hidden_from_timeline": int(user_hidden_from_timeline),
-                        "user_hidden_at": observed_at if user_hidden_from_timeline else None,
-                        "updated_at": observed_at,
-                    }
+                if storage_current is not None and (user_hidden_from_timeline is not None or last_read_at is not None):
+                    storage_values: dict[str, Any] = {"updated_at": observed_at}
+                    if user_hidden_from_timeline is not None:
+                        storage_values["user_hidden_from_timeline"] = int(user_hidden_from_timeline)
+                        storage_values["user_hidden_at"] = observed_at if user_hidden_from_timeline else None
+                    storage_read_at = _as_aware_utc(storage_current["last_read_at"])
+                    if last_read_at is not None and (storage_read_at is None or last_read_at > storage_read_at):
+                        storage_values["last_read_at"] = last_read_at
                     connection.execute(
                         update(StorageSession.__table__).where(StorageSession.__table__.c.session_id == session_id).values(**storage_values)
                     )
@@ -4409,9 +4446,14 @@ class CatalogStore:
                             "user_state": str(storage_current["user_state"] or "active"),
                             "loop_mode": str(storage_current["loop_mode"] or "assist"),
                             "notification_muted": bool(storage_current["notification_muted"]),
-                            "user_hidden_from_timeline": user_hidden_from_timeline,
+                            "user_hidden_from_timeline": (
+                                user_hidden_from_timeline
+                                if user_hidden_from_timeline is not None
+                                else bool(storage_current["user_hidden_from_timeline"])
+                            ),
+                            "last_read_at": _encode_datetime(storage_values.get("last_read_at") or storage_read_at),
                         },
-                        "updated": bool(user_hidden_from_timeline != bool(storage_current["user_hidden_from_timeline"])),
+                        "updated": True,
                         "commit_seq": str(commit_seq),
                     }
                 return {
@@ -4430,21 +4472,32 @@ class CatalogStore:
             if user_hidden_from_timeline is not None and user_hidden_from_timeline != bool(current["user_hidden_from_timeline"]):
                 values["user_hidden_from_timeline"] = int(user_hidden_from_timeline)
                 values["user_hidden_at"] = observed_at if user_hidden_from_timeline else None
+            current_read_at = _as_aware_utc(current["last_read_at"])
+            # Mark-read is a max-write: read_through never moves last_read_at
+            # backwards, and an already-read session is a true no-op.
+            if last_read_at is not None and (current_read_at is None or last_read_at > current_read_at):
+                values["last_read_at"] = last_read_at
             if values:
                 values["updated_at"] = observed_at
                 connection.execute(update(table).where(table.c.session_id == session_id).values(**values))
                 storage_values = {
-                    key: value for key, value in values.items() if key in {"user_hidden_from_timeline", "user_hidden_at", "updated_at"}
+                    key: value
+                    for key, value in values.items()
+                    if key in {"user_hidden_from_timeline", "user_hidden_at", "last_read_at", "updated_at"}
                 }
                 if storage_values:
                     connection.execute(
                         update(StorageSession.__table__).where(StorageSession.__table__.c.session_id == session_id).values(**storage_values)
                     )
-                    connection.execute(
-                        update(LiveTimelineCard.__table__)
-                        .where(LiveTimelineCard.__table__.c.session_id == session_id)
-                        .values(**storage_values)
-                    )
+                    # LiveTimelineCard has no last_read_at column; only mirror
+                    # the hidden-state fields it actually carries.
+                    card_values = {key: value for key, value in storage_values.items() if key != "last_read_at"}
+                    if set(card_values) != {"updated_at"}:
+                        connection.execute(
+                            update(LiveTimelineCard.__table__)
+                            .where(LiveTimelineCard.__table__.c.session_id == session_id)
+                            .values(**card_values)
+                        )
                 commit_seq = _advance_commit_seq(connection, observed_at)
             else:
                 commit_seq = _current_commit_seq(connection)
@@ -4458,6 +4511,7 @@ class CatalogStore:
                     "user_hidden_from_timeline": (
                         user_hidden_from_timeline if user_hidden_from_timeline is not None else bool(current["user_hidden_from_timeline"])
                     ),
+                    "last_read_at": _encode_datetime(values.get("last_read_at") or current_read_at),
                 },
                 "updated": bool(values),
                 "commit_seq": str(commit_seq),
@@ -7771,6 +7825,9 @@ def _storage_catalog_compat_row(row) -> dict[str, Any]:
         "summary_revision": 0,
         "user_state": str(row["user_state"]),
         "user_state_at": row["updated_at"],
+        "last_console_result_at": row["last_console_result_at"],
+        "last_console_result_outcome": row["last_console_result_outcome"],
+        "last_read_at": row["last_read_at"],
         "primary_thread_id": None,
         "loop_mode": str(row["loop_mode"]),
         "notification_muted": bool(row["notification_muted"]),
@@ -8380,6 +8437,9 @@ _CATALOG_FIELDS = frozenset(
         "summary_revision",
         "user_state",
         "user_state_at",
+        "last_console_result_at",
+        "last_console_result_outcome",
+        "last_read_at",
         "primary_thread_id",
         "loop_mode",
         "notification_muted",

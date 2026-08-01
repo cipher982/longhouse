@@ -259,6 +259,24 @@ def publish_session_runtime_update(
     bus.publish(TOPIC_TIMELINE, payload)
 
 
+def publish_session_read_update(*, session_id: str) -> None:
+    """Wake timeline subscribers after a mark-read write so unread clears fan out.
+
+    Preference writes publish nothing by default; without this the cold
+    timeline stream would only converge on its periodic rescan.
+    """
+    payload = {
+        "kind": "read_update",
+        "session_id": session_id,
+        "provider": None,
+        "source": "mark_read",
+        "server_fanout_at_ms": int(datetime.now(timezone.utc).timestamp() * 1000),
+    }
+    bus = get_pubsub()
+    bus.publish(topic_session(session_id), payload)
+    bus.publish(TOPIC_TIMELINE, payload)
+
+
 def publish_session_title_update(
     *,
     session_id: str,

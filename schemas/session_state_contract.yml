@@ -1,5 +1,5 @@
 schema_version: 1
-state_contract_version: 1
+state_contract_version: 2
 presentation_policy_version: 1
 
 # Canonical state vocabulary. Provider adapters may retain raw evidence, but
@@ -79,7 +79,7 @@ providers:
 # projector, OpenAPI DTO, TypeScript, Swift, and Rust fixture decoder all use
 # these names; nullable fields are marked with `?`.
 fact_families:
-  session_state: [state_contract_version, presentation_policy_version, mode, disposition, 'launch?', 'run?', activity, control, 'pending_interaction?', transcript, host, presentation, 'commit_seq?']
+  session_state: [state_contract_version, presentation_policy_version, mode, disposition, 'launch?', 'run?', activity, control, 'pending_interaction?', transcript, host, working_set, unread, 'last_result_at?', 'last_result_outcome?', presentation, 'commit_seq?']
   disposition: [state, 'closed_at?', 'close_reason?']
   launch: [state, 'error_code?', 'error_message?']
   run: ['id?', lifecycle, 'started_at?', 'ended_at?', 'end_reason?']

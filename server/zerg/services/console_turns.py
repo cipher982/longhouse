@@ -60,6 +60,19 @@ class ConsoleTurnConflict(RuntimeError):
     pass
 
 
+def stamp_console_result(db: Session, *, session_id, outcome: str, at: datetime) -> None:
+    """Denormalize a terminal Console turn onto the session row for unread derivation.
+
+    Only terminal outcomes reach here — a draining turn's early terminal_at
+    must never stamp (docs/specs/console-unread-acknowledgement.md).
+    """
+
+    session = db.get(AgentSession, session_id)
+    if session is not None:
+        session.last_console_result_at = at
+        session.last_console_result_outcome = outcome
+
+
 @dataclass(frozen=True)
 class EnqueuedConsoleTurn:
     input_id: int
@@ -394,6 +407,7 @@ def settle_console_turn(
     turn.durable_at = now
     run.ended_at = now
     run.exit_status = exit_status or outcome
+    stamp_console_result(db, session_id=turn.session_id, outcome=outcome, at=now)
     if outcome != SESSION_TURN_STATE_COMPLETED:
         input_row.status = INPUT_STATUS_FAILED
         input_row.last_error = outcome
@@ -1022,6 +1036,7 @@ def _fail_starting_console_turn(db: Session, *, turn_id: int, error_code: str, e
     input_row.last_error = f"{error_code}: {error}"[:1000]
     run.ended_at = now
     run.exit_status = error_code[:64]
+    stamp_console_result(db, session_id=turn.session_id, outcome=SESSION_TURN_STATE_FAILED, at=now)
     db.commit()
 
 

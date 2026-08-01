@@ -1751,7 +1751,15 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _update_session_preferences(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        expected = {"session_id", "user_state", "loop_mode", "notification_muted", "user_hidden_from_timeline", "observed_at"}
+        expected = {
+            "session_id",
+            "user_state",
+            "loop_mode",
+            "notification_muted",
+            "user_hidden_from_timeline",
+            "last_read_at",
+            "observed_at",
+        }
         if set(request.params) != expected:
             return self._error(request, "invalid_request", "session.preferences.update.v2 has invalid parameters")
         params = dict(request.params)
@@ -1770,10 +1778,15 @@ class CatalogDaemon:
             return self._error(request, "invalid_request", "notification_muted must be a boolean or null")
         if params["user_hidden_from_timeline"] is not None and type(params["user_hidden_from_timeline"]) is not bool:
             return self._error(request, "invalid_request", "user_hidden_from_timeline must be a boolean or null")
-        if all(params[field] is None for field in ("user_state", "loop_mode", "notification_muted", "user_hidden_from_timeline")):
+        if all(
+            params[field] is None
+            for field in ("user_state", "loop_mode", "notification_muted", "user_hidden_from_timeline", "last_read_at")
+        ):
             return self._error(request, "invalid_request", "at least one preference must be provided")
         try:
             params["observed_at"] = _parse_datetime(params["observed_at"], "observed_at")
+            if params["last_read_at"] is not None:
+                params["last_read_at"] = _parse_datetime(params["last_read_at"], "last_read_at")
         except ValueError as exc:
             return self._error(request, "invalid_request", str(exc))
         assert self._store is not None

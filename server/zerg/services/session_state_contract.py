@@ -29,7 +29,7 @@ from zerg.services.session_runtime import SessionRuntimeView
 from zerg.services.session_runtime_display import compact_runtime_tool_label
 from zerg.utils.time import normalize_utc
 
-STATE_CONTRACT_VERSION = 1
+STATE_CONTRACT_VERSION = 2
 PRESENTATION_POLICY_VERSION = 1
 
 PRIMARY_PRESENTATION_KEYS: tuple[str, ...] = (
@@ -224,6 +224,15 @@ class SessionStateFacts(_FrozenModel):
     transcript: SessionTranscriptFacts
     host: SessionHostFacts
     working_set: WorkingSet = "history"
+    # Console unread acknowledgement (docs/specs/console-unread-acknowledgement.md).
+    # last_result_at/outcome mirror the session row's terminal Console-turn
+    # stamp; unread is derived here (result newer than last_read_at), never
+    # stored. Shadow/Helm sessions never stamp a result, so they are never
+    # unread. Orthogonal to working_set by design: "finished but unseen" is an
+    # overlay, not a liveness tier.
+    unread: bool = False
+    last_result_at: datetime | None = None
+    last_result_outcome: str | None = None
     presentation: SessionPresentation
     commit_seq: int | None = None
 
@@ -633,6 +642,9 @@ def build_archive_session_state_facts(
             live_observation=False,
         ),
         host=SessionHostFacts(state="unknown"),
+        last_console_result_at=getattr(session, "last_console_result_at", None),
+        last_console_result_outcome=getattr(session, "last_console_result_outcome", None),
+        last_read_at=getattr(session, "last_read_at", None),
     )
 
 
@@ -648,6 +660,9 @@ def assemble_session_state_facts(
     transcript: SessionTranscriptFacts,
     host: SessionHostFacts,
     commit_seq: int | None = None,
+    last_console_result_at: datetime | None = None,
+    last_console_result_outcome: str | None = None,
+    last_read_at: datetime | None = None,
 ) -> SessionStateFacts:
     """Assemble orthogonal axes and apply the single presentation policy."""
 
@@ -686,9 +701,28 @@ def assemble_session_state_facts(
             control=control,
             interaction=pending_interaction,
         ),
+        unread=_unread(last_console_result_at=last_console_result_at, last_read_at=last_read_at),
+        last_result_at=normalize_utc(last_console_result_at),
+        last_result_outcome=_clean(last_console_result_outcome),
         presentation=SessionPresentation(primary=primary, access=access, transcript=transcript_label),
         commit_seq=commit_seq,
     )
+
+
+def _unread(*, last_console_result_at: datetime | None, last_read_at: datetime | None) -> bool:
+    """Has a human seen this session's latest Console result?
+
+    Derived, never stored: the settle path stamps ``last_console_result_at``
+    on terminal Console turns and the mark-read endpoint writes
+    ``last_read_at`` from the client's observed read_through. Sessions with
+    no Console result (Shadow, Helm) are vacuously read.
+    """
+
+    result_at = normalize_utc(last_console_result_at)
+    if result_at is None:
+        return False
+    read_at = normalize_utc(last_read_at)
+    return read_at is None or result_at > read_at
 
 
 def _working_set(
@@ -929,6 +963,9 @@ def build_session_state_facts(
             state=host_state,
             observed_at=normalize_utc(liveness.host.last_seen_at),
         ),
+        last_console_result_at=getattr(session, "last_console_result_at", None),
+        last_console_result_outcome=getattr(session, "last_console_result_outcome", None),
+        last_read_at=getattr(session, "last_read_at", None),
     )
 
 

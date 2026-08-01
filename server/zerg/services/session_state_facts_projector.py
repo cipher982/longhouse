@@ -204,6 +204,7 @@ def project_served_session_state_facts(
         catalog_facts=catalog_facts,
         supported_operations=set(supported_operations),
     )
+    catalog = _mapping(catalog_facts.get("catalog"))
     return assemble_session_state_facts(
         mode=served_mode,
         disposition=shadow.disposition,
@@ -215,6 +216,9 @@ def project_served_session_state_facts(
         transcript=transcript,
         host=host,
         commit_seq=commit_seq,
+        last_console_result_at=_optional_wire_datetime(catalog.get("last_console_result_at"), "catalog.last_console_result_at"),
+        last_console_result_outcome=_text(catalog.get("last_console_result_outcome")),
+        last_read_at=_optional_wire_datetime(catalog.get("last_read_at"), "catalog.last_read_at"),
     )
 
 

@@ -103,6 +103,8 @@ from zerg.services.session_views import SessionPreviewMessage
 from zerg.services.session_views import SessionPreviewResponse
 from zerg.services.session_views import SessionProjectionItemResponse
 from zerg.services.session_views import SessionProjectionResponse
+from zerg.services.session_views import SessionReadRequest
+from zerg.services.session_views import SessionReadResponse
 from zerg.services.session_views import SessionResponse
 from zerg.services.session_views import SessionsListResponse
 from zerg.services.session_views import SessionsSummaryResponse
@@ -1487,6 +1489,47 @@ async def set_session_action(
     db.commit()
 
     return SessionActionResponse(session_id=str(session_id), user_state=new_state)
+
+
+@router.post("/sessions/{session_id}/read", response_model=SessionReadResponse)
+async def mark_session_read(
+    session_id: UUID,
+    body: SessionReadRequest,
+    db: Session | None = Depends(session_preferences_db_dependency),
+    _auth: None = Depends(verify_agents_token),
+    _single: None = Depends(require_single_tenant),
+) -> SessionReadResponse:
+    """Acknowledge a session's Console results up to the observed read_through.
+
+    Max-write: last_read_at only moves forward, and only as far as the client
+    actually saw (docs/specs/console-unread-acknowledgement.md). Idempotent —
+    acknowledging an already-read session is a no-op, not an error.
+    """
+    from zerg.services.session_pubsub import publish_session_read_update
+
+    read_through = normalize_utc_datetime(body.read_through)
+    if read_through is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="read_through must be a valid timestamp")
+
+    if database_module.live_catalog_enabled():
+        from zerg.services.session_preferences import update_session_preferences
+
+        preferences = await update_session_preferences(session_id, last_read_at=read_through)
+        if preferences is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+        publish_session_read_update(session_id=str(session_id))
+        return SessionReadResponse(session_id=str(session_id), last_read_at=preferences.last_read_at)
+
+    assert db is not None
+    session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+    current = normalize_utc_datetime(session.last_read_at)
+    if current is None or read_through > current:
+        session.last_read_at = read_through
+        db.commit()
+        publish_session_read_update(session_id=str(session_id))
+    return SessionReadResponse(session_id=str(session_id), last_read_at=normalize_utc_datetime(session.last_read_at))
 
 
 @router.patch("/sessions/{session_id}/loop-mode", response_model=SessionLoopModeResponse)

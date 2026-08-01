@@ -155,6 +155,14 @@ def _list_timeline_sessions_for_browser_sync(
             include_automation=params.include_automation,
             context_mode=params.context_mode,
         )
+    with _timing_span(timing, "unread_union"):
+        # Unread Console results must survive days_back and pagination: they
+        # stay listed until read or archived, so union any missing ones into
+        # the page (docs/specs/console-unread-acknowledgement.md).
+        unread_rows = _unread_thread_rows(db, params=params, exclude=thread_rows)
+        if unread_rows:
+            thread_rows = unread_rows + thread_rows
+            total += len(unread_rows)
     with _timing_span(timing, "build_cards"):
         sessions = build_timeline_cards_from_thread_rows(db=db, thread_rows=thread_rows, owner_id=owner_id)
     with _timing_span(timing, "has_real"):
@@ -167,6 +175,47 @@ def _list_timeline_sessions_for_browser_sync(
             has_real_sessions=has_real_sessions_value,
         )
     )
+
+
+def _unread_thread_rows(
+    db: Session,
+    *,
+    params: TimelineSessionListParams,
+    exclude: tuple[tuple[str, str, datetime | None], ...],
+) -> tuple[tuple[str, str, datetime | None], ...]:
+    from sqlalchemy import or_
+
+    from zerg.models.agents import AgentSession
+
+    query = db.query(AgentSession).filter(
+        AgentSession.last_console_result_at.isnot(None),
+        or_(
+            AgentSession.last_read_at.is_(None),
+            AgentSession.last_console_result_at > AgentSession.last_read_at,
+        ),
+        AgentSession.user_state.notin_(("archived", "snoozed")),
+    )
+    if params.project is not None:
+        query = query.filter(AgentSession.project == params.project)
+    if params.provider is not None:
+        query = query.filter(AgentSession.provider == params.provider)
+    if params.environment is not None:
+        query = query.filter(AgentSession.environment == params.environment)
+    elif not params.include_test:
+        query = query.filter(AgentSession.environment.notin_(("test", "e2e")))
+    if params.device_id is not None:
+        query = query.filter(AgentSession.device_id == params.device_id)
+
+    seen_sessions = {session_id for _thread_id, session_id, _anchor in exclude}
+    seen_threads = {thread_id for thread_id, _session_id, _anchor in exclude}
+    rows: list[tuple[str, str, datetime | None]] = []
+    for session in query.order_by(AgentSession.last_console_result_at.desc()).limit(100).all():
+        session_id = str(session.id)
+        thread_id = str(session.primary_thread_id or session.id)
+        if session_id in seen_sessions or thread_id in seen_threads:
+            continue
+        rows.append((thread_id, session_id, session.last_console_result_at))
+    return tuple(rows)
 
 
 def build_timeline_cards_from_thread_rows(

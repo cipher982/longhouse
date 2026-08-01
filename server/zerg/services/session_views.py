@@ -1558,6 +1558,18 @@ class SessionActionResponse(BaseModel):
     user_state: str
 
 
+class SessionReadRequest(BaseModel):
+    # The result timestamp the client actually rendered (last_result_at from
+    # the facts it displayed). Acknowledgement is bounded to what was seen:
+    # the server writes max(existing, read_through), never now().
+    read_through: datetime = Field(..., description="Result timestamp the client observed")
+
+
+class SessionReadResponse(BaseModel):
+    session_id: str
+    last_read_at: datetime | None
+
+
 class SessionLoopModeRequest(BaseModel):
     loop_mode: SessionLoopMode = Field(..., description="assist | autopilot")
 

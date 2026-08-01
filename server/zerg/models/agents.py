@@ -121,6 +121,15 @@ class AgentSession(AgentsBase):
     user_state = Column(String(20), nullable=False, server_default=text("'active'"))
     user_state_at = Column(DateTime(timezone=True), nullable=True)
 
+    # Console unread acknowledgement (docs/specs/console-unread-acknowledgement.md).
+    # Result columns are stamped only when a Console turn reaches a terminal
+    # state (completed|failed|cancelled); last_read_at is written only by the
+    # mark-read endpoint with the client's observed read_through timestamp.
+    # unread is always derived (last_console_result_at > last_read_at), never stored.
+    last_console_result_at = Column(DateTime(timezone=True), nullable=True)
+    last_console_result_outcome = Column(String(20), nullable=True)
+    last_read_at = Column(DateTime(timezone=True), nullable=True)
+
     # Session identity kernel — primary thread pointer.
     # Kept nullable for now: legacy ingest paths and a number of tests
     # create AgentSession rows before the kernel thread is materialized.

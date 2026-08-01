@@ -905,6 +905,9 @@ def _apply_run_terminal_event(
             turn.terminal_phase = terminal_state
             turn.terminal_at = turn.terminal_at or occurred_at
             turn.durable_at = occurred_at
+            from zerg.services.console_turns import stamp_console_result
+
+            stamp_console_result(db, session_id=turn.session_id, outcome=outcome, at=occurred_at)
             if turn.session_input_id is not None:
                 input_row = db.get(SessionInput, turn.session_input_id)
                 if input_row is not None and outcome != "completed":

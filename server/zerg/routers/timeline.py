@@ -81,6 +81,8 @@ from zerg.services.session_views import SessionNotificationWatchRequest
 from zerg.services.session_views import SessionNotificationWatchResponse
 from zerg.services.session_views import SessionPreviewMessage
 from zerg.services.session_views import SessionPreviewResponse
+from zerg.services.session_views import SessionReadRequest
+from zerg.services.session_views import SessionReadResponse
 from zerg.services.session_views import SessionResponse
 from zerg.services.session_views import SessionsSummaryResponse
 from zerg.services.session_views import SessionSummaryResponse
@@ -825,6 +827,21 @@ async def set_timeline_session_action(
     db: Session | None = Depends(_sessions_router.session_preferences_db_dependency),
 ):
     return await _sessions_router.set_session_action(
+        session_id=session_id,
+        body=body,
+        db=db,
+        _auth=None,
+        _single=None,
+    )
+
+
+@router.post("/sessions/{session_id}/read", response_model=SessionReadResponse)
+async def mark_timeline_session_read(
+    session_id: UUID,
+    body: SessionReadRequest,
+    db: Session | None = Depends(_sessions_router.session_preferences_db_dependency),
+):
+    return await _sessions_router.mark_session_read(
         session_id=session_id,
         body=body,
         db=db,
