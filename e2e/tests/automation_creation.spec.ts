@@ -61,7 +61,7 @@ test.describe('Automation Creation', () => {
       data: {
         system_instructions: 'Test instructions',
         task_instructions: 'Test task',
-        model: 'deepseek/deepseek-v4-pro'
+        model: 'deepseek/deepseek-v4-flash'
       }
     });
 
@@ -80,7 +80,7 @@ test.describe('Automation Creation', () => {
       data: {
         system_instructions: 'Test instructions',
         task_instructions: 'Test task',
-        model: 'deepseek/deepseek-v4-pro'
+        model: 'deepseek/deepseek-v4-flash'
       }
     });
     expect(response1.ok()).toBeTruthy();
@@ -92,7 +92,7 @@ test.describe('Automation Creation', () => {
       data: {
         system_instructions: 'Different instructions',
         task_instructions: 'Different task',
-        model: 'deepseek/deepseek-v4-pro'
+        model: 'deepseek/deepseek-v4-flash'
       }
     });
     expect(response2.ok()).toBeTruthy();
