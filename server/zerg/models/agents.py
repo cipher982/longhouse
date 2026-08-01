@@ -153,7 +153,8 @@ class AgentSession(AgentsBase):
     launch_actor = Column(String(32), nullable=True, index=True)
     launch_surface = Column(String(32), nullable=True, index=True)
     # Managed permission policy: "bypass" (default, autonomous/skip-permissions) or
-    # "remote_approve" (pause on permission prompts, answerable via Longhouse). Has
+    # "provider_local" (provider owns prompts) or "remote_approve" (pause on
+    # permission prompts, answerable via Longhouse). Has
     # a server_default so _auto_add_missing_columns adds it without a migrator.
     permission_mode = Column(String(32), nullable=False, default="bypass", server_default=text("'bypass'"))
 

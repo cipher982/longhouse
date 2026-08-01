@@ -9,6 +9,7 @@ from datetime import timedelta
 from datetime import timezone
 from typing import Any
 from typing import List
+from typing import Literal
 from typing import Optional
 from uuid import UUID
 from uuid import uuid4
@@ -2265,6 +2266,72 @@ class DirectedInputReply(UTCBaseModel):
 
     text: str = Field(max_length=_DIRECTED_INPUT_MAX_CHARS)
     client_request_id: str | None = None
+
+
+class ManagedLocalLaunchOutcomeRequest(UTCBaseModel):
+    """Provider-observed result for a registered Helm launch transaction."""
+
+    run_id: UUID
+    outcome: Literal["confirmed", "aborted"]
+    error_code: str | None = Field(None, min_length=1, max_length=64)
+    error_message: str | None = Field(None, min_length=1, max_length=2000)
+
+
+@router.post("/sessions/{session_id}/launch-outcome")
+async def record_managed_local_launch_outcome(
+    session_id: UUID,
+    body: ManagedLocalLaunchOutcomeRequest,
+    _auth: object = Depends(verify_agents_token),
+    _single: None = Depends(require_single_tenant),
+) -> dict[str, str | bool | None]:
+    """Confirm provider readiness or abort a registered launch, exactly once."""
+
+    if isinstance(_auth, ManagedSessionToken):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="A device token is required")
+    if not database_module.live_catalog_enabled():
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Launch outcomes require catalogd")
+    device_id = str(getattr(_auth, "device_id", "") or "").strip()
+    if not device_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Device token is missing device identity")
+    owner_id = _directed_input_owner_id(_auth)
+    catalogd = get_catalogd_client()
+    if catalogd is None:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Launch outcomes require catalogd")
+    error_code = body.error_code
+    error_message = body.error_message
+    if body.outcome == "confirmed":
+        error_code = None
+        error_message = None
+    elif error_code is None:
+        error_code = "provider_launch_failed"
+    outcome = {
+        "session_id": str(session_id),
+        "run_id": str(body.run_id),
+        "owner_id": owner_id,
+        "device_id": device_id,
+        "state": "adopted" if body.outcome == "confirmed" else "failed",
+        "error_code": error_code,
+        "error_message": error_message,
+        "observed_at": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        result = await catalogd.call("session.launch.local.finish.v2", {"outcome": outcome})
+    except CatalogRemoteError as exc:
+        if exc.code == "not_found":
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Launch was not found") from exc
+        if exc.code == "conflict":
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Launch outcome was rejected") from exc
+    except CatalogUnavailable as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Launch outcomes require catalogd") from exc
+    launch = result.get("launch") or {}
+    return {
+        "recorded": True,
+        "session_id": str(session_id),
+        "run_id": str(body.run_id),
+        "launch_state": str(launch.get("launch_state") or ""),
+        "error_code": launch.get("launch_error_code"),
+    }
 
 
 @router.post("/sessions/{session_id}/coordination-token")

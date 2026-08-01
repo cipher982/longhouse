@@ -37,6 +37,7 @@ mod managed_bridge_scan;
 mod managed_claude_scan;
 mod managed_contract_janitor;
 mod managed_cursor_helm_scan;
+mod managed_launch_lifecycle;
 mod managed_opencode_scan;
 mod media_redaction;
 mod media_upload;

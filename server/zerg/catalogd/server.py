@@ -285,6 +285,8 @@ class CatalogDaemon:
             return await self._update_console_turn(request)
         if request.method == "session.launch.local.create.v2":
             return await self._create_local_launch(request)
+        if request.method == "session.launch.local.finish.v2":
+            return await self._finish_local_launch(request)
         if request.method == "interaction.register.v2":
             return await self._register_interaction(request)
         if request.method == "interaction.list.v2":
@@ -1366,6 +1368,21 @@ class CatalogDaemon:
         result = await self._run_store(self._store.create_local_launch, launch=launch)
         if result.get("idempotency_conflict") is True:
             return self._error(request, "conflict", "local launch identity was reused with different attributes")
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _finish_local_launch(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"outcome"}:
+            return self._error(request, "invalid_request", "session.launch.local.finish.v2 requires outcome")
+        try:
+            outcome = _validate_local_launch_outcome_rpc(request.params["outcome"])
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        assert self._store is not None
+        result = await self._run_store(self._store.finish_local_launch, outcome=outcome)
+        if result.get("found") is not True:
+            return self._error(request, "not_found", "local launch was not found")
+        if result.get("idempotency_conflict") is True:
+            return self._error(request, "conflict", "local launch outcome conflicts with durable launch state")
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _register_interaction(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
@@ -3251,6 +3268,16 @@ _LOCAL_LAUNCH_PLAN_FIELDS = {
     "managed_transport",
     "attach_command",
 }
+_LOCAL_LAUNCH_OUTCOME_FIELDS = {
+    "session_id",
+    "run_id",
+    "owner_id",
+    "device_id",
+    "state",
+    "error_code",
+    "error_message",
+    "observed_at",
+}
 _INTERACTION_REGISTRATION_FIELDS = {
     "session_id",
     "runtime_key",
@@ -3415,6 +3442,29 @@ def _validate_local_launch_rpc(value: object) -> dict:
     if runner_id is not None and (type(runner_id) is not int or runner_id <= 0):
         raise ValueError("local launch.plan.source_runner_id must be a positive integer or null")
     result["plan"] = plan
+    return result
+
+
+def _validate_local_launch_outcome_rpc(value: object) -> dict:
+    if not isinstance(value, dict) or set(value) != _LOCAL_LAUNCH_OUTCOME_FIELDS:
+        raise ValueError("local launch outcome has invalid fields")
+    result = dict(value)
+    for field in ("session_id", "run_id"):
+        if not _is_canonical_uuid(result[field]):
+            raise ValueError(f"local launch outcome.{field} must be a canonical UUID")
+    if type(result["owner_id"]) is not int or result["owner_id"] <= 0:
+        raise ValueError("local launch outcome.owner_id must be a positive integer")
+    if not _is_string(result["device_id"], maximum=255):
+        raise ValueError("local launch outcome.device_id must contain 1 to 255 characters")
+    if result["state"] not in {"adopted", "failed"}:
+        raise ValueError("local launch outcome.state must be adopted or failed")
+    for field, maximum in (("error_code", 64), ("error_message", 2000)):
+        raw = result[field]
+        if raw is not None and (not isinstance(raw, str) or not raw.strip() or len(raw) > maximum):
+            raise ValueError(f"local launch outcome.{field} must be null or contain 1 to {maximum} characters")
+    if result["state"] == "adopted" and (result["error_code"] is not None or result["error_message"] is not None):
+        raise ValueError("adopted local launch outcome cannot carry an error")
+    result["observed_at"] = _parse_datetime(result["observed_at"], "local launch outcome.observed_at")
     return result
 
 

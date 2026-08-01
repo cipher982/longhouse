@@ -23,14 +23,13 @@ use std::process::Command;
 
 /// Permission posture Longhouse reports for a managed launch.
 ///
-/// The Runtime Host stores exactly two values (`managed_local_launcher.py`
-/// normalizes anything that is not `remote_approve` to `bypass`), so this is
-/// the whole vocabulary. `Bypass` means Longhouse told the provider to skip its
-/// own prompts; `RemoteApprove` means the provider's approval surface stays on
-/// and Longhouse can answer it remotely.
+/// `Bypass` means Longhouse told the provider to skip its own prompts;
+/// `ProviderLocal` means the provider keeps and owns its local approval UI;
+/// `RemoteApprove` means Longhouse can answer that approval surface remotely.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PermissionMode {
     Bypass,
+    ProviderLocal,
     RemoteApprove,
 }
 
@@ -39,6 +38,7 @@ impl PermissionMode {
     pub fn as_wire(self) -> &'static str {
         match self {
             PermissionMode::Bypass => "bypass",
+            PermissionMode::ProviderLocal => "provider_local",
             PermissionMode::RemoteApprove => "remote_approve",
         }
     }
@@ -180,6 +180,7 @@ mod tests {
             PermissionMode::from_bypass_flag(false).as_wire(),
             "remote_approve"
         );
+        assert_eq!(PermissionMode::ProviderLocal.as_wire(), "provider_local");
     }
 
     #[test]

@@ -1085,6 +1085,60 @@ def test_this_device_launch_response_contract_matrix(monkeypatch, tmp_path, prov
         assert payload["session_id"] in payload["attach_command"]
 
 
+def test_launch_outcome_uses_device_bound_catalog_transaction(monkeypatch, tmp_path):
+    import zerg.database as database_module
+    from zerg.routers import agents_sessions
+
+    SessionLocal = _make_db(tmp_path)
+    calls = []
+
+    class Catalog:
+        async def call(self, method, params):
+            calls.append((method, params))
+            return {
+                "launch": {
+                    "launch_state": "live",
+                    "launch_error_code": None,
+                }
+            }
+
+    with SessionLocal() as db:
+        user, _runner = _seed_user_and_runner(db)
+        device_token = SimpleNamespace(owner_id=user.id, device_id="cinder")
+        client, api_app = _make_device_client(db, device_token)
+        monkeypatch.setattr(database_module, "live_catalog_enabled", lambda: True)
+        monkeypatch.setattr(agents_sessions, "get_catalogd_client", lambda: Catalog())
+        session_id = uuid4()
+        run_id = uuid4()
+        try:
+            response = client.post(
+                f"/api/agents/sessions/{session_id}/launch-outcome",
+                json={
+                    "run_id": str(run_id),
+                    "outcome": "confirmed",
+                    "error_code": "ignored_on_confirm",
+                    "error_message": "ignored on confirm",
+                },
+            )
+        finally:
+            api_app.dependency_overrides = {}
+
+    assert response.status_code == 200, response.text
+    assert response.json()["launch_state"] == "live"
+    method, params = calls.pop()
+    assert method == "session.launch.local.finish.v2"
+    assert params["outcome"] == {
+        "session_id": str(session_id),
+        "run_id": str(run_id),
+        "owner_id": user.id,
+        "device_id": "cinder",
+        "state": "adopted",
+        "error_code": None,
+        "error_message": None,
+        "observed_at": params["outcome"]["observed_at"],
+    }
+
+
 def test_this_device_launch_returns_native_codex_hot_launch(monkeypatch, tmp_path, managed_launch_live_store):
     from zerg.services import managed_local_launcher
 

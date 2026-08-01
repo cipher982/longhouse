@@ -147,6 +147,11 @@ json_field() {
   python3 -c 'import sys, json; d=json.load(sys.stdin); v=d.get(sys.argv[1]); print("" if v is None else v)' "$1"
 }
 
+launch_attempt_state() {
+  sqlite3 "$TEST_ROOT/longhouse-live.db" \
+    "SELECT state FROM live_session_launch_attempts WHERE session_id = '$1' ORDER BY id DESC LIMIT 1;"
+}
+
 # `longhouse <provider>` exits cleanly, but the PTY master does not always reach
 # EOF: something in the managed launch keeps the slave fd open after the child
 # is reaped, so a plain `run-in-pty.py` invocation can block forever waiting to
@@ -237,6 +242,10 @@ echo "ok: Shadow-only provider is refused coordination authority"
 cat > "$BIN_DIR/cursor-agent" <<'EOF'
 #!/usr/bin/env sh
 if [ "$1" = "create-chat" ]; then
+  if [ "${LONGHOUSE_FAKE_CURSOR_CREATE_FAIL:-0}" = "1" ]; then
+    printf '%s\n' 'scripted create-chat failure' >&2
+    exit 9
+  fi
   printf '%s\n' '00000000-0000-0000-0000-000000000001'
   exit 0
 fi
@@ -255,7 +264,7 @@ LONGHOUSE_DEVICE_TOKEN="$DEVICE_TOKEN" "$BIN_DIR/longhouse" auth --url "$BASE_UR
 launch_out="$TEST_ROOT/cursor-launch.out"
 set +e
 run_launch_bounded "$launch_out" 90 \
-  "$BIN_DIR/longhouse" cursor --cwd "$HOME_DIR" --cursor-bin "$BIN_DIR/cursor-agent"
+  "$BIN_DIR/longhouse" cursor --verbose --cwd "$HOME_DIR" --cursor-bin "$BIN_DIR/cursor-agent"
 launch_status=$?
 set -e
 if [[ "$launch_status" != "0" ]]; then
@@ -264,7 +273,29 @@ if [[ "$launch_status" != "0" ]]; then
   fail "longhouse cursor exited $launch_status against a real Runtime Host"
 fi
 grep -q 'CURSOR_LIFECYCLE_PTY_OK' "$launch_out" || fail "the scripted provider never ran under the PTY"
+cursor_session_id="$(sed -n 's/^Longhouse Cursor session: \([0-9a-f-]*\).*/\1/p' "$launch_out" | tail -1 | tr -d '\r')"
+[[ -n "$cursor_session_id" ]] || fail "successful Cursor launch did not print its session identity"
+cursor_launch_state="$(launch_attempt_state "$cursor_session_id")"
+[[ "$cursor_launch_state" == "adopted" ]] \
+  || fail "successful Cursor launch recorded $cursor_launch_state instead of adopted"
 echo "ok: longhouse cursor launched against a real Runtime Host"
+
+# Registration is not launch success. Fail the first irreversible provider
+# action after registration and prove the launch attempt becomes failed rather
+# than remaining a durable session that claims it launched.
+failed_launch_out="$TEST_ROOT/cursor-start-failed.out"
+set +e
+LONGHOUSE_FAKE_CURSOR_CREATE_FAIL=1 run_launch_bounded "$failed_launch_out" 90 \
+  "$BIN_DIR/longhouse" cursor --verbose --cwd "$HOME_DIR" --cursor-bin "$BIN_DIR/cursor-agent"
+failed_launch_status=$?
+set -e
+[[ "$failed_launch_status" != "0" ]] || fail "scripted Cursor startup failure returned success"
+failed_session_id="$(sed -n 's/^Longhouse Cursor session: \([0-9a-f-]*\).*/\1/p' "$failed_launch_out" | tail -1 | tr -d '\r')"
+[[ -n "$failed_session_id" ]] || fail "failed Cursor launch did not print its registered session identity"
+failed_launch_state="$(launch_attempt_state "$failed_session_id")"
+[[ "$failed_launch_state" == "failed" ]] \
+  || fail "failed Cursor startup recorded $failed_launch_state instead of failed"
+echo "ok: provider startup failure aborts the registered launch"
 
 # The resume leg of coordination authority, per provider, against the real
 # server. This is the assertion the outage needed: `longhouse cursor --resume`

@@ -3459,6 +3459,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/agents/sessions/{session_id}/launch-outcome": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Record Managed Local Launch Outcome
+         * @description Confirm provider readiness or abort a registered launch, exactly once.
+         */
+        post: operations["record_managed_local_launch_outcome_agents_sessions__session_id__launch_outcome_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/agents/sessions/{session_id}/coordination-token": {
         parameters: {
             query?: never;
@@ -6172,6 +6192,26 @@ export interface components {
             changed: boolean;
         };
         /**
+         * ManagedLocalLaunchOutcomeRequest
+         * @description Provider-observed result for a registered Helm launch transaction.
+         */
+        ManagedLocalLaunchOutcomeRequest: {
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "confirmed" | "aborted";
+            /** Error Code */
+            error_code?: string | null;
+            /** Error Message */
+            error_message?: string | null;
+        };
+        /**
          * ManagedLocalSessionLaunchResponse
          * @description Response after successfully starting a managed local session.
          */
@@ -6265,7 +6305,7 @@ export interface components {
             } | null;
             /**
              * Permission Mode
-             * @description Managed permission policy: 'bypass' (autonomous, default) or 'remote_approve' (answer permission prompts via Longhouse)
+             * @description Managed permission policy: 'bypass', 'provider_local', or 'remote_approve' (answer permission prompts via Longhouse)
              * @default bypass
              */
             permission_mode: string;
@@ -17893,6 +17933,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SessionArchiveBundleResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    record_managed_local_launch_outcome_agents_sessions__session_id__launch_outcome_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ManagedLocalLaunchOutcomeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string | boolean | null;
+                    };
                 };
             };
             /** @description Validation Error */

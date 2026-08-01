@@ -3089,6 +3089,106 @@ class CatalogStore:
                 "commit_seq": str(commit_seq),
             }
 
+    def finish_local_launch(self, *, outcome: dict[str, Any]) -> dict[str, Any]:
+        """Commit the provider-observed result of one registered Helm launch."""
+
+        from zerg.services.live_catalog_launch import live_launch_result
+        from zerg.services.live_catalog_launch import update_live_launch_catalog_outcome
+        from zerg.services.live_launch_readiness import update_live_launch_readiness_state
+
+        session_id = str(outcome["session_id"])
+        run_id = str(outcome["run_id"])
+        command_id = f"managed-local-{session_id}"
+        observed_at = outcome["observed_at"]
+        requested_state = str(outcome["state"])
+        with _write_transaction(self.engine) as connection:
+            orm = Session(bind=connection, join_transaction_mode="create_savepoint", expire_on_commit=False)
+            try:
+                attempt = orm.query(LiveSessionLaunchAttempt).filter(LiveSessionLaunchAttempt.command_id == command_id).one_or_none()
+                if attempt is None:
+                    orm.rollback()
+                    return {"found": False, "idempotency_conflict": False}
+                run = orm.get(LiveSessionRun, run_id)
+                identity_matches = (
+                    str(attempt.session_id) == session_id
+                    and int(attempt.owner_id or 0) == int(outcome["owner_id"])
+                    and str(attempt.host_id or "") == str(outcome["device_id"])
+                    and run is not None
+                    and str(run.thread_id) == str(attempt.thread_id)
+                    and str(run.host_id or "") == str(outcome["device_id"])
+                )
+                if not identity_matches:
+                    orm.rollback()
+                    return {"found": True, "idempotency_conflict": True}
+
+                current_state = str(attempt.state or "pending")
+                if current_state in {"adopted", "failed", "abandoned"}:
+                    exact_replay = (
+                        current_state == requested_state
+                        and str(attempt.run_id or run_id) == run_id
+                        and (attempt.error_code or None) == outcome["error_code"]
+                        and (attempt.error_message or None) == outcome["error_message"]
+                    )
+                    result = live_launch_result(attempt)
+                    orm.rollback()
+                    return {
+                        "found": True,
+                        "exact_replay": exact_replay,
+                        "idempotency_conflict": not exact_replay,
+                        "launch": _json_launch_result(result),
+                        "commit_seq": str(_current_commit_seq(connection)),
+                    }
+                if current_state not in {"pending", "dispatched"}:
+                    orm.rollback()
+                    return {"found": True, "idempotency_conflict": True}
+
+                attempt.run_id = run_id
+                update_live_launch_catalog_outcome(
+                    orm,
+                    session_id=UUID(session_id),
+                    command_id=command_id,
+                    state=requested_state,
+                    error_code=outcome["error_code"],
+                    error_message=outcome["error_message"],
+                    now=observed_at,
+                )
+                update_live_launch_readiness_state(
+                    orm,
+                    session_id=UUID(session_id),
+                    state=requested_state,
+                    error_code=outcome["error_code"],
+                    error_message=outcome["error_message"],
+                    clear_expires=True,
+                    now=observed_at,
+                )
+                if requested_state == "failed":
+                    run.ended_at = observed_at
+                    for connection_row in (
+                        orm.query(LiveSessionConnection)
+                        .filter(
+                            LiveSessionConnection.run_id == run_id,
+                            LiveSessionConnection.released_at.is_(None),
+                        )
+                        .all()
+                    ):
+                        connection_row.state = "released"
+                        connection_row.released_at = observed_at
+                result = live_launch_result(attempt)
+                orm.commit()
+            except BaseException:
+                orm.rollback()
+                raise
+            finally:
+                orm.close()
+            commit_seq = _advance_commit_seq(connection, observed_at)
+            return {
+                "found": True,
+                "exact_replay": False,
+                "idempotency_conflict": False,
+                "launch": _json_launch_result(result),
+                "commit_seq": str(commit_seq),
+            }
+
     def list_queued_input_sessions(self, *, limit: int) -> dict[str, Any]:
         """Return a bounded set of sessions with queued hot input."""
 

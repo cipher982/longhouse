@@ -105,6 +105,8 @@ fn normalize_permission_mode(value: &str) -> anyhow::Result<String> {
 fn permission_wire_mode(value: &str) -> &'static str {
     if value == "remote_human" {
         "remote_approve"
+    } else if value == "provider_local" {
+        "provider_local"
     } else {
         "bypass"
     }
@@ -603,8 +605,47 @@ fn register(
     cwd: &Path,
     session_id: &str,
     permission_mode: &str,
-) -> Option<Registration> {
-    let machine = home(config.config_dir.as_deref()).ok()?.join("machine");
+) -> anyhow::Result<Registration> {
+    let (url, token, machine_name) = registration_credentials(config)?;
+    let payload = crate::managed_launch_payload::ManagedLaunchRegistration {
+        provider: "cursor",
+        cwd,
+        project: config.project.as_deref(),
+        display_name: config.name.as_deref(),
+        loop_mode: &config.loop_mode,
+        machine_name: &machine_name,
+        permission_mode: match permission_wire_mode(permission_mode) {
+            "remote_approve" => crate::managed_launch_payload::PermissionMode::RemoteApprove,
+            "provider_local" => crate::managed_launch_payload::PermissionMode::ProviderLocal,
+            _ => crate::managed_launch_payload::PermissionMode::Bypass,
+        },
+        // Cursor mints its own session id before registering, so the Runtime
+        // Host must be told which one to bind rather than allocating its own.
+        extra: vec![("session_id", json!(session_id))],
+    }
+    .to_json();
+    tokio::runtime::Runtime::new()?.block_on(async {
+        let response = reqwest::Client::new()
+            .post(format!(
+                "{}/api/sessions/managed-local/this-device",
+                url.trim_end_matches('/')
+            ))
+            .header("X-Agents-Token", token)
+            .json(&payload)
+            .timeout(std::time::Duration::from_secs(5))
+            .send()
+            .await?
+            .error_for_status()?;
+        let registration = response.json::<Registration>().await?;
+        if registration.session_id != session_id || registration.run_id.trim().is_empty() {
+            anyhow::bail!("Runtime Host returned a mismatched Cursor launch identity");
+        }
+        Ok(registration)
+    })
+}
+
+fn registration_credentials(config: &LaunchConfig) -> anyhow::Result<(String, String, String)> {
+    let machine = home(config.config_dir.as_deref())?.join("machine");
     let state: Value = fs::read(machine.join("state.json"))
         .ok()
         .and_then(|raw| serde_json::from_slice(&raw).ok())
@@ -621,53 +662,15 @@ fn register(
             .map(|value| value.trim().to_owned())
             .filter(|value| !value.is_empty())
     });
-    let (Some(url), Some(token)) = (url, token) else {
-        return None;
-    };
+    let url = url.context("No Longhouse URL configured. Run `longhouse auth` first.")?;
+    let token = token.context("No device token found. Run `longhouse auth` first.")?;
     let machine_name = state
         .get("machine_name")
         .and_then(Value::as_str)
         .filter(|value| !value.trim().is_empty())
         .map(str::to_owned)
         .unwrap_or_else(|| std::env::var("HOSTNAME").unwrap_or_else(|_| "unknown".into()));
-    let payload = crate::managed_launch_payload::ManagedLaunchRegistration {
-        provider: "cursor",
-        cwd,
-        project: config.project.as_deref(),
-        display_name: config.name.as_deref(),
-        loop_mode: &config.loop_mode,
-        machine_name: &machine_name,
-        permission_mode: if permission_wire_mode(permission_mode) == "remote_approve" {
-            crate::managed_launch_payload::PermissionMode::RemoteApprove
-        } else {
-            crate::managed_launch_payload::PermissionMode::Bypass
-        },
-        // Cursor mints its own session id before registering, so the Runtime
-        // Host must be told which one to bind rather than allocating its own.
-        extra: vec![("session_id", json!(session_id))],
-    }
-    .to_json();
-    tokio::runtime::Runtime::new()
-        .ok()?
-        .block_on(async {
-            reqwest::Client::new()
-                .post(format!(
-                    "{}/api/sessions/managed-local/this-device",
-                    url.trim_end_matches('/')
-                ))
-                .header("X-Agents-Token", token)
-                .json(&payload)
-                .timeout(std::time::Duration::from_secs(5))
-                .send()
-                .await
-                .ok()?
-                .error_for_status()
-                .ok()?
-                .json::<Registration>()
-                .await
-                .ok()
-        })
-        .filter(|value| value.session_id == session_id && !value.run_id.trim().is_empty())
+    Ok((url, token, machine_name))
 }
 fn enqueue_terminal_event(
     config: &LaunchConfig,
@@ -867,12 +870,12 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
         .resume_session
         .clone()
         .unwrap_or_else(|| Uuid::new_v4().to_string());
-    let (conversation, permission_mode) = if config.resume_session.is_some() {
+    let (resume_conversation, permission_mode) = if config.resume_session.is_some() {
         let claim = read_claim(&dir, &session_id, config.permission_mode.as_deref())?;
-        (claim.conversation, claim.permission_mode)
+        (Some(claim.conversation), claim.permission_mode)
     } else {
         (
-            cursor_chat(&bin, &cwd)?,
+            None,
             normalize_permission_mode(config.permission_mode.as_deref().unwrap_or("auto_approve"))?,
         )
     };
@@ -886,9 +889,42 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
         anyhow::bail!("Cursor Helm session {session_id} is already attached");
     }
     let launch_id = Uuid::new_v4().to_string();
-    // Runtime/control failure is deliberately soft. Permission authority is not:
-    // a remote approval session never starts without a hook token to fail closed.
-    let registered = register(&config, &cwd, &session_id, &permission_mode);
+    // A new Helm launch is a transaction: authority must exist before Cursor
+    // creates a conversation. Resume can still recover authority through the
+    // dedicated coordination-token route when replay registration is stale.
+    let registered = match register(&config, &cwd, &session_id, &permission_mode) {
+        Ok(value) => Some(value),
+        Err(error) if config.resume_session.is_some() => {
+            if config.verbose {
+                eprintln!("Longhouse warning: replay registration failed; using resume authority: {error:#}");
+            }
+            None
+        }
+        Err(error) => return Err(error).context("register Cursor Helm launch"),
+    };
+    let lifecycle_credentials = if config.resume_session.is_some() {
+        None
+    } else {
+        let (url, token, _) = registration_credentials(&config)?;
+        Some((url, token))
+    };
+    let lifecycle_runtime = lifecycle_credentials
+        .as_ref()
+        .map(|_| tokio::runtime::Runtime::new())
+        .transpose()?;
+    let mut launch_transaction = match (&lifecycle_runtime, &lifecycle_credentials, &registered) {
+        (Some(runtime), Some((url, token)), Some(registration)) => Some(
+            crate::managed_launch_lifecycle::ManagedLaunchTransaction::new(
+                runtime,
+                url,
+                token,
+                &registration.session_id,
+                &registration.run_id,
+            ),
+        ),
+        (None, None, _) => None,
+        _ => anyhow::bail!("new Cursor Helm launch is missing registration"),
+    };
     let hook_url = config.url.clone().or_else(|| {
         home(config.config_dir.as_deref()).ok().and_then(|root| {
             fs::read(root.join("machine/state.json"))
@@ -911,6 +947,10 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
             );
         }
     }
+    let conversation = match resume_conversation.as_deref() {
+        Some(value) => value.to_owned(),
+        None => cursor_chat(&bin, &cwd)?,
+    };
     if matches!(permission_mode.as_str(), "remote_human")
         && registered
             .as_ref()
@@ -1100,6 +1140,17 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
             return Err(error);
         }
     };
+    if let Some(transaction) = launch_transaction.as_mut() {
+        if let Err(error) = transaction.confirm() {
+            drop(terminal);
+            unsafe {
+                libc::kill(pid, libc::SIGKILL);
+                libc::waitpid(pid, std::ptr::null_mut(), 0);
+                libc::close(master);
+            }
+            return Err(error);
+        }
+    }
     sync_winsize(master);
     let socket_stop = stop.clone();
     let guard = Arc::new(Mutex::new(()));

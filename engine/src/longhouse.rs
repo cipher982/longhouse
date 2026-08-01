@@ -6,11 +6,14 @@
 
 #[path = "build_identity.rs"]
 mod build_identity;
+#[path = "managed_launch_lifecycle.rs"]
+mod managed_launch_lifecycle;
 #[path = "managed_launch_payload.rs"]
 mod managed_launch_payload;
 
 use anyhow::Context;
 use clap::{Args, Parser, Subcommand};
+use managed_launch_lifecycle::ManagedLaunchTransaction;
 use managed_launch_payload::{ManagedLaunchRegistration, PermissionMode};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -937,8 +940,20 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
             Ok::<_, anyhow::Error>(r.json().await?)
         })?
     };
+    let mut launch_transaction = if resuming {
+        None
+    } else {
+        Some(ManagedLaunchTransaction::new(
+            &runtime,
+            &url,
+            &token,
+            &response.session_id,
+            &response.run_id,
+        ))
+    };
     let provider_session_id = response
         .provider_session_id
+        .as_deref()
         .context("Longhouse did not return a Claude provider session")?;
     if response.managed_transport.as_deref() != Some("claude_channel_bridge") {
         anyhow::bail!("Longhouse returned an unsupported managed-local transport for Claude");
@@ -949,7 +964,7 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        Some(token) => token.to_owned(),
+        Some(value) => value.to_owned(),
         None if resuming => issue_coordination_token(&runtime, &url, &token, &response.session_id)?,
         None => anyhow::bail!("Longhouse did not issue coordination authority for this session"),
     };
@@ -959,9 +974,9 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
         command.arg("--dangerously-skip-permissions");
     }
     if resuming {
-        command.args(["--resume", &provider_session_id]);
+        command.args(["--resume", provider_session_id]);
     } else {
-        command.args(["--session-id", &provider_session_id]);
+        command.args(["--session-id", provider_session_id]);
     }
     command
         .args([
@@ -974,10 +989,13 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
         .env("LONGHOUSE_MANAGED_SESSION_ID", &response.session_id)
         .env("LONGHOUSE_RUN_ID", &response.run_id)
         .env("LONGHOUSE_CHANNEL_SESSION_ID", &response.session_id)
-        .env("LONGHOUSE_PROVIDER_SESSION_ID", &provider_session_id)
+        .env("LONGHOUSE_PROVIDER_SESSION_ID", provider_session_id)
         .env("LONGHOUSE_CHANNEL_CWD", &cwd)
         .env("LONGHOUSE_HOOK_URL", &url)
-        .env("LONGHOUSE_HOOK_TOKEN", response.hook_token.unwrap_or(token))
+        .env(
+            "LONGHOUSE_HOOK_TOKEN",
+            response.hook_token.as_deref().unwrap_or(&token),
+        )
         .env_remove("LONGHOUSE_COORDINATION_TOKEN")
         .env(
             "LONGHOUSE_PERMISSION_HOOK_ENABLED",
@@ -990,7 +1008,11 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
     if let Err(error) = record_claude_contract(&response.session_id, &cwd, &binary) {
         eprintln!("Longhouse warning: could not record managed-session contract: {error}");
     }
-    let run_result = run_foreground_command(&mut command);
+    let run_result = if let Some(transaction) = launch_transaction.as_mut() {
+        run_foreground_command_after_spawn(&mut command, || transaction.confirm())
+    } else {
+        run_foreground_command(&mut command)
+    };
     if let Err(error) = remove_claude_contract(&response.session_id) {
         eprintln!("Longhouse warning: could not remove managed-session contract: {error}");
     }
@@ -998,7 +1020,7 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
     if let Err(error) = record_claude_terminal_event(
         &response.session_id,
         &response.run_id,
-        &provider_session_id,
+        provider_session_id,
         &machine_name,
         exit,
     ) {
@@ -1057,6 +1079,13 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
         }
         Ok::<_, anyhow::Error>(response.json().await?)
     })?;
+    let mut launch_transaction = ManagedLaunchTransaction::new(
+        &runtime,
+        &url,
+        &token,
+        &response.session_id,
+        &response.run_id,
+    );
     if response.managed_transport.as_deref() != Some("opencode_server_bridge") {
         anyhow::bail!("Longhouse returned an unsupported managed-local transport for OpenCode");
     }
@@ -1106,6 +1135,10 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
             "OpenCode bridge failed: {}",
             String::from_utf8_lossy(&output.stderr).trim()
         );
+    }
+    if let Err(error) = launch_transaction.confirm() {
+        let _ = stop_opencode_bridge(&response.session_id, args.claude_dir.clone());
+        return Err(error);
     }
     println!(
         "Managed OpenCode ready\n→ {}/s/{}",
@@ -1526,7 +1559,6 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
     let cwd = std::fs::canonicalize(&args.cwd)
         .with_context(|| format!("resolve {}", args.cwd.display()))?;
     let (url, token, machine_name) = resolve_codex_config(args.url, args.token)?;
-    configure_codex_coordination_mcp()?;
     let codex_bin = resolve_codex_binary(args.codex_bin)?;
     let payload = ManagedLaunchRegistration {
         provider: "codex",
@@ -1535,23 +1567,14 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
         display_name: args.name.as_deref(),
         loop_mode: &args.loop_mode,
         machine_name: &machine_name,
-        // Deliberately still "bypass", and deliberately still not the whole
-        // truth. `--dangerously-bypass-approvals-and-sandbox` is opt-in and off
-        // by default, so a default managed Codex session records "bypasses
-        // approvals" while Codex is enforcing them locally.
-        //
-        // Mapping the absent flag to `remote_approve` -- the obvious fix, and
-        // what this line briefly did -- is worse. The Runtime Host mints a
-        // remote permission hook token for remote_approve
-        // (session_chat_impl.py), and the Codex bridge is never handed that
-        // token, so Longhouse would advertise a remote approval surface nothing
-        // can consume. An inert wrong label beats an actionable wrong label.
-        //
-        // The honest fix needs a third posture -- provider-local approval --
-        // which is a vocabulary change across the server and both clients, or
-        // codex remote approval actually wired. Tracked as the permission half
-        // of the launch-lifecycle work.
-        permission_mode: PermissionMode::Bypass,
+        // Codex owns local approvals unless the explicit bypass flag is set.
+        // This must not be reported as remote_approve: Longhouse has no Codex
+        // permission hook and therefore must not mint remote hook authority.
+        permission_mode: if args.dangerously_bypass_approvals_and_sandbox {
+            PermissionMode::Bypass
+        } else {
+            PermissionMode::ProviderLocal
+        },
         extra: vec![],
     }
     .to_json();
@@ -1576,6 +1599,13 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
         }
         Ok::<_, anyhow::Error>(response.json().await?)
     })?;
+    let mut launch_transaction = ManagedLaunchTransaction::new(
+        &runtime,
+        &url,
+        &token,
+        &response.session_id,
+        &response.run_id,
+    );
     let coordination_token = response
         .coordination_token
         .as_deref()
@@ -1585,6 +1615,7 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
     if response.run_id.trim().is_empty() {
         anyhow::bail!("Longhouse server did not return the managed run identity");
     }
+    configure_codex_coordination_mcp()?;
     let attach = args.attach && !args.no_attach && interactive_stdio();
     let launch_mode = if attach { "tui" } else { "detached_ui" };
     let engine = paired_engine_path()?;
@@ -1641,6 +1672,14 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
             "bridge_start_failed",
         );
         anyhow::bail!("Native Codex bridge did not return thread_id for detached launch");
+    }
+    if let Err(error) = launch_transaction.confirm() {
+        let _ = stop_codex_bridge(
+            &response.session_id,
+            Some(response.run_id.as_str()),
+            "launch_confirmation_failed",
+        );
+        return Err(error);
     }
     println!(
         "Managed Codex ready\n→ {}/s/{}",
@@ -1857,6 +1896,14 @@ fn print_helm_closed(machine_name: &str) {
 
 #[cfg(unix)]
 fn run_foreground_command(command: &mut Command) -> anyhow::Result<i32> {
+    run_foreground_command_after_spawn(command, || Ok(()))
+}
+
+#[cfg(unix)]
+fn run_foreground_command_after_spawn(
+    command: &mut Command,
+    after_spawn: impl FnOnce() -> anyhow::Result<()>,
+) -> anyhow::Result<i32> {
     use std::os::unix::io::AsRawFd;
     use std::os::unix::process::CommandExt;
 
@@ -1881,6 +1928,11 @@ fn run_foreground_command(command: &mut Command) -> anyhow::Result<i32> {
     unsafe {
         libc::setpgid(child_pgrp, child_pgrp);
     }
+    if let Err(error) = after_spawn() {
+        terminate_child(&mut child, Some(child_pgrp));
+        let _ = child.wait();
+        return Err(error);
+    }
     if !interactive_stdio() {
         return wait_for_child_or_signal(&mut child, &signal, Some(child_pgrp));
     }
@@ -1902,7 +1954,20 @@ fn run_foreground_command(command: &mut Command) -> anyhow::Result<i32> {
 
 #[cfg(not(unix))]
 fn run_foreground_command(command: &mut Command) -> anyhow::Result<i32> {
+    run_foreground_command_after_spawn(command, || Ok(()))
+}
+
+#[cfg(not(unix))]
+fn run_foreground_command_after_spawn(
+    command: &mut Command,
+    after_spawn: impl FnOnce() -> anyhow::Result<()>,
+) -> anyhow::Result<i32> {
     let mut child = command.spawn()?;
+    if let Err(error) = after_spawn() {
+        terminate_child(&mut child, None);
+        let _ = child.wait();
+        return Err(error);
+    }
     let signal = install_tui_signal_flag()?;
     wait_for_child_or_signal(&mut child, &signal, None)
 }

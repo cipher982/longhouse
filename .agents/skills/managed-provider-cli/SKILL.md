@@ -44,6 +44,10 @@ sessions.
   through `LONGHOUSE_CODEX_BRIDGE_TOKEN`; managed Codex bridge argv must not
   contain the device token.
 - The Rust bridge starts `codex app-server`, fronts it with `engine/src/codex_ws_relay.rs`, and attaches the TUI with `codex --enable tui_app_server --remote ...`.
+- Default managed Codex approval posture is `provider_local`: Codex owns its
+  local approval UI and Longhouse does not mint remote hook authority. The
+  explicit dangerous bypass flag records `bypass`; Codex has no
+  `remote_approve` path until a real remote permission transport exists.
 - Bridge state, logs, lock sidecars, and IPC sockets live under `~/.longhouse/managed-local/codex-bridge/` unless overridden.
 - Hook scripts such as `longhouse-codex-hook.sh` are Longhouse hook scripts, not provider binaries.
 

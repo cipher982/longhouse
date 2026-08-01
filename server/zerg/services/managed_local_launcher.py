@@ -249,7 +249,8 @@ def build_managed_local_launch_plan(
     display_name = (params.display_name or project).strip() or project
     contract = require_contract_for_provider(provider)
     managed_session_name = _build_managed_session_name(display_name, fallback=f"{provider}-{plan_session_id.hex[:8]}")
-    permission_mode = "remote_approve" if str(params.permission_mode).strip() == "remote_approve" else "bypass"
+    requested_permission_mode = str(params.permission_mode).strip()
+    permission_mode = requested_permission_mode if requested_permission_mode in {"bypass", "provider_local", "remote_approve"} else "bypass"
     launch_actor, launch_surface = sanitize_launch_provenance(
         origin_kind=None,
         launch_actor=params.launch_actor,
