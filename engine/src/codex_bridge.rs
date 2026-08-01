@@ -1265,19 +1265,10 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
         rejected_thread_ids: BTreeSet::new(),
         pending_pause_requests: Arc::new(Mutex::new(BTreeMap::new())),
     };
-    // Mark ready so the CLI can read ws_url and launch the TUI. Prestart
-    // launches already have a thread id; legacy TUI launches capture it later
-    // from thread/started notifications.
-    write_state_file(&context.state_file, &context.state)?;
-    if let Some(response) = startup_resume_response.as_ref() {
-        apply_thread_resume_snapshot(&config, &mut context, response).await?;
-    }
-    if config.create_initial_thread && context.state.thread_id.is_some() {
-        let startup_phase = context.runtime_tracker.current_phase_update();
-        emit_runtime_updates(&config, &mut context, vec![startup_phase]).await;
-    }
-
-    // Spawn IPC socket listener so `send` routes through the daemon's persistent connection
+    // Bind the IPC control path before publishing ready. The launcher confirms
+    // the Runtime Host transaction as soon as it observes this state; writing
+    // ready first can therefore adopt a session whose bridge immediately dies
+    // while creating its socket.
     let sock_path = ipc_socket_path(&context.state_file);
     let (ipc_tx, mut ipc_rx) = mpsc::unbounded_channel::<IpcCommand>();
     // The ownership watcher stops this bridge through the same queue an
@@ -1300,6 +1291,19 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
         }
     }
     let _sock_guard = SocketCleanup(sock_path);
+
+    // Mark ready so the CLI can read ws_url and launch the TUI. Prestart
+    // launches already have a thread id; legacy TUI launches capture it later
+    // from thread/started notifications.
+    write_state_file(&context.state_file, &context.state)?;
+    if let Some(response) = startup_resume_response.as_ref() {
+        apply_thread_resume_snapshot(&config, &mut context, response).await?;
+    }
+    if config.create_initial_thread && context.state.thread_id.is_some() {
+        let startup_phase = context.runtime_tracker.current_phase_update();
+        emit_runtime_updates(&config, &mut context, vec![startup_phase]).await;
+    }
+
     // Codex can spend minutes in model-only thinking without emitting any
     // item deltas. Refresh the live phase so Timeline does not decay to Ready.
     let mut runtime_keepalive =

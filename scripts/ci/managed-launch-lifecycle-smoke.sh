@@ -20,7 +20,10 @@
 set -euo pipefail
 
 ROOT_DIR="$(git rev-parse --show-toplevel)"
-TEST_ROOT="$(mktemp -d)"
+# Codex's per-session Unix socket must fit the platform SUN_LEN limit. Keep the
+# smoke root short so the test exercises lifecycle behavior rather than the
+# host's unusually long default macOS TMPDIR prefix.
+TEST_ROOT="$(mktemp -d /tmp/lh.XXXXXX)"
 HOME_DIR="$TEST_ROOT/home"
 BIN_DIR="$TEST_ROOT/bin"
 SERVER_LOG="$TEST_ROOT/server.log"
@@ -32,7 +35,11 @@ cleanup() {
     kill "$SERVER_PID" 2>/dev/null || true
     wait "$SERVER_PID" 2>/dev/null || true
   fi
-  rm -rf "$TEST_ROOT"
+  if [[ "${LONGHOUSE_KEEP_LIFECYCLE_SMOKE_ROOT:-0}" == "1" ]]; then
+    echo "preserved lifecycle smoke root: $TEST_ROOT" >&2
+  else
+    rm -rf "$TEST_ROOT"
+  fi
 }
 trap cleanup EXIT
 
@@ -152,6 +159,11 @@ launch_attempt_state() {
     "SELECT state FROM live_session_launch_attempts WHERE session_id = '$1' ORDER BY id DESC LIMIT 1;"
 }
 
+latest_launch_session_id() {
+  sqlite3 "$TEST_ROOT/longhouse-live.db" \
+    "SELECT session_id FROM live_session_launch_attempts ORDER BY id DESC LIMIT 1;"
+}
+
 # Keep provider launches bounded and use the shared PTY harness. The harness
 # completes from child status rather than waiting for macOS PTY EOF, which can
 # remain unreadable after the child has already been reaped.
@@ -210,6 +222,14 @@ chmod 755 "$BIN_DIR/cursor-agent"
 
 export HOME="$HOME_DIR"
 export PATH="$BIN_DIR:/usr/bin:/bin:/usr/sbin:/sbin"
+# The Codex protocol fake uses the same pinned Python environment as the real
+# Runtime Host. Keep the provider executable self-contained on PATH while
+# avoiding a second dependency installation inside this smoke.
+cat > "$BIN_DIR/python3" <<EOF
+#!/bin/sh
+exec "$ROOT_DIR/server/.venv/bin/python" "\$@"
+EOF
+chmod 755 "$BIN_DIR/python3"
 
 LONGHOUSE_DEVICE_TOKEN="$DEVICE_TOKEN" "$BIN_DIR/longhouse" auth --url "$BASE_URL" >/dev/null
 [[ -f "$HOME_DIR/.longhouse/machine/device-token" ]] || fail "device token was not stored"
@@ -277,12 +297,7 @@ echo "ok: resume path refuses a provider with no coordination tools (409 from th
 #     --json` reporting loggedIn) is cheap to script, so there is no reason to
 #     leave the highest-traffic provider proven only at the HTTP layer.
 #
-#     Codex and OpenCode are deliberately not launched here: codex-bridge waits
-#     on a real WebSocket app-server and opencode-bridge on a real HTTP server,
-#     so a faithful fake is a protocol implementation rather than a shell
-#     script. Both are covered above on the registration and resume paths --
-#     the layer the outage lived in -- and their transports already have
-#     hermetic Rust canaries (codex_app_server_canary, opencode_control).
+#     Codex and OpenCode follow below with protocol-faithful local servers.
 # ---------------------------------------------------------------------------
 cat > "$BIN_DIR/claude" <<'EOF'
 #!/usr/bin/env sh
@@ -308,6 +323,180 @@ if [[ "$claude_status" != "0" ]]; then
 fi
 grep -q 'CLAUDE_LIFECYCLE_PTY_OK' "$claude_out" || fail "the scripted claude never ran under the PTY"
 echo "ok: longhouse claude launched against a real Runtime Host"
+
+# ---------------------------------------------------------------------------
+# 3c. Codex launches through the actual native app-server bridge. This fake
+#     implements the WebSocket JSON-RPC startup contract used by stock Codex:
+#     initialize, initialized, and thread/start. It stays alive until the real
+#     `longhouse codex stop` path tears down the bridge and provider process.
+# ---------------------------------------------------------------------------
+cat > "$BIN_DIR/codex" <<'PY'
+#!/usr/bin/env python3
+import json
+import os
+import sys
+
+from websockets.sync.server import serve
+
+if os.environ.get("LONGHOUSE_FAKE_CODEX_START_FAIL") == "1":
+    print("scripted Codex app-server startup failure", file=sys.stderr, flush=True)
+    raise SystemExit(9)
+
+if "app-server" not in sys.argv[1:]:
+    print("unexpected fake codex args: " + json.dumps(sys.argv[1:]), file=sys.stderr)
+    raise SystemExit(2)
+
+
+def handle(websocket):
+    for raw in websocket:
+        message = json.loads(raw)
+        method = message.get("method")
+        request_id = message.get("id")
+        if method == "initialized":
+            continue
+        if method == "initialize":
+            result = {
+                "platformFamily": "unix",
+                "platformOs": "macos",
+                "userAgent": "longhouse-lifecycle-fake/1.0",
+            }
+        elif method == "thread/start":
+            result = {"thread": {"id": "thr_lifecycle_fake"}}
+        else:
+            result = {}
+        if request_id is not None:
+            websocket.send(json.dumps({"id": request_id, "result": result}))
+
+
+server = serve(handle, "127.0.0.1", 0)
+port = server.socket.getsockname()[1]
+print(f"listening on: ws://127.0.0.1:{port}", file=sys.stderr, flush=True)
+server.serve_forever()
+PY
+chmod 755 "$BIN_DIR/codex"
+
+codex_out="$TEST_ROOT/codex-launch.out"
+"$BIN_DIR/longhouse" codex --no-attach --cwd "$HOME_DIR" --codex-bin "$BIN_DIR/codex" \
+  >"$codex_out" 2>&1 || {
+    cat "$codex_out" >&2
+    fail "longhouse codex failed against its protocol-faithful app-server"
+  }
+grep -q 'Managed Codex ready' "$codex_out" || fail "Codex facade did not report readiness"
+codex_session_id="$(latest_launch_session_id)"
+[[ -n "$codex_session_id" ]] || fail "successful Codex launch did not record its session identity"
+[[ "$(launch_attempt_state "$codex_session_id")" == "adopted" ]] \
+  || fail "successful Codex launch was not adopted"
+"$BIN_DIR/longhouse" codex stop --session-id "$codex_session_id" \
+  || fail "Codex launch could not be torn down through the real facade"
+echo "ok: longhouse codex launched and stopped against a WebSocket app-server"
+
+set +e
+LONGHOUSE_FAKE_CODEX_START_FAIL=1 \
+  "$BIN_DIR/longhouse" codex --no-attach --cwd "$HOME_DIR" --codex-bin "$BIN_DIR/codex" \
+  >"$TEST_ROOT/codex-start-failed.out" 2>&1
+codex_failed_status=$?
+set -e
+[[ "$codex_failed_status" != "0" ]] || fail "scripted Codex startup failure returned success"
+codex_failed_session_id="$(latest_launch_session_id)"
+[[ "$(launch_attempt_state "$codex_failed_session_id")" == "failed" ]] \
+  || fail "failed Codex startup did not abort its launch transaction"
+echo "ok: Codex app-server startup failure aborts the registered launch"
+
+# ---------------------------------------------------------------------------
+# 3d. OpenCode launches through its native HTTP bridge. The fake speaks the
+#     authenticated health and session-creation surface used during startup.
+# ---------------------------------------------------------------------------
+cat > "$BIN_DIR/opencode" <<'PY'
+#!/usr/bin/env python3
+import base64
+import http.server
+import json
+import os
+import signal
+import sys
+from urllib.parse import urlparse
+
+if os.environ.get("LONGHOUSE_FAKE_OPENCODE_START_FAIL") == "1":
+    print("scripted OpenCode server startup failure", flush=True)
+    raise SystemExit(9)
+
+if not sys.argv[1:] or sys.argv[1] != "serve":
+    print("unexpected fake opencode args: " + json.dumps(sys.argv[1:]), file=sys.stderr)
+    raise SystemExit(2)
+
+username = os.environ.get("OPENCODE_SERVER_USERNAME", "opencode")
+password = os.environ.get("OPENCODE_SERVER_PASSWORD", "")
+
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *_args):
+        return
+
+    def send_json(self, payload, status=200):
+        body = json.dumps(payload).encode()
+        self.send_response(status)
+        self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def authorized(self):
+        value = base64.b64encode(f"{username}:{password}".encode()).decode()
+        return self.headers.get("authorization") == f"Basic {value}"
+
+    def do_GET(self):
+        if not self.authorized():
+            self.send_json({"error": "forbidden"}, 403)
+        elif urlparse(self.path).path == "/global/health":
+            self.send_json({"healthy": True})
+        else:
+            self.send_json({"error": "not found"}, 404)
+
+    def do_POST(self):
+        if not self.authorized():
+            self.send_json({"error": "forbidden"}, 403)
+        elif urlparse(self.path).path == "/session":
+            self.send_json({"id": "ses_lifecycle_fake"})
+        else:
+            self.send_json({"error": "not found"}, 404)
+
+
+server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+signal.signal(signal.SIGTERM, lambda *_args: sys.exit(0))
+print(
+    f"opencode server listening on http://127.0.0.1:{server.server_address[1]}",
+    flush=True,
+)
+server.serve_forever()
+PY
+chmod 755 "$BIN_DIR/opencode"
+
+opencode_out="$TEST_ROOT/opencode-launch.out"
+"$BIN_DIR/longhouse" opencode --no-attach --cwd "$HOME_DIR" --opencode-bin "$BIN_DIR/opencode" \
+  >"$opencode_out" 2>&1 || {
+    cat "$opencode_out" >&2
+    fail "longhouse opencode failed against its protocol-faithful HTTP server"
+  }
+grep -q 'Managed OpenCode ready' "$opencode_out" || fail "OpenCode facade did not report readiness"
+opencode_session_id="$(latest_launch_session_id)"
+[[ -n "$opencode_session_id" ]] || fail "successful OpenCode launch did not record its session identity"
+[[ "$(launch_attempt_state "$opencode_session_id")" == "adopted" ]] \
+  || fail "successful OpenCode launch was not adopted"
+"$BIN_DIR/longhouse" opencode stop --session-id "$opencode_session_id" \
+  || fail "OpenCode launch could not be torn down through the real facade"
+echo "ok: longhouse opencode launched and stopped against an HTTP server"
+
+set +e
+LONGHOUSE_FAKE_OPENCODE_START_FAIL=1 \
+  "$BIN_DIR/longhouse" opencode --no-attach --cwd "$HOME_DIR" --opencode-bin "$BIN_DIR/opencode" \
+  >"$TEST_ROOT/opencode-start-failed.out" 2>&1
+opencode_failed_status=$?
+set -e
+[[ "$opencode_failed_status" != "0" ]] || fail "scripted OpenCode startup failure returned success"
+opencode_failed_session_id="$(latest_launch_session_id)"
+[[ "$(launch_attempt_state "$opencode_failed_session_id")" == "failed" ]] \
+  || fail "failed OpenCode startup did not abort its launch transaction"
+echo "ok: OpenCode server startup failure aborts the registered launch"
 
 # ---------------------------------------------------------------------------
 # 4. A non-zero provider exit propagates rather than being swallowed.
