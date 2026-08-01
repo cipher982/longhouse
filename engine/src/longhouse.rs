@@ -13,7 +13,9 @@ mod managed_launch_payload;
 
 use anyhow::Context;
 use clap::{Args, Parser, Subcommand};
-use managed_launch_lifecycle::ManagedLaunchTransaction;
+use managed_launch_lifecycle::{
+    register_managed_launch, ManagedLaunchResponse, ManagedLaunchTransaction,
+};
 use managed_launch_payload::{ManagedLaunchRegistration, PermissionMode};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -325,17 +327,6 @@ struct PairIdentity {
 struct MachineState {
     runtime_url: Option<String>,
     machine_name: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct ManagedLaunchResponse {
-    session_id: String,
-    run_id: String,
-    provider_session_id: Option<String>,
-    permission_mode: Option<String>,
-    hook_token: Option<String>,
-    managed_transport: Option<String>,
-    coordination_token: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -923,22 +914,7 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
         if let Some(surface) = launch_surface {
             payload["launch_surface"] = json!(surface);
         }
-        let endpoint = format!(
-            "{}/api/sessions/managed-local/this-device",
-            url.trim_end_matches('/')
-        );
-        runtime.block_on(async {
-            let r = reqwest::Client::new()
-                .post(endpoint)
-                .header("X-Agents-Token", &token)
-                .json(&payload)
-                .send()
-                .await?;
-            if !r.status().is_success() {
-                anyhow::bail!("managed Claude launch failed ({})", r.status());
-            }
-            Ok::<_, anyhow::Error>(r.json().await?)
-        })?
+        register_managed_launch(&runtime, &url, &token, "Claude", &payload, None)?
     };
     let mut launch_transaction = if resuming {
         None
@@ -1062,23 +1038,8 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
     if let Some(surface) = launch_surface {
         payload["launch_surface"] = json!(surface);
     }
-    let endpoint = format!(
-        "{}/api/sessions/managed-local/this-device",
-        url.trim_end_matches('/')
-    );
     let runtime = tokio::runtime::Runtime::new()?;
-    let response: ManagedLaunchResponse = runtime.block_on(async {
-        let response = reqwest::Client::new()
-            .post(endpoint)
-            .header("X-Agents-Token", &token)
-            .json(&payload)
-            .send()
-            .await?;
-        if !response.status().is_success() {
-            anyhow::bail!("managed OpenCode launch failed ({})", response.status());
-        }
-        Ok::<_, anyhow::Error>(response.json().await?)
-    })?;
+    let response = register_managed_launch(&runtime, &url, &token, "OpenCode", &payload, None)?;
     let mut launch_transaction = ManagedLaunchTransaction::new(
         &runtime,
         &url,
@@ -1534,27 +1495,8 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
         extra: vec![],
     }
     .to_json();
-    let endpoint = format!(
-        "{}/api/sessions/managed-local/this-device",
-        url.trim_end_matches('/')
-    );
     let runtime = tokio::runtime::Runtime::new()?;
-    let response: ManagedLaunchResponse = runtime.block_on(async {
-        let response = reqwest::Client::new()
-            .post(&endpoint)
-            .header("X-Agents-Token", &token)
-            .json(&payload)
-            .send()
-            .await?;
-        if !response.status().is_success() {
-            anyhow::bail!(
-                "managed Codex launch failed ({}): {}",
-                response.status(),
-                response.text().await.unwrap_or_default()
-            );
-        }
-        Ok::<_, anyhow::Error>(response.json().await?)
-    })?;
+    let response = register_managed_launch(&runtime, &url, &token, "Codex", &payload, None)?;
     let mut launch_transaction = ManagedLaunchTransaction::new(
         &runtime,
         &url,

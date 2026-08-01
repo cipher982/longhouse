@@ -23,6 +23,8 @@ use serde_json::{json, Value};
 use sha2::Digest;
 use uuid::Uuid;
 
+use crate::managed_launch_lifecycle::ManagedLaunchResponse;
+
 const STATE_DIR: &str = "managed-local/cursor-helm";
 
 pub struct LaunchConfig {
@@ -167,7 +169,7 @@ fn write_pending_claim(
     conversation: &str,
     launch_id: &str,
     permission_mode: &str,
-    registration: Option<&Registration>,
+    registration: Option<&ManagedLaunchResponse>,
 ) -> anyhow::Result<()> {
     let target = claim_path(dir, session_id);
     let backup = claim_backup_path(dir, session_id);
@@ -335,14 +337,6 @@ fn write_all(fd: RawFd, mut bytes: &[u8]) -> std::io::Result<()> {
     }
     Ok(())
 }
-#[derive(serde::Deserialize)]
-struct Registration {
-    session_id: String,
-    run_id: String,
-    hook_token: Option<String>,
-    coordination_token: Option<String>,
-}
-
 struct CursorMcpConfig {
     path: PathBuf,
     state_path: PathBuf,
@@ -392,7 +386,7 @@ struct CursorMcpConfigState {
 
 fn coordination_token(
     config: &LaunchConfig,
-    registration: Option<&Registration>,
+    registration: Option<&ManagedLaunchResponse>,
     session_id: &str,
 ) -> anyhow::Result<String> {
     if let Some(token) = registration
@@ -605,7 +599,7 @@ fn register(
     cwd: &Path,
     session_id: &str,
     permission_mode: &str,
-) -> anyhow::Result<Registration> {
+) -> anyhow::Result<ManagedLaunchResponse> {
     let (url, token, machine_name) = registration_credentials(config)?;
     let payload = crate::managed_launch_payload::ManagedLaunchRegistration {
         provider: "cursor",
@@ -624,24 +618,15 @@ fn register(
         extra: vec![("session_id", json!(session_id))],
     }
     .to_json();
-    tokio::runtime::Runtime::new()?.block_on(async {
-        let response = reqwest::Client::new()
-            .post(format!(
-                "{}/api/sessions/managed-local/this-device",
-                url.trim_end_matches('/')
-            ))
-            .header("X-Agents-Token", token)
-            .json(&payload)
-            .timeout(std::time::Duration::from_secs(5))
-            .send()
-            .await?
-            .error_for_status()?;
-        let registration = response.json::<Registration>().await?;
-        if registration.session_id != session_id || registration.run_id.trim().is_empty() {
-            anyhow::bail!("Runtime Host returned a mismatched Cursor launch identity");
-        }
-        Ok(registration)
-    })
+    let runtime = tokio::runtime::Runtime::new()?;
+    crate::managed_launch_lifecycle::register_managed_launch(
+        &runtime,
+        &url,
+        &token,
+        "Cursor",
+        &payload,
+        Some(session_id),
+    )
 }
 
 fn registration_credentials(config: &LaunchConfig) -> anyhow::Result<(String, String, String)> {
