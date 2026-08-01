@@ -115,7 +115,19 @@ def test_canonical_host_projection_preserves_same_snapshot_liveness():
 
 def test_canonical_detail_projects_one_owner_scoped_snapshot(monkeypatch):
     session_id = str(uuid4())
-    projected = object()
+
+    class _Projected:
+        """Stand-in for SessionResponse: the read stamps provider_session_id via model_copy."""
+
+        provider_session_id: str | None = None
+
+        def model_copy(self, *, update):
+            clone = _Projected()
+            clone.__dict__.update(self.__dict__)
+            clone.__dict__.update(update)
+            return clone
+
+    projected = _Projected()
     heads = [{"family": "activity"}]
     canonical_snapshot = {
         "found": True,
@@ -142,7 +154,7 @@ def test_canonical_detail_projects_one_owner_scoped_snapshot(monkeypatch):
 
     result, provider_alias, commit_seq = read_live_catalog_session(session_id, owner_id=3)
 
-    assert result is projected
+    assert result.provider_session_id == "thread-1", "the body must carry the provider-native id"
     assert provider_alias == "thread-1"
     assert commit_seq == "19"
 

@@ -4511,6 +4511,38 @@ class CatalogStore:
                 "owner": owner_preview,
             }
 
+    def resolve_session_alias(self, *, provider_session_id: str) -> dict[str, Any]:
+        """Resolve a provider-native session id alias to its Longhouse session id.
+
+        Read-side counterpart of the ``provider_session_id`` thread-alias upserts:
+        callers holding only the id a provider handed the user resolve it here.
+        Primary-key lookups happen before this everywhere, so this never shadows
+        a real Longhouse id.
+        """
+
+        observed_at = datetime.now(UTC)
+        alias = LiveSessionThreadAlias.__table__
+        thread = LiveSessionThread.__table__
+        with _read_snapshot(self.engine) as connection:
+            row = (
+                connection.execute(
+                    select(thread.c.session_id)
+                    .select_from(alias.join(thread, alias.c.thread_id == thread.c.id))
+                    .where(alias.c.alias_kind == "provider_session_id")
+                    .where(alias.c.alias_value == provider_session_id)
+                    .order_by(alias.c.last_seen_at.desc(), alias.c.id.desc())
+                    .limit(1)
+                )
+                .mappings()
+                .first()
+            )
+            return {
+                "commit_seq": str(_current_commit_seq(connection)),
+                "observed_at": observed_at.isoformat(),
+                "found": row is not None,
+                "session_id": str(row["session_id"]) if row is not None else None,
+            }
+
     def list_machine_enrollments(self, *, owner_id: int) -> dict[str, Any]:
         observed_at = datetime.now(UTC)
         token = LiveDeviceToken.__table__

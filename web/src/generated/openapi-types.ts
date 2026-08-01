@@ -9261,6 +9261,11 @@ export interface components {
              */
             provider: string;
             /**
+             * Provider Session Id
+             * @description Provider-native session id when bound (e.g. the Claude transcript UUID from `claude --resume`). Null for Shadow sessions whose Longhouse id is the native id.
+             */
+            provider_session_id?: string | null;
+            /**
              * Project
              * @description Project name
              */

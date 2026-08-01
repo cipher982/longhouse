@@ -333,6 +333,8 @@ class CatalogDaemon:
             return await self._list_active_sessions(request)
         if request.method == "session.prefix.resolve.v2":
             return await self._resolve_session_prefix(request)
+        if request.method == "session.alias.resolve.v2":
+            return await self._resolve_session_alias(request)
         if request.method == "machine.enrollment.list.v2":
             return await self._list_machine_enrollments(request)
         if request.method == "machine.health.list.v2":
@@ -1815,6 +1817,22 @@ class CatalogDaemon:
             return self._error(request, "invalid_request", "prefix must be 1 to 36 lowercase UUID characters")
         assert self._store is not None
         result = await self._run_store(self._store.resolve_session_prefix, prefix=prefix)
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _resolve_session_alias(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"provider_session_id"}:
+            return self._error(request, "invalid_request", "session.alias.resolve.v2 requires provider_session_id")
+        provider_session_id = request.params["provider_session_id"]
+        # Provider-native ids are UUIDs for Claude but provider-shaped strings
+        # elsewhere (Codex rollouts, OpenCode), so bound rather than parse.
+        if (
+            not isinstance(provider_session_id, str)
+            or not 1 <= len(provider_session_id) <= 256
+            or provider_session_id != provider_session_id.strip()
+        ):
+            return self._error(request, "invalid_request", "provider_session_id must be a trimmed string of 1 to 256 characters")
+        assert self._store is not None
+        result = await self._run_store(self._store.resolve_session_alias, provider_session_id=provider_session_id)
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _list_machine_enrollments(self, request: CatalogRpcRequest) -> CatalogRpcResponse:

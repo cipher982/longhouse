@@ -70,6 +70,10 @@ def resolve_session_prefix(prefix: str) -> dict[str, Any]:
     return _call("session.prefix.resolve.v2", {"prefix": prefix})
 
 
+def resolve_session_alias(provider_session_id: str) -> dict[str, Any]:
+    return _call("session.alias.resolve.v2", {"provider_session_id": provider_session_id})
+
+
 def enrolled_machines(owner_id: int) -> dict[str, Any]:
     return _call("machine.enrollment.list.v2", {"owner_id": owner_id})
 
@@ -173,6 +177,7 @@ __all__ = [
     "machine_workspaces",
     "recent_visible_web_presence",
     "rename_machine",
+    "resolve_session_alias",
     "resolve_session_prefix",
     "session_snapshot",
     "shadow_session_state_snapshot",

@@ -47,6 +47,7 @@ from zerg.services.agents.kernel_capabilities import project_session_capabilitie
 from zerg.services.agents.session_graph_writes import ensure_primary_thread
 from zerg.services.archive_transcript import ArchiveTranscriptUnavailable
 from zerg.services.catalog_read_gateway import CatalogReadError
+from zerg.services.catalog_read_gateway import resolve_session_alias
 from zerg.services.catalog_read_gateway import timeline_snapshot
 from zerg.services.catalogd_supervisor import get_catalogd_client
 from zerg.services.console_sessions import create_empty_console_session
@@ -80,6 +81,7 @@ from zerg.services.session_graph_projection import build_session_graph_projectio
 from zerg.services.session_hot_cards import upsert_timeline_card_from_session
 from zerg.services.session_kernel_projection import project_provider_session_id
 from zerg.services.session_kernel_projection import project_session_lineage_fields
+from zerg.services.session_kernel_projection import resolve_session_id_by_provider_session_id
 from zerg.services.session_listing import SessionListingError
 from zerg.services.session_listing import SessionListParams
 from zerg.services.session_listing import list_agent_sessions
@@ -1016,6 +1018,29 @@ def _tail_response(
     }
 
 
+def _live_session_id_via_provider_alias(session_id: UUID) -> UUID | None:
+    """Resolve a provider-native id to its Longhouse session id (live catalog).
+
+    Fallback for the live-catalog branches after a primary-key miss, so the id a
+    provider hands the user (``claude --resume <uuid>``) resolves too. Returns
+    None when the alias is unknown or the catalog is unreachable — the caller
+    keeps its original 404 either way.
+    """
+
+    try:
+        result = resolve_session_alias(str(session_id))
+    except CatalogReadError:
+        return None
+    resolved = result.get("session_id") if result.get("found") is True else None
+    if not resolved:
+        return None
+    try:
+        resolved_id = UUID(str(resolved))
+    except ValueError:
+        return None
+    return resolved_id if resolved_id != session_id else None
+
+
 @router.get("/sessions/{session_id}/tail")
 async def session_tail(
     session_id: UUID,
@@ -1058,6 +1083,17 @@ async def session_tail(
             anchor="tail",
         )
         if workspace is None:
+            resolved = await asyncio.to_thread(_live_session_id_via_provider_alias, session_id)
+            if resolved is not None:
+                session_id = resolved
+                workspace = await build_storage_v2_workspace(
+                    session_id=session_id,
+                    owner_id=int(owner_id),
+                    branch_mode="head",
+                    limit=scan_limit,
+                    anchor="tail",
+                )
+        if workspace is None:
             raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
         projection = workspace["projection"]
         # Count the raw page before any filtering. Exhaustion has to be keyed off
@@ -1090,7 +1126,14 @@ async def session_tail(
     try:
         events = load_session_tail(db, session_id=session_id, limit=limit, roles=requested_roles)
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        resolved = resolve_session_id_by_provider_session_id(db, session_id)
+        if resolved is None or resolved == session_id:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        session_id = resolved
+        try:
+            events = load_session_tail(db, session_id=session_id, limit=limit, roles=requested_roles)
+        except ValueError as retry_exc:
+            raise HTTPException(status_code=404, detail=str(retry_exc)) from retry_exc
 
     # The legacy path filters by role in SQL over the whole session, so there is
     # no scan window to report and no ambiguity about why results ran out.
@@ -1595,20 +1638,26 @@ def get_session(
         if effective_owner_id is None:
             raw_owner_id = getattr(_auth, "owner_id", None)
             effective_owner_id = int(raw_owner_id) if raw_owner_id is not None else None
-        try:
-            result, provider_session_id, commit_seq = read_live_catalog_session(
-                session_id,
-                owner_id=effective_owner_id,
-            )
-        except CatalogReadError as exc:
-            response_status = {
-                "canonical_owner_required": status.HTTP_401_UNAUTHORIZED,
-                "shadow_fact_head_limit_exceeded": status.HTTP_409_CONFLICT,
-            }.get(exc.code, status.HTTP_503_SERVICE_UNAVAILABLE)
-            raise HTTPException(
-                status_code=response_status,
-                detail={"code": exc.code, "message": exc.message},
-            ) from exc
+
+        def _read_live(sid: UUID):
+            try:
+                return read_live_catalog_session(sid, owner_id=effective_owner_id)
+            except CatalogReadError as exc:
+                response_status = {
+                    "canonical_owner_required": status.HTTP_401_UNAUTHORIZED,
+                    "shadow_fact_head_limit_exceeded": status.HTTP_409_CONFLICT,
+                }.get(exc.code, status.HTTP_503_SERVICE_UNAVAILABLE)
+                raise HTTPException(
+                    status_code=response_status,
+                    detail={"code": exc.code, "message": exc.message},
+                ) from exc
+
+        result, provider_session_id, commit_seq = _read_live(session_id)
+        if result is None:
+            resolved = _live_session_id_via_provider_alias(session_id)
+            if resolved is not None:
+                session_id = resolved
+                result, provider_session_id, commit_seq = _read_live(session_id)
         if result is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -1626,6 +1675,13 @@ def get_session(
 
     with timing.span("load_session"):
         session = store.get_session(session_id)
+
+    if not session:
+        resolved = resolve_session_id_by_provider_session_id(db, session_id)
+        if resolved is not None and resolved != session_id:
+            session_id = resolved
+            with timing.span("load_session_by_alias"):
+                session = store.get_session(session_id)
 
     if not session:
         effective_owner_id = owner_id
@@ -2157,11 +2213,23 @@ async def export_session(
         owner_id = getattr(_auth, "owner_id", None)
         if owner_id is None:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Owner identity is required")
-        return await build_storage_v2_raw_export(
-            session_id=session_id,
-            owner_id=int(owner_id),
-            branch_mode=branch_mode,
-        )
+        try:
+            return await build_storage_v2_raw_export(
+                session_id=session_id,
+                owner_id=int(owner_id),
+                branch_mode=branch_mode,
+            )
+        except HTTPException as exc:
+            if exc.status_code != status.HTTP_404_NOT_FOUND:
+                raise
+            resolved = await asyncio.to_thread(_live_session_id_via_provider_alias, session_id)
+            if resolved is None:
+                raise
+            return await build_storage_v2_raw_export(
+                session_id=resolved,
+                owner_id=int(owner_id),
+                branch_mode=branch_mode,
+            )
     assert db is not None
     store = AgentsStore(db)
     if branch_mode not in {"head", "all"}:
@@ -2170,15 +2238,23 @@ async def export_session(
             detail="branch_mode must be one of: head, all",
         )
 
-    try:
-        result = store.export_session_jsonl(session_id, branch_mode=branch_mode)
-    except ArchiveTranscriptUnavailable as exc:
-        # Fail closed: raw bytes for a known source line are missing from both the
-        # monolith and the archive. Surface 503 rather than a truncated transcript.
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Transcript raw bytes unavailable for session {session_id}: {exc}",
-        )
+    def _export_jsonl(sid: UUID):
+        try:
+            return store.export_session_jsonl(sid, branch_mode=branch_mode)
+        except ArchiveTranscriptUnavailable as exc:
+            # Fail closed: raw bytes for a known source line are missing from both the
+            # monolith and the archive. Surface 503 rather than a truncated transcript.
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=f"Transcript raw bytes unavailable for session {sid}: {exc}",
+            )
+
+    result = _export_jsonl(session_id)
+    if not result:
+        resolved = resolve_session_id_by_provider_session_id(db, session_id)
+        if resolved is not None and resolved != session_id:
+            session_id = resolved
+            result = _export_jsonl(session_id)
 
     if not result:
         raise HTTPException(

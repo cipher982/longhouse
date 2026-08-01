@@ -50,6 +50,7 @@ _SAFE_RETRY_METHODS = {
     "ping.v2",
     "schema.v2",
     "session.prefix.resolve.v2",
+    "session.alias.resolve.v2",
     "session.console.create.v2",
     "session.console.turn.enqueue.v2",
     "session.console.turn.current.v2",
