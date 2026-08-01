@@ -49,6 +49,24 @@ def _validate_websocket_device_token(websocket: WebSocket) -> DeviceToken | None
     return _validate_device_token_for_request(token)
 
 
+def _control_identity(
+    hello: Mapping[str, Any],
+    token: DeviceToken | None,
+    *,
+    auth_disabled: bool,
+) -> tuple[int, str] | None:
+    """Resolve the same device identity used by the HTTP agents surface."""
+
+    if token is None:
+        return _auth_disabled_identity(hello) if auth_disabled else None
+
+    device_id = str(token.device_id)
+    hello_device_id = str(hello.get("device_id") or "").strip()
+    if hello_device_id and hello_device_id != device_id:
+        return None
+    return int(token.owner_id), device_id
+
+
 async def _reconcile_machine_control_operation_result(
     db: Session | None,
     message: dict[str, Any],
@@ -172,19 +190,13 @@ async def machine_control_websocket(websocket: WebSocket) -> None:
             await _close_control_ws(websocket, reason="Expected hello message")
             return
 
-        if settings.auth_disabled:
-            owner_id, device_id = _auth_disabled_identity(hello)
-        else:
-            token = await asyncio.to_thread(_validate_websocket_device_token, websocket)
-            if token is None:
-                await _close_control_ws(websocket, reason="Invalid or missing device token")
-                return
-            owner_id = int(token.owner_id)
-            device_id = str(token.device_id)
-            hello_device_id = str(hello.get("device_id") or "").strip()
-            if hello_device_id and hello_device_id != device_id:
-                await _close_control_ws(websocket, reason="Device token does not match hello device_id")
-                return
+        token = await asyncio.to_thread(_validate_websocket_device_token, websocket)
+        identity = _control_identity(hello, token, auth_disabled=settings.auth_disabled)
+        if identity is None:
+            reason = "Device token does not match hello device_id" if token is not None else "Invalid or missing device token"
+            await _close_control_ws(websocket, reason=reason)
+            return
+        owner_id, device_id = identity
 
         supports_raw = hello.get("supports") or []
         supports = [str(item) for item in supports_raw] if isinstance(supports_raw, list) else []
