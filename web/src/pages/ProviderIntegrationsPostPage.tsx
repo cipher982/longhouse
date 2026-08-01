@@ -153,7 +153,7 @@ export default function ProviderIntegrationsPostPage() {
               <li>Input maps to OpenCode's prompt API. Interrupt maps to its abort API.</li>
               <li>Managed server launch is idempotent per Longhouse session, preventing duplicate servers after retries.</li>
               <li>Supports send, interrupt, terminate, reattach, and turn-scoped Console execution.</li>
-              <li>Does not advertise active-turn steer or pause-answer.</li>
+              <li>Supports pause-answer but does not advertise active-turn steer.</li>
             </CapabilityList>
           </section>
 
@@ -168,10 +168,10 @@ export default function ProviderIntegrationsPostPage() {
 
           <section>
             <h2>Cursor</h2>
-            <p>Cursor sessions are currently Shadow-only: Longhouse can archive and search their native session data, but it does not launch or remotely control them.</p>
+            <p><code>longhouse cursor</code> launches a managed native PTY session. Bare Cursor Agent sessions remain Shadow and can still be archived and searched.</p>
             <CapabilityList>
-              <li>Searchable and inspectable after import.</li>
-              <li>No Helm, Console, or remote-control claim until the native runtime is complete.</li>
+              <li>Supports Helm and Console launch, send, interrupt, terminate, and reattach.</li>
+              <li>Does not advertise active-turn steer or pause-answer.</li>
             </CapabilityList>
           </section>
 

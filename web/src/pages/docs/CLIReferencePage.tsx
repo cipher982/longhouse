@@ -43,8 +43,8 @@ longhouse opencode             # start OpenCode (managed live control)`}
         <code>opencode</code>, and <code>cursor-agent</code> runs still import
         into the timeline, but they remain unmanaged history. Claude and Codex
         support the strongest live control, including active-turn steer.
-        OpenCode Helm supports managed send, interrupt, and terminate but
-        not active-turn steer. Cursor Helm is the same shape: managed send,
+        OpenCode Helm supports managed send, interrupt, terminate, and
+        pause-answer but not active-turn steer. Cursor Helm has managed send,
         interrupt, and terminate, without active-turn steer. Antigravity is
         Shadow-only: Longhouse archives it but cannot launch or control it.
       </p>

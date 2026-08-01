@@ -83,15 +83,17 @@ longhouse machine repair --repair-service`}
       <CodeBlock title="terminal">
         {`longhouse claude       # Claude Code with control channel
 longhouse codex        # Codex CLI with control channel
-longhouse opencode     # OpenCode, managed live control`}
+longhouse opencode     # OpenCode, managed live control
+longhouse cursor       # Cursor Agent, managed live control`}
       </CodeBlock>
       <p>
         When Longhouse launches the session, it owns the session record and
         local observation path. Claude is the strongest managed path today, and{" "}
         <code>longhouse codex</code> also keeps a Codex session steerable.
-        OpenCode Helm supports managed send, interrupt, and terminate but
-        not active-turn steer. Cursor and Antigravity remain Shadow-only in the
-        native device release.
+        OpenCode Helm supports managed send, interrupt, terminate, and
+        pause-answer but not active-turn steer. Cursor Helm supports managed
+        send, interrupt, terminate, and reattach but not active-turn steer or
+        pause-answer. Antigravity remains Shadow-only.
       </p>
       <div className="docs-callout">
         <p>
@@ -99,7 +101,8 @@ longhouse opencode     # OpenCode, managed live control`}
           but managed sessions keep Longhouse ownership of the launch and
           observation path. Use <code>longhouse claude</code> or{" "}
           <code>longhouse codex</code> for steerable sessions,{" "}
-          <code>longhouse opencode</code> for managed OpenCode control.
+          <code>longhouse opencode</code> or <code>longhouse cursor</code> for
+          their managed control paths.
         </p>
       </div>
 

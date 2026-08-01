@@ -127,9 +127,9 @@ export default function IntegrationsPage() {
 
       <h2>Cursor Agent</h2>
       <p>
-        Cursor sessions are observed as Shadow sessions. Native Helm is
-        explicitly excluded until one native runtime owns PTY, control,
-        permission, and transcript lifecycle.
+        <code>longhouse cursor</code> launches a managed Helm session whose
+        native runtime owns the PTY, control, permission, and transcript
+        lifecycle. Bare <code>cursor-agent</code> sessions remain Shadow.
       </p>
       <table>
         <thead>
@@ -139,13 +139,13 @@ export default function IntegrationsPage() {
           </tr>
         </thead>
         <tbody>
-          <tr><td>Session import / archive</td><td>Native storage-v2 migration in progress</td></tr>
-          <tr><td>Search & detail</td><td>Available after native archive ships</td></tr>
-          <tr><td>Launch through Longhouse (Helm)</td><td>Excluded from native Helm</td></tr>
-          <tr><td>Headless launch (Console / ACP)</td><td>Unavailable during archive migration</td></tr>
-          <tr><td>Live control</td><td>Unavailable</td></tr>
-          <tr><td>Live transcript</td><td>Unavailable until receipt-backed source proof</td></tr>
-          <tr><td>Continue / branch</td><td>Not yet</td></tr>
+          <tr><td>Session import / archive</td><td>Supported</td></tr>
+          <tr><td>Search & detail</td><td>Supported</td></tr>
+          <tr><td>Launch through Longhouse (Helm)</td><td>Supported</td></tr>
+          <tr><td>Headless launch (Console / ACP)</td><td>Supported</td></tr>
+          <tr><td>Live control</td><td>Send, interrupt, terminate, and reattach</td></tr>
+          <tr><td>Live transcript</td><td>Supported</td></tr>
+          <tr><td>Active-turn steer / pause-answer</td><td>Not supported</td></tr>
         </tbody>
       </table>
 

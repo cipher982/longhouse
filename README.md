@@ -48,9 +48,10 @@ operators install `longhouse-server` in that server environment.
 longhouse claude       # managed channel session: send, interrupt, steer, resume
 longhouse codex        # managed app-server session: send, interrupt, steer, resume
 longhouse opencode     # managed server session: send, interrupt, reattach (not active-turn steer)
+longhouse cursor       # managed PTY session: send, interrupt, reattach (not active-turn steer)
 ```
 
-OpenCode Helm supports send, interrupt, and terminate but not active-turn steer or pause-answer.
+OpenCode Helm supports send, interrupt, terminate, and pause-answer but not active-turn steer. Cursor Helm supports send, interrupt, terminate, and reattach but not active-turn steer or pause-answer.
 
 Bare provider CLI sessions still get ingested into the timeline — they stay unmanaged: searchable and observable, but without Longhouse-owned remote control.
 
@@ -142,7 +143,7 @@ Issues: <https://github.com/cipher982/longhouse/issues>
 
 ## Status
 
-Alpha. Actively developed. Claude Code, Codex, Cursor, OpenCode, and Antigravity sessions sync today. Native Helm currently supports Claude, Codex, and OpenCode; Cursor and Antigravity remain Shadow-only until their complete native control runtimes exist. The native iOS companion can page on `needs_user` / `blocked` once APNs is configured.
+Alpha. Actively developed. Claude Code, Codex, Cursor, OpenCode, and Antigravity sessions sync today. Native Helm supports Claude, Codex, Cursor, and OpenCode; Antigravity remains Shadow-only. The native iOS companion can page on `needs_user` / `blocked` once APNs is configured.
 
 Built and maintained by [David W. Rose](https://drose.io/)
 ([cipher982](https://github.com/cipher982)). Apache-2.0.
