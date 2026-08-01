@@ -144,3 +144,65 @@ async def test_absent_store_status_is_not_read_as_complete(monkeypatch):
 
     assert match.evidence_status == "partial"
     assert match.evidence_reason == "search_evidence_status_absent"
+
+
+@pytest.mark.asyncio
+async def test_semantic_match_carries_evidence_beside_its_context(monkeypatch):
+    """A null `evidence` next to a populated `context` is its own small lie.
+
+    The lexical lane fills evidence from an FTS snippet. The semantic lane has
+    none, so it returned null there even once hydration was working — and a
+    caller that checks `evidence` to decide whether a hit is worth reading would
+    skip a match whose evidence was sitting in the very next field.
+    """
+
+    async def fake_context(**_kwargs):
+        return {
+            "evidence_status": "complete",
+            "evidence_reason": None,
+            "context": [
+                {"order_time_us": 100, "role": "user", "content_text": "earlier turn, before the anchor"},
+                {"order_time_us": 200, "role": "assistant", "content_text": "the anchored episode text"},
+                {"order_time_us": 300, "role": "user", "content_text": "later turn"},
+            ],
+            "total_events": 42,
+        }
+
+    monkeypatch.setattr(agents_search, "search_storage_v2_context", fake_context)
+
+    match = RecallMatch(
+        session_id=str(uuid4()),
+        chunk_index=1,
+        score=0.6,
+        generation_id=str(uuid4()),
+        start_order_time_us=200,
+    )
+    await agents_search._hydrate_recall_match(match, owner_id=42, context_turns=2, timeout_seconds=5.0)
+
+    assert match.evidence == "the anchored episode text"
+    assert match.context_text == "the anchored episode text"
+
+
+@pytest.mark.asyncio
+async def test_lexical_snippet_is_not_overwritten_by_the_anchor(monkeypatch):
+    async def fake_context(**_kwargs):
+        return {
+            "evidence_status": "complete",
+            "evidence_reason": None,
+            "context": [{"order_time_us": 200, "role": "assistant", "content_text": "neighbour text"}],
+            "total_events": 42,
+        }
+
+    monkeypatch.setattr(agents_search, "search_storage_v2_context", fake_context)
+
+    match = RecallMatch(
+        session_id=str(uuid4()),
+        chunk_index=0,
+        score=0.05,
+        generation_id=str(uuid4()),
+        match_event_id=17,
+        evidence="the matched fts snippet",
+    )
+    await agents_search._hydrate_recall_match(match, owner_id=42, context_turns=2, timeout_seconds=5.0)
+
+    assert match.evidence == "the matched fts snippet"

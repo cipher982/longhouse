@@ -424,6 +424,35 @@ async def _hydrate_recall_match(
         match.evidence_reason = "search_evidence_status_absent"
     else:
         match.evidence_reason = None
+    if match.evidence is None:
+        match.evidence = _anchor_excerpt(match)
+        match.context_text = match.evidence
+
+
+def _anchor_excerpt(match: RecallMatch) -> str | None:
+    """Text at the point the match anchors on, for matches with no snippet.
+
+    The lexical lane fills ``evidence`` from its FTS snippet; the semantic lane
+    has no snippet, so it was returning null evidence beside a fully populated
+    ``context``. A caller checking ``evidence`` to decide whether a hit is worth
+    reading would skip a match whose evidence was sitting right next to it.
+    """
+
+    if match.start_order_time_us is None or not match.context:
+        return None
+    for item in match.context:
+        order_time = item.get("order_time_us")
+        if not isinstance(order_time, int) or order_time < match.start_order_time_us:
+            continue
+        text = str(item.get("content_text") or "").strip()
+        if text:
+            return text[:_ANCHOR_EXCERPT_MAX_CHARS]
+    return None
+
+
+# Long enough to judge relevance, short enough that five of them do not crowd out
+# the context they are summarizing.
+_ANCHOR_EXCERPT_MAX_CHARS = 400
 
 
 def _rrf_merge_recall_matches(

@@ -15,16 +15,16 @@ from collections.abc import Iterator
 from collections.abc import Mapping
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime
-from datetime import timezone
 from typing import TYPE_CHECKING
 
 import numpy as np
 
-from .content import redact_secrets
-from .content import strip_noise
+from zerg.services.clean_events import event_sort_key as _event_sort_key
+from zerg.services.clean_events import iter_clean_transcript_events
+from zerg.services.transcript_content import redact_secrets
+from zerg.services.transcript_content import strip_noise
+
 from .tokens import truncate
-from .transcript import _extract_content
 
 if TYPE_CHECKING:
     from zerg.models_config import EmbeddingConfig
@@ -67,17 +67,6 @@ class EmbeddingChunk:
     # locator, carried so a stored episode can be pointed back at a transcript
     # position without reproducing the clean-index projection.
     source_event_id_start: int | None = None
-
-
-@dataclass(frozen=True)
-class CleanTranscriptEvent:
-    """A content-bearing transcript event in the same projection used for turn embeddings."""
-
-    index: int
-    event_id: int | None
-    role: str
-    content: str
-    tool_name: str | None = None
 
 
 def sanitize_for_embedding(text: str) -> str:
@@ -193,52 +182,6 @@ class _TranscriptTurn:
     # transcript position without re-running this module's sanitization; the
     # source id survives that projection and is what makes a chunk locatable.
     source_event_id_start: int | None = None
-
-
-def _event_sort_key(event: Mapping[str, object]) -> tuple[datetime, int]:
-    timestamp = event.get("timestamp")
-    if isinstance(timestamp, datetime):
-        ts = timestamp
-    elif isinstance(timestamp, str):
-        try:
-            ts = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
-        except ValueError:
-            ts = datetime.min.replace(tzinfo=timezone.utc)
-    else:
-        ts = datetime.min.replace(tzinfo=timezone.utc)
-    if ts.tzinfo is not None:
-        ts = ts.astimezone(timezone.utc).replace(tzinfo=None)
-    return ts, int(event.get("id") or 0)
-
-
-def iter_clean_transcript_events(
-    events: list[Mapping[str, object]],
-    *,
-    include_tool_calls: bool = False,
-) -> Iterator[CleanTranscriptEvent]:
-    """Yield content-bearing events in the clean index space used by turn embeddings."""
-    ordered = sorted(events, key=_event_sort_key)
-    message_index = 0
-
-    for event in ordered:
-        content = _extract_content(event, include_tool_calls=include_tool_calls, tool_output_max_chars=500)
-        if content is None:
-            continue
-        content = redact_secrets(strip_noise(content))
-        if not content.strip():
-            continue
-
-        event_id_value = event.get("id")
-        event_id = int(event_id_value) if event_id_value is not None else None
-        tool_name_value = event.get("tool_name")
-        yield CleanTranscriptEvent(
-            index=message_index,
-            event_id=event_id,
-            role=str(event.get("role") or "unknown"),
-            content=content,
-            tool_name=str(tool_name_value) if tool_name_value else None,
-        )
-        message_index += 1
 
 
 def _iter_clean_turns(events: list[Mapping[str, object]]) -> Iterator[_TranscriptTurn]:

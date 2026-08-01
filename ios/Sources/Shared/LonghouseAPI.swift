@@ -229,6 +229,34 @@ struct LonghouseAPI: Sendable {
         try await timelineSessions(limit: limit).filter(\.isUserActive)
     }
 
+    func searchSessions(query: String, limit: Int = 30) async throws -> [SessionSummary] {
+        let url = Self.searchSessionsURL(baseURL: baseURL, query: query, limit: limit)
+        var request = URLRequest(url: url)
+        request.addValue("application/json", forHTTPHeaderField: "Accept")
+
+        let (data, httpResponse) = try await data(for: request)
+        guard httpResponse.statusCode == 200 else {
+            throw LonghouseAPIError.from(statusCode: httpResponse.statusCode)
+        }
+
+        let decoded = try JSONDecoder.snakeCase.decode(APISemanticSearchResponse.self, from: data)
+        return decoded.sessions.map(\.searchSessionSummary)
+    }
+
+    static func searchSessionsURL(baseURL: URL, query: String, limit: Int = 30) -> URL {
+        var components = URLComponents(
+            url: baseURL.appendingPathComponent("/api/timeline/sessions/semantic"),
+            resolvingAgainstBaseURL: false
+        )!
+        components.queryItems = [
+            URLQueryItem(name: "query", value: query),
+            URLQueryItem(name: "days_back", value: "365"),
+            URLQueryItem(name: "limit", value: String(limit)),
+            URLQueryItem(name: "context_mode", value: "forensic"),
+        ]
+        return components.url!
+    }
+
     func timelineSessions(limit: Int = 30) async throws -> [SessionSummary] {
         var components = URLComponents(url: baseURL.appendingPathComponent("/api/timeline/sessions"), resolvingAgainstBaseURL: false)!
         components.queryItems = [
@@ -874,6 +902,10 @@ struct LonghouseAPI: Sendable {
             HTTPCookieStorage.shared.setCookie(cookie)
         }
     }
+}
+
+private struct APISemanticSearchResponse: Decodable {
+    let sessions: [APISessionResponse]
 }
 
 // MARK: - Console session launch

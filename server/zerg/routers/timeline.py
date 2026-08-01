@@ -191,17 +191,19 @@ async def _search_storage_v2_timeline(
             detail={"code": "search_unavailable", "message": "The derived search index is unavailable."},
         ) from exc
     session_ids: list[UUID] = []
+    search_rows: list[dict[str, object]] = []
     seen: set[str] = set()
     for row in result.get("results") or []:
         session_id = str(row.get("session_id") or "") if isinstance(row, dict) else ""
         if session_id and session_id not in seen:
             seen.add(session_id)
             session_ids.append(UUID(session_id))
+            search_rows.append(row)
     projected = await asyncio.gather(
         *(asyncio.to_thread(read_live_catalog_session, session_id, owner_id=owner_id) for session_id in session_ids)
     )
     cards: list[TimelineSessionCardResponse] = []
-    for session, _provider_alias, _commit_seq in projected:
+    for (session, _provider_alias, _commit_seq), row in zip(projected, search_rows, strict=True):
         if session is None:
             continue
         if session.user_hidden_from_timeline:
@@ -210,6 +212,14 @@ async def _search_storage_v2_timeline(
             continue
         if params.hide_autonomous and session.user_messages <= 0:
             continue
+        snippet = str(row.get("content_snippet") or row.get("tool_output_snippet") or "") or None
+        rank = abs(float(row.get("rank") or 0.0))
+        session = session.model_copy(
+            update={
+                "match_snippet": snippet,
+                "match_score": 1.0 / (1.0 + rank),
+            }
+        )
         cards.append(
             TimelineSessionCardResponse(
                 thread_id=session.id,

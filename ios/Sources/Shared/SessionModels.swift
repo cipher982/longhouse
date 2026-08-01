@@ -139,6 +139,10 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
     let summary: String?
     let summaryStatus: String?
     let firstUserMessage: String?
+    /// Canonical machine identifier from the session record.
+    let deviceId: String?
+    /// Server-projected archive-search context. Nil on ordinary timeline rows.
+    let matchSnippet: String?
     // Live, drifting summary title — used for the subordinate "now:" drift line,
     // NOT the headline. The stable headline is `title` (server timeline_title).
     let summaryTitle: String?
@@ -171,6 +175,8 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
         summary: String? = nil,
         summaryStatus: String? = nil,
         firstUserMessage: String? = nil,
+        deviceId: String? = nil,
+        matchSnippet: String? = nil,
         summaryTitle: String? = nil,
         userState: String? = nil,
         status: String? = nil,
@@ -200,6 +206,8 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
         self.summary = summary
         self.summaryStatus = summaryStatus
         self.firstUserMessage = firstUserMessage
+        self.deviceId = deviceId
+        self.matchSnippet = matchSnippet
         self.summaryTitle = summaryTitle
         self.userState = userState
         self.status = status
@@ -254,6 +262,16 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
     var projectLabel: String {
         guard let project, !project.isEmpty else { return "Unknown project" }
         return project
+    }
+
+    var timelineMachineLabel: String? {
+        for candidate in [deviceId, headOriginLabel, homeLabel] {
+            guard let label = candidate?.trimmingCharacters(in: .whitespacesAndNewlines), !label.isEmpty else {
+                continue
+            }
+            return label
+        }
+        return nil
     }
 
     var managementLabel: String {

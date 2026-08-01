@@ -211,6 +211,9 @@ class SearchDaemon:
             if request.method == "search.embedding.write.v2":
                 params = _embedding_write_params(request.params)
                 return self._result(request, await self._run(self._store.write_episode_embeddings, **params))
+            if request.method == "search.embedding.locators.backfill.v2":
+                params = _embedding_locator_backfill_params(request.params)
+                return self._result(request, await self._run(self._store.backfill_episode_locators, **params))
             if request.method == "search.embedding.hashes.v2":
                 params = _embedding_hashes_params(request.params)
                 return self._result(
@@ -568,6 +571,17 @@ def _publish_params(value: dict) -> dict:
         "git_repo": _text(value["git_repo"], "git_repo", 500, optional=True),
         "started_at": _text(value["started_at"], "started_at", 64),
     }
+
+
+def _embedding_locator_backfill_params(value: dict) -> dict:
+    _exact_keys(value, {"limit", "verify"})
+    limit = value["limit"]
+    verify = value["verify"]
+    if type(limit) is not int or not 1 <= limit <= 100_000:
+        raise ValueError("locator backfill limit is invalid")
+    if type(verify) is not bool:
+        raise ValueError("locator backfill verify flag is invalid")
+    return {"limit": limit, "verify": verify}
 
 
 def _embedding_write_params(value: dict) -> dict:

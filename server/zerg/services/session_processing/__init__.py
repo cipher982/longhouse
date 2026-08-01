@@ -5,15 +5,18 @@ This module centralizes session event processing that's used by multiple consume
 callers pass in event data, module processes and returns results.
 
 Public API:
-    content: strip_noise(), redact_secrets(), is_tool_result()
+    transcript_content: strip_noise(), redact_secrets(), is_tool_result() —
+        these live in zerg.services.transcript_content, outside this package, so
+        searchd can use them without importing tiktoken through .tokens
     tokens:  count_tokens(), truncate()
     transcript: build_transcript(), detect_turns(), SessionMessage, Turn, SessionTranscript
     summarize: summarize_events(), quick_summary(), SessionSummary
 """
 
-from .content import is_tool_result
-from .content import redact_secrets
-from .content import strip_noise
+from zerg.services.transcript_content import is_tool_result
+from zerg.services.transcript_content import redact_secrets
+from zerg.services.transcript_content import strip_noise
+
 from .embeddings import bytes_to_embedding
 from .embeddings import embedding_to_bytes
 from .embeddings import generate_embedding

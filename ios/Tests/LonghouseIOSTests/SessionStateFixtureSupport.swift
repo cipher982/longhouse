@@ -12,6 +12,7 @@ func makeSessionStateFacts(
     startTurnAvailable: Bool = false,
     sendInputAvailable: Bool? = nil,
     accessLabel: String? = nil,
+    workingSet overrideWorkingSet: String? = nil,
     unread: Bool = false,
     lastResultAt: String? = nil,
     lastResultOutcome: String? = nil
@@ -48,11 +49,11 @@ func makeSessionStateFacts(
         controlOwnership: owned ? "owned" : "unowned",
         controlConnection: owned ? "connected" : "not_applicable",
         // Mirror the server's _working_set rule so fixtures cannot drift.
-        workingSet: closed
+        workingSet: overrideWorkingSet ?? (closed
             ? "history"
             : (pendingInteractionKind != nil || activity == "thinking" || activity == "executing")
                 ? "open"
-                : "history",
+                : "history"),
         unread: unread,
         lastResultAt: lastResultAt,
         lastResultOutcome: lastResultOutcome,

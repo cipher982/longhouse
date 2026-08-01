@@ -4,6 +4,27 @@ import Testing
 
 struct LonghouseAPITests {
     @Test
+    func searchSessionsURLUsesBrowserAuthTimelineRoute() throws {
+        let baseURL = try #require(URL(string: "https://demo.longhouse.ai"))
+
+        let url = LonghouseAPI.searchSessionsURL(
+            baseURL: baseURL,
+            query: "provider channel",
+            limit: 25
+        )
+        let components = try #require(URLComponents(url: url, resolvingAgainstBaseURL: false))
+
+        #expect(components.path == "/api/timeline/sessions/semantic")
+        #expect(!components.path.contains("/agents/"))
+        #expect(components.queryItems == [
+            URLQueryItem(name: "query", value: "provider channel"),
+            URLQueryItem(name: "days_back", value: "365"),
+            URLQueryItem(name: "limit", value: "25"),
+            URLQueryItem(name: "context_mode", value: "forensic"),
+        ])
+    }
+
+    @Test
     func workspaceSuggestionsURLUsesCookieAuthTimelinePath() throws {
         // Regression guard: the launch sheet authenticates with the browser
         // cookie, so this MUST hit /api/timeline/*, NOT the device-token-gated

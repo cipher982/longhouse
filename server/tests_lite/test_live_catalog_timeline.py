@@ -30,6 +30,7 @@ from zerg.services.live_catalog_timeline import project_catalog_sessions_snapsho
 from zerg.services.live_catalog_timeline import project_catalog_timeline_snapshot
 from zerg.services.live_catalog_timeline import read_live_catalog_session
 from zerg.services.timeline_session_listing import TimelineSessionListParams
+from zerg.services.session_views import SessionResponse
 
 
 def _params(**overrides):
@@ -207,11 +208,29 @@ async def test_storage_v2_browser_search_hydrates_hits_with_owner_scope(monkeypa
         async def call(self, method, params):
             assert method == "search.query.v2"
             assert params["owner_id"] == "7"
-            return {"results": [{"session_id": str(session_id)}]}
+            return {
+                "results": [
+                    {
+                        "session_id": str(session_id),
+                        "content_snippet": "matched provider channel",
+                        "rank": 3.0,
+                    }
+                ]
+            }
 
     def read_session(requested, *, owner_id):
         observed.update(requested=requested, owner_id=owner_id)
-        return None, None, "9"
+        session = SessionResponse.model_construct(
+            id=str(session_id),
+            user_hidden_from_timeline=False,
+            environment="development",
+            user_messages=1,
+            timeline_anchor_at=datetime.now(timezone.utc),
+            origin_label="cube",
+            match_snippet=None,
+            match_score=None,
+        )
+        return session, None, "9"
 
     monkeypatch.setattr(timeline_router, "get_searchd_client", lambda: SearchClient())
     monkeypatch.setattr(timeline_router, "read_live_catalog_session", read_session)
@@ -221,7 +240,9 @@ async def test_storage_v2_browser_search_hydrates_hits_with_owner_scope(monkeypa
         params=_params(query="needle"),
     )
 
-    assert result.total == 0
+    assert result.total == 1
+    assert result.sessions[0].head.match_snippet == "matched provider channel"
+    assert result.sessions[0].head.match_score == 0.25
     assert observed == {"requested": session_id, "owner_id": 7}
 
 
