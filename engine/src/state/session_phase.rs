@@ -13,6 +13,8 @@ pub enum PhaseSource {
     CodexHook,
     /// Antigravity hook-derived phase signal drained from the outbox.
     AntigravityHook,
+    /// Cursor hook-derived phase signal drained from the outbox.
+    CursorHook,
     /// Codex bridge WebSocket tracker-derived phase signal.
     CodexBridgeWs,
 }
@@ -23,15 +25,20 @@ impl PhaseSource {
             PhaseSource::ClaudeHook => "claude_hook",
             PhaseSource::CodexHook => "codex_hook",
             PhaseSource::AntigravityHook => "antigravity_hook",
+            PhaseSource::CursorHook => "cursor_hook",
             PhaseSource::CodexBridgeWs => "codex_bridge",
         }
     }
 
     pub const fn for_hook_provider(provider: &str) -> Self {
         // Small match-returning-const helper for hook outbox coalescing.
+        // Every hook-carrying provider gets an explicit arm: a silent
+        // fallthrough stamped Cursor activity as `claude_hook`, which made
+        // provenance unreadable in the fact store.
         match provider.as_bytes() {
             b"codex" => PhaseSource::CodexHook,
             b"antigravity" => PhaseSource::AntigravityHook,
+            b"cursor" => PhaseSource::CursorHook,
             _ => PhaseSource::ClaudeHook,
         }
     }

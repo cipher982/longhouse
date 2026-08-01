@@ -2361,6 +2361,17 @@ fn build_local_status_projection(
                 )
             }
         };
+    // Persist this cycle's session -> run bindings before building evidence, so
+    // a session whose provider state file has already been torn down can still
+    // attach its closing phase to the run it belonged to.
+    let remembered_run_ids = record_and_read_run_bindings(
+        conn,
+        observations,
+        claude_observations,
+        opencode_observations,
+        cursor_observations,
+        now,
+    );
     payload.machine_evidence = Some(heartbeat::machine_evidence_from_observations(
         machine_id,
         observations,
@@ -2370,6 +2381,7 @@ fn build_local_status_projection(
         cursor_observations,
         unmanaged_session_bindings,
         &phase_ledger,
+        &remembered_run_ids,
         process_snapshot_complete,
         now,
     ));
@@ -2385,6 +2397,68 @@ fn build_local_status_projection(
     heartbeat::apply_local_titles(conn, &mut payload.sessions);
     session_snapshot_state.annotate(&mut payload);
     heartbeat::build_status_file_projection(payload, &stats, phase_ledger, ledger_status)
+}
+
+/// Upsert every live observation's run binding, then return the remembered set
+/// (including sessions whose observation has already disappeared).
+fn record_and_read_run_bindings(
+    conn: &rusqlite::Connection,
+    codex_observations: &[managed_bridge_scan::CodexBridgeObservation],
+    claude_observations: &[managed_claude_scan::ClaudeChannelObservation],
+    opencode_observations: &[managed_opencode_scan::OpenCodeServerObservation],
+    cursor_observations: &[managed_cursor_helm_scan::CursorHelmObservation],
+    now: chrono::DateTime<chrono::Utc>,
+) -> std::collections::HashMap<String, String> {
+    use crate::state::session_run_binding::{SessionRunBinding, SessionRunBindingStore};
+
+    let store = SessionRunBindingStore::new(conn);
+    let observed: Vec<(&str, &str, Option<&str>)> = codex_observations
+        .iter()
+        .map(|obs| ("codex", obs.session_id.as_str(), obs.run_id.as_deref()))
+        .chain(
+            claude_observations
+                .iter()
+                .map(|obs| ("claude", obs.session_id.as_str(), obs.run_id.as_deref())),
+        )
+        .chain(
+            opencode_observations
+                .iter()
+                .map(|obs| ("opencode", obs.session_id.as_str(), obs.run_id.as_deref())),
+        )
+        .chain(
+            cursor_observations
+                .iter()
+                .map(|obs| ("cursor", obs.session_id.as_str(), obs.run_id.as_deref())),
+        )
+        .collect();
+    for (provider, session_id, run_id) in observed {
+        let Some(run_id) = run_id.map(str::trim).filter(|value| !value.is_empty()) else {
+            continue;
+        };
+        if session_id.trim().is_empty() {
+            continue;
+        }
+        let binding = SessionRunBinding {
+            session_id: session_id.to_string(),
+            provider: provider.to_string(),
+            run_id: run_id.to_string(),
+            observed_at: now,
+        };
+        if let Err(err) = store.record(&binding) {
+            tracing::warn!(
+                error = %err,
+                session_id = %binding.session_id,
+                "persisting session run binding failed"
+            );
+        }
+    }
+    match store.remembered(now) {
+        Ok(bindings) => bindings,
+        Err(err) => {
+            tracing::warn!(error = %err, "reading remembered session run bindings failed");
+            std::collections::HashMap::new()
+        }
+    }
 }
 
 fn history_runtime_work_active(

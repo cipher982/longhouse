@@ -113,6 +113,17 @@ pub fn open_db(db_path: Option<&Path>) -> Result<Connection> {
             observed_at TEXT NOT NULL
         );
 
+        -- Last run a provider observation bound a session to. Provider state
+        -- files vanish the moment a launcher exits, so without a durable
+        -- binding the final `idle` of a session has no run to attach to and
+        -- the served activity head stays frozen on the last live phase.
+        CREATE TABLE IF NOT EXISTS session_run_binding (
+            session_id TEXT PRIMARY KEY,
+            provider TEXT NOT NULL,
+            run_id TEXT NOT NULL,
+            observed_at TEXT NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS session_title_state (
             session_id TEXT PRIMARY KEY,
             title TEXT NOT NULL,

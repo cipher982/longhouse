@@ -706,6 +706,13 @@ impl HeartbeatPayload {
 /// or visible state. It deliberately excludes observation timestamps and
 /// freshness counters so frequent heartbeats can refresh liveness without
 /// forcing the Runtime Host to re-run snapshot cleanup work.
+///
+/// Activity is folded in explicitly. `ResolvedLocalSession::phase` is always
+/// `None` in production — phases live in the ledger, not the resolved session
+/// — so without this the digest was blind to every turn boundary and a
+/// thinking -> idle transition never triggered a ship. Activity observations
+/// only advance when a provider hook actually fires, so this does not make the
+/// digest chatty.
 pub fn session_snapshot_digest(payload: &HeartbeatPayload) -> String {
     let mut sessions: Vec<String> = payload
         .sessions
@@ -767,7 +774,28 @@ pub fn session_snapshot_digest(payload: &HeartbeatPayload) -> String {
         })
         .collect();
     sessions.sort();
-    let signature = format!("sessions=[{}]", sessions.join(";"));
+    let mut activity: Vec<String> = payload
+        .machine_evidence
+        .iter()
+        .flat_map(|evidence| evidence.activity.iter())
+        .map(|fact| {
+            format!(
+                "{}|{}|{}|{}|{}|{}",
+                fact.provider,
+                fact.session_id,
+                fact.run_id.as_deref().unwrap_or(""),
+                fact.kind,
+                fact.tool_name.as_deref().unwrap_or(""),
+                fact.observed_at,
+            )
+        })
+        .collect();
+    activity.sort();
+    let signature = format!(
+        "sessions=[{}]|activity=[{}]",
+        sessions.join(";"),
+        activity.join(";")
+    );
     let mut hasher = Sha256::new();
     hasher.update(signature.as_bytes());
     format!("{:x}", hasher.finalize())
@@ -1037,6 +1065,7 @@ pub(crate) fn machine_evidence_from_observations(
     cursor_observations: &[CursorHelmObservation],
     unmanaged_bindings: &[UnmanagedSessionBinding],
     phase_rows: &[PhaseLedgerRow],
+    remembered_run_ids: &HashMap<String, String>,
     process_snapshot_complete: bool,
     now: DateTime<Utc>,
 ) -> MachineEvidence {
@@ -1549,12 +1578,22 @@ pub(crate) fn machine_evidence_from_observations(
                 .map(|run_id| (observation.session_id.as_str(), run_id))
         }))
         .collect::<HashMap<_, _>>();
+    // Live observations are the preferred run binding, but they vanish the
+    // moment a launcher exits. Falling back to the remembered binding is what
+    // lets the closing `idle` of a session still ship; without it the served
+    // activity head stays frozen on whatever phase was live at the last
+    // observation and then expires to `unknown` instead of going quiescent.
     let mut activity = phase_rows
         .iter()
         .filter_map(|row| {
             managed_run_ids
                 .get(row.session_id.as_str())
                 .copied()
+                .or_else(|| {
+                    remembered_run_ids
+                        .get(row.session_id.as_str())
+                        .map(String::as_str)
+                })
                 .map(|run_id| activity_evidence_from_phase_row(row, Some(run_id)))
         })
         .collect::<Vec<_>>();
@@ -4778,6 +4817,7 @@ mod tests {
             &cursor_observations,
             &unmanaged_bindings,
             std::slice::from_ref(&phase),
+            &HashMap::new(),
             true,
             now,
         );
@@ -4952,6 +4992,7 @@ mod tests {
             &cursor_observations,
             &unmanaged_bindings,
             &[],
+            &HashMap::new(),
             false,
             now,
         );
@@ -5151,6 +5192,7 @@ mod tests {
             &[],
             &[binding.clone()],
             &[],
+            &HashMap::new(),
             true,
             first_now,
         );
@@ -5163,6 +5205,7 @@ mod tests {
             &[],
             &[rescanned],
             &[],
+            &HashMap::new(),
             true,
             first_now + chrono::Duration::minutes(5),
         );
@@ -5194,6 +5237,7 @@ mod tests {
             &[],
             &[missing_mtime],
             &[],
+            &HashMap::new(),
             true,
             first_now,
         );
@@ -5226,6 +5270,7 @@ mod tests {
             &[],
             &[],
             &[phase],
+            &HashMap::new(),
             true,
             now,
         );
@@ -5235,6 +5280,188 @@ mod tests {
         assert!(evidence.activity.is_empty());
         assert!(!evidence.process.is_empty());
         assert!(!evidence.transcript.is_empty());
+    }
+
+    #[test]
+    fn closing_phase_ships_after_the_provider_observation_disappears() {
+        // Cursor Helm deletes its per-session state file on exit, so the final
+        // `idle` arrives in the ledger with no live observation left to name a
+        // run. Before the remembered binding existed the row was filtered out
+        // and the served activity head stayed frozen on the previous
+        // `thinking`, which is what made a finished turn read as working.
+        let now = DateTime::parse_from_rfc3339("2026-08-01T13:11:53Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let phase = PhaseLedgerRow {
+            session_id: "cursor-session".to_string(),
+            provider: "cursor".to_string(),
+            phase: "idle".to_string(),
+            tool_name: None,
+            source: "cursor_hook".to_string(),
+            observed_at: "2026-08-01T13:11:51Z".to_string(),
+            valid_until: "2026-08-01T13:21:51Z".to_string(),
+        };
+        let remembered = HashMap::from([(
+            "cursor-session".to_string(),
+            "run-cursor-session".to_string(),
+        )]);
+
+        let stranded = machine_evidence_from_observations(
+            "cinder",
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            std::slice::from_ref(&phase),
+            &HashMap::new(),
+            true,
+            now,
+        );
+        assert!(
+            stranded.activity.is_empty(),
+            "without a run binding the closing phase has nothing to attach to"
+        );
+
+        let evidence = machine_evidence_from_observations(
+            "cinder",
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            std::slice::from_ref(&phase),
+            &remembered,
+            true,
+            now,
+        );
+        assert_eq!(evidence.activity.len(), 1);
+        assert_eq!(evidence.activity[0].kind, "idle");
+        assert_eq!(evidence.activity[0].provider, "cursor");
+        assert_eq!(
+            evidence.activity[0].run_id.as_deref(),
+            Some("run-cursor-session")
+        );
+    }
+
+    /// Minimal payload for digest assertions: only `sessions` and
+    /// `machine_evidence` feed `session_snapshot_digest`, so everything else
+    /// is inert here.
+    fn digest_test_payload() -> HeartbeatPayload {
+        HeartbeatPayload {
+            version: "0.1.0".to_string(),
+            daemon_pid: 1,
+            last_ship_at: None,
+            last_ship_attempt_at: None,
+            last_ship_result: None,
+            last_ship_latency_ms: None,
+            last_ship_http_status: None,
+            last_ship_error_kind: None,
+            last_ship_error_message: None,
+            spool_pending_count: 0,
+            spool_dead_count: 0,
+            archive_backlog: ArchiveBacklogSnapshot::default(),
+            storage_v2_outbox: StorageV2OutboxSnapshot::default(),
+            parse_error_count_1h: 0,
+            consecutive_ship_failures: 0,
+            ship_attempts_1h: 0,
+            ship_successes_1h: 0,
+            ship_rate_limited_1h: 0,
+            ship_server_errors_1h: 0,
+            ship_payload_rejections_1h: 0,
+            ship_payload_too_large_1h: 0,
+            ship_retryable_client_errors_1h: 0,
+            ship_connect_errors_1h: 0,
+            ship_latency_p50_ms_1h: None,
+            ship_latency_p95_ms_1h: None,
+            ship_attempts_10m: 0,
+            ship_successes_10m: 0,
+            ship_rate_limited_10m: 0,
+            ship_server_errors_10m: 0,
+            ship_retryable_client_errors_10m: 0,
+            ship_connect_errors_10m: 0,
+            ship_lanes: ShipLaneSummarySet::default(),
+            events_per_sec_ewma_10s: None,
+            bytes_per_sec_ewma_10s: None,
+            disk_free_bytes: 0,
+            is_offline: false,
+            managed_sessions: Vec::new(),
+            unmanaged_session_bindings: Vec::new(),
+            machine_evidence: None,
+            sessions: Vec::new(),
+            sessions_digest: None,
+            sessions_sequence: None,
+            adaptive_backlog_limiter: None,
+            ship_scheduler: None,
+            history_import: Default::default(),
+        }
+    }
+
+    #[test]
+    fn snapshot_digest_tracks_the_turn_boundary() {
+        // `ResolvedLocalSession::phase` is always None in production, so the
+        // digest only sees activity through machine_evidence. A digest blind to
+        // this is a digest that never ships a thinking -> idle transition.
+        let now = DateTime::parse_from_rfc3339("2026-08-01T13:11:53Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let phase_at = |kind: &str, observed_at: &str| ActivityEvidence {
+            authority_class: "provider_runtime".to_string(),
+            provider: "cursor".to_string(),
+            session_id: "cursor-session".to_string(),
+            run_id: Some("run-cursor-session".to_string()),
+            kind: kind.to_string(),
+            raw_kind: kind.to_string(),
+            tool_name: None,
+            detail: None,
+            source: "cursor_hook".to_string(),
+            observed_at: observed_at.to_string(),
+            valid_until: "2026-08-01T13:21:51Z".to_string(),
+            raw_locator: None,
+            reason_codes: Vec::new(),
+        };
+        let with_activity = |activity: Vec<ActivityEvidence>| {
+            let mut evidence = machine_evidence_from_observations(
+                "cinder",
+                &[],
+                &[],
+                &[],
+                &[],
+                &[],
+                &[],
+                &[],
+                &HashMap::new(),
+                true,
+                now,
+            );
+            evidence.activity = activity;
+            let mut payload = digest_test_payload();
+            payload.machine_evidence = Some(evidence);
+            payload
+        };
+
+        let thinking = session_snapshot_digest(&with_activity(vec![phase_at(
+            "thinking",
+            "2026-08-01T13:10:57Z",
+        )]));
+        let idle = session_snapshot_digest(&with_activity(vec![phase_at(
+            "idle",
+            "2026-08-01T13:11:01Z",
+        )]));
+        assert_ne!(
+            thinking, idle,
+            "a turn boundary must change the digest or it never triggers a ship"
+        );
+        assert_eq!(
+            thinking,
+            session_snapshot_digest(&with_activity(vec![phase_at(
+                "thinking",
+                "2026-08-01T13:10:57Z"
+            )])),
+            "digest must stay stable for an unchanged observation"
+        );
     }
 
     #[test]
