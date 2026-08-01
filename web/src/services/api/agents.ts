@@ -837,6 +837,7 @@ export interface SessionWorkspaceStreamChange {
   latest_event_emitted_at_ms?: number | null;
   server_fanout_at_ms?: number | null;
   server_now_ms?: number;
+  catalog_commit_seq?: number | null;
   pubsub_seq?: number;
   transcript_preview?: SessionTranscriptPreview | null;
 }
@@ -890,6 +891,7 @@ export function connectSessionWorkspaceStream(
         latest_event_emitted_at_ms: data.latest_event_emitted_at_ms ?? null,
         server_fanout_at_ms: data.server_fanout_at_ms ?? null,
         server_now_ms: data.server_now_ms,
+        catalog_commit_seq: data.catalog_commit_seq ?? null,
         pubsub_seq: data.pubsub_seq,
         client_received_at_ms: Date.now(),
         has_transcript_preview: Object.prototype.hasOwnProperty.call(data, "transcript_preview"),

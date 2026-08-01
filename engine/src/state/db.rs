@@ -110,7 +110,8 @@ pub fn open_db(db_path: Option<&Path>) -> Result<Connection> {
             phase TEXT NOT NULL,
             tool_name TEXT,
             source TEXT NOT NULL,
-            observed_at TEXT NOT NULL
+            observed_at TEXT NOT NULL,
+            revision INTEGER NOT NULL DEFAULT 0
         );
 
         -- Runs a provider observation bound a session to, with the window each
@@ -293,6 +294,20 @@ pub fn open_db(db_path: Option<&Path>) -> Result<Connection> {
         .collect::<std::result::Result<_, _>>()?;
     if !live_file_state_columns.contains("file_identity") {
         conn.execute_batch("ALTER TABLE live_file_state ADD COLUMN file_identity TEXT;")?;
+    }
+
+    let session_phase_columns: std::collections::HashSet<String> = conn
+        .prepare("PRAGMA table_info(session_phase_state)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<std::result::Result<_, _>>()?;
+    if !session_phase_columns.contains("revision") {
+        // Existing ledgers start at zero. The first accepted write after the
+        // upgrade allocates the first monotonic revision; timestamp ordering
+        // remains the LWW truth coordinate.
+        conn.execute_batch(
+            "ALTER TABLE session_phase_state
+             ADD COLUMN revision INTEGER NOT NULL DEFAULT 0;",
+        )?;
     }
 
     let unmanaged_binding_columns: std::collections::HashSet<String> = conn
@@ -545,5 +560,36 @@ mod tests {
         assert!(columns.contains("source_revision"));
         assert!(columns.contains("bound_session_id"));
         assert!(columns.contains("provider_session_id"));
+    }
+
+    #[test]
+    fn test_open_db_adds_revision_to_existing_phase_ledger() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let conn = Connection::open(tmp.path()).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE session_phase_state (
+                session_id TEXT PRIMARY KEY,
+                provider TEXT NOT NULL,
+                phase TEXT NOT NULL,
+                tool_name TEXT,
+                source TEXT NOT NULL,
+                observed_at TEXT NOT NULL
+            );
+            INSERT INTO session_phase_state
+                (session_id, provider, phase, source, observed_at)
+            VALUES ('s1', 'codex', 'thinking', 'codex_bridge', '2026-08-01T13:10:00Z');",
+        )
+        .unwrap();
+        drop(conn);
+
+        let conn = open_db(Some(tmp.path())).unwrap();
+        let revision: i64 = conn
+            .query_row(
+                "SELECT revision FROM session_phase_state WHERE session_id = 's1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(revision, 0);
     }
 }

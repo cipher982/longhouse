@@ -21,6 +21,7 @@ const queryClientMocks = vi.hoisted(() => ({
 }));
 const renderBeaconMocks = vi.hoisted(() => ({
   emitRenderBeacon: vi.fn(),
+  emitStateRenderBeacon: vi.fn(),
   recordServerClockSkew: vi.fn(),
 }));
 
@@ -738,6 +739,62 @@ describe("useSessionWorkspace", () => {
         serverFanoutAtMs: 1_779_220_000_150,
         clientReceivedAtMs: expect.any(Number),
         pubsubSeq: 7,
+      });
+    });
+  });
+
+  it("emits state telemetry only after the canonical catalog commit is rendered", async () => {
+    let handlers:
+      | {
+          onWorkspaceChanged?: (data: {
+            session_id: string;
+            latest_event_id: number;
+            thread_session_count: number;
+            server_fanout_at_ms?: number | null;
+            catalog_commit_seq?: number | null;
+            pubsub_seq?: number;
+          }) => void;
+        }
+      | undefined;
+    streamMocks.connectSessionWorkspaceStream.mockImplementation((_sessionId, nextHandlers) => {
+      handlers = nextHandlers;
+      return vi.fn();
+    });
+
+    seedHookMocks(80);
+    const { rerender } = renderHook(() => useSessionWorkspace(baseSession.id));
+
+    act(() => {
+      handlers?.onWorkspaceChanged?.({
+        session_id: baseSession.id,
+        latest_event_id: 80,
+        thread_session_count: 1,
+        server_fanout_at_ms: 1_779_220_000_150,
+        catalog_commit_seq: 42,
+        pubsub_seq: 8,
+      });
+    });
+
+    expect(renderBeaconMocks.emitStateRenderBeacon).not.toHaveBeenCalled();
+
+    seedHookMocks(80, {
+      session_state: {
+        ...makeSessionStateFacts({ activity: "thinking", observedAt: "2026-03-14T12:01:22.000Z" }),
+        commit_seq: 42,
+      },
+    });
+    rerender();
+
+    await waitFor(() => {
+      expect(renderBeaconMocks.emitStateRenderBeacon).toHaveBeenCalledWith({
+        sessionId: baseSession.id,
+        catalogCommitSeq: 42,
+        statePhase: "thinking",
+        stateObservedAtMs: Date.parse("2026-03-14T12:01:22.000Z"),
+        managed: false,
+        serverFanoutAtMs: 1_779_220_000_150,
+        clientReceivedAtMs: expect.any(Number),
+        pubsubSeq: 8,
       });
     });
   });

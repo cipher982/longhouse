@@ -1097,6 +1097,7 @@ def test_live_catalog_workspace_event_matches_ios_required_contract():
         {
             "kind": "transcript_preview",
             "server_fanout_at_ms": 1234,
+            "catalog_commit_seq": "41",
             "transcript_preview": {
                 "event_id": 7,
                 "text": "visible before durability",
@@ -1134,6 +1135,7 @@ def test_live_catalog_workspace_event_matches_ios_required_contract():
     events = asyncio.run(_run())
     changed = json.loads(next(event["data"] for event in events if event["event"] == "workspace_changed"))
     assert changed["latest_event_id"] == -7
+    assert changed["catalog_commit_seq"] == 41
     assert changed["transcript_preview"]["text"] == "visible before durability"
     # Required, non-optional fields in SessionWorkspaceStream.WorkspaceChanged.
     assert isinstance(changed["session_id"], str)

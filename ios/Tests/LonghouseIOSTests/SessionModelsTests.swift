@@ -11,6 +11,7 @@ struct SessionModelsTests {
           "latest_event_id": -7,
           "server_now_ms": 1784251909243,
           "server_fanout_at_ms": 1784251909243,
+          "catalog_commit_seq": 41,
           "pubsub_seq": 9,
           "transcript_preview": {
             "event_id": 7,
@@ -34,6 +35,7 @@ struct SessionModelsTests {
 
         let event = try JSONDecoder().decode(SessionWorkspaceStream.WorkspaceChanged.self, from: json)
         #expect(event.latest_event_id == -7)
+        #expect(event.catalog_commit_seq == 41)
         #expect(event.transcript_preview?.text == "visible before durability")
         #expect(event.transcript_preview?.is_provisional == true)
     }

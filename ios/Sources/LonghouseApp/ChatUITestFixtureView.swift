@@ -1202,7 +1202,8 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
                     transcriptConvergence: "current",
                     primary: SessionStateLabel(key: "idle", label: "Idle", tone: "idle", observedAt: nil),
                     access: SessionStateLabel(key: "live_control", label: "Live control", tone: "live", observedAt: nil),
-                    transcript: nil
+                    transcript: nil,
+                    commitSeq: nil
                 )
             )
         )

@@ -34,6 +34,8 @@ let browser;
 let page;
 let detailPage;
 let closeObserved = false;
+const runtimeSettlementTargets = new Set();
+let runtimeSettlementChain = Promise.resolve();
 
 function elapsedMs() {
   return Math.round(performance.now() - started);
@@ -94,15 +96,26 @@ async function waitForCard(kind, timeoutMs) {
         const snapshot = {
           session_id: card.getAttribute("data-session-id"),
           thread_id: card.getAttribute("data-thread-id"),
-          card_state: card.getAttribute("data-card-state"),
-          runtime_tone: card.getAttribute("data-runtime-tone"),
+          card_state:
+            card.getAttribute("data-card-state") ||
+            (card.getAttribute("data-closed") === "true" ? "closed" : null),
+          runtime_tone: card.getAttribute("data-runtime-tone") || card.getAttribute("data-status"),
           runtime_freshness: card.getAttribute("data-runtime-freshness"),
           control_path: card.getAttribute("data-control-path"),
+          activity_state: card.getAttribute("data-activity-state"),
+          activity_observed_at: card.getAttribute("data-activity-observed-at"),
+          state_commit_seq: card.getAttribute("data-state-commit-seq"),
           page_observed_at_wall: new Date().toISOString(),
           page_performance_now_ms: performance.now(),
-          preview_text: preview?.textContent?.trim() ?? "",
+          preview_text:
+            preview?.textContent?.trim() ??
+            card.querySelector('[data-testid="session-row-snippet"]')?.textContent?.trim() ??
+            "",
           closed_text: closed?.textContent?.trim() ?? "",
-          runtime_text: runtime?.textContent?.trim() ?? "",
+          runtime_text:
+            runtime?.textContent?.trim() ??
+            card.querySelector('.inbox-row-status-label')?.textContent?.trim() ??
+            "",
         };
 
         if (targetKind === "card_painted") {
@@ -147,6 +160,92 @@ async function waitForCard(kind, timeoutMs) {
     }
     return false;
   }
+}
+
+function observeRuntimeStateAfterStream(detail) {
+  const targetCommitSeq = Number(detail?.catalog_commit_seq);
+  const targetSessionId = String(detail?.session_id || sessionId);
+  if (!Number.isFinite(targetCommitSeq) || targetCommitSeq <= 0) {
+    return;
+  }
+  const targetKey = `${targetSessionId}:${targetCommitSeq}`;
+  if (runtimeSettlementTargets.has(targetKey)) {
+    return;
+  }
+  runtimeSettlementTargets.add(targetKey);
+
+  runtimeSettlementChain = runtimeSettlementChain
+    .then(async () => {
+      const targetPage =
+        detail?.page_pathname && detail.page_pathname !== "/timeline" ? detailPage : page;
+      if (!targetPage || targetPage.isClosed()) {
+        emit("runtime_state_timeout", {
+          error: "target page is closed",
+          detail,
+          catalog_commit_seq: targetCommitSeq,
+        });
+        return;
+      }
+      try {
+        const handle = await targetPage.waitForFunction(
+          ({ sessionId, targetCommitSeq }) => {
+            const escaped = CSS.escape(sessionId);
+            const card = document.querySelector(
+              `[data-session-id="${escaped}"], [data-thread-id="${escaped}"]`,
+            );
+            if (!card) return false;
+            const rawCommitSeq = card.getAttribute("data-state-commit-seq");
+            const stateCommitSeq = Number(rawCommitSeq);
+            if (!Number.isFinite(stateCommitSeq) || stateCommitSeq < targetCommitSeq) {
+              return false;
+            }
+            return {
+              session_id: card.getAttribute("data-session-id"),
+              thread_id: card.getAttribute("data-thread-id"),
+              activity_state: card.getAttribute("data-activity-state"),
+              activity_observed_at: card.getAttribute("data-activity-observed-at"),
+              state_commit_seq: rawCommitSeq,
+              runtime_tone: card.getAttribute("data-runtime-tone") || card.getAttribute("data-status"),
+              page_observed_at_wall: new Date().toISOString(),
+              page_performance_now_ms: performance.now(),
+              runtime_text:
+                card.querySelector('[data-testid="session-card-runtime"]')?.textContent?.trim() ??
+                card.querySelector('.inbox-row-status-label')?.textContent?.trim() ??
+                "",
+            };
+          },
+          { sessionId: targetSessionId, targetCommitSeq },
+          { timeout: 45000, polling: "raf" },
+        );
+        const domMatchedElapsedMs = elapsedMs();
+        const card = await handle.jsonValue();
+        await handle.dispose();
+        await afterPaintOn(targetPage);
+        const paintStamp = await targetPage.evaluate(() => ({
+          page_painted_at_wall: new Date().toISOString(),
+          page_painted_performance_now_ms: performance.now(),
+        }));
+        emit("runtime_state_painted", {
+          detail,
+          dom_matched_elapsed_ms: domMatchedElapsedMs,
+          stream_catalog_commit_seq: targetCommitSeq,
+          card: { ...card, ...paintStamp },
+        });
+      } catch (error) {
+        emit("runtime_state_timeout", {
+          detail,
+          stream_catalog_commit_seq: targetCommitSeq,
+          error: String(error).slice(0, 500),
+        });
+      }
+    })
+    .catch((error) => {
+      emit("runtime_state_timeout", {
+        detail,
+        stream_catalog_commit_seq: targetCommitSeq,
+        error: String(error).slice(0, 500),
+      });
+    });
 }
 
 async function waitForDetailTranscript(kind, timeoutMs) {
@@ -245,6 +344,9 @@ try {
       Number(detail.transcript_preview_text_length || 0) > 0
     ) {
       emit("timeline_stream_workspace_preview_changed", { detail });
+    }
+    if (kind === "workspace_changed" && detail.catalog_commit_seq != null) {
+      observeRuntimeStateAfterStream(detail);
     }
   });
   await context.addInitScript(() => {

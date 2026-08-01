@@ -1437,6 +1437,21 @@ def _workspace_server_fanout_at_ms(payload: dict | None) -> int | None:
     return candidate if isinstance(candidate, int) else None
 
 
+def _workspace_catalog_commit_seq(payload: dict | None) -> int | None:
+    """Return the canonical catalog commit carried by a runtime wake, if any."""
+    if not isinstance(payload, dict):
+        return None
+    candidate = payload.get("catalog_commit_seq")
+    if isinstance(candidate, bool):
+        return None
+    if isinstance(candidate, int):
+        return candidate if candidate >= 0 else None
+    if isinstance(candidate, str) and candidate.isdecimal():
+        parsed = int(candidate)
+        return parsed if parsed >= 0 else None
+    return None
+
+
 def _workspace_latest_event_ts_ms(signature: tuple) -> int | None:
     latest_event_ts = signature[6] if len(signature) > 6 else None
     if latest_event_ts is None:
@@ -1718,6 +1733,7 @@ async def _live_catalog_workspace_stream(
     skip_initial: bool,
     last_event_id: int | None,
     known_workspace_fingerprint: str | None = None,
+    owner_id: int | None = None,
 ):
     """Live-only invalidation stream; archive detail is fetched via a child.
 
@@ -1784,6 +1800,22 @@ async def _live_catalog_workspace_stream(
             preview = _workspace_transcript_preview_from_payload(message.payload)
             preview_event_id = _workspace_preview_event_id(preview)
             latest_event_id = -abs(preview_event_id) if preview_event_id is not None else 0
+            catalog_commit_seq = _workspace_catalog_commit_seq(message.payload)
+            if catalog_commit_seq is None and owner_id is not None:
+                try:
+                    _session, _provider_alias, raw_commit_seq = await asyncio.to_thread(
+                        read_live_catalog_session,
+                        session_id,
+                        owner_id=owner_id,
+                    )
+                    if str(raw_commit_seq).isdecimal():
+                        catalog_commit_seq = int(raw_commit_seq)
+                except (CatalogReadError, TypeError, ValueError):
+                    logger.debug(
+                        "Could not attach a live catalog commit to workspace wake session=%s",
+                        session_id,
+                        exc_info=True,
+                    )
             yield {
                 "event": "workspace_changed",
                 "id": str(message.seq),
@@ -1792,6 +1824,7 @@ async def _live_catalog_workspace_stream(
                         "session_id": str(session_id),
                         "latest_event_id": latest_event_id,
                         "server_now_ms": int(datetime.now(timezone.utc).timestamp() * 1000),
+                        "catalog_commit_seq": catalog_commit_seq,
                         "server_fanout_at_ms": _workspace_server_fanout_at_ms(message.payload),
                         "pubsub_seq": message.seq,
                         "transcript_preview": preview,
@@ -1812,6 +1845,7 @@ async def stream_session_workspace(
         None,
         description="Fingerprint from the client's rendered workspace snapshot; when stale, skip_initial is ignored.",
     ),
+    current_user_id: int = Depends(get_current_browser_user_id_short_lived),
 ) -> EventSourceResponse:
     """SSE stream that emits workspace_changed when the session's data mutates.
 
@@ -1837,6 +1871,7 @@ async def stream_session_workspace(
                 skip_initial=skip_initial,
                 last_event_id=last_event_id,
                 known_workspace_fingerprint=known_workspace_fingerprint,
+                owner_id=current_user_id,
             )
         )
     return EventSourceResponse(

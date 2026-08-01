@@ -77,6 +77,7 @@ actor RenderBeaconReporter {
         let event_id: String
         let session_id: String?
         let surface: String
+        let render_kind: String
         let managed: Bool
         let emitted_at_ms: Int64
         let rendered_at_ms: Int64
@@ -84,6 +85,9 @@ actor RenderBeaconReporter {
         let server_fanout_at_ms: Int64?
         let client_received_at_ms: Int64?
         let pubsub_seq: Int?
+        let state_commit_seq: Int64?
+        let state_phase: String?
+        let state_observed_at_ms: Int64?
         let webkit: WebKitDiagnostics?
     }
 
@@ -98,16 +102,21 @@ actor RenderBeaconReporter {
         serverFanoutAtMs: Int64? = nil,
         clientReceivedAtMs: Int64? = nil,
         pubsubSeq: Int? = nil,
+        renderKind: String = "event",
+        stateCommitSeq: Int64? = nil,
+        statePhase: String? = nil,
+        stateObservedAtMs: Int64? = nil,
         webkit: WebKitDiagnostics? = nil
     ) -> Payload? {
         let stage = webkit?.stage ?? "rendered"
-        let beaconKey = "\(sessionId):\(latestEventId):\(stage)"
+        let beaconKey = "\(sessionId):\(renderKind):\(latestEventId):\(stage)"
         if lastBeaconKey == beaconKey { return nil }
         lastBeaconKey = beaconKey
         return Payload(
             event_id: latestEventId,
             session_id: sessionId,
             surface: "ios",
+            render_kind: renderKind,
             managed: managed,
             emitted_at_ms: Int64(emittedAt.timeIntervalSince1970 * 1000),
             rendered_at_ms: Int64(Date().timeIntervalSince1970 * 1000),
@@ -115,6 +124,9 @@ actor RenderBeaconReporter {
             server_fanout_at_ms: serverFanoutAtMs,
             client_received_at_ms: clientReceivedAtMs,
             pubsub_seq: pubsubSeq,
+            state_commit_seq: stateCommitSeq,
+            state_phase: statePhase,
+            state_observed_at_ms: stateObservedAtMs,
             webkit: webkit
         )
     }

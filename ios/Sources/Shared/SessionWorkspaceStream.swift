@@ -64,6 +64,7 @@ actor SessionWorkspaceStream {
         let latest_event_emitted_at_ms: Int64?
         let server_fanout_at_ms: Int64?
         let server_now_ms: Int64?
+        var catalog_commit_seq: Int64? = nil
         let pubsub_seq: Int?
         let transcript_preview: TranscriptPreview?
     }

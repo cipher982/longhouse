@@ -916,8 +916,8 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let phase_projection_timer = tokio::time::sleep(PHASE_PROJECTION_DEBOUNCE);
     tokio::pin!(phase_projection_timer);
     let mut phase_projection_pending = false;
-    // Highest observed_at seen in the phase ledger, to detect out-of-process writes.
-    let mut last_phase_watermark: Option<String> = None;
+    // Highest accepted phase-ledger revision, to detect out-of-process writes.
+    let mut last_phase_watermark: Option<i64> = None;
     let startup_reconciliation_timer = tokio::time::sleep(STARTUP_RECONCILIATION_SCAN_DELAY);
     tokio::pin!(startup_reconciliation_timer);
     let mut startup_reconciliation_pending = !startup_archive_mode.is_paused();
@@ -2098,7 +2098,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 // including any added later, without each one having to signal
                 // the daemon. One MAX() over a table with one row per session.
                 if let Some(watermark) = latest_phase_watermark(&conn) {
-                    if last_phase_watermark.as_deref() != Some(watermark.as_str()) {
+                    if last_phase_watermark != Some(watermark) {
                         last_phase_watermark = Some(watermark);
                         if arm_phase_projection(&mut phase_projection_pending) {
                             phase_projection_timer
@@ -2315,17 +2315,17 @@ fn arm_phase_projection(pending: &mut bool) -> bool {
     true
 }
 
-/// Highest `observed_at` in the phase ledger, or None if it cannot be read.
+/// Highest accepted phase-ledger revision, or None if the ledger is empty.
 ///
 /// Cheap enough for the 100ms outbox tick: `session_phase_state` holds one row
 /// per session. Reading a watermark rather than subscribing to a signal is what
 /// makes this cover out-of-process writers — the Codex bridge, Console
 /// adapters, and OpenCode all record phases from their own processes.
-fn latest_phase_watermark(conn: &rusqlite::Connection) -> Option<String> {
+fn latest_phase_watermark(conn: &rusqlite::Connection) -> Option<i64> {
     conn.query_row(
-        "SELECT MAX(observed_at) FROM session_phase_state",
+        "SELECT MAX(revision) FROM session_phase_state",
         [],
-        |row| row.get::<_, Option<String>>(0),
+        |row| row.get::<_, Option<i64>>(0),
     )
     .ok()
     .flatten()
@@ -4781,14 +4781,15 @@ mod tests {
                 phase TEXT NOT NULL,
                 tool_name TEXT,
                 source TEXT NOT NULL,
-                observed_at TEXT NOT NULL
+                observed_at TEXT NOT NULL,
+                revision INTEGER NOT NULL DEFAULT 0
             );",
         )
         .unwrap();
         assert_eq!(latest_phase_watermark(&conn), None, "empty ledger has no watermark");
 
         conn.execute(
-            "INSERT INTO session_phase_state VALUES ('s1','codex','thinking',NULL,'codex_bridge','2026-08-01T13:10:00+00:00')",
+            "INSERT INTO session_phase_state VALUES ('s1','codex','thinking',NULL,'codex_bridge','2026-08-01T13:10:00+00:00',1)",
             [],
         )
         .unwrap();
@@ -4796,7 +4797,7 @@ mod tests {
 
         // A different session transitions later; the watermark must advance.
         conn.execute(
-            "INSERT INTO session_phase_state VALUES ('s2','codex','idle',NULL,'codex_bridge','2026-08-01T13:11:00+00:00')",
+            "INSERT INTO session_phase_state VALUES ('s2','codex','idle',NULL,'codex_bridge','2026-08-01T13:11:00+00:00',2)",
             [],
         )
         .unwrap();
@@ -4805,6 +4806,45 @@ mod tests {
 
         // Re-reading without a write must not re-arm the debounce.
         assert_eq!(latest_phase_watermark(&conn).unwrap(), second);
+    }
+
+    #[test]
+    fn ledger_watermark_moves_for_equal_and_out_of_order_accepted_updates() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let conn = crate::state::db::open_db(Some(tmp.path())).unwrap();
+        let store = crate::state::session_phase::SessionPhaseStore::new(&conn);
+
+        let signal = |session_id: &str, observed_at: &str, phase: &str| {
+            crate::state::session_phase::SessionPhaseSignal {
+                session_id: session_id.to_string(),
+                provider: "codex".to_string(),
+                phase: phase.to_string(),
+                tool_name: None,
+                source: "codex_bridge".to_string(),
+                observed_at: chrono::DateTime::parse_from_rfc3339(observed_at)
+                    .unwrap()
+                    .with_timezone(&chrono::Utc),
+            }
+        };
+
+        assert!(store
+            .record(&signal("s1", "2026-08-01T13:10:00Z", "thinking"))
+            .unwrap());
+        let first = latest_phase_watermark(&conn).unwrap();
+        assert!(store
+            .record(&signal("s1", "2026-08-01T13:10:00+00:00", "running"))
+            .unwrap());
+        let equal_timestamp = latest_phase_watermark(&conn).unwrap();
+        assert!(equal_timestamp > first);
+        assert!(store
+            .record(&signal("s2", "2026-08-01T13:09:59Z", "idle"))
+            .unwrap());
+        let out_of_order = latest_phase_watermark(&conn).unwrap();
+        assert!(out_of_order > equal_timestamp);
+        assert!(!store
+            .record(&signal("s1", "2026-08-01T13:09:58Z", "stale"))
+            .unwrap());
+        assert_eq!(latest_phase_watermark(&conn), Some(out_of_order));
     }
 
     #[test]

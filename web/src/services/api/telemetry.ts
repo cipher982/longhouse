@@ -4,6 +4,7 @@ export interface ClientRenderBeaconItem {
   session_id: string | null;
   event_id: string | null;
   surface: string | null;
+  render_kind: "event" | "state" | null;
   managed: boolean | null;
   latency_ms: number | null;
   emitted_at_ms: number | null;
@@ -12,6 +13,9 @@ export interface ClientRenderBeaconItem {
   server_fanout_at_ms: number | null;
   client_received_at_ms: number | null;
   pubsub_seq: number | null;
+  state_commit_seq: number | null;
+  state_phase: string | null;
+  state_observed_at_ms: number | null;
   webkit?: ClientRenderWebKitDiagnostics | null;
   observed_at: string | null;
   received_at: string | null;

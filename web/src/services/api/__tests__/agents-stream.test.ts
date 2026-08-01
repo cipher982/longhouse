@@ -156,6 +156,7 @@ describe("Timeline session stream", () => {
       latest_event_emitted_at_ms: 1_779_482_799_900,
       server_fanout_at_ms: 1_779_482_799_980,
       server_now_ms: 1_779_482_800_000,
+      catalog_commit_seq: 41,
       pubsub_seq: 7,
       transcript_preview: {
         event_id: 42,
@@ -168,6 +169,7 @@ describe("Timeline session stream", () => {
       expect.objectContaining({
         session_id: "session-1",
         latest_event_id: 42,
+        catalog_commit_seq: 41,
       }),
     );
     const streamEventDetails = onTimelineStreamEvent.mock.calls.map(([event]) => (event as CustomEvent).detail);

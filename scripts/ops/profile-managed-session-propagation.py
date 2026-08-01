@@ -45,8 +45,8 @@ CODEX_LONGHOUSE_HOOK_SCRIPT = Path.home() / ".codex" / "hooks" / "longhouse-code
 BROWSER_UI_OBSERVER_SCRIPT = ROOT / "scripts" / "ops" / "managed_profiler" / "browser_ui_observer.mjs"
 HOSTED_CONTAINER_PREFIX = "longhouse-"
 HOSTED_RUNTIME_OBSERVATION_LIMIT = 200
-METRICS_SCHEMA_VERSION = 3
-BATCH_METRICS_SCHEMA_VERSION = 2
+METRICS_SCHEMA_VERSION = 4
+BATCH_METRICS_SCHEMA_VERSION = 3
 PENDING_BROWSER_SESSION_ID = "__pending_browser_session__"
 BATCH_METRIC_KEYS = (
     "cold_timeline_navigation_to_card_paint_ms",
@@ -63,6 +63,10 @@ BATCH_METRIC_KEYS = (
     "browser_workspace_stream_to_first_paint_ms",
     "browser_workspace_stream_to_tail_paint_ms",
     "browser_workspace_stream_after_sse_ms",
+    "browser_runtime_state_stream_to_paint_ms",
+    "browser_runtime_state_fanout_to_paint_ms",
+    "web_state_render_beacon_p50_ms",
+    "ios_state_render_beacon_p50_ms",
     "close_observed_ms",
     "bridge_live_ingest_lag_ms",
     "browser_timeline_card_from_session_id_ms",
@@ -358,14 +362,17 @@ class Profiler:
         completed = run_cmd(cmd, timeout=60)
         data = safe_json_loads(completed.stdout)
         if isinstance(data, dict):
-            return data
+            database = data.get("database")
+            return database if isinstance(database, dict) else data
         return self.hosted_db_direct(session_id)
 
     def hosted_db_direct(self, session_id: str) -> dict[str, Any] | None:
         script = r"""
-import json, sqlite3, sys
+import json, os, sqlite3, sys
 subdomain, sid, runtime_observation_limit = sys.argv[1], sys.argv[2], int(sys.argv[3])
-path = f"/var/app-data/longhouse/{subdomain}/longhouse.db"
+path = f"/var/app-data/longhouse/{subdomain}/longhouse-live.db"
+if not os.path.exists(path):
+    path = f"/var/app-data/longhouse/{subdomain}/longhouse.db"
 conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
 conn.row_factory = sqlite3.Row
 def table(name):
@@ -400,6 +407,18 @@ if table("session_observations"):
             "payload_json": json.dumps(inner, sort_keys=True),
         })
         payload["runtime_observations"].append(row)
+    client_rows = rows("SELECT id, source, observed_at, received_at, payload_json FROM session_observations WHERE session_id=? AND source_domain='client' AND kind='client_render' ORDER BY id DESC LIMIT ?", (sid, runtime_observation_limit))
+    payload["client_render_observations"] = []
+    for row in client_rows:
+        payload_json = row.pop("payload_json") or "{}"
+        decoded = json.loads(payload_json)
+        inner = decoded.get("payload") if isinstance(decoded, dict) else {}
+        if not isinstance(inner, dict) or "render_kind" not in inner:
+            inner = decoded if isinstance(decoded, dict) else {}
+        row["payload"] = inner
+        payload["client_render_observations"].append(row)
+else:
+    payload["client_render_observations"] = []
 print(json.dumps(payload, default=str))
 """
         proc = subprocess.run(
@@ -1292,6 +1311,7 @@ except Exception as exc:
             "timeline_stream_workspace_connected": "browser_workspace_stream_connected",
             "timeline_stream_workspace_changed": "browser_workspace_stream_changed",
             "timeline_stream_workspace_preview_changed": "browser_workspace_preview_stream_changed",
+            "runtime_state_painted": "browser_runtime_state_painted",
             "live_transcript_first_painted": "browser_live_transcript_first_painted",
             "live_transcript_nonce_painted": "browser_live_transcript_nonce_painted",
         }
@@ -1303,6 +1323,7 @@ except Exception as exc:
             "close_painted_timeout": "browser_close_card_painted_timeout",
             "live_transcript_first_painted_timeout": "browser_live_transcript_first_painted_timeout",
             "live_transcript_nonce_painted_timeout": "browser_live_transcript_nonce_painted_timeout",
+            "runtime_state_timeout": "browser_runtime_state_painted_timeout",
         }
         if observer_kind == "cold":
             event_map = {
@@ -2458,6 +2479,8 @@ except Exception as exc:
         hosted = self.hosted_db_direct(session_id) or {}
         session = hosted.get("session") or {}
         runtime = hosted.get("runtime_state") or {}
+        state_settlement = self.runtime_state_settlement_metrics(case_id, session_id)
+        client_state = state_render_beacon_metrics(hosted)
         contains = hosted_assistant_events_contain(hosted, nonce)
         closed = lifecycle_closed(hosted)
         transcript_latency = self.event_delta_ms(
@@ -2820,6 +2843,16 @@ except Exception as exc:
             "browser_workspace_stream_to_first_paint_ms": browser_workspace_to_first_paint_latency,
             "browser_workspace_stream_to_tail_paint_ms": browser_workspace_to_tail_paint_latency,
             "browser_workspace_stream_after_sse_ms": browser_workspace_after_sse_latency,
+            "browser_runtime_state_stream_to_paint_ms": state_settlement.get("stream_to_paint_ms"),
+            "browser_runtime_state_fanout_to_paint_ms": state_settlement.get("fanout_to_paint_ms"),
+            "browser_runtime_state_settlement_count": state_settlement.get("count", 0),
+            "web_state_render_beacon_count": client_state.get("web_count", 0),
+            "web_state_render_beacon_p50_ms": client_state.get("web_p50_ms"),
+            "web_state_render_beacon_p95_ms": client_state.get("web_p95_ms"),
+            "ios_state_render_beacon_count": client_state.get("ios_count", 0),
+            "ios_state_render_beacon_p50_ms": client_state.get("ios_p50_ms"),
+            "ios_state_render_beacon_p95_ms": client_state.get("ios_p95_ms"),
+            "state_render_beacon_count": client_state.get("count", 0),
             "warm_ready_to_prompt_ms": warm_ready_to_prompt_latency,
             "warm_live_prompt_to_sse_first_ms": first_live_sse_latency,
             "warm_live_prompt_to_browser_first_paint_ms": browser_live_first_latency,
@@ -3012,6 +3045,18 @@ except Exception as exc:
             transcript += f" browser_workspace_stream_to_tail_paint={browser_workspace_to_tail_paint_latency}ms"
         if browser_workspace_after_sse_latency is not None:
             transcript += f" browser_workspace_stream_after_sse={browser_workspace_after_sse_latency}ms"
+        if state_settlement.get("count"):
+            transcript += (
+                f" runtime_state_settlements={state_settlement['count']}"
+                f" stream_to_paint_p50={state_settlement.get('stream_to_paint_ms')}ms"
+                f" fanout_to_paint_p50={state_settlement.get('fanout_to_paint_ms')}ms"
+            )
+        if client_state.get("count"):
+            transcript += (
+                f" state_beacons={client_state['count']}"
+                f" web_p50={client_state.get('web_p50_ms')}ms"
+                f" ios_p50={client_state.get('ios_p50_ms')}ms"
+            )
         if transcript_ingest.get("ingest_lag_ms") is not None:
             transcript += f" server_ingest_lag={transcript_ingest['ingest_lag_ms']}ms"
         if transcript_ingest.get("skew_adjusted_lag_ms") is not None:
@@ -3319,6 +3364,64 @@ except Exception as exc:
         if not starts:
             return None
         return end - max(starts)
+
+    def runtime_state_settlement_metrics(self, case_id: str, session_id: str) -> dict[str, Any]:
+        """Match each browser state paint to the catalog commit that woke it."""
+        streams: dict[int, list[tuple[int, dict[str, Any]]]] = {}
+        for row in self.observations:
+            if row.get("case_id") != case_id or row.get("session_id") != session_id:
+                continue
+            if row.get("event") not in {
+                "browser_workspace_stream_changed",
+                "browser_cold_workspace_stream_changed",
+            }:
+                continue
+            payload = row.get("payload")
+            detail = payload.get("detail") if isinstance(payload, dict) else None
+            if not isinstance(detail, dict):
+                continue
+            commit_seq = int_or_none(detail.get("catalog_commit_seq"))
+            observed = row.get("observed_at_monotonic_ms")
+            if commit_seq is None or not isinstance(observed, int):
+                continue
+            streams.setdefault(commit_seq, []).append((observed, detail))
+
+        settlements: list[dict[str, int]] = []
+        for row in self.observations:
+            if row.get("case_id") != case_id or row.get("session_id") != session_id:
+                continue
+            if row.get("event") not in {
+                "browser_runtime_state_painted",
+                "browser_cold_runtime_state_painted",
+            }:
+                continue
+            payload = row.get("payload")
+            if not isinstance(payload, dict):
+                continue
+            commit_seq = int_or_none(payload.get("stream_catalog_commit_seq"))
+            observed = row.get("observed_at_monotonic_ms")
+            candidates = streams.get(commit_seq or 0, [])
+            if commit_seq is None or not isinstance(observed, int) or not candidates:
+                continue
+            previous = [item for item in candidates if item[0] <= observed]
+            if not previous:
+                continue
+            stream_observed, detail = max(previous, key=lambda item: item[0])
+            item = {"stream_to_paint_ms": observed - stream_observed}
+            fanout_at_ms = int_or_none(detail.get("server_fanout_at_ms"))
+            paint_at_ms = payload_wall_timestamp(row)
+            if fanout_at_ms is not None and paint_at_ms is not None and paint_at_ms >= fanout_at_ms:
+                item["fanout_to_paint_ms"] = paint_at_ms - fanout_at_ms
+            settlements.append(item)
+
+        stream_values = [item["stream_to_paint_ms"] for item in settlements]
+        fanout_values = [item["fanout_to_paint_ms"] for item in settlements if "fanout_to_paint_ms" in item]
+        return {
+            "count": len(settlements),
+            "stream_to_paint_ms": percentile(stream_values, 50),
+            "fanout_to_paint_ms": percentile(fanout_values, 50),
+            "settlements": settlements,
+        }
 
     def terminal_received_delta_from_event_ms(
         self,
@@ -3828,6 +3931,35 @@ def compact_hosted(data: dict[str, Any]) -> dict[str, Any]:
         "event_stats": data.get("event_stats"),
         "recent_events": (data.get("recent_events") or [])[:5],
         "runtime_observations": (data.get("runtime_observations") or [])[:5],
+        "client_render_observation_stats": data.get("client_render_observation_stats"),
+        "client_render_observations": (
+            data.get("client_render_observations") or data.get("recent_client_render_observations") or []
+        )[:20],
+    }
+
+
+def state_render_beacon_metrics(data: dict[str, Any]) -> dict[str, Any]:
+    rows = data.get("client_render_observations") or data.get("recent_client_render_observations") or []
+    by_surface: dict[str, list[int]] = {"web": [], "ios": []}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        payload = row.get("payload") if isinstance(row.get("payload"), dict) else row
+        if payload.get("render_kind") != "state":
+            continue
+        surface = str(payload.get("surface") or "").strip().lower()
+        latency = int_or_none(payload.get("latency_ms"))
+        if surface in by_surface and latency is not None and latency >= 0:
+            by_surface[surface].append(latency)
+    all_values = by_surface["web"] + by_surface["ios"]
+    return {
+        "count": len(all_values),
+        "web_count": len(by_surface["web"]),
+        "web_p50_ms": percentile(by_surface["web"], 50),
+        "web_p95_ms": percentile(by_surface["web"], 95),
+        "ios_count": len(by_surface["ios"]),
+        "ios_p50_ms": percentile(by_surface["ios"], 50),
+        "ios_p95_ms": percentile(by_surface["ios"], 95),
     }
 
 
