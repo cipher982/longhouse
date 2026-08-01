@@ -337,12 +337,14 @@ class Profiler:
         managed = [
             item
             for item in data.get("managed_sessions", [])
+            if isinstance(item, dict)
             if str(item.get("session_id") or item.get("id") or "") == session_id
             or str(item.get("provider_session_id") or "") == session_id
         ]
         unmanaged = [
             item
             for item in data.get("unmanaged_session_bindings", [])
+            if isinstance(item, dict)
             if str(item.get("session_id") or item.get("id") or "") == session_id
             or str(item.get("provider_session_id") or "") == session_id
         ]
@@ -383,11 +385,40 @@ def one(sql, params=()):
     r = conn.execute(sql, params).fetchone()
     return dict(r) if r else None
 payload = {"db_path": path, "session_id": sid}
+if table("live_sessions"):
+    payload["catalog_schema"] = "live"
+    payload["live_session"] = one("SELECT * FROM live_sessions WHERE session_id=?", (sid,))
+    payload["session"] = payload["live_session"]
+    payload["runtime_state"] = one(
+        "SELECT * FROM live_runtime_state WHERE session_id=? ORDER BY updated_at DESC LIMIT 1", (sid,)
+    )
+    payload["timeline_card"] = one("SELECT * FROM live_timeline_cards WHERE session_id=?", (sid,))
+    payload["interactions"] = rows(
+        '''SELECT id, provider, source, reply_transport, kind, status, can_respond,
+                  occurred_at, last_seen_at, resolved_at, expires_at, projection_json
+           FROM live_interaction_requests WHERE session_id=?
+           ORDER BY occurred_at DESC LIMIT ?''',
+        (sid, runtime_observation_limit),
+    ) if table("live_interaction_requests") else []
+    payload["event_stats"] = None
+    payload["recent_events"] = []
+else:
+    payload["catalog_schema"] = "legacy"
+
 if table("sessions"):
-    payload["session"] = one("SELECT id, provider, project, device_id, cwd, started_at, ended_at, last_activity_at, user_messages, assistant_messages, tool_calls, provider_session_id, summary_title, execution_home, managed_transport, source_runner_name, managed_session_name FROM sessions WHERE id=? OR provider_session_id=?", (sid, sid))
-if table("session_runtime_state"):
+    session_columns = {row[1] for row in conn.execute("PRAGMA table_info(sessions)")}
+    if "session_id" in session_columns:
+        archived_session = one("SELECT * FROM sessions WHERE session_id=?", (sid,))
+    elif "id" in session_columns:
+        archived_session = one("SELECT * FROM sessions WHERE id=? OR provider_session_id=?", (sid, sid))
+    else:
+        archived_session = None
+    if archived_session is not None:
+        payload["archive_session"] = archived_session
+        payload["session"] = archived_session
+if table("session_runtime_state") and "runtime_state" not in payload:
     payload["runtime_state"] = one("SELECT * FROM session_runtime_state WHERE session_id=? ORDER BY updated_at DESC LIMIT 1", (sid,))
-if table("events"):
+if table("events") and "event_stats" not in payload:
     payload["event_stats"] = one("SELECT count(*) AS count, min(timestamp) AS first_timestamp, max(timestamp) AS last_timestamp FROM events WHERE session_id=?", (sid,))
     payload["recent_events"] = rows("SELECT id, role, tool_name, substr(coalesce(content_text, tool_output_text, ''), 1, 500) AS text, timestamp FROM events WHERE session_id=? ORDER BY id DESC LIMIT 20", (sid,))
 if table("session_observations"):
@@ -466,7 +497,35 @@ print(json.dumps(payload, default=str))
         if self._browser_session_cookie:
             return self._browser_session_cookie
 
+        explicit_token = os.environ.get("LONGHOUSE_BROWSER_SESSION_TOKEN") or os.environ.get("LONGHOUSE_DEVICE_TOKEN")
+        if explicit_token and explicit_token.strip():
+            self._browser_session_cookie = explicit_token.strip()
+            return self._browser_session_cookie
+
+        machine_state_path = Path.home() / ".longhouse" / "machine" / "state.json"
+        machine_state = read_json(machine_state_path)
+        configured_url = str((machine_state or {}).get("runtime_url") or "").rstrip("/")
+        target_url = self.browser_ui_base_url.rstrip("/")
+        if configured_url == target_url:
+            device_token_path = machine_state_path.parent / "device-token"
+            try:
+                device_token = device_token_path.read_text().strip()
+            except OSError:
+                device_token = ""
+            if device_token:
+                self._browser_session_cookie = device_token
+                return self._browser_session_cookie
+
         script = r"""
+import os
+
+# Hosted runtime API processes deliberately do not open the catalog-owned live
+# SQLite store through the retired default session factory.  This isolated
+# profiler subprocess needs the live store only to mint a browser token for
+# the real user-facing surfaces.
+os.environ["DATABASE_URL"] = "sqlite:////data/longhouse-live.db"
+os.environ["TESTING"] = "1"
+
 from zerg.auth.session_tokens import _issue_access_token
 from zerg.database import db_session
 from zerg.models.models import User
@@ -1522,8 +1581,9 @@ except Exception as exc:
             self.project,
             "--name",
             name,
+            "--url",
+            self.browser_ui_base_url,
             "--no-attach",
-            "--no-open",
         ]
         if self.args.codex_model:
             launch_cmd.extend(["--model", self.args.codex_model])
@@ -1537,7 +1597,15 @@ except Exception as exc:
             timeout=90,
         )
         session_id = parse_session_id(launch.stdout)
-        ws_url = parse_remote_target(launch.stdout)
+        ws_url = None
+        if session_id:
+            ws_url = parse_remote_target(launch.stdout)
+            if not ws_url:
+                ws_url = self.wait_bridge_ws_url(
+                    session_id,
+                    case_id=case_id,
+                    ownership=ownership,
+                )
         if not session_id or not ws_url:
             raise RuntimeError(f"managed launch did not return session/ws url: {launch.short()}")
         self.observe(
@@ -1559,51 +1627,55 @@ except Exception as exc:
                 case_id=case_id,
                 ownership=ownership,
             )
-        self.poll_timeline_session(
-            session_id,
-            case_id=case_id,
-            ownership=ownership,
-            predicate=timeline_has_card,
-            event="timeline_card_visible_pre_ingest",
-            timeout=30,
-            interval=0.25,
-        )
+        if self.args.profile != "warm-live":
+            self.poll_timeline_session(
+                session_id,
+                case_id=case_id,
+                ownership=ownership,
+                predicate=timeline_has_card,
+                event="timeline_card_visible_pre_ingest",
+                timeout=30,
+                interval=0.25,
+            )
         self.write_snapshot(case_id, ownership, session_id, "post_launch")
 
-        tui_log = self.output_dir / f"{session_id}-managed-tui.log"
-        tui_cmd = [
-            "/opt/homebrew/bin/codex",
-            "-c",
-            "check_for_update_on_startup=false",
-        ]
-        if self.args.codex_effort:
-            tui_cmd.extend(["-c", f"model_reasoning_effort={self.args.codex_effort}"])
-        if self.args.codex_model:
-            tui_cmd.extend(["--model", self.args.codex_model])
-        tui_cmd.extend(["--enable", "tui_app_server", "--remote", ws_url, "--no-alt-screen"])
-        remote_exec = f"LONGHOUSE_MANAGED_SESSION_ID={shlex.quote(session_id)} exec {shlex.join(tui_cmd)}"
-        remote_cmd = (
-            "stty rows 40 cols 120 2>/dev/null || true; "
-            "export LINES=40 COLUMNS=120 TERM=${TERM:-xterm-256color}; "
-            f"{remote_exec}"
-        )
-        tui = subprocess.Popen(
-            ["script", "-q", str(tui_log), "zsh", "-lc", remote_cmd],
-            cwd=str(ROOT),
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-        self.observe(
-            case_id=case_id,
-            provider="codex",
-            ownership=ownership,
-            source="harness",
-            event="remote_tui_started",
-            session_id=session_id,
-            payload={"pid": tui.pid, "log": str(tui_log)},
-        )
+        tui: subprocess.Popen[str] | None = None
+        precondition: dict[str, Any] | None = None
+        if self.args.profile != "warm-live":
+            tui_log = self.output_dir / f"{session_id}-managed-tui.log"
+            tui_cmd = [
+                "/opt/homebrew/bin/codex",
+                "-c",
+                "check_for_update_on_startup=false",
+            ]
+            if self.args.codex_effort:
+                tui_cmd.extend(["-c", f"model_reasoning_effort={self.args.codex_effort}"])
+            if self.args.codex_model:
+                tui_cmd.extend(["--model", self.args.codex_model])
+            tui_cmd.extend(["--enable", "tui_app_server", "--remote", ws_url, "--no-alt-screen"])
+            remote_exec = f"LONGHOUSE_MANAGED_SESSION_ID={shlex.quote(session_id)} exec {shlex.join(tui_cmd)}"
+            remote_cmd = (
+                "stty rows 40 cols 120 2>/dev/null || true; "
+                "export LINES=40 COLUMNS=120 TERM=${TERM:-xterm-256color}; "
+                f"{remote_exec}"
+            )
+            tui = subprocess.Popen(
+                ["script", "-q", str(tui_log), "zsh", "-lc", remote_cmd],
+                cwd=str(ROOT),
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            self.observe(
+                case_id=case_id,
+                provider="codex",
+                ownership=ownership,
+                source="harness",
+                event="remote_tui_started",
+                session_id=session_id,
+                payload={"pid": tui.pid, "log": str(tui_log)},
+            )
         state = self.wait_bridge_thread(session_id, case_id=case_id, ownership=ownership)
         thread_id = state.get("thread_id") if state else None
         thread_path = Path(str(state.get("thread_path") or "")) if state else None
@@ -1618,13 +1690,14 @@ except Exception as exc:
             session_id=session_id,
             payload={"thread_id": thread_id, "state": state},
         )
-        precondition = self.wait_codex_tui_precondition(
-            tui_log,
-            case_id=case_id,
-            ownership=ownership,
-            session_id=session_id,
-            timeout=8,
-        )
+        if tui is not None:
+            precondition = self.wait_codex_tui_precondition(
+                tui_log,
+                case_id=case_id,
+                ownership=ownership,
+                session_id=session_id,
+                timeout=8,
+            )
         if precondition:
             self.write_snapshot(case_id, ownership, session_id, "provider_precondition")
             self.observe(
@@ -1685,8 +1758,8 @@ except Exception as exc:
             browser_ready = self.wait_for_observation(
                 case_id,
                 session_id,
-                "browser_timeline_card_painted",
-                timeout=30,
+                "browser_session_id_received",
+                timeout=15,
             )
             sse_ready = self.wait_for_observation(
                 case_id,
@@ -2254,6 +2327,27 @@ except Exception as exc:
         )
         return last
 
+    def wait_bridge_ws_url(self, session_id: str, *, case_id: str, ownership: str) -> str | None:
+        state_path = BRIDGE_ROOT / f"{session_id}.json"
+        deadline = time.monotonic() + 30
+        last = None
+        while time.monotonic() < deadline:
+            last = read_json(state_path)
+            ws_url = str((last or {}).get("ws_url") or "").strip()
+            if ws_url:
+                return ws_url
+            time.sleep(0.25)
+        self.observe(
+            case_id=case_id,
+            provider="codex",
+            ownership=ownership,
+            source="codex_bridge_state",
+            event="managed_ws_url_timeout",
+            session_id=session_id,
+            payload={"state_path": str(state_path), "last": last},
+        )
+        return None
+
     def poll_local_assistant_response(
         self,
         path: Path,
@@ -2477,6 +2571,15 @@ except Exception as exc:
         )
         requires_durable = not active_metrics or "durable_archive_local_to_hosted_ms" in active_metrics
         hosted = self.hosted_db_direct(session_id) or {}
+        if not hosted.get("session"):
+            # The catalog-owned live store and the debug helper can briefly
+            # observe different SQLite generations during archive promotion.
+            # Keep the direct reader as the primary timing source, but use the
+            # same canonical debug snapshot for final verdict identity when it
+            # has the durable row the direct read missed.
+            hosted_fallback = self.hosted_debug(session_id) or {}
+            if hosted_fallback.get("session"):
+                hosted = {**hosted, **hosted_fallback}
         session = hosted.get("session") or {}
         runtime = hosted.get("runtime_state") or {}
         state_settlement = self.runtime_state_settlement_metrics(case_id, session_id)
@@ -3531,7 +3634,10 @@ def redact_cmd(cmd: list[str]) -> list[str]:
 
 
 def parse_session_id(text: str) -> str | None:
-    match = re.search(r"Session ID:\s*([0-9a-fA-F-]{36})", text)
+    match = re.search(
+        r"(?:Session ID:|Attach:\s+longhouse\s+codex\s+attach\s+--session-id)\s*([0-9a-fA-F-]{36})",
+        text,
+    )
     return match.group(1) if match else None
 
 
@@ -3691,6 +3797,18 @@ def hosted_assistant_events_contain(data: dict[str, Any], text: str) -> bool:
         if str(event.get("role") or "") != "assistant":
             continue
         if text in str(event.get("text") or ""):
+            return True
+    # Catalog-backed hosted tenants keep the durable transcript in `sessions`
+    # while live provisional text is held separately.  The profiler must be
+    # able to prove the archived assistant result in either schema.
+    for key in (
+        "last_assistant_message_preview",
+        "last_visible_text_preview",
+        "transcript_preview",
+    ):
+        if text in str((data.get("session") or {}).get(key) or ""):
+            return True
+        if text in str((data.get("archive_session") or {}).get(key) or ""):
             return True
     return False
 
@@ -4051,8 +4169,8 @@ def summarize_local_health(data: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def terminate_process(proc: subprocess.Popen[str]) -> None:
-    if proc.poll() is not None:
+def terminate_process(proc: subprocess.Popen[str] | None) -> None:
+    if proc is None or proc.poll() is not None:
         return
     try:
         proc.terminate()

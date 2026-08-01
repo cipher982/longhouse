@@ -400,19 +400,21 @@ try {
     emit("session_id_received", { session_id: sessionId });
   }
 
-  const cardPainted = await waitForCard("card_painted", 30000);
-  if (exitAfterDetailTranscript && page && !page.isClosed()) {
-    await page.close();
-    page = undefined;
-    emit("timeline_page_closed_after_card", { card_painted: cardPainted });
-  }
-
+  // Warm-live must attach the detail workspace before the provider turn. The
+  // timeline card can legitimately lag archive promotion, and waiting for it
+  // first would make the browser measurement include an observer-induced
+  // 30-second timeout while the real workspace stream is already live.
+  const cardPaintedPromise = waitForCard("card_painted", 30000);
   await openDetailObserver(context);
   const detailFirstPainted = waitForDetailTranscript("live_transcript_first_painted", 95000);
   const detailNoncePainted = waitForDetailTranscript("live_transcript_nonce_painted", 95000);
   if (exitAfterDetailTranscript) {
     await Promise.all([detailFirstPainted, detailNoncePainted]);
+    // Keep the card measurement in the same run, but do not let it delay the
+    // detail observer's attachment or the provider-to-browser timing.
+    await cardPaintedPromise;
   } else {
+    await cardPaintedPromise;
     void detailFirstPainted;
     void detailNoncePainted;
     await waitForCard("close_painted", 420000);

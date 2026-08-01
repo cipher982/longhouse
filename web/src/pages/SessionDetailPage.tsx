@@ -467,6 +467,10 @@ function SessionDetailWorkspaceRoute({
   return (
     <div
       className={workspaceClassName}
+      data-session-id={displaySession.id}
+      data-state-commit-seq={displaySession.session_state.commit_seq ?? undefined}
+      data-activity-state={displaySession.session_state.activity.state}
+      data-activity-observed-at={displaySession.session_state.activity.observed_at ?? undefined}
       data-control-path={interaction.isManagedLocalSession ? "managed" : "unmanaged"}
       data-runtime-tone={runtime.tone}
     >
