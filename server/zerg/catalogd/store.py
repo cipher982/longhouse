@@ -2694,7 +2694,11 @@ class CatalogStore:
                         LiveSessionThreadAlias.provider == session.provider,
                         LiveSessionThreadAlias.alias_kind == "provider_session_id",
                     )
-                    .order_by(LiveSessionThreadAlias.last_seen_at.desc())
+                    .order_by(
+                        LiveSessionThreadAlias.last_seen_at.desc(),
+                        LiveSessionThreadAlias.first_seen_at.desc(),
+                        LiveSessionThreadAlias.id.desc(),
+                    )
                     .first()
                 )
                 receipt = LiveSessionInputReceipt(
@@ -2844,7 +2848,11 @@ class CatalogStore:
                                 LiveSessionThreadAlias.provider == next_turn.provider,
                                 LiveSessionThreadAlias.alias_kind == "provider_session_id",
                             )
-                            .order_by(LiveSessionThreadAlias.last_seen_at.desc())
+                            .order_by(
+                                LiveSessionThreadAlias.last_seen_at.desc(),
+                                LiveSessionThreadAlias.first_seen_at.desc(),
+                                LiveSessionThreadAlias.id.desc(),
+                            )
                             .first()
                         )
                         next_run_id = str(uuid4())
@@ -5312,6 +5320,33 @@ class CatalogStore:
                     session_facts["last_activity_at"],
                 )
                 connection.execute(update(storage_session).where(storage_session.c.session_id == session_key).values(**session_values))
+            provider_session_id = str(session_facts.get("provider_session_id") or "").strip()
+            if provider_session_id:
+                primary_thread_id = connection.execute(
+                    select(live_session_catalog.c.primary_thread_id).where(live_session_catalog.c.session_id == session_key)
+                ).scalar_one_or_none()
+                if primary_thread_id:
+                    alias_table = LiveSessionThreadAlias.__table__
+                    alias_seen_at = _as_aware_utc(session_facts["last_activity_at"]) or commit_time
+                    alias_upsert = sqlite_insert(alias_table).values(
+                        thread_id=str(primary_thread_id),
+                        provider=provider,
+                        alias_kind="provider_session_id",
+                        alias_value=provider_session_id,
+                        first_seen_at=alias_seen_at,
+                        last_seen_at=alias_seen_at,
+                    )
+                    connection.execute(
+                        alias_upsert.on_conflict_do_update(
+                            index_elements=["thread_id", "provider", "alias_kind", "alias_value"],
+                            set_={
+                                "last_seen_at": func.max(
+                                    alias_table.c.last_seen_at,
+                                    alias_upsert.excluded.last_seen_at,
+                                )
+                            },
+                        )
+                    )
             if render_manifest is not None:
                 generation_key = str(render_manifest["generation_id"])
                 publish_render = render_state == "ready"

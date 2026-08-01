@@ -122,6 +122,83 @@ pub fn managed_longhouse_session_id_for_opencode(provider_session_id: &str) -> O
     )
 }
 
+/// A newly created top-level session can become visible in OpenCode's SQLite
+/// store a few milliseconds before the private server event monitor updates its
+/// managed bridge state. Hold that source briefly instead of permanently
+/// archiving its first batch as an unrelated shadow session.
+pub fn managed_binding_may_be_pending(metadata: &SessionMetadata) -> bool {
+    managed_binding_may_be_pending_from_roots(metadata, &opencode_state_roots(), Utc::now())
+}
+
+fn managed_binding_may_be_pending_from_roots(
+    metadata: &SessionMetadata,
+    roots: &[PathBuf],
+    now: DateTime<Utc>,
+) -> bool {
+    if metadata.is_sidechain
+        || metadata.forked_from_session_id.is_some()
+        || metadata.subagent_id.is_some()
+    {
+        return false;
+    }
+    let Some(provider_session_id) = metadata.provider_session_id.as_deref() else {
+        return false;
+    };
+    let Some(cwd) = metadata.cwd.as_deref() else {
+        return false;
+    };
+    let Some(started_at) = metadata.started_at else {
+        return false;
+    };
+    let age = now.signed_duration_since(started_at);
+    if age < chrono::Duration::seconds(-2) || age > chrono::Duration::seconds(5) {
+        return false;
+    }
+    for root in roots {
+        let Ok(entries) = fs::read_dir(root) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|value| value.to_str()) != Some("json") {
+                continue;
+            }
+            let Some(value) = fs::read(&path)
+                .ok()
+                .and_then(|raw| serde_json::from_slice::<Value>(&raw).ok())
+            else {
+                continue;
+            };
+            let same_workspace = value
+                .get("cwd")
+                .and_then(Value::as_str)
+                .is_some_and(|state_cwd| paths_resolve_equal(state_cwd, cwd));
+            let different_active_session = value
+                .get("provider_session_id")
+                .and_then(Value::as_str)
+                .is_some_and(|active| active != provider_session_id);
+            let server_alive = value
+                .get("pid")
+                .and_then(Value::as_u64)
+                .and_then(|pid| i32::try_from(pid).ok())
+                .is_some_and(|pid| pid > 0 && unsafe { libc::kill(pid, 0) == 0 });
+            if same_workspace && different_active_session && server_alive {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn paths_resolve_equal(left: &str, right: &str) -> bool {
+    let left = PathBuf::from(left);
+    let right = PathBuf::from(right);
+    match (fs::canonicalize(&left), fs::canonicalize(&right)) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => left == right,
+    }
+}
+
 pub fn pending_console_binding_blocks_shadow(provider_session_id: &str) -> bool {
     let Ok(registry) = crate::turn_claims::default_registry() else {
         return false;
@@ -294,7 +371,18 @@ fn managed_longhouse_session_id_for_opencode_from_roots(
                 .and_then(Value::as_str)
                 .map(str::trim)
                 .filter(|value| !value.is_empty());
-            if state_provider_session_id != Some(provider_session_id) {
+            let prior_provider_session_id = value
+                .get("previous_provider_session_ids")
+                .and_then(Value::as_array)
+                .is_some_and(|values| {
+                    values
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(str::trim)
+                        .any(|value| value == provider_session_id)
+                });
+            if state_provider_session_id != Some(provider_session_id) && !prior_provider_session_id
+            {
                 continue;
             }
             let Some(longhouse_session_id) = value
@@ -2225,6 +2313,7 @@ mod tests {
                 "schema_version": 1,
                 "session_id": longhouse_session_id,
                 "provider_session_id": "ses_native_server",
+                "previous_provider_session_ids": ["ses_before_reset"],
                 "server_url": "http://127.0.0.1:12345",
                 "pid": 12345,
                 "cwd": "/tmp/project",
@@ -2238,10 +2327,60 @@ mod tests {
         assert_eq!(
             managed_longhouse_session_id_for_opencode_from_roots(
                 "ses_native_server",
-                &[state_root]
+                std::slice::from_ref(&state_root),
             )
             .as_deref(),
             Some(longhouse_session_id)
         );
+        assert_eq!(
+            managed_longhouse_session_id_for_opencode_from_roots(
+                "ses_before_reset",
+                std::slice::from_ref(&state_root),
+            )
+            .as_deref(),
+            Some(longhouse_session_id)
+        );
+    }
+
+    #[test]
+    fn fresh_top_level_session_waits_for_matching_managed_server_event() {
+        let temp = tempfile::tempdir().unwrap();
+        let state_root = temp.path().join("states");
+        let workspace = temp.path().join("workspace");
+        std::fs::create_dir_all(&state_root).unwrap();
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::write(
+            state_root.join("managed.json"),
+            serde_json::json!({
+                "session_id": "22222222-2222-4222-8222-222222222222",
+                "provider_session_id": "ses_before_reset",
+                "pid": std::process::id(),
+                "cwd": workspace,
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let now = Utc::now();
+        let metadata = SessionMetadata {
+            provider_session_id: Some("ses_after_reset".to_string()),
+            cwd: Some(workspace.to_string_lossy().into_owned()),
+            started_at: Some(now),
+            ..Default::default()
+        };
+
+        assert!(managed_binding_may_be_pending_from_roots(
+            &metadata,
+            std::slice::from_ref(&state_root),
+            now
+        ));
+        let old = SessionMetadata {
+            started_at: Some(now - chrono::Duration::seconds(6)),
+            ..metadata
+        };
+        assert!(!managed_binding_may_be_pending_from_roots(
+            &old,
+            std::slice::from_ref(&state_root),
+            now
+        ));
     }
 }

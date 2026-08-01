@@ -322,6 +322,58 @@ pub fn active_source_revision(
     )
 }
 
+/// Attach the upstream conversation identity observed in this source epoch.
+pub fn record_provider_session_id(
+    conn: &Connection,
+    source_epoch: Uuid,
+    provider_session_id: &str,
+) -> Result<()> {
+    let provider_session_id = provider_session_id.trim();
+    if provider_session_id.is_empty() {
+        bail!("provider session id must be non-empty");
+    }
+    let changed = conn.execute(
+        "UPDATE source_epoch_registry
+         SET provider_session_id = ?1, updated_at = ?2
+         WHERE source_epoch = ?3",
+        params![
+            provider_session_id,
+            Utc::now().to_rfc3339(),
+            source_epoch.to_string()
+        ],
+    )?;
+    if changed != 1 {
+        bail!("source epoch is unavailable while recording provider identity");
+    }
+    Ok(())
+}
+
+/// Return the newest different source identity already bound to this managed
+/// Longhouse session. The current epoch is excluded so callers can query before
+/// recording the newly observed provider conversation.
+pub fn previous_provider_session_id(
+    conn: &Connection,
+    current_source_epoch: Uuid,
+    provider: &str,
+    bound_session_id: &str,
+) -> Result<Option<String>> {
+    conn.query_row(
+        "SELECT provider_session_id
+         FROM source_epoch_registry
+         WHERE provider = ?1
+           AND bound_session_id = ?2
+           AND source_epoch != ?3
+           AND provider_session_id IS NOT NULL
+           AND provider_session_id != ''
+         ORDER BY created_at DESC, source_epoch DESC
+         LIMIT 1",
+        params![provider, bound_session_id, current_source_epoch.to_string()],
+        |row| row.get(0),
+    )
+    .optional()
+    .map_err(Into::into)
+}
+
 pub fn resolution_for_epoch(
     conn: &Connection,
     source_epoch: Uuid,
@@ -980,6 +1032,52 @@ mod tests {
         assert_eq!(repair.source_epoch, managed.source_epoch);
         assert_eq!(repair.bound_session_id.as_deref(), Some("managed-session"));
         assert!(!repair.created);
+    }
+
+    #[test]
+    fn provider_identity_follows_ordered_sources_in_one_managed_session() {
+        let mut conn = crate::state::db::open_db(None).unwrap();
+        let first = observe_source(
+            &mut conn,
+            "claude",
+            "source-one",
+            "incarnation-one",
+            1,
+            SourceLane::Durable,
+            0,
+            None,
+            Some("managed-session"),
+            SourceChangeHint::None,
+        )
+        .unwrap();
+        record_provider_session_id(&conn, first.source_epoch, "provider-one").unwrap();
+        let second = observe_source(
+            &mut conn,
+            "claude",
+            "source-two",
+            "incarnation-two",
+            1,
+            SourceLane::Durable,
+            0,
+            None,
+            Some("managed-session"),
+            SourceChangeHint::None,
+        )
+        .unwrap();
+
+        assert_eq!(
+            previous_provider_session_id(&conn, second.source_epoch, "claude", "managed-session")
+                .unwrap()
+                .as_deref(),
+            Some("provider-one")
+        );
+        record_provider_session_id(&conn, second.source_epoch, "provider-two").unwrap();
+        assert_eq!(
+            previous_provider_session_id(&conn, first.source_epoch, "claude", "managed-session")
+                .unwrap()
+                .as_deref(),
+            Some("provider-two")
+        );
     }
 
     #[test]

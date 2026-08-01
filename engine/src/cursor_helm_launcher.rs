@@ -83,8 +83,20 @@ fn phase(dir: &Path, session_id: &str, conversation: &str, launch_id: &str) -> O
     let value: Value =
         serde_json::from_slice(&fs::read(dir.join(format!("{session_id}.phase.json"))).ok()?)
             .ok()?;
+    let active_conversation = fs::read(
+        dir.join("binding-probes")
+            .join(format!("{session_id}.json")),
+    )
+    .ok()
+    .and_then(|raw| serde_json::from_slice::<Value>(&raw).ok())
+    .and_then(|claim| {
+        (claim.get("launch_id")?.as_str()? == launch_id)
+            .then(|| claim.get("conversation_uuid")?.as_str().map(str::to_string))
+            .flatten()
+    })
+    .unwrap_or_else(|| conversation.to_string());
     (value.get("session_id")?.as_str()? == session_id
-        && value.get("conversation_id")?.as_str()? == conversation
+        && value.get("conversation_id")?.as_str()? == active_conversation
         && value.get("launch_id")?.as_str()? == launch_id)
         .then_some(value)
 }
@@ -1064,7 +1076,7 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
         let now = Utc::now().to_rfc3339();
         write_json(
             &dir.join(format!("{session_id}.json")),
-            &json!({"schema_version":1,"session_id":session_id,"run_id":registered.as_ref().map(|value| value.run_id.as_str()),"connection_id":Uuid::new_v4().to_string(),"lease_generation":Uuid::new_v4().to_string(),"provider":"cursor","control_plane":"cursor_helm","socket_path":socket,"launcher_pid":launcher_pid,"launcher_process_start_time":launcher_start,"cursor_pid":pid,"cursor_process_start_time":cursor_start,"cwd":cwd,"ready":true,"registration":if registered.is_some() {"registered"} else {"degraded"},"started_at":now,"updated_at":now}),
+            &json!({"schema_version":1,"session_id":session_id,"provider_session_id":conversation,"run_id":registered.as_ref().map(|value| value.run_id.as_str()),"connection_id":Uuid::new_v4().to_string(),"lease_generation":Uuid::new_v4().to_string(),"provider":"cursor","control_plane":"cursor_helm","socket_path":socket,"launcher_pid":launcher_pid,"launcher_process_start_time":launcher_start,"cursor_pid":pid,"cursor_process_start_time":cursor_start,"cwd":cwd,"ready":true,"registration":if registered.is_some() {"registered"} else {"degraded"},"started_at":now,"updated_at":now}),
         )?;
         let terminal = Terminal(0, raw(0)?);
         signal_hook::flag::register(libc::SIGWINCH, resized.clone())?;

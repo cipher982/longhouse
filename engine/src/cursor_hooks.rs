@@ -137,18 +137,32 @@ pub fn lifecycle(event: &str) {
     let claim_path = root
         .join("binding-probes")
         .join(format!("{session_id}.json"));
-    let claim: Value = std::fs::read(&claim_path)
+    let mut claim: Value = std::fs::read(&claim_path)
         .ok()
         .and_then(|raw| serde_json::from_slice(&raw).ok())
         .unwrap_or_else(|| json!({}));
     if claim.get("session_id").and_then(Value::as_str) != Some(&session_id)
-        || claim.get("conversation_uuid").and_then(Value::as_str) != Some(conversation)
         || claim.get("launch_id").and_then(Value::as_str) != Some(&launch_id)
     {
         println!("{{}}");
         return;
     }
     let now = Utc::now().to_rfc3339();
+    if claim.get("conversation_uuid").and_then(Value::as_str) != Some(conversation) {
+        if !is_top_level_conversation_start(event, &payload)
+            || !rotate_cursor_conversation(
+                &root,
+                &claim_path,
+                &mut claim,
+                &session_id,
+                conversation,
+                &now,
+            )
+        {
+            println!("{{}}");
+            return;
+        }
+    }
     let phase = match event {
         "beforeSubmitPrompt"
         | "afterAgentThought"
@@ -212,6 +226,63 @@ pub fn lifecycle(event: &str) {
         wake_transcript(&session_id, conversation, payload.get("generation_id"));
     }
     println!("{{}}");
+}
+
+fn is_top_level_conversation_start(event: &str, payload: &Value) -> bool {
+    event == "sessionStart"
+        && payload.get("is_background_agent").and_then(Value::as_bool) == Some(false)
+}
+
+fn rotate_cursor_conversation(
+    root: &std::path::Path,
+    claim_path: &std::path::Path,
+    claim: &mut Value,
+    session_id: &str,
+    conversation: &str,
+    observed_at: &str,
+) -> bool {
+    let Some(previous) = claim
+        .get("conversation_uuid")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_string)
+    else {
+        return false;
+    };
+    let history = claim.as_object_mut().and_then(|object| {
+        object
+            .entry("previous_conversation_uuids")
+            .or_insert_with(|| json!([]))
+            .as_array_mut()
+    });
+    let Some(history) = history else {
+        return false;
+    };
+    // This is ordered transition history, not a set. A -> B -> A -> B must
+    // retain A as the final predecessor so the first post-upgrade archive can
+    // emit a distinct boundary even before source-epoch identity is populated.
+    history.push(Value::String(previous));
+    claim["conversation_uuid"] = Value::String(conversation.to_string());
+    claim["status"] = Value::String("observed".to_string());
+    claim["hook_observed_at"] = Value::String(observed_at.to_string());
+    claim["updated_at"] = Value::String(observed_at.to_string());
+    if !write(claim_path.to_path_buf(), claim) {
+        return false;
+    }
+
+    let state_path = root.join(format!("{session_id}.json"));
+    let Some(mut state) = std::fs::read(&state_path)
+        .ok()
+        .and_then(|raw| serde_json::from_slice::<Value>(&raw).ok())
+    else {
+        return true;
+    };
+    if state.get("session_id").and_then(Value::as_str) == Some(session_id) {
+        state["provider_session_id"] = Value::String(conversation.to_string());
+        state["updated_at"] = Value::String(observed_at.to_string());
+        let _ = write(state_path, &state);
+    }
+    true
 }
 
 fn wake_transcript(session_id: &str, conversation: &str, generation_id: Option<&Value>) {
@@ -465,4 +536,91 @@ fn remote_decision(
             .await;
         None
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn conversation_rotation_preserves_history_and_updates_active_state() {
+        let temp = tempfile::tempdir().unwrap();
+        let claim_path = temp.path().join("binding-probes/session.json");
+        let state_path = temp.path().join("session.json");
+        let mut claim = json!({
+            "session_id": "session",
+            "conversation_uuid": "conversation-old",
+            "launch_id": "launch",
+            "status": "observed"
+        });
+        write(claim_path.clone(), &claim);
+        write(
+            state_path.clone(),
+            &json!({
+                "session_id": "session",
+                "provider_session_id": "conversation-old",
+                "updated_at": "before"
+            }),
+        );
+
+        assert!(rotate_cursor_conversation(
+            temp.path(),
+            &claim_path,
+            &mut claim,
+            "session",
+            "conversation-new",
+            "2026-07-31T12:00:00Z",
+        ));
+
+        let durable_claim: Value =
+            serde_json::from_slice(&std::fs::read(&claim_path).unwrap()).unwrap();
+        let durable_state: Value =
+            serde_json::from_slice(&std::fs::read(state_path).unwrap()).unwrap();
+        assert_eq!(durable_claim["conversation_uuid"], "conversation-new");
+        assert_eq!(
+            durable_claim["previous_conversation_uuids"],
+            json!(["conversation-old"])
+        );
+        assert_eq!(durable_state["provider_session_id"], "conversation-new");
+        assert_eq!(durable_state["updated_at"], "2026-07-31T12:00:00Z");
+
+        assert!(rotate_cursor_conversation(
+            temp.path(),
+            &claim_path,
+            &mut claim,
+            "session",
+            "conversation-old",
+            "2026-07-31T12:01:00Z",
+        ));
+        assert!(rotate_cursor_conversation(
+            temp.path(),
+            &claim_path,
+            &mut claim,
+            "session",
+            "conversation-new",
+            "2026-07-31T12:02:00Z",
+        ));
+        let repeated: Value = serde_json::from_slice(&std::fs::read(claim_path).unwrap()).unwrap();
+        assert_eq!(
+            repeated["previous_conversation_uuids"],
+            json!(["conversation-old", "conversation-new", "conversation-old"])
+        );
+    }
+
+    #[test]
+    fn conversation_rotation_requires_an_explicit_foreground_session_start() {
+        assert!(is_top_level_conversation_start(
+            "sessionStart",
+            &json!({"is_background_agent": false})
+        ));
+        assert!(!is_top_level_conversation_start(
+            "sessionStart",
+            &json!({"is_background_agent": true})
+        ));
+        assert!(!is_top_level_conversation_start("sessionStart", &json!({})));
+        assert!(!is_top_level_conversation_start(
+            "beforeSubmitPrompt",
+            &json!({"is_background_agent": false})
+        ));
+    }
 }

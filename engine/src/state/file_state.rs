@@ -89,6 +89,34 @@ impl<'a> FileState<'a> {
         }
     }
 
+    /// Return the most recently observed provider conversation for another
+    /// source belonging to the same managed Longhouse session.
+    pub fn previous_provider_session_id(
+        &self,
+        file_path: &str,
+        session_id: &str,
+        provider: &str,
+    ) -> Result<Option<String>> {
+        let result = self.conn.query_row(
+            "SELECT provider_session_id
+             FROM file_state
+             WHERE session_id = ?1
+               AND provider = ?2
+               AND path != ?3
+               AND provider_session_id IS NOT NULL
+               AND provider_session_id != ''
+             ORDER BY last_updated DESC, path DESC
+             LIMIT 1",
+            rusqlite::params![session_id, provider, file_path],
+            |row| row.get::<_, String>(0),
+        );
+        match result {
+            Ok(value) => Ok(Some(value)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(error) => Err(error.into()),
+        }
+    }
+
     /// Persist the strongest identity for a source already proven continuous.
     pub fn record_continuous_file_identity(
         &self,
@@ -339,6 +367,28 @@ mod tests {
             .unwrap();
         assert_eq!(fs.get_offset("/path/a.jsonl").unwrap(), 1000);
         assert_eq!(fs.get_queued_offset("/path/a.jsonl").unwrap(), 1000);
+    }
+
+    #[test]
+    fn previous_provider_session_id_uses_another_source_in_the_same_managed_session() {
+        let (_tmp, conn) = setup();
+        let fs = FileState::new(&conn);
+        fs.set_offset("/old.jsonl", 100, "managed", "provider-old", "claude")
+            .unwrap();
+        fs.set_offset("/other.jsonl", 100, "other", "provider-other", "claude")
+            .unwrap();
+
+        assert_eq!(
+            fs.previous_provider_session_id("/new.jsonl", "managed", "claude")
+                .unwrap()
+                .as_deref(),
+            Some("provider-old")
+        );
+        assert_eq!(
+            fs.previous_provider_session_id("/old.jsonl", "managed", "claude")
+                .unwrap(),
+            None
+        );
     }
 
     #[test]

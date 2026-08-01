@@ -108,6 +108,7 @@ _EXPECTED_SESSION_FIELDS = {
     "launch_actor",
     "launch_surface",
 }
+_OPTIONAL_SESSION_FIELDS = {"provider_session_id"}
 _EXPECTED_RENDER_FIELDS = {"generation_id", "parser_revision", "ordering_revision", "records"}
 _EXPECTED_RENDER_RECORD_FIELDS = {
     "event_id",
@@ -227,9 +228,14 @@ def _lower_hash(value: object, field: str) -> str:
 
 
 def _parse_session_facts(value: object) -> dict[str, object]:
-    if not isinstance(value, dict) or set(value) != _EXPECTED_SESSION_FIELDS:
+    if (
+        not isinstance(value, dict)
+        or not _EXPECTED_SESSION_FIELDS.issubset(value)
+        or set(value) - _EXPECTED_SESSION_FIELDS - _OPTIONAL_SESSION_FIELDS
+    ):
         raise ValueError("session fields do not match protocol v2")
     result = dict(value)
+    result.setdefault("provider_session_id", None)
     result["environment"] = _canonical_text(result["environment"], "session.environment", 32)
     for field, maximum in (
         ("project", 255),
@@ -239,6 +245,7 @@ def _parse_session_facts(value: object) -> dict[str, object]:
         ("origin_kind", 64),
         ("launch_actor", 32),
         ("launch_surface", 32),
+        ("provider_session_id", 255),
     ):
         raw = result[field]
         if raw is not None:

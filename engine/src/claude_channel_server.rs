@@ -710,6 +710,7 @@ impl BridgeState {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("creating {}", parent.display()))?;
         }
+        let _lock = lock_state_path(&path)?;
         let raw = serde_json::to_vec_pretty(&self.payload())?;
         let tmp = path.with_extension(format!("json.tmp.{}", std::process::id()));
         write_private_file(&tmp, [&raw[..], b"\n"].concat().as_slice())
@@ -724,6 +725,7 @@ impl BridgeState {
         let Some(path) = self.state_file()? else {
             return Ok(());
         };
+        let _lock = lock_state_path(&path)?;
         match std::fs::remove_file(&path) {
             Ok(()) => Ok(()),
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -1010,6 +1012,52 @@ fn default_state_root() -> PathBuf {
         .join(".claude/channels/longhouse")
 }
 
+pub(crate) fn update_managed_provider_session_id(
+    session_id: &str,
+    provider_session_id: &str,
+) -> Result<bool> {
+    update_managed_provider_session_id_in(&default_state_root(), session_id, provider_session_id)
+}
+
+fn update_managed_provider_session_id_in(
+    state_root: &Path,
+    session_id: &str,
+    provider_session_id: &str,
+) -> Result<bool> {
+    let session_id = Uuid::parse_str(session_id).context("session_id must be a UUID")?;
+    let normalized_session_id = session_id.to_string();
+    let provider_session_id = provider_session_id.trim();
+    if provider_session_id.is_empty() {
+        return Ok(false);
+    }
+    let path = state_root
+        .join("sessions")
+        .join(format!("{session_id}.json"));
+    let _lock = lock_state_path(&path)?;
+    let Ok(raw) = std::fs::read(&path) else {
+        return Ok(false);
+    };
+    let mut state: Value =
+        serde_json::from_slice(&raw).with_context(|| format!("parsing {}", path.display()))?;
+    if state.get("session_id").and_then(Value::as_str) != Some(normalized_session_id.as_str()) {
+        return Ok(false);
+    }
+    if state.get("provider_session_id").and_then(Value::as_str) == Some(provider_session_id) {
+        return Ok(true);
+    }
+    state["provider_session_id"] = Value::String(provider_session_id.to_string());
+    state["updated_at"] = Value::String(Utc::now().to_rfc3339());
+    let mut encoded = serde_json::to_vec_pretty(&state)?;
+    encoded.push(b'\n');
+    let temporary = path.with_extension(format!("json.tmp.{}", Uuid::new_v4()));
+    write_private_file(&temporary, &encoded)
+        .with_context(|| format!("writing {}", temporary.display()))?;
+    std::fs::rename(&temporary, &path)
+        .with_context(|| format!("renaming {} to {}", temporary.display(), path.display()))?;
+    set_private_file_mode(&path);
+    Ok(true)
+}
+
 fn normalize_optional(value: Option<String>) -> Option<String> {
     value
         .map(|value| value.trim().to_string())
@@ -1047,6 +1095,31 @@ fn set_private_file_mode(path: &Path) {
     {
         let _ = path;
     }
+}
+
+fn lock_state_path(path: &Path) -> Result<std::fs::File> {
+    let lock_path = path.with_extension("json.lock");
+    if let Some(parent) = lock_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true).write(true).create(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let file = options.open(&lock_path)?;
+    set_private_file_mode(&lock_path);
+    #[cfg(unix)]
+    {
+        use std::os::fd::AsRawFd;
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } != 0 {
+            return Err(std::io::Error::last_os_error())
+                .with_context(|| format!("locking {}", lock_path.display()));
+        }
+    }
+    Ok(file)
 }
 
 fn write_private_file(path: &Path, contents: &[u8]) -> Result<()> {
@@ -1237,5 +1310,22 @@ mod tests {
                 & 0o777;
             assert_eq!(mode, 0o600);
         }
+    }
+
+    #[test]
+    fn lifecycle_identity_update_rotates_channel_state_without_losing_control_fields() {
+        let temp = tempfile::tempdir().unwrap();
+        let state = BridgeState::new(test_config(temp.path())).unwrap();
+        state.set_port(1234).unwrap();
+        state.write_state().unwrap();
+
+        assert!(
+            update_managed_provider_session_id_in(temp.path(), SESSION_ID, "provider-456").unwrap()
+        );
+        let payload: Value =
+            serde_json::from_slice(&std::fs::read(state_path(temp.path())).unwrap()).unwrap();
+        assert_eq!(payload["provider_session_id"], "provider-456");
+        assert_eq!(payload["auth_token"], "bridge-test-token");
+        assert_eq!(payload["port"], 1234);
     }
 }

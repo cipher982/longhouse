@@ -8,12 +8,13 @@ use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
 use reqwest::Url;
 use serde::Serialize;
-use serde_json::json;
+use serde_json::{json, Value};
 use uuid::Uuid;
 
 const USERNAME: &str = "opencode";
@@ -250,12 +251,16 @@ pub fn attach(
     opencode_bin: Option<String>,
     claude_dir: Option<PathBuf>,
 ) -> Result<i32> {
-    let state_dir = claude_dir.map(|path| path.join("managed-local/opencode-server"));
-    let state = crate::opencode_control::read_for_bridge(session_id, state_dir.as_deref())?;
+    let state_dir = state_dir(claude_dir.as_deref())?;
+    let state_path = state_dir.join(format!(
+        "{}.json",
+        normalize_uuid(session_id, "session_id")?
+    ));
+    let state = crate::opencode_control::read_for_bridge(session_id, Some(&state_dir))?;
     let binary = resolve_binary(opencode_bin)?;
     let runtime = tokio::runtime::Runtime::new()?;
     runtime.block_on(assert_health(&state.server_url, &state.password))?;
-    let status = Command::new(binary)
+    let mut child = Command::new(binary)
         .args([
             "attach",
             &state.server_url,
@@ -265,9 +270,202 @@ pub fn attach(
         .current_dir(&state.cwd)
         .env("OPENCODE_SERVER_USERNAME", &state.username)
         .env("OPENCODE_SERVER_PASSWORD", &state.password)
-        .status()
+        .spawn()
         .context("attach stock OpenCode TUI")?;
+    let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
+    let monitor_server_url = state.server_url.clone();
+    let monitor_username = state.username.clone();
+    let monitor_password = state.password.clone();
+    let monitor_session_id = normalize_uuid(session_id, "session_id")?;
+    let monitor = thread::spawn(move || {
+        monitor_opencode_session_rollovers(
+            &monitor_server_url,
+            &monitor_username,
+            &monitor_password,
+            &state_path,
+            &monitor_session_id,
+            stop_rx,
+        )
+    });
+    let status = child.wait().context("wait for stock OpenCode TUI")?;
+    let _ = stop_tx.send(true);
+    match monitor.join() {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => {
+            tracing::warn!(error = %error, "OpenCode session rollover monitor stopped with an error")
+        }
+        Err(_) => tracing::warn!("OpenCode session rollover monitor panicked"),
+    }
     Ok(status.code().unwrap_or(1))
+}
+
+fn monitor_opencode_session_rollovers(
+    server_url: &str,
+    username: &str,
+    password: &str,
+    state_path: &Path,
+    longhouse_session_id: &str,
+    mut stop: tokio::sync::watch::Receiver<bool>,
+) -> Result<()> {
+    let runtime = tokio::runtime::Runtime::new()?;
+    runtime.block_on(async {
+        while !*stop.borrow() {
+            if let Err(error) = monitor_opencode_events_once(
+                server_url,
+                username,
+                password,
+                state_path,
+                longhouse_session_id,
+                &mut stop,
+            )
+            .await
+            {
+                if *stop.borrow() {
+                    break;
+                }
+                tracing::warn!(error = %error, "OpenCode event monitor disconnected; retrying")
+            }
+            if !*stop.borrow() {
+                tokio::select! {
+                    _ = tokio::time::sleep(Duration::from_millis(250)) => {}
+                    changed = stop.changed() => {
+                        if changed.is_err() || *stop.borrow() {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    })
+}
+
+async fn monitor_opencode_events_once(
+    server_url: &str,
+    username: &str,
+    password: &str,
+    state_path: &Path,
+    longhouse_session_id: &str,
+    stop: &mut tokio::sync::watch::Receiver<bool>,
+) -> Result<()> {
+    let mut response = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(5))
+        .build()?
+        .get(format!("{server_url}/global/event"))
+        .basic_auth(username, Some(password))
+        .send()
+        .await?;
+    if !response.status().is_success() {
+        bail!("OpenCode event stream failed ({})", response.status());
+    }
+    let mut pending = String::new();
+    while !*stop.borrow() {
+        let chunk = tokio::select! {
+            chunk = response.chunk() => chunk?,
+            changed = stop.changed() => {
+                if changed.is_err() || *stop.borrow() {
+                    return Ok(());
+                }
+                continue;
+            },
+        };
+        let Some(chunk) = chunk else {
+            break;
+        };
+        pending.push_str(&String::from_utf8_lossy(&chunk));
+        while let Some((boundary, delimiter_len)) = sse_frame_boundary(&pending) {
+            let frame = pending[..boundary].to_string();
+            pending.drain(..boundary + delimiter_len);
+            for line in frame.lines() {
+                let Some(data) = line.strip_prefix("data:") else {
+                    continue;
+                };
+                let Ok(event) = serde_json::from_str::<Value>(data.trim()) else {
+                    continue;
+                };
+                if let Some(provider_session_id) = top_level_created_session_id(&event) {
+                    update_provider_session_id(
+                        state_path,
+                        longhouse_session_id,
+                        provider_session_id,
+                    )?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn sse_frame_boundary(pending: &str) -> Option<(usize, usize)> {
+    let lf = pending.find("\n\n").map(|offset| (offset, 2));
+    let crlf = pending.find("\r\n\r\n").map(|offset| (offset, 4));
+    match (lf, crlf) {
+        (Some(left), Some(right)) => Some(if left.0 <= right.0 { left } else { right }),
+        (Some(boundary), None) | (None, Some(boundary)) => Some(boundary),
+        (None, None) => None,
+    }
+}
+
+fn top_level_created_session_id(event: &Value) -> Option<&str> {
+    let payload = event.get("payload")?;
+    if payload.get("type").and_then(Value::as_str) != Some("session.created") {
+        return None;
+    }
+    let properties = payload.get("properties")?;
+    let info = properties.get("info")?;
+    if info
+        .get("parentID")
+        .and_then(Value::as_str)
+        .is_some_and(|value| !value.trim().is_empty())
+    {
+        return None;
+    }
+    properties
+        .get("sessionID")
+        .and_then(Value::as_str)
+        .or_else(|| info.get("id").and_then(Value::as_str))
+        .filter(|value| !value.trim().is_empty())
+}
+
+fn update_provider_session_id(
+    state_path: &Path,
+    longhouse_session_id: &str,
+    provider_session_id: &str,
+) -> Result<()> {
+    let raw = fs::read(state_path)
+        .with_context(|| format!("read OpenCode bridge state {}", state_path.display()))?;
+    let mut state: Value = serde_json::from_slice(&raw)?;
+    if state.get("session_id").and_then(Value::as_str) != Some(longhouse_session_id) {
+        bail!("OpenCode bridge state changed ownership while attached");
+    }
+    if state.get("provider_session_id").and_then(Value::as_str) == Some(provider_session_id) {
+        return Ok(());
+    }
+    if let Some(previous) = state
+        .get("provider_session_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_string)
+    {
+        let history = state
+            .as_object_mut()
+            .and_then(|object| {
+                object
+                    .entry("previous_provider_session_ids")
+                    .or_insert_with(|| json!([]))
+                    .as_array_mut()
+            })
+            .context("OpenCode bridge provider identity history is invalid")?;
+        if !history
+            .iter()
+            .any(|value| value.as_str() == Some(&previous))
+        {
+            history.push(Value::String(previous));
+        }
+    }
+    state["provider_session_id"] = Value::String(provider_session_id.to_string());
+    state["updated_at"] = Value::String(chrono::Utc::now().to_rfc3339());
+    write_private_json(state_path, &state)
 }
 
 fn state_dir(claude_dir: Option<&Path>) -> Result<PathBuf> {
@@ -516,5 +714,64 @@ mod tests {
             embedded["mcp"]["longhouse"]["environment"]["LONGHOUSE_COORDINATION_TOKEN"],
             "session-secret"
         );
+    }
+
+    #[test]
+    fn extracts_only_top_level_created_sessions() {
+        let top_level = json!({
+            "payload": {
+                "type": "session.created",
+                "properties": {
+                    "sessionID": "ses_new",
+                    "info": {"id": "ses_new"}
+                }
+            }
+        });
+        let child = json!({
+            "payload": {
+                "type": "session.created",
+                "properties": {
+                    "sessionID": "ses_child",
+                    "info": {"id": "ses_child", "parentID": "ses_parent"}
+                }
+            }
+        });
+        assert_eq!(top_level_created_session_id(&top_level), Some("ses_new"));
+        assert_eq!(top_level_created_session_id(&child), None);
+        assert_eq!(
+            top_level_created_session_id(&json!({"payload": {"type": "session.updated"}})),
+            None
+        );
+    }
+
+    #[test]
+    fn updates_active_provider_session_without_replacing_bridge_identity() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("state.json");
+        write_private_json(
+            &path,
+            &json!({
+                "session_id": "11111111-1111-4111-8111-111111111111",
+                "provider_session_id": "ses_old",
+                "password": "secret",
+                "updated_at": "before"
+            }),
+        )
+        .unwrap();
+
+        update_provider_session_id(&path, "11111111-1111-4111-8111-111111111111", "ses_new")
+            .unwrap();
+
+        let state: Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+        assert_eq!(state["provider_session_id"], "ses_new");
+        assert_eq!(state["previous_provider_session_ids"], json!(["ses_old"]));
+        assert_eq!(state["password"], "secret");
+        assert_ne!(state["updated_at"], "before");
+    }
+
+    #[test]
+    fn accepts_lf_and_crlf_sse_boundaries() {
+        assert_eq!(sse_frame_boundary("data: one\n\nnext"), Some((9, 2)));
+        assert_eq!(sse_frame_boundary("data: one\r\n\r\nnext"), Some((9, 4)));
     }
 }

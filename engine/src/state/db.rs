@@ -144,6 +144,7 @@ pub fn open_db(db_path: Option<&Path>) -> Result<Connection> {
             max_observed_len INTEGER NOT NULL,
             source_revision TEXT,
             bound_session_id TEXT,
+            provider_session_id TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
             ended_at TEXT,
@@ -286,6 +287,11 @@ pub fn open_db(db_path: Option<&Path>) -> Result<Connection> {
     }
     if !source_epoch_columns.contains("bound_session_id") {
         conn.execute_batch("ALTER TABLE source_epoch_registry ADD COLUMN bound_session_id TEXT;")?;
+    }
+    if !source_epoch_columns.contains("provider_session_id") {
+        conn.execute_batch(
+            "ALTER TABLE source_epoch_registry ADD COLUMN provider_session_id TEXT;",
+        )?;
     }
 
     let pending_envelope_columns: std::collections::HashSet<String> = conn
@@ -510,5 +516,6 @@ mod tests {
             .unwrap();
         assert!(columns.contains("source_revision"));
         assert!(columns.contains("bound_session_id"));
+        assert!(columns.contains("provider_session_id"));
     }
 }

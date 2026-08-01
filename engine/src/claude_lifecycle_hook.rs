@@ -39,6 +39,16 @@ fn run_inner() -> anyhow::Result<()> {
     };
     let cwd = string(&input, "cwd");
     let transcript_path = string(&input, "transcript_path");
+    if event == "SessionStart" {
+        if let (Some(managed), Some(provider_session_id)) =
+            (managed_session_id.as_deref(), string(&input, "session_id"))
+        {
+            let _ = crate::claude_channel_server::update_managed_provider_session_id(
+                managed,
+                &provider_session_id,
+            );
+        }
+    }
     if let (Some(managed), Some(transcript)) = (&managed_session_id, &transcript_path) {
         if let Ok(conn) = crate::state::db::open_db(None) {
             let binding = crate::state::session_binding::SessionBinding::new(&conn);

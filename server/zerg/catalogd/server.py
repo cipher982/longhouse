@@ -2972,9 +2972,11 @@ def _validate_storage_session_facts(value: object) -> dict:
         "launch_actor",
         "launch_surface",
     }
-    if not isinstance(value, dict) or set(value) != expected:
+    optional = {"provider_session_id"}
+    if not isinstance(value, dict) or not expected.issubset(value) or set(value) - expected - optional:
         raise ValueError("session_facts has invalid fields")
     result = dict(value)
+    result.setdefault("provider_session_id", None)
     result["environment"] = _canonical_storage_text(result["environment"], field="environment", maximum_bytes=32)
     for field, maximum in (
         ("project", 255),
@@ -2984,6 +2986,7 @@ def _validate_storage_session_facts(value: object) -> dict:
         ("origin_kind", 64),
         ("launch_actor", 32),
         ("launch_surface", 32),
+        ("provider_session_id", 255),
     ):
         raw = result[field]
         if raw is not None:

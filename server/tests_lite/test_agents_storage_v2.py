@@ -158,6 +158,20 @@ def _payload(*, tenant_id: str, machine_id: str, epoch: UUID, data: bytes = b"he
     }
 
 
+def test_storage_v2_session_facts_accept_provider_conversation_identity():
+    payload = _payload(tenant_id="tenant", machine_id="machine", epoch=uuid4())
+    payload["session"]["provider_session_id"] = "provider-thread-new"
+
+    _spec, parsed = storage_router._parse_envelope(
+        payload,
+        tenant_id="tenant",
+        machine_id="machine",
+        lane="live",
+    )
+
+    assert parsed["session_facts"]["provider_session_id"] == "provider-thread-new"
+
+
 @pytest.mark.asyncio
 async def test_storage_v2_render_reader_saturation_is_not_reported_as_corruption(monkeypatch):
     session_id = uuid4()

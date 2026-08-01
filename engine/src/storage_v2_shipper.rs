@@ -242,7 +242,55 @@ fn prepare_next_envelope_with_limit(
         record_hashes: storage_v2_contract::hash_records(&raw_bytes),
     };
     let expected_envelope_id = hex_hash(storage_v2_contract::envelope_id(&identity)?);
-    let render_records = render_records_for_batch(&parse_result, &raw_batch)?;
+    let provider_session_id = parse_result
+        .metadata
+        .provider_session_id
+        .as_deref()
+        .unwrap_or(&parse_result.metadata.session_id)
+        .trim()
+        .to_string();
+    let routes_as_provider_head = routes_as_provider_head(&parse_result.metadata);
+    let previous_provider_session_id = if position == 0 && routes_as_provider_head {
+        if let Some(managed_session_id) = durable_session_id.as_deref() {
+            source_epoch::previous_provider_session_id(
+                conn,
+                resolution.source_epoch,
+                provider,
+                managed_session_id,
+            )?
+            .or(FileState::new(conn).previous_provider_session_id(
+                &path_text,
+                managed_session_id,
+                provider,
+            )?)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    if routes_as_provider_head {
+        source_epoch::record_provider_session_id(
+            conn,
+            resolution.source_epoch,
+            &provider_session_id,
+        )?;
+    }
+    let conversation_reset = previous_provider_session_id
+        .as_deref()
+        .is_some_and(|previous| previous != provider_session_id.as_str());
+    let mut render_records = render_records_for_batch(&parse_result, &raw_batch)?;
+    if conversation_reset {
+        insert_conversation_reset_boundary(
+            &mut render_records,
+            resolution.source_epoch,
+            raw_batch.range_start,
+            &resolution.opened_at,
+            &session_id,
+            previous_provider_session_id.as_deref().unwrap_or_default(),
+            &provider_session_id,
+        )?;
+    }
     let render_generation = render_generation_id(session_uuid);
     let session = session_facts(&parse_result.metadata, &render_records, &resolution)?;
     let media_objects = parse_result
@@ -1142,6 +1190,9 @@ pub(crate) fn prepare_next_opencode_envelope(
                 opencode_db::opencode_raw_snapshot(db_path, &candidate.provider_session_id)?;
             let logical_len = u64::try_from(snapshot.records.len())
                 .context("OpenCode snapshot has too many records")?;
+            let managed_session_id = opencode_db::managed_longhouse_session_id_for_opencode(
+                &candidate.provider_session_id,
+            );
             let resolution = source_epoch::observe_source(
                 conn,
                 "opencode",
@@ -1151,7 +1202,7 @@ pub(crate) fn prepare_next_opencode_envelope(
                 SourceLane::Durable,
                 0,
                 Some(&snapshot.source_revision),
-                None,
+                managed_session_id.as_deref(),
                 SourceChangeHint::None,
             )?;
             let range_start =
@@ -1167,10 +1218,41 @@ pub(crate) fn prepare_next_opencode_envelope(
             )?;
             let parse_result =
                 opencode_db::parse_opencode_session(db_path, &candidate.provider_session_id)?;
-            let session_id = opencode_db::managed_longhouse_session_id_for_opencode(
-                &candidate.provider_session_id,
-            )
-            .unwrap_or_else(|| parse_result.metadata.session_id.clone());
+            let managed_session_id = managed_session_id.or_else(|| {
+                opencode_db::managed_longhouse_session_id_for_opencode(
+                    &candidate.provider_session_id,
+                )
+            });
+            if managed_session_id.is_none()
+                && opencode_db::managed_binding_may_be_pending(&parse_result.metadata)
+            {
+                tracing::debug!(
+                    provider_session_id = candidate.provider_session_id,
+                    "Waiting for OpenCode managed-session rollover binding"
+                );
+                continue;
+            }
+            let resolution = if managed_session_id.is_some()
+                && resolution.bound_session_id.as_deref() != managed_session_id.as_deref()
+            {
+                source_epoch::observe_source(
+                    conn,
+                    "opencode",
+                    &opaque_source_id,
+                    "opencode-sqlite-session-v1",
+                    logical_len,
+                    SourceLane::Durable,
+                    range_start,
+                    Some(&snapshot.source_revision),
+                    managed_session_id.as_deref(),
+                    SourceChangeHint::None,
+                )?
+            } else {
+                resolution
+            };
+            let session_id = managed_session_id
+                .clone()
+                .unwrap_or_else(|| parse_result.metadata.session_id.clone());
             let session_uuid = Uuid::parse_str(&session_id)
                 .context("storage-v2 OpenCode session id is not a UUID")?;
             if let Err(error) =
@@ -1194,12 +1276,50 @@ pub(crate) fn prepare_next_opencode_envelope(
                 record_hashes: storage_v2_contract::hash_records(selected),
             };
             let expected_envelope_id = hex_hash(storage_v2_contract::envelope_id(&identity)?);
-            let render_records = opencode_render_records_for_range(
+            let previous_provider_session_id = if range_start == 0 {
+                if let Some(managed_session_id) = managed_session_id.as_deref() {
+                    source_epoch::previous_provider_session_id(
+                        conn,
+                        resolution.source_epoch,
+                        "opencode",
+                        managed_session_id,
+                    )?
+                    .or(FileState::new(conn).previous_provider_session_id(
+                        &candidate.source_key,
+                        managed_session_id,
+                        "opencode",
+                    )?)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            source_epoch::record_provider_session_id(
+                conn,
+                resolution.source_epoch,
+                &candidate.provider_session_id,
+            )?;
+            let mut render_records = opencode_render_records_for_range(
                 &parse_result,
                 snapshot.part_record_start,
                 range_start,
                 range_end,
             )?;
+            if previous_provider_session_id
+                .as_deref()
+                .is_some_and(|previous| previous != candidate.provider_session_id.as_str())
+            {
+                insert_conversation_reset_boundary(
+                    &mut render_records,
+                    resolution.source_epoch,
+                    range_start,
+                    &resolution.opened_at,
+                    &session_id,
+                    previous_provider_session_id.as_deref().unwrap_or_default(),
+                    &candidate.provider_session_id,
+                )?;
+            }
             let event_count = render_records.len();
             let render_generation = render_generation_id(session_uuid);
             let session = session_facts(&parse_result.metadata, &render_records, &resolution)?;
@@ -1766,11 +1886,37 @@ fn prepare_next_cursor_envelope_outcome_with_limit(
     }
     let snapshot =
         cursor_store::cursor_store_raw_snapshot_from(&store_snapshot, store_incarnation.clone())?;
+    let opaque_source_id = cursor_store::cursor_opaque_source_id(&snapshot.conversation_uuid);
+    let source_was_seen =
+        source_epoch::active_source_incarnation(conn, "cursor", &opaque_source_id)?.is_some();
+    let store_is_fresh = snapshot
+        .created_at_ms
+        .and_then(DateTime::from_timestamp_millis)
+        .map(|created_at| {
+            Utc::now().signed_duration_since(created_at) <= chrono::Duration::seconds(5)
+        })
+        .or_else(|| {
+            metadata_before
+                .created()
+                .ok()
+                .and_then(|created| created.elapsed().ok())
+                .map(|age| age <= Duration::from_secs(5))
+        })
+        .unwrap_or(false);
     let claimed_binding = match crate::cursor_launch_binding::launch_binding_state_for_conversation(
         &snapshot.conversation_uuid,
     )? {
         crate::cursor_launch_binding::CursorLaunchBindingState::Managed(binding) => Some(binding),
         crate::cursor_launch_binding::CursorLaunchBindingState::Pending => {
+            return Ok(CursorPreparationOutcome::WaitingOnClaim);
+        }
+        crate::cursor_launch_binding::CursorLaunchBindingState::Unclaimed
+            if !source_was_seen
+                && store_is_fresh
+                && crate::cursor_launch_binding::reset_binding_may_be_pending(
+                    &snapshot.conversation_uuid,
+                )? =>
+        {
             return Ok(CursorPreparationOutcome::WaitingOnClaim);
         }
         crate::cursor_launch_binding::CursorLaunchBindingState::Unclaimed => None,
@@ -1824,7 +1970,6 @@ fn prepare_next_cursor_envelope_outcome_with_limit(
             }
         }
     }
-    let opaque_source_id = cursor_store::cursor_opaque_source_id(&snapshot.conversation_uuid);
     let previous_root_ids =
         cursor_store_root::previous_message_blob_ids(conn, &snapshot.conversation_uuid)?;
     let root_relation = match snapshot.root_blob_id.as_deref() {
@@ -2084,6 +2229,49 @@ fn prepare_next_cursor_envelope_outcome_with_limit(
         started_at.timestamp_micros(),
         visibility_evidence.as_ref(),
     )?;
+    let previous_provider_session_id = if range_start == 0 {
+        if let Some(managed_session_id) = managed_session_id.as_deref() {
+            source_epoch::previous_provider_session_id(
+                conn,
+                resolution.source_epoch,
+                "cursor",
+                managed_session_id,
+            )?
+            .or_else(|| {
+                claimed_binding
+                    .as_ref()
+                    .and_then(|binding| binding.previous_provider_session_id.clone())
+            })
+            .or(FileState::new(conn).previous_provider_session_id(
+                &stable_source_path(db_path).to_string_lossy(),
+                managed_session_id,
+                "cursor",
+            )?)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    source_epoch::record_provider_session_id(
+        conn,
+        resolution.source_epoch,
+        &snapshot.conversation_uuid,
+    )?;
+    if previous_provider_session_id
+        .as_deref()
+        .is_some_and(|previous| previous != snapshot.conversation_uuid.as_str())
+    {
+        insert_conversation_reset_boundary(
+            &mut render_records,
+            resolution.source_epoch,
+            range_start,
+            &resolution.opened_at,
+            &session_id,
+            previous_provider_session_id.as_deref().unwrap_or_default(),
+            &snapshot.conversation_uuid,
+        )?;
+    }
     if let Some(thread_id) = claimed_binding
         .as_ref()
         .and_then(|binding| binding.thread_id.as_ref())
@@ -2121,6 +2309,7 @@ fn prepare_next_cursor_envelope_outcome_with_limit(
             render,
             media: Vec::new(),
             session: StorageV2SessionFacts {
+                provider_session_id: Some(snapshot.conversation_uuid.clone()),
                 environment: "local".to_string(),
                 project: None,
                 cwd: None,
@@ -2242,6 +2431,7 @@ pub(crate) fn prepare_next_cursor_acp_envelope(
             render: None,
             media: Vec::new(),
             session: StorageV2SessionFacts {
+                provider_session_id: None,
                 environment: "local".to_string(),
                 project: None,
                 cwd: None,
@@ -2754,6 +2944,70 @@ fn render_record(
     })
 }
 
+fn insert_conversation_reset_boundary(
+    records: &mut Vec<StorageV2RenderRecord>,
+    source_epoch: Uuid,
+    source_position: u64,
+    opened_at: &str,
+    session_id: &str,
+    previous_provider_session_id: &str,
+    provider_session_id: &str,
+) -> Result<()> {
+    for record in records
+        .iter_mut()
+        .filter(|record| record.source_position == source_position)
+    {
+        record.event_subordinal = record.event_subordinal.saturating_add(1);
+    }
+    let fallback_time = DateTime::parse_from_rfc3339(opened_at)
+        .context("source epoch opened_at is invalid")?
+        .with_timezone(&Utc)
+        .timestamp_micros();
+    let order_time_us = records
+        .iter()
+        .map(|record| record.order_time_us)
+        .min()
+        .map(|value| value.saturating_sub(1))
+        .unwrap_or(fallback_time);
+    let event_id = Uuid::new_v5(
+        &Uuid::NAMESPACE_URL,
+        format!(
+            "longhouse:conversation-reset:{session_id}:{source_epoch}:{source_position}:{previous_provider_session_id}:{provider_session_id}"
+        )
+        .as_bytes(),
+    );
+    records.push(StorageV2RenderRecord {
+        event_id: event_id.to_string(),
+        order_time_us,
+        source_position,
+        event_subordinal: 0,
+        role: "system".to_string(),
+        content_text: Some("Conversation reset".to_string()),
+        tool_name: None,
+        tool_input_json: None,
+        tool_output_text: None,
+        tool_call_id: None,
+        thread_id: None,
+        branch_kind: Some("conversation_reset".to_string()),
+        raw_record_ordinal: 0,
+    });
+    records.sort_by(|left, right| {
+        (
+            left.order_time_us,
+            left.source_position,
+            left.event_subordinal,
+            &left.event_id,
+        )
+            .cmp(&(
+                right.order_time_us,
+                right.source_position,
+                right.event_subordinal,
+                &right.event_id,
+            ))
+    });
+    Ok(())
+}
+
 fn session_facts(
     metadata: &SessionMetadata,
     records: &[StorageV2RenderRecord],
@@ -2773,6 +3027,12 @@ fn session_facts(
         .or(metadata.ended_at)
         .unwrap_or(started_at);
     Ok(StorageV2SessionFacts {
+        provider_session_id: routes_as_provider_head(metadata).then(|| {
+            metadata
+                .provider_session_id
+                .clone()
+                .unwrap_or_else(|| metadata.session_id.clone())
+        }),
         environment: metadata
             .environment
             .clone()
@@ -2789,6 +3049,13 @@ fn session_facts(
         launch_actor: metadata.launch_actor.clone(),
         launch_surface: metadata.launch_surface.clone(),
     })
+}
+
+fn routes_as_provider_head(metadata: &SessionMetadata) -> bool {
+    !metadata.is_sidechain
+        && metadata.subagent_id.is_none()
+        && metadata.parent_provider_session_id.is_none()
+        && metadata.forked_from_session_id.is_none()
 }
 
 fn record_time(record: &StorageV2RenderRecord) -> Option<DateTime<Utc>> {
@@ -2853,6 +3120,7 @@ fn hex_hash(hash: [u8; 32]) -> String {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::io::Write;
     use std::sync::{Arc, Mutex};
 
     use rusqlite::params;
@@ -2882,6 +3150,63 @@ mod tests {
         let error =
             preparation_result::<()>(Err(anyhow::anyhow!("unsupported local shape"))).unwrap_err();
         assert!(error.downcast_ref::<StorageV2PreparationError>().is_some());
+    }
+
+    #[test]
+    fn conversation_reset_boundary_precedes_the_new_source_records() {
+        let mut records = vec![StorageV2RenderRecord {
+            event_id: "first-event".to_string(),
+            order_time_us: 200,
+            source_position: 0,
+            event_subordinal: 0,
+            role: "user".to_string(),
+            content_text: Some("after".to_string()),
+            tool_name: None,
+            tool_input_json: None,
+            tool_output_text: None,
+            tool_call_id: None,
+            thread_id: None,
+            branch_kind: None,
+            raw_record_ordinal: 0,
+        }];
+
+        insert_conversation_reset_boundary(
+            &mut records,
+            Uuid::parse_str("018f0c3a-7b2d-7f10-8a11-123456789abc").unwrap(),
+            0,
+            "2026-07-31T12:00:00Z",
+            "managed-session",
+            "provider-old",
+            "provider-new",
+        )
+        .unwrap();
+
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].role, "system");
+        assert_eq!(
+            records[0].content_text.as_deref(),
+            Some("Conversation reset")
+        );
+        assert_eq!(
+            records[0].branch_kind.as_deref(),
+            Some("conversation_reset")
+        );
+        assert_eq!(records[1].event_subordinal, 1);
+        assert!(records[0].order_time_us < records[1].order_time_us);
+
+        let first_boundary_id = records[0].event_id.clone();
+        let mut repeated_transition = records[1..].to_vec();
+        insert_conversation_reset_boundary(
+            &mut repeated_transition,
+            Uuid::parse_str("028f0c3a-7b2d-7f10-8a11-123456789abc").unwrap(),
+            0,
+            "2026-07-31T12:01:00Z",
+            "managed-session",
+            "provider-old",
+            "provider-new",
+        )
+        .unwrap();
+        assert_ne!(repeated_transition[0].event_id, first_boundary_id);
     }
 
     fn capabilities() -> StorageV2Capabilities {
@@ -4810,6 +5135,98 @@ mod tests {
             .unwrap();
 
         assert_eq!(prepared.envelope.session_id, managed_session_id);
+    }
+
+    #[test]
+    fn managed_source_rollover_emits_one_boundary_and_continuation_emits_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let old_provider_id = "018f0c3a-7b2d-7f10-8a11-000000000001";
+        let new_provider_id = "018f0c3a-7b2d-7f10-8a11-000000000002";
+        let managed_session_id = "018f0c3a-7b2d-7f10-8a11-000000000042";
+        let old_path = dir.path().join(format!("{old_provider_id}.jsonl"));
+        let new_path = dir.path().join(format!("{new_provider_id}.jsonl"));
+        fs::write(
+            &old_path,
+            format!(
+                "{{\"type\":\"user\",\"sessionId\":\"{old_provider_id}\",\"uuid\":\"old-user\",\"timestamp\":\"2026-07-12T12:00:00Z\",\"message\":{{\"content\":\"before\"}}}}\n"
+            ),
+        )
+        .unwrap();
+        fs::write(
+            &new_path,
+            format!(
+                "{{\"type\":\"user\",\"sessionId\":\"{new_provider_id}\",\"uuid\":\"new-user\",\"timestamp\":\"2026-07-12T12:01:00Z\",\"message\":{{\"content\":\"after\"}}}}\n"
+            ),
+        )
+        .unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        let binding = crate::state::session_binding::SessionBinding::new(&conn);
+        binding
+            .bind(
+                &fs::canonicalize(&old_path).unwrap().to_string_lossy(),
+                managed_session_id,
+                "claude",
+            )
+            .unwrap();
+        binding
+            .bind(
+                &fs::canonicalize(&new_path).unwrap().to_string_lossy(),
+                managed_session_id,
+                "claude",
+            )
+            .unwrap();
+
+        let old = prepare_next_envelope(&mut conn, &capabilities(), &old_path, "claude", None)
+            .unwrap()
+            .unwrap();
+        assert!(old
+            .envelope
+            .render
+            .as_ref()
+            .unwrap()
+            .records
+            .iter()
+            .all(|record| record.branch_kind.as_deref() != Some("conversation_reset")));
+        acknowledge_prepared(&mut conn, &old);
+
+        let reset = prepare_next_envelope(&mut conn, &capabilities(), &new_path, "claude", None)
+            .unwrap()
+            .unwrap();
+        let reset_records = &reset.envelope.render.as_ref().unwrap().records;
+        assert_eq!(
+            reset_records
+                .iter()
+                .filter(|record| record.branch_kind.as_deref() == Some("conversation_reset"))
+                .count(),
+            1
+        );
+        let retry = prepare_next_envelope(&mut conn, &capabilities(), &new_path, "claude", None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(&retry.envelope.render).unwrap(),
+            serde_json::to_value(&reset.envelope.render).unwrap()
+        );
+        acknowledge_prepared(&mut conn, &reset);
+
+        let mut continuation = fs::OpenOptions::new().append(true).open(&new_path).unwrap();
+        writeln!(
+            continuation,
+            "{{\"type\":\"assistant\",\"sessionId\":\"{new_provider_id}\",\"uuid\":\"new-assistant\",\"timestamp\":\"2026-07-12T12:02:00Z\",\"message\":{{\"content\":\"continued\"}}}}"
+        )
+        .unwrap();
+        let continuation =
+            prepare_next_envelope(&mut conn, &capabilities(), &new_path, "claude", None)
+                .unwrap()
+                .unwrap();
+        assert!(continuation
+            .envelope
+            .render
+            .as_ref()
+            .unwrap()
+            .records
+            .iter()
+            .all(|record| record.branch_kind.as_deref() != Some("conversation_reset")));
     }
 
     #[test]

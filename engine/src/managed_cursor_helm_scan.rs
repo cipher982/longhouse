@@ -21,6 +21,7 @@ use crate::process_identity::{lstart_matches_recorded, ProcessFact};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CursorHelmObservation {
     pub session_id: String,
+    pub provider_session_id: Option<String>,
     pub run_id: Option<String>,
     pub connection_id: Option<String>,
     pub lease_generation: Option<String>,
@@ -43,6 +44,8 @@ pub struct CursorHelmObservation {
 #[derive(Debug, Deserialize)]
 struct CursorHelmStateFile {
     session_id: Option<String>,
+    #[serde(default)]
+    provider_session_id: Option<String>,
     #[serde(default)]
     run_id: Option<String>,
     #[serde(default)]
@@ -132,6 +135,9 @@ pub(crate) fn collect_observations_from_paths(
         let live = launcher_alive && cursor_pid.is_some() && socket_present && ready;
         out.push(CursorHelmObservation {
             session_id,
+            provider_session_id: state
+                .provider_session_id
+                .filter(|value| !value.trim().is_empty()),
             run_id: state.run_id,
             connection_id: state.connection_id,
             lease_generation: state.lease_generation,
@@ -216,6 +222,7 @@ mod tests {
     ) {
         let mut value = json!({
             "session_id": session_id,
+            "provider_session_id": format!("provider-{session_id}"),
             "socket_path": socket.to_string_lossy(),
             "launcher_process_start_time": "Tue Jun 30 00:00:00 2026",
             "cursor_pid": 99999,
@@ -249,6 +256,10 @@ mod tests {
             collect_observations_from_processes(dir.path(), &launcher_facts(std::process::id()));
         let live = obs.iter().find(|o| o.session_id == "sess-live").unwrap();
         assert!(live.live);
+        assert_eq!(
+            live.provider_session_id.as_deref(),
+            Some("provider-sess-live")
+        );
     }
 
     #[test]

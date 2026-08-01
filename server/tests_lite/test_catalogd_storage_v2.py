@@ -26,7 +26,9 @@ from zerg.catalogd.server import CatalogDaemon
 from zerg.catalogd.store import CatalogStore
 from zerg.models.live_store import LiveHeartbeatStamp
 from zerg.models.live_store import LiveSessionCatalog
+from zerg.models.live_store import LiveSessionThreadAlias
 from zerg.models.live_store import LiveTimelineCard
+from zerg.models.live_store import LiveUser
 from zerg.storage_v2.contracts import EnvelopeIdentity
 from zerg.storage_v2.contracts import envelope_id
 
@@ -426,9 +428,24 @@ async def test_console_provenance_survives_first_archived_provider_transcript(da
             launch_actor=None,
             launch_surface=None,
             ended_at=(now + timedelta(seconds=2)).isoformat(),
+            provider_session_id="provider-before-reset",
         )
 
         await client.call("storage.raw_object.commit.v2", raw)
+        after_reset = _raw_params(
+            epoch=uuid4(),
+            session_id=session_id,
+            start=0,
+            end=6,
+            records=(b"after\n",),
+            sealed_at=now + timedelta(seconds=3),
+            opaque_source_id="history-after-reset.jsonl",
+        )
+        after_reset["session_facts"]["provider_session_id"] = "provider-after-reset"
+        # Coarse provider clocks may give both sides the same activity time;
+        # insertion order must still make the new conversation the resume head.
+        after_reset["session_facts"]["last_activity_at"] = raw["session_facts"]["last_activity_at"]
+        await client.call("storage.raw_object.commit.v2", after_reset)
         stored = await client.call("storage.session.read.v2", {"session_id": str(session_id)})
 
         assert stored["session"]["origin_kind"] == "console"
@@ -438,6 +455,40 @@ async def test_console_provenance_survives_first_archived_provider_transcript(da
     finally:
         await client.close()
         await daemon.close()
+
+    engine = create_catalog_engine(database_path)
+    with Session(engine) as db:
+        db.add(LiveUser(id=42, email="owner@example.com", is_active=True))
+        db.commit()
+    next_turn = CatalogStore(engine).enqueue_console_turn(
+        data={
+            "session_id": str(session_id),
+            "owner_id": 42,
+            "message": "continue after reset",
+            "client_request_id": "after-reset-turn",
+            "created_at": now + timedelta(seconds=4),
+        }
+    )
+    assert next_turn["turn"]["resume_provider_thread_id"] == "provider-after-reset"
+    with Session(engine) as db:
+        aliases = (
+            db.query(LiveSessionThreadAlias)
+            .filter(
+                LiveSessionThreadAlias.thread_id == str(thread_id),
+                LiveSessionThreadAlias.alias_kind == "provider_session_id",
+            )
+            .order_by(
+                LiveSessionThreadAlias.last_seen_at.desc(),
+                LiveSessionThreadAlias.first_seen_at.desc(),
+                LiveSessionThreadAlias.id.desc(),
+            )
+            .all()
+        )
+        assert [alias.alias_value for alias in aliases] == [
+            "provider-after-reset",
+            "provider-before-reset",
+        ]
+    engine.dispose()
 
 
 @pytest.mark.asyncio

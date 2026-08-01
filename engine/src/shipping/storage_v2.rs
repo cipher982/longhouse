@@ -76,6 +76,10 @@ pub struct StorageV2MediaRef {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct StorageV2SessionFacts {
+    /// Provider-native conversation identity observed in this source. This is
+    /// routing evidence, not the Longhouse session identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_session_id: Option<String>,
     pub environment: String,
     pub project: Option<String>,
     pub cwd: Option<String>,

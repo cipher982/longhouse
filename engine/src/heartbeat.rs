@@ -2313,9 +2313,13 @@ fn resolved_managed_cursor_session(
     // control socket. Project workspace + UI presence from that observation so
     // local-health / menu bar rows match Codex/Claude/OpenCode shape.
     let cwd = obs.and_then(|obs| obs.cwd.clone());
+    let provider_session_id = obs.and_then(|obs| obs.provider_session_id.clone());
     let launcher_pid = obs.and_then(|obs| obs.launcher_pid);
     let cursor_pid = obs.and_then(|obs| obs.cursor_pid);
     let mut join_keys = vec![format!("session_id={}", lease.session_id)];
+    if let Some(provider_session_id) = provider_session_id.as_deref() {
+        join_keys.push(format!("provider_session_id={provider_session_id}"));
+    }
     if let Some(pid) = launcher_pid {
         join_keys.push(format!("launcher_pid={pid}"));
     }
@@ -2331,7 +2335,7 @@ fn resolved_managed_cursor_session(
     ResolvedLocalSession {
         session_id: Some(lease.session_id.clone()),
         provider: lease.provider.clone(),
-        provider_session_id: None,
+        provider_session_id,
         control_path: "managed".to_string(),
         state: lease.state.clone(),
         phase: None,
@@ -3971,6 +3975,7 @@ mod tests {
     fn test_cursor_observation(session_id: &str) -> CursorHelmObservation {
         CursorHelmObservation {
             session_id: session_id.to_string(),
+            provider_session_id: Some(format!("provider-{session_id}")),
             run_id: Some(format!("run-{session_id}")),
             connection_id: Some(format!("connection-{session_id}")),
             lease_generation: Some(format!("lease-{session_id}")),
