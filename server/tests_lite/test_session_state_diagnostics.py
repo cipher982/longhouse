@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 import zerg.routers.agents_state_diagnostics as diagnostics_router
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
+from zerg.services.session_state_contract import STATE_CONTRACT_VERSION
 from zerg.services.session_state_contract import SessionActivityFacts
 from zerg.services.session_state_contract import SessionStateFacts
 from zerg.services.session_state_contract import SessionRunFacts
@@ -270,7 +271,7 @@ def test_projection_parity_detects_version_and_presentation_key_divergence():
         session_state=state,
         machine_payload={
             "commit_seq": "12",
-            "state_contract_version": 1,
+            "state_contract_version": STATE_CONTRACT_VERSION,
             "presentation_policy_version": 1,
             "presentation": {"primary": None, "access": None},
         },
@@ -281,7 +282,7 @@ def test_projection_parity_detects_version_and_presentation_key_divergence():
         session_state=state,
         machine_payload={
             "commit_seq": "12",
-            "state_contract_version": 2,
+            "state_contract_version": STATE_CONTRACT_VERSION + 1,
             "presentation_policy_version": 1,
             "presentation": {"primary": {"key": "idle"}, "access": None},
         },
@@ -293,7 +294,7 @@ def test_projection_parity_detects_version_and_presentation_key_divergence():
         session_state=state,
         machine_payload={
             "commit_seq": "13",
-            "state_contract_version": 1,
+            "state_contract_version": STATE_CONTRACT_VERSION,
             "presentation_policy_version": 1,
             "presentation": {"primary": None, "access": None},
         },
@@ -436,7 +437,7 @@ def test_diagnostics_route_reports_only_canonical_serve_and_authorization(monkey
         "project_machine_session_delta",
         lambda _session, *, commit_seq, canonical: {
             "commit_seq": str(commit_seq),
-            "state_contract_version": 1,
+            "state_contract_version": STATE_CONTRACT_VERSION,
             "presentation_policy_version": 1,
             "presentation": {"primary": None, "access": None},
         },
@@ -459,7 +460,7 @@ def test_diagnostics_route_reports_only_canonical_serve_and_authorization(monkey
     assert "cutover_active" not in payload
     assert "authorization_cutover_active" not in payload
     assert payload["explain"]["commit_seq"] == 12
-    assert payload["explain"]["state_contract_version"] == 1
+    assert payload["explain"]["state_contract_version"] == STATE_CONTRACT_VERSION
     assert payload["explain"]["presentation_policy_version"] == 1
     assert payload["explain"]["presentation_keys"] == {
         "primary": None,
@@ -522,7 +523,7 @@ def test_reducer_health_route_reports_failures_without_claiming_cutover(monkeypa
     assert payload["projected_families"] == ["mode", "disposition", "launch", "run", "activity", "control"]
     assert "transcript" in payload["unsupported_families"]
     assert "cutover_active" not in payload
-    assert payload["contract"]["state_contract_version"] == 1
+    assert payload["contract"]["state_contract_version"] == STATE_CONTRACT_VERSION
     assert payload["contract"]["presentation_policy_version"] == 1
     assert payload["contract"]["presentation_keys"]["primary"][-1] == "activity_unknown"
     assert len(payload["contract"]["fingerprint"]) == 64
