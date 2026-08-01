@@ -1447,6 +1447,13 @@ def _workspace_server_fanout_at_ms(payload: dict | None) -> int | None:
     return candidate if isinstance(candidate, int) else None
 
 
+def _workspace_change_kind(payload: dict | None) -> str | None:
+    if not isinstance(payload, dict):
+        return None
+    kind = payload.get("kind")
+    return str(kind) if isinstance(kind, str) and kind else None
+
+
 def _workspace_catalog_commit_seq(payload: dict | None) -> int | None:
     """Return the canonical catalog commit carried by a runtime wake, if any."""
     if not isinstance(payload, dict):
@@ -1629,6 +1636,7 @@ async def _session_workspace_stream(
                         "data": json.dumps(
                             {
                                 "session_id": str(session_id),
+                                "change_kind": _workspace_change_kind(consumed_payload),
                                 "latest_event_id": _workspace_render_event_id(current_sig, consumed_preview_payload),
                                 "thread_session_count": current_sig[5],
                                 "detect_ms": round((monotonic() - wait_start) * 1000, 1) if wait_start else 0,
@@ -1704,6 +1712,7 @@ async def _session_workspace_stream(
                 "data": json.dumps(
                     {
                         "session_id": str(session_id),
+                        "change_kind": _workspace_change_kind(consumed_payload),
                         "latest_event_id": _workspace_render_event_id(current_sig, transcript_preview_payload),
                         "thread_session_count": current_sig[5],
                         "detect_ms": detect_ms,
@@ -1832,6 +1841,7 @@ async def _live_catalog_workspace_stream(
                 "data": json.dumps(
                     {
                         "session_id": str(session_id),
+                        "change_kind": _workspace_change_kind(message.payload),
                         "latest_event_id": latest_event_id,
                         "server_now_ms": int(datetime.now(timezone.utc).timestamp() * 1000),
                         "catalog_commit_seq": catalog_commit_seq,

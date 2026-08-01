@@ -590,6 +590,7 @@ def test_workspace_stream_wake_includes_fanout_metadata(tmp_path):
     assert len(changed_events) == 1
     assert changed_events[0]["id"] == "1"
     changed = json.loads(changed_events[0]["data"])
+    assert changed["change_kind"] == "ingest"
     assert changed["latest_event_id"] > 0
     assert changed["pubsub_seq"] == 1
     assert changed["server_fanout_at_ms"] == 1_779_220_000_150
@@ -656,6 +657,7 @@ def test_workspace_stream_title_update_wakes_on_anchor_title_change(tmp_path):
     assert len(changed_events) == 1
     assert changed_events[0]["id"] == "1"
     changed = json.loads(changed_events[0]["data"])
+    assert changed["change_kind"] == "title_update"
     assert changed["session_id"] == str(session_id)
     assert changed["pubsub_seq"] == 1
     assert changed["transcript_preview"] is None
@@ -1134,6 +1136,7 @@ def test_live_catalog_workspace_event_matches_ios_required_contract():
 
     events = asyncio.run(_run())
     changed = json.loads(next(event["data"] for event in events if event["event"] == "workspace_changed"))
+    assert changed["change_kind"] == "transcript_preview"
     assert changed["latest_event_id"] == -7
     assert changed["catalog_commit_seq"] == 41
     assert changed["transcript_preview"]["text"] == "visible before durability"

@@ -217,25 +217,30 @@ export function useSessionWorkspace(
       return;
     }
 
-    const refreshQueryKeys = [
+    const baseRefreshQueryKeys = [
       ["agent-session-workspace", sessionId],
       ["agent-session", sessionId],
       ["agent-session-thread", sessionId],
+      ["agent-sessions"],
+    ] as const;
+    const transcriptRefreshQueryKeys = [
       ["agent-session-turns", sessionId],
       ["agent-session-projection-infinite", sessionId],
       ["agent-session-events", sessionId],
       ["agent-session-events-infinite", sessionId],
-      ["agent-sessions"],
     ] as const;
     let refreshInFlight: Promise<void> | null = null;
-    let refreshQueued = false;
+    let queuedIncludeTranscript = false;
     let disposed = false;
 
-    const refreshWorkspaceQueries = () => {
+    const refreshWorkspaceQueries = (includeTranscript: boolean) => {
       if (refreshInFlight) {
-        refreshQueued = true;
+        queuedIncludeTranscript = queuedIncludeTranscript || includeTranscript;
         return;
       }
+      const refreshQueryKeys = includeTranscript
+        ? [...baseRefreshQueryKeys, ...transcriptRefreshQueryKeys]
+        : baseRefreshQueryKeys;
       refreshInFlight = Promise.all(
         refreshQueryKeys.map((queryKey) =>
           queryClient.invalidateQueries({ queryKey }, { cancelRefetch: false }),
@@ -244,9 +249,12 @@ export function useSessionWorkspace(
         .then(() => undefined)
         .finally(() => {
           refreshInFlight = null;
-          if (refreshQueued && !disposed) {
-            refreshQueued = false;
-            refreshWorkspaceQueries();
+          if (queuedIncludeTranscript && !disposed) {
+            const nextIncludeTranscript = queuedIncludeTranscript;
+            queuedIncludeTranscript = false;
+            refreshWorkspaceQueries(nextIncludeTranscript);
+          } else {
+            queuedIncludeTranscript = false;
           }
         });
     };
@@ -270,10 +278,15 @@ export function useSessionWorkspace(
             };
             setPendingStateRenderBeaconVersion((value) => value + 1);
           }
-          let shouldDeferRefetchForPreview = false;
-          if (Object.prototype.hasOwnProperty.call(data, "transcript_preview")) {
-            const transcriptPreview = data.transcript_preview ?? null;
-            shouldDeferRefetchForPreview = shouldRenderTranscriptPreview(transcriptPreview);
+          const hasTranscriptPreview = Object.prototype.hasOwnProperty.call(data, "transcript_preview");
+          const transcriptPreview = data.transcript_preview ?? null;
+          const isFreshTranscriptPreview =
+            transcriptPreview !== null && shouldRenderTranscriptPreview(transcriptPreview);
+          const isTranscriptMutation =
+            data.change_kind === "ingest" ||
+            (data.change_kind === "transcript_preview" && !isFreshTranscriptPreview) ||
+            (!data.change_kind && (data.latest_event_id > 0 || hasTranscriptPreview));
+          if (hasTranscriptPreview && (isTranscriptMutation || isFreshTranscriptPreview)) {
             setStreamTranscriptPreview(transcriptPreview);
             queryClient.setQueriesData<AgentSessionWorkspaceResponse>(
               { queryKey: ["agent-session-workspace", sessionId] },
@@ -303,13 +316,13 @@ export function useSessionWorkspace(
           };
           setPendingRenderBeaconVersion((version) => version + 1);
 
-          if (shouldDeferRefetchForPreview && typeof window !== "undefined" && window.requestAnimationFrame) {
-            window.requestAnimationFrame(() => {
-              window.setTimeout(refreshWorkspaceQueries, 0);
-            });
-          } else {
-            refreshWorkspaceQueries();
+          if (isFreshTranscriptPreview) {
+            // The preview is already applied to the workspace cache and local
+            // projection. Wait for the durable ingest wake before refetching
+            // transcript queries; runtime wakes must not evict it.
+            return;
           }
+          refreshWorkspaceQueries(isTranscriptMutation);
         },
         onError: () => setStreamConnected(false),
       },

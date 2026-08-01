@@ -152,6 +152,7 @@ describe("Timeline session stream", () => {
     });
     MockEventSource.instances[0].emit("workspace_changed", {
       session_id: "session-1",
+      change_kind: "transcript_preview",
       latest_event_id: 42,
       latest_event_emitted_at_ms: 1_779_482_799_900,
       server_fanout_at_ms: 1_779_482_799_980,
@@ -185,6 +186,7 @@ describe("Timeline session stream", () => {
       expect.objectContaining({
         kind: "workspace_changed",
         session_id: "session-1",
+        change_kind: "transcript_preview",
         latest_event_id: 42,
         latest_event_emitted_at_ms: 1_779_482_799_900,
         server_fanout_at_ms: 1_779_482_799_980,

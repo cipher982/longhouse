@@ -831,6 +831,7 @@ export interface SessionWorkspaceStreamConnected {
 
 export interface SessionWorkspaceStreamChange {
   session_id: string;
+  change_kind?: string | null;
   latest_event_id: number;
   thread_session_count: number;
   detect_ms?: number;
@@ -887,6 +888,7 @@ export function connectSessionWorkspaceStream(
     if (data) {
       dispatchTimelineStreamEvent("workspace_changed", {
         session_id: data.session_id,
+        change_kind: data.change_kind ?? null,
         latest_event_id: data.latest_event_id,
         latest_event_emitted_at_ms: data.latest_event_emitted_at_ms ?? null,
         server_fanout_at_ms: data.server_fanout_at_ms ?? null,
