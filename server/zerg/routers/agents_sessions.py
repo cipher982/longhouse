@@ -960,6 +960,7 @@ def get_session_graph(
 
 
 _TAIL_ALL_ROLES = frozenset({"user", "assistant", "tool"})
+_TAIL_VALID_ROLES = _TAIL_ALL_ROLES | {"system"}
 # A tool-heavy transcript can be ~96% tool events, so a narrowed tail scans wider.
 _TAIL_ROLE_SCAN_FACTOR = 25
 
@@ -974,11 +975,11 @@ def _parse_tail_roles(raw: object) -> frozenset[str]:
     if not isinstance(raw, str) or not raw.strip():
         return _TAIL_ALL_ROLES
     requested = {part.strip().lower() for part in raw.split(",") if part.strip()}
-    unknown = requested - _TAIL_ALL_ROLES
+    unknown = requested - _TAIL_VALID_ROLES
     if unknown:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Unknown roles: {', '.join(sorted(unknown))}. Valid roles: user, assistant, tool.",
+            detail=f"Unknown roles: {', '.join(sorted(unknown))}. Valid roles: user, assistant, system, tool.",
         )
     if not requested:
         return _TAIL_ALL_ROLES
@@ -1021,7 +1022,7 @@ async def session_tail(
     limit: int = Query(30, ge=1, le=100, description="Number of recent events to return"),
     roles: str | None = Query(
         None,
-        description="Comma-separated roles to include: user, assistant, tool. Defaults to all.",
+        description="Comma-separated roles to include: user, assistant, system, tool. Defaults to user, assistant, and tool.",
     ),
     db: Session | None = Depends(machine_session_read_db_dependency),
     _auth: object = Depends(verify_agents_token),

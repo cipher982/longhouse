@@ -247,6 +247,32 @@ def test_tail_rejects_unknown_role(tmp_path):
         cleanup()
 
 
+def test_tail_system_role_surfaces_conversation_boundaries(tmp_path):
+    factory, cleanup = _setup_app(tmp_path)
+    session_id = _add_tool_heavy_session(factory)
+    with factory() as db:
+        db.add(
+            AgentEvent(
+                session_id=session_id,
+                role="system",
+                content_text="Conversation reset",
+                timestamp=_TS + timedelta(seconds=100),
+                raw_json='{"role":"system","branch_kind":"conversation_reset"}',
+            )
+        )
+        db.commit()
+    client = TestClient(api_app)
+    try:
+        resp = client.get(f"/agents/sessions/{session_id}/tail", params={"roles": "system"})
+        assert resp.status_code == 200
+        events = resp.json()["events"]
+        assert len(events) == 1
+        assert events[0]["role"] == "system"
+        assert events[0]["content"] == "Conversation reset"
+    finally:
+        cleanup()
+
+
 def test_tail_blank_roles_falls_back_to_all(tmp_path):
     factory, cleanup = _setup_app(tmp_path)
     session_id = _add_tool_heavy_session(factory)

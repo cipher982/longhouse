@@ -342,7 +342,7 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
         Args:
             session_id: The session ID to read (from search_sessions or peers).
             limit: Number of recent events to return (default 30, max 100).
-            roles: Comma-separated roles to include: user, assistant, tool.
+            roles: Comma-separated roles to include: user, assistant, system, tool.
                 Tool output dominates most transcripts, so pass
                 "user,assistant" to read decisions instead of command spam.
         """

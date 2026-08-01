@@ -31,7 +31,8 @@ impl ManagedLaunchResponse {
     ) -> anyhow::Result<()> {
         if self.managed_transport.as_deref() != Some(expected_transport) {
             anyhow::bail!(
-                "Runtime Host returned an unsupported managed-local transport for {provider_name}"
+                "Runtime Host returned an unsupported managed-local transport for {provider_name} (expected {expected_transport}, got {})",
+                self.managed_transport.as_deref().unwrap_or("missing")
             );
         }
         Ok(())

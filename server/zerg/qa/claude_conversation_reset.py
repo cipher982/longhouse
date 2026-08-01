@@ -84,7 +84,16 @@ def _assistant_marker_path(marker: str, *, started_at: float) -> Path | None:
 
 def _tail(session_id: str) -> dict[str, Any] | None:
     result = subprocess.run(
-        ["longhouse-server", "tail", session_id, "--limit", "100", "--json"],
+        [
+            "longhouse-server",
+            "tail",
+            session_id,
+            "--limit",
+            "100",
+            "--roles",
+            "user,assistant,system",
+            "--json",
+        ],
         text=True,
         capture_output=True,
         timeout=30,

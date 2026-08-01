@@ -381,7 +381,7 @@ def tail(
     roles: str | None = typer.Option(
         None,
         "--roles",
-        help="Comma-separated roles to include: user, assistant, tool. Tool output "
+        help="Comma-separated roles to include: user, assistant, system, tool. Tool output "
         "dominates most transcripts, so --roles user,assistant reads decisions.",
     ),
     output_json: bool = typer.Option(

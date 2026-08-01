@@ -17294,7 +17294,7 @@ export interface operations {
             query?: {
                 /** @description Number of recent events to return */
                 limit?: number;
-                /** @description Comma-separated roles to include: user, assistant, tool. Defaults to all. */
+                /** @description Comma-separated roles to include: user, assistant, system, tool. Defaults to user, assistant, and tool. */
                 roles?: string | null;
             };
             header?: never;

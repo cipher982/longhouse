@@ -15,6 +15,8 @@ use anyhow::{bail, Context, Result};
 use reqwest::Url;
 use serde::Serialize;
 use serde_json::{json, Value};
+#[cfg(unix)]
+use tokio::io::AsyncWriteExt;
 use uuid::Uuid;
 
 const USERNAME: &str = "opencode";
@@ -400,6 +402,13 @@ async fn monitor_opencode_events_once(
                         Some(&provider_binding_path(longhouse_session_id)?),
                     )?;
                 }
+                if let Some(provider_session_id) = idle_session_id(&event) {
+                    let longhouse_session_id = longhouse_session_id.to_string();
+                    let provider_session_id = provider_session_id.to_string();
+                    tokio::spawn(async move {
+                        wake_transcript_shipper(&longhouse_session_id, &provider_session_id).await;
+                    });
+                }
             }
         }
     }
@@ -436,6 +445,95 @@ fn top_level_created_session_id(event: &Value) -> Option<&str> {
         .or_else(|| info.get("id").and_then(Value::as_str))
         .filter(|value| !value.trim().is_empty())
 }
+
+fn idle_session_id(event: &Value) -> Option<&str> {
+    let payload = event.get("payload")?;
+    let event_type = payload.get("type").and_then(Value::as_str)?;
+    let properties = payload.get("properties")?;
+    let idle = event_type == "session.idle"
+        || (event_type == "session.status"
+            && properties
+                .get("status")
+                .and_then(|status| status.get("type"))
+                .and_then(Value::as_str)
+                == Some("idle"));
+    idle.then(|| properties.get("sessionID").and_then(Value::as_str))
+        .flatten()
+        .filter(|value| !value.trim().is_empty())
+}
+
+#[cfg(unix)]
+async fn wake_transcript_shipper(longhouse_session_id: &str, provider_session_id: &str) {
+    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+        return;
+    };
+    let database_path = opencode_database_path(&home);
+    if !database_path.is_file() {
+        return;
+    }
+    let Ok(socket_path) = crate::config::get_agent_transcript_wake_socket_path() else {
+        return;
+    };
+    if !socket_path.exists() {
+        return;
+    }
+    let _ = send_transcript_wake(
+        &socket_path,
+        &database_path,
+        longhouse_session_id,
+        provider_session_id,
+    )
+    .await;
+}
+
+fn opencode_database_path(home: &Path) -> PathBuf {
+    home.join(".local/share/opencode/opencode.db")
+}
+
+#[cfg(unix)]
+async fn send_transcript_wake(
+    socket_path: &Path,
+    database_path: &Path,
+    longhouse_session_id: &str,
+    provider_session_id: &str,
+) -> std::io::Result<()> {
+    let file_len_hint = database_path.metadata().ok().map(|value| value.len());
+    let payload = json!({
+        "provider": "opencode",
+        "path": database_path,
+        "phase": "idle",
+        "session_id": longhouse_session_id,
+        "turn_id": provider_session_id,
+        "wake_reason": "turn_completed",
+        "observed_at_ms": chrono::Utc::now().timestamp_millis(),
+        "file_len_hint": file_len_hint,
+    })
+    .to_string()
+    .into_bytes();
+    let mut stream = tokio::time::timeout(
+        Duration::from_millis(75),
+        tokio::net::UnixStream::connect(socket_path),
+    )
+    .await
+    .map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "transcript wake connect timed out",
+        )
+    })??;
+    tokio::time::timeout(Duration::from_millis(75), stream.write_all(&payload))
+        .await
+        .map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "transcript wake write timed out",
+            )
+        })??;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+async fn wake_transcript_shipper(_longhouse_session_id: &str, _provider_session_id: &str) {}
 
 fn update_provider_session_id(
     state_path: &Path,
@@ -806,6 +904,77 @@ mod tests {
             top_level_created_session_id(&json!({"payload": {"type": "session.updated"}})),
             None
         );
+    }
+
+    #[test]
+    fn extracts_idle_sessions_from_current_and_legacy_events() {
+        let legacy = json!({
+            "payload": {
+                "type": "session.idle",
+                "properties": {"sessionID": "ses_legacy"}
+            }
+        });
+        let current = json!({
+            "payload": {
+                "type": "session.status",
+                "properties": {
+                    "sessionID": "ses_current",
+                    "status": {"type": "idle"}
+                }
+            }
+        });
+        let busy = json!({
+            "payload": {
+                "type": "session.status",
+                "properties": {
+                    "sessionID": "ses_busy",
+                    "status": {"type": "busy"}
+                }
+            }
+        });
+        assert_eq!(idle_session_id(&legacy), Some("ses_legacy"));
+        assert_eq!(idle_session_id(&current), Some("ses_current"));
+        assert_eq!(idle_session_id(&busy), None);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn emits_turn_completed_wake_for_shared_opencode_database() {
+        use tokio::io::AsyncReadExt;
+
+        let temp = tempfile::tempdir().unwrap();
+        let database_path = opencode_database_path(temp.path());
+        fs::create_dir_all(database_path.parent().unwrap()).unwrap();
+        fs::write(&database_path, b"opencode-db").unwrap();
+        let socket_path = temp.path().join("wake.sock");
+        let listener = tokio::net::UnixListener::bind(&socket_path).unwrap();
+
+        let send = tokio::spawn({
+            let socket_path = socket_path.clone();
+            let database_path = database_path.clone();
+            async move {
+                send_transcript_wake(
+                    &socket_path,
+                    &database_path,
+                    "longhouse-session",
+                    "ses_after_reset",
+                )
+                .await
+            }
+        });
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut raw = Vec::new();
+        stream.read_to_end(&mut raw).await.unwrap();
+        send.await.unwrap().unwrap();
+
+        let payload: Value = serde_json::from_slice(&raw).unwrap();
+        assert_eq!(payload["provider"], "opencode");
+        assert_eq!(payload["path"], database_path.to_string_lossy().as_ref());
+        assert_eq!(payload["phase"], "idle");
+        assert_eq!(payload["session_id"], "longhouse-session");
+        assert_eq!(payload["turn_id"], "ses_after_reset");
+        assert_eq!(payload["wake_reason"], "turn_completed");
+        assert_eq!(payload["file_len_hint"], 11);
     }
 
     #[test]

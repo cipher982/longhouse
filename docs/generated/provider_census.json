@@ -7,7 +7,7 @@
     "cursor",
     "opencode"
   ],
-  "file_count": 219,
+  "file_count": 216,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -303,10 +303,8 @@
     {
       "path": "ios/Sources/LonghouseApp/LaunchSessionSheet.swift",
       "providers": [
-        "antigravity",
         "claude",
         "codex",
-        "cursor",
         "opencode"
       ]
     },
@@ -349,14 +347,6 @@
         "codex",
         "cursor",
         "opencode"
-      ]
-    },
-    {
-      "path": "ios/Sources/Shared/SessionAPIAdapters.swift",
-      "providers": [
-        "antigravity",
-        "claude",
-        "codex"
       ]
     },
     {
@@ -1558,15 +1548,6 @@
       ]
     },
     {
-      "path": "server/zerg/services/apns_sender.py",
-      "providers": [
-        "antigravity",
-        "claude",
-        "codex",
-        "cursor"
-      ]
-    },
-    {
       "path": "server/zerg/services/demo_sessions.py",
       "providers": [
         "antigravity",
@@ -1689,15 +1670,6 @@
         "antigravity",
         "claude",
         "codex"
-      ]
-    },
-    {
-      "path": "server/zerg/services/session_views.py",
-      "providers": [
-        "antigravity",
-        "claude",
-        "codex",
-        "opencode"
       ]
     },
     {

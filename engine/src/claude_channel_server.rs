@@ -312,7 +312,7 @@ fn coordination_tools() -> Vec<Value> {
             json!({
                 "session_id":{"type":"string"},
                 "limit":{"type":"integer","default":30,"minimum":1,"maximum":100},
-                "roles":{"type":"string","description":"Comma-separated roles to include: user, assistant, tool. Defaults to all."},
+                "roles":{"type":"string","description":"Comma-separated roles to include: user, assistant, system, tool. Defaults to user, assistant, and tool."},
             }),
         ),
         tool(
