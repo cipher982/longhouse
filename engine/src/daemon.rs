@@ -916,6 +916,8 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let phase_projection_timer = tokio::time::sleep(PHASE_PROJECTION_DEBOUNCE);
     tokio::pin!(phase_projection_timer);
     let mut phase_projection_pending = false;
+    // Highest observed_at seen in the phase ledger, to detect out-of-process writes.
+    let mut last_phase_watermark: Option<String> = None;
     let startup_reconciliation_timer = tokio::time::sleep(STARTUP_RECONCILIATION_SCAN_DELAY);
     tokio::pin!(startup_reconciliation_timer);
     let mut startup_reconciliation_pending = !startup_archive_mode.is_paused();
@@ -2085,6 +2087,26 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             // overlay signals only; transcript shipping is owned by filesystem
             // events plus reconciliation scans.
             _ = outbox_timer.tick() => {
+                // The hook outbox is only one of five phase-ledger writers. The
+                // Codex bridge, both Console adapters, and OpenCode all run as
+                // separate processes and write the shared ledger directly, so
+                // the daemon never sees their phases through the outbox at all
+                // — those transitions fell through to the 60s reconciliation
+                // and produced the long tail that survived the debounce.
+                //
+                // Watching the ledger watermark covers every producer at once,
+                // including any added later, without each one having to signal
+                // the daemon. One MAX() over a table with one row per session.
+                if let Some(watermark) = latest_phase_watermark(&conn) {
+                    if last_phase_watermark.as_deref() != Some(watermark.as_str()) {
+                        last_phase_watermark = Some(watermark);
+                        if arm_phase_projection(&mut phase_projection_pending) {
+                            phase_projection_timer
+                                .as_mut()
+                                .reset(tokio::time::Instant::now() + PHASE_PROJECTION_DEBOUNCE);
+                        }
+                    }
+                }
                 if outbox_collect_tasks.is_empty() {
                     let outbox_dir = outbox_dir.clone();
                     let runtime_events_outbox_dir = runtime_events_outbox_dir.clone();
@@ -2291,6 +2313,22 @@ fn arm_phase_projection(pending: &mut bool) -> bool {
     }
     *pending = true;
     true
+}
+
+/// Highest `observed_at` in the phase ledger, or None if it cannot be read.
+///
+/// Cheap enough for the 100ms outbox tick: `session_phase_state` holds one row
+/// per session. Reading a watermark rather than subscribing to a signal is what
+/// makes this cover out-of-process writers — the Codex bridge, Console
+/// adapters, and OpenCode all record phases from their own processes.
+fn latest_phase_watermark(conn: &rusqlite::Connection) -> Option<String> {
+    conn.query_row(
+        "SELECT MAX(observed_at) FROM session_phase_state",
+        [],
+        |row| row.get::<_, Option<String>>(0),
+    )
+    .ok()
+    .flatten()
 }
 
 fn maybe_start_projection_build(
@@ -4729,6 +4767,45 @@ async fn shutdown_signal() {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn ledger_watermark_detects_out_of_process_phase_writes() {
+        // The Codex bridge and Console adapters write session_phase_state from
+        // their own processes. Nothing reaches the daemon's outbox, so the
+        // watermark is the only way it learns a phase moved.
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE session_phase_state (
+                session_id TEXT PRIMARY KEY,
+                provider TEXT NOT NULL,
+                phase TEXT NOT NULL,
+                tool_name TEXT,
+                source TEXT NOT NULL,
+                observed_at TEXT NOT NULL
+            );",
+        )
+        .unwrap();
+        assert_eq!(latest_phase_watermark(&conn), None, "empty ledger has no watermark");
+
+        conn.execute(
+            "INSERT INTO session_phase_state VALUES ('s1','codex','thinking',NULL,'codex_bridge','2026-08-01T13:10:00+00:00')",
+            [],
+        )
+        .unwrap();
+        let first = latest_phase_watermark(&conn).unwrap();
+
+        // A different session transitions later; the watermark must advance.
+        conn.execute(
+            "INSERT INTO session_phase_state VALUES ('s2','codex','idle',NULL,'codex_bridge','2026-08-01T13:11:00+00:00')",
+            [],
+        )
+        .unwrap();
+        let second = latest_phase_watermark(&conn).unwrap();
+        assert_ne!(first, second, "a later phase from any session must move the watermark");
+
+        // Re-reading without a write must not re-arm the debounce.
+        assert_eq!(latest_phase_watermark(&conn).unwrap(), second);
+    }
 
     #[test]
     fn phase_writes_coalesce_into_one_debounce_window() {
