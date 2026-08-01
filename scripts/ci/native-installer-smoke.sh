@@ -82,8 +82,9 @@ fi
 # Managed launches fail closed without coordination authority, matching the
 # Claude contract, so the fixture Runtime Host issues a session-scoped token the
 # way a real one does. Registration is only accepted when the response echoes the
-# launcher's own session id and a non-empty run id, so the fixture must read the
-# request body rather than return a constant.
+# launcher's own session id, a non-empty run id, and the requested provider's
+# native managed transport, so the fixture must read the request body rather than
+# return a constant.
 cat > "$TEST_ROOT/fake-runtime.js" <<'RUNTIME_EOF'
 const http = require("http");
 const TOKEN = "native-installer-smoke-coordination";
@@ -115,6 +116,7 @@ http
             session_id: payload.session_id,
             run_id: "native-installer-smoke-run",
             coordination_token: TOKEN,
+            managed_transport: "cursor_helm",
           }),
         );
         return;
