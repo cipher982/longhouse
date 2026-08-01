@@ -16953,7 +16953,7 @@ export interface operations {
                 device_id?: string | null;
                 /** @description Days to look back */
                 days_back?: number;
-                /** @description Search query for content */
+                /** @description Content search query. Omit or blank to list recent sessions ordered by last activity. */
                 query?: string | null;
                 /** @description Max results */
                 limit?: number;

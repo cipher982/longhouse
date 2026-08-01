@@ -549,7 +549,10 @@ async def list_sessions(
     ),
     device_id: Optional[str] = Query(None, description="Filter by device ID"),
     days_back: int = Query(14, ge=1, le=90, description="Days to look back"),
-    query: Optional[str] = Query(None, description="Search query for content"),
+    query: Optional[str] = Query(
+        None,
+        description="Content search query. Omit or blank to list recent sessions ordered by last activity.",
+    ),
     limit: int = Query(20, ge=1, le=100, description="Max results"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
     sort: Optional[str] = Query(
@@ -563,6 +566,11 @@ async def list_sessions(
     _single: None = Depends(require_single_tenant),
 ) -> SessionsListResponse:
     """List sessions with optional filters."""
+    # A blank query is an absent query. Searching FTS for "" matches nothing
+    # and reads as "empty corpus" rather than "bad call"; the listing path is
+    # what a query-less caller actually wants.
+    if query is not None and not query.strip():
+        query = None
     try:
         params = SessionListParams(
             project=project,
