@@ -1834,7 +1834,14 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                         "runtime_truth_change",
                                     );
                                 } else {
+                                    // A POST is already in flight, so this
+                                    // change cannot ship yet. Clearing the
+                                    // signature guarantees the next projection
+                                    // ships it, but only if another projection
+                                    // actually runs — otherwise the change sits
+                                    // until the 60s reconciliation. Queue one.
                                     last_runtime_truth_signature = None;
+                                    projection_build_pending = true;
                                 }
                             }
                             }
