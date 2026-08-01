@@ -389,11 +389,7 @@ fn coordination_token(
     registration: Option<&ManagedLaunchResponse>,
     session_id: &str,
 ) -> anyhow::Result<String> {
-    if let Some(token) = registration
-        .and_then(|value| value.coordination_token.as_deref())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
+    if let Some(token) = registration.and_then(ManagedLaunchResponse::coordination_token) {
         return Ok(token.to_owned());
     }
     if config.resume_session.is_none() {
@@ -619,14 +615,16 @@ fn register(
     }
     .to_json();
     let runtime = tokio::runtime::Runtime::new()?;
-    crate::managed_launch_lifecycle::register_managed_launch(
+    let response = crate::managed_launch_lifecycle::register_managed_launch(
         &runtime,
         &url,
         &token,
         "Cursor",
         &payload,
         Some(session_id),
-    )
+    )?;
+    response.require_authority("Cursor", crate::cursor_helm_control::CURSOR_HELM_TRANSPORT)?;
+    Ok(response)
 }
 
 fn registration_credentials(config: &LaunchConfig) -> anyhow::Result<(String, String, String)> {

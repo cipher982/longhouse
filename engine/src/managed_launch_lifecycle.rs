@@ -23,6 +23,38 @@ pub struct ManagedLaunchResponse {
     pub coordination_token: Option<String>,
 }
 
+impl ManagedLaunchResponse {
+    pub fn validate_transport(
+        &self,
+        provider_name: &str,
+        expected_transport: &str,
+    ) -> anyhow::Result<()> {
+        if self.managed_transport.as_deref() != Some(expected_transport) {
+            anyhow::bail!(
+                "Runtime Host returned an unsupported managed-local transport for {provider_name}"
+            );
+        }
+        Ok(())
+    }
+
+    pub fn coordination_token(&self) -> Option<&str> {
+        self.coordination_token
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    }
+
+    pub fn require_authority(
+        &self,
+        provider_name: &str,
+        expected_transport: &str,
+    ) -> anyhow::Result<&str> {
+        self.validate_transport(provider_name, expected_transport)?;
+        self.coordination_token()
+            .context("Longhouse did not issue coordination authority for this session")
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LaunchOutcome {
     Confirmed,
@@ -255,5 +287,25 @@ mod tests {
             validate_launch_identity(response("expected", "run"), "Cursor", Some("expected"))
                 .is_ok()
         );
+    }
+
+    #[test]
+    fn authority_requires_expected_transport_and_nonempty_token() {
+        let mut response = response("session", "run");
+        response.managed_transport = Some("codex_app_server".to_string());
+        response.coordination_token = Some("  secret  ".to_string());
+        assert_eq!(
+            response
+                .require_authority("Codex", "codex_app_server")
+                .unwrap(),
+            "secret"
+        );
+        assert!(response
+            .require_authority("Codex", "claude_channel_bridge")
+            .is_err());
+        response.coordination_token = Some("  ".to_string());
+        assert!(response
+            .require_authority("Codex", "codex_app_server")
+            .is_err());
     }
 }

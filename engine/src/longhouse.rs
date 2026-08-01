@@ -931,15 +931,8 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
         .provider_session_id
         .as_deref()
         .context("Longhouse did not return a Claude provider session")?;
-    if response.managed_transport.as_deref() != Some("claude_channel_bridge") {
-        anyhow::bail!("Longhouse returned an unsupported managed-local transport for Claude");
-    }
-    let coordination_token = match response
-        .coordination_token
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
+    response.validate_transport("Claude", "claude_channel_bridge")?;
+    let coordination_token = match response.coordination_token() {
         Some(value) => value.to_owned(),
         None if resuming => issue_coordination_token(&runtime, &url, &token, &response.session_id)?,
         None => anyhow::bail!("Longhouse did not issue coordination authority for this session"),
@@ -1047,15 +1040,7 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
         &response.session_id,
         &response.run_id,
     );
-    if response.managed_transport.as_deref() != Some("opencode_server_bridge") {
-        anyhow::bail!("Longhouse returned an unsupported managed-local transport for OpenCode");
-    }
-    let coordination_token = response
-        .coordination_token
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .context("Longhouse did not issue coordination authority for this session")?;
+    let coordination_token = response.require_authority("OpenCode", "opencode_server_bridge")?;
     let bridge = paired_engine_path()?;
     let mut start = Command::new(&bridge);
     start
@@ -1504,12 +1489,7 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
         &response.session_id,
         &response.run_id,
     );
-    let coordination_token = response
-        .coordination_token
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .context("Longhouse did not issue coordination authority for this session")?;
+    let coordination_token = response.require_authority("Codex", "codex_app_server")?;
     if response.run_id.trim().is_empty() {
         anyhow::bail!("Longhouse server did not return the managed run identity");
     }
