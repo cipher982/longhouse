@@ -925,20 +925,48 @@ async def stream_live_catalog_timeline(
     yield {"event": "connected", "data": json.dumps({"message": "Timeline session stream connected"})}
 
     with bus.subscribe(TOPIC_TIMELINE, since_seq=sequence) as subscription:
-        if skip_initial_replay:
-            # The browser already has the HTTP snapshot. Seed the signatures
-            # without replaying those cards so the first wake only emits cards
-            # whose session-local projection actually changed.
-            response = await asyncio.to_thread(
-                list_live_catalog_timeline,
-                params=params,
-                owner_id=owner_id,
-            )
-            previous = {card.thread_id: _timeline_card_signature(card) for card in response.sessions}
-            previous_total = response.total
-            skip_initial_replay = False
+        # The first snapshot either seeds the signatures behind an already
+        # rendered browser snapshot or is the stream's initial replay. After
+        # that, only a real pubsub wake triggers another catalog read. A
+        # timeout is a heartbeat opportunity, not permission to rescan the
+        # entire timeline.
+        response = await asyncio.to_thread(
+            list_live_catalog_timeline,
+            params=params,
+            owner_id=owner_id,
+        )
+        previous = {card.thread_id: _timeline_card_signature(card) for card in response.sessions}
+        previous_total = response.total
+        if not skip_initial_replay:
+            for card in response.sessions:
+                yield {
+                    "event": "session_upsert",
+                    "data": json.dumps(
+                        {
+                            "session": card.model_dump(mode="json"),
+                            "total": response.total,
+                            "has_real_sessions": response.has_real_sessions,
+                        }
+                    ),
+                }
 
         while not await request.is_disconnected():
+            message = await subscription.next_message(timeout=5.0)
+            if message is None:
+                now = monotonic()
+                if now - last_heartbeat >= 30.0:
+                    yield {
+                        "event": "heartbeat",
+                        "data": json.dumps(
+                            {
+                                "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                                "total": previous_total,
+                            }
+                        ),
+                    }
+                    last_heartbeat = now
+                continue
+
             response = await asyncio.to_thread(
                 list_live_catalog_timeline,
                 params=params,
@@ -972,17 +1000,3 @@ async def stream_live_catalog_timeline(
                 }
             previous = current
             previous_total = response.total
-
-            now = monotonic()
-            if now - last_heartbeat >= 30.0:
-                yield {
-                    "event": "heartbeat",
-                    "data": json.dumps(
-                        {
-                            "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-                            "total": previous_total,
-                        }
-                    ),
-                }
-                last_heartbeat = now
-            await subscription.next_message(timeout=5.0)
