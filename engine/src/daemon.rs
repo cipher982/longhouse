@@ -2065,6 +2065,13 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     Ok(_) => {}
                     Err(e) => tracing::warn!("Session binding prune error: {}", e),
                 }
+                let windows =
+                    crate::state::session_run_binding::SessionRunWindowStore::new(&conn);
+                match windows.prune(chrono::Utc::now()) {
+                    Ok(n) if n > 0 => tracing::info!("Daily prune: removed {} stale session_run_window entries", n),
+                    Ok(_) => {}
+                    Err(e) => tracing::warn!("Session run window prune error: {}", e),
+                }
             }
 
             // Frequent local status file refresh for ambient UX and debugging
@@ -2364,7 +2371,7 @@ fn build_local_status_projection(
     // Persist this cycle's session -> run bindings before building evidence, so
     // a session whose provider state file has already been torn down can still
     // attach its closing phase to the run it belonged to.
-    let remembered_run_ids = record_and_read_run_bindings(
+    let run_windows = record_and_read_run_bindings(
         conn,
         observations,
         claude_observations,
@@ -2381,7 +2388,7 @@ fn build_local_status_projection(
         cursor_observations,
         unmanaged_session_bindings,
         &phase_ledger,
-        &remembered_run_ids,
+        &run_windows,
         process_snapshot_complete,
         now,
     ));
@@ -2399,8 +2406,12 @@ fn build_local_status_projection(
     heartbeat::build_status_file_projection(payload, &stats, phase_ledger, ledger_status)
 }
 
-/// Upsert every live observation's run binding, then return the remembered set
+/// Upsert every live observation's run window, then return the retained index
 /// (including sessions whose observation has already disappeared).
+///
+/// `run_started_at` comes from the observation, never from scan wall time. A
+/// window that starts at `now` would drift later than the phases that belong to
+/// it, which is exactly the misbinding the window exists to prevent.
 fn record_and_read_run_bindings(
     conn: &rusqlite::Connection,
     codex_observations: &[managed_bridge_scan::CodexBridgeObservation],
@@ -2408,55 +2419,85 @@ fn record_and_read_run_bindings(
     opencode_observations: &[managed_opencode_scan::OpenCodeServerObservation],
     cursor_observations: &[managed_cursor_helm_scan::CursorHelmObservation],
     now: chrono::DateTime<chrono::Utc>,
-) -> std::collections::HashMap<String, String> {
-    use crate::state::session_run_binding::{SessionRunBinding, SessionRunBindingStore};
+) -> crate::state::session_run_binding::RunWindowIndex {
+    use crate::state::session_run_binding::{
+        RunWindowIndex, SessionRunWindow, SessionRunWindowStore,
+    };
 
-    let store = SessionRunBindingStore::new(conn);
-    let observed: Vec<(&str, &str, Option<&str>)> = codex_observations
+    let store = SessionRunWindowStore::new(conn);
+    let parse_started = |raw: Option<&str>| -> Option<chrono::DateTime<chrono::Utc>> {
+        let raw = raw.map(str::trim).filter(|value| !value.is_empty())?;
+        chrono::DateTime::parse_from_rfc3339(raw)
+            .ok()
+            .map(|at| at.with_timezone(&chrono::Utc))
+    };
+    let observed: Vec<(&str, &str, Option<&str>, Option<&str>)> = codex_observations
         .iter()
-        .map(|obs| ("codex", obs.session_id.as_str(), obs.run_id.as_deref()))
-        .chain(
-            claude_observations
-                .iter()
-                .map(|obs| ("claude", obs.session_id.as_str(), obs.run_id.as_deref())),
-        )
-        .chain(
-            opencode_observations
-                .iter()
-                .map(|obs| ("opencode", obs.session_id.as_str(), obs.run_id.as_deref())),
-        )
-        .chain(
-            cursor_observations
-                .iter()
-                .map(|obs| ("cursor", obs.session_id.as_str(), obs.run_id.as_deref())),
-        )
+        .map(|obs| {
+            (
+                "codex",
+                obs.session_id.as_str(),
+                obs.run_id.as_deref(),
+                obs.bridge_process_start_time.as_deref(),
+            )
+        })
+        .chain(claude_observations.iter().map(|obs| {
+            (
+                "claude",
+                obs.session_id.as_str(),
+                obs.run_id.as_deref(),
+                Some(obs.started_at.as_str()),
+            )
+        }))
+        .chain(opencode_observations.iter().map(|obs| {
+            (
+                "opencode",
+                obs.session_id.as_str(),
+                obs.run_id.as_deref(),
+                Some(obs.started_at.as_str()),
+            )
+        }))
+        .chain(cursor_observations.iter().map(|obs| {
+            (
+                "cursor",
+                obs.session_id.as_str(),
+                obs.run_id.as_deref(),
+                Some(obs.started_at.as_str()),
+            )
+        }))
         .collect();
-    for (provider, session_id, run_id) in observed {
+    for (provider, session_id, run_id, started_at) in observed {
         let Some(run_id) = run_id.map(str::trim).filter(|value| !value.is_empty()) else {
             continue;
         };
         if session_id.trim().is_empty() {
             continue;
         }
-        let binding = SessionRunBinding {
+        // An observation with no parseable start cannot bound a window. Falling
+        // back to `now` would silently reintroduce the misbinding.
+        let Some(run_started_at) = parse_started(started_at) else {
+            continue;
+        };
+        let window = SessionRunWindow {
             session_id: session_id.to_string(),
-            provider: provider.to_string(),
             run_id: run_id.to_string(),
+            provider: provider.to_string(),
+            run_started_at,
             observed_at: now,
         };
-        if let Err(err) = store.record(&binding) {
+        if let Err(err) = store.record(&window) {
             tracing::warn!(
                 error = %err,
-                session_id = %binding.session_id,
-                "persisting session run binding failed"
+                session_id = %window.session_id,
+                "persisting session run window failed"
             );
         }
     }
-    match store.remembered(now) {
-        Ok(bindings) => bindings,
+    match store.index(now) {
+        Ok(index) => index,
         Err(err) => {
-            tracing::warn!(error = %err, "reading remembered session run bindings failed");
-            std::collections::HashMap::new()
+            tracing::warn!(error = %err, "reading session run windows failed");
+            RunWindowIndex::default()
         }
     }
 }
