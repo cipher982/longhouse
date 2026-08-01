@@ -2070,6 +2070,8 @@ struct LonghouseMenuBarCoreTests {
         #expect(session.isConsoleManagedSession == false)
         #expect(session.needsManagedSessionAttention == false)
         #expect(HealthSnapshot.providerDisplayName("cursor") == "Cursor")
+        #expect(HealthSnapshot.providerDisplayName("opencode") == "OpenCode")
+        #expect(HealthSnapshot.providerDisplayName("gemini") == "Antigravity")
     }
 
     @Test

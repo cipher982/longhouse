@@ -1123,20 +1123,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
     }
 
     static func providerDisplayName(_ raw: String) -> String {
-        switch raw.lowercased() {
-        case "claude":
-            return "Claude"
-        case "codex":
-            return "Codex"
-        case "opencode":
-            return "OpenCode"
-        case "cursor":
-            return "Cursor"
-        case "gemini", "antigravity":
-            return "Antigravity"
-        default:
-            return raw.capitalized
-        }
+        ProviderBrands.displayName(raw, fallback: "Unknown")
     }
 
     private static func humanizeReason(_ raw: String) -> String {

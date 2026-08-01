@@ -18,6 +18,7 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from zerg.config import get_settings
+from zerg.generated.provider_brands import provider_display_name
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionPauseRequest
 from zerg.models.apns_device_registration import APNSDeviceRegistration
@@ -48,15 +49,6 @@ NOTIFICATION_EVENT_SESSION_BLOCKED = "session_blocked"
 NOTIFICATION_EVENT_SESSION_BLOCKED_REMINDER = "session_blocked_reminder"
 NOTIFICATION_EVENT_SESSION_NEEDS_ANSWER = "session_needs_answer"
 NOTIFICATION_CHANNEL_APNS_IOS = "apns_ios"
-PROVIDER_DISPLAY_NAMES = {
-    "claude": "Claude",
-    "codex": "Codex",
-    "cursor": "Cursor",
-    "antigravity": "Antigravity",
-    "openai": "OpenAI",
-    "zai": "z.ai",
-    "z.ai": "z.ai",
-}
 _APNS_PROVIDER_TOKEN_TTL = timedelta(minutes=50)
 
 _cached_provider_token: str | None = None
@@ -1508,10 +1500,7 @@ def _clean_label(value: object) -> str | None:
 
 
 def _provider_display_name(provider: str) -> str:
-    cleaned = str(provider or "").strip()
-    if not cleaned:
-        return "Session"
-    return PROVIDER_DISPLAY_NAMES.get(cleaned.lower(), cleaned.replace("_", " ").title())
+    return provider_display_name(provider)
 
 
 def _attention_collapse_id(session_id: str) -> str:

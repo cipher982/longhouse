@@ -115,16 +115,7 @@ public struct ProviderGlyph: View {
     }
 }
 
-/// Proper-cased display name for a provider. Mirrors web `getProviderLabel`.
+/// Proper-cased display name from the generated provider identity contract.
 public func providerDisplayLabel(_ provider: String?) -> String {
-    guard let provider, !provider.isEmpty else { return "Session" }
-    switch provider.lowercased() {
-    case "codex": return "Codex"
-    case "openai": return "OpenAI"
-    case "claude": return "Claude"
-    case "opencode": return "OpenCode"
-    case "cursor": return "Cursor"
-    case "gemini", "antigravity": return "Antigravity"
-    default: return provider.prefix(1).uppercased() + provider.dropFirst()
-    }
+    ProviderBrands.displayName(provider)
 }

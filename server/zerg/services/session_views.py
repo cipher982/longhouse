@@ -26,6 +26,7 @@ from pydantic import Field
 from sqlalchemy import and_
 from sqlalchemy import or_
 
+from zerg.generated.provider_brands import provider_display_name
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import MediaObject
@@ -314,17 +315,10 @@ def _attach_images_capability(capability_flags, *, live_control_available: bool 
 
 
 def _provider_label(session: AgentSession | None) -> str | None:
-    provider = str(getattr(session, "provider", "") or "").strip().lower()
-    if provider == "gemini":
-        provider = "antigravity"
+    provider = str(getattr(session, "provider", "") or "").strip()
     if not provider:
         return None
-    labels = {
-        "claude": "Claude",
-        "codex": "Codex",
-        "antigravity": "Antigravity",
-    }
-    return labels.get(provider, provider[:1].upper() + provider[1:])
+    return provider_display_name(provider)
 
 
 def _runtime_is_executing(*, runtime_display, runtime_facts) -> bool:
@@ -2085,11 +2079,7 @@ def build_live_launch_placeholder_response(
     current_now = normalize_utc(now) or datetime.now(timezone.utc)
     started_at = normalize_utc(launch_readiness.created_at) or normalize_utc(launch_readiness.updated_at) or current_now
     provider = (launch_readiness.provider or "unknown").strip() or "unknown"
-    provider_label = {
-        "claude": "Claude",
-        "codex": "Codex",
-        "opencode": "OpenCode",
-    }.get(provider.lower(), provider[:1].upper() + provider[1:] if provider else "session")
+    provider_label = provider_display_name(provider, fallback="session")
     machine_label = (launch_readiness.device_id or "").strip() or "the machine"
     project = (launch_readiness.project or "").strip() or None
     title = project or f"{provider} launch"

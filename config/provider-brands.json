@@ -12,14 +12,21 @@
   },
   "providers": {
     "claude": {
+      "display_name": "Claude",
+      "marketing_name": "Claude Code",
       "brand": "#D97757"
     },
     "antigravity": {
       "aliases": ["gemini"],
+      "display_name": "Antigravity",
+      "marketing_name": "Antigravity CLI",
       "brand": "#4F87ED"
     },
     "codex": {
       "aliases": ["openai"],
+      "alias_display_names": { "openai": "OpenAI" },
+      "display_name": "Codex",
+      "marketing_name": "Codex CLI",
       "brand": "#F3EAD9",
       "glyph_style": "template",
       "mark_color": "#FFFFFFEB",
@@ -30,6 +37,8 @@
       }
     },
     "opencode": {
+      "display_name": "OpenCode",
+      "marketing_name": "OpenCode",
       "brand": "#C9C4C4",
       "glyph_style": "template",
       "mark_color": "#85D1FA",
@@ -40,6 +49,8 @@
       }
     },
     "cursor": {
+      "display_name": "Cursor",
+      "marketing_name": "Cursor Agent",
       "brand": "#14120B",
       "glyph_style": "template",
       "mark_color": "#EDECEC",
@@ -49,6 +60,9 @@
       }
     },
     "zai": {
+      "aliases": ["z.ai"],
+      "display_name": "Z.ai",
+      "marketing_name": "Z.ai",
       "brand": "#B06E8A"
     }
   }

@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   getLaunchProviderSupport,
   getLaunchProviderSupportList,
+  getProviderLabel,
   type LaunchProviderId,
 } from "../providers";
 
@@ -52,6 +53,15 @@ function loadContracts(): ManagedProviderContracts {
 }
 
 describe("providers launch support", () => {
+  it("uses generated provider display and marketing names", () => {
+    expect(getProviderLabel("opencode")).toBe("OpenCode");
+    expect(getProviderLabel("openai")).toBe("OpenAI");
+    expect(getProviderLabel("gemini")).toBe("Antigravity");
+    expect(getProviderLabel("z.ai")).toBe("Z.ai");
+    expect(getProviderLabel("new_provider")).toBe("New Provider");
+    expect(getLaunchProviderSupport("codex")?.marketingName).toBe("Codex CLI");
+  });
+
   it("keeps the launch provider capability contract explicit", () => {
     const providers = getLaunchProviderSupportList();
     expect(providers.map((provider) => provider.id)).toEqual([

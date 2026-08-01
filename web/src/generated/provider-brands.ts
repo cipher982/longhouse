@@ -2,6 +2,8 @@
 // Run: python3 scripts/generate/provider_brands.py
 
 export interface ProviderBrandConfig {
+  displayName: string;
+  marketingName: string;
   brand: string;
   glyphStyle: "original" | "template";
   markColor: string | null;
@@ -20,6 +22,8 @@ export const DEFAULT_PROVIDER_BRAND = "#9A8F7E";
 
 const PROVIDER_BRANDS: Record<string, ProviderBrandConfig> = {
   "claude": {
+    displayName: "Claude",
+    marketingName: "Claude Code",
     brand: "#D97757",
     glyphStyle: "original",
     markColor: null,
@@ -34,6 +38,8 @@ const PROVIDER_BRANDS: Record<string, ProviderBrandConfig> = {
     aliases: [],
   },
   "antigravity": {
+    displayName: "Antigravity",
+    marketingName: "Antigravity CLI",
     brand: "#4F87ED",
     glyphStyle: "original",
     markColor: null,
@@ -48,6 +54,8 @@ const PROVIDER_BRANDS: Record<string, ProviderBrandConfig> = {
     aliases: ["gemini"],
   },
   "codex": {
+    displayName: "Codex",
+    marketingName: "Codex CLI",
     brand: "#F3EAD9",
     glyphStyle: "template",
     markColor: "#FFFFFFEB",
@@ -62,6 +70,8 @@ const PROVIDER_BRANDS: Record<string, ProviderBrandConfig> = {
     aliases: ["openai"],
   },
   "opencode": {
+    displayName: "OpenCode",
+    marketingName: "OpenCode",
     brand: "#C9C4C4",
     glyphStyle: "template",
     markColor: "#85D1FA",
@@ -76,6 +86,8 @@ const PROVIDER_BRANDS: Record<string, ProviderBrandConfig> = {
     aliases: [],
   },
   "cursor": {
+    displayName: "Cursor",
+    marketingName: "Cursor Agent",
     brand: "#14120B",
     glyphStyle: "template",
     markColor: "#EDECEC",
@@ -90,6 +102,8 @@ const PROVIDER_BRANDS: Record<string, ProviderBrandConfig> = {
     aliases: [],
   },
   "zai": {
+    displayName: "Z.ai",
+    marketingName: "Z.ai",
     brand: "#B06E8A",
     glyphStyle: "original",
     markColor: null,
@@ -101,16 +115,31 @@ const PROVIDER_BRANDS: Record<string, ProviderBrandConfig> = {
     chipStrokeColor: null,
     chipStrokeWidth: 0.5,
     cornerRadiusFactor: 0.28,
-    aliases: [],
+    aliases: ["z.ai"],
   },
 };
 
 const PROVIDER_ALIASES: Record<string, string> = {
   "gemini": "antigravity",
   "openai": "codex",
+  "z.ai": "zai",
+};
+
+const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
+  "claude": "Claude",
+  "antigravity": "Antigravity",
+  "gemini": "Antigravity",
+  "codex": "Codex",
+  "openai": "OpenAI",
+  "opencode": "OpenCode",
+  "cursor": "Cursor",
+  "zai": "Z.ai",
+  "z.ai": "Z.ai",
 };
 
 const DEFAULT_CONFIG: ProviderBrandConfig = {
+  displayName: "Session",
+  marketingName: "Session",
   brand: DEFAULT_PROVIDER_BRAND,
   glyphStyle: "original",
   markColor: null,
@@ -140,6 +169,16 @@ export function lookupProviderBrand(provider: string | null | undefined): Provid
 
 export function providerBrandColor(provider: string | null | undefined): string {
   return lookupProviderBrand(provider).brand;
+}
+
+export function providerDisplayName(
+  provider: string | null | undefined,
+  fallback = "Session",
+): string {
+  const cleaned = provider?.trim();
+  if (!cleaned) return fallback;
+  return PROVIDER_DISPLAY_NAMES[cleaned.toLowerCase()]
+    ?? cleaned.replaceAll("_", " ").replace(/\b\w/g, (character) => character.toUpperCase());
 }
 
 export function hexToRgb(hex: string): string {

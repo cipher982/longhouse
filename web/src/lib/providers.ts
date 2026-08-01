@@ -7,6 +7,7 @@
  */
 
 import { GENERATED_PROVIDER_CAPABILITIES } from "../generated/provider-capabilities";
+import { lookupProviderBrand, providerDisplayName } from "../generated/provider-brands";
 
 export type LaunchProviderId = "claude" | "codex" | "opencode" | "antigravity" | "cursor";
 
@@ -42,33 +43,28 @@ export type LaunchProviderSupport = {
 // into ../generated/provider-capabilities.ts and merged below, because this
 // table drifted from the contract twice (4402f99ea, 6432e21fa) while its own
 // header claimed to mirror it.
-const LAUNCH_PROVIDER_PRESENTATION: Record<LaunchProviderId, Omit<LaunchProviderSupport, "id" | "launchAndSend" | "interrupt" | "steerMidTurn" | "resume" | "cloudSessionStart" | "nativeLaunchCommand">> = {
+const LAUNCH_PROVIDER_PRESENTATION: Record<LaunchProviderId, Omit<LaunchProviderSupport, "id" | "marketingName" | "launchAndSend" | "interrupt" | "steerMidTurn" | "resume" | "cloudSessionStart" | "nativeLaunchCommand">> = {
   claude: {
-    marketingName: "Claude Code",
     archiveVisibility: "live",
     hooksSupport: "live",
     telemetryQuality: "rich",
   },
   codex: {
-    marketingName: "Codex CLI",
     archiveVisibility: "live",
     hooksSupport: "none",
     telemetryQuality: "structured",
   },
   opencode: {
-    marketingName: "OpenCode",
     archiveVisibility: "live",
     hooksSupport: "none",
     telemetryQuality: "structured",
   },
   antigravity: {
-    marketingName: "Antigravity CLI",
     archiveVisibility: "live",
     hooksSupport: "none",
     telemetryQuality: "structured",
   },
   cursor: {
-    marketingName: "Cursor Agent",
     archiveVisibility: "live",
     hooksSupport: "live",
     telemetryQuality: "structured",
@@ -82,6 +78,7 @@ const LAUNCH_PROVIDER_SUPPORT: Record<LaunchProviderId, LaunchProviderSupport> =
       id,
       {
         id,
+        marketingName: lookupProviderBrand(id).marketingName,
         nativeLaunchCommand: generated.nativeLaunchCommand,
         launchAndSend: generated.launchAndSend,
         interrupt: generated.interrupt,
@@ -120,22 +117,9 @@ export function getProviderColor(provider: string): string {
   }
 }
 
-/** Proper-cased display names for known providers. */
-const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
-  claude: "Claude",
-  codex: "Codex",
-  openai: "OpenAI",
-  opencode: "OpenCode",
-  antigravity: "Antigravity",
-  cursor: "Cursor",
-  zai: "Z.ai",
-};
-
 /** Human-readable label for a provider. */
 export function getProviderLabel(provider: string): string {
-  if (!provider) return "Unknown";
-  const key = canonicalProvider(provider).toLowerCase();
-  return PROVIDER_DISPLAY_NAMES[key] ?? provider.charAt(0).toUpperCase() + provider.slice(1);
+  return providerDisplayName(provider, "Unknown");
 }
 
 /** Launch-facing provider capability contract for the currently supported CLIs. */

@@ -429,14 +429,7 @@ struct LaunchSessionSheet: View {
     }
 
     private func providerDisplayName(_ provider: String) -> String {
-        switch provider {
-        case "codex": "Codex"
-        case "claude": "Claude"
-        case "opencode": "OpenCode"
-        case "cursor": "Cursor"
-        case "antigravity": "Antigravity"
-        default: provider
-        }
+        ProviderBrands.displayName(provider)
     }
 
 }

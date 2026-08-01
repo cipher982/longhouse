@@ -5,6 +5,7 @@ import {
   hexToRgb,
   parseHexAlpha,
   normalizeProviderKey,
+  providerDisplayName,
 } from "../generated/provider-brands";
 import type { ProviderBrandConfig } from "../generated/provider-brands";
 
@@ -107,16 +108,6 @@ export type ProviderGlyphProps = {
   style?: React.CSSProperties;
 };
 
-const PROVIDER_DISPLAY: Record<string, string> = {
-  claude: "Claude",
-  codex: "Codex",
-  openai: "OpenAI",
-  opencode: "OpenCode",
-  antigravity: "Antigravity",
-  cursor: "Cursor",
-  zai: "Z.ai",
-};
-
 function MarkFor(provider: string) {
   switch (provider) {
     case "codex":
@@ -162,7 +153,7 @@ export function ProviderGlyph({
 }: ProviderGlyphProps) {
   const key = normalizeProviderKey(provider ?? "");
   const config = lookupProviderBrand(provider);
-  const title = PROVIDER_DISPLAY[key] ?? (provider ? provider : "Session");
+  const title = providerDisplayName(provider);
   const monoFallback = "var(--color-text-secondary)";
 
   const markColor =

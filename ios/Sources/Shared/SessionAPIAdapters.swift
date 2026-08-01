@@ -19,16 +19,6 @@ private func hasMeaningfulSessionTitle(_ value: String?) -> Bool {
     }
 }
 
-private func providerDisplayName(_ provider: String) -> String {
-    switch provider.lowercased() {
-    case "codex": return "Codex"
-    case "claude": return "Claude"
-    case "antigravity", "gemini": return "Antigravity"
-    default:
-        return provider.prefix(1).uppercased() + String(provider.dropFirst())
-    }
-}
-
 private func timelineCardTitle(for session: APISessionResponse) -> String {
     // The server resolves a single sanitized, frozen headline (timeline_title)
     // so iOS/web/widget render identical text and the row stays stable as the
@@ -46,7 +36,7 @@ private func timelineCardTitle(for session: APISessionResponse) -> String {
     if let firstUser = compactSessionText(session.firstUserMessage) {
         return firstUser
     }
-    let provider = providerDisplayName(session.provider)
+    let provider = ProviderBrands.displayName(session.provider)
     if let project = compactSessionText(session.project), project != session.provider {
         return "New \(provider) session in \(project)"
     }

@@ -775,7 +775,7 @@ validate-ios-api: ## @internal iOS OpenAPI DTO drift check
 
 validate-provider-brands: ## @internal Provider brand config drift check
 	@$(MAKE) generate-provider-brands >/dev/null
-	@if ! git diff --quiet -- web/src/generated/provider-brands.ts ios/Sources/Shared/ProviderBrands.generated.swift desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ProviderBrands.generated.swift; then \
+	@if ! git diff --quiet -- web/src/generated/provider-brands.ts ios/Sources/Shared/ProviderBrands.generated.swift desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ProviderBrands.generated.swift server/zerg/generated/provider_brands.py; then \
 		echo "Provider brands out of sync — run 'make generate-provider-brands'"; \
 		exit 1; \
 	fi
@@ -812,7 +812,7 @@ generate-sdk: ## Regenerate OpenAPI types
 generate-ios-api: ## Regenerate iOS OpenAPI DTOs from openapi.json
 	@python3 scripts/generate/ios_api_models.py
 
-generate-provider-brands: ## Regenerate provider brand config (TS + Swift) from config/provider-brands.json
+generate-provider-brands: ## Regenerate provider identity config (Python + TS + Swift)
 	@python3 scripts/generate/provider_brands.py
 
 generate-provider-census: ## Regenerate the provider-name-literal census artifact
