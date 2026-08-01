@@ -6,6 +6,7 @@ This module owns the provider-agnostic runtime reducer used by Timeline.
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
@@ -39,6 +40,8 @@ from zerg.services.session_observations import OBS_KIND_RUNTIME_SIGNAL
 from zerg.services.session_observations import decode_observation_payload_json
 from zerg.services.session_observations import record_runtime_observation
 from zerg.utils.time import normalize_utc
+
+logger = logging.getLogger(__name__)
 
 RuntimeEventKind = Literal[
     "phase_signal",
@@ -777,7 +780,48 @@ def reduce_runtime_signal_observation(db: Session, observation) -> RuntimeEventA
     event = runtime_event_from_observation(observation)
     if event is None:
         return "ignored"
+    if event.kind == "binding_signal":
+        # Binding aliases are an idempotent graph side effect, not a
+        # runtime-state mutation, so they persist regardless of the reducer
+        # outcome. Parity with the catalogd live path, which upserts the
+        # provider_session_id alias in LiveCatalogStore.apply_session_runtime.
+        _record_binding_signal_alias(db, event)
     return _apply_runtime_event(db, event)
+
+
+def _record_binding_signal_alias(db: Session, event: RuntimeEventIngest) -> None:
+    """Persist the provider-native session id carried by a binding signal."""
+
+    from zerg.services.agents.kernel_writes import ProviderSessionAliasConflict
+    from zerg.services.agents.kernel_writes import ensure_primary_thread
+    from zerg.services.agents.kernel_writes import record_thread_alias
+
+    if event.session_id is None:
+        return
+    provider_session_id = str((event.payload or {}).get("provider_session_id") or "").strip()
+    if not provider_session_id:
+        return
+    session = db.get(AgentSession, event.session_id)
+    if session is None:
+        return
+    thread = ensure_primary_thread(db, session)
+    try:
+        record_thread_alias(
+            db,
+            thread=thread,
+            provider=event.provider,
+            alias_kind="provider_session_id",
+            alias_value=provider_session_id,
+        )
+    except ProviderSessionAliasConflict as exc:
+        logger.warning(
+            "Provider session binding conflict during runtime binding_signal: "
+            "provider=%s provider_session_id=%s existing_thread_id=%s requested_thread_id=%s",
+            exc.provider,
+            exc.provider_session_id,
+            exc.existing_thread_id,
+            exc.requested_thread_id,
+        )
 
 
 def _observation_payload(observation) -> dict[str, Any]:

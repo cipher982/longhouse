@@ -367,6 +367,80 @@ async def test_semantic_search_sessions_fails_loud_instead_of_falling_back():
 
 
 @pytest.mark.asyncio
+async def test_search_sessions_without_query_lists_recent_sessions():
+    """Omitting the query is a listing call, not an error.
+
+    The tool forwards to /api/agents/sessions without a query param, which
+    returns recent sessions ordered by last activity.
+    """
+    server = create_server("http://example.com", "test-token")
+    tool = server._tool_manager._tools["search_sessions"]
+    response = type(
+        "Resp",
+        (),
+        {
+            "status_code": 200,
+            "text": '{"sessions":[],"total":0,"has_real_sessions":false}',
+        },
+    )()
+
+    with patch(
+        "zerg.mcp_server.server.LonghouseAPIClient.get",
+        new=AsyncMock(return_value=response),
+    ) as mock_get:
+        result = await tool.run({"project": "zerg", "limit": 5})
+
+    assert result == '{"sessions":[],"total":0,"has_real_sessions":false}'
+    mock_get.assert_awaited_once_with(
+        "/api/agents/sessions",
+        params={
+            "days_back": 14,
+            "limit": 5,
+            "context_mode": "forensic",
+            "project": "zerg",
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_search_sessions_blank_query_is_treated_as_absent():
+    server = create_server("http://example.com", "test-token")
+    tool = server._tool_manager._tools["search_sessions"]
+    response = type(
+        "Resp",
+        (),
+        {
+            "status_code": 200,
+            "text": '{"sessions":[],"total":0,"has_real_sessions":false}',
+        },
+    )()
+
+    with patch(
+        "zerg.mcp_server.server.LonghouseAPIClient.get",
+        new=AsyncMock(return_value=response),
+    ) as mock_get:
+        await tool.run({"query": "   "})
+
+    assert "query" not in mock_get.await_args.kwargs["params"]
+
+
+@pytest.mark.asyncio
+async def test_search_sessions_semantic_without_query_errors_without_api_call():
+    server = create_server("http://example.com", "test-token")
+    tool = server._tool_manager._tools["search_sessions"]
+
+    with patch(
+        "zerg.mcp_server.server.LonghouseAPIClient.get",
+        new=AsyncMock(),
+    ) as mock_get:
+        result = await tool.run({"semantic": True})
+
+    payload = json.loads(result)
+    assert "requires a query" in payload["error"]
+    assert mock_get.await_count == 0
+
+
+@pytest.mark.asyncio
 async def test_search_sessions_preserves_structured_owner_scope_error():
     server = create_server("http://example.com", "test-token")
     tool = server._tool_manager._tools["search_sessions"]

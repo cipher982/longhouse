@@ -402,6 +402,17 @@ class LiveSessionThreadAlias(LiveBase):
         Index("ix_live_thread_aliases_lookup", "provider", "alias_kind", "alias_value"),
         Index("ix_live_thread_aliases_thread_kind", "thread_id", "alias_kind"),
         UniqueConstraint("thread_id", "provider", "alias_kind", "alias_value", name="uq_live_thread_alias"),
+        # A provider's native session id is the stable routing key; live
+        # routing needs the same one-native-id-one-thread guarantee as the
+        # archive's ux_thread_aliases_provider_session_routing. Existing
+        # catalogs get this via schema migration 3->4, which dedupes first.
+        Index(
+            "ux_live_thread_aliases_provider_session_routing",
+            "provider",
+            "alias_value",
+            unique=True,
+            sqlite_where=text("alias_kind = 'provider_session_id'"),
+        ),
     )
 
 

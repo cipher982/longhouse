@@ -6,7 +6,7 @@
 
 import { test, expect } from './fixtures';
 
-const EXPECTED_MODELS = ['deepseek/deepseek-v4-flash', 'deepseek/deepseek-v4-pro'];
+const EXPECTED_MODELS = ['deepseek/deepseek-v4-flash'];
 
 test.describe('Model Capabilities & Reasoning Selector', () => {
   test.beforeEach(async ({ page }) => {
@@ -16,11 +16,11 @@ test.describe('Model Capabilities & Reasoning Selector', () => {
     await expect(modelSelector).toBeVisible({ timeout: 10000 });
   });
 
-  test('reasoning selector visible for DeepSeek Pro', async ({ page }) => {
+  test('reasoning selector visible for DeepSeek Flash', async ({ page }) => {
     const modelSelector = page.locator('.model-select');
     const reasoningSelector = page.locator('.reasoning-select');
 
-    await modelSelector.selectOption('deepseek/deepseek-v4-pro');
+    await modelSelector.selectOption('deepseek/deepseek-v4-flash');
 
     await expect(reasoningSelector).toBeVisible();
     await expect(reasoningSelector.locator('option[value="none"]')).toBeAttached();
@@ -29,7 +29,7 @@ test.describe('Model Capabilities & Reasoning Selector', () => {
     await expect(reasoningSelector.locator('option[value="high"]')).toBeAttached();
   });
 
-  test('reasoning selector visible for DeepSeek Flash', async ({ page }) => {
+  test('reasoning selector supports none for DeepSeek Flash', async ({ page }) => {
     const modelSelector = page.locator('.model-select');
     const reasoningSelector = page.locator('.reasoning-select');
 
@@ -43,7 +43,7 @@ test.describe('Model Capabilities & Reasoning Selector', () => {
     const modelSelector = page.locator('.model-select');
     const reasoningSelector = page.locator('.reasoning-select');
 
-    await modelSelector.selectOption('deepseek/deepseek-v4-pro');
+    await modelSelector.selectOption('deepseek/deepseek-v4-flash');
     await reasoningSelector.selectOption('none');
     await expect(reasoningSelector).toHaveValue('none');
 

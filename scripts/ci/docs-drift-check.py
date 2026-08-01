@@ -2,7 +2,7 @@
 """
 Docs drift detector — LLM-powered CI check for documentation accuracy.
 
-Sends the full PR diff + all doc pages to DeepSeek V4 Pro via OpenRouter.
+Sends the full PR diff + all doc pages to DeepSeek V4 Flash via OpenRouter.
 The model decides what's drifted. ~$0.01 per run, ~$1/month at 80 PRs.
 
 Non-blocking: posts a PR comment with findings. Never fails the build
@@ -27,7 +27,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DOCS_DIR = REPO_ROOT / "web" / "src" / "pages" / "docs"
 
-MODEL = "deepseek/deepseek-v4-pro"
+MODEL = "deepseek/deepseek-v4-flash"
 
 SYSTEM_PROMPT = """\
 You are a documentation accuracy reviewer for an open-source project called Longhouse.

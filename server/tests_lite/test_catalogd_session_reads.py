@@ -1198,6 +1198,13 @@ async def test_session_read_validation_and_prefix_missing_ambiguous_found(daemon
         }
         assert found["owner"] == {"display_name": "David Rose", "email_local": "david010"}
         assert set(found["session"]) == {"session_id", "provider", "device_name", "started_at", "ended_at"}
+        resolved_alias = await client.call("session.alias.resolve.v2", {"provider_session_id": f"provider-{first_id}"})
+        assert resolved_alias["found"] is True and resolved_alias["session_id"] == first_id
+        unknown_alias = await client.call("session.alias.resolve.v2", {"provider_session_id": "provider-unknown"})
+        assert unknown_alias["found"] is False and unknown_alias["session_id"] is None
+        with pytest.raises(CatalogRemoteError) as alias_exc_info:
+            await client.call("session.alias.resolve.v2", {"provider_session_id": ""})
+        assert alias_exc_info.value.code == "invalid_request"
         missing = await client.call("session.read.v2", {"session_id": str(uuid4())})
         assert missing["found"] is False and missing["facts"] is None
         with pytest.raises(CatalogRemoteError) as exc_info:

@@ -121,6 +121,10 @@ class PresenceIn(UTCBaseModel):
     provider: Optional[str] = "claude"
     occurred_at: Optional[datetime] = None
     dedupe_key: Optional[str] = None
+    # Managed hooks report under the Longhouse session id; the provider-native
+    # id rides along so the server can re-bind the alias without waiting for a
+    # transcript ship (e.g. after an out-of-band resume rotates the native id).
+    provider_session_id: Optional[str] = None
 
 
 @router.post("/presence", status_code=status.HTTP_204_NO_CONTENT, response_class=Response)
@@ -168,6 +172,26 @@ async def upsert_presence(
         dedupe_key=runtime_dedupe_key,
         payload={},
     )
+    runtime_events = [runtime_event]
+    provider_session_id = str(payload.provider_session_id or "").strip()
+    if provider_session_id and provider_session_id != payload.session_id and runtime_event.session_id is not None:
+        # Both storage lanes already consume binding_signal alias upserts:
+        # catalogd in apply_session_runtime (live), the legacy reducer in
+        # reduce_runtime_signal_observation (archive). The stable dedupe key
+        # makes repeated managed presence posts free after the first bind.
+        runtime_events.append(
+            RuntimeEventIngest(
+                runtime_key=runtime_key,
+                session_id=runtime_event.session_id,
+                provider=runtime_provider,
+                device_id=getattr(_token, "device_id", None),
+                source=_source_for_provider_hook(runtime_provider),
+                kind="binding_signal",
+                occurred_at=now,
+                dedupe_key=f"presence-binding:{payload.session_id}:{provider_session_id}",
+                payload={"provider_session_id": provider_session_id},
+            )
+        )
 
     auto_resume = payload.state in _AUTO_RESUME_STATES
     _now = now
@@ -182,7 +206,7 @@ async def upsert_presence(
 
         runtime_response = Response()
         await ingest_runtime_observation_batch(
-            RuntimeEventBatchIngest(events=[runtime_event]),
+            RuntimeEventBatchIngest(events=runtime_events),
             runtime_response,
             db,
             _token,
@@ -199,7 +223,7 @@ async def upsert_presence(
             previous_presence_state = current_presence_state_for_session(write_db, session_uuid, now=_now)
         else:
             previous_presence_state = None
-        ingest_result: RuntimeEventBatchResult = ingest_runtime_events(write_db, [runtime_event])
+        ingest_result: RuntimeEventBatchResult = ingest_runtime_events(write_db, runtime_events)
         canonical_presence_state = (
             current_presence_state_for_session(write_db, session_uuid, now=_now) if session_uuid is not None else None
         )

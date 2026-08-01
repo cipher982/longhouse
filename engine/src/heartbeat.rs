@@ -1065,7 +1065,7 @@ pub(crate) fn machine_evidence_from_observations(
     cursor_observations: &[CursorHelmObservation],
     unmanaged_bindings: &[UnmanagedSessionBinding],
     phase_rows: &[PhaseLedgerRow],
-    remembered_run_ids: &HashMap<String, String>,
+    run_windows: &crate::state::session_run_binding::RunWindowIndex,
     process_snapshot_complete: bool,
     now: DateTime<Utc>,
 ) -> MachineEvidence {
@@ -1579,22 +1579,27 @@ pub(crate) fn machine_evidence_from_observations(
         }))
         .collect::<HashMap<_, _>>();
     // Live observations are the preferred run binding, but they vanish the
-    // moment a launcher exits. Falling back to the remembered binding is what
-    // lets the closing `idle` of a session still ship; without it the served
+    // moment a launcher exits. Falling back to the recorded window is what lets
+    // the closing `idle` of a session still ship; without it the served
     // activity head stays frozen on whatever phase was live at the last
     // observation and then expires to `unknown` instead of going quiescent.
+    //
+    // The fallback resolves by the phase's own observation time, not by "most
+    // recent run". A session that resumed would otherwise ship the previous
+    // run's trailing phase stamped with the new run id, and the Runtime Host
+    // would accept it because that run is the durable latest.
     let mut activity = phase_rows
         .iter()
         .filter_map(|row| {
-            managed_run_ids
-                .get(row.session_id.as_str())
-                .copied()
-                .or_else(|| {
-                    remembered_run_ids
-                        .get(row.session_id.as_str())
-                        .map(String::as_str)
-                })
-                .map(|run_id| activity_evidence_from_phase_row(row, Some(run_id)))
+            let run_id = match managed_run_ids.get(row.session_id.as_str()).copied() {
+                Some(run_id) => Some(run_id),
+                None => chrono::DateTime::parse_from_rfc3339(&row.observed_at)
+                    .ok()
+                    .and_then(|observed_at| {
+                        run_windows.resolve(&row.session_id, observed_at.with_timezone(&Utc))
+                    }),
+            }?;
+            Some(activity_evidence_from_phase_row(row, Some(run_id)))
         })
         .collect::<Vec<_>>();
 
@@ -3087,6 +3092,7 @@ fn disk_free_bytes(_path: &std::path::Path) -> u64 {
 
 #[cfg(test)]
 mod tests {
+    use crate::state::session_run_binding::RunWindowIndex;
     use super::*;
     use crate::state::db::open_db;
     use std::path::PathBuf;
@@ -4817,7 +4823,7 @@ mod tests {
             &cursor_observations,
             &unmanaged_bindings,
             std::slice::from_ref(&phase),
-            &HashMap::new(),
+            &RunWindowIndex::default(),
             true,
             now,
         );
@@ -4992,7 +4998,7 @@ mod tests {
             &cursor_observations,
             &unmanaged_bindings,
             &[],
-            &HashMap::new(),
+            &RunWindowIndex::default(),
             false,
             now,
         );
@@ -5192,7 +5198,7 @@ mod tests {
             &[],
             &[binding.clone()],
             &[],
-            &HashMap::new(),
+            &RunWindowIndex::default(),
             true,
             first_now,
         );
@@ -5205,7 +5211,7 @@ mod tests {
             &[],
             &[rescanned],
             &[],
-            &HashMap::new(),
+            &RunWindowIndex::default(),
             true,
             first_now + chrono::Duration::minutes(5),
         );
@@ -5237,7 +5243,7 @@ mod tests {
             &[],
             &[missing_mtime],
             &[],
-            &HashMap::new(),
+            &RunWindowIndex::default(),
             true,
             first_now,
         );
@@ -5270,7 +5276,7 @@ mod tests {
             &[],
             &[],
             &[phase],
-            &HashMap::new(),
+            &RunWindowIndex::default(),
             true,
             now,
         );
@@ -5280,6 +5286,85 @@ mod tests {
         assert!(evidence.activity.is_empty());
         assert!(!evidence.process.is_empty());
         assert!(!evidence.transcript.is_empty());
+    }
+
+    /// Build an index the way the daemon would, from (run_id, run_started_at).
+    fn run_window_index(runs: &[(&str, &str)]) -> RunWindowIndex {
+        use crate::state::session_run_binding::{SessionRunWindow, SessionRunWindowStore};
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE session_run_window (
+                session_id TEXT NOT NULL,
+                run_id TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                run_started_at TEXT NOT NULL,
+                last_observed_at TEXT NOT NULL,
+                PRIMARY KEY (session_id, run_id)
+            );",
+        )
+        .unwrap();
+        let store = SessionRunWindowStore::new(&conn);
+        let observed = DateTime::parse_from_rfc3339("2026-08-01T13:11:53Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        for (run_id, started_at) in runs {
+            store
+                .record(&SessionRunWindow {
+                    session_id: "cursor-session".to_string(),
+                    run_id: (*run_id).to_string(),
+                    provider: "cursor".to_string(),
+                    run_started_at: DateTime::parse_from_rfc3339(started_at)
+                        .unwrap()
+                        .with_timezone(&Utc),
+                    observed_at: observed,
+                })
+                .unwrap();
+        }
+        store.index(observed).unwrap()
+    }
+
+    #[test]
+    fn trailing_phase_is_not_restamped_onto_a_later_run() {
+        // A session that resumes opens a second run while the previous run's
+        // phase can still be inside its freshness window. Binding by "most
+        // recent run" would ship run A's idle as run B's activity, and the
+        // Runtime Host would accept it because B is the durable latest run.
+        let now = DateTime::parse_from_rfc3339("2026-08-01T13:30:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let phase = PhaseLedgerRow {
+            session_id: "cursor-session".to_string(),
+            provider: "cursor".to_string(),
+            phase: "idle".to_string(),
+            tool_name: None,
+            source: "cursor_hook".to_string(),
+            observed_at: "2026-08-01T13:11:51Z".to_string(),
+            valid_until: "2026-08-01T13:21:51Z".to_string(),
+        };
+        let windows = run_window_index(&[
+            ("run-a", "2026-08-01T13:10:35Z"),
+            ("run-b", "2026-08-01T13:20:00Z"),
+        ]);
+
+        let evidence = machine_evidence_from_observations(
+            "cinder",
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            std::slice::from_ref(&phase),
+            &windows,
+            true,
+            now,
+        );
+        assert_eq!(evidence.activity.len(), 1);
+        assert_eq!(
+            evidence.activity[0].run_id.as_deref(),
+            Some("run-a"),
+            "a phase observed during run A must not be attributed to run B"
+        );
     }
 
     #[test]
@@ -5301,9 +5386,9 @@ mod tests {
             observed_at: "2026-08-01T13:11:51Z".to_string(),
             valid_until: "2026-08-01T13:21:51Z".to_string(),
         };
-        let remembered = HashMap::from([(
-            "cursor-session".to_string(),
-            "run-cursor-session".to_string(),
+        let remembered = run_window_index(&[(
+            "run-cursor-session",
+            "2026-08-01T13:10:35Z",
         )]);
 
         let stranded = machine_evidence_from_observations(
@@ -5315,7 +5400,7 @@ mod tests {
             &[],
             &[],
             std::slice::from_ref(&phase),
-            &HashMap::new(),
+            &RunWindowIndex::default(),
             true,
             now,
         );
@@ -5432,7 +5517,7 @@ mod tests {
                 &[],
                 &[],
                 &[],
-                &HashMap::new(),
+                &RunWindowIndex::default(),
                 true,
                 now,
             );

@@ -85,6 +85,31 @@ def project_provider_session_id(db: Session, session: AgentSession) -> str | Non
     return _provider_session_id_for_thread(db, session=session, thread=thread)
 
 
+def resolve_session_id_by_provider_session_id(db: Session, provider_session_id: str | UUID | None) -> UUID | None:
+    """Resolve a provider-native session id to its Longhouse session id.
+
+    Inverse of ``project_provider_session_id``: callers that only hold the id a
+    provider handed the user (e.g. ``claude --resume <uuid>``) resolve it here.
+    Primary-key lookups stay first everywhere — this is the fallback, so a
+    Longhouse id that happens to equal another session's alias never reroutes.
+    """
+
+    value = str(provider_session_id or "").strip()
+    if not value:
+        return None
+    row = (
+        db.query(SessionThread.session_id)
+        .join(SessionThreadAlias, SessionThreadAlias.thread_id == SessionThread.id)
+        .filter(SessionThreadAlias.alias_kind == "provider_session_id")
+        .filter(SessionThreadAlias.alias_value == value)
+        .order_by(SessionThread.is_primary.desc(), SessionThread.created_at.asc(), SessionThread.id.asc())
+        .first()
+    )
+    if row is None or row[0] is None:
+        return None
+    return row[0] if isinstance(row[0], UUID) else UUID(str(row[0]))
+
+
 def _provider_session_id_for_thread(db: Session, *, session: AgentSession, thread: SessionThread | None) -> str | None:
     if thread is None:
         return None

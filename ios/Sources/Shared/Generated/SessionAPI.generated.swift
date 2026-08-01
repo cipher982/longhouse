@@ -328,6 +328,7 @@ struct APISessionResponse: Codable, Hashable, Sendable {
     let id: String
     let originKind: String?
     let provider: String
+    let providerSessionId: String?
     let project: String?
     let deviceId: String?
     let environment: String?

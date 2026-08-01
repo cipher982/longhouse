@@ -333,6 +333,8 @@ class CatalogDaemon:
             return await self._list_active_sessions(request)
         if request.method == "session.prefix.resolve.v2":
             return await self._resolve_session_prefix(request)
+        if request.method == "session.alias.resolve.v2":
+            return await self._resolve_session_alias(request)
         if request.method == "machine.enrollment.list.v2":
             return await self._list_machine_enrollments(request)
         if request.method == "machine.health.list.v2":
@@ -1830,6 +1832,22 @@ class CatalogDaemon:
         result = await self._run_store(self._store.resolve_session_prefix, prefix=prefix)
         return CatalogRpcResponse(id=request.id, result=result)
 
+    async def _resolve_session_alias(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"provider_session_id"}:
+            return self._error(request, "invalid_request", "session.alias.resolve.v2 requires provider_session_id")
+        provider_session_id = request.params["provider_session_id"]
+        # Provider-native ids are UUIDs for Claude but provider-shaped strings
+        # elsewhere (Codex rollouts, OpenCode), so bound rather than parse.
+        if (
+            not isinstance(provider_session_id, str)
+            or not 1 <= len(provider_session_id) <= 256
+            or provider_session_id != provider_session_id.strip()
+        ):
+            return self._error(request, "invalid_request", "provider_session_id must be a trimmed string of 1 to 256 characters")
+        assert self._store is not None
+        result = await self._run_store(self._store.resolve_session_alias, provider_session_id=provider_session_id)
+        return CatalogRpcResponse(id=request.id, result=result)
+
     async def _list_machine_enrollments(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
         if set(request.params) != {"owner_id"}:
             return self._error(request, "invalid_request", "machine.enrollment.list.v2 requires owner_id")
@@ -1973,9 +1991,14 @@ class CatalogDaemon:
             "session_facts",
             "sealed_at",
         }
-        if set(request.params) != expected:
+        # Optional so pre-rotation callers (legacy replay, direct commits) stay
+        # valid; absent means the envelope carried no conversation_reset records.
+        optional = {"conversation_resets"}
+        provided = set(request.params)
+        if provided - expected - optional or expected - provided:
             return self._error(request, "invalid_request", "storage.raw_object.commit.v2 has invalid parameters")
         params = dict(request.params)
+        params.setdefault("conversation_resets", [])
         try:
             _validate_raw_object_commit(params)
         except ValueError as exc:
@@ -2987,7 +3010,25 @@ def _validate_raw_object_commit(params: dict) -> None:
     if owner_id is not None:
         params["owner_id"] = _canonical_storage_text(owner_id, field="owner_id", maximum_bytes=64)
     params["session_facts"] = _validate_storage_session_facts(params["session_facts"])
+    params["conversation_resets"] = _validate_conversation_resets(params["conversation_resets"])
     params["sealed_at"] = _parse_datetime(params["sealed_at"], "sealed_at")
+
+
+def _validate_conversation_resets(value: object) -> tuple[dict, ...]:
+    """Validate native-id rotations extracted from conversation_reset records."""
+
+    if not isinstance(value, list) or len(value) > 32:
+        raise ValueError("conversation_resets must contain at most 32 rotations")
+    resets: list[dict] = []
+    for item in value:
+        if not isinstance(item, dict) or set(item) != {"previous_provider_session_id", "provider_session_id"}:
+            raise ValueError("conversation_resets contains an invalid rotation")
+        new_id = _canonical_storage_text(item["provider_session_id"], field="provider_session_id", maximum_bytes=255)
+        previous = item["previous_provider_session_id"]
+        if previous is not None:
+            previous = _canonical_storage_text(previous, field="previous_provider_session_id", maximum_bytes=255)
+        resets.append({"previous_provider_session_id": previous, "provider_session_id": new_id})
+    return tuple(resets)
 
 
 def _validate_storage_session_facts(value: object) -> dict:

@@ -31,22 +31,21 @@ fn run_inner() -> anyhow::Result<()> {
     let managed_session_id = std::env::var("LONGHOUSE_MANAGED_SESSION_ID")
         .ok()
         .filter(|value| !value.trim().is_empty());
+    let provider_session_id = string(&input, "session_id");
     let session_id = managed_session_id
         .clone()
-        .or_else(|| string(&input, "session_id"));
+        .or_else(|| provider_session_id.clone());
     let Some(session_id) = session_id else {
         return Ok(());
     };
     let cwd = string(&input, "cwd");
     let transcript_path = string(&input, "transcript_path");
     if event == "SessionStart" {
-        if let (Some(managed), Some(provider_session_id)) =
-            (managed_session_id.as_deref(), string(&input, "session_id"))
+        if let (Some(managed), Some(native)) =
+            (managed_session_id.as_deref(), provider_session_id.as_deref())
         {
-            let _ = crate::claude_channel_server::update_managed_provider_session_id(
-                managed,
-                &provider_session_id,
-            );
+            let _ =
+                crate::claude_channel_server::update_managed_provider_session_id(managed, native);
         }
     }
     if let (Some(managed), Some(transcript)) = (&managed_session_id, &transcript_path) {
@@ -66,6 +65,11 @@ fn run_inner() -> anyhow::Result<()> {
         "transcript_path": transcript_path,
         "control_path": if managed_session_id.is_some() { "managed" } else { "unmanaged" },
     });
+    attach_provider_session_id(
+        &mut payload,
+        managed_session_id.is_some(),
+        provider_session_id.as_deref(),
+    );
     if managed_session_id.is_none() {
         if let Some(provider_pid) = unmanaged_provider_pid() {
             payload["provider_pid"] = json!(provider_pid);
@@ -79,6 +83,20 @@ fn run_inner() -> anyhow::Result<()> {
         );
     }
     Ok(())
+}
+
+/// Managed sessions report under the Longhouse id, so without this the
+/// provider-native id only reaches the server when a transcript ships. Carrying
+/// it on every managed presence record lets the server re-bind the alias
+/// immediately (e.g. after an out-of-band `claude --resume` rotates the native
+/// id). Unmanaged payloads skip it: their `session_id` is already the native id.
+fn attach_provider_session_id(payload: &mut Value, managed: bool, provider_session_id: Option<&str>) {
+    if !managed {
+        return;
+    }
+    if let Some(native) = provider_session_id {
+        payload["provider_session_id"] = json!(native);
+    }
 }
 
 /// Claude executes hooks through a shell, so its direct parent is not reliably
@@ -194,5 +212,20 @@ mod tests {
             parse_process_row("/opt/homebrew/bin/claude 123\n"),
             Some(("/opt/homebrew/bin/claude", 123))
         );
+    }
+
+    #[test]
+    fn managed_presence_carries_provider_session_id() {
+        let mut managed = json!({"session_id": "lh-id", "state": "idle"});
+        attach_provider_session_id(&mut managed, true, Some("native-id"));
+        assert_eq!(managed["provider_session_id"], json!("native-id"));
+
+        let mut unmanaged = json!({"session_id": "native-id", "state": "idle"});
+        attach_provider_session_id(&mut unmanaged, false, Some("native-id"));
+        assert!(unmanaged.get("provider_session_id").is_none());
+
+        let mut missing = json!({"session_id": "lh-id", "state": "idle"});
+        attach_provider_session_id(&mut missing, true, None);
+        assert!(missing.get("provider_session_id").is_none());
     }
 }

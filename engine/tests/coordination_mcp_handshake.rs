@@ -67,6 +67,26 @@ fn registered_engine_command_advertises_coordination_tools() {
         assert!(names.contains(&expected), "missing {expected}");
     }
 
+    // Agents choose tools by their descriptions. The query-less listing mode
+    // ("what are my recent sessions?") only exists for them if the advertised
+    // description says omitting the query lists recent sessions.
+    let search = advertised
+        .iter()
+        .find(|tool| tool["name"] == "search_sessions")
+        .expect("search_sessions is advertised");
+    let search_description = search["description"].as_str().unwrap();
+    assert!(
+        search_description.contains("list recent sessions when query is omitted"),
+        "search_sessions must advertise query-less recent listing: {search_description}"
+    );
+    let query_description = search["inputSchema"]["properties"]["query"]["description"]
+        .as_str()
+        .unwrap();
+    assert!(
+        query_description.contains("Omit or leave blank"),
+        "query property must say it is optional: {query_description}"
+    );
+
     // The archive rejects limit > 100. Advertise the bound so a caller does not
     // have to discover it by getting a 422.
     let tail = advertised

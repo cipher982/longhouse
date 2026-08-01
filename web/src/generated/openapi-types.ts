@@ -6816,6 +6816,8 @@ export interface components {
             occurred_at?: string | null;
             /** Dedupe Key */
             dedupe_key?: string | null;
+            /** Provider Session Id */
+            provider_session_id?: string | null;
         };
         /**
          * PresenceState
@@ -9317,6 +9319,11 @@ export interface components {
              * @description AI provider
              */
             provider: string;
+            /**
+             * Provider Session Id
+             * @description Provider-native session id when bound (e.g. the Claude transcript UUID from `claude --resume`). Null for Shadow sessions whose Longhouse id is the native id.
+             */
+            provider_session_id?: string | null;
             /**
              * Project
              * @description Project name
@@ -17049,7 +17056,7 @@ export interface operations {
                 device_id?: string | null;
                 /** @description Days to look back */
                 days_back?: number;
-                /** @description Search query for content */
+                /** @description Content search query. Omit or blank to list recent sessions ordered by last activity. */
                 query?: string | null;
                 /** @description Max results */
                 limit?: number;

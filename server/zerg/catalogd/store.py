@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import logging
 import os
 from contextlib import contextmanager
 from datetime import UTC
@@ -1747,15 +1748,18 @@ class CatalogStore:
                         if provider_session_id and event.session_id is not None:
                             catalog = orm.get(LiveSessionCatalog, str(event.session_id))
                             thread_id = str(event.thread_id or (catalog.primary_thread_id if catalog is not None else ""))
+                            # Query without thread_id: the routing index makes
+                            # (provider, alias_value) unique per native id, so a
+                            # row on another thread is a conflict, not an insert.
                             alias = (
                                 orm.query(LiveSessionThreadAlias)
                                 .filter(
-                                    LiveSessionThreadAlias.thread_id == thread_id,
                                     LiveSessionThreadAlias.provider == event.provider,
                                     LiveSessionThreadAlias.alias_kind == "provider_session_id",
                                     LiveSessionThreadAlias.alias_value == provider_session_id,
                                 )
-                                .one_or_none()
+                                .order_by(LiveSessionThreadAlias.id.asc())
+                                .first()
                             )
                             if alias is None:
                                 orm.add(
@@ -1768,8 +1772,19 @@ class CatalogStore:
                                         last_seen_at=event.occurred_at or observed_at,
                                     )
                                 )
-                            else:
+                            elif alias.thread_id == thread_id:
                                 alias.last_seen_at = event.occurred_at or observed_at
+                            else:
+                                # Existing thread keeps the native id; crashing
+                                # the runtime batch would retry forever.
+                                logging.getLogger(__name__).warning(
+                                    "Provider session binding conflict in live catalog: "
+                                    "provider=%s provider_session_id=%s existing_thread_id=%s requested_thread_id=%s",
+                                    event.provider,
+                                    provider_session_id,
+                                    alias.thread_id,
+                                    thread_id,
+                                )
                 orm.commit()
             except BaseException:
                 orm.rollback()
@@ -4565,6 +4580,38 @@ class CatalogStore:
                 "owner": owner_preview,
             }
 
+    def resolve_session_alias(self, *, provider_session_id: str) -> dict[str, Any]:
+        """Resolve a provider-native session id alias to its Longhouse session id.
+
+        Read-side counterpart of the ``provider_session_id`` thread-alias upserts:
+        callers holding only the id a provider handed the user resolve it here.
+        Primary-key lookups happen before this everywhere, so this never shadows
+        a real Longhouse id.
+        """
+
+        observed_at = datetime.now(UTC)
+        alias = LiveSessionThreadAlias.__table__
+        thread = LiveSessionThread.__table__
+        with _read_snapshot(self.engine) as connection:
+            row = (
+                connection.execute(
+                    select(thread.c.session_id)
+                    .select_from(alias.join(thread, alias.c.thread_id == thread.c.id))
+                    .where(alias.c.alias_kind == "provider_session_id")
+                    .where(alias.c.alias_value == provider_session_id)
+                    .order_by(alias.c.last_seen_at.desc(), alias.c.id.desc())
+                    .limit(1)
+                )
+                .mappings()
+                .first()
+            )
+            return {
+                "commit_seq": str(_current_commit_seq(connection)),
+                "observed_at": observed_at.isoformat(),
+                "found": row is not None,
+                "session_id": str(row["session_id"]) if row is not None else None,
+            }
+
     def list_machine_enrollments(self, *, owner_id: int) -> dict[str, Any]:
         observed_at = datetime.now(UTC)
         token = LiveDeviceToken.__table__
@@ -4868,6 +4915,7 @@ class CatalogStore:
         render_manifest: dict[str, Any] | None,
         session_facts: dict[str, Any],
         sealed_at: datetime,
+        conversation_resets: tuple[dict[str, Any], ...] = (),
     ) -> dict[str, Any]:
         del protocol_version  # validated as v2 by the RPC boundary
         identity = EnvelopeIdentity(
@@ -5487,33 +5535,81 @@ class CatalogStore:
                     session_facts["last_activity_at"],
                 )
                 connection.execute(update(storage_session).where(storage_session.c.session_id == session_key).values(**session_values))
+            alias_values: list[str] = []
             provider_session_id = str(session_facts.get("provider_session_id") or "").strip()
             if provider_session_id:
+                alias_values.append(provider_session_id)
+            # Rotation capture (spec group C): a conversation_reset boundary
+            # means the provider rotated its native session id inside the same
+            # transcript (raw `claude --resume` outside Longhouse). Aliasing the
+            # new id here is what makes it resolvable via the group-A read path
+            # (session.alias.resolve.v2); before this the id existed only hashed
+            # inside the reset record's event_id. Cross-thread collisions cannot
+            # crash: the live alias table is unique only per
+            # (thread_id, provider, alias_kind, alias_value), and readers order
+            # duplicates by last_seen_at with primary-key lookups winning first.
+            # Remaining fork-linkage work (deliberately not built here): the
+            # live serving path has no SessionEdge equivalent and hardcodes
+            # continued_from_session_id=None (services/storage_v2_workspace.py),
+            # and the archive-side SessionEdge/lineage projection
+            # (session_kernel_projection._source_session_id_for_thread) lives in
+            # a different database this single-writer commit cannot reach.
+            # Wiring reset linkage into served lineage therefore needs an
+            # archive-outbox projection or a live edge store — new machinery,
+            # tracked in the session-identity spec, not smuggled into ingest.
+            for reset in conversation_resets:
+                rotated = str(reset.get("provider_session_id") or "").strip()
+                if rotated and rotated not in alias_values:
+                    alias_values.append(rotated)
+            if alias_values:
                 primary_thread_id = connection.execute(
                     select(live_session_catalog.c.primary_thread_id).where(live_session_catalog.c.session_id == session_key)
                 ).scalar_one_or_none()
                 if primary_thread_id:
                     alias_table = LiveSessionThreadAlias.__table__
                     alias_seen_at = _as_aware_utc(session_facts["last_activity_at"]) or commit_time
-                    alias_upsert = sqlite_insert(alias_table).values(
-                        thread_id=str(primary_thread_id),
-                        provider=provider,
-                        alias_kind="provider_session_id",
-                        alias_value=provider_session_id,
-                        first_seen_at=alias_seen_at,
-                        last_seen_at=alias_seen_at,
-                    )
-                    connection.execute(
-                        alias_upsert.on_conflict_do_update(
-                            index_elements=["thread_id", "provider", "alias_kind", "alias_value"],
-                            set_={
-                                "last_seen_at": func.max(
-                                    alias_table.c.last_seen_at,
-                                    alias_upsert.excluded.last_seen_at,
+                    for alias_value in alias_values:
+                        # The routing index makes (provider, alias_value) unique
+                        # across threads for provider_session_id, so a row on
+                        # another thread is a conflict, not an insert. Existing
+                        # thread wins — same semantics as the binding_signal and
+                        # launch writers; an ON CONFLICT keyed on the per-thread
+                        # constraint would trip the routing index and fail the
+                        # whole storage commit.
+                        existing = connection.execute(
+                            select(alias_table.c.id, alias_table.c.thread_id)
+                            .where(alias_table.c.provider == provider)
+                            .where(alias_table.c.alias_kind == "provider_session_id")
+                            .where(alias_table.c.alias_value == alias_value)
+                            .order_by(alias_table.c.id.asc())
+                            .limit(1)
+                        ).first()
+                        if existing is None:
+                            connection.execute(
+                                insert(alias_table).values(
+                                    thread_id=str(primary_thread_id),
+                                    provider=provider,
+                                    alias_kind="provider_session_id",
+                                    alias_value=alias_value,
+                                    first_seen_at=alias_seen_at,
+                                    last_seen_at=alias_seen_at,
                                 )
-                            },
-                        )
-                    )
+                            )
+                        elif str(existing.thread_id) == str(primary_thread_id):
+                            connection.execute(
+                                update(alias_table)
+                                .where(alias_table.c.id == existing.id)
+                                .values(last_seen_at=func.max(alias_table.c.last_seen_at, alias_seen_at))
+                            )
+                        else:
+                            logging.getLogger(__name__).warning(
+                                "Provider session alias routing conflict during storage commit: "
+                                "provider=%s alias_value=%s existing_thread_id=%s requested_thread_id=%s",
+                                provider,
+                                alias_value,
+                                existing.thread_id,
+                                primary_thread_id,
+                            )
             if render_manifest is not None:
                 generation_key = str(render_manifest["generation_id"])
                 publish_render = render_state == "ready"

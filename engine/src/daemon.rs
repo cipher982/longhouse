@@ -137,6 +137,24 @@ fn failed_shipment_retry_path_limit(limiter: &AdaptiveLimiter) -> usize {
 }
 const LOCAL_WORK_TICK_INTERVAL: Duration = Duration::from_millis(250);
 const OUTBOX_DRAIN_INTERVAL: Duration = Duration::from_millis(100);
+/// How long to coalesce a burst of phase-ledger writes before rebuilding the
+/// local projection.
+///
+/// A phase write is what makes a turn boundary visible, but nothing used to
+/// schedule a projection from one: `maybe_start_projection_build` fired only on
+/// inventory change, reconciliation completion, or a queued rerun, so a
+/// `thinking -> idle` transition waited for the 60s full reconciliation. Adding
+/// activity to the snapshot digest without this only moved the ceiling from the
+/// 300s heartbeat to that 60s timer.
+///
+/// Debouncing matters because providers are chatty: the Codex bridge posts a
+/// phase for every item start, completion, and thread-status change, with no
+/// same-phase suppression, plus a 30s keepalive. Projecting each one directly
+/// would turn one tool-heavy turn into many full machine snapshots and host
+/// POSTs. Matched to `WATCHER_FLUSH_INTERVAL`, which solves the same burst
+/// problem for transcript appends.
+const PHASE_PROJECTION_DEBOUNCE: Duration = Duration::from_millis(15);
+
 const MANAGED_WAKE_FSEVENT_DEFER_WINDOW: Duration = Duration::from_secs(30);
 const MANAGED_WAKE_FSEVENT_FALLBACK_DELAY: Duration = Duration::from_secs(5);
 const MAX_TRANSCRIPT_WAKE_TRACKED_PATHS: usize = 4096;
@@ -892,6 +910,12 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
         tokio::time::sleep(startup_archive_replay_delay.unwrap_or(Duration::ZERO));
     tokio::pin!(startup_archive_replay_timer);
     let mut startup_archive_replay_pending = startup_archive_replay_delay.is_some();
+    // Armed by a phase-ledger write, cleared when the projection is scheduled.
+    // Coalesces a burst into one build; periodic reconciliation stays the
+    // repair path for anything a notification misses.
+    let phase_projection_timer = tokio::time::sleep(PHASE_PROJECTION_DEBOUNCE);
+    tokio::pin!(phase_projection_timer);
+    let mut phase_projection_pending = false;
     let startup_reconciliation_timer = tokio::time::sleep(STARTUP_RECONCILIATION_SCAN_DELAY);
     tokio::pin!(startup_reconciliation_timer);
     let mut startup_reconciliation_pending = !startup_archive_mode.is_paused();
@@ -1199,6 +1223,14 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 signal_count = result.presence.signals.len(),
                                 "Ignoring hook outbox transcript catch-up signals"
                             );
+                            // The phase ledger just moved, which is the only
+                            // evidence a turn boundary produces. Arm the
+                            // debounce rather than projecting per signal.
+                            if arm_phase_projection(&mut phase_projection_pending) {
+                                phase_projection_timer
+                                    .as_mut()
+                                    .reset(tokio::time::Instant::now() + PHASE_PROJECTION_DEBOUNCE);
+                            }
                         }
                         if !result.presence.posts.is_empty() {
                             if outbox_post_tasks.is_empty() {
@@ -1802,7 +1834,14 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                         "runtime_truth_change",
                                     );
                                 } else {
+                                    // A POST is already in flight, so this
+                                    // change cannot ship yet. Clearing the
+                                    // signature guarantees the next projection
+                                    // ships it, but only if another projection
+                                    // actually runs — otherwise the change sits
+                                    // until the 60s reconciliation. Queue one.
                                     last_runtime_truth_signature = None;
+                                    projection_build_pending = true;
                                 }
                             }
                             }
@@ -1848,6 +1887,42 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         session_snapshot_state: session_snapshot_state.clone(),
                     };
                     let _ = maybe_start_projection_build(&mut projection_build_tasks, input);
+                }
+            }
+
+            // Debounced projection rebuild for phase-ledger writes. If a build
+            // is already running, `projection_build_pending` makes it run
+            // exactly once more afterwards, so a phase observed mid-build is
+            // never stranded until the next reconciliation.
+            _ = &mut phase_projection_timer, if phase_projection_pending => {
+                phase_projection_pending = false;
+                // Only after the first full projection: before that the
+                // managed snapshot is empty, and projecting would ship a
+                // sessionless digest that the first real scan immediately
+                // replaces.
+                if last_status_projection.is_some() {
+                    let input = ProjectionBuildInput {
+                        generation: projection_generation,
+                        managed_scan_partial: last_projected_managed_scan_partial,
+                        process_snapshot_complete: last_projected_process_snapshot_complete,
+                        db_path: projection_db_path.clone(),
+                        tracker: tracker.clone(),
+                        parse_tracker: parse_tracker.clone(),
+                        ship_stats: ship_stats.clone(),
+                        is_offline: offline.is_offline,
+                        last_ship_at: last_ship_at.clone(),
+                        machine_id: config.shipper_config.machine_name.clone(),
+                        managed: last_projected_managed_observations.clone(),
+                        unmanaged: last_unmanaged_session_bindings.clone().unwrap_or_default(),
+                        limiter: adaptive_limiter.snapshot(),
+                        scheduler: scheduler.snapshot(),
+                        archive_repair_mode: config.archive_repair_mode,
+                        last_full_reconciled_at: last_full_reconciled_at.clone(),
+                        session_snapshot_state: session_snapshot_state.clone(),
+                    };
+                    if !maybe_start_projection_build(&mut projection_build_tasks, input) {
+                        projection_build_pending = true;
+                    }
                 }
             }
 
@@ -2065,6 +2140,13 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     Ok(_) => {}
                     Err(e) => tracing::warn!("Session binding prune error: {}", e),
                 }
+                let windows =
+                    crate::state::session_run_binding::SessionRunWindowStore::new(&conn);
+                match windows.prune(chrono::Utc::now()) {
+                    Ok(n) if n > 0 => tracing::info!("Daily prune: removed {} stale session_run_window entries", n),
+                    Ok(_) => {}
+                    Err(e) => tracing::warn!("Session run window prune error: {}", e),
+                }
             }
 
             // Frequent local status file refresh for ambient UX and debugging
@@ -2191,6 +2273,24 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     crate::codex_exec::shutdown_codex_console_worker_pool().await;
     tracing::info!("Daemon shutdown complete");
     Ok(())
+}
+
+/// Open a debounce window for a phase-ledger write.
+///
+/// Returns true when the caller should arm the timer, false when a window is
+/// already open and this write coalesces into it.
+///
+/// The window is fixed from the first write, not sliding. A sliding window
+/// would be pushed out by every subsequent phase, and providers are chatty
+/// enough — the Codex bridge posts a phase per item start, completion, and
+/// thread-status change — that a busy turn could starve the rebuild
+/// indefinitely, which is the failure this whole change exists to remove.
+fn arm_phase_projection(pending: &mut bool) -> bool {
+    if *pending {
+        return false;
+    }
+    *pending = true;
+    true
 }
 
 fn maybe_start_projection_build(
@@ -2364,7 +2464,7 @@ fn build_local_status_projection(
     // Persist this cycle's session -> run bindings before building evidence, so
     // a session whose provider state file has already been torn down can still
     // attach its closing phase to the run it belonged to.
-    let remembered_run_ids = record_and_read_run_bindings(
+    let run_windows = record_and_read_run_bindings(
         conn,
         observations,
         claude_observations,
@@ -2381,7 +2481,7 @@ fn build_local_status_projection(
         cursor_observations,
         unmanaged_session_bindings,
         &phase_ledger,
-        &remembered_run_ids,
+        &run_windows,
         process_snapshot_complete,
         now,
     ));
@@ -2399,8 +2499,12 @@ fn build_local_status_projection(
     heartbeat::build_status_file_projection(payload, &stats, phase_ledger, ledger_status)
 }
 
-/// Upsert every live observation's run binding, then return the remembered set
+/// Upsert every live observation's run window, then return the retained index
 /// (including sessions whose observation has already disappeared).
+///
+/// `run_started_at` comes from the observation, never from scan wall time. A
+/// window that starts at `now` would drift later than the phases that belong to
+/// it, which is exactly the misbinding the window exists to prevent.
 fn record_and_read_run_bindings(
     conn: &rusqlite::Connection,
     codex_observations: &[managed_bridge_scan::CodexBridgeObservation],
@@ -2408,55 +2512,85 @@ fn record_and_read_run_bindings(
     opencode_observations: &[managed_opencode_scan::OpenCodeServerObservation],
     cursor_observations: &[managed_cursor_helm_scan::CursorHelmObservation],
     now: chrono::DateTime<chrono::Utc>,
-) -> std::collections::HashMap<String, String> {
-    use crate::state::session_run_binding::{SessionRunBinding, SessionRunBindingStore};
+) -> crate::state::session_run_binding::RunWindowIndex {
+    use crate::state::session_run_binding::{
+        RunWindowIndex, SessionRunWindow, SessionRunWindowStore,
+    };
 
-    let store = SessionRunBindingStore::new(conn);
-    let observed: Vec<(&str, &str, Option<&str>)> = codex_observations
+    let store = SessionRunWindowStore::new(conn);
+    let parse_started = |raw: Option<&str>| -> Option<chrono::DateTime<chrono::Utc>> {
+        let raw = raw.map(str::trim).filter(|value| !value.is_empty())?;
+        chrono::DateTime::parse_from_rfc3339(raw)
+            .ok()
+            .map(|at| at.with_timezone(&chrono::Utc))
+    };
+    let observed: Vec<(&str, &str, Option<&str>, Option<&str>)> = codex_observations
         .iter()
-        .map(|obs| ("codex", obs.session_id.as_str(), obs.run_id.as_deref()))
-        .chain(
-            claude_observations
-                .iter()
-                .map(|obs| ("claude", obs.session_id.as_str(), obs.run_id.as_deref())),
-        )
-        .chain(
-            opencode_observations
-                .iter()
-                .map(|obs| ("opencode", obs.session_id.as_str(), obs.run_id.as_deref())),
-        )
-        .chain(
-            cursor_observations
-                .iter()
-                .map(|obs| ("cursor", obs.session_id.as_str(), obs.run_id.as_deref())),
-        )
+        .map(|obs| {
+            (
+                "codex",
+                obs.session_id.as_str(),
+                obs.run_id.as_deref(),
+                obs.bridge_process_start_time.as_deref(),
+            )
+        })
+        .chain(claude_observations.iter().map(|obs| {
+            (
+                "claude",
+                obs.session_id.as_str(),
+                obs.run_id.as_deref(),
+                Some(obs.started_at.as_str()),
+            )
+        }))
+        .chain(opencode_observations.iter().map(|obs| {
+            (
+                "opencode",
+                obs.session_id.as_str(),
+                obs.run_id.as_deref(),
+                Some(obs.started_at.as_str()),
+            )
+        }))
+        .chain(cursor_observations.iter().map(|obs| {
+            (
+                "cursor",
+                obs.session_id.as_str(),
+                obs.run_id.as_deref(),
+                Some(obs.started_at.as_str()),
+            )
+        }))
         .collect();
-    for (provider, session_id, run_id) in observed {
+    for (provider, session_id, run_id, started_at) in observed {
         let Some(run_id) = run_id.map(str::trim).filter(|value| !value.is_empty()) else {
             continue;
         };
         if session_id.trim().is_empty() {
             continue;
         }
-        let binding = SessionRunBinding {
+        // An observation with no parseable start cannot bound a window. Falling
+        // back to `now` would silently reintroduce the misbinding.
+        let Some(run_started_at) = parse_started(started_at) else {
+            continue;
+        };
+        let window = SessionRunWindow {
             session_id: session_id.to_string(),
-            provider: provider.to_string(),
             run_id: run_id.to_string(),
+            provider: provider.to_string(),
+            run_started_at,
             observed_at: now,
         };
-        if let Err(err) = store.record(&binding) {
+        if let Err(err) = store.record(&window) {
             tracing::warn!(
                 error = %err,
-                session_id = %binding.session_id,
-                "persisting session run binding failed"
+                session_id = %window.session_id,
+                "persisting session run window failed"
             );
         }
     }
-    match store.remembered(now) {
-        Ok(bindings) => bindings,
+    match store.index(now) {
+        Ok(index) => index,
         Err(err) => {
-            tracing::warn!(error = %err, "reading remembered session run bindings failed");
-            std::collections::HashMap::new()
+            tracing::warn!(error = %err, "reading session run windows failed");
+            RunWindowIndex::default()
         }
     }
 }
@@ -4595,6 +4729,26 @@ async fn shutdown_signal() {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn phase_writes_coalesce_into_one_debounce_window() {
+        // A tool-heavy turn emits many phases. They must produce one projection
+        // rebuild, and the window must not slide, or a busy turn never rebuilds.
+        let mut pending = false;
+        assert!(arm_phase_projection(&mut pending), "first write opens the window");
+        for _ in 0..50 {
+            assert!(
+                !arm_phase_projection(&mut pending),
+                "writes inside an open window must coalesce, not re-arm"
+            );
+        }
+        // Timer fires and the loop clears the flag.
+        pending = false;
+        assert!(
+            arm_phase_projection(&mut pending),
+            "the next write after a rebuild opens a fresh window"
+        );
+    }
     use super::*;
 
     #[tokio::test]

@@ -735,7 +735,10 @@ def read_live_catalog_session(
             "Catalog session snapshot could not be projected.",
         ) from exc
     provider_alias = facts.get("provider_alias")
-    return projected, str(provider_alias) if provider_alias else None, commit_seq
+    provider_session_id = str(provider_alias) if provider_alias else None
+    if provider_session_id:
+        projected = projected.model_copy(update={"provider_session_id": provider_session_id})
+    return projected, provider_session_id, commit_seq
 
 
 def project_machine_session_delta(

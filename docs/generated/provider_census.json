@@ -7,7 +7,7 @@
     "cursor",
     "opencode"
   ],
-  "file_count": 216,
+  "file_count": 217,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -217,7 +217,8 @@
       "providers": [
         "antigravity",
         "claude",
-        "codex"
+        "codex",
+        "cursor"
       ]
     },
     {
@@ -613,6 +614,13 @@
       "providers": [
         "codex",
         "opencode"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_agents_sessions_queryless_listing.py",
+      "providers": [
+        "claude",
+        "codex"
       ]
     },
     {

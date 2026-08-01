@@ -920,6 +920,13 @@ class SessionResponse(UTCBaseModel):
     id: str = Field(..., description="Session UUID")
     origin_kind: Optional[str] = Field(None, description="Canonical session origin: console or imported provider transcript.")
     provider: str = Field(..., description="AI provider")
+    provider_session_id: Optional[str] = Field(
+        None,
+        description=(
+            "Provider-native session id when bound (e.g. the Claude transcript UUID from "
+            "`claude --resume`). Null for Shadow sessions whose Longhouse id is the native id."
+        ),
+    )
     project: Optional[str] = Field(None, description="Project name")
     device_id: Optional[str] = Field(None, description="Device ID")
     environment: Optional[str] = Field(None, description="Environment (production, development, test, e2e, automation)")
@@ -1906,6 +1913,7 @@ def build_session_response(
     return SessionResponse(
         id=str(session.id),
         provider=session.provider,
+        provider_session_id=kernel_projection.provider_session_id,
         project=session.project,
         device_id=session.device_id,
         environment=session.environment,

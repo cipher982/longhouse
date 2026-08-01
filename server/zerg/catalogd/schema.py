@@ -39,7 +39,7 @@ from sqlalchemy.schema import CreateColumn
 from zerg.catalogd.models import CatalogBase
 from zerg.models.live_store import LiveBase
 
-CATALOG_SCHEMA_VERSION = 3
+CATALOG_SCHEMA_VERSION = 4
 DEFAULT_BUSY_TIMEOUT_MS = 5_000
 
 
@@ -161,6 +161,45 @@ def _replace_session_messages_with_directed_inputs(connection: Connection) -> No
     """Discard the pre-launch collaboration prototype before creating v1."""
 
     connection.exec_driver_sql("DROP TABLE IF EXISTS session_messages")
+
+
+def _enforce_provider_session_alias_routing(connection: Connection) -> None:
+    """Dedupe provider_session_id aliases, then add the unique routing index.
+
+    Parity with the archive's ``ux_thread_aliases_provider_session_routing``:
+    one provider-native session id routes to exactly one live thread. Existing
+    catalogs may hold duplicate rows; keep the newest evidence deterministically
+    (latest ``last_seen_at``, then highest id) before creating the index.
+    """
+
+    tables = set(inspect(connection).get_table_names())
+    if "live_session_thread_aliases" not in tables:
+        # A catalog this old has no alias rows; create_all builds the table
+        # with the declared unique index after migrations complete.
+        return
+    connection.exec_driver_sql(
+        """
+        DELETE FROM live_session_thread_aliases
+        WHERE id IN (
+            WITH ranked AS (
+                SELECT
+                    id,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY provider, alias_value
+                        ORDER BY last_seen_at DESC, id DESC
+                    ) AS rn
+                FROM live_session_thread_aliases
+                WHERE alias_kind = 'provider_session_id'
+            )
+            SELECT id FROM ranked WHERE rn > 1
+        )
+        """
+    )
+    connection.exec_driver_sql(
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_live_thread_aliases_provider_session_routing "
+        "ON live_session_thread_aliases(provider, alias_value) "
+        "WHERE alias_kind = 'provider_session_id'"
+    )
 
 
 _FACT_REDUCER_V1_TABLES = ("fact_heads", "fact_receipts", "fact_conflicts")
@@ -338,6 +377,7 @@ def _initialize_fact_reducer_schema_in_transaction(connection: Connection) -> No
 CATALOG_SCHEMA_MIGRATIONS: dict[int, Callable[[Connection], None]] = {
     1: _hide_empty_human_launch_shells,
     2: _replace_session_messages_with_directed_inputs,
+    3: _enforce_provider_session_alias_routing,
 }
 
 

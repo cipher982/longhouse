@@ -1678,6 +1678,9 @@ def _raw_commit(
             "launch_actor": _optional_text(session.launch_actor),
             "launch_surface": _optional_text(session.launch_surface),
         },
+        # Legacy replay carries no live rotation evidence; conversation-reset
+        # alias capture applies only to engine-shipped envelopes.
+        "conversation_resets": [],
         "sealed_at": datetime.now(UTC).isoformat(),
     }
 

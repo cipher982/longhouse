@@ -113,16 +113,33 @@ pub fn open_db(db_path: Option<&Path>) -> Result<Connection> {
             observed_at TEXT NOT NULL
         );
 
-        -- Last run a provider observation bound a session to. Provider state
-        -- files vanish the moment a launcher exits, so without a durable
-        -- binding the final `idle` of a session has no run to attach to and
-        -- the served activity head stays frozen on the last live phase.
-        CREATE TABLE IF NOT EXISTS session_run_binding (
-            session_id TEXT PRIMARY KEY,
-            provider TEXT NOT NULL,
+        -- Runs a provider observation bound a session to, with the window each
+        -- run was valid for. Provider state files vanish the moment a launcher
+        -- exits, so without a durable binding the final `idle` of a session has
+        -- no run to attach to and the served activity head stays frozen on the
+        -- last live phase.
+        --
+        -- One row per (session, run), not per session. A session that resumes
+        -- gets a second run while the previous run's phase may still be inside
+        -- its freshness window; binding that phase to the newer run would ship
+        -- run A's activity stamped as run B, and the Runtime Host would accept
+        -- it because B is the durable latest run. Phases resolve against
+        -- `run_started_at` so each one attaches to the run that was live when
+        -- it was observed.
+        CREATE TABLE IF NOT EXISTS session_run_window (
+            session_id TEXT NOT NULL,
             run_id TEXT NOT NULL,
-            observed_at TEXT NOT NULL
+            provider TEXT NOT NULL,
+            run_started_at TEXT NOT NULL,
+            last_observed_at TEXT NOT NULL,
+            PRIMARY KEY (session_id, run_id)
         );
+        CREATE INDEX IF NOT EXISTS idx_session_run_window_session
+            ON session_run_window(session_id, run_started_at DESC);
+
+        -- Superseded by session_run_window. Held only the latest run per
+        -- session with no validity window, which is the misbinding above.
+        DROP TABLE IF EXISTS session_run_binding;
 
         CREATE TABLE IF NOT EXISTS session_title_state (
             session_id TEXT PRIMARY KEY,

@@ -50,7 +50,7 @@ test.describe('Comprehensive Database Isolation', () => {
       data: {
         system_instructions: 'You are a test automation for database isolation testing',
         task_instructions: 'Respond briefly',
-        model: 'deepseek/deepseek-v4-pro',
+        model: 'deepseek/deepseek-v4-flash',
       }
     });
     expect(createResponse.status()).toBe(201);
