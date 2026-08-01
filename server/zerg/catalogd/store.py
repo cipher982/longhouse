@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import logging
 import os
 from contextlib import contextmanager
 from datetime import UTC
@@ -1747,15 +1748,18 @@ class CatalogStore:
                         if provider_session_id and event.session_id is not None:
                             catalog = orm.get(LiveSessionCatalog, str(event.session_id))
                             thread_id = str(event.thread_id or (catalog.primary_thread_id if catalog is not None else ""))
+                            # Query without thread_id: the routing index makes
+                            # (provider, alias_value) unique per native id, so a
+                            # row on another thread is a conflict, not an insert.
                             alias = (
                                 orm.query(LiveSessionThreadAlias)
                                 .filter(
-                                    LiveSessionThreadAlias.thread_id == thread_id,
                                     LiveSessionThreadAlias.provider == event.provider,
                                     LiveSessionThreadAlias.alias_kind == "provider_session_id",
                                     LiveSessionThreadAlias.alias_value == provider_session_id,
                                 )
-                                .one_or_none()
+                                .order_by(LiveSessionThreadAlias.id.asc())
+                                .first()
                             )
                             if alias is None:
                                 orm.add(
@@ -1768,8 +1772,19 @@ class CatalogStore:
                                         last_seen_at=event.occurred_at or observed_at,
                                     )
                                 )
-                            else:
+                            elif alias.thread_id == thread_id:
                                 alias.last_seen_at = event.occurred_at or observed_at
+                            else:
+                                # Existing thread keeps the native id; crashing
+                                # the runtime batch would retry forever.
+                                logging.getLogger(__name__).warning(
+                                    "Provider session binding conflict in live catalog: "
+                                    "provider=%s provider_session_id=%s existing_thread_id=%s requested_thread_id=%s",
+                                    event.provider,
+                                    provider_session_id,
+                                    alias.thread_id,
+                                    thread_id,
+                                )
                 orm.commit()
             except BaseException:
                 orm.rollback()

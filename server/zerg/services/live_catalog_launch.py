@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime
 from datetime import timezone
 from typing import Any
@@ -23,6 +24,8 @@ from zerg.models.live_store import LiveTimelineCard
 from zerg.services.managed_provider_contracts import require_contract_for_provider
 
 LIVE_CATALOG_CARD_REVISION = "live-catalog-v1"
+
+logger = logging.getLogger(__name__)
 
 
 def create_live_console_session_shell(db: Session, *, data: dict[str, Any]) -> LiveSessionCatalog:
@@ -139,16 +142,16 @@ def _upsert_live_thread_alias(
     clean = str(value or "").strip()
     if not clean:
         return
-    row = (
-        db.query(LiveSessionThreadAlias)
-        .filter(
-            LiveSessionThreadAlias.thread_id == thread_id,
-            LiveSessionThreadAlias.provider == provider,
-            LiveSessionThreadAlias.alias_kind == kind,
-            LiveSessionThreadAlias.alias_value == clean,
-        )
-        .first()
+    query = db.query(LiveSessionThreadAlias).filter(
+        LiveSessionThreadAlias.provider == provider,
+        LiveSessionThreadAlias.alias_kind == kind,
+        LiveSessionThreadAlias.alias_value == clean,
     )
+    if kind != "provider_session_id":
+        # Only native session ids are globally unique per provider (routing
+        # index); other alias kinds may legitimately repeat across threads.
+        query = query.filter(LiveSessionThreadAlias.thread_id == thread_id)
+    row = query.order_by(LiveSessionThreadAlias.id.asc()).first()
     if row is None:
         db.add(
             LiveSessionThreadAlias(
@@ -160,8 +163,19 @@ def _upsert_live_thread_alias(
                 last_seen_at=observed_at,
             )
         )
-    else:
+    elif row.thread_id == thread_id:
         row.last_seen_at = observed_at
+    else:
+        # Existing thread keeps the native id; a launch-path insert here would
+        # violate ux_live_thread_aliases_provider_session_routing.
+        logger.warning(
+            "Provider session binding conflict at live launch: provider=%s alias_kind=%s alias_value=%s existing_thread_id=%s requested_thread_id=%s",
+            provider,
+            kind,
+            clean,
+            row.thread_id,
+            thread_id,
+        )
 
 
 def attach_live_catalog_control(
