@@ -71,6 +71,23 @@ def _receipt(orm: Session, *, status: str = "delivering", attempts: int | None =
 # --- Which failures may consume a message -----------------------------------
 
 
+@pytest.mark.parametrize(
+    "reason",
+    ["control_unavailable", "connection_unavailable", "control_head_missing", "lease_expired"],
+)
+def test_unconverged_control_preconditions_are_transient(reason: str):
+    # These describe a control path that has not come back yet, and they do
+    # come back on reconnect.
+    result = ManagedControlDispatchResult(
+        ok=False,
+        transport=MANAGED_CONTROL_TRANSPORT_NONE,
+        error="x",
+        failure_kind=DISPATCH_FAILURE_PRECONDITION,
+        failure_reason=reason,
+    )
+    assert _is_transient_delivery_failure(result) is True
+
+
 def test_absent_control_path_is_transient():
     result = ManagedControlDispatchResult(
         ok=False,
@@ -87,20 +104,45 @@ def test_absent_control_path_is_transient():
     [
         "Failed to send command to Machine Agent control channel",
         "Machine control channel was replaced",
-        "command timed out after 15s",
+        "Machine Agent control channel is offline",
     ],
 )
-def test_transport_failures_are_transient_whatever_the_wording(error: str):
+def test_unsent_transport_failures_are_transient_whatever_the_wording(error: str):
     # Regression on the first implementation, which classified by substring and
-    # therefore consumed both real transport errors above. Classification comes
-    # from the typed kind so rewording a message cannot start eating input.
+    # therefore consumed real transport errors. Classification comes from typed
+    # fields so rewording a message cannot start eating input.
     result = ManagedControlDispatchResult(
-        ok=False, transport="engine_channel", error=error, failure_kind=DISPATCH_FAILURE_TRANSPORT
+        ok=False,
+        transport="engine_channel",
+        error=error,
+        failure_kind=DISPATCH_FAILURE_TRANSPORT,
+        failure_reason="not_sent",
     )
     assert _is_transient_delivery_failure(result) is True
 
 
-@pytest.mark.parametrize("reason", ["idempotency_conflict", "operation_finished"])
+def test_ambiguous_timeout_is_not_retried():
+    """A timeout must consume the input until dedupe survives engine restart.
+
+    We stopped waiting; the engine may already have accepted and run the
+    command. Engine dedupe is an in-memory cache, so a retry across a restart
+    could inject the same prompt twice. Duplicating a user's message is worse
+    than dropping it, so this deliberately does not retry.
+    """
+    result = ManagedControlDispatchResult(
+        ok=False,
+        transport="engine_channel",
+        error="Machine Agent control command timed out after 15 seconds",
+        failure_kind=DISPATCH_FAILURE_TRANSPORT,
+        failure_reason="ambiguous",
+    )
+    assert _is_transient_delivery_failure(result) is False
+
+
+@pytest.mark.parametrize(
+    "reason",
+    ["idempotency_conflict", "operation_finished", "session_closed", "run_ended", "not_granted"],
+)
 def test_unretryable_preconditions_are_terminal(reason: str):
     # Waiting cannot satisfy these. Treating them as transient burns the whole
     # budget without the command ever reaching the engine.
@@ -340,6 +382,7 @@ async def test_transient_dispatch_failure_requeues_then_delivers(monkeypatch):
                 transport="engine_channel",
                 error="Machine control channel was replaced",
                 failure_kind=DISPATCH_FAILURE_TRANSPORT,
+                failure_reason="not_sent",
             )
         return ManagedControlDispatchResult(ok=True, transport="engine_channel", data={"exit_code": 0})
 

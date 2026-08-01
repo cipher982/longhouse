@@ -227,7 +227,9 @@ async def _prepare_catalog_managed_control_operation(
         )
     except Exception:
         logger.warning("Failed to prepare catalog managed-control operation %s", command_id, exc_info=True)
-        return None
+        # catalogd itself was unreachable. That is a transient condition, and
+        # returning a bare None here would break the caller's two-value unpack.
+        return None, "control_unavailable"
     grant = _normalize_catalog_control_grant(result.get("grant"))
     prepared_operation_id = result.get("operation_id")
     if result.get("allowed") is not True or grant is None or not prepared_operation_id:
@@ -419,6 +421,10 @@ async def dispatch_managed_control_command(
         transport=MANAGED_CONTROL_TRANSPORT_NONE,
         error=MANAGED_CONTROL_UNAVAILABLE_ERROR,
         failure_kind=DISPATCH_FAILURE_PRECONDITION,
+        # No managed transport is available at all. That is exactly the
+        # disconnected-channel case the durability work exists for, so it must
+        # classify as retryable rather than consume the message.
+        failure_reason="control_unavailable",
     )
 
 
@@ -493,19 +499,30 @@ async def _dispatch_engine_channel(
         command_id=command_id,
     )
     if not response.transport_ok:
-        await _finish_live_managed_control_operation(
-            operation_id=live_operation_id,
-            status="failed",
-            error={
-                "code": "machine_control_transport_failed",
-                "message": response.error or "Machine Agent control channel dispatch failed",
-            },
-        )
+        certainty = getattr(response, "delivery_certainty", None)
+        never_sent = certainty == "not_sent"
+        if not never_sent:
+            # Ambiguous: the engine may already have accepted and run this.
+            # Finalize so a retry cannot duplicate it — engine dedupe is an
+            # in-memory cache and does not survive restart, so replay is not
+            # safe here yet.
+            await _finish_live_managed_control_operation(
+                operation_id=live_operation_id,
+                status="failed",
+                error={
+                    "code": "machine_control_transport_failed",
+                    "message": response.error or "Machine Agent control channel dispatch failed",
+                },
+            )
         return ManagedControlDispatchResult(
             ok=False,
             transport=MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL,
             error=response.error or "Machine Agent control channel dispatch failed",
             failure_kind=DISPATCH_FAILURE_TRANSPORT,
+            # Only a provably-unsent command may be retried. Leaving its
+            # operation un-finalized is what lets the deterministic id replay
+            # instead of coming back as operation_finished.
+            failure_reason="not_sent" if never_sent else "ambiguous",
         )
 
     message = response.message or {}

@@ -443,44 +443,54 @@ def live_session_closed_for_input(db: Session, session: LiveControlSession) -> b
 
 
 def _is_transient_delivery_failure(result: "ManagedControlDispatchResult") -> bool:
-    """Did this dispatch fail because nothing received it, rather than refused it?
+    """May this input be retried, or has it been consumed?
 
-    Classified from the dispatcher's typed failure kind, never from error text.
-    Matching prose here is how a renamed message silently starts consuming a
-    user's input: "Failed to send command to Machine Agent control channel" and
-    "Machine control channel was replaced" are both transport failures that no
-    substring list reliably catches.
+    Read from typed fields, never error text: matching prose is how a reworded
+    message silently starts eating user input.
 
-    - transport: the command never reached the provider. Retry.
-    - rejected: the provider saw it and refused. Consume it; retrying forever
-      would wedge every later input behind one that will never land.
-    - precondition: we never got as far as sending. Only some of these are
-      worth retrying — a missing control path may come back, but an
-      idempotency conflict or a finished operation will not, and treating
-      those as transient burns the attempt budget in seconds.
+    Retry only when the command provably never reached the provider. Two cases
+    qualify:
+
+    - transport with reason "not_sent": no channel, or the send itself failed.
+      The operation is left un-finalized so the retry replays it.
+    - a precondition a later attempt could plausibly satisfy — the machine is
+      offline, the lease lapsed, control has not reconverged.
+
+    Everything else consumes the input. Notably an *ambiguous* transport
+    failure (a timeout) does not retry: the engine may already have accepted
+    and run the command, and its dedupe is an in-memory cache that does not
+    survive restart. Retrying there would risk injecting the same prompt twice,
+    which is worse than dropping it. Revisit once dedupe is durable.
     """
 
     from zerg.services.managed_control_dispatcher import DISPATCH_FAILURE_PRECONDITION
     from zerg.services.managed_control_dispatcher import DISPATCH_FAILURE_TRANSPORT
 
     kind = getattr(result, "failure_kind", None)
+    reason = str(getattr(result, "failure_reason", "") or "")
     if kind == DISPATCH_FAILURE_TRANSPORT:
-        return True
+        return reason == "not_sent"
     if kind == DISPATCH_FAILURE_PRECONDITION:
-        return str(getattr(result, "failure_reason", "") or "") in _RETRYABLE_PRECONDITIONS
+        return reason in _RETRYABLE_PRECONDITIONS
     return False
 
 
-# Preconditions that a later attempt can plausibly satisfy: the machine is
-# offline, asleep, or has not yet re-established control. Everything else —
-# notably idempotency_conflict and operation_finished — means retrying is
-# pointless and would consume the budget without ever reaching the engine.
+# catalogd prepare reasons a later attempt can plausibly satisfy.
+#
+# Enumerated against the real vocabulary rather than guessed: control_unavailable,
+# connection_unavailable, control_head_missing, lease_expired and identity_unbound
+# all describe a control path that has not (yet) converged, and converge on
+# reconnect. Deliberately excluded: idempotency_conflict and operation_finished
+# (a retry can never satisfy them and would burn the budget), unsupported,
+# session_closed, run_ended, identity_diverged, control_head_rejected, not_granted
+# and grant_revoked (all decisions about this session that waiting will not change).
 _RETRYABLE_PRECONDITIONS = frozenset(
     {
         "control_unavailable",
-        "grant_revoked",
-        "session_not_found",
-        "device_offline",
+        "connection_unavailable",
+        "control_head_missing",
+        "lease_expired",
+        "identity_unbound",
     }
 )
 
