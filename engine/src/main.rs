@@ -39,6 +39,7 @@ mod managed_contract_janitor;
 mod managed_cursor_helm_scan;
 mod managed_launch_lifecycle;
 mod managed_opencode_scan;
+mod managed_terminal;
 mod media_redaction;
 mod media_upload;
 mod observability;

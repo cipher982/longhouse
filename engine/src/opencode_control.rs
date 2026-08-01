@@ -29,6 +29,7 @@ pub struct OpenCodeStopResult {
 #[derive(Debug, Clone)]
 struct OpenCodeControlState {
     session_id: String,
+    run_id: Option<String>,
     provider_session_id: String,
     server_url: String,
     cwd: Option<String>,
@@ -68,6 +69,7 @@ pub(crate) fn read_for_bridge(
 struct OpenCodeServerStateFile {
     schema_version: Option<u64>,
     session_id: Option<String>,
+    run_id: Option<String>,
     provider_session_id: Option<String>,
     server_url: Option<String>,
     cwd: Option<String>,
@@ -136,6 +138,8 @@ pub fn stop_server_bridge_at(
     let pid = state.pid;
     let stopped = terminate_recorded_opencode_server(&state)?;
     if stopped || pid.is_none_or(|pid| !pid_is_running(pid)) {
+        let outbox = crate::config::get_longhouse_home()?.join("agent/runtime-events-outbox");
+        enqueue_terminal_event(&state, &outbox)?;
         let directory = state_dir
             .map(Path::to_path_buf)
             .or_else(crate::managed_opencode_scan::default_opencode_server_state_dir)
@@ -148,6 +152,35 @@ pub fn stop_server_bridge_at(
         );
     }
     Ok(OpenCodeStopResult { pid, stopped })
+}
+
+fn enqueue_terminal_event(state: &OpenCodeControlState, outbox: &Path) -> Result<bool> {
+    let Some(run_id) = state
+        .run_id
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    else {
+        return Ok(false);
+    };
+    let runtime_key = format!("opencode:{}", state.session_id);
+    let device_id = std::env::var("HOSTNAME").ok();
+    let event = crate::managed_terminal::ManagedTerminalEvent {
+        runtime_key: &runtime_key,
+        session_id: &state.session_id,
+        run_id,
+        provider: "opencode",
+        managed_transport: OPENCODE_SERVER_BRIDGE_TRANSPORT,
+        provider_session_id: Some(&state.provider_session_id),
+        device_id: device_id.as_deref(),
+        source: "opencode_server_bridge",
+        dedupe_prefix: "opencode-terminal",
+        terminal_state: "session_ended",
+        terminal_reason: "bridge_stop",
+        exit_code: None,
+    }
+    .to_json();
+    crate::managed_terminal::enqueue(outbox, &event).context("enqueue OpenCode terminal event")?;
+    Ok(true)
 }
 
 fn read_bridge_state(session_id: &str, state_dir: Option<&Path>) -> Result<OpenCodeControlState> {
@@ -222,6 +255,10 @@ fn read_bridge_state_from_path(
 
     Ok(OpenCodeControlState {
         session_id: state_session_id,
+        run_id: payload
+            .run_id
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty()),
         provider_session_id,
         server_url,
         cwd,
@@ -927,12 +964,37 @@ mod tests {
         json!({
             "schema_version": 1,
             "session_id": SESSION_ID,
+            "run_id": "run-1",
             "provider_session_id": "ses_test123",
             "server_url": server_url,
             "cwd": cwd.unwrap_or(""),
             "username": "opencode",
             "password": "secret-password",
         })
+    }
+
+    #[test]
+    fn terminal_event_is_durable_before_bridge_state_removal() {
+        let temp = TempDir::new().unwrap();
+        write_state(temp.path(), "http://127.0.0.1:12345", Some("/tmp/project"));
+        let state = read_bridge_state(SESSION_ID, Some(temp.path())).unwrap();
+        let outbox = temp.path().join("outbox");
+
+        assert!(enqueue_terminal_event(&state, &outbox).unwrap());
+        let event_path = fs::read_dir(&outbox)
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        let event: Value = serde_json::from_slice(&fs::read(event_path).unwrap()).unwrap();
+        assert_eq!(event["session_id"], SESSION_ID);
+        assert_eq!(event["run_id"], "run-1");
+        assert_eq!(event["payload"]["provider_session_id"], "ses_test123");
+        assert_eq!(
+            event["payload"]["managed_transport"],
+            OPENCODE_SERVER_BRIDGE_TRANSPORT
+        );
     }
 
     #[cfg(unix)]
