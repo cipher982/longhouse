@@ -5515,25 +5515,47 @@ class CatalogStore:
                     alias_table = LiveSessionThreadAlias.__table__
                     alias_seen_at = _as_aware_utc(session_facts["last_activity_at"]) or commit_time
                     for alias_value in alias_values:
-                        alias_upsert = sqlite_insert(alias_table).values(
-                            thread_id=str(primary_thread_id),
-                            provider=provider,
-                            alias_kind="provider_session_id",
-                            alias_value=alias_value,
-                            first_seen_at=alias_seen_at,
-                            last_seen_at=alias_seen_at,
-                        )
-                        connection.execute(
-                            alias_upsert.on_conflict_do_update(
-                                index_elements=["thread_id", "provider", "alias_kind", "alias_value"],
-                                set_={
-                                    "last_seen_at": func.max(
-                                        alias_table.c.last_seen_at,
-                                        alias_upsert.excluded.last_seen_at,
-                                    )
-                                },
+                        # The routing index makes (provider, alias_value) unique
+                        # across threads for provider_session_id, so a row on
+                        # another thread is a conflict, not an insert. Existing
+                        # thread wins — same semantics as the binding_signal and
+                        # launch writers; an ON CONFLICT keyed on the per-thread
+                        # constraint would trip the routing index and fail the
+                        # whole storage commit.
+                        existing = connection.execute(
+                            select(alias_table.c.id, alias_table.c.thread_id)
+                            .where(alias_table.c.provider == provider)
+                            .where(alias_table.c.alias_kind == "provider_session_id")
+                            .where(alias_table.c.alias_value == alias_value)
+                            .order_by(alias_table.c.id.asc())
+                            .limit(1)
+                        ).first()
+                        if existing is None:
+                            connection.execute(
+                                insert(alias_table).values(
+                                    thread_id=str(primary_thread_id),
+                                    provider=provider,
+                                    alias_kind="provider_session_id",
+                                    alias_value=alias_value,
+                                    first_seen_at=alias_seen_at,
+                                    last_seen_at=alias_seen_at,
+                                )
                             )
-                        )
+                        elif str(existing.thread_id) == str(primary_thread_id):
+                            connection.execute(
+                                update(alias_table)
+                                .where(alias_table.c.id == existing.id)
+                                .values(last_seen_at=func.max(alias_table.c.last_seen_at, alias_seen_at))
+                            )
+                        else:
+                            logging.getLogger(__name__).warning(
+                                "Provider session alias routing conflict during storage commit: "
+                                "provider=%s alias_value=%s existing_thread_id=%s requested_thread_id=%s",
+                                provider,
+                                alias_value,
+                                existing.thread_id,
+                                primary_thread_id,
+                            )
             if render_manifest is not None:
                 generation_key = str(render_manifest["generation_id"])
                 publish_render = render_state == "ready"

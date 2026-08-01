@@ -6775,6 +6775,8 @@ export interface components {
             occurred_at?: string | null;
             /** Dedupe Key */
             dedupe_key?: string | null;
+            /** Provider Session Id */
+            provider_session_id?: string | null;
         };
         /**
          * PresenceState

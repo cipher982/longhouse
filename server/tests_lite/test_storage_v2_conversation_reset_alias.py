@@ -343,6 +343,69 @@ async def test_reset_record_without_structured_ids_is_ignored_not_fatal(monkeypa
         tempdir.cleanup()
 
 
+@pytest.mark.asyncio
+async def test_rotation_claimed_by_another_session_survives_the_routing_index(monkeypatch):
+    """Cross-branch seam: the alias write must not trip the unique routing index.
+
+    The routing index (schema v4) makes (provider, alias_value) unique across
+    threads for provider_session_id. A rotation claiming a native id already
+    held by another session's thread must resolve existing-thread-wins with a
+    warning — an ON CONFLICT keyed on the per-thread constraint would raise
+    IntegrityError and fail the whole storage commit.
+    """
+
+    tempdir = TemporaryDirectory(prefix="lh2-reset-collide-", dir="/tmp")
+    root = Path(tempdir.name)
+    session_id = str(uuid4())
+    other_session_id = str(uuid4())
+    previous_native_id = str(uuid4())
+    stolen_native_id = str(uuid4())
+    _seed_helm_session(root / "catalog.db", session_id=session_id, previous_native_id=previous_native_id)
+    # The colliding id already routes to another session's thread.
+    _seed_helm_session(root / "catalog.db", session_id=other_session_id, previous_native_id=stolen_native_id)
+
+    daemon = CatalogDaemon(database_path=root / "catalog.db", socket_path=root / "catalogd.sock")
+    await daemon.start()
+    catalog = CatalogClient(root / "catalogd.sock")
+    workers = RawObjectWorkerPool(root / "objects", live_workers=1, repair_workers=1, queue_multiplier=1)
+    await workers.start()
+    monkeypatch.setattr(storage_router, "get_catalogd_client", lambda: catalog)
+    monkeypatch.setattr(storage_router, "get_raw_object_worker_pool", lambda: workers)
+    monkeypatch.setattr(storage_router, "get_render_object_worker_pool", lambda: _InlineRenderPool(root / "objects"))
+    monkeypatch.setattr(storage_titles, "schedule_storage_session_title", lambda candidate: None)
+
+    app = FastAPI()
+    app.include_router(storage_router.router)
+    app.dependency_overrides[verify_agents_token] = lambda: SimpleNamespace(device_id="cinder", owner_id=1)
+    app.dependency_overrides[require_single_tenant] = lambda: None
+
+    try:
+        payload = _reset_envelope(
+            tenant_id=get_settings().archive_primary_tenant_id,
+            machine_id="cinder",
+            session_id=session_id,
+            previous_native_id=previous_native_id,
+            new_native_id=stolen_native_id,
+        )
+        payload["session"].pop("provider_session_id")
+        # The commit itself must succeed — the collision may not fail the batch.
+        await _ingest(app, payload)
+
+        # Existing thread wins: the stolen id keeps routing to its first owner.
+        resolved = await catalog.call("session.alias.resolve.v2", {"provider_session_id": stolen_native_id})
+        assert resolved["found"] is True
+        assert resolved["session_id"] == other_session_id
+        # The ingesting session's own prior identity is untouched.
+        own = await catalog.call("session.alias.resolve.v2", {"provider_session_id": previous_native_id})
+        assert own["found"] is True
+        assert own["session_id"] == session_id
+    finally:
+        await workers.close()
+        await catalog.close()
+        await daemon.close()
+        tempdir.cleanup()
+
+
 def test_router_extracts_rotation_ids_from_reset_records():
     """The extraction feeding the commit RPC reads exactly the engine's payload."""
 
