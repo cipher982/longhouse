@@ -658,6 +658,28 @@ def project_catalog_timeline_snapshot(snapshot: dict[str, Any]) -> TimelineSessi
     )
 
 
+def _timeline_card_signature(card: TimelineSessionCardResponse) -> str:
+    """Return a change signature that excludes the global catalog watermark.
+
+    ``session_state.commit_seq`` and the compatibility ``runtime_version`` are
+    catalog-wide coordinates. They advance when any session changes, so using
+    them as card identity makes every visible card look changed on every wake.
+    The payload still carries those coordinates when the session itself emits;
+    they simply do not force unrelated cards onto the browser stream.
+    """
+
+    payload = card.model_dump(mode="json")
+    for projection_key in ("head", "detail", "root"):
+        projection = payload.get(projection_key)
+        if not isinstance(projection, dict):
+            continue
+        projection.pop("runtime_version", None)
+        state = projection.get("session_state")
+        if isinstance(state, dict):
+            state.pop("commit_seq", None)
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"))
+
+
 def list_live_catalog_sessions(
     *,
     params: TimelineSessionListParams,
@@ -903,46 +925,53 @@ async def stream_live_catalog_timeline(
     yield {"event": "connected", "data": json.dumps({"message": "Timeline session stream connected"})}
 
     with bus.subscribe(TOPIC_TIMELINE, since_seq=sequence) as subscription:
+        if skip_initial_replay:
+            # The browser already has the HTTP snapshot. Seed the signatures
+            # without replaying those cards so the first wake only emits cards
+            # whose session-local projection actually changed.
+            response = await asyncio.to_thread(
+                list_live_catalog_timeline,
+                params=params,
+                owner_id=owner_id,
+            )
+            previous = {card.thread_id: _timeline_card_signature(card) for card in response.sessions}
+            previous_total = response.total
+            skip_initial_replay = False
+
         while not await request.is_disconnected():
-            if skip_initial_replay:
-                skip_initial_replay = False
-            else:
-                response = await asyncio.to_thread(
-                    list_live_catalog_timeline,
-                    params=params,
-                    owner_id=owner_id,
-                )
-                current = {
-                    card.thread_id: json.dumps(card.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
-                    for card in response.sessions
+            response = await asyncio.to_thread(
+                list_live_catalog_timeline,
+                params=params,
+                owner_id=owner_id,
+            )
+            current = {card.thread_id: _timeline_card_signature(card) for card in response.sessions}
+            for thread_id in sorted(previous.keys() - current.keys()):
+                yield {
+                    "event": "session_remove",
+                    "data": json.dumps(
+                        {
+                            "thread_id": thread_id,
+                            "total": response.total,
+                            "has_real_sessions": response.has_real_sessions,
+                        }
+                    ),
                 }
-                for thread_id in sorted(previous.keys() - current.keys()):
-                    yield {
-                        "event": "session_remove",
-                        "data": json.dumps(
-                            {
-                                "thread_id": thread_id,
-                                "total": response.total,
-                                "has_real_sessions": response.has_real_sessions,
-                            }
-                        ),
-                    }
-                for card in response.sessions:
-                    signature = current[card.thread_id]
-                    if previous.get(card.thread_id) == signature:
-                        continue
-                    yield {
-                        "event": "session_upsert",
-                        "data": json.dumps(
-                            {
-                                "session": card.model_dump(mode="json"),
-                                "total": response.total,
-                                "has_real_sessions": response.has_real_sessions,
-                            }
-                        ),
-                    }
-                previous = current
-                previous_total = response.total
+            for card in response.sessions:
+                signature = current[card.thread_id]
+                if previous.get(card.thread_id) == signature:
+                    continue
+                yield {
+                    "event": "session_upsert",
+                    "data": json.dumps(
+                        {
+                            "session": card.model_dump(mode="json"),
+                            "total": response.total,
+                            "has_real_sessions": response.has_real_sessions,
+                        }
+                    ),
+                }
+            previous = current
+            previous_total = response.total
 
             now = monotonic()
             if now - last_heartbeat >= 30.0:

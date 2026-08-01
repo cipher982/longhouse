@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
@@ -29,6 +30,7 @@ from zerg.services.live_catalog_timeline import project_catalog_session_facts
 from zerg.services.live_catalog_timeline import project_catalog_sessions_snapshot
 from zerg.services.live_catalog_timeline import project_catalog_timeline_snapshot
 from zerg.services.live_catalog_timeline import read_live_catalog_session
+from zerg.services.live_catalog_timeline import _timeline_card_signature
 from zerg.services.timeline_session_listing import TimelineSessionListParams
 from zerg.services.session_views import SessionResponse
 
@@ -52,6 +54,46 @@ def _params(**overrides):
     }
     values.update(overrides)
     return TimelineSessionListParams(**values)
+
+
+def test_timeline_card_signature_ignores_global_commit_coordinates():
+    payload = {
+        "head": {
+            "runtime_version": 41,
+            "session_state": {
+                "commit_seq": 41,
+                "activity": {"state": "idle"},
+            },
+        },
+        "detail": {
+            "runtime_version": 41,
+            "session_state": {
+                "commit_seq": 41,
+                "activity": {"state": "idle"},
+            },
+        },
+        "root": {
+            "runtime_version": 41,
+            "session_state": {
+                "commit_seq": 41,
+                "activity": {"state": "idle"},
+            },
+        },
+    }
+
+    def card(value):
+        return SimpleNamespace(model_dump=lambda mode: deepcopy(value))
+
+    baseline = _timeline_card_signature(card(payload))
+    advanced = deepcopy(payload)
+    for projection in (advanced["head"], advanced["detail"], advanced["root"]):
+        projection["runtime_version"] = 42
+        projection["session_state"]["commit_seq"] = 42
+    assert _timeline_card_signature(card(advanced)) == baseline
+
+    changed = deepcopy(advanced)
+    changed["head"]["session_state"]["activity"]["state"] = "thinking"
+    assert _timeline_card_signature(card(changed)) != baseline
 
 
 def _snapshot(db, params: TimelineSessionListParams):
