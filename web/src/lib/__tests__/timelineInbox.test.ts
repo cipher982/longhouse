@@ -556,3 +556,82 @@ describe("buildInboxLayout", () => {
     });
   });
 });
+
+describe("unread band", () => {
+  const fixedNow = Date.parse("2026-05-18T12:00:00Z");
+
+  it("carves unread cards out of active and closed, never the shelf", () => {
+    const cards = [
+      // Running unread session stays on the shelf, not the band.
+      makeCard({
+        id: "unread-running",
+        repo: "zerg",
+        startedAt: "2026-05-18T11:00:00Z",
+        state: makeSessionStateFacts({
+          activity: "executing",
+          unread: true,
+          lastResultAt: "2026-05-18T10:30:00Z",
+        }),
+      }),
+      // Open-disposition finished Console session: would land in active
+      // without the carve-out (the ghost the review flagged).
+      makeCard({
+        id: "unread-open",
+        repo: "zerg",
+        startedAt: "2026-05-18T09:00:00Z",
+        state: makeSessionStateFacts({
+          mode: "console",
+          unread: true,
+          lastResultAt: "2026-05-18T10:00:00Z",
+          lastResultOutcome: "completed",
+        }),
+      }),
+      // Closed unread session moves out of Closed into the band.
+      makeCard({
+        id: "unread-closed",
+        repo: "alpha",
+        startedAt: "2026-05-18T08:00:00Z",
+        closed: true,
+        state: makeSessionStateFacts({
+          mode: "console",
+          closed: true,
+          unread: true,
+          lastResultAt: "2026-05-18T11:30:00Z",
+          lastResultOutcome: "failed",
+        }),
+      }),
+      makeCard({ id: "plain-active", repo: "zerg", startedAt: "2026-05-18T07:00:00Z" }),
+    ];
+    const layout = buildInboxLayout(cards, undefined, fixedNow);
+
+    expect(layout.shelf.map((s) => s.thread_id)).toEqual(["unread-running"]);
+    // Sorted by result completion desc — the just-finished lands on top.
+    expect(layout.unread.map((s) => s.thread_id)).toEqual(["unread-closed", "unread-open"]);
+    // Never duplicated into active or closed.
+    const activeIds = layout.active.flatMap((g) => g.sessions.map((s) => s.thread_id));
+    const closedIds = layout.closed.flatMap((g) => g.sessions.map((s) => s.thread_id));
+    expect(activeIds).toEqual(["plain-active"]);
+    expect(closedIds).toEqual([]);
+  });
+
+  it("read sessions fall back to their liveness tier", () => {
+    const cards = [
+      makeCard({
+        id: "read-closed",
+        repo: "alpha",
+        startedAt: "2026-05-18T08:00:00Z",
+        closed: true,
+        state: makeSessionStateFacts({
+          mode: "console",
+          closed: true,
+          unread: false,
+          lastResultAt: "2026-05-18T09:00:00Z",
+          lastResultOutcome: "completed",
+        }),
+      }),
+    ];
+    const layout = buildInboxLayout(cards, undefined, fixedNow);
+    expect(layout.unread).toEqual([]);
+    expect(layout.closed.flatMap((g) => g.sessions.map((s) => s.thread_id))).toEqual(["read-closed"]);
+  });
+});

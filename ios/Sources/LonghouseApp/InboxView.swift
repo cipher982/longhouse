@@ -169,6 +169,14 @@ struct TimelineView: View {
                     tierRows(openSessions(sessions), emphasized: true)
                 }
 
+                // Unacknowledged Console results, email-unread semantics.
+                // Carved out of History (and never duplicated with Open);
+                // cleared read-on-open server-side.
+                if !unreadSessions(sessions).isEmpty {
+                    tierHeader("Unread").padding(.top, 6)
+                    tierRows(unreadSessions(sessions), emphasized: true)
+                }
+
                 if !historySessions(sessions).isEmpty {
                     tierHeader("History").padding(.top, 6)
                     tierRows(historySessions(sessions), emphasized: false)
@@ -191,8 +199,12 @@ struct TimelineView: View {
         sessions.filter { $0.stateFacts.workingSet == "open" }
     }
 
+    private func unreadSessions(_ sessions: [SessionSummary]) -> [SessionSummary] {
+        sessions.filter { $0.stateFacts.workingSet != "open" && $0.stateFacts.unread }
+    }
+
     private func historySessions(_ sessions: [SessionSummary]) -> [SessionSummary] {
-        sessions.filter { $0.stateFacts.workingSet != "open" }
+        sessions.filter { $0.stateFacts.workingSet != "open" && !$0.stateFacts.unread }
     }
 
     private func tierHeader(_ title: String) -> some View {

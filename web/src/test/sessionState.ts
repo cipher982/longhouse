@@ -12,6 +12,9 @@ type SessionStateOptions = {
   interruptAvailable?: boolean;
   mode?: SessionStateFacts["mode"];
   terminalAttached?: boolean | null;
+  unread?: boolean;
+  lastResultAt?: string | null;
+  lastResultOutcome?: string | null;
 };
 
 export function makeSessionStateFacts(options: SessionStateOptions = {}): SessionStateFacts {
@@ -67,6 +70,9 @@ export function makeSessionStateFacts(options: SessionStateOptions = {}): Sessio
       tool: options.tool ?? (activity === "executing" ? "Shell" : null),
     },
     working_set: workingSet,
+    unread: options.unread ?? false,
+    last_result_at: options.lastResultAt ?? null,
+    last_result_outcome: options.lastResultOutcome ?? null,
     control: {
       ownership: access === "live_control" || access === "reattach" ? "owned" : "unowned",
       terminal_attached: terminalAttached,

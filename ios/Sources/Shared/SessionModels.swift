@@ -33,6 +33,12 @@ struct SessionStateFacts: Hashable, Codable, Sendable {
     /// Which timeline tier this session belongs to, decided server-side.
     /// "open" is what the user would say they have going right now.
     let workingSet: String
+    /// Console unread acknowledgement, derived server-side: a Console turn
+    /// settled and no human has opened the session since. Overlay on the
+    /// tiers, not a tier (console-unread-acknowledgement spec).
+    let unread: Bool
+    let lastResultAt: String?
+    let lastResultOutcome: String?
     let startTurn: SessionStateAction?
     let sendInput: SessionStateAction
     let interrupt: SessionStateAction
@@ -61,6 +67,9 @@ struct SessionStateFacts: Hashable, Codable, Sendable {
         controlOwnership: "unowned",
         controlConnection: "unknown",
         workingSet: "history",
+        unread: false,
+        lastResultAt: nil,
+        lastResultOutcome: nil,
         startTurn: SessionStateAction(state: "unknown", reason: "missing_state_facts"),
         sendInput: SessionStateAction(state: "unknown", reason: "missing_state_facts"),
         interrupt: SessionStateAction(state: "unknown", reason: "missing_state_facts"),

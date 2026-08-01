@@ -102,6 +102,10 @@ private extension APISessionStateFacts {
             // Absent on pre-tier servers; history is the safe default because
             // it never manufactures a top-tier row from missing evidence.
             workingSet: workingSet ?? "history",
+            // Absent on pre-contract-v2 servers; never unread from missing evidence.
+            unread: unread ?? false,
+            lastResultAt: lastResultAt,
+            lastResultOutcome: lastResultOutcome,
             startTurn: control.actions.startTurn?.sessionStateAction,
             sendInput: control.actions.sendInput.sessionStateAction,
             interrupt: control.actions.interrupt.sessionStateAction,

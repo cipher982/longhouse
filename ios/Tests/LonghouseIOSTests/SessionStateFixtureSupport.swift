@@ -11,7 +11,10 @@ func makeSessionStateFacts(
     tool: String? = nil,
     startTurnAvailable: Bool = false,
     sendInputAvailable: Bool? = nil,
-    accessLabel: String? = nil
+    accessLabel: String? = nil,
+    unread: Bool = false,
+    lastResultAt: String? = nil,
+    lastResultOutcome: String? = nil
 ) -> SessionStateFacts {
     let available = SessionStateAction(state: "available", reason: nil)
     let unavailable = SessionStateAction(state: "unavailable", reason: "fixture_not_granted")
@@ -50,6 +53,9 @@ func makeSessionStateFacts(
             : (pendingInteractionKind != nil || activity == "thinking" || activity == "executing")
                 ? "open"
                 : "history",
+        unread: unread,
+        lastResultAt: lastResultAt,
+        lastResultOutcome: lastResultOutcome,
         startTurn: startTurnAvailable ? available : unavailable,
         sendInput: (sendInputAvailable ?? owned) ? available : unavailable,
         interrupt: owned ? available : unavailable,

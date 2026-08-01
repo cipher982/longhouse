@@ -142,10 +142,14 @@ protocol SessionWorkspaceClient: Sendable {
     ) async throws -> PauseRequestResponse
     func draftReply(id: String, maxChars: Int) async throws -> DraftReplyResponse
     func setSessionLoopMode(id: String, loopMode: SessionLoopMode) async throws -> LoopModeResponse
+    func markSessionRead(id: String, readThrough: String) async throws
     func postRenderBeacon(_ payload: RenderBeaconReporter.Payload) async
 }
 
 extension SessionWorkspaceClient {
+    // Mocks/fixtures that never exercise acknowledgement inherit a no-op.
+    func markSessionRead(id: String, readThrough: String) async throws {}
+
     func respondToPauseRequest(
         sessionId: String,
         pauseRequestId: String,
@@ -601,6 +605,20 @@ struct LonghouseAPI: Sendable {
             throw LonghouseAPIError.from(statusCode: httpResponse.statusCode)
         }
         return try JSONDecoder.snakeCase.decode(APISessionLoopModeResponse.self, from: data).loopModeResponse
+    }
+
+    /// Console unread acknowledgement: mark results seen up to the timestamp
+    /// this client actually rendered. Server writes max(existing, read_through).
+    func markSessionRead(id: String, readThrough: String) async throws {
+        var request = URLRequest(url: baseURL.appendingPathComponent("/api/timeline/sessions/\(id)/read"))
+        request.httpMethod = "POST"
+        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["read_through": readThrough])
+
+        let (_, httpResponse) = try await data(for: request)
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            throw LonghouseAPIError.from(statusCode: httpResponse.statusCode)
+        }
     }
 
     func sessionAction(id: String, action: String) async throws {

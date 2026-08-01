@@ -97,6 +97,7 @@ struct SessionView: View {
             // Console sends both reuse a ready document.
             WebTranscriptWebViewPool.prewarm()
             await viewModel.start(sessionId: sessionId, appState: appState)
+            await viewModel.acknowledgeUnreadIfNeeded(sessionId: sessionId, appState: appState)
         }
         .onDisappear {
             viewModel.pauseRealtime()
@@ -2035,6 +2036,16 @@ final class SessionViewModel: ObservableObject {
             draftErrorMessage = "Draft unavailable: \(error.localizedDescription)"
             return nil
         }
+    }
+
+    /// Read-on-open acknowledgement for Console results
+    /// (console-unread-acknowledgement spec): acknowledge exactly the result
+    /// this client rendered. Fire-and-forget; the server is a max-write no-op
+    /// when already read.
+    func acknowledgeUnreadIfNeeded(sessionId: String, appState: AppState) async {
+        guard let facts = detail?.stateFacts, facts.unread, let readThrough = facts.lastResultAt else { return }
+        guard let api = apiFactory(appState.serverURL) else { return }
+        try? await api.markSessionRead(id: sessionId, readThrough: readThrough)
     }
 
     func setLoopMode(sessionId: String, mode: SessionLoopMode, appState: AppState) async {
