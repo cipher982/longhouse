@@ -30,9 +30,19 @@ SERVER_LOG="$TEST_ROOT/server.log"
 SERVER_PID=""
 ENGINE_LOG="$TEST_ROOT/engine.log"
 ENGINE_PID=""
+CLAUDE_CONTROL_PID=""
+CURSOR_CONTROL_PID=""
 PORT="${LONGHOUSE_LIFECYCLE_SMOKE_PORT:-0}"
 
 cleanup() {
+  if [[ -n "$CURSOR_CONTROL_PID" ]]; then
+    kill "$CURSOR_CONTROL_PID" 2>/dev/null || true
+    wait "$CURSOR_CONTROL_PID" 2>/dev/null || true
+  fi
+  if [[ -n "$CLAUDE_CONTROL_PID" ]]; then
+    kill "$CLAUDE_CONTROL_PID" 2>/dev/null || true
+    wait "$CLAUDE_CONTROL_PID" 2>/dev/null || true
+  fi
   if [[ -n "$ENGINE_PID" ]]; then
     kill "$ENGINE_PID" 2>/dev/null || true
     wait "$ENGINE_PID" 2>/dev/null || true
@@ -286,20 +296,68 @@ echo "ok: Shadow-only provider is refused coordination authority"
 # 3. A real `longhouse cursor` launch against the real server, under a real
 #    PTY, with a scripted provider binary.
 # ---------------------------------------------------------------------------
-cat > "$BIN_DIR/cursor-agent" <<'EOF'
-#!/usr/bin/env sh
-if [ "$1" = "create-chat" ]; then
-  if [ "${LONGHOUSE_FAKE_CURSOR_CREATE_FAIL:-0}" = "1" ]; then
-    printf '%s\n' 'scripted create-chat failure' >&2
-    exit 9
-  fi
-  printf '%s\n' '00000000-0000-0000-0000-000000000001'
-  exit 0
-fi
-printf '%s\n' 'CURSOR_LIFECYCLE_PTY_OK'
-sleep 1
-exit "${LONGHOUSE_FAKE_CURSOR_EXIT:-0}"
-EOF
+cat > "$BIN_DIR/cursor-agent" <<'PY'
+#!/usr/bin/env python3
+import json
+import os
+import subprocess
+import sys
+import tty
+import uuid
+
+conversation_id = "00000000-0000-0000-0000-000000000001"
+
+if sys.argv[1:2] == ["create-chat"]:
+    if os.environ.get("LONGHOUSE_FAKE_CURSOR_CREATE_FAIL") == "1":
+        print("scripted create-chat failure", file=sys.stderr)
+        raise SystemExit(9)
+    print(conversation_id)
+    raise SystemExit(0)
+
+print("CURSOR_LIFECYCLE_PTY_OK", flush=True)
+if os.environ.get("LONGHOUSE_FAKE_CURSOR_CONTROL") != "1":
+    import time
+
+    time.sleep(1)
+    raise SystemExit(int(os.environ.get("LONGHOUSE_FAKE_CURSOR_EXIT", "0")))
+
+
+def lifecycle(event, generation_id=None):
+    payload = {
+        "conversation_id": conversation_id,
+        "cwd": os.getcwd(),
+    }
+    if generation_id:
+        payload["generation_id"] = generation_id
+    subprocess.run(
+        ["longhouse-engine", "cursor-lifecycle-hook", event],
+        input=json.dumps(payload),
+        text=True,
+        stdout=subprocess.DEVNULL,
+        check=True,
+    )
+
+
+lifecycle("sessionStart")
+tty.setraw(sys.stdin.fileno())
+generation_id = None
+buffer = bytearray()
+while True:
+    value = os.read(sys.stdin.fileno(), 1)
+    if not value:
+        break
+    if value == b"\x03":
+        lifecycle("stop", generation_id)
+        continue
+    if value == b"\x1b":
+        continue
+    if value in {b"\r", b"\n"}:
+        generation_id = str(uuid.uuid4())
+        lifecycle("beforeSubmitPrompt", generation_id)
+        buffer.clear()
+        continue
+    buffer.extend(value)
+PY
 chmod 755 "$BIN_DIR/cursor-agent"
 
 export HOME="$HOME_DIR"
@@ -381,15 +439,102 @@ echo "ok: resume path refuses a provider with no coordination tools (409 from th
 #
 #     Codex and OpenCode follow below with protocol-faithful local servers.
 # ---------------------------------------------------------------------------
-cat > "$BIN_DIR/claude" <<'EOF'
-#!/usr/bin/env sh
-if [ "$1" = "auth" ]; then
-  printf '%s\n' '{"loggedIn": true}'
-  exit 0
-fi
-printf '%s\n' 'CLAUDE_LIFECYCLE_PTY_OK'
-exit "${LONGHOUSE_FAKE_CLAUDE_EXIT:-0}"
-EOF
+cat > "$BIN_DIR/claude" <<'PY'
+#!/usr/bin/env python3
+import datetime
+import json
+import os
+import pathlib
+import signal
+import subprocess
+import sys
+import threading
+import time
+import uuid
+
+if sys.argv[1:2] == ["auth"]:
+    print('{"loggedIn": true}')
+    raise SystemExit(0)
+
+print("CLAUDE_LIFECYCLE_PTY_OK", flush=True)
+if os.environ.get("LONGHOUSE_FAKE_CLAUDE_CONTROL") != "1":
+    raise SystemExit(int(os.environ.get("LONGHOUSE_FAKE_CLAUDE_EXIT", "0")))
+
+mcp_path = pathlib.Path(sys.argv[sys.argv.index("--mcp-config") + 1])
+mcp = json.loads(mcp_path.read_text())["mcpServers"]["longhouse-channel"]
+bridge_env = os.environ.copy()
+bridge_env.update(mcp.get("env") or mcp.get("environment") or {})
+bridge_env["LONGHOUSE_CHANNEL_PARENT_PID"] = str(os.getpid())
+bridge = subprocess.Popen(
+    [mcp["command"], *mcp.get("args", [])],
+    stdin=subprocess.PIPE,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.DEVNULL,
+    text=True,
+    bufsize=1,
+    env=bridge_env,
+)
+bridge.stdin.write(json.dumps({
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "initialize",
+    "params": {
+        "protocolVersion": "2025-11-25",
+        "capabilities": {},
+        "clientInfo": {"name": "lifecycle-fake", "version": "1"},
+    },
+}) + "\n")
+bridge.stdin.flush()
+json.loads(bridge.stdout.readline())
+bridge.stdin.write('{"jsonrpc":"2.0","method":"notifications/initialized"}\n')
+bridge.stdin.flush()
+
+running = threading.Event()
+running.set()
+provider_session_id = os.environ["LONGHOUSE_PROVIDER_SESSION_ID"]
+transcript = pathlib.Path.home() / ".claude/projects/lifecycle" / f"{provider_session_id}.jsonl"
+transcript.parent.mkdir(parents=True, exist_ok=True)
+
+
+def record_notifications():
+    for line in bridge.stdout:
+        message = json.loads(line)
+        if message.get("method") != "notifications/claude/channel":
+            continue
+        content = message["params"]["content"]
+        wrapped = (
+            '<channel source="longhouse-channel" injected_by="longhouse">\n'
+            + content
+            + "\n</channel>"
+        )
+        event = {
+            "parentUuid": None,
+            "isSidechain": False,
+            "userType": "external",
+            "cwd": os.getcwd(),
+            "sessionId": provider_session_id,
+            "version": "lifecycle-fake",
+            "type": "user",
+            "message": {"role": "user", "content": wrapped},
+            "uuid": str(uuid.uuid4()),
+            "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        }
+        with transcript.open("a") as output:
+            output.write(json.dumps(event) + "\n")
+            output.flush()
+            os.fsync(output.fileno())
+
+
+threading.Thread(target=record_notifications, daemon=True).start()
+signal.signal(signal.SIGINT, lambda *_: None)
+signal.signal(signal.SIGTERM, lambda *_: running.clear())
+while running.is_set():
+    time.sleep(0.05)
+
+bridge.stdin.close()
+bridge.terminate()
+bridge.wait(timeout=5)
+PY
 chmod 755 "$BIN_DIR/claude"
 
 claude_out="$TEST_ROOT/claude-launch.out"
@@ -664,6 +809,38 @@ codex_control_session_id="$(latest_launch_session_id)"
   || fail "OpenCode control-cycle launch failed"
 opencode_control_session_id="$(latest_launch_session_id)"
 
+LONGHOUSE_FAKE_CLAUDE_CONTROL=1 \
+  "$BIN_DIR/longhouse" claude --cwd "$HOME_DIR" --claude-bin "$BIN_DIR/claude" \
+  >"$TEST_ROOT/claude-control-launch.out" 2>&1 &
+CLAUDE_CONTROL_PID=$!
+claude_state=""
+for _ in $(seq 1 100); do
+  claude_state="$(find "$HOME_DIR/.claude/channels/longhouse/sessions" -name '*.json' -type f 2>/dev/null | head -1 || true)"
+  if [[ -n "$claude_state" ]] && [[ "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("ready", False))' "$claude_state")" == "True" ]]; then
+    break
+  fi
+  kill -0 "$CLAUDE_CONTROL_PID" 2>/dev/null || fail "Claude control-cycle provider exited before its channel became ready"
+  sleep 0.2
+done
+[[ -n "$claude_state" ]] || fail "Claude control-cycle channel state never appeared"
+claude_control_session_id="$(basename "$claude_state" .json)"
+
+LONGHOUSE_FAKE_CURSOR_CONTROL=1 \
+  run_launch_bounded "$TEST_ROOT/cursor-control-launch.out" 120 \
+  "$BIN_DIR/longhouse" cursor --verbose --cwd "$HOME_DIR" --cursor-bin "$BIN_DIR/cursor-agent" &
+CURSOR_CONTROL_PID=$!
+cursor_phase=""
+for _ in $(seq 1 100); do
+  cursor_phase="$(find "$HOME_DIR/.longhouse/managed-local/cursor-helm" -name '*.phase.json' -type f 2>/dev/null | head -1 || true)"
+  if [[ -n "$cursor_phase" ]] && [[ "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("phase", ""))' "$cursor_phase")" == "idle" ]]; then
+    break
+  fi
+  kill -0 "$CURSOR_CONTROL_PID" 2>/dev/null || fail "Cursor control-cycle provider exited before its lifecycle hook became ready"
+  sleep 0.2
+done
+[[ -n "$cursor_phase" ]] || fail "Cursor control-cycle phase state never appeared"
+cursor_control_session_id="$(basename "$cursor_phase" .phase.json)"
+
 # Launch the Machine Agent after both provider bridges exist. Its mandatory
 # startup scan then publishes their control leases without depending on the
 # slower periodic reconciliation path.
@@ -715,6 +892,45 @@ opencode_terminate="$(post_live_action "$opencode_control_session_id" terminate)
 wait_for_value "OpenCode terminal state" session_ended 20 \
   runtime_terminal_state "$opencode_control_session_id"
 echo "ok: OpenCode send, interrupt, terminate, and terminal state crossed the real Runtime Host"
+
+claude_send="$(send_live "$claude_control_session_id" 'CLAUDE_LIFECYCLE_CONTROL')" \
+  || fail "Runtime Host failed to send through the Claude channel"
+[[ "$(printf '%s' "$claude_send" | json_field accepted)" == "True" ]] \
+  || fail "Runtime Host did not accept the Claude send: $claude_send"
+claude_interrupt="$(post_live_action "$claude_control_session_id" interrupt)" \
+  || fail "Runtime Host failed to interrupt Claude"
+[[ "$(printf '%s' "$claude_interrupt" | json_field interrupt_dispatched)" == "True" ]] \
+  || fail "Runtime Host did not dispatch the Claude interrupt: $claude_interrupt"
+claude_provider_pid="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["claude_pid"])' "$claude_state")"
+kill -TERM "$claude_provider_pid" || fail "could not stop the Claude control-cycle provider"
+wait "$CLAUDE_CONTROL_PID" || fail "Claude control-cycle facade did not exit cleanly"
+CLAUDE_CONTROL_PID=""
+wait_for_value "Claude terminal state" session_ended 20 \
+  runtime_terminal_state "$claude_control_session_id"
+echo "ok: Claude send, interrupt, and terminal state crossed the real Runtime Host"
+
+cursor_send="$(send_live "$cursor_control_session_id" 'CURSOR_LIFECYCLE_CONTROL')" \
+  || fail "Runtime Host failed to send through Cursor Helm"
+[[ "$(printf '%s' "$cursor_send" | json_field accepted)" == "True" ]] \
+  || fail "Runtime Host did not accept the Cursor send: $cursor_send"
+cursor_interrupt="$(post_live_action "$cursor_control_session_id" interrupt)" \
+  || fail "Runtime Host failed to interrupt Cursor Helm"
+[[ "$(printf '%s' "$cursor_interrupt" | json_field interrupt_dispatched)" == "True" ]] \
+  || fail "Runtime Host did not dispatch the Cursor interrupt: $cursor_interrupt"
+cursor_terminate="$(post_live_action "$cursor_control_session_id" terminate)" \
+  || fail "Runtime Host failed to terminate Cursor Helm"
+[[ "$(printf '%s' "$cursor_terminate" | json_field terminate_dispatched)" == "True" ]] \
+  || fail "Runtime Host did not dispatch Cursor termination: $cursor_terminate"
+set +e
+wait "$CURSOR_CONTROL_PID"
+cursor_control_status=$?
+set -e
+CURSOR_CONTROL_PID=""
+[[ "$cursor_control_status" == "137" ]] \
+  || fail "Cursor terminate returned unexpected facade status $cursor_control_status"
+wait_for_value "Cursor terminal state" session_ended 20 \
+  runtime_terminal_state "$cursor_control_session_id"
+echo "ok: Cursor send, interrupt, terminate, and terminal state crossed the real Runtime Host"
 
 # ---------------------------------------------------------------------------
 # 4. A non-zero provider exit propagates rather than being swallowed.

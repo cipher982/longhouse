@@ -672,6 +672,7 @@ fn enqueue_terminal_event(
     session_id: &str,
     run_id: Option<&str>,
     exit_code: i32,
+    requested_session_end: bool,
 ) {
     let Ok(root) = home(config.config_dir.as_deref()) else {
         return;
@@ -694,8 +695,16 @@ fn enqueue_terminal_event(
         device_id: device_id.as_deref(),
         source: "cursor_helm",
         dedupe_prefix: "cursor-helm-terminal",
-        terminal_state: crate::managed_terminal::terminal_state_for_exit(exit_code),
-        terminal_reason: "provider_exit",
+        terminal_state: if requested_session_end {
+            "session_ended"
+        } else {
+            crate::managed_terminal::terminal_state_for_exit(exit_code)
+        },
+        terminal_reason: if requested_session_end {
+            "remote_terminate"
+        } else {
+            "provider_exit"
+        },
         exit_code: Some(exit_code),
     }
     .to_json();
@@ -713,6 +722,7 @@ fn serve(
     master: RawFd,
     child: libc::pid_t,
     stop: &AtomicBool,
+    requested_session_end: &AtomicBool,
     pty_lock: &Mutex<()>,
     dir: &Path,
     session_id: &str,
@@ -853,6 +863,7 @@ fn serve(
             );
         }
         Some("terminate") => {
+            requested_session_end.store(true, Ordering::Relaxed);
             unsafe {
                 libc::kill(child, libc::SIGKILL);
             }
@@ -1144,6 +1155,7 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
         );
     }
     let stop = Arc::new(AtomicBool::new(false));
+    let requested_session_end = Arc::new(AtomicBool::new(false));
     let resized = Arc::new(AtomicBool::new(true));
     let setup = (|| -> anyhow::Result<Terminal> {
         let launcher_pid = std::process::id();
@@ -1193,6 +1205,7 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
     }
     sync_winsize(master);
     let socket_stop = stop.clone();
+    let socket_requested_session_end = requested_session_end.clone();
     let guard = Arc::new(Mutex::new(()));
     let socket_guard = guard.clone();
     let server_dir = dir.clone();
@@ -1208,6 +1221,7 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
                     master,
                     pid,
                     &socket_stop,
+                    &socket_requested_session_end,
                     &socket_guard,
                     &server_dir,
                     &server_session,
@@ -1317,6 +1331,7 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
         &session_id,
         registered.as_ref().map(|value| value.run_id.as_str()),
         exit_code,
+        requested_session_end.load(Ordering::Relaxed),
     );
     unsafe {
         libc::close(master);
@@ -1356,15 +1371,17 @@ mod tests {
         master: RawFd,
         child: libc::pid_t,
         request: Value,
-    ) -> (Value, Arc<AtomicBool>) {
+    ) -> (Value, Arc<AtomicBool>, Arc<AtomicBool>) {
         let (mut client, server) = UnixStream::pair().unwrap();
         client.write_all(format!("{request}\n").as_bytes()).unwrap();
         let stop = Arc::new(AtomicBool::new(false));
+        let requested_session_end = Arc::new(AtomicBool::new(false));
         serve(
             server,
             master,
             child,
             &stop,
+            &requested_session_end,
             &Mutex::new(()),
             dir,
             "session-id",
@@ -1374,7 +1391,11 @@ mod tests {
         );
         let mut response = String::new();
         client.read_to_string(&mut response).unwrap();
-        (serde_json::from_str(response.trim()).unwrap(), stop)
+        (
+            serde_json::from_str(response.trim()).unwrap(),
+            stop,
+            requested_session_end,
+        )
     }
 
     fn observed_claim(dir: &Path, policy: Option<&str>) -> String {
@@ -1413,7 +1434,7 @@ mod tests {
             cursor_args: vec![],
         };
 
-        enqueue_terminal_event(&config, "session-1", Some("run-1"), 0);
+        enqueue_terminal_event(&config, "session-1", Some("run-1"), 137, true);
 
         let event_path = fs::read_dir(root.path().join("agent/runtime-events-outbox"))
             .unwrap()
@@ -1425,6 +1446,7 @@ mod tests {
         assert_eq!(event["run_id"], "run-1");
         assert_eq!(event["dedupe_key"], "cursor-helm-terminal:session-1:run-1");
         assert_eq!(event["payload"]["terminal_state"], "session_ended");
+        assert_eq!(event["payload"]["terminal_reason"], "remote_terminate");
     }
 
     #[test]
@@ -1598,11 +1620,13 @@ mod tests {
         let (mut client, server) = UnixStream::pair().unwrap();
         client.write_all(b"not-json\n").unwrap();
         let stop = AtomicBool::new(false);
+        let requested_session_end = AtomicBool::new(false);
         serve(
             server,
             pipe[1],
             -1,
             &stop,
+            &requested_session_end,
             &Mutex::new(()),
             root.path(),
             "session-id",
@@ -1617,7 +1641,7 @@ mod tests {
             "bad_request"
         );
 
-        let (stale, _) = serve_request(
+        let (stale, _, _) = serve_request(
             root.path(),
             pipe[1],
             -1,
@@ -1629,7 +1653,7 @@ mod tests {
             &json!({"session_id":"session-id","conversation_id":"conversation-id","launch_id":"launch-id","phase":"idle"}),
         )
         .unwrap();
-        let (sent, _) = serve_request(
+        let (sent, _, _) = serve_request(
             root.path(),
             pipe[1],
             -1,
@@ -1653,14 +1677,14 @@ mod tests {
             &json!({"session_id":"session-id","conversation_id":"conversation-id","launch_id":"launch-id","phase":"active","generation_id":"turn-1"}),
         )
         .unwrap();
-        let (mismatch, _) = serve_request(
+        let (mismatch, _, _) = serve_request(
             root.path(),
             pipe[1],
             -1,
             json!({"kind":"interrupt","generation_id":"other"}),
         );
         assert_eq!(mismatch["error"]["code"], "provider_generation_mismatch");
-        let (interrupted, _) = serve_request(
+        let (interrupted, _, _) = serve_request(
             root.path(),
             pipe[1],
             -1,
@@ -1679,9 +1703,11 @@ mod tests {
             unsafe { libc::pause() };
             unsafe { libc::_exit(0) };
         }
-        let (terminated, stop) = serve_request(root.path(), -1, child, json!({"kind":"terminate"}));
+        let (terminated, stop, requested_session_end) =
+            serve_request(root.path(), -1, child, json!({"kind":"terminate"}));
         assert_eq!(terminated["ok"], true);
         assert!(stop.load(Ordering::Relaxed));
+        assert!(requested_session_end.load(Ordering::Relaxed));
         let mut status = 0;
         assert_eq!(unsafe { libc::waitpid(child, &mut status, 0) }, child);
         assert!(libc::WIFSIGNALED(status));
