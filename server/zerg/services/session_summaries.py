@@ -17,7 +17,6 @@ from datetime import timedelta
 from datetime import timezone
 from typing import Any
 
-from sqlalchemy import func
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
@@ -25,7 +24,9 @@ from zerg.config import get_settings
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.services.internal_sessions import classify_provider_proof_environment
+from zerg.services.provider_interaction_semantics import title_eligible_provider_event
 from zerg.services.provisional_events import durable_transcript_event_predicate
+from zerg.services.raw_json_compression import decode_raw_json
 from zerg.services.session_title import freeze_anchor_title
 from zerg.services.session_title import sanitize_title
 
@@ -91,19 +92,29 @@ def _summary_content_values(summary: Any) -> dict[str, str]:
     return values
 
 
-def events_to_dicts(events: list[AgentEvent]) -> list[dict]:
+def events_to_dicts(events: list[AgentEvent], *, provider: str | None = None) -> list[dict]:
     """Convert ORM AgentEvent rows to plain dicts for summarization."""
-    return [
-        {
-            "role": event.role,
-            "content_text": event.content_text,
-            "tool_name": event.tool_name,
-            "tool_input_json": event.tool_input_json,
-            "tool_output_text": event.tool_output_text,
-            "timestamp": event.timestamp.isoformat() if event.timestamp else None,
-        }
-        for event in events
-    ]
+    result: list[dict] = []
+    for event in events:
+        event_provider = provider or getattr(getattr(event, "session", None), "provider", None)
+        if event.role == "user" and not title_eligible_provider_event(
+            event_provider,
+            role=event.role,
+            content_text=event.content_text,
+            raw_json=decode_raw_json(event),
+        ):
+            continue
+        result.append(
+            {
+                "role": event.role,
+                "content_text": event.content_text,
+                "tool_name": event.tool_name,
+                "tool_input_json": event.tool_input_json,
+                "tool_output_text": event.tool_output_text,
+                "timestamp": event.timestamp.isoformat() if event.timestamp else None,
+            }
+        )
+    return result
 
 
 def _load_summary_event_chunk(
@@ -117,14 +128,9 @@ def _load_summary_event_chunk(
     limit = SUMMARY_EVENT_LOAD_LIMIT if limit is None else limit
     limit = max(1, int(limit or 1))
     text_chars = max(1, int(SUMMARY_EVENT_TEXT_MAX_CHARS or 1))
-    text_expr = func.substr(AgentEvent.content_text, 1, text_chars).label("content_text")
+    provider = db.query(AgentSession.provider).filter(AgentSession.id == session_id).scalar()
     base_query = (
-        db.query(
-            AgentEvent.id,
-            AgentEvent.role,
-            text_expr,
-            AgentEvent.timestamp,
-        )
+        db.query(AgentEvent)
         .filter(AgentEvent.session_id == session_id)
         .filter(AgentEvent.role.in_(("user", "assistant")))
         .filter(AgentEvent.content_text.isnot(None))
@@ -148,17 +154,25 @@ def _load_summary_event_chunk(
         has_more = len(rows) > limit
         rows = rows[:limit]
 
-    events = [
-        {
-            "role": row.role,
-            "content_text": row.content_text,
-            "tool_name": None,
-            "tool_input_json": None,
-            "tool_output_text": None,
-            "timestamp": row.timestamp.isoformat() if row.timestamp else None,
-        }
-        for row in rows
-    ]
+    events = []
+    for row in rows:
+        if row.role == "user" and not title_eligible_provider_event(
+            provider,
+            role=row.role,
+            content_text=row.content_text,
+            raw_json=decode_raw_json(row),
+        ):
+            continue
+        events.append(
+            {
+                "role": row.role,
+                "content_text": str(row.content_text or "")[:text_chars],
+                "tool_name": row.tool_name,
+                "tool_input_json": row.tool_input_json,
+                "tool_output_text": row.tool_output_text,
+                "timestamp": row.timestamp.isoformat() if row.timestamp else None,
+            }
+        )
     return _SummaryEventChunk(
         events=events,
         last_event_id=int(rows[-1].id) if rows else None,
@@ -217,7 +231,7 @@ async def summarize_and_persist(
     from zerg.services.session_processing import summarize_events
     from zerg.services.write_serializer import get_write_serializer
 
-    event_dicts = events_to_dicts(events)
+    event_dicts = events_to_dicts(events, provider=session.provider)
 
     summary = await summarize_events(
         event_dicts,
@@ -330,19 +344,36 @@ async def generate_initial_title_impl(session_id: str) -> bool:
             return False
 
         first_user_message = (session.first_user_message_preview or "").strip()
+        if first_user_message and not title_eligible_provider_event(
+            session.provider,
+            role="user",
+            content_text=first_user_message,
+        ):
+            first_user_message = ""
         if not first_user_message:
-            first_user_message = (
-                db.query(AgentEvent.content_text)
+            user_events = (
+                db.query(AgentEvent)
                 .filter(AgentEvent.session_id == session_id)
                 .filter(AgentEvent.role == "user")
                 .filter(AgentEvent.content_text.isnot(None))
-                .filter(func.trim(AgentEvent.content_text) != "")
-                .filter(func.lower(func.trim(AgentEvent.content_text)) != "warmup")
                 .order_by(AgentEvent.timestamp.asc(), AgentEvent.id.asc())
-                .limit(1)
-                .scalar()
-                or ""
-            ).strip()
+                .all()
+            )
+            first_user_message = next(
+                (
+                    str(event.content_text or "").strip()
+                    for event in user_events
+                    if str(event.content_text or "").strip()
+                    and str(event.content_text or "").strip().lower() != "warmup"
+                    and title_eligible_provider_event(
+                        session.provider,
+                        role=event.role,
+                        content_text=event.content_text,
+                        raw_json=decode_raw_json(event),
+                    )
+                ),
+                "",
+            )
         if not first_user_message:
             await record_initial_title_failure(session_id, "missing_durable_user_message")
             return False

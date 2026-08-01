@@ -85,7 +85,7 @@ def test_cursor_observed_install_runs_full_exact_column(tmp_path: Path) -> None:
     assert result["status"] == "pass"
     assert result["build_provenance"] == "observed_install"
     assert result["full_column_gate"]["status"] == "pass"
-    assert result["full_column_gate"]["captured_scenario_count"] == 22
+    assert result["full_column_gate"]["captured_scenario_count"] == 23
     assert result["full_column_gate"]["coverage_gap_kind_counts"] == {
         "passed": 29,
         "no_token_safety_gate": 1,

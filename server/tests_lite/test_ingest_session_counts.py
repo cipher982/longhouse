@@ -4,6 +4,7 @@ Tool-call events (assistant role + tool_name set) must count toward tool_calls
 only, not assistant_messages, so the UI shows accurate conversation turns.
 """
 
+import json
 from datetime import datetime
 from datetime import timezone
 from unittest.mock import patch
@@ -13,6 +14,7 @@ from sqlalchemy.orm import sessionmaker
 
 from zerg.database import initialize_database
 from zerg.database import make_engine
+from zerg.models.agents import AgentSession
 from zerg.routers.health import _session_enrichment_lag_check
 from zerg.services.agents import AgentsStore
 from zerg.services.agents import EventIngest
@@ -32,6 +34,17 @@ def _make_store(tmp_path):
 
 def _ts():
     return datetime(2026, 2, 22, tzinfo=timezone.utc)
+
+
+def _claude_local_command_event(content: str, offset: int) -> EventIngest:
+    return EventIngest(
+        role="user",
+        content_text=content,
+        raw_json=json.dumps({"type": "user", "message": {"role": "user", "content": content}}),
+        timestamp=_ts(),
+        source_path="/claude/session.jsonl",
+        source_offset=offset,
+    )
 
 
 def test_tool_call_events_count_as_tools_not_turns(tmp_path):
@@ -192,6 +205,69 @@ def test_warmup_user_event_does_not_trigger_initial_title_generation(tmp_path):
 
     assert result.events_inserted == 1
     trigger.assert_not_called()
+
+
+def test_claude_local_command_does_not_count_or_trigger_title_generation(tmp_path):
+    store, db, _ = _make_store(tmp_path)
+    session_id = uuid4()
+    command = "\n".join(
+        (
+            "<local-command-caveat>Caveat: /effort is a local command.</local-command-caveat>",
+            "<command-name>/effort</command-name>",
+            "<command-message>effort</command-message>",
+            "<command-args>high</command-args>",
+        )
+    )
+    output = "<local-command-stdout>Set effort level to high</local-command-stdout>"
+
+    with patch("zerg.services.session_title_trigger.maybe_start_initial_title_generation") as trigger:
+        result = store.ingest_session(
+            SessionIngest(
+                id=session_id,
+                provider="claude",
+                environment="test",
+                project="test",
+                device_id="dev",
+                cwd="/tmp",
+                started_at=_ts(),
+                events=[_claude_local_command_event(command, 0), _claude_local_command_event(output, 1)],
+            )
+        )
+
+    session = db.query(AgentSession).filter_by(id=session_id).one()
+    assert result.events_inserted == 2
+    assert session.user_messages == 0
+    assert session.first_user_message_preview is None
+    assert session.last_visible_text_preview is None
+    trigger.assert_not_called()
+
+
+def test_claude_command_then_real_prompt_uses_prompt_for_counts_and_title_trigger(tmp_path):
+    store, db, _ = _make_store(tmp_path)
+    session_id = uuid4()
+    command = "<command-name>/effort</command-name><command-args>high</command-args>"
+    prompt = "Fix the session title pipeline"
+
+    with patch("zerg.services.session_title_trigger.maybe_start_initial_title_generation") as trigger:
+        result = store.ingest_session(
+            SessionIngest(
+                id=session_id,
+                provider="claude",
+                environment="test",
+                project="test",
+                device_id="dev",
+                cwd="/tmp",
+                started_at=_ts(),
+                events=[_claude_local_command_event(command, 0), _claude_local_command_event(prompt, 1)],
+            )
+        )
+
+    session = db.query(AgentSession).filter_by(id=session_id).one()
+    assert result.events_inserted == 2
+    assert session.user_messages == 1
+    assert session.first_user_message_preview == prompt
+    assert session.last_visible_text_preview == prompt
+    trigger.assert_called_once_with(str(session_id), reason="first_user_event")
 
 
 def test_incremental_count_ingest_triggers_initial_title_generation(tmp_path):

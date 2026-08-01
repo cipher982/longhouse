@@ -134,6 +134,7 @@ SCENARIOS = (
     "multi_turn_continuity",
     "conversation_reset",
     "conversation_reset_resume",
+    "interaction_semantics",
     "external_event_channel",
     "permission_prompt",
     "crash_timeout_cleanup",
@@ -200,6 +201,7 @@ MVP_METHODS = (
     "multi_turn_continuity",
     "conversation_reset",
     "conversation_reset_resume",
+    "interaction_semantics",
     "external_event_channel",
     "permission_prompt",
     "crash_timeout_cleanup",
@@ -224,6 +226,7 @@ COMPOSITE_PROFILES = {
     "present_and_disclose": ("tool_presentation_projection",),
     "control_surface": ("control_surface",),
     "conversation_reset": ("conversation_reset", "conversation_reset_resume"),
+    "interaction_semantics": ("interaction_semantics",),
     "drift_compare": ("baseline_compare", "old_new_release_diff"),
 }
 FULL_ACTION_SUITE_SCENARIOS = (
@@ -250,6 +253,7 @@ FULL_ACTION_SUITE_SCENARIOS = (
     "runtime_phase",
     "transcript_binding",
     "multi_turn_continuity",
+    "interaction_semantics",
     "external_event_channel",
     "permission_prompt",
     "crash_timeout_cleanup",
@@ -790,6 +794,8 @@ class AgentHarnessAdapter(Protocol):
     def conversation_reset(self, package: "EvidencePackage") -> dict[str, Any]: ...
 
     def conversation_reset_resume(self, package: "EvidencePackage") -> dict[str, Any]: ...
+
+    def interaction_semantics(self, package: "EvidencePackage") -> dict[str, Any]: ...
 
     def external_event_channel(self, package: "EvidencePackage") -> dict[str, Any]: ...
 
@@ -1874,6 +1880,132 @@ class UniversalProviderAdapter:
             },
         }
         package.write_json("assertions/conversation_reset_resume.json", payload)
+        return payload
+
+    def interaction_semantics(self, package: EvidencePackage) -> dict[str, Any]:
+        """Capture/evaluate provider controls without rewriting raw history.
+
+        The release factory may provide a live artifact through an explicit
+        environment variable. CI and local fake builds use the same oracle over
+        generated provider-shaped evidence. A real build with no live artifact
+        stays blocked so a missing canary cannot look like a passing probe.
+        """
+
+        from zerg.qa.provider_interaction_semantics import evaluate_observation
+        from zerg.qa.provider_interaction_semantics import generated_fake_observation
+        from zerg.qa.provider_interaction_semantics import jsonl_events
+
+        artifact_value = str(
+            os.environ.get("LONGHOUSE_PROVIDER_INTERACTION_ARTIFACT")
+            or os.environ.get(f"LONGHOUSE_{self.config.provider.upper()}_INTERACTION_ARTIFACT")
+            or ""
+        ).strip()
+        observation: dict[str, Any] | None = None
+        evidence_level = "hermetic"
+        synthetic = False
+        if artifact_value:
+            try:
+                loaded = json.loads(Path(artifact_value).expanduser().read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                payload = {
+                    "status": STATUS_FAIL,
+                    "scenario": "interaction_semantics",
+                    "failure_code": "interaction_artifact_invalid",
+                    "message": f"{type(exc).__name__}: {exc}",
+                }
+                package.write_json("assertions/interaction_semantics.json", payload)
+                return payload
+            if not isinstance(loaded, dict) or loaded.get("provider") != self.config.provider:
+                payload = {
+                    "status": STATUS_FAIL,
+                    "scenario": "interaction_semantics",
+                    "failure_code": "interaction_artifact_provider_mismatch",
+                    "message": "The interaction artifact provider did not match the harness provider.",
+                }
+                package.write_json("assertions/interaction_semantics.json", payload)
+                return payload
+            observation = loaded
+            evidence_level = str(observation.get("evidence_class") or "live_no_token")
+        elif self.provider_build is not None and self.provider_build.artifact_provenance == GENERATED_FAKE_PROVENANCE:
+            observation = generated_fake_observation(self.config.provider)
+            synthetic = True
+        elif self.config.provider == "antigravity":
+            observation = generated_fake_observation(self.config.provider)
+            synthetic = True
+        elif os.environ.get("LONGHOUSE_PROVIDER_INTERACTION_LIVE") == "1":
+            from zerg.qa.provider_interaction_probe import produce_live_observation
+
+            try:
+                observation = produce_live_observation(
+                    self.config.provider,
+                    provider_bin=self.provider_bin,
+                    artifact_root=package.path("live-probe"),
+                )
+                evidence_level = str(observation.get("evidence_class") or "live_no_token")
+            except (OSError, RuntimeError, ValueError) as exc:
+                payload = {
+                    "status": STATUS_BLOCKED,
+                    "scenario": "interaction_semantics",
+                    "failure_code": "interaction_live_probe_setup_failed",
+                    "message": f"{type(exc).__name__}: {exc}",
+                    "operation_evidence": {
+                        "provider_interaction_semantics": {
+                            "status": STATUS_BLOCKED,
+                            "level": "none",
+                            "canary": "provider_interaction_probe",
+                            "failure_code": "interaction_live_probe_setup_failed",
+                        }
+                    },
+                }
+                package.write_json("assertions/interaction_semantics.json", payload)
+                return payload
+        else:
+            payload = {
+                "status": STATUS_BLOCKED,
+                "scenario": "interaction_semantics",
+                "failure_code": "interaction_live_artifact_missing",
+                "message": "A real provider build requires an explicit live interaction artifact.",
+                "operation_evidence": {
+                    "provider_interaction_semantics": {
+                        "status": STATUS_BLOCKED,
+                        "level": "none",
+                        "canary": "provider_interaction_probe",
+                        "failure_code": "interaction_live_artifact_missing",
+                    }
+                },
+            }
+            package.write_json("assertions/interaction_semantics.json", payload)
+            return payload
+
+        assert observation is not None
+        raw_observation_path = package.write_json("raw/provider-interaction-observation.json", observation)
+        raw_events_path = package.write_text("events/provider-interaction-raw.jsonl", jsonl_events(observation))
+        evaluation = evaluate_observation(self.config.provider, observation)
+        semantic_rows = evaluation.get("semantic_projection")
+        semantic_path = package.write_text(
+            "events/provider-interaction-semantic.jsonl",
+            "".join(json.dumps(row, sort_keys=True) + "\n" for row in semantic_rows if isinstance(row, Mapping))
+            if isinstance(semantic_rows, list)
+            else "",
+        )
+        payload = {
+            **evaluation,
+            "scenario": "interaction_semantics",
+            "synthetic": synthetic or bool(observation.get("synthetic")),
+            "evidence_class": evidence_level,
+            "raw_observation_path": str(raw_observation_path),
+            "raw_events_path": str(raw_events_path),
+            "semantic_events_path": str(semantic_path),
+            "operation_evidence": {
+                "provider_interaction_semantics": {
+                    "status": evaluation.get("status"),
+                    "level": evidence_level if evaluation.get("status") == STATUS_PASS else "none",
+                    "canary": "provider_interaction_probe",
+                    "failure_code": evaluation.get("failure_code"),
+                }
+            },
+        }
+        package.write_json("assertions/interaction_semantics.json", payload)
         return payload
 
     def external_event_channel(self, package: EvidencePackage) -> dict[str, Any]:
@@ -6016,6 +6148,18 @@ def run_conversation_reset_resume(adapter: AgentHarnessAdapter, package: Evidenc
     )
 
 
+def run_interaction_semantics(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
+    adapter.prepare(package)
+    payload = adapter.interaction_semantics(package)
+    adapter.cleanup(package)
+    return scenario_result(
+        provider=adapter.config.provider,
+        scenario="interaction_semantics",
+        package=package,
+        payload=payload,
+    )
+
+
 def run_external_event_channel(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
     adapter.prepare(package)
     payload = adapter.external_event_channel(package)
@@ -6149,6 +6293,7 @@ SCENARIO_RUNNERS = {
     "multi_turn_continuity": run_multi_turn_continuity,
     "conversation_reset": run_conversation_reset,
     "conversation_reset_resume": run_conversation_reset_resume,
+    "interaction_semantics": run_interaction_semantics,
     "external_event_channel": run_external_event_channel,
     "permission_prompt": run_permission_prompt,
     "crash_timeout_cleanup": run_crash_timeout_cleanup,

@@ -80,6 +80,7 @@ DEFAULT_HARNESS_SCENARIOS: tuple[str, ...] = (
     "full_action_suite",
     "parse_ingest_project",
     "db_ingest_project",
+    "interaction_semantics",
     "session_projection",
     "timeline_projection",
     "run_prompt_once",

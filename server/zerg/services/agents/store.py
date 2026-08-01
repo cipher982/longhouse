@@ -57,6 +57,7 @@ from zerg.services.internal_sessions import classify_provider_proof_environment
 from zerg.services.internal_sessions import internal_canary_session_clause
 from zerg.services.internal_sessions import is_internal_canary_provider_filter
 from zerg.services.internal_sessions import provider_proof_session_clause
+from zerg.services.provider_interaction_semantics import title_eligible_provider_event
 from zerg.services.provisional_events import durable_transcript_event_predicate
 from zerg.services.provisional_events import visible_transcript_event_predicate
 from zerg.services.raw_json_compression import CODEC_PLAIN
@@ -116,6 +117,13 @@ def _bounded_session_preview(value: str | None, *, max_len: int) -> str | None:
 def _first_user_text_from_ingest(data: SessionIngest) -> str | None:
     for event in data.events:
         if str(event.role or "").strip().lower() != "user":
+            continue
+        if not title_eligible_provider_event(
+            data.provider,
+            role=event.role,
+            content_text=event.content_text,
+            raw_json=event.raw_json,
+        ):
             continue
         preview = _bounded_session_preview(
             event.content_text,
@@ -1833,23 +1841,33 @@ class AgentsStore:
         primary_thread_id = session_obj.primary_thread_id
         thread_filter = AgentEvent.thread_id == primary_thread_id if primary_thread_id is not None else text("1=1")
 
-        user_count = (
-            self.db.query(func.count())
-            .select_from(AgentEvent)
+        user_events = (
+            self.db.query(AgentEvent)
             .filter(AgentEvent.session_id == session_id)
             .filter(AgentEvent.branch_id == head_branch_id)
             .filter(thread_filter)
             .filter(durable_transcript_event_predicate())
             .filter(AgentEvent.role == "user")
-            .filter(
-                or_(
-                    AgentEvent.content_text.is_(None),
-                    func.lower(func.trim(AgentEvent.content_text)) != "warmup",
-                )
-            )
-            .scalar()
-            or 0
+            .order_by(AgentEvent.timestamp.asc(), AgentEvent.id.asc())
+            .yield_per(100)
         )
+        user_count = 0
+        first_user_preview: str | None = None
+        last_user_preview: str | None = None
+        for event in user_events:
+            if str(event.content_text or "").strip().lower() == "warmup":
+                continue
+            if not title_eligible_provider_event(
+                session_obj.provider,
+                role=event.role,
+                content_text=event.content_text,
+                raw_json=decode_raw_json(event),
+            ):
+                continue
+            user_count += 1
+            if first_user_preview is None:
+                first_user_preview = event.content_text
+            last_user_preview = event.content_text
         assistant_count = (
             self.db.query(func.count())
             .select_from(AgentEvent)
@@ -1878,21 +1896,8 @@ class AgentsStore:
         session_obj.user_messages = int(user_count)
         session_obj.assistant_messages = int(assistant_count)
         session_obj.tool_calls = int(tool_count)
-        first_user_preview = (
-            self.db.query(AgentEvent.content_text)
-            .filter(AgentEvent.session_id == session_id)
-            .filter(AgentEvent.branch_id == head_branch_id)
-            .filter(thread_filter)
-            .filter(durable_transcript_event_predicate())
-            .filter(AgentEvent.role == "user")
-            .filter(AgentEvent.content_text.isnot(None))
-            .filter(func.lower(func.trim(AgentEvent.content_text)) != "warmup")
-            .order_by(AgentEvent.timestamp.asc(), AgentEvent.id.asc())
-            .limit(1)
-            .scalar()
-        )
-        last_visible_preview = (
-            self.db.query(AgentEvent.content_text)
+        visible_events = (
+            self.db.query(AgentEvent)
             .filter(AgentEvent.session_id == session_id)
             .filter(AgentEvent.branch_id == head_branch_id)
             .filter(thread_filter)
@@ -1901,22 +1906,23 @@ class AgentsStore:
             .filter(or_(AgentEvent.role != "assistant", AgentEvent.tool_name.is_(None)))
             .filter(AgentEvent.content_text.isnot(None))
             .order_by(AgentEvent.timestamp.desc(), AgentEvent.id.desc())
-            .limit(1)
-            .scalar()
+            .yield_per(100)
         )
-        last_user_preview = (
-            self.db.query(AgentEvent.content_text)
-            .filter(AgentEvent.session_id == session_id)
-            .filter(AgentEvent.branch_id == head_branch_id)
-            .filter(thread_filter)
-            .filter(durable_transcript_event_predicate())
-            .filter(AgentEvent.role == "user")
-            .filter(AgentEvent.content_text.isnot(None))
-            .filter(func.lower(func.trim(AgentEvent.content_text)) != "warmup")
-            .order_by(AgentEvent.timestamp.desc(), AgentEvent.id.desc())
-            .limit(1)
-            .scalar()
+        last_visible_event = next(
+            (
+                event
+                for event in visible_events
+                if event.role != "user"
+                or title_eligible_provider_event(
+                    session_obj.provider,
+                    role=event.role,
+                    content_text=event.content_text,
+                    raw_json=decode_raw_json(event),
+                )
+            ),
+            None,
         )
+        last_visible_preview = last_visible_event.content_text if last_visible_event is not None else None
         last_assistant_preview = (
             self.db.query(AgentEvent.content_text)
             .filter(AgentEvent.session_id == session_id)
@@ -2562,7 +2568,13 @@ class AgentsStore:
                     is_warmup = bool(role == "user" and content_clean and content_clean.lower() == "warmup")
                     event_ts = _normalize_utc_naive(event_data.timestamp) or datetime.min
                     event_order = int(event_data.source_offset or 0)
-                    if role == "user" and not is_warmup:
+                    title_eligible = title_eligible_provider_event(
+                        data.provider,
+                        role=role,
+                        content_text=content_text,
+                        raw_json=event_data.raw_json,
+                    )
+                    if role == "user" and not is_warmup and title_eligible:
                         user_count_delta += 1
                         if content_clean:
                             candidate = (event_ts, event_order, content_clean)
@@ -2578,7 +2590,12 @@ class AgentsStore:
                             candidate = (event_ts, event_order, content_clean)
                             if last_assistant_preview_delta is None or candidate[:2] > last_assistant_preview_delta[:2]:
                                 last_assistant_preview_delta = candidate
-                    if role in {"user", "assistant"} and (role != "assistant" or event_data.tool_name is None) and content_clean:
+                    if (
+                        role in {"user", "assistant"}
+                        and (role != "assistant" or event_data.tool_name is None)
+                        and (role != "user" or title_eligible)
+                        and content_clean
+                    ):
                         candidate = (event_ts, event_order, content_clean)
                         if last_visible_preview_delta is None or candidate[:2] > last_visible_preview_delta[:2]:
                             last_visible_preview_delta = candidate

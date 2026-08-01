@@ -37,6 +37,36 @@
         "continuous": "privacy_safe_live_replay"
       },
       "support_tier": "launch",
+      "interaction_probes": [
+        {
+          "probe_id": "codex_model_picker",
+          "surface": "helm_tui",
+          "input_sequence": [
+            "/model"
+          ],
+          "acknowledgement_oracle": "codex_model_picker_open_or_cancel",
+          "native_sources": [
+            "native_archive",
+            "managed_bridge"
+          ],
+          "raw_markers": [
+            "/model",
+            "model picker"
+          ],
+          "raw_output_markers": [
+            "model"
+          ],
+          "expected_interaction_kind": "local_control",
+          "expected_title_eligibility": false,
+          "expected_model_turn": false,
+          "changes_provider_state": true,
+          "source_surface": "helm_tui",
+          "state_mutation_scope": "session_model",
+          "evidence_class": "live_no_token",
+          "disposition": "not_implemented",
+          "canary": "server/zerg/qa/provider_interaction_probe.py"
+        }
+      ],
       "release_channel": {
         "channel": "github_releases",
         "coordinate": "openai/codex",
@@ -362,6 +392,101 @@
         "continuous": "privacy_safe_live_replay"
       },
       "support_tier": "launch",
+      "interaction_probes": [
+        {
+          "probe_id": "claude_effort_command",
+          "surface": "helm_tui",
+          "input_sequence": [
+            "/effort high"
+          ],
+          "acknowledgement_oracle": "claude_local_command_stdout",
+          "native_sources": [
+            "provider_file",
+            "native_archive",
+            "managed_bridge"
+          ],
+          "raw_markers": [
+            "<local-command-caveat>",
+            "<command-name>",
+            "<command-message>",
+            "<command-args>"
+          ],
+          "raw_output_markers": [
+            "<local-command-stdout>"
+          ],
+          "expected_interaction_kind": "local_control",
+          "expected_title_eligibility": false,
+          "expected_model_turn": false,
+          "changes_provider_state": true,
+          "source_surface": "helm_tui",
+          "state_mutation_scope": "session_effort",
+          "evidence_class": "live_no_token",
+          "disposition": "implemented",
+          "canary": "server/zerg/qa/provider_interaction_probe.py"
+        },
+        {
+          "probe_id": "claude_model_picker",
+          "surface": "helm_tui",
+          "input_sequence": [
+            "/model",
+            "cancel"
+          ],
+          "acknowledgement_oracle": "claude_model_picker_cancelled",
+          "native_sources": [
+            "provider_file",
+            "native_archive",
+            "managed_bridge"
+          ],
+          "raw_markers": [
+            "<command-name>",
+            "<command-message>",
+            "model"
+          ],
+          "raw_output_markers": [
+            "<local-command-stdout>"
+          ],
+          "expected_interaction_kind": "local_control",
+          "expected_title_eligibility": false,
+          "expected_model_turn": false,
+          "changes_provider_state": false,
+          "source_surface": "helm_tui",
+          "state_mutation_scope": "session_model",
+          "evidence_class": "live_no_token",
+          "disposition": "not_implemented",
+          "canary": "server/zerg/qa/provider_interaction_probe.py"
+        },
+        {
+          "probe_id": "claude_clear_boundary",
+          "surface": "helm_tui",
+          "input_sequence": [
+            "/clear"
+          ],
+          "acknowledgement_oracle": "claude_conversation_reset",
+          "native_sources": [
+            "provider_file",
+            "native_archive",
+            "managed_bridge"
+          ],
+          "raw_markers": [
+            "<local-command-caveat>",
+            "<command-name>",
+            "<command-message>",
+            "<command-args>"
+          ],
+          "raw_output_markers": [
+            "<local-command-stdout>"
+          ],
+          "expected_interaction_kind": "conversation_boundary",
+          "expected_title_eligibility": false,
+          "expected_model_turn": false,
+          "changes_provider_state": true,
+          "source_surface": "helm_tui",
+          "state_mutation_scope": "conversation_identity",
+          "evidence_class": "live_no_token",
+          "disposition": "not_implemented",
+          "canary": "server/zerg/qa/claude_conversation_reset.py"
+        }
+      ],
       "release_channel": {
         "channel": "npm_registry",
         "coordinate": "@anthropic-ai/claude-code",
@@ -726,6 +851,67 @@
         "continuous": "privacy_safe_live_replay"
       },
       "support_tier": "launch",
+      "interaction_probes": [
+        {
+          "probe_id": "opencode_new_boundary",
+          "surface": "helm_tui",
+          "input_sequence": [
+            "/new"
+          ],
+          "acknowledgement_oracle": "opencode_conversation_reset",
+          "native_sources": [
+            "provider_file",
+            "native_archive",
+            "managed_bridge"
+          ],
+          "raw_markers": [
+            "/new",
+            "session boundary"
+          ],
+          "raw_output_markers": [
+            "session"
+          ],
+          "expected_interaction_kind": "conversation_boundary",
+          "expected_title_eligibility": false,
+          "expected_model_turn": false,
+          "changes_provider_state": true,
+          "source_surface": "helm_tui",
+          "state_mutation_scope": "conversation_identity",
+          "evidence_class": "live_no_token",
+          "disposition": "not_implemented",
+          "canary": "server/zerg/qa/opencode_conversation_reset.py"
+        },
+        {
+          "probe_id": "opencode_help_command",
+          "surface": "helm_tui",
+          "input_sequence": [
+            "/help"
+          ],
+          "acknowledgement_oracle": "opencode_local_help_output",
+          "native_sources": [
+            "provider_file",
+            "native_archive",
+            "managed_bridge"
+          ],
+          "raw_markers": [
+            "/help",
+            "help"
+          ],
+          "raw_output_markers": [
+            "commands",
+            "help"
+          ],
+          "expected_interaction_kind": "local_control",
+          "expected_title_eligibility": false,
+          "expected_model_turn": false,
+          "changes_provider_state": false,
+          "source_surface": "helm_tui",
+          "state_mutation_scope": "command_help",
+          "evidence_class": "live_no_token",
+          "disposition": "not_implemented",
+          "canary": "server/zerg/qa/provider_interaction_probe.py"
+        }
+      ],
       "release_channel": {
         "channel": "github_releases",
         "coordinate": "anomalyco/opencode",
@@ -966,6 +1152,36 @@
         "continuous": "privacy_safe_live_replay"
       },
       "support_tier": "maintenance",
+      "interaction_probes": [
+        {
+          "probe_id": "antigravity_shadow_control_absence",
+          "surface": "shadow",
+          "input_sequence": [
+            "(no managed control input)"
+          ],
+          "acknowledgement_oracle": "antigravity_shadow_observation_only",
+          "native_sources": [
+            "native_archive",
+            "hooks"
+          ],
+          "raw_markers": [
+            "shadow_only"
+          ],
+          "raw_output_markers": [
+            "native_archive",
+            "hooks"
+          ],
+          "expected_interaction_kind": "provider_system",
+          "expected_title_eligibility": false,
+          "expected_model_turn": null,
+          "changes_provider_state": null,
+          "source_surface": "shadow",
+          "state_mutation_scope": "none",
+          "evidence_class": "hermetic",
+          "disposition": "policy_disabled",
+          "canary": "server/zerg/qa/provider_interaction_probe.py"
+        }
+      ],
       "release_channel": {
         "channel": "github_releases",
         "coordinate": "google-antigravity/antigravity-cli",
@@ -1208,6 +1424,37 @@
         "continuous": "privacy_safe_live_replay"
       },
       "support_tier": "launch",
+      "interaction_probes": [
+        {
+          "probe_id": "cursor_model_launch_option",
+          "surface": "console",
+          "input_sequence": [
+            "cursor-agent --model <fixture-model>"
+          ],
+          "acknowledgement_oracle": "cursor_model_launch_metadata",
+          "native_sources": [
+            "provider_file",
+            "native_archive",
+            "managed_bridge"
+          ],
+          "raw_markers": [
+            "--model",
+            "model"
+          ],
+          "raw_output_markers": [
+            "provider model"
+          ],
+          "expected_interaction_kind": "local_control",
+          "expected_title_eligibility": false,
+          "expected_model_turn": false,
+          "changes_provider_state": true,
+          "source_surface": "console",
+          "state_mutation_scope": "session_model",
+          "evidence_class": "live_no_token",
+          "disposition": "not_implemented",
+          "canary": "server/zerg/qa/provider_interaction_probe.py"
+        }
+      ],
       "release_channel": {
         "channel": "observed_only",
         "coordinate": "cursor-agent",

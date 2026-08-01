@@ -4,33 +4,33 @@
 
 | Provider | Trigger | Build provenance | Status |
 |---|---|---|---|
-| codex | release_poll | staged_release | runs — 2 qualification scenarios + 22 harness scenarios |
+| codex | release_poll | staged_release | runs — 2 qualification scenarios + 23 harness scenarios |
 | codex | push | generated_fake | runs — 1 scenario |
-| codex | weekly_cron | generated_fake | runs — 22 scenarios |
+| codex | weekly_cron | generated_fake | runs — 23 scenarios |
 | codex | manual | observed_install | runs — 2 scenarios |
-| claude | release_poll | staged_release | runs — 1 qualification scenario + 22 harness scenarios |
+| claude | release_poll | staged_release | runs — 1 qualification scenario + 23 harness scenarios |
 | claude | push | generated_fake | runs — 4 scenarios |
-| claude | weekly_cron | generated_fake | runs — 22 scenarios |
+| claude | weekly_cron | generated_fake | runs — 23 scenarios |
 | claude | manual | observed_install | runs — 1 scenario |
-| opencode | release_poll | staged_release | runs — 1 qualification scenario + 22 harness scenarios |
+| opencode | release_poll | staged_release | runs — 1 qualification scenario + 23 harness scenarios |
 | opencode | push | generated_fake | runs — 4 scenarios |
-| opencode | weekly_cron | generated_fake | runs — 22 scenarios |
+| opencode | weekly_cron | generated_fake | runs — 23 scenarios |
 | opencode | manual | observed_install | runs — 1 scenario |
-| antigravity | release_poll | staged_release | runs — 1 qualification scenario + 22 harness scenarios |
+| antigravity | release_poll | staged_release | runs — 1 qualification scenario + 23 harness scenarios |
 | antigravity | push | generated_fake | runs — 4 scenarios |
-| antigravity | weekly_cron | generated_fake | runs — 22 scenarios |
+| antigravity | weekly_cron | generated_fake | runs — 23 scenarios |
 | antigravity | manual | observed_install | runs — 2 scenarios |
 | cursor | release_poll | staged_release | never runs — cursor has no registered release lane (no *_lane() in provider_factory/registry.py) |
 | cursor | push | generated_fake | runs — 4 scenarios |
-| cursor | weekly_cron | generated_fake | runs — 22 scenarios |
-| cursor | manual | observed_install | runs — 22 scenarios |
+| cursor | weekly_cron | generated_fake | runs — 23 scenarios |
+| cursor | manual | observed_install | runs — 23 scenarios |
 
 ## Staged-release diagonal
 
 | Provider | The diagonal (real binary x full scenario set) |
 |---|---|
-| codex | runs — 22 scenarios |
-| claude | runs — 22 scenarios |
-| opencode | runs — 22 scenarios |
-| antigravity | runs — 22 scenarios |
+| codex | runs — 23 scenarios |
+| claude | runs — 23 scenarios |
+| opencode | runs — 23 scenarios |
+| antigravity | runs — 23 scenarios |
 | cursor | never runs — release lane does not execute the full universal scenario set |

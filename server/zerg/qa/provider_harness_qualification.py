@@ -4,7 +4,7 @@ Phase 2's "bridge/dispatcher design" (docs/specs/provider-factory-coherence.md):
 `codex_tool_call_result_v1` and `codex_helm_interrupt_v1` are the two
 release-lane profiles whose strict oracles can now be satisfied by a harness
 scenario instead of each profile launching its own subprocess. The tool-result
-profile also owns the release lane's complete 22-scenario Codex column. This
+profile also owns the release lane's complete universal Codex column. This
 module loads the same staged-release request the release lane's own executors
 consume, derives and verifies a real `ProviderBuildRef` (unlike the release
 lane's own `run()`, which trusts the request's claimed build identity without
@@ -68,6 +68,7 @@ _HELM_INTERRUPT_STRICT_KEYS = frozenset(
 # contract truth. Everything else in the column must pass. A change to one of
 # these rows is a deliberate contract change and should update this gate.
 _EXPECTED_CODEX_FULL_COLUMN_LIMITS: dict[str, tuple[str, str | None]] = {
+    "interaction_semantics": ("blocked", "interaction_live_artifact_missing"),
     "action_matrix": ("blocked", None),
     "control_surface": ("blocked", None),
     "full_action_suite": ("blocked", "full_action_suite_has_explicit_gaps"),
@@ -78,6 +79,7 @@ _EXPECTED_CODEX_FULL_COLUMN_LIMITS: dict[str, tuple[str, str | None]] = {
 }
 
 _EXPECTED_CLAUDE_FULL_COLUMN_LIMITS: dict[str, tuple[str, str | None]] = {
+    "interaction_semantics": ("blocked", "interaction_live_artifact_missing"),
     "action_matrix": ("blocked", None),
     "control_surface": ("blocked", None),
     "full_action_suite": ("blocked", "full_action_suite_has_explicit_gaps"),
@@ -86,6 +88,7 @@ _EXPECTED_CLAUDE_FULL_COLUMN_LIMITS: dict[str, tuple[str, str | None]] = {
 }
 
 _EXPECTED_OPENCODE_FULL_COLUMN_LIMITS: dict[str, tuple[str, str | None]] = {
+    "interaction_semantics": ("blocked", "interaction_live_artifact_missing"),
     "action_matrix": ("blocked", None),
     "control_surface": ("blocked", None),
     "full_action_suite": ("blocked", "full_action_suite_has_explicit_gaps"),
@@ -101,6 +104,7 @@ _EXPECTED_ANTIGRAVITY_FULL_COLUMN_LIMITS: dict[str, tuple[str, str | None]] = {
 }
 
 _EXPECTED_CURSOR_FULL_COLUMN_LIMITS: dict[str, tuple[str, str | None]] = {
+    "interaction_semantics": ("blocked", "interaction_live_artifact_missing"),
     "action_matrix": ("blocked", None),
     "control_surface": ("blocked", None),
     "full_action_suite": ("blocked", "full_action_suite_has_explicit_gaps"),
@@ -116,14 +120,15 @@ _FULL_COLUMN_LIMITS = {
 }
 
 _FULL_COLUMN_ALLOWED_GAP_KINDS = {
-    "codex": frozenset({"passed", "provider_contract_unsupported"}),
-    "claude": frozenset({"passed", "no_token_safety_gate"}),
+    "codex": frozenset({"passed", "provider_contract_unsupported", "missing_live_canary"}),
+    "claude": frozenset({"passed", "no_token_safety_gate", "missing_live_canary"}),
     "opencode": frozenset(
         {
             "passed",
             "no_token_safety_gate",
             "not_applicable",
             "provider_contract_unsupported",
+            "missing_live_canary",
         }
     ),
     "antigravity": frozenset(
@@ -140,6 +145,7 @@ _FULL_COLUMN_ALLOWED_GAP_KINDS = {
             "no_token_safety_gate",
             "not_applicable",
             "provider_contract_unsupported",
+            "missing_live_canary",
         }
     ),
 }
