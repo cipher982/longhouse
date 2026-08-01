@@ -306,70 +306,6 @@ server.serve_forever()
     )
 
 
-def _fake_antigravity(path: Path) -> Path:
-    return _write_exe(
-        path,
-        r"""#!/usr/bin/env python3
-import json
-import os
-import sys
-from pathlib import Path
-
-args = sys.argv[1:]
-if args == ["--version"]:
-    print("1.0.2-fake")
-    raise SystemExit(0)
-
-if args == ["--help"]:
-    if os.environ.get("FAKE_AGY_MISSING_PLUGIN_HELP") == "1":
-        print("--print --prompt-interactive --conversation")
-    else:
-        print("--print --prompt-interactive --conversation plugin")
-    raise SystemExit(0)
-
-if args == ["plugin", "--help"]:
-    print("install <target>")
-    print("list")
-    print("validate")
-    raise SystemExit(0)
-
-def installed_marker():
-    return Path(os.environ.get("HOME", ".")) / ".fake-agy-plugins.json"
-
-if len(args) == 3 and args[:2] == ["plugin", "validate"]:
-    root = Path(args[2])
-    if not (root / "plugin.json").is_file():
-        print("missing plugin.json", file=sys.stderr)
-        raise SystemExit(1)
-    print("[ok] " + str(root))
-    raise SystemExit(0)
-
-if len(args) == 3 and args[:2] == ["plugin", "install"]:
-    if os.environ.get("FAKE_AGY_INSTALL_FAIL") == "1":
-        print("install failed", file=sys.stderr)
-        raise SystemExit(1)
-    root = Path(args[2])
-    name = json.loads((root / "plugin.json").read_text()).get("name")
-    marker = installed_marker()
-    marker.parent.mkdir(parents=True, exist_ok=True)
-    marker.write_text(json.dumps({"imports": [{"name": name}]}))
-    print("[ok] " + str(root))
-    raise SystemExit(0)
-
-if args == ["plugin", "list"]:
-    marker = installed_marker()
-    if marker.exists():
-        print(marker.read_text())
-    else:
-        print(json.dumps({"imports": []}))
-    raise SystemExit(0)
-
-print("unexpected fake agy args: " + json.dumps(args), file=sys.stderr)
-raise SystemExit(2)
-""",
-    )
-
-
 def _run_canary(
     root: Path,
     fake_bin: Path,
@@ -407,6 +343,17 @@ def _run_canary(
     )
     payload = json.loads(artifact.read_text(encoding="utf-8"))
     return result, payload
+
+
+# Antigravity has no live-canary coverage here on purpose. 2d4dc0335 derived the
+# live-proof provider set from schemas/managed_providers.yml, and
+# provider-live-canary.py now rejects anything outside it at argument parsing
+# ("invalid choice: 'antigravity' (choose from claude, opencode)"). Two tests and
+# a fake `agy` binary exercised the plugin-install and hook-inbox paths through
+# this canary; they asserted against a provider the canary declines by design, so
+# they were removed rather than kept alive against a CLI that will not accept
+# them. Antigravity release proofs still run -- provider-release-proof.py reports
+# the absent source canary as evidence instead of crashing on it.
 
 
 def _run_provider_canary(
@@ -529,60 +476,6 @@ def test_opencode_live_canary_proves_server_and_no_token_contracts() -> None:
         )
         serialized = json.dumps(payload)
         assert "Reply with exactly this token" not in serialized
-
-
-def test_antigravity_live_canary_fails_when_plugin_install_fails() -> None:
-    with tempfile.TemporaryDirectory() as temp_dir:
-        root = Path(temp_dir)
-        fake_bin = _fake_antigravity(root / "bin" / "agy")
-        result, payload = _run_provider_canary(
-            root,
-            provider="antigravity",
-            fake_bin=fake_bin,
-            extra_env={"FAKE_AGY_INSTALL_FAIL": "1"},
-        )
-
-        assert result.returncode == 1
-        assert payload["verdict"] == "red"
-        assert payload["failure_code"] == "antigravity_plugin_install_failed"
-
-
-def test_antigravity_live_canary_proves_hook_inbox_without_advertising_send() -> None:
-    with tempfile.TemporaryDirectory() as temp_dir:
-        root = Path(temp_dir)
-        fake_bin = _fake_antigravity(root / "bin" / "agy")
-        result, payload = _run_provider_canary(
-            root, provider="antigravity", fake_bin=fake_bin
-        )
-
-        assert result.returncode == 0, result.stderr + result.stdout
-        assert payload["provider"] == "antigravity"
-        assert payload["provider_version"] == "1.0.2-fake"
-        assert payload["verdict"] == "green"
-        assert payload["canaries"]["hook_inbox_claim_contract"]["status"] == "pass"
-        assert payload["canaries"]["hook_inbox_claim_contract"]["pre_injection"][
-            "injectSteps"
-        ]
-        assert (
-            payload["canaries"]["hook_inbox_claim_contract"]["post_injection"][
-                "terminationBehavior"
-            ]
-            == "force_continue"
-        )
-        assert (
-            payload["canaries"]["hook_inbox_claim_contract"]["stop_decision"][
-                "decision"
-            ]
-            == "continue"
-        )
-        assert payload["canaries"]["hook_inbox_claim_contract"][
-            "empty_stop_decision"
-        ] == {
-            "decision": "allow",
-            "reason": "",
-        }
-        assert payload["operation_evidence"]["launch_local"]["status"] == "pass"
-        assert "send_input" not in payload.get("operation_evidence", {})
 
 
 def test_opencode_live_canary_fails_when_schema_drops_prompt_async() -> None:
@@ -738,8 +631,6 @@ def test_opencode_live_canary_fails_when_restart_loses_transcript_marker() -> No
 def main() -> int:
     tests = [
         test_opencode_live_canary_proves_server_and_no_token_contracts,
-        test_antigravity_live_canary_fails_when_plugin_install_fails,
-        test_antigravity_live_canary_proves_hook_inbox_without_advertising_send,
         test_opencode_live_canary_fails_when_schema_drops_prompt_async,
         test_opencode_live_canary_fails_when_schema_drops_session_messages,
         test_opencode_live_canary_fails_when_noreply_schema_is_missing,
