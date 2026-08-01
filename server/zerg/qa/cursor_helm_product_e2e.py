@@ -523,9 +523,24 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
         (artifact_root / "product-e2e.json").write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
 
 
-def main() -> int:
+def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--workspace", type=Path, default=Path("/tmp/longhouse-cursor-product-e2e"))
+    # The workspace path is what keeps this harness out of the user timeline.
+    # `classify_provider_proof_environment` recognises a cwd under
+    # `/canaries/provider-live/…/workspace` and normalises the session to
+    # environment=test, which default listings exclude.
+    #
+    # The old default (`/tmp/longhouse-cursor-product-e2e`) matched none of the
+    # proof signals, so every run shipped to the real instance as ordinary user
+    # work — fourteen rows at the top of a dogfood timeline. The prompts cannot
+    # carry the marker instead: the `_NOREPLY_` pattern is anchored at the start
+    # of the first user message, and these prompts open with "Reply with
+    # exactly …".
+    parser.add_argument(
+        "--workspace",
+        type=Path,
+        default=Path.home() / ".longhouse" / "canaries" / "provider-live" / "cursor" / "product-e2e" / "workspace",
+    )
     parser.add_argument("--artifact-root", type=Path)
     parser.add_argument("--timeout", type=float, default=90.0)
     parser.add_argument("--max-archive-lag", type=float, default=10.0)
@@ -533,7 +548,11 @@ def main() -> int:
     parser.add_argument("--longhouse-bin", default="longhouse")
     parser.add_argument("--engine-bin", default="longhouse-engine")
     parser.add_argument("--skip-machine-agent-restart", action="store_true")
-    args = parser.parse_args()
+    return parser
+
+
+def main() -> int:
+    args = build_arg_parser().parse_args()
     try:
         report = run_product_e2e(args)
     except Exception as exc:

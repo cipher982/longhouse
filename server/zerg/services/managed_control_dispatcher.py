@@ -7,7 +7,9 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 from typing import Mapping
+from uuid import NAMESPACE_URL
 from uuid import uuid4
+from uuid import uuid5
 
 from sqlalchemy.orm import Session
 
@@ -32,12 +34,32 @@ MANAGED_CONTROL_TRANSPORT_NONE = "none"
 MANAGED_CONTROL_UNAVAILABLE_ERROR = "Managed control channel is not connected or does not advertise this capability"
 
 
+# Why a dispatch failed, as structure rather than prose.
+#
+# Callers deciding whether to retry must not parse `error`. Wording changes,
+# providers phrase rejections differently, and a missed match consumes a user's
+# message. "transport" means nothing received the command; "rejected" means
+# something did and refused it; "precondition" means we never got as far as
+# sending.
+# Stable namespace so one command_id always yields the same operation id.
+_CONTROL_OPERATION_NAMESPACE = uuid5(NAMESPACE_URL, "https://longhouse.ai/managed-control/operation")
+
+DISPATCH_FAILURE_TRANSPORT = "transport"
+DISPATCH_FAILURE_REJECTED = "rejected"
+DISPATCH_FAILURE_PRECONDITION = "precondition"
+
+
 @dataclass(frozen=True)
 class ManagedControlDispatchResult:
     ok: bool
     transport: str
     data: Mapping[str, Any] | None = None
     error: str | None = None
+    # None when ok. See DISPATCH_FAILURE_* above.
+    failure_kind: str | None = None
+    # For precondition failures, catalogd's machine-readable reason
+    # (control_unavailable, idempotency_conflict, operation_finished, ...).
+    failure_reason: str | None = None
 
 
 def _session_device_id(session: AgentSession | None) -> str | None:
@@ -177,8 +199,12 @@ async def _prepare_catalog_managed_control_operation(
     catalogd = get_catalogd_client()
     device_id = _session_device_id(session)
     if catalogd is None or device_id is None:
-        return None
-    operation_id = str(uuid4())
+        return None, "control_unavailable"
+    # Deterministic per command, not per attempt. catalogd treats a known
+    # command_id arriving with a *new* operation id as an idempotency conflict,
+    # so a fresh uuid here made every retry of a stable command self-conflict
+    # and burn its attempt budget without ever reaching the engine.
+    operation_id = str(uuid5(_CONTROL_OPERATION_NAMESPACE, command_id))
     try:
         result = await catalogd.call(
             "control.command.prepare.v2",
@@ -201,12 +227,14 @@ async def _prepare_catalog_managed_control_operation(
         )
     except Exception:
         logger.warning("Failed to prepare catalog managed-control operation %s", command_id, exc_info=True)
-        return None
+        # catalogd itself was unreachable. That is a transient condition, and
+        # returning a bare None here would break the caller's two-value unpack.
+        return None, "control_unavailable"
     grant = _normalize_catalog_control_grant(result.get("grant"))
     prepared_operation_id = result.get("operation_id")
     if result.get("allowed") is not True or grant is None or not prepared_operation_id:
-        return None
-    return str(prepared_operation_id), grant
+        return None, str(result.get("reason") or "control_unavailable")
+    return (str(prepared_operation_id), grant), None
 
 
 def _normalize_catalog_control_grant(raw: object) -> dict[str, Any] | None:
@@ -350,7 +378,7 @@ async def dispatch_managed_control_command(
         )
         prepared_operation_id = None
         if database_module.live_catalog_enabled() and action is not None and command_type is not None and command_id is not None:
-            prepared = await _prepare_catalog_managed_control_operation(
+            prepared, prepare_reason = await _prepare_catalog_managed_control_operation(
                 owner_id=owner_id,
                 session=session,
                 command_type=command_type,
@@ -367,6 +395,8 @@ async def dispatch_managed_control_command(
                     ok=False,
                     transport=MANAGED_CONTROL_TRANSPORT_NONE,
                     error=MANAGED_CONTROL_UNAVAILABLE_ERROR,
+                    failure_kind=DISPATCH_FAILURE_PRECONDITION,
+                    failure_reason=prepare_reason,
                 )
             prepared_operation_id, grant = prepared
             run_id = str(grant["run_id"])
@@ -390,6 +420,11 @@ async def dispatch_managed_control_command(
         ok=False,
         transport=MANAGED_CONTROL_TRANSPORT_NONE,
         error=MANAGED_CONTROL_UNAVAILABLE_ERROR,
+        failure_kind=DISPATCH_FAILURE_PRECONDITION,
+        # No managed transport is available at all. That is exactly the
+        # disconnected-channel case the durability work exists for, so it must
+        # classify as retryable rather than consume the message.
+        failure_reason="control_unavailable",
     )
 
 
@@ -464,6 +499,11 @@ async def _dispatch_engine_channel(
         command_id=command_id,
     )
     if not response.transport_ok:
+        # Always terminal. A dispatch that reached the channel may have been
+        # accepted before failing, and the operation is already created, so
+        # replaying it would need both durable engine dedupe and a grant that
+        # survived the reconnect. Neither holds today. Retry is confined to
+        # precondition failures, which occur before any operation exists.
         await _finish_live_managed_control_operation(
             operation_id=live_operation_id,
             status="failed",
@@ -476,6 +516,7 @@ async def _dispatch_engine_channel(
             ok=False,
             transport=MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL,
             error=response.error or "Machine Agent control channel dispatch failed",
+            failure_kind=DISPATCH_FAILURE_TRANSPORT,
         )
 
     message = response.message or {}

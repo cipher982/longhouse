@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
+from typing import TYPE_CHECKING
 from typing import Literal
 from uuid import UUID
 from uuid import uuid4
@@ -24,6 +25,9 @@ from zerg.services.managed_control_state import DEFAULT_MANAGED_CONTROL_LEASE_TT
 from zerg.services.managed_provider_contracts import contract_for_provider
 from zerg.services.session_state_facts_projector import authorize_exact_control_fact
 from zerg.utils.time import normalize_utc
+
+if TYPE_CHECKING:  # pragma: no cover - typing only, avoids a runtime import cycle
+    from zerg.services.managed_control_dispatcher import ManagedControlDispatchResult
 
 logger = logging.getLogger(__name__)
 _CONTROL_ACQUISITION_KINDS = ("spawned_control", "adopted_control")
@@ -438,6 +442,54 @@ def live_session_closed_for_input(db: Session, session: LiveControlSession) -> b
     return live_session_input_block_reason(db, session) is not None
 
 
+def _is_transient_delivery_failure(result: "ManagedControlDispatchResult") -> bool:
+    """May this input be retried, or has it been consumed?
+
+    Read from typed fields, never error text: matching prose is how a reworded
+    message silently starts eating user input.
+
+    Retry is confined to *precondition* failures — the control path was not
+    available, so nothing was prepared and nothing was sent. That is the only
+    surface where retry is unambiguously safe, and it is the one the reported
+    incident lands on: a peer whose channel was momentarily down.
+
+    Everything past that point is consumed, deliberately:
+
+    - A transport failure has already created a control operation, and the
+      websocket may have written the frame before raising. Replaying needs both
+      durable engine dedupe (today an in-memory cache) and a grant that survived
+      the reconnect (today a new lease generation revokes it). Neither holds, so
+      a retry would risk injecting the prompt twice.
+    - A provider that saw the input and refused it should not be retried at all.
+
+    Dropping a message is bad; delivering it twice is worse.
+    """
+
+    from zerg.services.managed_control_dispatcher import DISPATCH_FAILURE_PRECONDITION
+
+    if getattr(result, "failure_kind", None) != DISPATCH_FAILURE_PRECONDITION:
+        return False
+    return str(getattr(result, "failure_reason", "") or "") in _RETRYABLE_PRECONDITIONS
+
+
+# catalogd prepare reasons a later attempt can plausibly satisfy.
+#
+# All describe a control path that has not converged yet and does converge on
+# reconnect. Deliberately excluded: idempotency_conflict and operation_finished
+# (a retry can never satisfy them), and unsupported, session_closed, run_ended,
+# identity_diverged, control_head_rejected, not_granted, grant_revoked — all
+# decisions about this session that waiting will not change.
+_RETRYABLE_PRECONDITIONS = frozenset(
+    {
+        "control_unavailable",
+        "connection_unavailable",
+        "control_head_missing",
+        "lease_expired",
+        "identity_unbound",
+    }
+)
+
+
 async def wake_next_live_catalog_input(session_id: UUID | str) -> bool:
     """Claim and dispatch one queued hot receipt after a terminal signal."""
 
@@ -496,19 +548,28 @@ async def wake_next_live_catalog_input(session_id: UUID | str) -> bool:
         timeout_secs=15,
         command_type=MANAGED_CONTROL_COMMAND_SEND_TEXT,
         payload={"text": str(receipt.get("text") or "")},
-        request_id=request_id,
+        # Seed the engine command id from the durable receipt, not this
+        # attempt's claim token. Retrying a transient failure must reuse the
+        # same command id, or an ambiguous acceptance followed by a retry
+        # injects the same prompt twice.
+        request_id=str(receipt["id"]),
         run_id=None,
     )
     data = dict(result.data or {})
     if not result.ok or int(data.get("exit_code", 1)) != 0:
         delivery_error = str(result.error or data.get("stderr") or "queued send failed")[:500]
+        # A transport that was never reachable did not reject the input; it
+        # never saw it. Returning the receipt to the queue makes an offline or
+        # briefly-disconnected machine deliver late instead of dropping the
+        # message. A provider that actually refused the input is terminal.
+        outcome = "queued" if _is_transient_delivery_failure(result) else "failed"
         try:
             await catalogd.call(
                 "session.input.finish.v2",
                 {
                     "receipt_id": str(receipt["id"]),
                     "delivery_request_id": request_id,
-                    "status": "failed",
+                    "status": outcome,
                     "error": delivery_error,
                 },
                 timeout_seconds=1.0,

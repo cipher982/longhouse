@@ -105,6 +105,10 @@ http
         res.end(JSON.stringify({ coordination_token: TOKEN }));
         return;
       }
+      if (/launch-outcome/.test(req.url || "")) {
+        res.end(JSON.stringify({ recorded: true }));
+        return;
+      }
       if (payload && payload.session_id) {
         res.end(
           JSON.stringify({

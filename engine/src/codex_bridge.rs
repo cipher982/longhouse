@@ -135,6 +135,9 @@ pub struct BridgeStartConfig {
     /// Existing Codex rollout/transcript path paired with `resume_thread_id`.
     pub resume_thread_path: Option<String>,
     pub launch_mode: BridgeLaunchMode,
+    /// Pid of the CLI wrapper launching this bridge. Recorded so the bridge can
+    /// exit when nothing owns it. See codex_bridge_ownership.
+    pub owner_pid: Option<u32>,
 }
 
 #[derive(Debug, Clone)]
@@ -174,6 +177,10 @@ pub struct BridgeRunConfig {
     /// Existing Codex rollout/transcript path paired with `resume_thread_id`.
     pub resume_thread_path: Option<String>,
     pub launch_mode: BridgeLaunchMode,
+    /// Pid of the CLI wrapper that launched this bridge, if any. The bridge
+    /// watches it and commits terminal state once neither it nor a terminal
+    /// remains. See codex_bridge_ownership.
+    pub owner_pid: Option<u32>,
 }
 
 #[derive(Debug, Clone)]
@@ -269,6 +276,17 @@ pub struct BridgeStateFile {
     /// cold restart.
     #[serde(default)]
     pub bridge_process_start_time: Option<String>,
+    /// Pid of the CLI wrapper that launched this bridge, when one did.
+    ///
+    /// A `tui` bridge is owned by this wrapper whenever no terminal is
+    /// attached. Absent for headless launches and for bridges started by a CLI
+    /// predating the flag; see codex_bridge_ownership.
+    #[serde(default)]
+    pub owner_pid: Option<u32>,
+    /// OS process-start identity for `owner_pid`, so a recycled pid cannot
+    /// masquerade as a live wrapper.
+    #[serde(default)]
+    pub owner_process_start_time: Option<String>,
     #[serde(default)]
     pub app_server_pid: Option<u32>,
     #[serde(default)]
@@ -887,6 +905,11 @@ pub async fn cmd_codex_bridge_start(config: BridgeStartConfig) -> Result<BridgeS
             .arg("--launch-mode")
             .arg(config.launch_mode.cli_value());
     }
+    // The daemon outlives this `start` process, so ownership must name the CLI
+    // wrapper that is waiting on the TUI, never this short-lived launcher.
+    if let Some(owner_pid) = config.owner_pid {
+        child.arg("--owner-pid").arg(owner_pid.to_string());
+    }
 
     #[cfg(unix)]
     {
@@ -958,6 +981,11 @@ pub async fn cmd_codex_bridge_start(config: BridgeStartConfig) -> Result<BridgeS
 pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
     let pid = std::process::id();
     let bridge_process_start_time = crate::turn_claims::process_start_time_for_pid(Some(pid));
+    // Capture the wrapper's start time now, while it is certainly alive. Pids
+    // are recycled; without this a later check could mistake an unrelated
+    // process for a live owner and keep debris running forever.
+    let owner_process_start_time =
+        crate::turn_claims::process_start_time_for_pid(config.owner_pid);
     crate::codex_attachments::cleanup_session_tmpdir(&config.session_id);
     let resume_thread_id = normalize_optional_string(config.resume_thread_id.clone());
     let resume_thread_path = normalize_optional_string(config.resume_thread_path.clone());
@@ -1198,6 +1226,8 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
             thread_path: initial_thread_path.clone(),
             pid,
             bridge_process_start_time,
+            owner_pid: config.owner_pid,
+            owner_process_start_time: owner_process_start_time.clone(),
             app_server_pid: client.child_pid,
             app_server_process_start_time,
             app_server_pgid: client.child_pgid,
@@ -1235,21 +1265,15 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
         rejected_thread_ids: BTreeSet::new(),
         pending_pause_requests: Arc::new(Mutex::new(BTreeMap::new())),
     };
-    // Mark ready so the CLI can read ws_url and launch the TUI. Prestart
-    // launches already have a thread id; legacy TUI launches capture it later
-    // from thread/started notifications.
-    write_state_file(&context.state_file, &context.state)?;
-    if let Some(response) = startup_resume_response.as_ref() {
-        apply_thread_resume_snapshot(&config, &mut context, response).await?;
-    }
-    if config.create_initial_thread && context.state.thread_id.is_some() {
-        let startup_phase = context.runtime_tracker.current_phase_update();
-        emit_runtime_updates(&config, &mut context, vec![startup_phase]).await;
-    }
-
-    // Spawn IPC socket listener so `send` routes through the daemon's persistent connection
+    // Bind the IPC control path before publishing ready. The launcher confirms
+    // the Runtime Host transaction as soon as it observes this state; writing
+    // ready first can therefore adopt a session whose bridge immediately dies
+    // while creating its socket.
     let sock_path = ipc_socket_path(&context.state_file);
     let (ipc_tx, mut ipc_rx) = mpsc::unbounded_channel::<IpcCommand>();
+    // The ownership watcher stops this bridge through the same queue an
+    // explicit `codex-bridge stop` uses, so there is exactly one teardown path.
+    let ipc_self_tx = ipc_tx.clone();
     let pause_responder = PauseRequestResponder {
         pending: context.pending_pause_requests.clone(),
         outbound: websocket_outbound_sender(&client),
@@ -1267,12 +1291,34 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
         }
     }
     let _sock_guard = SocketCleanup(sock_path);
+
+    // Mark ready so the CLI can read ws_url and launch the TUI. Prestart
+    // launches already have a thread id; legacy TUI launches capture it later
+    // from thread/started notifications.
+    write_state_file(&context.state_file, &context.state)?;
+    if let Some(response) = startup_resume_response.as_ref() {
+        apply_thread_resume_snapshot(&config, &mut context, response).await?;
+    }
+    if config.create_initial_thread && context.state.thread_id.is_some() {
+        let startup_phase = context.runtime_tracker.current_phase_update();
+        emit_runtime_updates(&config, &mut context, vec![startup_phase]).await;
+    }
+
     // Codex can spend minutes in model-only thinking without emitting any
     // item deltas. Refresh the live phase so Timeline does not decay to Ready.
     let mut runtime_keepalive =
         tokio::time::interval(Duration::from_millis(ACTIVE_PHASE_KEEPALIVE_MS));
     runtime_keepalive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     runtime_keepalive.tick().await;
+    // Ownership: a `tui` bridge outlives its terminal only while the launching
+    // wrapper is still supervising. Once neither remains it is debris and must
+    // end itself; nothing else can, because it is a setsid daemon with no
+    // parent and no controlling TTY. See codex_bridge_ownership.
+    let mut ownership_check =
+        tokio::time::interval(crate::codex_bridge_ownership::OWNERSHIP_CHECK_INTERVAL);
+    ownership_check.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    ownership_check.tick().await;
+    let mut ownership_watch = crate::codex_bridge_ownership::OwnershipWatch::new();
     let mut thread_subscribe_retry =
         tokio::time::interval(Duration::from_millis(THREAD_SUBSCRIBE_BACKGROUND_RETRY_MS));
     thread_subscribe_retry.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -1454,6 +1500,44 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
             }
             _ = runtime_keepalive.tick() => {
                 emit_runtime_keepalive(&config, &mut context).await;
+            }
+            _ = ownership_check.tick() => {
+                let observed = observe_ownership(
+                    config.owner_pid,
+                    owner_process_start_time.as_deref(),
+                    context.state.ws_url.as_deref(),
+                );
+                let should_stop = match observed {
+                    // `ps` failed. Hold the previous observation rather than
+                    // counting a failed look as evidence of absence.
+                    None => {
+                        ownership_watch.observation_failed();
+                        false
+                    }
+                    Some((owner_alive, terminal_attached)) => {
+                        ownership_watch.observe(crate::codex_bridge_ownership::OwnershipInputs {
+                            headless_launch: config.launch_mode != BridgeLaunchMode::Tui,
+                            terminal_attached,
+                            owner_recorded: config.owner_pid.is_some(),
+                            owner_alive,
+                        })
+                    }
+                };
+                if should_stop {
+                    // Nothing owns this bridge: no terminal, and the wrapper
+                    // that launched it is gone. Route through the ordinary
+                    // stop path so terminal state is committed and published
+                    // exactly as an explicit close would.
+                    eprintln!(
+                        "[codex-bridge] no terminal and no launching wrapper remain; committing terminal state"
+                    );
+                    let (reply_tx, _reply_rx) = oneshot::channel();
+                    let _ = ipc_self_tx.send(IpcCommand::Stop {
+                        terminal_reason: crate::codex_bridge_ownership::TERMINAL_REASON_OWNER_GONE
+                            .to_string(),
+                        reply: reply_tx,
+                    });
+                }
             }
         }
     }
@@ -2464,7 +2548,9 @@ fn read_log_tail(path: &Path, max_chars: usize) -> String {
 
 async fn spawn_app_server_client(config: &BridgeRunConfig) -> Result<RpcClient> {
     let mut command = Command::new(&config.codex_bin);
-    command.args(codex_app_server_args(config));
+    let coordination_command =
+        std::env::current_exe().context("resolving Longhouse engine for Codex coordination MCP")?;
+    command.args(codex_app_server_args(config, &coordination_command));
     command
         .env_remove("LONGHOUSE_COORDINATION_TOKEN")
         .env("LONGHOUSE_MANAGED_SESSION_ID", &config.session_id)
@@ -2599,10 +2685,18 @@ async fn spawn_app_server_client(config: &BridgeRunConfig) -> Result<RpcClient> 
     })
 }
 
-fn codex_app_server_args(config: &BridgeRunConfig) -> Vec<OsString> {
+fn codex_app_server_args(config: &BridgeRunConfig, coordination_command: &Path) -> Vec<OsString> {
     let mut args = vec![
         OsString::from("-c"),
         OsString::from(CODEX_DISABLE_UPDATE_CHECK_CONFIG),
+        OsString::from("-c"),
+        OsString::from(format!(
+            "mcp_servers.longhouse.command={}",
+            serde_json::to_string(&coordination_command.display().to_string())
+                .expect("coordination command is serializable")
+        )),
+        OsString::from("-c"),
+        OsString::from("mcp_servers.longhouse.args=[\"claude-channel\",\"serve\"]"),
     ];
     for tool in LONGHOUSE_COORDINATION_TOOLS {
         args.push(OsString::from("-c"));
@@ -4520,6 +4614,59 @@ async fn emit_runtime_updates(
     }
 }
 
+/// True when the recorded wrapper pid is still running as the same process.
+///
+/// Start-time matching is what makes this safe: pids recycle, and a recycled
+/// pid that happened to match would keep debris alive indefinitely. A bridge
+/// with no recorded owner returns false here; the ownership rule treats that
+/// case as unprovable rather than dead, so it is never killed on this alone.
+/// Observe ownership from one coherent process inventory.
+///
+/// Returns `None` when `ps` itself failed. That is the difference between "the
+/// wrapper is gone" and "we could not look", and conflating them is how a
+/// transient scan failure would terminate live work. `process_identity`
+/// documents the same rule for durable reconcilers.
+fn observe_ownership(
+    owner_pid: Option<u32>,
+    recorded_start_time: Option<&str>,
+    ws_url: Option<&str>,
+) -> Option<(bool, bool)> {
+    let facts = crate::process_identity::try_collect_process_facts_by_pid()?;
+
+    let owner_alive = match owner_pid {
+        None => false,
+        Some(pid) => match facts.get(&pid) {
+            None => false,
+            Some(fact) => match recorded_start_time {
+                Some(recorded) if !recorded.trim().is_empty() => {
+                    crate::process_identity::lstart_matches_recorded(fact, recorded)
+                }
+                // No start time was readable at launch, so pid presence is the
+                // only evidence there is. Treating that as dead would end a
+                // live session on missing evidence.
+                _ => true,
+            },
+        },
+    };
+
+    // A codex TUI is launched with `--remote <ws_url>`, so a live process
+    // carrying both strings is an attached terminal. This is an argv proxy
+    // rather than a socket check: it can keep a bridge alive for a hung or
+    // stopped TUI, which errs toward preserving a session rather than ending
+    // one. Cross-checked against raw socket state across nine live bridges
+    // with no disagreement.
+    let terminal_attached = ws_url
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_some_and(|ws| {
+            facts
+                .values()
+                .any(|fact| fact.command.contains(ws) && fact.command.contains("--remote"))
+        });
+
+    Some((owner_alive, terminal_attached))
+}
+
 async fn emit_runtime_keepalive(config: &BridgeRunConfig, context: &mut BridgeContext) {
     if let Some(update) = context.runtime_tracker.keepalive_update() {
         emit_runtime_updates(config, context, vec![update]).await;
@@ -5788,6 +5935,7 @@ mod tests {
 
     fn make_test_run_config(temp: &tempfile::TempDir) -> BridgeRunConfig {
         BridgeRunConfig {
+            owner_pid: None,
             session_id: "session-123".to_string(),
             run_id: None,
             connection_id: None,
@@ -5857,8 +6005,9 @@ mod tests {
         let mut config = make_test_run_config(&temp);
         config.approval_policy = Some("never".to_string());
         config.sandbox = Some("danger-full-access".to_string());
+        let coordination_command = temp.path().join("longhouse-engine");
 
-        let args = codex_app_server_args(&config)
+        let args = codex_app_server_args(&config, &coordination_command)
             .into_iter()
             .map(|arg| arg.to_string_lossy().into_owned())
             .collect::<Vec<_>>();
@@ -5866,6 +6015,13 @@ mod tests {
         let mut expected = vec![
             "-c".to_string(),
             CODEX_DISABLE_UPDATE_CHECK_CONFIG.to_string(),
+            "-c".to_string(),
+            format!(
+                "mcp_servers.longhouse.command={}",
+                serde_json::to_string(&coordination_command.display().to_string()).unwrap()
+            ),
+            "-c".to_string(),
+            "mcp_servers.longhouse.args=[\"claude-channel\",\"serve\"]".to_string(),
         ];
         for tool in LONGHOUSE_COORDINATION_TOOLS {
             expected.extend([

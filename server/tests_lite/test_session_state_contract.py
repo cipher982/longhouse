@@ -396,3 +396,83 @@ def test_every_managed_provider_projects_the_same_semantic_axes(provider):
     assert facts.presentation.primary.key == "executing"
     assert facts.presentation.access is not None
     assert facts.presentation.access.key == "live_control"
+
+
+def _working_set_facts(
+    *,
+    disposition_state="open",
+    activity_state="quiescent",
+    terminal_attached=None,
+    interaction=None,
+):
+    """Exercise the working-set rule directly, without a full facts build.
+
+    The rule is small and load-bearing enough that it deserves tests that
+    cannot drift with unrelated projection changes.
+    """
+    from zerg.services.session_state_contract import SessionActionAvailability
+    from zerg.services.session_state_contract import SessionActivityFacts
+    from zerg.services.session_state_contract import SessionControlActions
+    from zerg.services.session_state_contract import SessionControlFacts
+    from zerg.services.session_state_contract import SessionDispositionFacts
+    from zerg.services.session_state_contract import _working_set
+
+    unavailable = SessionActionAvailability(state="unavailable", reason="test")
+    return _working_set(
+        disposition=SessionDispositionFacts(state=disposition_state),
+        activity=SessionActivityFacts(state=activity_state),
+        control=SessionControlFacts(
+            ownership="owned",
+            connection="connected",
+            terminal_attached=terminal_attached,
+            actions=SessionControlActions(
+                send_input=unavailable,
+                interrupt=unavailable,
+                terminate=unavailable,
+                reattach=unavailable,
+                resume=unavailable,
+            ),
+        ),
+        interaction=interaction,
+    )
+
+
+def test_attached_terminal_puts_a_session_in_the_working_set():
+    assert _working_set_facts(terminal_attached=True) == "open"
+
+
+def test_idle_session_without_a_terminal_is_history_despite_live_control():
+    # The regression this whole tier exists for: control liveness outlives
+    # terminals, so a connected-but-unattended session must not be promoted.
+    assert _working_set_facts(terminal_attached=False) == "history"
+
+
+def test_unobservable_attachment_does_not_promote():
+    # None means "this provider cannot observe attachment", which is not
+    # evidence of a terminal. Promoting on it would resurrect the old bug for
+    # every provider lacking the signal.
+    assert _working_set_facts(terminal_attached=None) == "history"
+
+
+@pytest.mark.parametrize("state", ["thinking", "executing"])
+def test_in_flight_work_is_in_the_working_set_without_a_terminal(state):
+    # Console dispatches have no terminal by construction.
+    assert _working_set_facts(activity_state=state, terminal_attached=None) == "open"
+
+
+def test_blocked_on_the_user_is_in_the_working_set():
+    from zerg.services.session_state_contract import SessionPendingInteractionFacts
+
+    interaction = SessionPendingInteractionFacts(id="q1", kind="question")
+    assert _working_set_facts(terminal_attached=None, interaction=interaction) == "open"
+
+
+def test_closed_session_is_history_even_while_attached():
+    assert (
+        _working_set_facts(
+            disposition_state="closed",
+            activity_state="executing",
+            terminal_attached=True,
+        )
+        == "history"
+    )

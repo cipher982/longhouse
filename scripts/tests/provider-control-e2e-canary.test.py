@@ -385,21 +385,15 @@ def test_antigravity_real_agy_send_canary_blocks_without_an_unwatched_worker() -
         assert agy["failure_code"] == "antigravity_unwatched_producer_boundary_unavailable"
 
 
-def test_antigravity_hermetic_channel_canary_executes_native_module() -> None:
+def test_antigravity_hermetic_control_is_blocked_as_shadow_only() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
         result, payload = _run_canary(root, ["--provider", "antigravity"])
 
         assert result.returncode == 0, result.stderr + result.stdout
         antigravity = payload["canaries"]["antigravity"]
-        assert antigravity["status"] == "pass"
-        assert antigravity["pre_injection"]["injectSteps"] == [
-            {"userMessage": "pre invocation canary input"}
-        ]
-        assert antigravity["post_injection"]["injectSteps"] == [
-            {"userMessage": "post invocation canary input"}
-        ]
-        assert antigravity["stop_decision"]["decision"] == "continue"
+        assert antigravity["status"] == "blocked"
+        assert antigravity["failure_code"] == "antigravity_shadow_only"
 
 
 def test_antigravity_real_agy_send_canary_blocks_before_marker_evaluation() -> None:
@@ -534,7 +528,7 @@ def main() -> int:
         test_claude_real_print_canary_fails_on_api_error_result,
         test_claude_real_print_canary_preserves_non_secret_launch_env,
         test_claude_channel_canary_uses_native_channel_module,
-        test_antigravity_hermetic_channel_canary_executes_native_module,
+        test_antigravity_hermetic_control_is_blocked_as_shadow_only,
         test_antigravity_real_agy_send_canary_blocks_without_an_unwatched_worker,
         test_antigravity_real_agy_send_canary_blocks_before_marker_evaluation,
         test_opencode_real_tool_canary_requires_completed_tool_marker,

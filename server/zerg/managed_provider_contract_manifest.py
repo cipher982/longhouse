@@ -29,6 +29,7 @@ _REQUIRED_BOOL_FIELDS = (
     "startup_coordination_context",
     "can_resume",
     "turn_start",
+    "live_proof",
 )
 _STRING_LIST_FIELDS = (
     "control_plane_aliases",
@@ -274,26 +275,22 @@ def _validate_machine_control_supports(item: dict[str, Any]) -> None:
     for support in item.get("machine_control_supports") or ():
         prefix, separator, suffix = str(support).partition(".")
         if separator != "." or not prefix or not suffix:
-            raise ValueError(
-                f"managed provider contract {provider}: machine_control_supports entry {support!r} " "must be provider.operation"
-            )
+            raise ValueError(f"managed provider contract {provider}: machine_control_supports entry {support!r} must be provider.operation")
         if prefix != provider:
             raise ValueError(
-                f"managed provider contract {provider}: machine_control_supports entry {support!r} " f"must use provider prefix {provider}"
+                f"managed provider contract {provider}: machine_control_supports entry {support!r} must use provider prefix {provider}"
             )
         operation = MACHINE_CONTROL_SUPPORT_OPERATION_BY_SUFFIX.get(suffix)
         if operation is None:
             raise ValueError(
-                f"managed provider contract {provider}: machine_control_supports entry {support!r} " f"has unknown operation {suffix!r}"
+                f"managed provider contract {provider}: machine_control_supports entry {support!r} has unknown operation {suffix!r}"
             )
         if item.get(operation) is not True:
-            raise ValueError(
-                f"managed provider contract {provider}: machine_control_supports entry {support!r} " f"requires {operation}=true"
-            )
+            raise ValueError(f"managed provider contract {provider}: machine_control_supports entry {support!r} requires {operation}=true")
         for extra_operation in _MACHINE_CONTROL_SUPPORT_EXTRA_REQUIREMENTS.get(suffix, ()):
             if item.get(extra_operation) is not True:
                 raise ValueError(
-                    f"managed provider contract {provider}: machine_control_supports entry {support!r} " f"requires {extra_operation}=true"
+                    f"managed provider contract {provider}: machine_control_supports entry {support!r} requires {extra_operation}=true"
                 )
 
 
@@ -371,12 +368,10 @@ def _validate_factory_contract(item: dict[str, Any]) -> None:
     if not isinstance(proof_profiles, dict):
         raise ValueError(f"managed provider contract {provider}: proof_profiles must be an object")
     if set(proof_profiles) != _PROOF_PROFILE_NAMES:
-        raise ValueError(f"managed provider contract {provider}: proof_profiles must contain exactly " f"{sorted(_PROOF_PROFILE_NAMES)}")
+        raise ValueError(f"managed provider contract {provider}: proof_profiles must contain exactly {sorted(_PROOF_PROFILE_NAMES)}")
     for name, value in proof_profiles.items():
         if value not in _PROOF_PROFILE_VALUES:
-            raise ValueError(
-                f"managed provider contract {provider}: proof_profiles.{name} must be one of " f"{sorted(_PROOF_PROFILE_VALUES)}"
-            )
+            raise ValueError(f"managed provider contract {provider}: proof_profiles.{name} must be one of {sorted(_PROOF_PROFILE_VALUES)}")
     _validate_release_channel(item)
 
 
@@ -396,12 +391,11 @@ def _validate_release_channel(item: dict[str, Any]) -> None:
             raise ValueError(f"managed provider contract {provider}: release_channel.{field} must be a non-empty string")
     if release["version_discovery"] not in _RELEASE_VERSION_DISCOVERY:
         raise ValueError(
-            f"managed provider contract {provider}: release_channel.version_discovery must be one of "
-            f"{sorted(_RELEASE_VERSION_DISCOVERY)}"
+            f"managed provider contract {provider}: release_channel.version_discovery must be one of {sorted(_RELEASE_VERSION_DISCOVERY)}"
         )
     if release["verification"] not in _RELEASE_VERIFICATION:
         raise ValueError(
-            f"managed provider contract {provider}: release_channel.verification must be one of " f"{sorted(_RELEASE_VERIFICATION)}"
+            f"managed provider contract {provider}: release_channel.verification must be one of {sorted(_RELEASE_VERIFICATION)}"
         )
     expected_discovery, expected_verification = _RELEASE_CHANNEL_POLICY[channel]
     if (release["version_discovery"], release["verification"]) != (expected_discovery, expected_verification):
@@ -412,8 +406,7 @@ def _validate_release_channel(item: dict[str, Any]) -> None:
     unknown_platforms = set(artifacts) - _PLATFORM_ARTIFACT_KEYS
     if unknown_platforms:
         raise ValueError(
-            f"managed provider contract {provider}: release_channel.platform_artifacts has unknown platforms "
-            f"{sorted(unknown_platforms)}"
+            f"managed provider contract {provider}: release_channel.platform_artifacts has unknown platforms {sorted(unknown_platforms)}"
         )
     if not all(
         (isinstance(value, str) and value.strip())

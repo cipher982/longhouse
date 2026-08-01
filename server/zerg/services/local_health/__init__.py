@@ -591,7 +591,6 @@ def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = F
         observed_at=now,
         capability_proof_records=capability_proof_records,
         provider_executable_identities=provider_executable_identities,
-        trusted_capability_artifact_ids=trusted_runtime_proofs.trusted_artifact_ids,
     )
     managed_session_ids = {
         session_id

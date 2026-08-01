@@ -60,10 +60,7 @@ def test_declared_rich_provider_gaps_have_specific_reason_codes():
         assert coverage["switch_actor"].state == ActionCoverageState.UNKNOWN
         assert coverage["switch_actor"].reason_code == ActionCoverageReasonCode.PROVIDER_ACTOR_SWITCH_UNMAPPED
         assert coverage["background_task_status"].state == ActionCoverageState.UNKNOWN
-        assert (
-            coverage["background_task_status"].reason_code
-            == ActionCoverageReasonCode.PROVIDER_BACKGROUND_STATUS_UNPROVEN
-        )
+        assert coverage["background_task_status"].reason_code == ActionCoverageReasonCode.PROVIDER_BACKGROUND_STATUS_UNPROVEN
 
 
 def test_contract_false_operation_derives_unsupported_without_manual_matrix_cell():
@@ -75,9 +72,16 @@ def test_contract_false_operation_derives_unsupported_without_manual_matrix_cell
 
 
 def test_antigravity_send_prompt_follows_executable_contract_not_old_orchestration_label():
+    """Still the same principle -- coverage follows the contract, not a label.
+
+    The contract changed: antigravity's send_input is policy_disabled as of
+    2026-07-31 (Longhouse routes no control to a Shadow-only provider), so the
+    derived coverage must now report unsupported rather than supported.
+    """
+
     coverage = derive_provider_action_coverage("antigravity")
 
-    assert coverage["send_prompt"].state == ActionCoverageState.SUPPORTED
+    assert coverage["send_prompt"].state == ActionCoverageState.UNSUPPORTED
 
 
 def test_opencode_subagent_support_is_derived_from_required_harness_assertions():

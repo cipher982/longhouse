@@ -6,6 +6,8 @@
  * Add new providers here when onboarding them.
  */
 
+import { GENERATED_PROVIDER_CAPABILITIES } from "../generated/provider-capabilities";
+
 export type LaunchProviderId = "claude" | "codex" | "opencode" | "antigravity" | "cursor";
 
 export type LaunchProviderSupport = {
@@ -34,73 +36,63 @@ export type LaunchProviderSupport = {
   telemetryQuality: "rich" | "structured" | "basic";
 };
 
-const LAUNCH_PROVIDER_SUPPORT: Record<LaunchProviderId, LaunchProviderSupport> = {
+// Presentation and provenance facts the provider contract cannot answer. The
+// capability claims that it CAN answer -- launchAndSend, interrupt,
+// steerMidTurn, resume, cloudSessionStart, nativeLaunchCommand -- are generated
+// into ../generated/provider-capabilities.ts and merged below, because this
+// table drifted from the contract twice (4402f99ea, 6432e21fa) while its own
+// header claimed to mirror it.
+const LAUNCH_PROVIDER_PRESENTATION: Record<LaunchProviderId, Omit<LaunchProviderSupport, "id" | "launchAndSend" | "interrupt" | "steerMidTurn" | "resume" | "cloudSessionStart" | "nativeLaunchCommand">> = {
   claude: {
-    id: "claude",
-    nativeLaunchCommand: "longhouse claude",
     marketingName: "Claude Code",
-    launchAndSend: true,
-    interrupt: true,
-    steerMidTurn: true,
-    resume: true,
     archiveVisibility: "live",
-    cloudSessionStart: "live",
     hooksSupport: "live",
     telemetryQuality: "rich",
   },
   codex: {
-    id: "codex",
-    nativeLaunchCommand: "longhouse codex",
     marketingName: "Codex CLI",
-    launchAndSend: true,
-    interrupt: true,
-    steerMidTurn: true,
-    resume: true,
     archiveVisibility: "live",
-    cloudSessionStart: "live",
     hooksSupport: "none",
     telemetryQuality: "structured",
   },
   opencode: {
-    id: "opencode",
-    nativeLaunchCommand: "longhouse opencode",
     marketingName: "OpenCode",
-    launchAndSend: true,
-    interrupt: true,
-    steerMidTurn: false,
-    resume: false,
     archiveVisibility: "live",
-    cloudSessionStart: "live",
     hooksSupport: "none",
     telemetryQuality: "structured",
   },
   antigravity: {
-    id: "antigravity",
-    nativeLaunchCommand: null,
     marketingName: "Antigravity CLI",
-    launchAndSend: true,
-    interrupt: false,
-    steerMidTurn: false,
-    resume: false,
     archiveVisibility: "live",
-    cloudSessionStart: "none",
     hooksSupport: "none",
     telemetryQuality: "structured",
   },
   cursor: {
-    id: "cursor",
-    nativeLaunchCommand: "longhouse cursor",
     marketingName: "Cursor Agent",
-    launchAndSend: true,
-    interrupt: true,
-    steerMidTurn: false,
-    resume: true,
     archiveVisibility: "live",
-    cloudSessionStart: "live",
     hooksSupport: "live",
     telemetryQuality: "structured",
   },
 };
+
+const LAUNCH_PROVIDER_SUPPORT: Record<LaunchProviderId, LaunchProviderSupport> = Object.fromEntries(
+  (Object.keys(LAUNCH_PROVIDER_PRESENTATION) as LaunchProviderId[]).map((id) => {
+    const generated = GENERATED_PROVIDER_CAPABILITIES[id];
+    return [
+      id,
+      {
+        id,
+        nativeLaunchCommand: generated.nativeLaunchCommand,
+        launchAndSend: generated.launchAndSend,
+        interrupt: generated.interrupt,
+        steerMidTurn: generated.steerMidTurn,
+        resume: generated.resume,
+        cloudSessionStart: generated.cloudSessionStart,
+        ...LAUNCH_PROVIDER_PRESENTATION[id],
+      },
+    ];
+  }),
+) as Record<LaunchProviderId, LaunchProviderSupport>;
 
 /** Map deprecated provider ids to their canonical successor. */
 export function canonicalProvider(provider: string): string {

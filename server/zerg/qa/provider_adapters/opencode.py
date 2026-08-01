@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-import base64
-import http.server
 import json
-import threading
 from typing import Any
 from typing import Mapping
 
+from zerg.qa.universal_agent_harness import STATUS_BLOCKED
 from zerg.qa.universal_agent_harness import STATUS_FAIL
 from zerg.qa.universal_agent_harness import STATUS_PASS
 from zerg.qa.universal_agent_harness import EvidencePackage
@@ -248,112 +246,21 @@ class OpenCodeHarnessAdapter(UniversalProviderAdapter):
         return consume_live_reset_artifact(self, package, provider="opencode") or super().conversation_reset(package)
 
     def permission_prompt(self, package: EvidencePackage) -> dict[str, Any]:
-        from zerg.cli.opencode_bridge import permission_reply
-        from zerg.services.opencode_bridge_state import write_opencode_bridge_state
-
-        request_id = "perm-universal-opencode"
-        decision = "allow"
-        session_id = self._session_id(package)
-        state_root = package.path("opencode-bridge-state")
-        username = "opencode"
-        password = "universal-permission-secret"
-        requests: list[dict[str, Any]] = []
-        expected_auth = "Basic " + base64.b64encode(f"{username}:{password}".encode()).decode()
-
-        class Handler(http.server.BaseHTTPRequestHandler):
-            def log_message(self, *_args: Any) -> None:
-                return
-
-            def do_POST(self) -> None:
-                length = int(self.headers.get("Content-Length") or "0")
-                raw_body = self.rfile.read(length) if length else b"{}"
-                try:
-                    body = json.loads(raw_body.decode("utf-8") or "{}")
-                except json.JSONDecodeError:
-                    body = {"_decode_error": raw_body.decode("utf-8", errors="replace")}
-                requests.append(
-                    {
-                        "path": self.path,
-                        "authorization_ok": self.headers.get("Authorization") == expected_auth,
-                        "body": body,
-                    }
-                )
-                status = 204 if self.path == f"/permission/{request_id}/reply" else 404
-                self.send_response(status)
-                self.send_header("Content-Length", "0")
-                self.end_headers()
-
-        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-        server_url = f"http://127.0.0.1:{server.server_address[1]}"
-        state_path = write_opencode_bridge_state(
-            session_id=session_id,
-            server_url=server_url,
-            server_username=username,
-            server_password=password,
-            cwd=str(package.root),
-            opencode_pid=None,
-            opencode_session_id="opencode-permission-session",
-            state_root=state_root,
-        )
-        try:
-            permission_reply(
-                session_id=session_id,
-                request_id=request_id,
-                decision=decision,
-                state_root=state_root,
-                config_dir=None,
-                wait_secs=0.0,
-            )
-            command_error = None
-        except Exception as exc:
-            command_error = f"{type(exc).__name__}: {exc}"
-        finally:
-            server.shutdown()
-            server.server_close()
-            thread.join(timeout=5)
-
-        request = requests[0] if requests else {}
-        assertions = {
-            "request_received": bool(requests),
-            "request_path_matches": request.get("path") == f"/permission/{request_id}/reply",
-            "decision_forwarded": (request.get("body") or {}).get("decision") == decision,
-            "auth_header_matches_state": request.get("authorization_ok") is True,
-            "command_returned": command_error is None,
-        }
-        passed = all(assertions.values())
-        raw_path = package.write_json(
-            "raw/opencode-permission-reply.json",
-            {
-                "server_url": server_url,
-                "state_path": str(state_path),
-                "session_id": session_id,
-                "request_id": request_id,
-                "decision": decision,
-                "requests": requests,
-                "command_error": command_error,
-            },
-        )
-        operation_evidence = {
-            "permission_prompt": {
-                "status": STATUS_PASS if passed else STATUS_FAIL,
-                "level": "hermetic",
-                "canary": "opencode_bridge_permission_reply",
-                "failure_code": None if passed else "opencode_permission_reply_failed",
-            }
-        }
         payload = {
-            "status": STATUS_PASS if passed else STATUS_FAIL,
+            "status": STATUS_BLOCKED,
             "scenario": "permission_prompt",
-            "assertions": assertions,
-            "raw_permission_reply_path": str(raw_path),
-            "operation_evidence": operation_evidence,
-            "proof_scope": "opencode_bridge_permission_reply",
+            "failure_code": "opencode_native_permission_canary_required",
+            "message": ("The Python permission bridge was retired; this action needs evidence from the native OpenCode control adapter."),
+            "operation_evidence": {
+                "permission_prompt": {
+                    "status": STATUS_BLOCKED,
+                    "level": "hermetic",
+                    "canary": "opencode_native_permission_canary_required",
+                    "failure_code": "opencode_native_permission_canary_required",
+                }
+            },
+            "proof_scope": "opencode_native_permission_canary_required",
         }
-        if not passed:
-            payload["failure_code"] = "opencode_permission_reply_failed"
-            payload["message"] = "OpenCode bridge permission-reply transport did not pass."
         package.write_json("assertions/permission_prompt.json", payload)
         return payload
 

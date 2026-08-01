@@ -70,7 +70,9 @@ describe("providers launch support", () => {
     ).toBe(true);
     expect(
       providers
-        .filter((provider) => ["claude", "codex", "cursor", "opencode", "antigravity"].includes(provider.id))
+        // Antigravity dropped out: it is Shadow-only, so it can be archived but
+        // not launched or sent to.
+        .filter((provider) => ["claude", "codex", "cursor", "opencode"].includes(provider.id))
         .every((provider) => provider.launchAndSend),
     ).toBe(true);
   });
@@ -109,7 +111,9 @@ describe("providers launch support", () => {
       hooksSupport: "none",
     });
     expect(getLaunchProviderSupport("antigravity")).toMatchObject({
-      launchAndSend: true,
+      // Shadow-only: send_input is policy_disabled in the contract and the
+      // engine no longer advertises antigravity.send.
+      launchAndSend: false,
       interrupt: false,
       steerMidTurn: false,
       resume: false,

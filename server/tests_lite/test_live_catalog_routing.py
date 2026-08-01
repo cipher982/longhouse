@@ -310,7 +310,13 @@ def test_directed_input_delivery_links_real_input_receipt(monkeypatch, provider)
     assert response["input_receipt"]["status"] == "delivered"
     assert observed["method"] == "directed_input.link_receipt.v2"
     assert observed["params"]["owner_id"] == 7
-    assert observed["input"].intent == "auto"
+    # Regression: this previously asserted "auto" for an idle target, which is
+    # the bug. `auto` dispatches live and fails terminally when the control
+    # channel is down, so a message to an idle peer was dropped while the same
+    # message to a busy peer was queued safely. Directed input is always
+    # durable now; the target's phase decides when it lands, not whether it
+    # survives.
+    assert observed["input"].intent == "queue"
     assert '"type":"longhouse_directed_input"' in observed["input"].text
 
 

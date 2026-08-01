@@ -44,6 +44,13 @@ sessions.
   through `LONGHOUSE_CODEX_BRIDGE_TOKEN`; managed Codex bridge argv must not
   contain the device token.
 - The Rust bridge starts `codex app-server`, fronts it with `engine/src/codex_ws_relay.rs`, and attaches the TUI with `codex --enable tui_app_server --remote ...`.
+- The bridge supplies the Longhouse coordination MCP through process-scoped
+  Codex `-c mcp_servers.longhouse.*` overrides. Managed launch must never add or
+  replace a Longhouse section in the user's `~/.codex/config.toml`.
+- Default managed Codex approval posture is `provider_local`: Codex owns its
+  local approval UI and Longhouse does not mint remote hook authority. The
+  explicit dangerous bypass flag records `bypass`; Codex has no
+  `remote_approve` path until a real remote permission transport exists.
 - Bridge state, logs, lock sidecars, and IPC sockets live under `~/.longhouse/managed-local/codex-bridge/` unless overridden.
 - Hook scripts such as `longhouse-codex-hook.sh` are Longhouse hook scripts, not provider binaries.
 
@@ -100,12 +107,18 @@ Hard Codex contract:
 
 - Start from the same ownership rule: Longhouse can own the wrapper/control path, but the provider CLI remains user-owned unless the product decision explicitly changes.
 - Do not infer one provider's liveness/control model from another provider. Split behavior when the provider mechanics differ.
-- Antigravity has a managed local wrapper plus a hook-inbox adapter. The named
-  control plane is `antigravity_hook_inbox`; advertise `antigravity.send`
-  only when a real `agy` loop canary proves active hooks claim pending input
-  and the assistant response includes the injected marker. Do not advertise
-  Antigravity Console execution, reattach, interrupt, or active-turn steer until a
-  stable provider surface proves those semantics.
+- Antigravity is Shadow-only. Ingest, archive, and transcript projection keep
+  working; Longhouse routes no control to it. As of 2026-07-31 the contract
+  records `send_input` as `policy_disabled` with `routed_to:
+  shadow_archive_only`, `machine_control_supports` is empty, and the engine's
+  `reject_excluded_provider` refuses every antigravity command with
+  `provider_shadow_only` before dispatch.
+  The named control plane is still `antigravity_hook_inbox` for archive
+  purposes. The hook-inbox injection itself was proven by a real `agy` loop
+  canary; the product simply does not route there, which is why the operation
+  is `policy_disabled` rather than `not_implemented`. Do not re-advertise
+  `antigravity.send`, Console execution, reattach, interrupt, or active-turn
+  steer unless the product decision changes.
 
 ## Workflows
 

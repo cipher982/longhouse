@@ -1,6 +1,6 @@
 [project]
 name = "longhouse"
-version = "0.1.30"
+version = "0.1.31"
 description = "Keep Claude Code, Codex CLI, and Antigravity CLI sessions in one searchable timeline."
 authors = [
     {name = "David Rose", email = "david.github@drose.io"}
@@ -102,6 +102,9 @@ exclude = [
 # checkout above it nor the image's /schemas, so without this the endpoint
 # 500s for every self-hoster.
 "../schemas/managed_providers.yml" = "zerg/_config/managed_providers.yml"
+# Which `longhouse <provider>` commands exist. `longhouse onboard` reads this
+# to avoid suggesting an excluded entrypoint, and it runs from the wheel.
+"../config/native_device_entrypoints.json" = "zerg/_config/native_device_entrypoints.json"
 # Bundle the frontend dist into the package for pip install deployment
 # This allows `longhouse serve` to serve the UI without needing the repo
 "../web/dist" = "zerg/_frontend_dist"

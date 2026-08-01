@@ -205,6 +205,7 @@ struct APISessionControlFacts: Codable, Hashable, Sendable {
     let connectionId: JSONValue?
     let leaseGeneration: String?
     let controlPlane: String?
+    let terminalAttached: Bool?
     let observedAt: String?
     let validUntil: String?
     let actions: APISessionControlActions
@@ -279,6 +280,7 @@ struct APISessionStateFacts: Codable, Hashable, Sendable {
     let pendingInteraction: APISessionPendingInteractionFacts?
     let transcript: APISessionTranscriptFacts
     let host: APISessionHostFacts
+    let workingSet: String?
     let presentation: APISessionPresentation
     let commitSeq: Int?
 }

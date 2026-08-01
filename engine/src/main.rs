@@ -8,6 +8,7 @@ mod claude_print;
 mod codex_app_server_canary;
 mod codex_attachments;
 mod codex_bridge;
+mod codex_bridge_ownership;
 mod codex_exec;
 mod codex_source;
 mod codex_teardown;
@@ -31,11 +32,14 @@ mod flight;
 mod heartbeat;
 mod machine_presence;
 mod managed_antigravity_scan;
+mod managed_launch_payload;
 mod managed_bridge_scan;
 mod managed_claude_scan;
 mod managed_contract_janitor;
 mod managed_cursor_helm_scan;
+mod managed_launch_lifecycle;
 mod managed_opencode_scan;
+mod managed_terminal;
 mod media_redaction;
 mod media_upload;
 mod observability;
@@ -923,6 +927,11 @@ enum CodexBridgeCommands {
         #[arg(long, default_value = "tui")]
         launch_mode: String,
 
+        /// Pid of the CLI wrapper launching this bridge. The bridge exits once
+        /// neither this wrapper nor a provider terminal remains.
+        #[arg(long)]
+        owner_pid: Option<u32>,
+
         #[arg(long)]
         json: bool,
     },
@@ -1006,6 +1015,11 @@ enum CodexBridgeCommands {
         /// Persisted lifecycle mode for this bridge.
         #[arg(long, default_value = "tui")]
         launch_mode: String,
+
+        /// Pid of the CLI wrapper launching this bridge. The bridge exits once
+        /// neither this wrapper nor a provider terminal remains.
+        #[arg(long)]
+        owner_pid: Option<u32>,
     },
 
     /// Attach stock Codex TUI to a running managed bridge
@@ -1889,6 +1903,7 @@ fn main() -> anyhow::Result<()> {
                     resume_thread_id,
                     resume_thread_path,
                     launch_mode,
+                    owner_pid,
                     json,
                 } => {
                     let token = require_codex_bridge_token_env()?;
@@ -1915,6 +1930,7 @@ fn main() -> anyhow::Result<()> {
                         hold_permission_requests,
                         state_root,
                         longhouse_home,
+                        owner_pid,
                         log_file,
                         start_timeout_secs,
                         create_initial_thread,
@@ -1962,10 +1978,12 @@ fn main() -> anyhow::Result<()> {
                     resume_thread_id,
                     resume_thread_path,
                     launch_mode,
+                    owner_pid,
                 } => {
                     let token = require_codex_bridge_token_env()?;
                     let launch_mode = parse_codex_bridge_launch_mode(&launch_mode)?;
                     rt.block_on(cmd_codex_bridge_run(BridgeRunConfig {
+                        owner_pid,
                         session_id,
                         run_id,
                         connection_id,

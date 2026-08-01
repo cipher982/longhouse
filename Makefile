@@ -17,7 +17,7 @@ CLAUDE_AGENTS_TOKEN ?=
 CLAUDE_DEVICE_ID ?=
 PERF_PROOF_OUTPUT ?= artifacts/perf-proof/perf-proof.json
 
-.PHONY: help check-push-readiness dev dev-demo stop test test-session-state test-ios test-ios-perf test-ios-session-open profile-ios-live-cold benchmark-ios-transcript ios-marketing test-mobile-chat test-mobile-chat-stress test-mobile-chat-replay test-ios-helper test-frontend test-engine test-codex-console-warm-canary test-claude-console-live-canary test-cursor-console-live-canary test-opencode-console-live-canary test-opencode-console-product-e2e test-cursor-helm-gate0 test-cursor-helm-product-e2e test-cursor-helm-gate0-unit test-runner test-e2e test-e2e-core test-e2e-a11y test-e2e-single test-ci test-full install-engine install-cli validate validate-ws validate-tools validate-sdk validate-ios-api validate-provider-brands validate-makefile validate-build-identity validate-public-surface validate-managed-codex-contract validate-managed-session-contract validate-session-state-contract validate-provider-census validate-provider-factory-plan validate-session-state-fault-matrix validate-session-state-deep-health validate-no-python-device-path validate-provider-cli-canaries validate-ship-monitor provider-release-proof provider-release-proof-accept provider-release-proof-diff provider-release-proof-old-new provider-release-proof-staged-old-new provider-release-proof-universal-smoke provider-release-proof-status provider-release-proof-status-all provider-release-proof-maturity regen-ws generate-tools generate-sdk generate-ios-api generate-provider-brands generate-provider-census generate-provider-factory-plan qa-live hosted-shipper-mixed-bench qa-unmanaged render-canary session-propagation-sla managed-claude-truth-probe managed-claude-poc provider-live-route-e2e provider-live-route-e2e-opencode-transcript reprovision deploy-status launch-readiness ship-watch ship release ui-capture marketing-screenshots demo-render qa-ui-workbench qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-visual-compare test-shipper-e2e test-shipper-synthetic-bench test-shipper-premerge test-wheel-package test-install test-install-first-run test-install-macos-ambient test-install-runner test-hosted-instance test-web-entrypoint test-runtime-packaging-macos test-e2e-onboarding test-readmes test-codex-bridge-e2e test-hooks onboarding-funnel launch-gate-local lint-test-patterns import-smoke ensure-js-deps ensure-playwright-browser demo-db menubar-harness qa-oss vibetest dogfood dogfood-refresh dogfood-check observability-up observability-down
+.PHONY: help check-push-readiness dev dev-demo stop test test-session-state test-ios test-ios-perf test-ios-session-open profile-ios-live-cold benchmark-ios-transcript ios-marketing test-mobile-chat test-mobile-chat-stress test-mobile-chat-replay test-ios-helper test-frontend test-engine test-codex-console-warm-canary test-claude-console-live-canary test-cursor-console-live-canary test-opencode-console-live-canary test-opencode-console-product-e2e test-cursor-helm-gate0 test-cursor-helm-product-e2e test-cursor-helm-gate0-unit test-runner test-e2e test-e2e-core test-e2e-a11y test-e2e-single test-ci test-full install-engine install-cli validate validate-ws validate-tools validate-sdk validate-ios-api validate-provider-brands validate-makefile validate-build-identity validate-public-surface validate-managed-codex-contract validate-managed-session-contract validate-session-state-contract validate-managed-provider-contracts validate-provider-capabilities generate-provider-capabilities validate-provider-census validate-provider-factory-plan validate-session-state-fault-matrix validate-session-state-deep-health validate-no-python-device-path validate-provider-cli-canaries validate-ship-monitor provider-release-proof provider-release-proof-accept provider-release-proof-diff provider-release-proof-old-new provider-release-proof-staged-old-new provider-release-proof-universal-smoke provider-release-proof-status provider-release-proof-status-all provider-release-proof-maturity regen-ws generate-tools generate-sdk generate-ios-api generate-provider-brands generate-provider-census generate-provider-factory-plan qa-live hosted-shipper-mixed-bench qa-unmanaged render-canary session-propagation-sla managed-claude-truth-probe managed-claude-poc provider-live-route-e2e provider-live-route-e2e-opencode-transcript reprovision deploy-status launch-readiness ship-watch ship release ui-capture marketing-screenshots demo-render qa-ui-workbench qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-visual-compare test-shipper-e2e test-shipper-synthetic-bench test-shipper-premerge test-wheel-package test-managed-launch-lifecycle test-install test-install-first-run test-install-macos-ambient test-install-runner test-hosted-instance test-web-entrypoint test-runtime-packaging-macos test-e2e-onboarding test-readmes test-codex-bridge-e2e test-hooks onboarding-funnel launch-gate-local lint-test-patterns import-smoke ensure-js-deps ensure-playwright-browser demo-db menubar-harness qa-oss vibetest dogfood dogfood-refresh dogfood-check observability-up observability-down
 .PHONY: test-antigravity-conversation-reset test-claude-conversation-reset test-codex-conversation-reset test-cursor-conversation-reset test-opencode-conversation-reset
 .PHONY: validate-dogfood-runtime test-storage-v2-b2 test-shipper-synthetic-live-bench
 .PHONY: validate-playwright-install
@@ -249,7 +249,13 @@ test-frontend: ## Frontend unit tests + type-check (~15s)
 test-engine: ## Rust engine tests (~20s)
 	@python3 scripts/build/generate_build_identity.py
 	cd engine && cargo build --profile $(or $(CARGO_PROFILE),release)
-	cd engine && cargo test --profile $(or $(CARGO_PROFILE),release) --bin longhouse-engine --test managed_teardown --test golden_parser_contract --test adversarial_parser --test coordination_mcp_handshake --test cursor_native_hooks
+	@# --bin longhouse is load-bearing: engine/src/longhouse.rs is a second bin
+	@# target holding launch_managed_claude/opencode/codex, and every cargo test
+	@# in this repo passed only --bin longhouse-engine, so its tests -- including
+	@# the only coordination-token scoping assertion -- had never run in CI. The
+	@# identical iOS scheme drift is documented above; the Rust lane had the same
+	@# hole.
+	cd engine && cargo test --profile $(or $(CARGO_PROFILE),release) --bin longhouse-engine --bin longhouse --test managed_teardown --test golden_parser_contract --test adversarial_parser --test coordination_mcp_handshake --test cursor_native_hooks
 
 test-codex-console-warm-canary: ## Real stock-Codex Console warm-path canary
 	@python3 scripts/build/generate_build_identity.py
@@ -404,6 +410,13 @@ test-full: ## Full suite — all tiers (~8min)
 	$(MAKE) test-e2e
 
 # CI-referenced test helpers (keep for workflow compatibility)
+test-managed-launch-lifecycle: ## @internal Real Runtime Host + real `longhouse <provider>` launch
+	@# The one lane where a real FastAPI server answers a real launcher. The
+	@# installer smoke traps python/uv on purpose, so its fake Runtime Host
+	@# cannot refuse anything -- which is why five days of a dead
+	@# `longhouse cursor` looked identical to five working ones.
+	@./scripts/ci/managed-launch-lifecycle-smoke.sh
+
 test-install: ## Installer syntax + first-run smoke
 	@bash -n scripts/install.sh
 	@bash scripts/ci/native-installer-smoke.sh
@@ -476,6 +489,8 @@ validate: ## Run all contract checks
 	@$(MAKE) validate-managed-codex-contract
 	@$(MAKE) validate-managed-session-contract
 	@$(MAKE) validate-session-state-contract
+	@$(MAKE) validate-managed-provider-contracts
+	@$(MAKE) validate-provider-capabilities
 	@$(MAKE) validate-provider-census
 	@$(MAKE) validate-provider-factory-plan
 	@$(MAKE) validate-session-state-fault-matrix
@@ -517,6 +532,19 @@ validate-managed-session-contract: ## @internal Guard managed provider session c
 
 validate-session-state-contract: ## @internal Guard canonical session-state vocabulary and generated client DTOs
 	@uv run --no-project --with pyyaml python scripts/generate_session_state_contract.py --check
+
+validate-managed-provider-contracts: ## @internal Guard the generated managed-provider contract manifest
+	@# The engine include_str!s server/zerg/config/managed_provider_contracts.json,
+	@# so the entire Rust-side provider authority rests on this generated file.
+	@# The generator had a --check mode and no caller anywhere in the repo.
+	@cd server && uv run python ../scripts/generate_managed_provider_contracts.py --check
+
+generate-provider-capabilities: ## @internal Regenerate the web provider capability claims from the contract
+	@python3 scripts/generate/provider_capabilities_ts.py
+
+validate-provider-capabilities: ## @internal Guard the generated web provider capability claims
+	@# web/src/lib/providers.ts hand-mirrored the contract and drifted twice.
+	@python3 scripts/generate/provider_capabilities_ts.py --check
 
 validate-provider-census: ## @internal Guard the provider-name-literal census artifact
 	@uv run --no-project --with pyyaml python scripts/generate_provider_census.py --check

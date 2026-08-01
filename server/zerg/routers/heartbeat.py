@@ -63,6 +63,7 @@ from zerg.services.managed_control_state import mark_missing_managed_control_lea
 from zerg.services.managed_control_state import refresh_managed_control_lease_health
 from zerg.services.managed_control_state import upsert_live_control_leases
 from zerg.services.managed_control_state import upsert_managed_control_leases
+from zerg.services.managed_provider_contracts import factory_provider_names
 from zerg.services.session_kernel_projection import project_provider_session_id
 from zerg.services.session_runtime import RuntimeEventIngest
 from zerg.services.session_runtime import ingest_runtime_events
@@ -86,12 +87,29 @@ MAX_MANAGED_SESSION_LEASE_TTL_MS = 60 * 60 * 1000
 MAX_MACHINE_EVIDENCE_FACTS_PER_FAMILY = 2_048
 MAX_REDUCER_EVIDENCE_FACTS = 256
 MANAGED_SESSION_LEASE_STATES = {"attached", "detached", "degraded"}
-MANAGED_SESSION_LEASE_PROVIDERS = {"codex", "claude", "opencode", "antigravity"}
+# Metric label bucketing only (see _managed_lease_provider_label). Derived so a
+# provider cannot ship first-tier and have its leases reported as "other",
+# which is what happened to Cursor for 31 days.
+MANAGED_SESSION_LEASE_PROVIDERS = factory_provider_names(include_maintenance=True)
 CODEX_ROLLOUT_ID_RE = re.compile(r"^rollout-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-(.+)$")
 # One Codex phase freshness window. A complete process snapshot can close
 # unbound sessions only after their last phase/progress signal is no longer
 # current.
-MISSING_UNBOUND_UNMANAGED_PROVIDERS = {"claude", "codex", "antigravity"}
+# Named policy, NOT derived from the provider contract: this gates closing a
+# Shadow session because it is absent from a "complete" process snapshot, so it
+# may only contain providers the engine's scanner can actually see. Adding a
+# provider the engine cannot observe would close every live session of that
+# provider after the grace period.
+#
+# Authority is engine/src/unmanaged_bindings.rs
+# (provider_from_argv0_basename / provider_from_node_script). OpenCode is
+# emitted there and was missing here for 87 days, so unmanaged OpenCode
+# sessions were observed and never closed. Cursor is deliberately absent: the
+# engine has no cursor branch and cursor transcripts live in SQLite rather than
+# per-session files, so absence from a snapshot is not evidence its process is
+# gone. Closing that gap is engine work, tracked separately.
+MISSING_UNBOUND_UNMANAGED_PROVIDERS = {"claude", "codex", "antigravity", "opencode"}
+UNMANAGED_PROCESS_SNAPSHOT_UNCOVERED_PROVIDERS = {"cursor"}
 UNBOUND_UNMANAGED_CLOSE_GRACE = timedelta(seconds=90)
 _HOT_HEARTBEAT_QUEUE_TIMEOUT_SECONDS = 2.0
 _HEARTBEAT_BOOKKEEPING_EXEC_TIMEOUT_SECONDS = 5.0
@@ -209,6 +227,11 @@ class ControlEvidenceIn(UTCBaseModel):
     provider_session_id: str | None = Field(None, max_length=255)
     ownership: Literal["managed"]
     state: Literal["attached", "detached", "degraded"]
+    # Whether a human terminal is attached right now. Independent of `state`: a
+    # bridge can hold a healthy control path with no terminal on it. None means
+    # the provider cannot observe attachment, which is not the same as
+    # observing that nothing is attached.
+    terminal_attached: bool | None = None
     bridge_status: str | None = Field(None, max_length=64)
     thread_subscription_status: str | None = Field(None, max_length=64)
     lease_ttl_ms: int = Field(..., ge=1, le=MAX_MANAGED_SESSION_LEASE_TTL_MS)

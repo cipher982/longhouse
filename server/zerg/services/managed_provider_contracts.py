@@ -90,6 +90,7 @@ class ManagedProviderContract:
     can_resume: bool = False
     console_adapter: str | None = None
     turn_start: bool = False
+    live_proof: bool = False
     # Expected machine-control channel operation names. The engine still owns
     # the live supports[] handshake; this field documents the provider ceiling.
     machine_control_supports: tuple[str, ...] = ()
@@ -107,13 +108,36 @@ class ManagedProviderContract:
     def connection_capabilities(self) -> dict[str, int]:
         # SessionConnection.can_resume is the host reattach bit. The provider
         # contract's can_resume flag records provider-native resume support.
+        #
+        # send/interrupt/terminate are remote-control capabilities: the value a
+        # client reads to decide whether to offer the control. They are only
+        # true when the machine control channel will actually carry the command,
+        # which is `machine_control_supports`, not the bare operation flag.
+        # Claude and Codex declare `terminate: true` and carry no
+        # `<provider>.terminate` support, so the flag advertised a control the
+        # dispatcher refuses before the engine is ever contacted
+        # (managed_control_dispatcher.py `_session_uses_engine_control`).
+        # tail_output and resume have no machine-control operation; they stay on
+        # the flag.
         return {
-            "can_send_input": int(self.send_input),
-            "can_interrupt": int(self.interrupt),
-            "can_terminate": int(self.terminate),
+            "can_send_input": int(self.dispatchable_operation("send_input")),
+            "can_interrupt": int(self.dispatchable_operation("interrupt")),
+            "can_terminate": int(self.dispatchable_operation("terminate")),
             "can_tail_output": int(self.tail_output),
             "can_resume": int(self.reattach),
         }
+
+    def dispatchable_operation(self, operation: str) -> bool:
+        """Whether the operation flag is set AND some advertised machine-control
+        support maps to it, i.e. whether a remote command can actually be
+        dispatched for it."""
+
+        if not self.supports_contract_operation(operation):
+            return False
+        return any(
+            MACHINE_CONTROL_SUPPORT_OPERATION_BY_SUFFIX.get(support.partition(".")[2]) == operation
+            for support in self.machine_control_supports
+        )
 
     def operation_evidence_for(self, operation: str) -> Mapping[str, str]:
         return self.operation_evidence.get(operation, {})
@@ -198,6 +222,7 @@ def _contract_from_manifest_item(item: dict[str, object]) -> ManagedProviderCont
         can_resume=bool(item.get("can_resume", False)),
         console_adapter=(str(item["console_adapter"]) if item.get("console_adapter") else None),
         turn_start=bool(item.get("turn_start", False)),
+        live_proof=bool(item.get("live_proof", False)),
         machine_control_supports=tuple(str(value) for value in item.get("machine_control_supports") or ()),
         operation_evidence={
             str(operation): {str(key): str(value) for key, value in dict(evidence).items()}
@@ -386,3 +411,17 @@ def machine_control_capability_for_command(provider: str | None, command_type: s
     if contract is None or operation is None:
         return None
     return contract.machine_control_capability_for_operation(operation)
+
+
+def live_proof_supported_providers() -> tuple[str, ...]:
+    """Providers `provider.live_proof` can actually run for.
+
+    Three hand-copies disagreed: `provider_live_proof.py` and the Pydantic
+    Literal on the public request body both said claude/opencode/antigravity,
+    while `control_channel.rs` -- the side that executes it -- said
+    claude/opencode. `provider_live_canary.py` implements exactly those two, so
+    the Rust set was right and the request body accepted a provider that always
+    failed `provider_unsupported`.
+    """
+
+    return tuple(contract.provider for contract in _CONTRACTS if contract.live_proof)

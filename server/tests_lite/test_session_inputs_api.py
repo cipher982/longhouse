@@ -126,16 +126,11 @@ def test_live_failed_input_summary_preserves_typed_error():
             status=INPUT_STATUS_FAILED,
             client_request_id="request-failed-1",
             archive_session_input_id=None,
-            error_json=(
-                '{"code":"claude_lifecycle_hook_missing",'
-                '"message":"run `longhouse claude configure`"}'
-            ),
+            error_json=('{"code":"claude_lifecycle_hook_missing","message":"run `longhouse claude configure`"}'),
         )
     )
 
-    assert summary.last_error == (
-        "claude_lifecycle_hook_missing: run `longhouse claude configure`"
-    )
+    assert summary.last_error == ("claude_lifecycle_hook_missing: run `longhouse claude configure`")
 
 
 def _seed_live_runtime_state(db, session, *, phase: str = "idle") -> None:
@@ -329,12 +324,8 @@ def _seed_machine_control_session(
         session = db.query(AgentSession).filter_by(id=session_id).one()
         session.provider = provider
         session.device_id = device_id
-        db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == session.id).delete(
-            synchronize_session=False
-        )
-        thread = (
-            db.query(SessionThread).filter(SessionThread.session_id == session.id, SessionThread.is_primary == 1).one()
-        )
+        db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == session.id).delete(synchronize_session=False)
+        thread = db.query(SessionThread).filter(SessionThread.session_id == session.id, SessionThread.is_primary == 1).one()
         thread.provider = provider
         run = db.query(SessionRun).filter(SessionRun.thread_id == thread.id, SessionRun.ended_at.is_(None)).one()
         run.provider = provider
@@ -375,11 +366,7 @@ def _wait_for_turn_input_link(session_local, *, session_id, request_id: str, tim
     last_turn = None
     while time.monotonic() < deadline:
         with session_local() as db:
-            turn = (
-                db.query(SessionTurn)
-                .filter(SessionTurn.session_id == session_id, SessionTurn.request_id == request_id)
-                .one_or_none()
-            )
+            turn = db.query(SessionTurn).filter(SessionTurn.session_id == session_id, SessionTurn.request_id == request_id).one_or_none()
             if turn is not None:
                 last_turn = SimpleNamespace(
                     session_input_id=turn.session_input_id,
@@ -660,9 +647,7 @@ def test_auto_input_links_session_turn_to_verified_user_event(monkeypatch, tmp_p
             assert row.delivery_request_id
 
             turn = (
-                db.query(SessionTurn)
-                .filter(SessionTurn.session_id == session_id, SessionTurn.request_id == row.delivery_request_id)
-                .one()
+                db.query(SessionTurn).filter(SessionTurn.session_id == session_id, SessionTurn.request_id == row.delivery_request_id).one()
             )
             assert turn.session_input_id == row.id
             assert turn.user_event_id is not None
@@ -674,7 +659,7 @@ def test_auto_input_links_session_turn_to_verified_user_event(monkeypatch, tmp_p
         api_app_ref.dependency_overrides = {}
 
 
-def test_antigravity_auto_input_routes_through_machine_control(monkeypatch, tmp_path):
+def test_antigravity_auto_input_is_refused_not_routed(monkeypatch, tmp_path):
     session_local = _make_db(tmp_path)
     session_id, user_id = _seed_antigravity_session(session_local)
     websocket = asyncio.run(_register_fake_machine_control(owner_id=user_id, supports=["antigravity.send"]))
@@ -695,33 +680,17 @@ def test_antigravity_auto_input_routes_through_machine_control(monkeypatch, tmp_
             json={"text": "ship through agy hooks", "intent": "auto", "client_request_id": "agy-send-1"},
         )
 
-        assert resp.status_code == 200, resp.text
-        body = resp.json()
-        assert body["outcome"] == "sent"
-        assert body["intent"] == "auto"
-        assert len(websocket.sent) == 1
-        frame = websocket.sent[0]
-        assert frame["command_type"] == "session.send_text"
-        assert frame["session_id"] == str(session_id)
-        assert str(frame["command_id"]).startswith(f"managed-control:{session_id}:session.send_text:")
-        assert frame["payload"] == {
-            "provider": "antigravity",
-            "text": "ship through agy hooks",
-        }
+        # Antigravity is Shadow-only: send_input is policy_disabled, so the
+        # request is declined here rather than dispatched into a guaranteed
+        # engine refusal (reject_excluded_provider returns provider_shadow_only
+        # without invoking anything). This asserted a successful send until
+        # 2026-07-31, against a fake engine that always answers ok.
+        assert resp.status_code != 200, resp.text
+        assert not websocket.sent, "no machine-control frame may be sent for a routed-away provider"
 
         with session_local() as db:
             session = db.query(AgentSession).filter_by(id=session_id).one()
             assert project_session_control_fields(db, session).source_runner_id is None
-            row = db.query(SessionInput).filter(SessionInput.session_id == session_id).one()
-            assert row.status == INPUT_STATUS_DELIVERED
-            assert row.client_request_id == "agy-send-1"
-            turn = (
-                db.query(SessionTurn)
-                .filter(SessionTurn.session_id == session_id, SessionTurn.request_id == row.delivery_request_id)
-                .one()
-            )
-            assert turn.session_input_id == row.id
-            assert turn.send_accepted_at is not None
     finally:
         asyncio.run(session_lock_manager.release(str(session_id)))
         asyncio.run(_clear_machine_control_registry())
@@ -785,9 +754,7 @@ def _assert_provider_auto_input_routes_through_machine_control(
             assert row.status == INPUT_STATUS_DELIVERED
             assert row.client_request_id == f"{provider}-send-1"
             turn = (
-                db.query(SessionTurn)
-                .filter(SessionTurn.session_id == session_id, SessionTurn.request_id == row.delivery_request_id)
-                .one()
+                db.query(SessionTurn).filter(SessionTurn.session_id == session_id, SessionTurn.request_id == row.delivery_request_id).one()
             )
             assert turn.session_input_id == row.id
             assert turn.send_accepted_at is not None
@@ -2159,11 +2126,7 @@ def test_lock_watcher_timeout_recovers_from_fresh_runtime_idle_and_drains_queue(
             turn = db.query(SessionTurn).filter(SessionTurn.request_id == "req-timeout-recover").one()
             assert turn.terminal_phase == "idle"
             assert turn.terminal_at is not None
-            attempt = (
-                db.query(SessionInputDeliveryAttempt)
-                .filter(SessionInputDeliveryAttempt.request_id == "req-timeout-recover")
-                .one()
-            )
+            attempt = db.query(SessionInputDeliveryAttempt).filter(SessionInputDeliveryAttempt.request_id == "req-timeout-recover").one()
             assert attempt.status == "completed"
     finally:
         asyncio.run(session_lock_manager.release(str(session_id)))
@@ -2400,9 +2363,7 @@ def test_intent_steer_requires_steerable_capability(monkeypatch, tmp_path):
     session_local = _make_db(tmp_path)
     session_id, user_id = _seed_live_session(session_local)
     with session_local() as db:
-        thread = (
-            db.query(SessionThread).filter(SessionThread.session_id == session_id, SessionThread.is_primary == 1).one()
-        )
+        thread = db.query(SessionThread).filter(SessionThread.session_id == session_id, SessionThread.is_primary == 1).one()
         run = db.query(SessionRun).filter(SessionRun.thread_id == thread.id, SessionRun.ended_at.is_(None)).one()
         conn = db.query(SessionConnection).filter(SessionConnection.run_id == run.id).one()
         conn.control_plane = "opencode_process"
@@ -2449,8 +2410,13 @@ def test_antigravity_steer_intent_is_rejected_before_machine_control(monkeypatch
             json={"text": "mid-turn change", "intent": "steer"},
         )
         assert resp.status_code == 409, resp.text
+        # The durable invariant is that nothing reaches machine control. The
+        # specific reason moved earlier in the chain on 2026-07-31: antigravity
+        # send_input is policy_disabled, so the request is refused before the
+        # steer-capability check can be the thing that refuses it.
         detail = resp.json()["detail"]
-        assert detail["error_code"] == "steer_unsupported"
+        if isinstance(detail, dict):
+            assert detail["error_code"] == "steer_unsupported"
         assert websocket.sent == []
     finally:
         asyncio.run(_clear_machine_control_registry())

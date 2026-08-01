@@ -385,3 +385,73 @@ private func mockSession(
     TimelineView()
         .environmentObject(AppState())
 }
+
+// MARK: - Working-set tiers
+
+/// The timeline's two tiers, which is the whole point of the screen: what the
+/// user has going right now, separated from everything else. Before this split
+/// iOS rendered one flat "Recent" list, so a session abandoned last week sat at
+/// the same visual weight as one mid-turn.
+#Preview("Timeline tiers — open and history") {
+    let open: [SessionSummary] = [
+        mockSession(
+            id: "open-1",
+            project: "zerg",
+            title: "Session UX and Reattach Logic",
+            summary: "Working through the timeline tiering and the ownership rule for managed bridges.",
+            statusLabel: "Thinking",
+            statusTone: "thinking",
+            activityRecency: "live",
+            anchorSecondsAgo: 4,
+            seenAtSecondsAgo: 4
+        ),
+        mockSession(
+            id: "open-2",
+            project: "sauron",
+            title: "Sauron Autonomous Agent Development",
+            summary: "Running the shell to reproduce the cron failure before changing the scheduler.",
+            provider: "codex",
+            statusLabel: "Using shell",
+            statusTone: "running",
+            activityRecency: "live",
+            anchorSecondsAgo: 9,
+            seenAtSecondsAgo: 9
+        ),
+    ]
+    let history: [SessionSummary] = [
+        mockSession(
+            id: "hist-1",
+            project: "g55",
+            title: "NAG TCU Telem and Adaptations",
+            summary: "Captured a two-second log excerpt and the learned A1 row for the firmware PR.",
+            provider: "codex",
+            statusLabel: "Idle",
+            statusTone: "idle",
+            activityRecency: "stale",
+            anchorSecondsAgo: 5 * 24 * 3600,
+            seenAtSecondsAgo: 5 * 24 * 3600
+        ),
+    ]
+
+    ScrollView {
+        LazyVStack(alignment: .leading, spacing: 14) {
+            Text("Open")
+                .font(.headline.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 2)
+            ForEach(open) { session in
+                TimelineSessionCardRow(session: session, emphasized: true, connectivityBanner: .none)
+            }
+            Text("History")
+                .font(.headline.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 2)
+                .padding(.top, 6)
+            ForEach(history) { session in
+                TimelineSessionCardRow(session: session, emphasized: false, connectivityBanner: .none)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
+    }
+}

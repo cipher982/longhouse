@@ -1188,6 +1188,7 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
                     activityValidUntil: nil,
                     controlOwnership: "owned",
                     controlConnection: "connected",
+                    workingSet: "open",
                     startTurn: unavailable,
                     sendInput: available,
                     interrupt: available,

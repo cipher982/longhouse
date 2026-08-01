@@ -25,7 +25,7 @@ longhouse-server serve --port 9090    # custom port
 longhouse-server serve --demo         # start with demo data`}
       </CodeBlock>
 
-      <h3>longhouse claude / codex / opencode</h3>
+      <h3>longhouse claude / codex / cursor / opencode</h3>
       <p>
         Launch a managed provider CLI session with a Longhouse control channel.
         The session runs in your terminal and stays reachable from other
@@ -34,6 +34,7 @@ longhouse-server serve --demo         # start with demo data`}
       <CodeBlock title="terminal">
         {`longhouse claude               # start Claude Code (steerable)
 longhouse codex                # start Codex CLI (steerable)
+longhouse cursor               # start Cursor Agent (managed live control)
 longhouse opencode             # start OpenCode (managed live control)`}
       </CodeBlock>
       <p>
@@ -41,9 +42,11 @@ longhouse opencode             # start OpenCode (managed live control)`}
         <code>claude</code>, <code>codex</code>, <code>antigravity</code>,{" "}
         <code>opencode</code>, and <code>cursor-agent</code> runs still import
         into the timeline, but they remain unmanaged history. Claude and Codex
-        support the strongest live control. OpenCode Helm supports managed send, interrupt, and terminate but
-        not active-turn steer. Cursor and
-        Antigravity are Shadow-only in the native device release.
+        support the strongest live control, including active-turn steer.
+        OpenCode Helm supports managed send, interrupt, and terminate but
+        not active-turn steer. Cursor Helm is the same shape: managed send,
+        interrupt, and terminate, without active-turn steer. Antigravity is
+        Shadow-only: Longhouse archives it but cannot launch or control it.
       </p>
 
       <h3>longhouse-server ship</h3>

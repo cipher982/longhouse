@@ -8,6 +8,7 @@ from datetime import timezone
 from pathlib import Path
 from typing import Any
 
+from zerg.provider_cli_contract import PROVIDER_CLI_BINARY_BY_PROVIDER
 from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_PROCESS
 
 from ._shared import _max_rfc3339
@@ -198,15 +199,40 @@ def _is_antigravity_cmdline(cmdline: list[str]) -> bool:
     return script in {"agy", "agy.js", "antigravity", "antigravity.js"}
 
 
+def _is_cursor_cmdline(cmdline: list[str]) -> bool:
+    if not cmdline:
+        return False
+    exe = cmdline[0].rsplit("/", 1)[-1]
+    return exe == "cursor-agent"
+
+
+# Wrapper-shape matchers only. Each encodes something the contract cannot say --
+# that `opencode` may run as `node .../opencode.js`, that Codex ships as
+# `codex-darwin`, that a `longhouse-` prefixed script is ours and not the
+# provider's. The plain `exe == <provider_cli_binary>` half is derived below, so
+# a provider added to the schema is recognized by its own binary name without
+# editing this file.
+_PROVIDER_CMDLINE_WRAPPER_MATCHERS = (
+    ("claude", _is_claude_cmdline),
+    ("codex", _is_codex_cmdline),
+    ("opencode", _is_opencode_cmdline),
+    ("antigravity", _is_antigravity_cmdline),
+    ("cursor", _is_cursor_cmdline),
+)
+
+
 def _provider_for_cmdline(cmdline: list[str]) -> str | None:
-    if _is_claude_cmdline(cmdline):
-        return "claude"
-    if _is_codex_cmdline(cmdline):
-        return "codex"
-    if _is_opencode_cmdline(cmdline):
-        return "opencode"
-    if _is_antigravity_cmdline(cmdline):
-        return "antigravity"
+    for provider, matches in _PROVIDER_CMDLINE_WRAPPER_MATCHERS:
+        if matches(cmdline):
+            return provider
+    if not cmdline:
+        return None
+    exe = cmdline[0].rsplit("/", 1)[-1]
+    if exe.startswith("longhouse-"):
+        return None
+    for provider, binary in PROVIDER_CLI_BINARY_BY_PROVIDER.items():
+        if exe == binary:
+            return provider
     return None
 
 

@@ -705,7 +705,52 @@ def _run_source_canary(
                 ]
             )
     else:
-        raise ValueError(f"unsupported provider: {args.provider}")
+        # No source canary implements this provider. Until 2d4dc0335 that was
+        # unreachable: antigravity sat in the live-proof provider list by hand,
+        # so it took the branch above. That commit derived the list from the
+        # schema and antigravity fell out of it -- correctly, since
+        # provider-live-canary.py only ever implemented claude and opencode --
+        # which left every antigravity proof raising ValueError out of main()
+        # with no artifact written at all. The factory still schedules an
+        # antigravity release lane, so a crash there is not an explicit
+        # capability gate, it is the lane silently losing its evidence.
+        #
+        # Report the absence as evidence instead. Yellow, not red: no source
+        # canary is missing proof, not a proven regression, and not green.
+        stdout_path.write_text("", encoding="utf-8")
+        stderr_path.write_text(
+            f"no source canary implements provider {args.provider}\n", encoding="utf-8"
+        )
+        source_path = raw_dir / "provider-source-canary-absent.json"
+        source = {
+            "artifact_kind": "provider_release_proof_source",
+            "provider": args.provider,
+            "provider_version": args.provider_version,
+            "verdict": "yellow",
+            "failure_code": "provider_release_proof_source_canary_absent",
+            "recommendation": "block_upgrade_recommendation",
+            "canaries": {
+                "release_proof": {
+                    "status": "blocked",
+                    "failure_code": "provider_release_proof_source_canary_absent",
+                    "message": (
+                        f"no source canary implements provider {args.provider}; "
+                        "live proof covers " + ", ".join(sorted(LIVE_CANARY_PROVIDERS)) + " and codex"
+                    ),
+                }
+            },
+            "operation_evidence": {},
+        }
+        _write_json(source_path, source)
+        return (
+            source,
+            {
+                "source_artifact": str(source_path),
+                "stdout": str(stdout_path),
+                "stderr": str(stderr_path),
+            },
+            None,
+        )
 
     if source_path.exists():
         source_path.unlink()

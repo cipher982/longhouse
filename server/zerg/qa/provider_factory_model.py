@@ -132,12 +132,18 @@ DEPLOYED_RELEASE_LANE_PROFILES: dict[str, tuple[str, ...]] = {
 }
 DEPLOYED_RELEASE_LANE_PROFILE: dict[str, str] = {provider: profiles[0] for provider, profiles in DEPLOYED_RELEASE_LANE_PROFILES.items()}
 
+# The two *_steer_rejection scenarios were removed on 2026-07-31 along with the
+# `session.input.steer_active` capability cells that required them: the cell
+# restated a fact the schema already carries in `steer_active_turn` and
+# `operation_evidence`, and its oracle
+# (server/zerg/qa/provider_control_oracles.py) had no caller anywhere, test or
+# production. An assertion nothing can produce is not a gap in coverage, it is
+# a claim with no possible evidence.
+#
 # Schema scenario_ids with zero producer of any kind, verified by hand:
 # - no non-test importer of the corresponding oracle function
 #   (awareness_create_assertions, directed_input_assertions,
 #   unsupported_steer_assertions)
-# - provider_control_oracles.py (the oracle_source for both *_steer_rejection
-#   scenarios) has no caller anywhere, test or production
 # - no dynamic dispatcher anywhere reads a schema oracle_source string and
 #   invokes it; every reference is a hardcoded string used for manifest
 #   generation or digest-hashing only
@@ -151,10 +157,8 @@ ORPHANED_CAPABILITY_SCENARIO_IDS: frozenset[str] = frozenset(
         "claude_coordination_awareness_create",
         "claude_coordination_awareness_post_compaction",
         "claude_coordination_directed_input",
-        "antigravity_steer_rejection",
         "cursor_coordination_awareness_create",
         "cursor_coordination_directed_input",
-        "cursor_steer_rejection",
     }
 )
 

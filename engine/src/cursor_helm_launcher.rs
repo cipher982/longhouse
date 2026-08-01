@@ -23,6 +23,8 @@ use serde_json::{json, Value};
 use sha2::Digest;
 use uuid::Uuid;
 
+use crate::managed_launch_lifecycle::ManagedLaunchResponse;
+
 const STATE_DIR: &str = "managed-local/cursor-helm";
 
 pub struct LaunchConfig {
@@ -117,6 +119,8 @@ fn normalize_permission_mode(value: &str) -> anyhow::Result<String> {
 fn permission_wire_mode(value: &str) -> &'static str {
     if value == "remote_human" {
         "remote_approve"
+    } else if value == "provider_local" {
+        "provider_local"
     } else {
         "bypass"
     }
@@ -177,7 +181,7 @@ fn write_pending_claim(
     conversation: &str,
     launch_id: &str,
     permission_mode: &str,
-    registration: Option<&Registration>,
+    registration: Option<&ManagedLaunchResponse>,
 ) -> anyhow::Result<()> {
     let target = claim_path(dir, session_id);
     let backup = claim_backup_path(dir, session_id);
@@ -345,14 +349,6 @@ fn write_all(fd: RawFd, mut bytes: &[u8]) -> std::io::Result<()> {
     }
     Ok(())
 }
-#[derive(serde::Deserialize)]
-struct Registration {
-    session_id: String,
-    run_id: String,
-    hook_token: Option<String>,
-    coordination_token: Option<String>,
-}
-
 struct CursorMcpConfig {
     path: PathBuf,
     state_path: PathBuf,
@@ -402,14 +398,10 @@ struct CursorMcpConfigState {
 
 fn coordination_token(
     config: &LaunchConfig,
-    registration: Option<&Registration>,
+    registration: Option<&ManagedLaunchResponse>,
     session_id: &str,
 ) -> anyhow::Result<String> {
-    if let Some(token) = registration
-        .and_then(|value| value.coordination_token.as_deref())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
+    if let Some(token) = registration.and_then(ManagedLaunchResponse::coordination_token) {
         return Ok(token.to_owned());
     }
     if config.resume_session.is_none() {
@@ -615,8 +607,40 @@ fn register(
     cwd: &Path,
     session_id: &str,
     permission_mode: &str,
-) -> Option<Registration> {
-    let machine = home(config.config_dir.as_deref()).ok()?.join("machine");
+) -> anyhow::Result<ManagedLaunchResponse> {
+    let (url, token, machine_name) = registration_credentials(config)?;
+    let payload = crate::managed_launch_payload::ManagedLaunchRegistration {
+        provider: "cursor",
+        cwd,
+        project: config.project.as_deref(),
+        display_name: config.name.as_deref(),
+        loop_mode: &config.loop_mode,
+        machine_name: &machine_name,
+        permission_mode: match permission_wire_mode(permission_mode) {
+            "remote_approve" => crate::managed_launch_payload::PermissionMode::RemoteApprove,
+            "provider_local" => crate::managed_launch_payload::PermissionMode::ProviderLocal,
+            _ => crate::managed_launch_payload::PermissionMode::Bypass,
+        },
+        // Cursor mints its own session id before registering, so the Runtime
+        // Host must be told which one to bind rather than allocating its own.
+        extra: vec![("session_id", json!(session_id))],
+    }
+    .to_json();
+    let runtime = tokio::runtime::Runtime::new()?;
+    let response = crate::managed_launch_lifecycle::register_managed_launch(
+        &runtime,
+        &url,
+        &token,
+        "Cursor",
+        &payload,
+        Some(session_id),
+    )?;
+    response.require_authority("Cursor", crate::cursor_helm_control::CURSOR_HELM_TRANSPORT)?;
+    Ok(response)
+}
+
+fn registration_credentials(config: &LaunchConfig) -> anyhow::Result<(String, String, String)> {
+    let machine = home(config.config_dir.as_deref())?.join("machine");
     let state: Value = fs::read(machine.join("state.json"))
         .ok()
         .and_then(|raw| serde_json::from_slice(&raw).ok())
@@ -633,37 +657,15 @@ fn register(
             .map(|value| value.trim().to_owned())
             .filter(|value| !value.is_empty())
     });
-    let (Some(url), Some(token)) = (url, token) else {
-        return None;
-    };
+    let url = url.context("No Longhouse URL configured. Run `longhouse auth` first.")?;
+    let token = token.context("No device token found. Run `longhouse auth` first.")?;
     let machine_name = state
         .get("machine_name")
         .and_then(Value::as_str)
         .filter(|value| !value.trim().is_empty())
         .map(str::to_owned)
         .unwrap_or_else(|| std::env::var("HOSTNAME").unwrap_or_else(|_| "unknown".into()));
-    let payload = json!({"cwd":cwd,"provider":"cursor","project":config.project,"display_name":config.name,"loop_mode":config.loop_mode,"permission_mode":permission_wire_mode(permission_mode),"session_id":session_id,"machine_name":machine_name});
-    tokio::runtime::Runtime::new()
-        .ok()?
-        .block_on(async {
-            reqwest::Client::new()
-                .post(format!(
-                    "{}/api/sessions/managed-local/this-device",
-                    url.trim_end_matches('/')
-                ))
-                .header("X-Agents-Token", token)
-                .json(&payload)
-                .timeout(std::time::Duration::from_secs(5))
-                .send()
-                .await
-                .ok()?
-                .error_for_status()
-                .ok()?
-                .json::<Registration>()
-                .await
-                .ok()
-        })
-        .filter(|value| value.session_id == session_id && !value.run_id.trim().is_empty())
+    Ok((url, token, machine_name))
 }
 fn enqueue_terminal_event(
     config: &LaunchConfig,
@@ -674,14 +676,34 @@ fn enqueue_terminal_event(
     let Ok(root) = home(config.config_dir.as_deref()) else {
         return;
     };
-    let now = Utc::now().to_rfc3339();
-    let event = json!({"runtime_key":format!("cursor:{session_id}"),"session_id":session_id,"run_id":run_id,"provider":"cursor","device_id":std::env::var("HOSTNAME").unwrap_or_else(|_| "unknown".into()),"source":"cursor_helm","kind":"terminal_signal","phase":"finished","occurred_at":now,"dedupe_key":format!("cursor-helm-terminal:{session_id}:{}",run_id.unwrap_or("unbound")),"payload":{"terminal_state":"session_ended","terminal_reason":"provider_exit","terminal_source":"cursor_helm","exit_code":exit_code}});
-    let _ = write_json(
-        &root
-            .join("agent/runtime-events-outbox")
-            .join(format!("{}.json", Uuid::new_v4())),
-        &event,
-    );
+    let Some(run_id) = run_id.filter(|value| !value.trim().is_empty()) else {
+        eprintln!(
+            "Longhouse warning: Cursor stopped without a run identity; terminal state was not queued"
+        );
+        return;
+    };
+    let runtime_key = format!("cursor:{session_id}");
+    let device_id = std::env::var("HOSTNAME").ok();
+    let event = crate::managed_terminal::ManagedTerminalEvent {
+        runtime_key: &runtime_key,
+        session_id,
+        run_id,
+        provider: "cursor",
+        managed_transport: crate::cursor_helm_control::CURSOR_HELM_TRANSPORT,
+        provider_session_id: None,
+        device_id: device_id.as_deref(),
+        source: "cursor_helm",
+        dedupe_prefix: "cursor-helm-terminal",
+        terminal_state: crate::managed_terminal::terminal_state_for_exit(exit_code),
+        terminal_reason: "provider_exit",
+        exit_code: Some(exit_code),
+    }
+    .to_json();
+    if let Err(error) =
+        crate::managed_terminal::enqueue(&root.join("agent/runtime-events-outbox"), &event)
+    {
+        eprintln!("Longhouse warning: could not queue Cursor terminal event: {error:#}");
+    }
 }
 fn response(stream: &mut UnixStream, value: Value) {
     let _ = stream.write_all(format!("{}\n", value).as_bytes());
@@ -863,12 +885,12 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
         .resume_session
         .clone()
         .unwrap_or_else(|| Uuid::new_v4().to_string());
-    let (conversation, permission_mode) = if config.resume_session.is_some() {
+    let (resume_conversation, permission_mode) = if config.resume_session.is_some() {
         let claim = read_claim(&dir, &session_id, config.permission_mode.as_deref())?;
-        (claim.conversation, claim.permission_mode)
+        (Some(claim.conversation), claim.permission_mode)
     } else {
         (
-            cursor_chat(&bin, &cwd)?,
+            None,
             normalize_permission_mode(config.permission_mode.as_deref().unwrap_or("auto_approve"))?,
         )
     };
@@ -882,9 +904,42 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
         anyhow::bail!("Cursor Helm session {session_id} is already attached");
     }
     let launch_id = Uuid::new_v4().to_string();
-    // Runtime/control failure is deliberately soft. Permission authority is not:
-    // a remote approval session never starts without a hook token to fail closed.
-    let registered = register(&config, &cwd, &session_id, &permission_mode);
+    // A new Helm launch is a transaction: authority must exist before Cursor
+    // creates a conversation. Resume can still recover authority through the
+    // dedicated coordination-token route when replay registration is stale.
+    let registered = match register(&config, &cwd, &session_id, &permission_mode) {
+        Ok(value) => Some(value),
+        Err(error) if config.resume_session.is_some() => {
+            if config.verbose {
+                eprintln!("Longhouse warning: replay registration failed; using resume authority: {error:#}");
+            }
+            None
+        }
+        Err(error) => return Err(error).context("register Cursor Helm launch"),
+    };
+    let lifecycle_credentials = if config.resume_session.is_some() {
+        None
+    } else {
+        let (url, token, _) = registration_credentials(&config)?;
+        Some((url, token))
+    };
+    let lifecycle_runtime = lifecycle_credentials
+        .as_ref()
+        .map(|_| tokio::runtime::Runtime::new())
+        .transpose()?;
+    let mut launch_transaction = match (&lifecycle_runtime, &lifecycle_credentials, &registered) {
+        (Some(runtime), Some((url, token)), Some(registration)) => Some(
+            crate::managed_launch_lifecycle::ManagedLaunchTransaction::new(
+                runtime,
+                url,
+                token,
+                &registration.session_id,
+                &registration.run_id,
+            ),
+        ),
+        (None, None, _) => None,
+        _ => anyhow::bail!("new Cursor Helm launch is missing registration"),
+    };
     let hook_url = config.url.clone().or_else(|| {
         home(config.config_dir.as_deref()).ok().and_then(|root| {
             fs::read(root.join("machine/state.json"))
@@ -907,6 +962,10 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
             );
         }
     }
+    let conversation = match resume_conversation.as_deref() {
+        Some(value) => value.to_owned(),
+        None => cursor_chat(&bin, &cwd)?,
+    };
     if matches!(permission_mode.as_str(), "remote_human")
         && registered
             .as_ref()
@@ -1047,14 +1106,14 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
     let cwd_c = CString::new(cwd.as_os_str().as_bytes())
         .context("Cursor working directory cannot contain NUL")?;
     let mut master = -1;
-    let pid = unsafe {
-        libc::forkpty(
-            &mut master,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            &mut size,
-        )
+    let mut slave_name = [0 as libc::c_char; 1024];
+    let slave_name_ptr = if cfg!(target_os = "macos") {
+        slave_name.as_mut_ptr()
+    } else {
+        std::ptr::null_mut()
     };
+    let pid =
+        unsafe { libc::forkpty(&mut master, slave_name_ptr, std::ptr::null_mut(), &mut size) };
     if pid < 0 {
         anyhow::bail!("forkpty failed: {}", std::io::Error::last_os_error());
     }
@@ -1064,6 +1123,25 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
             libc::execve(argv[0].as_ptr(), argv_ptrs.as_ptr(), env_ptrs.as_ptr());
             libc::_exit(127)
         }
+    }
+    // XNU can discard queued PTY output or hold a session-leader child in the
+    // exiting state until the master reads it. Keeping the slave open in the
+    // parent makes POLLIN observable; the relay loop drains it and reaps with
+    // WNOHANG before releasing this hold.
+    #[cfg(target_os = "macos")]
+    let slave_hold = unsafe { libc::open(slave_name.as_ptr(), libc::O_RDWR | libc::O_NOCTTY) };
+    #[cfg(not(target_os = "macos"))]
+    let slave_hold = -1;
+    if cfg!(target_os = "macos") && slave_hold < 0 {
+        unsafe {
+            libc::kill(pid, libc::SIGKILL);
+            libc::close(master);
+            libc::waitpid(pid, std::ptr::null_mut(), 0);
+        }
+        anyhow::bail!(
+            "open Cursor PTY slave hold failed: {}",
+            std::io::Error::last_os_error()
+        );
     }
     let stop = Arc::new(AtomicBool::new(false));
     let resized = Arc::new(AtomicBool::new(true));
@@ -1090,12 +1168,29 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
         Err(error) => {
             unsafe {
                 libc::kill(pid, libc::SIGKILL);
-                libc::waitpid(pid, std::ptr::null_mut(), 0);
+                if slave_hold >= 0 {
+                    libc::close(slave_hold);
+                }
                 libc::close(master);
+                libc::waitpid(pid, std::ptr::null_mut(), 0);
             }
             return Err(error);
         }
     };
+    if let Some(transaction) = launch_transaction.as_mut() {
+        if let Err(error) = transaction.confirm() {
+            drop(terminal);
+            unsafe {
+                libc::kill(pid, libc::SIGKILL);
+                if slave_hold >= 0 {
+                    libc::close(slave_hold);
+                }
+                libc::close(master);
+                libc::waitpid(pid, std::ptr::null_mut(), 0);
+            }
+            return Err(error);
+        }
+    }
     sync_winsize(master);
     let socket_stop = stop.clone();
     let guard = Arc::new(Mutex::new(()));
@@ -1129,6 +1224,7 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
     });
     let mut input = [0u8; 8192];
     let mut output = [0u8; 65536];
+    let mut reaped_status = None;
     loop {
         if stop.load(Ordering::Relaxed) {
             break;
@@ -1163,7 +1259,7 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
                 }
             }
         }
-        if fds[1].revents & libc::POLLIN != 0 {
+        if fds[1].revents & (libc::POLLIN | libc::POLLHUP | libc::POLLERR | libc::POLLNVAL) != 0 {
             let count = unsafe { libc::read(master, output.as_mut_ptr().cast(), output.len()) };
             if count > 0 {
                 if write_all(1, &output[..count as usize]).is_err() {
@@ -1173,7 +1269,11 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
                 break;
             }
         }
-        if fds[1].revents & (libc::POLLHUP | libc::POLLERR | libc::POLLNVAL) != 0 {
+        let mut status = 0;
+        if cfg!(target_os = "macos")
+            && unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) } == pid
+        {
+            reaped_status = Some(status);
             break;
         }
     }
@@ -1181,23 +1281,30 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
     drop(terminal);
     stop.store(true, Ordering::Relaxed);
     let _ = server.join();
+    if slave_hold >= 0 {
+        unsafe {
+            libc::close(slave_hold);
+        }
+    }
     let exit_code = unsafe {
-        let mut status = 0;
-        if launcher_requested_stop {
-            let mut observed = libc::waitpid(pid, &mut status, libc::WNOHANG);
-            for _ in 0..25 {
-                if observed != 0 {
-                    break;
+        let mut status = reaped_status.unwrap_or(0);
+        if reaped_status.is_none() {
+            if launcher_requested_stop {
+                let mut observed = libc::waitpid(pid, &mut status, libc::WNOHANG);
+                for _ in 0..25 {
+                    if observed != 0 {
+                        break;
+                    }
+                    thread::sleep(std::time::Duration::from_millis(10));
+                    observed = libc::waitpid(pid, &mut status, libc::WNOHANG);
                 }
-                thread::sleep(std::time::Duration::from_millis(10));
-                observed = libc::waitpid(pid, &mut status, libc::WNOHANG);
-            }
-            if observed == 0 {
-                libc::kill(pid, libc::SIGKILL);
+                if observed == 0 {
+                    libc::kill(pid, libc::SIGKILL);
+                    libc::waitpid(pid, &mut status, 0);
+                }
+            } else {
                 libc::waitpid(pid, &mut status, 0);
             }
-        } else {
-            libc::waitpid(pid, &mut status, 0);
         }
         if libc::WIFEXITED(status) {
             libc::WEXITSTATUS(status)

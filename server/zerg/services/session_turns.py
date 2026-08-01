@@ -29,6 +29,7 @@ from zerg.services.agent_heartbeat_health import MachineTransportHealthSummary
 from zerg.services.agent_heartbeat_health import load_machine_transport_health_map
 from zerg.services.agents.kernel_capabilities import project_session_capabilities
 from zerg.services.claude_channel_text import strip_claude_channel_wrapper
+from zerg.services.managed_provider_contracts import trusted_non_runner_control_planes
 from zerg.services.provisional_events import durable_transcript_event_predicate
 from zerg.services.session_observations import OBS_KIND_RUNTIME_SIGNAL
 from zerg.services.write_serializer import get_write_serializer
@@ -36,6 +37,23 @@ from zerg.utils.time import normalize_utc
 from zerg.utils.time import utc_now
 
 logger = logging.getLogger(__name__)
+
+# "Does this session have a Longhouse-owned control plane?" Derived from the
+# provider contract so a provider cannot be first-tier and simultaneously
+# invisible to managed-turn observability -- which is what happened to every
+# Cursor Helm turn while this was a hand-written tuple that predated Cursor.
+#
+# The two `*_process` planes are named policy, not derivation: they are
+# ManagedSessionTransport values (session_execution_home.py) that reach the
+# control_plane column without being schema control planes.
+_LEGACY_TRANSPORT_CONTROL_PLANES = frozenset({"opencode_process", "antigravity_process"})
+
+
+def _managed_turn_control_planes() -> frozenset[str]:
+    return trusted_non_runner_control_planes() | _LEGACY_TRANSPORT_CONTROL_PLANES
+
+
+_MANAGED_TURN_CONTROL_PLANES = _managed_turn_control_planes()
 
 SESSION_TURN_SOURCE_MANAGED_LIVE = "managed_live"
 SESSION_TURN_SOURCE_TRANSCRIPT_RECONSTRUCTED = "transcript_reconstructed"
@@ -796,19 +814,7 @@ def list_managed_completed_turns(
         .join(SessionRun, SessionRun.thread_id == SessionThread.id)
         .join(SessionConnection, SessionConnection.run_id == SessionRun.id)
         .filter(SessionThread.session_id == AgentSession.id)
-        .filter(
-            SessionConnection.control_plane.in_(
-                (
-                    "claude_channel_bridge",
-                    "codex_bridge",
-                    "codex_app_server",
-                    "opencode_server_bridge",
-                    "opencode_process",
-                    "antigravity_hook_inbox",
-                    "antigravity_process",
-                )
-            )
-        )
+        .filter(SessionConnection.control_plane.in_(tuple(sorted(_MANAGED_TURN_CONTROL_PLANES))))
         .exists()
     )
 

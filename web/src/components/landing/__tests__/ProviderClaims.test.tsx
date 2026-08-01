@@ -46,7 +46,8 @@ describe("landing provider claims", () => {
     expect(cellsFor("Claude Code")).toEqual(["yes", "yes", "yes", "yes", "yes"]);
     expect(cellsFor("Cursor Agent")).toEqual(["yes", "yes", "yes", "no", "yes"]);
     expect(cellsFor("OpenCode")).toEqual(["yes", "yes", "yes", "no", "no"]);
-    expect(cellsFor("Antigravity CLI")).toEqual(["yes", "yes", "no", "no", "no"]);
+    // Shadow-only: Longhouse archives Antigravity but cannot launch or send.
+    expect(cellsFor("Antigravity CLI")).toEqual(["yes", "no", "no", "no", "no"]);
   });
 
   it("renders FAQ provider answer consistent with the capability matrix", async () => {

@@ -595,12 +595,17 @@ def _project_control(
             return SessionActionAvailability(state="unavailable", reason="connection_unavailable")
         return SessionActionAvailability(state="available")
 
+    raw_terminal_attached = value.get("terminal_attached")
     return SessionControlFacts(
         ownership="owned",
         connection=connection,
         connection_id=str(value.get("connection_id") or "").strip() or None,
         lease_generation=str(value.get("lease_generation") or "").strip() or None,
         control_plane=None,
+        # Carry the observation through verbatim. Absent stays absent: a
+        # provider that cannot see attachment must not be reported as having
+        # observed nothing attached.
+        terminal_attached=raw_terminal_attached if isinstance(raw_terminal_attached, bool) else None,
         observed_at=observed_at,
         valid_until=valid_until,
         actions=SessionControlActions(

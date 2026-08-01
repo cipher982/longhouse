@@ -9,6 +9,7 @@ from datetime import timedelta
 from datetime import timezone
 from typing import Any
 from typing import List
+from typing import Literal
 from typing import Optional
 from uuid import UUID
 from uuid import uuid4
@@ -2267,6 +2268,72 @@ class DirectedInputReply(UTCBaseModel):
     client_request_id: str | None = None
 
 
+class ManagedLocalLaunchOutcomeRequest(UTCBaseModel):
+    """Provider-observed result for a registered Helm launch transaction."""
+
+    run_id: UUID
+    outcome: Literal["confirmed", "aborted"]
+    error_code: str | None = Field(None, min_length=1, max_length=64)
+    error_message: str | None = Field(None, min_length=1, max_length=2000)
+
+
+@router.post("/sessions/{session_id}/launch-outcome")
+async def record_managed_local_launch_outcome(
+    session_id: UUID,
+    body: ManagedLocalLaunchOutcomeRequest,
+    _auth: object = Depends(verify_agents_token),
+    _single: None = Depends(require_single_tenant),
+) -> dict[str, str | bool | None]:
+    """Confirm provider readiness or abort a registered launch, exactly once."""
+
+    if isinstance(_auth, ManagedSessionToken):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="A device token is required")
+    if not database_module.live_catalog_enabled():
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Launch outcomes require catalogd")
+    device_id = str(getattr(_auth, "device_id", "") or "").strip()
+    if not device_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Device token is missing device identity")
+    owner_id = _directed_input_owner_id(_auth)
+    catalogd = get_catalogd_client()
+    if catalogd is None:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Launch outcomes require catalogd")
+    error_code = body.error_code
+    error_message = body.error_message
+    if body.outcome == "confirmed":
+        error_code = None
+        error_message = None
+    elif error_code is None:
+        error_code = "provider_launch_failed"
+    outcome = {
+        "session_id": str(session_id),
+        "run_id": str(body.run_id),
+        "owner_id": owner_id,
+        "device_id": device_id,
+        "state": "adopted" if body.outcome == "confirmed" else "failed",
+        "error_code": error_code,
+        "error_message": error_message,
+        "observed_at": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        result = await catalogd.call("session.launch.local.finish.v2", {"outcome": outcome})
+    except CatalogRemoteError as exc:
+        if exc.code == "not_found":
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Launch was not found") from exc
+        if exc.code == "conflict":
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Launch outcome was rejected") from exc
+    except CatalogUnavailable as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Launch outcomes require catalogd") from exc
+    launch = result.get("launch") or {}
+    return {
+        "recorded": True,
+        "session_id": str(session_id),
+        "run_id": str(body.run_id),
+        "launch_state": str(launch.get("launch_state") or ""),
+        "error_code": launch.get("launch_error_code"),
+    }
+
+
 @router.post("/sessions/{session_id}/coordination-token")
 async def issue_session_coordination_token(
     session_id: UUID,
@@ -2293,6 +2360,18 @@ async def issue_session_coordination_token(
     session_device_id = str(getattr(session, "device_id", "") or "").strip()
     if not token_device_id or not session_device_id or token_device_id != session_device_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Session belongs to another device")
+    # Device match alone is not provenance. Without these, a device token could
+    # mint session-scoped coordination authority for any same-device session of
+    # a supported provider -- including a Shadow session Longhouse never
+    # launched, or one that ended weeks ago. This endpoint exists for one
+    # narrow case: a managed session being resumed.
+    if normalize_utc_datetime(getattr(session, "closed_at", None)) is not None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Session is closed")
+    if not _session_is_managed_for_coordination(session):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Coordination authority is only issued for managed sessions",
+        )
     token = issue_managed_session_token(
         owner_id=owner_id,
         session_id=str(session_id),
@@ -2301,6 +2380,23 @@ async def issue_session_coordination_token(
         scope=MANAGED_SESSION_SCOPE_COORDINATION,
     )
     return {"coordination_token": token}
+
+
+def _session_is_managed_for_coordination(session: object) -> bool:
+    """Whether Longhouse ever owned this session's control path.
+
+    Shadow sessions are discovered, not launched, so they never acquire a
+    SessionConnection. The catalog snapshot projects those rows into
+    ``catalog_facts["connections"]``; an empty list is the durable marker that
+    this session is unmanaged, which is exactly who must not receive
+    session-scoped coordination authority.
+    """
+
+    facts = getattr(session, "catalog_facts", None)
+    if not isinstance(facts, dict):
+        return False
+    connections = facts.get("connections")
+    return isinstance(connections, list) and bool(connections)
 
 
 def _directed_input_owner_id(auth: object) -> int:
@@ -2352,15 +2448,18 @@ async def _attempt_directed_input_delivery(
         text=str(directed_input["text"]),
     )
     try:
-        from zerg.routers.session_chat import INPUT_INTENT_AUTO
         from zerg.routers.session_chat import INPUT_INTENT_QUEUE
         from zerg.routers.session_chat import SessionInputRequest
         from zerg.routers.session_chat import _create_catalog_session_input_response
 
-        facts = getattr(target_session, "catalog_facts", None)
-        runtime = facts.get("runtime") if isinstance(facts, dict) else None
-        target_phase = str(runtime.get("phase") or "").strip() if isinstance(runtime, dict) else ""
-        intent = INPUT_INTENT_AUTO if target_phase in {"idle", "needs_user"} else INPUT_INTENT_QUEUE
+        # Directed input is always durable. It used to pick `auto` when the
+        # target looked idle, which dispatched live and failed terminally if the
+        # control channel happened to be down — so a message to an idle peer was
+        # dropped while the same message to a busy peer was queued safely. The
+        # target's phase is a fact about timing, never about whether the message
+        # survives; the sender chose to send, and that choice owns the
+        # semantics.
+        intent = INPUT_INTENT_QUEUE
 
         response = await _create_catalog_session_input_response(
             source_session=target_session,

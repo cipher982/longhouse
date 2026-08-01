@@ -79,6 +79,7 @@ function makeCard(args: {
   endedAt?: string;
   lastActivityAt?: string;
   capabilities?: SessionCapabilities;
+  state?: ReturnType<typeof makeSessionStateFacts>;
 }): TimelineSessionCard {
   const session = makeSession({
     id: args.id,
@@ -87,7 +88,7 @@ function makeCard(args: {
     last_activity_at: args.lastActivityAt ?? null,
     project: args.repo,
     capabilities: args.capabilities,
-    session_state: makeSessionStateFacts({
+    session_state: args.state ?? makeSessionStateFacts({
       closed: args.closed,
       access: args.capabilities?.live_control_available
         ? "live_control"
@@ -123,44 +124,64 @@ describe("isOnShelf", () => {
     expect(isOnShelf(card, now)).toBe(false);
   });
 
-  it("returns true for live-control sessions even if old", () => {
+  it("returns false for live-control sessions that are idle with no terminal", () => {
+    // Live control is capability, not presence. An unattended bridge keeps
+    // answering long after the user is done with it.
     const card = makeCard({
       id: "c1",
       repo: "zerg",
       startedAt: "2026-05-01T10:00:00Z",
       capabilities: makeCapabilities({ live_control_available: true }),
+      state: makeSessionStateFacts({ access: "live_control", activity: "quiescent" }),
     });
-    expect(isOnShelf(card, now)).toBe(true);
+    expect(isOnShelf(card, now)).toBe(false);
   });
 
-  it("returns true for host-reattach sessions even if old", () => {
+  it("returns false for reattachable sessions with no terminal, however recent", () => {
+    // The regression the working-set tier exists for. Reattach capability
+    // never expires, so promoting on it pinned every session ever launched to
+    // the top of the timeline.
     const card = makeCard({
       id: "c1",
       repo: "zerg",
-      startedAt: "2026-05-01T10:00:00Z",
+      startedAt: new Date(now - 60000).toISOString(),
       capabilities: makeCapabilities({ host_reattach_available: true }),
+      state: makeSessionStateFacts({ access: "reattach", activity: "quiescent" }),
     });
-    expect(isOnShelf(card, now)).toBe(true);
+    expect(isOnShelf(card, now)).toBe(false);
   });
 
-  it("returns true for recent Shadow (<24h) without capabilities", () => {
-    const recent = now - SHELF_RECENCY_MS + 60000; // 1 min inside window
+  it("returns false for a recent session with no terminal and no work in flight", () => {
+    // Age is not evidence of being open. A session started a minute ago and
+    // already abandoned is history.
+    const recent = now - SHELF_RECENCY_MS + 60000;
     const card = makeCard({
       id: "c1",
       repo: "zerg",
       startedAt: new Date(recent).toISOString(),
+      state: makeSessionStateFacts({ activity: "quiescent" }),
+    });
+    expect(isOnShelf(card, now)).toBe(false);
+  });
+
+  it("returns true for an attached terminal however old the session is", () => {
+    const card = makeCard({
+      id: "c1",
+      repo: "zerg",
+      startedAt: "2026-05-01T10:00:00Z",
+      state: makeSessionStateFacts({ activity: "quiescent", terminalAttached: true }),
     });
     expect(isOnShelf(card, now)).toBe(true);
   });
 
-  it("returns false for old Shadow (>24h) without capabilities", () => {
-    const old = now - SHELF_RECENCY_MS - 60000; // 1 min outside window
+  it("returns true for in-flight work with no terminal (Console)", () => {
     const card = makeCard({
       id: "c1",
       repo: "zerg",
-      startedAt: new Date(old).toISOString(),
+      startedAt: "2026-05-01T10:00:00Z",
+      state: makeSessionStateFacts({ activity: "executing", mode: "console" }),
     });
-    expect(isOnShelf(card, now)).toBe(false);
+    expect(isOnShelf(card, now)).toBe(true);
   });
 
   it("returns false for sessions with capabilities unset and old", () => {
@@ -389,13 +410,18 @@ describe("buildInboxLayout", () => {
   });
 
   describe("shelf", () => {
-    it("puts steerable (live control) sessions on shelf even if old", () => {
+    it("puts attached terminals on the shelf even if old", () => {
       const cards = [
         makeCard({
           id: "steerable",
           repo: "zerg",
           startedAt: "2026-05-01T10:00:00Z",
           capabilities: makeCapabilities({ live_control_available: true }),
+          state: makeSessionStateFacts({
+            access: "live_control",
+            activity: "quiescent",
+            terminalAttached: true,
+          }),
         }),
       ];
       const layout = buildInboxLayout(cards, undefined, fixedNow);
@@ -403,13 +429,13 @@ describe("buildInboxLayout", () => {
       expect(layout.active).toEqual([]);
     });
 
-    it("puts host-reattach sessions on shelf even if old", () => {
+    it("puts in-flight work on the shelf even without a terminal", () => {
       const cards = [
         makeCard({
           id: "reattachable",
           repo: "zerg",
           startedAt: "2026-05-01T10:00:00Z",
-          capabilities: makeCapabilities({ host_reattach_available: true }),
+          state: makeSessionStateFacts({ activity: "executing", mode: "console" }),
         }),
       ];
       const layout = buildInboxLayout(cards, undefined, fixedNow);
@@ -417,14 +443,14 @@ describe("buildInboxLayout", () => {
       expect(layout.active).toEqual([]);
     });
 
-    it("puts recent Shadow (<24h) on shelf", () => {
+    it("keeps a recent but abandoned session off the shelf", () => {
       const recentIso = new Date(fixedNow - 60 * 60 * 1000).toISOString(); // 1h ago
       const cards = [
         makeCard({ id: "recent", repo: "zerg", startedAt: recentIso }),
       ];
       const layout = buildInboxLayout(cards, undefined, fixedNow);
-      expect(layout.shelf.map((s) => s.thread_id)).toEqual(["recent"]);
-      expect(layout.active).toEqual([]);
+      expect(layout.shelf).toEqual([]);
+      expect(layout.active[0].sessions.map((s) => s.thread_id)).toEqual(["recent"]);
     });
 
     it("puts old quiet Shadow in active archive, not shelf", () => {
@@ -457,13 +483,13 @@ describe("buildInboxLayout", () => {
           id: "old",
           repo: "zerg",
           startedAt: "2026-05-01T10:00:00Z",
-          capabilities: makeCapabilities({ live_control_available: true }),
+          state: makeSessionStateFacts({ terminalAttached: true }),
         }),
         makeCard({
           id: "new",
           repo: "zerg",
           startedAt: "2026-05-18T10:00:00Z",
-          capabilities: makeCapabilities({ live_control_available: true }),
+          state: makeSessionStateFacts({ terminalAttached: true }),
         }),
       ];
       const layout = buildInboxLayout(cards, undefined, fixedNow);
@@ -476,13 +502,13 @@ describe("buildInboxLayout", () => {
           id: "alpha",
           repo: "zerg",
           startedAt: "2026-05-18T10:00:00Z",
-          capabilities: makeCapabilities({ live_control_available: true }),
+          state: makeSessionStateFacts({ terminalAttached: true }),
         }),
         makeCard({
           id: "beta",
           repo: "zerg",
           startedAt: "2026-05-18T11:00:00Z",
-          capabilities: makeCapabilities({ live_control_available: true }),
+          state: makeSessionStateFacts({ terminalAttached: true }),
         }),
       ];
       const layout = buildInboxLayout(cards, {
@@ -497,12 +523,17 @@ describe("buildInboxLayout", () => {
     it("shelf plus archive plus closed coexist correctly", () => {
       const recentIso = new Date(fixedNow - 60 * 60 * 1000).toISOString();
       const cards = [
-        makeCard({ id: "shelf-recent", repo: "zerg", startedAt: recentIso }),
+        makeCard({
+          id: "shelf-recent",
+          repo: "zerg",
+          startedAt: recentIso,
+          state: makeSessionStateFacts({ terminalAttached: true }),
+        }),
         makeCard({
           id: "shelf-steerable",
           repo: "floodmap",
           startedAt: "2026-05-01T10:00:00Z",
-          capabilities: makeCapabilities({ live_control_available: true }),
+          state: makeSessionStateFacts({ activity: "thinking" }),
         }),
         makeCard({ id: "active-old", repo: "stopsign", startedAt: "2026-05-01T10:00:00Z" }),
         makeCard({ id: "closed", repo: "alpha", startedAt: "2026-05-01T10:00:00Z", closed: true }),

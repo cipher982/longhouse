@@ -1496,7 +1496,7 @@ def _run_antigravity_hook_inbox_contract(root: Path) -> dict[str, Any]:
         plugin_root = _ensure_antigravity_runtime_plugin(
             config_dir=config_dir,
             antigravity_cli_root=antigravity_cli_root,
-            engine_path="/bin/true",
+            engine_path="/usr/bin/true",
             global_hooks_path=global_hooks_path,
         )
     except Exception as exc:
@@ -1517,7 +1517,7 @@ def _run_antigravity_hook_inbox_contract(root: Path) -> dict[str, Any]:
     env.update(
         {
             "LONGHOUSE_HOOK_PYTHON": sys.executable,
-            "LONGHOUSE_ENGINE": "/bin/true",
+            "LONGHOUSE_ENGINE": "/usr/bin/true",
             "LONGHOUSE_MANAGED_SESSION_ID": session_id,
             "LONGHOUSE_ANTIGRAVITY_INBOX_DIR": str(inbox_dir),
             "LONGHOUSE_ANTIGRAVITY_STATE_DIR": str(state_dir),

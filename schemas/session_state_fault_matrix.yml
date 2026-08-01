@@ -53,7 +53,6 @@ scenarios:
   - id: F08
     fault: stale_pid_or_state_file
     deterministic:
-      - server/tests_lite/test_opencode_channel_cli.py::test_stop_bridge_rejects_reused_pid
       - server/tests_lite/test_catalogd_fact_reducer.py::test_stale_position_and_old_run_cannot_mutate_current_head
     live: optional
     expect: [old_identity_cannot_grant_control, residue_localized]

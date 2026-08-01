@@ -389,7 +389,7 @@ class ManagedLocalThisDeviceLaunchRequest(BaseModel):
     permission_mode: str = Field(
         "bypass",
         description=(
-            "Managed permission policy: 'bypass' (autonomous, default) or 'remote_approve' (answer permission prompts via Longhouse)"
+            "Managed permission policy: 'bypass', 'provider_local', or 'remote_approve' (answer permission prompts via Longhouse)"
         ),
     )
     launch_actor: str | None = Field(None, description="Positive launch actor provenance when known")

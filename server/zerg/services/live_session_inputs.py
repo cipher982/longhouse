@@ -209,11 +209,18 @@ def claim_next_live_queued_receipt(
     session_id: UUID | str,
     delivery_request_id: str,
 ) -> LiveInputReceiptSnapshot | None:
+    # Age is enforced here, not only after a failed dispatch. A receipt that was
+    # never claimable — offline machine, activity that never became drainable —
+    # would otherwise sit untouched for hours and then be injected the moment
+    # the session woke up. Nobody wants a prompt they sent this morning arriving
+    # after lunch.
+    cutoff = datetime.now(timezone.utc) - MAX_DELIVERY_AGE
     candidate = (
         db.query(LiveSessionInputReceipt)
         .filter(
             LiveSessionInputReceipt.session_id == _session_key(session_id),
             LiveSessionInputReceipt.status == INPUT_STATUS_QUEUED,
+            LiveSessionInputReceipt.created_at >= cutoff,
         )
         .order_by(LiveSessionInputReceipt.created_at.asc(), LiveSessionInputReceipt.id.asc())
         .first()
@@ -272,6 +279,71 @@ def mark_live_receipt_failed(
     row.updated_at = datetime.now(timezone.utc)
     db.commit()
     return _snapshot(row)
+
+
+# How long an undelivered input stays worth delivering.
+#
+# This is the real bound, and it is age rather than attempts because attempts
+# measure retry cadence, not user intent. The recovery loop wakes every 5s, so
+# an attempt budget would expire in well under a minute for a machine that is
+# merely asleep — while a session whose activity never becomes drainable would
+# never burn an attempt at all. Age answers the actual question: is this still
+# something the sender wants injected?
+MAX_DELIVERY_AGE = timedelta(minutes=30)
+
+# Backstop against a receipt that somehow churns without aging out. Generous on
+# purpose: it exists to stop a hot spin, not to express policy.
+MAX_DELIVERY_ATTEMPTS = 200
+
+
+def requeue_live_receipt(
+    db: Session,
+    *,
+    receipt_id: str,
+    error: str,
+    now: datetime | None = None,
+) -> tuple[LiveInputReceiptSnapshot | None, bool]:
+    """Return a claimed receipt to the queue after a transient failure.
+
+    Returns ``(snapshot, requeued)``. ``requeued`` is False once the input has
+    aged out or exhausted the attempt backstop, in which case it is failed so
+    the queue can move past it rather than blocking every later input behind one
+    that will never land.
+
+    Clearing ``delivery_request_id`` is what makes the receipt claimable again;
+    the recovery loop then takes it in ``created_at`` order like any other
+    queued input.
+    """
+
+    row = db.query(LiveSessionInputReceipt).filter(LiveSessionInputReceipt.id == str(receipt_id)).first()
+    if row is None:
+        return None, False
+    observed_at = now or datetime.now(timezone.utc)
+    attempts = int(row.delivery_attempts or 0) + 1
+    row.delivery_attempts = attempts
+    row.updated_at = observed_at
+    message = str(error or "session input delivery failed")[:500]
+
+    created_at = normalize_utc(row.created_at)
+    aged_out = created_at is not None and (observed_at - created_at) > MAX_DELIVERY_AGE
+    exhausted = attempts >= MAX_DELIVERY_ATTEMPTS
+    if aged_out or exhausted:
+        row.status = INPUT_STATUS_FAILED
+        row.error_json = _json_or_none(
+            {
+                "message": message,
+                "attempts": attempts,
+                "reason": "delivery_expired" if aged_out else "max_delivery_attempts",
+            }
+        )
+        db.commit()
+        return _snapshot(row), False
+
+    row.status = INPUT_STATUS_QUEUED
+    row.delivery_request_id = None
+    row.error_json = _json_or_none({"message": message, "attempts": attempts, "reason": "transient"})
+    db.commit()
+    return _snapshot(row), True
 
 
 def upsert_live_input_receipt(

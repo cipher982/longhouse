@@ -157,20 +157,21 @@ struct TimelineView: View {
             LazyVStack(alignment: .leading, spacing: 14) {
                 ConnectionStatusStrip(banner: effectiveConnectionBanner)
                     .padding(.horizontal, 0)
-                Text("Recent")
-                    .font(.headline.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 2)
 
-                ForEach(sessions) { session in
-                    NavigationLink(value: SessionRoute(sessionId: session.id, fallbackTitle: session.title)) {
-                        TimelineSessionCardRow(
-                            session: session,
-                            emphasized: false,
-                            connectivityBanner: viewModel.connectionBanner
-                        )
-                    }
-                    .buttonStyle(.plain)
+                // Two tiers, decided server-side, matching web. A phone user is
+                // by definition away from the machine, so an undifferentiated
+                // list cannot answer "what do I have going right now" — the
+                // only question this screen exists for.
+                if openSessions(sessions).isEmpty {
+                    tierHeader("Nothing running")
+                } else {
+                    tierHeader("Open")
+                    tierRows(openSessions(sessions), emphasized: true)
+                }
+
+                if !historySessions(sessions).isEmpty {
+                    tierHeader("History").padding(.top, 6)
+                    tierRows(historySessions(sessions), emphasized: false)
                 }
             }
             .padding(.horizontal, 16)
@@ -179,6 +180,39 @@ struct TimelineView: View {
         }
         .navigationDestination(for: SessionRoute.self) { route in
             SessionView(sessionId: route.sessionId, fallbackTitle: route.fallbackTitle)
+        }
+    }
+
+    /// The sessions the user would say they have going right now.
+    ///
+    /// The tier is decided server-side (`working_set`) so web and iOS cannot
+    /// drift; the client only splits the list.
+    private func openSessions(_ sessions: [SessionSummary]) -> [SessionSummary] {
+        sessions.filter { $0.stateFacts.workingSet == "open" }
+    }
+
+    private func historySessions(_ sessions: [SessionSummary]) -> [SessionSummary] {
+        sessions.filter { $0.stateFacts.workingSet != "open" }
+    }
+
+    private func tierHeader(_ title: String) -> some View {
+        Text(title)
+            .font(.headline.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 2)
+    }
+
+    @ViewBuilder
+    private func tierRows(_ sessions: [SessionSummary], emphasized: Bool) -> some View {
+        ForEach(sessions) { session in
+            NavigationLink(value: SessionRoute(sessionId: session.id, fallbackTitle: session.title)) {
+                TimelineSessionCardRow(
+                    session: session,
+                    emphasized: emphasized,
+                    connectivityBanner: viewModel.connectionBanner
+                )
+            }
+            .buttonStyle(.plain)
         }
     }
 

@@ -289,7 +289,8 @@ def _managed_local_launch_response(db: Session, result, *, owner_id: int | None 
     permission_mode = str(getattr(session, "permission_mode", "") or "bypass").strip() or "bypass"
     # Mint a session-scoped hook token ONLY for remote_approve launches, so the
     # permission gate can authenticate as this exact session (the gate endpoints
-    # reject durable device tokens). Bypass launches never get one.
+    # reject durable device tokens). Bypass and provider-local launches never
+    # get one.
     hook_token: str | None = None
     coordination_token: str | None = None
     if owner_id is not None:

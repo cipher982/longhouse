@@ -34,7 +34,6 @@ impl BridgeLaunchMode {
 """,
     )
     _write(root / "engine/src/main.rs", "")
-    _write(root / "server/zerg/cli/codex.py", "")
     _write(root / "scripts/qa/codex-smoke.sh", "#!/usr/bin/env bash\n")
     _write(root / "scripts/ci/codex-smoke.sh", "#!/usr/bin/env bash\n")
 
@@ -106,14 +105,6 @@ def test_rejects_packaged_codex_source_selector() -> None:
         _assert_fails(root, "packaged Codex source selector")
 
 
-def test_rejects_legacy_start_thread_flag() -> None:
-    with tempfile.TemporaryDirectory() as temp_dir:
-        root = Path(temp_dir)
-        _write_minimal_contract_root(root)
-        _write(root / "server/zerg/cli/codex.py", "args.append('--start-thread')\n")
-        _assert_fails(root, "legacy Codex start-thread flag")
-
-
 def test_rejects_literal_headless_launch_mode_writer() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
@@ -136,7 +127,6 @@ def main() -> int:
         test_rejects_legacy_start_thread_flag_outside_cli_module,
         test_rejects_packaged_codex_release_artifact,
         test_rejects_packaged_codex_source_selector,
-        test_rejects_legacy_start_thread_flag,
         test_rejects_literal_headless_launch_mode_writer,
     ]
     for test in tests:

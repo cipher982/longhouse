@@ -343,6 +343,15 @@ pub struct ControlEvidence {
     pub lease_generation: Option<String>,
     pub ownership: String,
     pub state: String,
+    /// Whether a human terminal is attached to this session right now.
+    ///
+    /// Distinct from `state`: a bridge can hold a healthy control path with no
+    /// terminal on it. This is the axis that maps to what a user counts as
+    /// "sessions I have open", so it must not be inferred from control
+    /// liveness. `None` means the provider has no way to observe attachment,
+    /// which is different from observing that nothing is attached.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub terminal_attached: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bridge_status: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -790,7 +799,8 @@ pub(crate) fn leases_from_observations(
             .is_some_and(|value| !value.trim().is_empty());
         let bridge_ready = obs.status == "ready";
 
-        let detached_ui_control_ready = bridge_ready
+        let detached_ui_control_ready = is_detached_ui_launch(obs)
+            && bridge_ready
             && obs.app_server_alive
             && obs
                 .thread_id
@@ -1105,7 +1115,8 @@ pub(crate) fn machine_evidence_from_observations(
                 .last_error
                 .as_deref()
                 .is_some_and(|value| !value.trim().is_empty());
-            let detached_control_ready = obs.status == "ready"
+            let detached_control_ready = is_detached_ui_launch(obs)
+                && obs.status == "ready"
                 && obs.app_server_alive
                 && obs
                     .thread_id
@@ -1126,6 +1137,7 @@ pub(crate) fn machine_evidence_from_observations(
             control.push(ControlEvidence {
                 authority_class: "provider_control".to_string(),
                 provider: "codex".to_string(),
+                terminal_attached: Some(obs.has_tui_attachment),
                 session_id: obs.session_id.clone(),
                 provider_session_id: obs.thread_id.clone(),
                 connection_id: obs.connection_id.clone(),
@@ -1225,6 +1237,7 @@ pub(crate) fn machine_evidence_from_observations(
             control.push(ControlEvidence {
                 authority_class: "provider_control".to_string(),
                 provider: "claude".to_string(),
+                terminal_attached: Some(obs.claude_foreground_tui),
                 session_id: obs.session_id.clone(),
                 provider_session_id: obs.provider_session_id.clone(),
                 connection_id: obs.connection_id.clone(),
@@ -1316,6 +1329,7 @@ pub(crate) fn machine_evidence_from_observations(
             control.push(ControlEvidence {
                 authority_class: "provider_control".to_string(),
                 provider: "opencode".to_string(),
+                terminal_attached: Some(obs.has_tui_attachment),
                 session_id: obs.session_id.clone(),
                 provider_session_id: Some(obs.provider_session_id.clone()),
                 connection_id: obs.connection_id.clone(),
@@ -1406,6 +1420,12 @@ pub(crate) fn machine_evidence_from_observations(
             control.push(ControlEvidence {
                 authority_class: "provider_control".to_string(),
                 provider: "cursor".to_string(),
+                // Cursor Helm's launcher is the process the user runs in their
+                // terminal, so its liveness is the attachment signal: close the
+                // terminal and it dies. Reporting None here instead dropped
+                // open-but-idle Cursor terminals into History, since the
+                // working-set rule only promotes an explicit true.
+                terminal_attached: Some(obs.launcher_alive),
                 session_id: obs.session_id.clone(),
                 provider_session_id: None,
                 connection_id: obs.connection_id.clone(),
@@ -2259,6 +2279,16 @@ fn resolved_managed_codex_session(
         },
         reason_codes: Vec::new(),
     }
+}
+
+/// True when this bridge was launched deliberately headless (`detached_ui`).
+///
+/// Only a headless launch may reach `attached` without a live terminal. A `tui`
+/// launch *is* its terminal: once the TUI is gone the bridge is debris, and
+/// letting it satisfy the headless control-ready path is what kept abandoned
+/// bridges projecting live control indefinitely.
+fn is_detached_ui_launch(obs: &CodexBridgeObservation) -> bool {
+    obs.launch_mode.as_deref().map(str::trim) == Some("detached_ui")
 }
 
 fn codex_ui_presence(
@@ -3304,16 +3334,65 @@ mod tests {
             Some("background")
         );
 
+        // A `tui` launch with no live terminal is not steerable Helm state. It
+        // occurs briefly during the documented TUI-crash reattach, and durably
+        // whenever teardown was skipped. Both report `degraded`: honest during
+        // recovery (it self-corrects the moment the TUI returns) and honest for
+        // debris. Only `detached_ui` reaches `attached` without a terminal.
         let recovered_session = sessions
             .iter()
             .find(|session| session.session_id.as_deref() == Some("recovered-codex"))
             .unwrap();
-        assert_eq!(recovered_session.state, "attached");
+        assert_eq!(recovered_session.state, "degraded");
         assert_eq!(recovered_session.bridge.ui_attached, Some(false));
         assert_eq!(
             recovered_session.bridge.ui_presence.as_deref(),
-            Some("background")
+            Some("degraded")
         );
+    }
+
+    #[test]
+    fn leases_from_observations_refuse_attached_for_tui_launch_without_terminal() {
+        // Regression: an abandoned `tui` bridge stays alive with a live
+        // app-server and a thread forever. It used to satisfy the headless
+        // control-ready path and project `attached`, which became
+        // live_control_available on hosted and pinned dead rows to the shelf.
+        let now = Utc::now();
+
+        let mut obs = test_observation(
+            "abandoned-tui-codex",
+            "ws://127.0.0.1:45684/session",
+        );
+        obs.launch_mode = Some("tui".to_string());
+        obs.has_tui_attachment = false;
+        obs.app_server_alive = true;
+        obs.thread_id = Some("thread-abandoned".to_string());
+
+        let leases = leases_from_observations("cinder", &[obs], now);
+
+        assert_eq!(leases.len(), 1);
+        assert_eq!(leases[0].state, "degraded");
+    }
+
+    #[test]
+    fn leases_from_observations_refuse_attached_for_unknown_launch_mode() {
+        // Pre-`launch_mode` state files carry no mode. They must not inherit
+        // the headless exemption; without evidence of a terminal they degrade.
+        let now = Utc::now();
+
+        let mut obs = test_observation(
+            "legacy-codex",
+            "ws://127.0.0.1:45685/session",
+        );
+        obs.launch_mode = None;
+        obs.has_tui_attachment = false;
+        obs.app_server_alive = true;
+        obs.thread_id = Some("thread-legacy".to_string());
+
+        let leases = leases_from_observations("cinder", &[obs], now);
+
+        assert_eq!(leases.len(), 1);
+        assert_eq!(leases[0].state, "degraded");
     }
 
     #[test]

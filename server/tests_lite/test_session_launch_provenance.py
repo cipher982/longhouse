@@ -7,8 +7,6 @@ from uuid import uuid4
 
 from sqlalchemy.orm import sessionmaker
 
-from zerg.cli._managed_launch import build_managed_local_launch_payload
-from zerg.cli._managed_launch import interactive_human_shell_launch_provenance
 from zerg.database import Base
 from zerg.database import make_engine
 from zerg.models.agents import AgentSession
@@ -20,7 +18,6 @@ from zerg.services.managed_local_launcher import ManagedLocalLaunchParams
 from zerg.services.managed_local_launcher import build_managed_local_launch_plan
 from zerg.services.managed_local_launcher import materialize_managed_local_launch_plan_sync
 from zerg.services.session_hot_cards import upsert_timeline_card_from_session
-from zerg.session_loop_mode import SessionLoopMode
 
 
 def _make_db(tmp_path):
@@ -200,7 +197,6 @@ def test_ingest_launch_provenance_is_fill_only(tmp_path):
         assert session.launch_actor == "human_shell"
         assert session.launch_surface == "terminal"
 
-
 def test_ingest_only_backfills_surface_for_matching_actor(tmp_path):
     SessionLocal = _make_db(tmp_path)
     session_id = uuid4()
@@ -275,38 +271,3 @@ def test_managed_local_materialization_persists_human_shell_launch(tmp_path):
         session = db.get(AgentSession, plan.session_id)
         assert session.launch_actor == "human_shell"
         assert session.launch_surface == "terminal"
-
-
-def test_cli_human_shell_stamp_requires_interactive_tty_and_no_automation_env(tmp_path):
-    env = {"LONGHOUSE_ORIGIN_KIND": "", "LONGHOUSE_IS_SIDECHAIN": ""}
-    assert interactive_human_shell_launch_provenance(env=env, stdin_is_tty=True, stdout_is_tty=True) == (
-        "human_shell",
-        "terminal",
-    )
-    assert interactive_human_shell_launch_provenance(
-        env={"LONGHOUSE_ORIGIN_KIND": "hatch_automation"},
-        stdin_is_tty=True,
-        stdout_is_tty=True,
-    ) == (None, None)
-    assert interactive_human_shell_launch_provenance(
-        env={"LONGHOUSE_IS_SIDECHAIN": "1"},
-        stdin_is_tty=True,
-        stdout_is_tty=True,
-    ) == (None, None)
-    assert interactive_human_shell_launch_provenance(env=env, stdin_is_tty=False, stdout_is_tty=True) == (
-        None,
-        None,
-    )
-
-    payload = build_managed_local_launch_payload(
-        cwd=tmp_path,
-        provider="codex",
-        project=None,
-        name=None,
-        loop_mode=SessionLoopMode.ASSIST,
-        machine_name="laptop",
-        launch_actor="human_shell",
-        launch_surface="terminal",
-    )
-    assert payload["launch_actor"] == "human_shell"
-    assert payload["launch_surface"] == "terminal"

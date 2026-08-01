@@ -13,9 +13,9 @@
         "codex_app_server"
       ],
       "adapter_sources": [
-        "server/zerg/cli/codex.py",
         "server/zerg/mcp_server/server.py",
         "engine/src/codex_bridge.rs",
+        "engine/src/codex_bridge_ownership.rs",
         "engine/src/codex_exec.rs",
         "engine/src/codex_ws_relay.rs"
       ],
@@ -75,6 +75,7 @@
       "tail_output": true,
       "runtime_phase": true,
       "transcript_binding": true,
+      "live_proof": false,
       "startup_coordination_context": false,
       "capabilities": {
         "coordination.awareness.create": {
@@ -296,7 +297,7 @@
         "codex.resume_run_once",
         "codex.turn_start"
       ],
-      "adapter_digest": "f08a2f131f6cc63ced5cb771ce7f6d914f92865897a26318135f18c8660e0a9d"
+      "adapter_digest": "54999c330e8bf206b781c6f5dc978d1695ac93dcd454dc71d09eb5f3baf0bbaa"
     },
     {
       "provider": "claude",
@@ -360,6 +361,7 @@
       "tail_output": true,
       "runtime_phase": true,
       "transcript_binding": true,
+      "live_proof": true,
       "startup_coordination_context": true,
       "capabilities": {
         "session.launch.helm": {
@@ -642,8 +644,6 @@
       "control_plane": "opencode_server_bridge",
       "control_plane_aliases": [],
       "adapter_sources": [
-        "server/zerg/cli/opencode.py",
-        "server/zerg/cli/opencode_bridge.py",
         "server/zerg/mcp_server/server.py",
         "engine/src/opencode_control.rs",
         "engine/src/opencode_run.rs"
@@ -696,6 +696,7 @@
       "tail_output": true,
       "runtime_phase": true,
       "transcript_binding": true,
+      "live_proof": true,
       "startup_coordination_context": false,
       "capabilities": {
         "session.launch.helm": {
@@ -842,7 +843,7 @@
         "opencode.turn_start",
         "opencode.turn_interrupt"
       ],
-      "adapter_digest": "d146351320d1771b015ae40313d5480b9e652c349a161df8b9b7587d68754ce2"
+      "adapter_digest": "c7b6de0df1dbcbca4bfa82519e313f4161b6c42f587b0d7411da31d48021142c"
     },
     {
       "provider": "antigravity",
@@ -854,8 +855,6 @@
       "control_plane": "antigravity_hook_inbox",
       "control_plane_aliases": [],
       "adapter_sources": [
-        "server/zerg/cli/antigravity.py",
-        "server/zerg/cli/antigravity_channel.py",
         "server/zerg/services/managed_local_control.py",
         "engine/src/managed_antigravity_scan.rs"
       ],
@@ -898,7 +897,7 @@
       "launch_local": true,
       "run_once": false,
       "reattach": false,
-      "send_input": true,
+      "send_input": false,
       "interrupt": false,
       "steer_active_turn": false,
       "answer_pause": false,
@@ -906,6 +905,7 @@
       "tail_output": true,
       "runtime_phase": true,
       "transcript_binding": true,
+      "live_proof": false,
       "startup_coordination_context": false,
       "capabilities": {
         "session.launch.helm": {
@@ -934,8 +934,8 @@
           ]
         },
         "session.input.send": {
-          "disposition": "implemented",
-          "reason_code": "semantic_proof_missing",
+          "disposition": "policy_disabled",
+          "reason_code": "policy_disabled",
           "policy_key": "provider.antigravity.send_input",
           "action_gate": "strict",
           "contexts": {
@@ -957,31 +957,6 @@
               ],
               "max_age_seconds": 86400,
               "oracle_digest": "8130a0b62057da86bb925201b551e02b5eb59b855e3d6412140488a90209d146"
-            }
-          ]
-        },
-        "session.input.steer_active": {
-          "disposition": "upstream_absent",
-          "reason_code": "upstream_unavailable",
-          "policy_key": "provider.antigravity.steer_active_turn",
-          "action_gate": "strict",
-          "contexts": {
-            "modes": [
-              "helm"
-            ]
-          },
-          "runtime_prerequisites": [],
-          "required_assertions": [
-            {
-              "id": "rejected_before_control_write",
-              "scenario_id": "antigravity_steer_rejection",
-              "oracle_source": "server/zerg/qa/provider_control_oracles.py",
-              "minimum_scenario_revision": 1,
-              "acceptable_evidence": [
-                "hermetic"
-              ],
-              "max_age_seconds": 604800,
-              "oracle_digest": "12d58e296eef2f2042c5474b43a633601aa1a6130a4c9c9b7f4725a60f7b7d28"
             }
           ]
         }
@@ -1010,9 +985,11 @@
           "observed_provider_version": "1.1.5"
         },
         "send_input": {
-          "level": "live_token",
-          "source": "scripts/qa/provider-control-e2e-canary.py --provider antigravity --antigravity-real-agy-send proves real agy PreInvocation hook-inbox injection changes the model-visible turn",
-          "disposition": "implemented",
+          "level": "none",
+          "source": "routed away; see reason",
+          "disposition": "policy_disabled",
+          "reason": "Antigravity is maintenance tier. Five independent server gates zero its send capability (live_control_catalog._CANONICAL_AUTH_PROVIDERS, heartbeat ControlEvidenceIn, machine_evidence._RUN_EXIT_AUTHORITY, managed_control_state, live_catalog_launch) and control_channel.rs reject_excluded_provider refuses every antigravity command with provider_shadow_only before dispatch. The hook-inbox injection works; Longhouse does not route to it.",
+          "routed_to": "shadow_archive_only",
           "owner_action": "antigravity real agy hook-inbox injection canary"
         },
         "interrupt": {
@@ -1072,10 +1049,8 @@
           "owner_action": "antigravity turn-scoped Console adapter"
         }
       },
-      "machine_control_supports": [
-        "antigravity.send"
-      ],
-      "adapter_digest": "3e3c17a7f8dfe07ccea203142cbd17e1109229b818f304c8187d40de143b36a9"
+      "machine_control_supports": [],
+      "adapter_digest": "331c2bd00409db548d13cbc47c7da8d3873fba1f223bd515e157669f769ef000"
     },
     {
       "provider": "cursor",
@@ -1136,6 +1111,7 @@
       "tail_output": true,
       "runtime_phase": true,
       "transcript_binding": true,
+      "live_proof": false,
       "startup_coordination_context": false,
       "capabilities": {
         "coordination.awareness.create": {
@@ -1220,32 +1196,6 @@
               "oracle_digest": "ddf0aae0c879c9b48dea816c64742d052cbd3e6ef2e832deee67b723f5e3bcee"
             }
           ]
-        },
-        "session.input.steer_active": {
-          "disposition": "upstream_absent",
-          "reason_code": "upstream_unavailable",
-          "policy_key": "provider.cursor.steer_active_turn",
-          "action_gate": "strict",
-          "contexts": {
-            "modes": [
-              "helm",
-              "console"
-            ]
-          },
-          "runtime_prerequisites": [],
-          "required_assertions": [
-            {
-              "id": "rejected_before_control_write",
-              "scenario_id": "cursor_steer_rejection",
-              "oracle_source": "server/zerg/qa/provider_control_oracles.py",
-              "minimum_scenario_revision": 1,
-              "acceptable_evidence": [
-                "hermetic"
-              ],
-              "max_age_seconds": 604800,
-              "oracle_digest": "12d58e296eef2f2042c5474b43a633601aa1a6130a4c9c9b7f4725a60f7b7d28"
-            }
-          ]
         }
       },
       "can_resume": true,
@@ -1326,7 +1276,7 @@
         "cursor.turn_start",
         "cursor.turn_interrupt"
       ],
-      "adapter_digest": "658a5d28f7875aeef2fc9165943ef2fd6df7d640af2900be8caa837732549b0e"
+      "adapter_digest": "33f99527d9bc36a8829adc7017964f2cee768b93a52aeea0a2b2f695545fe5c0"
     }
   ]
 }

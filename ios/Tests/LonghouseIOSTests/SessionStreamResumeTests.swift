@@ -335,9 +335,22 @@ struct SessionStreamResumeTests {
         #expect(SessionViewModel.pendingInputPollDelay(submittedInputs: [failed], now: createdAt) == nil)
     }
 
+    /// Condition-poll budget for the async helpers below.
+    ///
+    /// These all poll for a condition and return as soon as it holds, so a
+    /// generous ceiling costs nothing on a fast machine — a passing test still
+    /// finishes in milliseconds. It only decides how much scheduling delay is
+    /// tolerated before a genuinely-satisfied condition gets reported as a
+    /// failure. At 2s these flaked on CI (suppressedSecondUnauthorizedLeaves-
+    /// StreamReattachable, run 30648338024) while passing locally in 0.084s,
+    /// on a runner whose log was full of simulator timeouts. Widening the
+    /// ceiling does not weaken any assertion: the condition must still become
+    /// true, and every #expect still runs against the real value.
+    private let waitBudget: Duration = .seconds(10)
+
     private func waitForLastItemId(_ model: SessionViewModel, _ expected: String) async {
         let clock = ContinuousClock()
-        let deadline = clock.now.advanced(by: .seconds(2))
+        let deadline = clock.now.advanced(by: waitBudget)
         while clock.now < deadline {
             if model.items.last?.id == expected {
                 return
@@ -348,7 +361,7 @@ struct SessionStreamResumeTests {
 
     private func waitForItemIds(_ model: SessionViewModel, _ expected: [String]) async {
         let clock = ContinuousClock()
-        let deadline = clock.now.advanced(by: .seconds(2))
+        let deadline = clock.now.advanced(by: waitBudget)
         while clock.now < deadline {
             if model.items.map(\.id) == expected {
                 return
@@ -359,7 +372,7 @@ struct SessionStreamResumeTests {
 
     private func waitForStartCount(_ recorder: StreamFactoryRecorder, atLeast count: Int) async {
         let clock = ContinuousClock()
-        let deadline = clock.now.advanced(by: .seconds(2))
+        let deadline = clock.now.advanced(by: waitBudget)
         while clock.now < deadline {
             if recorder.startCount >= count {
                 return
@@ -370,7 +383,7 @@ struct SessionStreamResumeTests {
 
     private func waitForStreamDetached(_ model: SessionViewModel) async -> Bool {
         let clock = ContinuousClock()
-        let deadline = clock.now.advanced(by: .seconds(2))
+        let deadline = clock.now.advanced(by: waitBudget)
         while clock.now < deadline {
             if !model.hasRealtimeStreamTaskForTesting {
                 return true

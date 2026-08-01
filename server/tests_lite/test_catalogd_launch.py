@@ -93,6 +93,104 @@ async def test_catalogd_owns_managed_local_launch_transaction(daemon_paths):
     engine.dispose()
 
 
+@pytest.mark.asyncio
+async def test_catalogd_confirms_registered_local_launch_exactly_once(daemon_paths):
+    database_path, socket_path = daemon_paths
+    session_id = uuid4()
+    launch = _local_launch_payload(
+        session_id=session_id,
+        provider="cursor",
+        managed_transport="cursor_helm",
+        attach_command="",
+    )
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        created = await client.call("session.launch.local.create.v2", {"launch": launch})
+        outcome = {
+            "session_id": str(session_id),
+            "run_id": created["run_id"],
+            "owner_id": 7,
+            "device_id": "cinder",
+            "state": "adopted",
+            "error_code": None,
+            "error_message": None,
+            "observed_at": datetime.now(UTC).isoformat(),
+        }
+        confirmed = await client.call("session.launch.local.finish.v2", {"outcome": outcome})
+        assert confirmed["launch"]["launch_state"] == "live"
+        replay = await client.call("session.launch.local.finish.v2", {"outcome": outcome})
+        assert replay["exact_replay"] is True
+        conflicting = {**outcome, "state": "failed", "error_code": "provider_launch_failed"}
+        with pytest.raises(CatalogRemoteError) as exc_info:
+            await client.call("session.launch.local.finish.v2", {"outcome": conflicting})
+        assert exc_info.value.code == "conflict"
+    finally:
+        await client.close()
+        await daemon.close()
+
+    engine = create_catalog_engine(database_path)
+    initialize_catalog_schema(engine)
+    with Session(engine) as db:
+        attempt = db.query(LiveSessionLaunchAttempt).one()
+        assert attempt.state == "adopted"
+        assert attempt.run_id == created["run_id"]
+        assert db.get(LiveLaunchReadiness, str(session_id)).state == "adopted"
+        assert db.get(LiveSessionRun, created["run_id"]).ended_at is None
+    engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_catalogd_aborts_registered_local_launch_and_releases_control(daemon_paths):
+    database_path, socket_path = daemon_paths
+    session_id = uuid4()
+    launch = _local_launch_payload(
+        session_id=session_id,
+        provider="opencode",
+        managed_transport="opencode_server_bridge",
+        attach_command="",
+    )
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        created = await client.call("session.launch.local.create.v2", {"launch": launch})
+        aborted = await client.call(
+            "session.launch.local.finish.v2",
+            {
+                "outcome": {
+                    "session_id": str(session_id),
+                    "run_id": created["run_id"],
+                    "owner_id": 7,
+                    "device_id": "cinder",
+                    "state": "failed",
+                    "error_code": "provider_launch_failed",
+                    "error_message": "scripted provider refused to start",
+                    "observed_at": datetime.now(UTC).isoformat(),
+                }
+            },
+        )
+        assert aborted["launch"]["launch_state"] == "launch_failed"
+    finally:
+        await client.close()
+        await daemon.close()
+
+    engine = create_catalog_engine(database_path)
+    initialize_catalog_schema(engine)
+    with Session(engine) as db:
+        attempt = db.query(LiveSessionLaunchAttempt).one()
+        assert attempt.state == "failed"
+        assert attempt.error_code == "provider_launch_failed"
+        assert db.get(LiveLaunchReadiness, str(session_id)).state == "failed"
+        assert db.get(LiveSessionCatalog, str(session_id)).ended_at is not None
+        assert db.get(LiveSessionRun, created["run_id"]).ended_at is not None
+        connection = db.query(LiveSessionConnection).one()
+        assert connection.state == "released"
+        assert connection.released_at is not None
+    engine.dispose()
+
+
 def _local_launch_payload(
     *,
     session_id,

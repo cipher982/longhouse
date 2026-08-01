@@ -32,6 +32,13 @@ class MachineControlCommandResponse:
     transport_ok: bool
     message: Mapping[str, Any] | None = None
     error: str | None = None
+    # When transport failed, whether the command could have been received.
+    #
+    # "not_sent" means it provably never left us: no channel, or the send
+    # itself raised. Retrying is free. "ambiguous" means we stopped waiting, so
+    # the engine may already have accepted and run it and a retry could
+    # duplicate. Callers must not infer this from error text.
+    delivery_certainty: str | None = None
 
 
 @dataclass
@@ -155,6 +162,7 @@ class MachineControlChannelRegistry:
             if connection is None:
                 return MachineControlCommandResponse(
                     transport_ok=False,
+                    delivery_certainty="not_sent",
                     error="Machine Agent control channel is offline",
                 )
             pending = self._pending.get(command_id)
@@ -162,6 +170,7 @@ class MachineControlChannelRegistry:
                 if pending.key != key:
                     return MachineControlCommandResponse(
                         transport_ok=False,
+                        delivery_certainty="not_sent",
                         error="Machine Agent control command id is already in flight for another connection",
                     )
                 future = pending.future
@@ -198,6 +207,7 @@ class MachineControlChannelRegistry:
                 )
                 return MachineControlCommandResponse(
                     transport_ok=False,
+                    delivery_certainty="not_sent",
                     error="Failed to send command to Machine Agent control channel",
                 )
 
@@ -211,6 +221,7 @@ class MachineControlChannelRegistry:
                 pending.future.exception()
             return MachineControlCommandResponse(
                 transport_ok=False,
+                delivery_certainty="ambiguous",
                 error=f"Machine Agent control command timed out after {timeout_secs} seconds",
             )
         except Exception as exc:
@@ -218,6 +229,7 @@ class MachineControlChannelRegistry:
                 self._pending.pop(command_id, None)
             return MachineControlCommandResponse(
                 transport_ok=False,
+                delivery_certainty="ambiguous",
                 error=str(exc),
             )
 
@@ -242,6 +254,7 @@ class MachineControlChannelRegistry:
             if connection is None:
                 return MachineControlCommandResponse(
                     transport_ok=False,
+                    delivery_certainty="not_sent",
                     error="Machine Agent control channel is offline",
                 )
             websocket = connection.websocket
@@ -268,6 +281,7 @@ class MachineControlChannelRegistry:
             )
             return MachineControlCommandResponse(
                 transport_ok=False,
+                delivery_certainty="not_sent",
                 error="Failed to send command to Machine Agent control channel",
             )
         return MachineControlCommandResponse(transport_ok=True, message=frame)

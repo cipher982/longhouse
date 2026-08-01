@@ -381,7 +381,16 @@ def _codex_managed_session_row(
     reason_codes: list[str],
 ) -> dict[str, Any]:
     bridge_has_thread = _normalize_optional_string(state.get("thread_id")) is not None
-    detached_ui_control_ready = bool(app_server is not None and bridge_status == "ready" and bridge_has_thread)
+    # Only a deliberately headless launch may be control-ready without a live
+    # terminal. A "tui" launch is its terminal: once the TUI is gone the bridge
+    # is debris, and letting it pass here is what kept abandoned bridges
+    # reporting attached. Mirrors is_detached_ui_launch in engine/heartbeat.rs.
+    detached_ui_control_ready = bool(
+        _normalize_optional_string(state.get("launch_mode")) == "detached_ui"
+        and app_server is not None
+        and bridge_status == "ready"
+        and bridge_has_thread
+    )
     normalized_state = "attached" if attached_process is not None or detached_ui_control_ready else "detached"
     provider_thread_switched = "provider_thread_switched" in reason_codes
     if reason_codes and not provider_thread_switched:

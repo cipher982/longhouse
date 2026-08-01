@@ -6,9 +6,19 @@
 
 #[path = "build_identity.rs"]
 mod build_identity;
+#[path = "managed_launch_lifecycle.rs"]
+mod managed_launch_lifecycle;
+#[path = "managed_launch_payload.rs"]
+mod managed_launch_payload;
+#[path = "managed_terminal.rs"]
+mod managed_terminal;
 
 use anyhow::Context;
 use clap::{Args, Parser, Subcommand};
+use managed_launch_lifecycle::{
+    register_managed_launch, ManagedLaunchResponse, ManagedLaunchTransaction,
+};
+use managed_launch_payload::{ManagedLaunchRegistration, PermissionMode};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::io::{BufRead, BufReader};
@@ -319,17 +329,6 @@ struct PairIdentity {
 struct MachineState {
     runtime_url: Option<String>,
     machine_name: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct ManagedLaunchResponse {
-    session_id: String,
-    run_id: String,
-    provider_session_id: Option<String>,
-    permission_mode: Option<String>,
-    hook_token: Option<String>,
-    managed_transport: Option<String>,
-    coordination_token: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -889,18 +888,6 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
         "--claude-bin",
     )?;
     ensure_claude_channel_prerequisite(&binary)?;
-    let git = |args: &[&str]| {
-        Command::new("git")
-            .arg("-C")
-            .arg(&cwd)
-            .args(args)
-            .output()
-            .ok()
-            .filter(|output| output.status.success())
-            .and_then(|output| String::from_utf8(output.stdout).ok())
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
-    };
     let (launch_actor, launch_surface) = interactive_human_shell_provenance();
     let runtime = tokio::runtime::Runtime::new()?;
     let resuming = args.resume.is_some();
@@ -910,43 +897,45 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
         cwd = session_cwd;
         response
     } else {
-        let mut payload = json!({"cwd":cwd,"provider":"claude","project":args.project,"git_repo":git(&["rev-parse", "--show-toplevel"]),"git_branch":git(&["rev-parse", "--abbrev-ref", "HEAD"]),"display_name":args.name,"loop_mode":args.loop_mode,"machine_name":machine_name,"permission_mode":if args.remote_approve {"remote_approve"} else {"bypass"},"native_claude_channels_available":true});
+        let mut payload = ManagedLaunchRegistration {
+            provider: "claude",
+            cwd: &cwd,
+            project: args.project.as_deref(),
+            display_name: args.name.as_deref(),
+            loop_mode: &args.loop_mode,
+            machine_name: &machine_name,
+            // Claude passes --dangerously-skip-permissions unless remote
+            // approval was requested, so the flag and the wire value agree.
+            permission_mode: PermissionMode::from_bypass_flag(!args.remote_approve),
+            extra: vec![("native_claude_channels_available", json!(true))],
+        }
+        .to_json();
         if let Some(actor) = launch_actor {
             payload["launch_actor"] = json!(actor);
         }
         if let Some(surface) = launch_surface {
             payload["launch_surface"] = json!(surface);
         }
-        let endpoint = format!(
-            "{}/api/sessions/managed-local/this-device",
-            url.trim_end_matches('/')
-        );
-        runtime.block_on(async {
-            let r = reqwest::Client::new()
-                .post(endpoint)
-                .header("X-Agents-Token", &token)
-                .json(&payload)
-                .send()
-                .await?;
-            if !r.status().is_success() {
-                anyhow::bail!("managed Claude launch failed ({})", r.status());
-            }
-            Ok::<_, anyhow::Error>(r.json().await?)
-        })?
+        register_managed_launch(&runtime, &url, &token, "Claude", &payload, None)?
+    };
+    let mut launch_transaction = if resuming {
+        None
+    } else {
+        Some(ManagedLaunchTransaction::new(
+            &runtime,
+            &url,
+            &token,
+            &response.session_id,
+            &response.run_id,
+        ))
     };
     let provider_session_id = response
         .provider_session_id
-        .context("Longhouse did not return a Claude provider session")?;
-    if response.managed_transport.as_deref() != Some("claude_channel_bridge") {
-        anyhow::bail!("Longhouse returned an unsupported managed-local transport for Claude");
-    }
-    let coordination_token = match response
-        .coordination_token
         .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        Some(token) => token.to_owned(),
+        .context("Longhouse did not return a Claude provider session")?;
+    response.validate_transport("Claude", "claude_channel_bridge")?;
+    let coordination_token = match response.coordination_token() {
+        Some(value) => value.to_owned(),
         None if resuming => issue_coordination_token(&runtime, &url, &token, &response.session_id)?,
         None => anyhow::bail!("Longhouse did not issue coordination authority for this session"),
     };
@@ -956,9 +945,9 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
         command.arg("--dangerously-skip-permissions");
     }
     if resuming {
-        command.args(["--resume", &provider_session_id]);
+        command.args(["--resume", provider_session_id]);
     } else {
-        command.args(["--session-id", &provider_session_id]);
+        command.args(["--session-id", provider_session_id]);
     }
     command
         .args([
@@ -971,10 +960,13 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
         .env("LONGHOUSE_MANAGED_SESSION_ID", &response.session_id)
         .env("LONGHOUSE_RUN_ID", &response.run_id)
         .env("LONGHOUSE_CHANNEL_SESSION_ID", &response.session_id)
-        .env("LONGHOUSE_PROVIDER_SESSION_ID", &provider_session_id)
+        .env("LONGHOUSE_PROVIDER_SESSION_ID", provider_session_id)
         .env("LONGHOUSE_CHANNEL_CWD", &cwd)
         .env("LONGHOUSE_HOOK_URL", &url)
-        .env("LONGHOUSE_HOOK_TOKEN", response.hook_token.unwrap_or(token))
+        .env(
+            "LONGHOUSE_HOOK_TOKEN",
+            response.hook_token.as_deref().unwrap_or(&token),
+        )
         .env_remove("LONGHOUSE_COORDINATION_TOKEN")
         .env(
             "LONGHOUSE_PERMISSION_HOOK_ENABLED",
@@ -987,7 +979,11 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
     if let Err(error) = record_claude_contract(&response.session_id, &cwd, &binary) {
         eprintln!("Longhouse warning: could not record managed-session contract: {error}");
     }
-    let run_result = run_foreground_command(&mut command);
+    let run_result = if let Some(transaction) = launch_transaction.as_mut() {
+        run_foreground_command_after_spawn(&mut command, || transaction.confirm())
+    } else {
+        run_foreground_command(&mut command)
+    };
     if let Err(error) = remove_claude_contract(&response.session_id) {
         eprintln!("Longhouse warning: could not remove managed-session contract: {error}");
     }
@@ -995,7 +991,7 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
     if let Err(error) = record_claude_terminal_event(
         &response.session_id,
         &response.run_id,
-        &provider_session_id,
+        provider_session_id,
         &machine_name,
         exit,
     ) {
@@ -1018,39 +1014,35 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
         "--opencode-bin",
     )?;
     let (launch_actor, launch_surface) = interactive_human_shell_provenance();
-    let mut payload = json!({"cwd": cwd, "provider":"opencode", "project":args.project, "display_name":args.name, "loop_mode":args.loop_mode, "machine_name":machine_name});
+    let mut payload = ManagedLaunchRegistration {
+        provider: "opencode",
+        cwd: &cwd,
+        project: args.project.as_deref(),
+        display_name: args.name.as_deref(),
+        loop_mode: &args.loop_mode,
+        machine_name: &machine_name,
+        // OpenCode has no remote-approval surface: control_channel rejects any
+        // non-bypass permission mode for it outright.
+        permission_mode: PermissionMode::Bypass,
+        extra: vec![],
+    }
+    .to_json();
     if let Some(actor) = launch_actor {
         payload["launch_actor"] = json!(actor);
     }
     if let Some(surface) = launch_surface {
         payload["launch_surface"] = json!(surface);
     }
-    let endpoint = format!(
-        "{}/api/sessions/managed-local/this-device",
-        url.trim_end_matches('/')
-    );
     let runtime = tokio::runtime::Runtime::new()?;
-    let response: ManagedLaunchResponse = runtime.block_on(async {
-        let response = reqwest::Client::new()
-            .post(endpoint)
-            .header("X-Agents-Token", &token)
-            .json(&payload)
-            .send()
-            .await?;
-        if !response.status().is_success() {
-            anyhow::bail!("managed OpenCode launch failed ({})", response.status());
-        }
-        Ok::<_, anyhow::Error>(response.json().await?)
-    })?;
-    if response.managed_transport.as_deref() != Some("opencode_server_bridge") {
-        anyhow::bail!("Longhouse returned an unsupported managed-local transport for OpenCode");
-    }
-    let coordination_token = response
-        .coordination_token
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .context("Longhouse did not issue coordination authority for this session")?;
+    let response = register_managed_launch(&runtime, &url, &token, "OpenCode", &payload, None)?;
+    let mut launch_transaction = ManagedLaunchTransaction::new(
+        &runtime,
+        &url,
+        &token,
+        &response.session_id,
+        &response.run_id,
+    );
+    let coordination_token = response.require_authority("OpenCode", "opencode_server_bridge")?;
     let bridge = paired_engine_path()?;
     let mut start = Command::new(&bridge);
     start
@@ -1091,6 +1083,10 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
             "OpenCode bridge failed: {}",
             String::from_utf8_lossy(&output.stderr).trim()
         );
+    }
+    if let Err(error) = launch_transaction.confirm() {
+        let _ = stop_opencode_bridge(&response.session_id, args.claude_dir.clone());
+        return Err(error);
     }
     println!(
         "Managed OpenCode ready\n→ {}/s/{}",
@@ -1202,31 +1198,23 @@ fn record_claude_terminal_event(
     machine_name: &str,
     exit_code: i32,
 ) -> anyhow::Result<()> {
-    let occurred_at = chrono::Utc::now().to_rfc3339();
-    let terminal_state = if exit_code == 0 {
-        "session_ended"
-    } else {
-        "process_gone"
-    };
-    let event = json!({
-        "runtime_key": format!("claude:{provider_session_id}"),
-        "session_id": session_id,
-        "run_id": run_id,
-        "provider": "claude",
-        "device_id": machine_name,
-        "source": "claude_channel_wrapper",
-        "kind": "terminal_signal",
-        "occurred_at": occurred_at,
-        "dedupe_key": format!("claude-terminal:{session_id}:{run_id}"),
-        "payload": {
-            "terminal_state": terminal_state,
-            "terminal_reason": "provider_exit",
-            "terminal_source": "claude_channel_wrapper",
-            "provider_session_id": provider_session_id,
-            "exit_code": exit_code,
-        },
-    });
-    enqueue_runtime_event(
+    let runtime_key = format!("claude:{provider_session_id}");
+    let event = managed_terminal::ManagedTerminalEvent {
+        runtime_key: &runtime_key,
+        session_id,
+        run_id,
+        provider: "claude",
+        managed_transport: "claude_channel_bridge",
+        provider_session_id: Some(provider_session_id),
+        device_id: Some(machine_name),
+        source: "claude_channel_wrapper",
+        dedupe_prefix: "claude-terminal",
+        terminal_state: managed_terminal::terminal_state_for_exit(exit_code),
+        terminal_reason: "provider_exit",
+        exit_code: Some(exit_code),
+    }
+    .to_json();
+    managed_terminal::enqueue(
         &longhouse_home()?.join("agent/runtime-events-outbox"),
         &event,
     )
@@ -1341,21 +1329,6 @@ fn remove_claude_contract(session_id: &str) -> anyhow::Result<()> {
     }
 }
 
-fn enqueue_runtime_event(dir: &Path, event: &serde_json::Value) -> anyhow::Result<()> {
-    std::fs::create_dir_all(dir)?;
-    let temporary = dir.join(format!(".{}.tmp", Uuid::new_v4()));
-    let ready = dir.join(format!("{}.json", Uuid::new_v4()));
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&temporary)?;
-    file.write_all(&serde_json::to_vec(event)?)?;
-    file.sync_all()?;
-    drop(file);
-    std::fs::rename(temporary, ready)?;
-    Ok(())
-}
-
 fn resolve_codex_config(
     url: Option<String>,
     token: Option<String>,
@@ -1398,50 +1371,6 @@ fn resolve_codex_binary(explicit: Option<String>) -> anyhow::Result<String> {
         "Codex",
         "--codex-bin",
     )
-}
-
-fn configure_codex_coordination_mcp() -> anyhow::Result<()> {
-    let home = std::env::var_os("HOME").context("HOME is required for Codex MCP configuration")?;
-    let path = PathBuf::from(home).join(".codex/config.toml");
-    let engine = paired_engine_path()?;
-    let section = format!(
-        "[mcp_servers.longhouse]\ncommand = \"{}\"\nargs = [\"claude-channel\", \"serve\"]\n",
-        engine
-            .display()
-            .to_string()
-            .replace('\\', "\\\\")
-            .replace('"', "\\\"")
-    );
-    let existing = std::fs::read_to_string(&path).unwrap_or_default();
-    let mut lines = existing.lines().peekable();
-    let mut retained = String::new();
-    while let Some(line) = lines.next() {
-        if line.trim() == "[mcp_servers.longhouse]" {
-            while let Some(next) = lines.peek() {
-                if next.trim_start().starts_with('[') {
-                    break;
-                }
-                lines.next();
-            }
-            continue;
-        }
-        retained.push_str(line);
-        retained.push('\n');
-    }
-    std::fs::create_dir_all(path.parent().context("Codex config has no parent")?)?;
-    std::fs::write(
-        &path,
-        format!(
-            "{}{}",
-            retained.trim_end(),
-            if retained.trim().is_empty() {
-                format!("{section}")
-            } else {
-                format!("\n\n{section}")
-            }
-        ),
-    )?;
-    Ok(())
 }
 
 fn resolve_provider_binary(
@@ -1511,52 +1440,35 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
     let cwd = std::fs::canonicalize(&args.cwd)
         .with_context(|| format!("resolve {}", args.cwd.display()))?;
     let (url, token, machine_name) = resolve_codex_config(args.url, args.token)?;
-    configure_codex_coordination_mcp()?;
     let codex_bin = resolve_codex_binary(args.codex_bin)?;
-    let git = |args: &[&str]| {
-        Command::new("git")
-            .arg("-C")
-            .arg(&cwd)
-            .args(args)
-            .output()
-            .ok()
-            .filter(|output| output.status.success())
-            .and_then(|output| String::from_utf8(output.stdout).ok())
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
-    };
-    let payload = json!({
-        "cwd": cwd, "provider": "codex", "project": args.project, "git_repo": git(&["rev-parse", "--show-toplevel"]),
-        "git_branch": git(&["rev-parse", "--abbrev-ref", "HEAD"]), "display_name": args.name,
-        "loop_mode": args.loop_mode, "machine_name": machine_name, "permission_mode": "bypass"
-    });
-    let endpoint = format!(
-        "{}/api/sessions/managed-local/this-device",
-        url.trim_end_matches('/')
-    );
+    let payload = ManagedLaunchRegistration {
+        provider: "codex",
+        cwd: &cwd,
+        project: args.project.as_deref(),
+        display_name: args.name.as_deref(),
+        loop_mode: &args.loop_mode,
+        machine_name: &machine_name,
+        // Codex owns local approvals unless the explicit bypass flag is set.
+        // This must not be reported as remote_approve: Longhouse has no Codex
+        // permission hook and therefore must not mint remote hook authority.
+        permission_mode: if args.dangerously_bypass_approvals_and_sandbox {
+            PermissionMode::Bypass
+        } else {
+            PermissionMode::ProviderLocal
+        },
+        extra: vec![],
+    }
+    .to_json();
     let runtime = tokio::runtime::Runtime::new()?;
-    let response: ManagedLaunchResponse = runtime.block_on(async {
-        let response = reqwest::Client::new()
-            .post(&endpoint)
-            .header("X-Agents-Token", &token)
-            .json(&payload)
-            .send()
-            .await?;
-        if !response.status().is_success() {
-            anyhow::bail!(
-                "managed Codex launch failed ({}): {}",
-                response.status(),
-                response.text().await.unwrap_or_default()
-            );
-        }
-        Ok::<_, anyhow::Error>(response.json().await?)
-    })?;
-    let coordination_token = response
-        .coordination_token
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .context("Longhouse did not issue coordination authority for this session")?;
+    let response = register_managed_launch(&runtime, &url, &token, "Codex", &payload, None)?;
+    let mut launch_transaction = ManagedLaunchTransaction::new(
+        &runtime,
+        &url,
+        &token,
+        &response.session_id,
+        &response.run_id,
+    );
+    let coordination_token = response.require_authority("Codex", "codex_app_server")?;
     if response.run_id.trim().is_empty() {
         anyhow::bail!("Longhouse server did not return the managed run identity");
     }
@@ -1616,6 +1528,14 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
             "bridge_start_failed",
         );
         anyhow::bail!("Native Codex bridge did not return thread_id for detached launch");
+    }
+    if let Err(error) = launch_transaction.confirm() {
+        let _ = stop_codex_bridge(
+            &response.session_id,
+            Some(response.run_id.as_str()),
+            "launch_confirmation_failed",
+        );
+        return Err(error);
     }
     println!(
         "Managed Codex ready\n→ {}/s/{}",
@@ -1832,6 +1752,14 @@ fn print_helm_closed(machine_name: &str) {
 
 #[cfg(unix)]
 fn run_foreground_command(command: &mut Command) -> anyhow::Result<i32> {
+    run_foreground_command_after_spawn(command, || Ok(()))
+}
+
+#[cfg(unix)]
+fn run_foreground_command_after_spawn(
+    command: &mut Command,
+    after_spawn: impl FnOnce() -> anyhow::Result<()>,
+) -> anyhow::Result<i32> {
     use std::os::unix::io::AsRawFd;
     use std::os::unix::process::CommandExt;
 
@@ -1856,6 +1784,11 @@ fn run_foreground_command(command: &mut Command) -> anyhow::Result<i32> {
     unsafe {
         libc::setpgid(child_pgrp, child_pgrp);
     }
+    if let Err(error) = after_spawn() {
+        terminate_child(&mut child, Some(child_pgrp));
+        let _ = child.wait();
+        return Err(error);
+    }
     if !interactive_stdio() {
         return wait_for_child_or_signal(&mut child, &signal, Some(child_pgrp));
     }
@@ -1877,7 +1810,20 @@ fn run_foreground_command(command: &mut Command) -> anyhow::Result<i32> {
 
 #[cfg(not(unix))]
 fn run_foreground_command(command: &mut Command) -> anyhow::Result<i32> {
+    run_foreground_command_after_spawn(command, || Ok(()))
+}
+
+#[cfg(not(unix))]
+fn run_foreground_command_after_spawn(
+    command: &mut Command,
+    after_spawn: impl FnOnce() -> anyhow::Result<()>,
+) -> anyhow::Result<i32> {
     let mut child = command.spawn()?;
+    if let Err(error) = after_spawn() {
+        terminate_child(&mut child, None);
+        let _ = child.wait();
+        return Err(error);
+    }
     let signal = install_tui_signal_flag()?;
     wait_for_child_or_signal(&mut child, &signal, None)
 }

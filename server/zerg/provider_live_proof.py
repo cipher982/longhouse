@@ -21,10 +21,15 @@ from zerg.provider_release_status import _parse_rfc3339
 from zerg.provider_release_status import _provider_version_from_cli
 from zerg.provider_release_status import normalize_provider_version
 from zerg.services.longhouse_paths import get_provider_live_proof_dir
+from zerg.services.managed_provider_contracts import live_proof_supported_providers
 from zerg.services.managed_provider_contracts import managed_provider_names
 
 LIVE_PROOF_ARTIFACT_KIND = "provider_live_canary"
-SUPPORTED_LIVE_PROOF_PROVIDERS = ("claude", "opencode", "antigravity")
+# Derived from schemas/managed_providers.yml. This was a hand-written tuple
+# including antigravity while control_channel.rs -- the side that executes the
+# command -- accepted only claude and opencode, so requesting an antigravity
+# live proof always failed provider_unsupported at the engine.
+SUPPORTED_LIVE_PROOF_PROVIDERS = live_proof_supported_providers()
 
 
 def _read_json_file(path: Path) -> tuple[dict[str, Any] | None, str | None]:

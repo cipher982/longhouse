@@ -8,10 +8,14 @@ from typing import Literal
 
 from pydantic import ConfigDict
 from pydantic import Field
+from pydantic import field_validator
 
 from zerg.utils.time import UTCBaseModel
 
-ProviderLiveProofProvider = Literal["claude", "opencode", "antigravity"]
+# A Literal here was a third hand-copy of the same set, on a public request
+# body, and it disagreed with the engine. Keep the type open and validate
+# against the contract so the wire contract cannot drift from what runs.
+ProviderLiveProofProvider = str
 ArchiveBacklogControlMode = Literal["paused", "trickle", "drain"]
 MachineControlOperationStatus = Literal["queued", "running", "succeeded", "failed", "timed_out"]
 
@@ -101,6 +105,17 @@ class ProviderLiveProofRequest(UTCBaseModel):
     model_config = ConfigDict(extra="forbid")
 
     provider: ProviderLiveProofProvider = Field(..., description="Provider CLI to prove on the target machine.")
+
+    @field_validator("provider")
+    @classmethod
+    def _provider_must_support_live_proof(cls, value: str) -> str:
+        from zerg.services.managed_provider_contracts import live_proof_supported_providers
+
+        supported = live_proof_supported_providers()
+        if value not in supported:
+            raise ValueError(f"provider must be one of {', '.join(supported)}")
+        return value
+
     expected_provider_version: str | None = Field(
         default=None,
         min_length=1,

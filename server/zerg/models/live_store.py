@@ -731,6 +731,13 @@ class LiveSessionInputReceipt(LiveBase):
     archive_session_input_id = Column(Integer, nullable=True, index=True)
     control_command_id = Column(String(96), nullable=True, index=True)
     delivery_request_id = Column(String(64), nullable=True, index=True)
+    # How many dispatch attempts this receipt has consumed.
+    #
+    # A transient transport failure returns the receipt to `queued` rather than
+    # failing it, so an unreachable machine makes delivery late instead of lost.
+    # That needs a bound: without one, a session that never comes back retries
+    # forever and its queue never drains. Nullable so it auto-adds at startup.
+    delivery_attempts = Column(Integer, nullable=True)
     error_json = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
     updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
