@@ -23,16 +23,16 @@ struct TimelineViewModelConnectivityTests {
         #expect(model.connectionBanner == .none)
 
         model.startStream(using: appState)
-        await settle()
+        await waitUntil { stream.startCount() >= 1 }
         stream.emit(.connected)
-        await settle()
+        await drain()
 
         stream.emit(.disconnected(nil))
-        await settle()
+        await drain()
         #expect(model.connectionBanner == .none)
 
         stream.emit(.disconnected(URLError(.cancelled)))
-        await settle()
+        await drain()
         #expect(model.connectionBanner == .none)
 
         await model.refresh(using: appState, force: true)
@@ -95,11 +95,13 @@ struct TimelineViewModelConnectivityTests {
         await model.refresh(using: appState, force: true)
         appState.isAuthenticated = true
         model.startStream(using: appState)
-        await settle()
+        await waitUntil { stream.startCount() >= 1 }
         let startCountBefore401 = stream.startCount()
 
         stream.emit(.disconnected(LonghouseAPIError.notAuthenticated))
-        await settle()
+        await waitUntil {
+            await api.requestCount() == 2 && stream.startCount() == startCountBefore401 + 1
+        }
 
         #expect(await api.requestCount() == 2)
         #expect(stream.startCount() == startCountBefore401 + 1)
@@ -124,10 +126,10 @@ struct TimelineViewModelConnectivityTests {
         await model.refresh(using: appState, force: true)
         appState.isAuthenticated = true
         model.startStream(using: appState)
-        await settle()
+        await waitUntil { stream.startCount() >= 1 }
 
         stream.emit(.disconnected(LonghouseAPIError.notAuthenticated))
-        await settle()
+        await waitUntil { !appState.isAuthenticated }
 
         #expect(model.connectionBanner == .authRequired)
         #expect(model.connectivity.reachability == .authRequired)
@@ -144,12 +146,12 @@ struct TimelineViewModelConnectivityTests {
 
         await model.refresh(using: appState, force: true)
         model.startStream(using: appState)
-        await settle()
+        await waitUntil { stream.startCount() >= 1 }
         stream.emit(.connected)
-        await settle()
+        await drain()
 
         model.stopStream()
-        await settle()
+        await drain()
 
         #expect(model.connectionBanner == .none)
     }
@@ -172,7 +174,34 @@ struct TimelineViewModelConnectivityTests {
         return appState
     }
 
-    private func settle() async {
+    /// Wait until `condition` holds, or give up after `budget`.
+    ///
+    /// Returns as soon as the condition is true, so a healthy test costs
+    /// milliseconds; the budget only bounds how much scheduling delay is
+    /// tolerated. This replaces a blind sleep for every assertion that waits
+    /// for something to *happen* — those are the ones a loaded CI runner can
+    /// starve, and the ones that fail rather than pass when starved.
+    private func waitUntil(
+        _ condition: () async -> Bool,
+        budget: Duration = .seconds(10)
+    ) async {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: budget)
+        while clock.now < deadline {
+            if await condition() {
+                return
+            }
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
+    }
+
+    /// Give the model a chance to process an event that should change nothing.
+    ///
+    /// Deliberately still time-based: you cannot wait for the absence of an
+    /// effect. This is safe where a condition wait is not, because a too-short
+    /// drain makes a "nothing changed" assertion pass rather than fail — it
+    /// cannot manufacture the CI flakes a starved positive wait does.
+    private func drain() async {
         try? await Task.sleep(nanoseconds: 50_000_000)
     }
 
