@@ -3,6 +3,8 @@
   "providers": [
     {
       "provider": "codex",
+      "display_name": "Codex",
+      "marketing_name": "Codex CLI",
       "provider_cli_binary": "codex",
       "provider_cli_env": "LONGHOUSE_CODEX_BIN",
       "requires_longhouse_cli": false,
@@ -301,6 +303,8 @@
     },
     {
       "provider": "claude",
+      "display_name": "Claude",
+      "marketing_name": "Claude Code",
       "provider_cli_binary": "claude",
       "provider_cli_env": null,
       "requires_longhouse_cli": false,
@@ -636,6 +640,8 @@
     },
     {
       "provider": "opencode",
+      "display_name": "OpenCode",
+      "marketing_name": "OpenCode",
       "provider_cli_binary": "opencode",
       "provider_cli_env": "LONGHOUSE_OPENCODE_BIN",
       "requires_longhouse_cli": false,
@@ -847,6 +853,8 @@
     },
     {
       "provider": "antigravity",
+      "display_name": "Antigravity",
+      "marketing_name": "Antigravity CLI",
       "provider_cli_binary": "agy",
       "provider_cli_env": "LONGHOUSE_ANTIGRAVITY_BIN",
       "requires_longhouse_cli": false,
@@ -1054,6 +1062,8 @@
     },
     {
       "provider": "cursor",
+      "display_name": "Cursor",
+      "marketing_name": "Cursor Agent",
       "provider_cli_binary": "cursor-agent",
       "provider_cli_env": "LONGHOUSE_CURSOR_BIN",
       "requires_longhouse_cli": false,

@@ -5,6 +5,8 @@ schema_version: 1
 # tracks entrypoint, health/repair, proof, and scaffold debt.
 providers:
 - provider: codex
+  display_name: Codex
+  marketing_name: Codex CLI
   provider_cli_binary: codex
   provider_cli_env: LONGHOUSE_CODEX_BIN
   requires_longhouse_cli: false
@@ -217,6 +219,8 @@ providers:
   - codex.resume_run_once
   - codex.turn_start
 - provider: claude
+  display_name: Claude
+  marketing_name: Claude Code
   provider_cli_binary: claude
   provider_cli_env: null
   requires_longhouse_cli: false
@@ -447,6 +451,8 @@ providers:
   - claude.turn_start
   - claude.turn_interrupt
 - provider: opencode
+  display_name: OpenCode
+  marketing_name: OpenCode
   provider_cli_binary: opencode
   provider_cli_env: LONGHOUSE_OPENCODE_BIN
   requires_longhouse_cli: false
@@ -612,6 +618,8 @@ providers:
   - opencode.turn_start
   - opencode.turn_interrupt
 - provider: antigravity
+  display_name: Antigravity
+  marketing_name: Antigravity CLI
   provider_cli_binary: agy
   provider_cli_env: LONGHOUSE_ANTIGRAVITY_BIN
   requires_longhouse_cli: false
@@ -780,6 +788,8 @@ providers:
   # so the machines API listed a control that always failed.
   machine_control_supports: []
 - provider: cursor
+  display_name: Cursor
+  marketing_name: Cursor Agent
   provider_cli_binary: cursor-agent
   provider_cli_env: LONGHOUSE_CURSOR_BIN
   requires_longhouse_cli: false

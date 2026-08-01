@@ -9,6 +9,8 @@ from typing import Any
 
 _REQUIRED_STRING_FIELDS = (
     "provider",
+    "display_name",
+    "marketing_name",
     "provider_cli_binary",
     "managed_transport",
     "control_plane",

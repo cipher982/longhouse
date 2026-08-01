@@ -50,6 +50,8 @@ class ProviderReleaseChannel:
 @dataclass(frozen=True)
 class ManagedProviderContract:
     provider: str
+    display_name: str
+    marketing_name: str
     managed_transport: ManagedSessionTransport
     control_plane: str
     release_channel: ProviderReleaseChannel
@@ -179,6 +181,8 @@ def _contract_from_manifest_item(item: dict[str, object]) -> ManagedProviderCont
     release_item = dict(item.get("release_channel") or {})
     return ManagedProviderContract(
         provider=str(item["provider"]),
+        display_name=str(item["display_name"]),
+        marketing_name=str(item["marketing_name"]),
         managed_transport=ManagedSessionTransport(str(item["managed_transport"])),
         control_plane=str(item["control_plane"]),
         control_plane_aliases=tuple(str(value) for value in item.get("control_plane_aliases") or ()),

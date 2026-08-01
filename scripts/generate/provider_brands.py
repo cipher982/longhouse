@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
-"""Generate provider identity modules from config/provider-brands.json.
+"""Generate provider identity modules from managed contracts and brand config.
 
-Single source of truth: config/provider-brands.json.
+Managed provider names come from schemas/managed_providers.yml through its
+generated manifest. config/provider-brands.json supplies visual treatment,
+aliases, and identity for non-managed archive providers.
 Outputs:
   - web/src/generated/provider-brands.ts
   - ios/Sources/Shared/ProviderBrands.generated.swift
@@ -15,6 +17,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 CONFIG = REPO / "config" / "provider-brands.json"
+MANAGED_CONTRACTS = REPO / "server" / "zerg" / "config" / "managed_provider_contracts.json"
 TS_OUT = REPO / "web" / "src" / "generated" / "provider-brands.ts"
 SWIFT_OUT_IOS = REPO / "ios" / "Sources" / "Shared" / "ProviderBrands.generated.swift"
 SWIFT_OUT_DESKTOP = (
@@ -29,7 +32,24 @@ PYTHON_OUT = REPO / "server" / "zerg" / "generated" / "provider_brands.py"
 
 
 def load() -> dict:
-    return json.loads(CONFIG.read_text())
+    brands = json.loads(CONFIG.read_text())
+    contracts = json.loads(MANAGED_CONTRACTS.read_text())
+    return merge_managed_provider_identity(brands, contracts)
+
+
+def merge_managed_provider_identity(brands: dict, contracts: dict) -> dict:
+    """Overlay canonical managed names and add default-styled new providers."""
+
+    merged = {
+        **brands,
+        "providers": {provider: dict(identity) for provider, identity in brands["providers"].items()},
+    }
+    for contract in contracts["providers"]:
+        provider = str(contract["provider"])
+        identity = merged["providers"].setdefault(provider, {})
+        identity["display_name"] = str(contract["display_name"])
+        identity["marketing_name"] = str(contract["marketing_name"])
+    return merged
 
 
 def _expand_hex(hex_str: str) -> str:
@@ -115,7 +135,7 @@ def render_ts(data: dict) -> str:
             display_name = p["alias_display_names"].get(alias, p["display_name"])
             display_name_entries.append(f"  {json.dumps(alias)}: {json.dumps(display_name)},")
 
-    return f"""// @generated from config/provider-brands.json — do not edit by hand.
+    return f"""// @generated from schemas/managed_providers.yml and config/provider-brands.json — do not edit by hand.
 // Run: python3 scripts/generate/provider_brands.py
 
 export interface ProviderBrandConfig {{
@@ -267,7 +287,7 @@ def render_swift(data: dict) -> str:
     default_fill = defaults["chip"]["fill"]
     default_stroke = defaults["chip"]["stroke"]
 
-    return f"""// @generated from config/provider-brands.json — do not edit by hand.
+    return f"""// @generated from schemas/managed_providers.yml and config/provider-brands.json — do not edit by hand.
 // Run: python3 scripts/generate/provider_brands.py
 
 import Foundation
@@ -341,7 +361,7 @@ def render_python(data: dict) -> str:
         names[key] = provider["display_name"]
         for alias in provider["aliases"]:
             names[alias] = provider["alias_display_names"].get(alias, provider["display_name"])
-    return f'''# @generated from config/provider-brands.json — do not edit by hand.
+    return f'''# @generated from schemas/managed_providers.yml and config/provider-brands.json — do not edit by hand.
 # Run: python3 scripts/generate/provider_brands.py
 
 PROVIDER_DISPLAY_NAMES: dict[str, str] = {json.dumps(names, indent=4, sort_keys=True)}
