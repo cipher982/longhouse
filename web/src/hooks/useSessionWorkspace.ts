@@ -202,6 +202,8 @@ export function useSessionWorkspace(
     },
   });
   const knownWorkspaceFingerprint = workspaceData?.workspace_revision?.fingerprint ?? null;
+  const knownWorkspaceFingerprintRef = useRef(knownWorkspaceFingerprint);
+  knownWorkspaceFingerprintRef.current = knownWorkspaceFingerprint;
   const workspaceReady = workspaceData !== undefined;
 
   // SSE stream subscription — invalidates queries on server-side change detection
@@ -311,14 +313,17 @@ export function useSessionWorkspace(
         },
         onError: () => setStreamConnected(false),
       },
-      { skipInitial: true, knownWorkspaceFingerprint },
+      {
+        skipInitial: true,
+        knownWorkspaceFingerprint: knownWorkspaceFingerprintRef.current,
+      },
     );
 
     return () => {
       disposed = true;
       cleanup();
     };
-  }, [sessionId, documentVisible, workspaceReady, knownWorkspaceFingerprint, queryClient, onlineEpoch]);
+  }, [sessionId, documentVisible, workspaceReady, queryClient, onlineEpoch]);
   const rawSession = workspaceData?.session ?? null;
   const session = useMemo(
     () =>

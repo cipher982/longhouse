@@ -344,6 +344,26 @@ describe("useSessionWorkspace", () => {
     );
   });
 
+  it("does not reconnect the workspace stream when a refetch advances the fingerprint", () => {
+    const { rerender } = renderHook(() => useSessionWorkspace(baseSession.id));
+    const firstResponse = agentSessionMocks.useAgentSessionWorkspace.mock.results.at(-1)?.value;
+
+    agentSessionMocks.useAgentSessionWorkspace.mockReturnValue({
+      ...firstResponse,
+      data: {
+        ...firstResponse.data,
+        workspace_revision: {
+          ...firstResponse.data.workspace_revision,
+          fingerprint: "sha256:advanced",
+        },
+      },
+    });
+
+    rerender();
+
+    expect(streamMocks.connectSessionWorkspaceStream).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps Console control state polling after the workspace stream connects", () => {
     let handlers: { onConnected?: () => void } | undefined;
     const consoleSession = {
