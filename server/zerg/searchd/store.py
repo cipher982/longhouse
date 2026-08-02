@@ -954,7 +954,8 @@ class SearchStore:
             "FROM episode_embeddings e "
             # Same generation fence as the resident loader: a superseded
             # vector must not rank.
-            "JOIN session_index si ON si.session_id = e.session_id AND si.generation_id = e.generation_id "
+            "JOIN session_index si ON si.session_id = e.session_id"
+            " AND si.generation_id = e.generation_id AND si.indexed_through = e.revision "
             "WHERE e.model = ? AND e.dims = ? AND e.owner_id = ? AND si.owner_id = ?"
         )
         params: list[object] = [model, dims, owner_id, owner_id]

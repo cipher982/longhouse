@@ -52,6 +52,10 @@ class _DenseIndexUnavailable(RuntimeError):
     """
 
 
+class _EmbeddingSpaceMismatch(RuntimeError):
+    """The caller requested vectors from a space this daemon does not own."""
+
+
 @dataclass(slots=True)
 class _ReadWorker:
     connection: sqlite3.Connection
@@ -226,11 +230,14 @@ class SearchDaemon:
                 return self._result(request, await self._run(self._store.index_object, **params))
             if request.method == "search.index.publish.v2":
                 params = _publish_params(request.params)
-                published = await self._run(self._store.publish_generation, **params)
+                published = await self._run_with_dense_refresh(self._store.publish_generation, **params)
                 return self._result(request, published)
             if request.method == "search.embedding.write.v2":
                 params = _embedding_write_params(request.params)
-                return self._result(request, await self._run(self._store.write_episode_embeddings, **params))
+                return self._result(
+                    request,
+                    await self._run_with_dense_refresh(self._store.write_episode_embeddings, **params),
+                )
             if request.method == "search.embedding.locators.backfill.v2":
                 params = _embedding_locator_backfill_params(request.params)
                 return self._result(request, await self._run(self._store.backfill_episode_locators, **params))
@@ -252,6 +259,8 @@ class SearchDaemon:
                 # stayed dead.
                 if self._dense_index is None or not self._dense_index.ready:
                     raise _DenseIndexUnavailable
+                if params["model"] != self._dense_index.model or params["dims"] != self._dense_index.dims:
+                    raise _EmbeddingSpaceMismatch
                 query = np.frombuffer(params.pop("query_embedding"), dtype="float32")
                 params.pop("model", None)
                 params.pop("dims", None)
@@ -311,7 +320,10 @@ class SearchDaemon:
                 _exact_keys(request.params, {"session_id"})
                 return self._result(
                     request,
-                    await self._run(self._store.delete_session, session_id=_uuid(request.params["session_id"], "session_id")),
+                    await self._run_with_dense_refresh(
+                        self._store.delete_session,
+                        session_id=_uuid(request.params["session_id"], "session_id"),
+                    ),
                 )
             return self._error(request, "unknown_method", "searchd method is unknown")
         except ValueError as exc:
@@ -324,6 +336,12 @@ class SearchDaemon:
             return self._error(request, "deadline_exceeded", "search read deadline exceeded", retryable=True)
         except _DenseIndexUnavailable:
             return self._error(request, "dense_index_unavailable", "the resident vector index is not loaded")
+        except _EmbeddingSpaceMismatch:
+            return self._error(
+                request,
+                "embedding_space_mismatch",
+                "the requested embedding model or dimensions do not match the resident index",
+            )
         except Exception:
             # Log the method and traceback. Returning a bare "internal" with no
             # record meant every searchd fault looked identical from the outside
@@ -334,6 +352,25 @@ class SearchDaemon:
     async def _run(self, function, **kwargs):
         assert self._executor is not None
         return await asyncio.get_running_loop().run_in_executor(self._executor, lambda: function(**kwargs))
+
+    async def _run_with_dense_refresh(self, function, **kwargs):
+        """Commit one writer mutation, then publish a complete new dense snapshot.
+
+        The writer executor serializes both operations. Readers retain the prior
+        immutable snapshot until ``load`` swaps the new one, so they can observe
+        the complete state before or after a commit but never a partially rebuilt
+        matrix. SQLite remains authoritative if the process dies between them.
+        """
+
+        assert self._executor is not None
+
+        def mutate_and_refresh():
+            result = function(**kwargs)
+            if self._dense_index is not None and self._connection is not None:
+                self._dense_index.load(self._connection)
+            return result
+
+        return await asyncio.get_running_loop().run_in_executor(self._executor, mutate_and_refresh)
 
     def _new_read_worker(self, name: str) -> _ReadWorker:
         connection = open_search_read_database(self.database_path)

@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 
 import numpy as np
+import pytest
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
@@ -73,6 +74,8 @@ def test_not_ready_until_loaded():
     index = DenseIndex(model=MODEL, dims=DIMS)
     assert index.ready is False
     assert index.size == 0
+    with pytest.raises(RuntimeError, match="not loaded"):
+        index.search(_unit([1, 0, 0, 0]), owner_id="42", limit=1)
 
 
 def test_ranks_by_cosine(tmp_path):
@@ -199,6 +202,42 @@ def test_superseded_generation_cannot_rank(tmp_path):
         index.load(connection)
         assert index.size == 0
         assert index.search(_unit([1, 0, 0, 0]), owner_id="42", limit=5) == []
+    finally:
+        connection.close()
+
+
+def test_superseded_revision_cannot_rank(tmp_path):
+    """Generation identity alone is insufficient when one generation republishes."""
+
+    rows = [("s1", 0, [1, 0, 0, 0], "42", "zerg", "claude", "local", "2026-07-01")]
+    index, connection = _index(tmp_path, rows)
+    try:
+        assert index.size == 1
+        connection.execute("UPDATE session_index SET indexed_through = 2, desired_revision = 2 WHERE session_id = 's1'")
+        connection.commit()
+        index.load(connection)
+        assert index.size == 0
+    finally:
+        connection.close()
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        np.array([1, 0, 0], dtype="float32"),
+        np.array([1, 0, 0, 0, 0], dtype="float32"),
+        np.array([0, 0, 0, 0], dtype="float32"),
+        np.array([np.nan, 0, 0, 0], dtype="float32"),
+    ],
+)
+def test_query_vector_must_match_the_space(query, tmp_path):
+    index, connection = _index(
+        tmp_path,
+        [("s1", 0, [1, 0, 0, 0], "42", "zerg", "claude", "local", "2026-07-01")],
+    )
+    try:
+        with pytest.raises(ValueError):
+            index.search(query, owner_id="42", limit=1)
     finally:
         connection.close()
 

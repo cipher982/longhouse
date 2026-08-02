@@ -43,6 +43,7 @@ class _Snapshot:
     session_ids: np.ndarray  # (N,) object
     episode_ordinals: np.ndarray  # (N,) int64
     generation_ids: np.ndarray  # (N,) object
+    revisions: np.ndarray  # (N,) int64
     start_order_times: np.ndarray  # (N,) int64, -1 when absent
     event_index_starts: np.ndarray  # (N,) int64, -1 when absent
     event_index_ends: np.ndarray  # (N,) int64, -1 when absent
@@ -65,6 +66,7 @@ _EMPTY = _Snapshot(
             ("session_ids", object),
             ("episode_ordinals", "int64"),
             ("generation_ids", object),
+            ("revisions", "int64"),
             ("start_order_times", "int64"),
             ("event_index_starts", "int64"),
             ("event_index_ends", "int64"),
@@ -109,12 +111,20 @@ class DenseIndex:
     def size(self) -> int:
         return self._snapshot.size
 
+    @property
+    def model(self) -> str:
+        return self._model
+
+    @property
+    def dims(self) -> int:
+        return self._dims
+
     def load(self, connection) -> None:
         """Build the snapshot from SQLite. Called on the writer thread."""
 
         rows = connection.execute(
             """
-            SELECT e.session_id, e.episode_ordinal, e.generation_id, e.embedding,
+            SELECT e.session_id, e.episode_ordinal, e.generation_id, e.revision, e.embedding,
                    e.start_order_time_us, e.event_index_start, e.event_index_end,
                    e.owner_id, s.project, s.provider, s.environment, s.started_at
             FROM episode_embeddings e
@@ -125,6 +135,7 @@ class DenseIndex:
              -- fail to hydrate, which hides the current generation's vector
              -- behind a hit that cannot produce evidence.
              AND s.generation_id = e.generation_id
+             AND s.indexed_through = e.revision
             WHERE e.model = ? AND e.dims = ?
             ORDER BY e.session_id ASC, e.episode_ordinal ASC
             """,
@@ -155,6 +166,7 @@ class DenseIndex:
             session_ids=column("session_id", object),
             episode_ordinals=column("episode_ordinal", "int64", -1),
             generation_ids=column("generation_id", object),
+            revisions=column("revision", "int64", -1),
             start_order_times=column("start_order_time_us", "int64", -1),
             event_index_starts=column("event_index_start", "int64", -1),
             event_index_ends=column("event_index_end", "int64", -1),
@@ -177,6 +189,8 @@ class DenseIndex:
         since_iso: str | None = None,
     ) -> list[dict[str, object]]:
         snapshot = self._snapshot  # one atomic read; immutable thereafter
+        if not self._loaded:
+            raise RuntimeError("resident episode index is not loaded")
         if snapshot.size == 0:
             return []
 
@@ -197,8 +211,13 @@ class DenseIndex:
         if candidates.size == 0:
             return []
 
-        vector = np.asarray(query, dtype="float32").reshape(-1)[: self._dims]
-        vector = vector / max(float(np.linalg.norm(vector)), 1e-9)
+        vector = np.asarray(query, dtype="float32").reshape(-1)
+        if vector.shape != (self._dims,) or not np.isfinite(vector).all():
+            raise ValueError(f"query vector must contain exactly {self._dims} finite dimensions")
+        norm = float(np.linalg.norm(vector))
+        if norm <= 1e-6:
+            raise ValueError("query vector must be nonzero")
+        vector = vector / norm
         scores = snapshot.vectors[candidates] @ vector
 
         take = min(limit, candidates.size)
