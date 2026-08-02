@@ -1862,6 +1862,13 @@ async def test_active_embedding_projector_state_becomes_claimable_on_render_comp
         # projector will never see the historical corpus.
         engine = create_catalog_engine(database_path)
         with engine.begin() as connection:
+            # Session metadata can advance after the render/search revision.
+            # A newly introduced embedding projector must inherit the search
+            # revision, not this unrelated catalog commit sequence.
+            connection.exec_driver_sql(
+                "UPDATE sessions SET commit_seq = commit_seq + 10 WHERE session_id = ?",
+                (str(session_id),),
+            )
             connection.exec_driver_sql(
                 "DELETE FROM projector_state WHERE projector = ? AND session_id = ?",
                 (EMBEDDING_PROJECTOR_ID, str(session_id)),
@@ -1869,12 +1876,40 @@ async def test_active_embedding_projector_state_becomes_claimable_on_render_comp
         assert CatalogStore(engine).ensure_known_projector_states()["inserted"] == 1
         with engine.connect() as connection:
             restored = connection.exec_driver_sql(
-                "SELECT desired_revision, completed_revision, status FROM projector_state "
-                "WHERE projector = ? AND session_id = ?",
+                "SELECT desired_revision, completed_revision, status FROM projector_state WHERE projector = ? AND session_id = ?",
                 (EMBEDDING_PROJECTOR_ID, str(session_id)),
             ).one()
         engine.dispose()
         assert tuple(restored) == (int(revision), 0, "idle")
+
+        engine = create_catalog_engine(database_path)
+        with engine.begin() as connection:
+            connection.exec_driver_sql(
+                "UPDATE projector_state SET desired_revision = ?, claimed_revision = ?, claim_token = ?, "
+                "worker_id = ?, status = 'failed', failure_count = 3, last_error_code = 'stale', "
+                "last_error_message = 'stale revision', retry_at = ? "
+                "WHERE projector = ? AND session_id = ?",
+                (
+                    int(revision) + 10,
+                    int(revision) + 10,
+                    str(uuid4()),
+                    "stale-worker",
+                    now + timedelta(minutes=5),
+                    EMBEDDING_PROJECTOR_ID,
+                    str(session_id),
+                ),
+            )
+        repaired = CatalogStore(engine).ensure_known_projector_states()
+        assert repaired["aligned_embeddings"] == 1
+        with engine.connect() as connection:
+            aligned = connection.exec_driver_sql(
+                "SELECT desired_revision, claimed_revision, claim_token, worker_id, status, "
+                "failure_count, last_error_code, last_error_message, retry_at "
+                "FROM projector_state WHERE projector = ? AND session_id = ?",
+                (EMBEDDING_PROJECTOR_ID, str(session_id)),
+            ).one()
+        engine.dispose()
+        assert tuple(aligned) == (int(revision), None, None, None, "idle", 0, None, None, None)
     finally:
         await client.close()
         await daemon.close()
@@ -1931,8 +1966,7 @@ async def test_source_epoch_replacement_advances_retired_projectors(daemon_paths
                 (str(old_session),),
             ).one()
             states = connection.exec_driver_sql(
-                "SELECT projector, desired_revision, claim_token, status FROM projector_state "
-                "WHERE session_id = ? ORDER BY projector",
+                "SELECT projector, desired_revision, claim_token, status FROM projector_state WHERE session_id = ? ORDER BY projector",
                 (str(old_session),),
             ).all()
         assert retired[0] == "retired"

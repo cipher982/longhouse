@@ -477,12 +477,18 @@ class CatalogStore:
                     )
                 )
             }
-            missing = [
-                (projector, str(session_id), int(revision))
-                for session_id, revision in eligible
-                for projector in KNOWN_PROJECTORS
-                if (projector, str(session_id)) not in existing
-            ]
+            missing = []
+            for session_id, session_revision in eligible:
+                session_key = str(session_id)
+                for projector in KNOWN_PROJECTORS:
+                    if (projector, session_key) in existing:
+                        continue
+                    revision = (
+                        existing.get(("search-v2", session_key), int(session_revision))
+                        if projector == EMBEDDING_PROJECTOR_ID
+                        else int(session_revision)
+                    )
+                    missing.append((projector, session_key, revision))
             now = datetime.now(UTC)
             commit_seq = _current_commit_seq(connection)
             if missing:
@@ -502,6 +508,40 @@ class CatalogStore:
                         }
                         for projector, session_id, revision in missing
                     ],
+                )
+            search_alignment = states.alias("search_alignment")
+            search_revision = (
+                select(search_alignment.c.desired_revision)
+                .where(
+                    search_alignment.c.projector == "search-v2",
+                    search_alignment.c.session_id == states.c.session_id,
+                )
+                .scalar_subquery()
+            )
+            alignment_filter = (
+                states.c.projector == EMBEDDING_PROJECTOR_ID,
+                search_revision.is_not(None),
+                states.c.desired_revision != search_revision,
+            )
+            aligned_embeddings = int(connection.execute(select(func.count()).select_from(states).where(*alignment_filter)).scalar_one())
+            if aligned_embeddings:
+                connection.execute(
+                    update(states)
+                    .where(*alignment_filter)
+                    .values(
+                        desired_revision=search_revision,
+                        claimed_revision=None,
+                        claim_token=None,
+                        worker_id=None,
+                        claim_expires_at=None,
+                        status="idle",
+                        failure_count=0,
+                        last_error_code=None,
+                        last_error_message=None,
+                        retry_at=None,
+                        commit_seq=commit_seq,
+                        updated_at=now,
+                    )
                 )
             retired = connection.execute(
                 select(sessions.c.session_id, sessions.c.commit_seq).where(sessions.c.render_state == "retired")
@@ -529,7 +569,12 @@ class CatalogStore:
                         )
                     )
                     advanced_retired += 1
-            return {"inserted": len(missing), "eligible_sessions": len(eligible), "advanced_retired": advanced_retired}
+            return {
+                "inserted": len(missing),
+                "eligible_sessions": len(eligible),
+                "aligned_embeddings": aligned_embeddings,
+                "advanced_retired": advanced_retired,
+            }
 
     def retire_archive_outbox(self) -> dict[str, int | str]:
         """Remove dead monolith projections and retain launch rows only as completed receipts."""
@@ -7193,6 +7238,7 @@ class CatalogStore:
                                 search_state.c.projector == "search-v2",
                                 search_state.c.session_id == table.c.session_id,
                                 search_state.c.completed_revision >= search_state.c.desired_revision,
+                                search_state.c.desired_revision == table.c.desired_revision,
                             ),
                         )
                         .where(*eligible_predicates)
