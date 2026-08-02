@@ -180,7 +180,7 @@ def test_claude_explicit_token_runs_existing_real_print_and_scrubs_secret(tmp_pa
     assert b"[QUALIFICATION_SECRET_1]" in retained
 
 
-def test_claude_explicit_default_home_runs_without_config_dir(tmp_path: Path, monkeypatch) -> None:
+def test_claude_live_probe_keeps_an_isolated_home_even_with_default_home_flag(tmp_path: Path, monkeypatch) -> None:
     binary, executable_identity = _fake_binary(tmp_path, "claude")
     default_home = tmp_path / "default-home"
     default_home.mkdir()
@@ -188,7 +188,7 @@ def test_claude_explicit_default_home_runs_without_config_dir(tmp_path: Path, mo
     monkeypatch.setenv("HOME", str(default_home))
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "wrong-credential-namespace"))
     monkeypatch.setenv(claude.LIVE_ENABLE_ENV, "1")
-    monkeypatch.setenv(claude.USE_DEFAULT_HOME_ENV, "1")
+    monkeypatch.setenv("LONGHOUSE_CLAUDE_QUALIFICATION_USE_DEFAULT_HOME", "1")
 
     def no_token_canary(_args):
         assert Path(os.environ["HOME"]) != default_home
@@ -196,8 +196,8 @@ def test_claude_explicit_default_home_runs_without_config_dir(tmp_path: Path, mo
         return _claude_no_token_artifact()
 
     def real_print(_args, _root):
-        assert os.environ["HOME"] == str(default_home)
-        assert "CLAUDE_CONFIG_DIR" not in os.environ
+        assert os.environ["HOME"] != str(default_home)
+        assert os.environ["CLAUDE_CONFIG_DIR"] == str(tmp_path / "wrong-credential-namespace")
         return {"status": "pass", "canary": "claude_real_print"}
 
     monkeypatch.setattr(claude, "run_provider_live_canary", no_token_canary)
