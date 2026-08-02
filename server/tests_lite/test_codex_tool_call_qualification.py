@@ -176,6 +176,20 @@ def test_live_profile_emits_strict_v2_bundle_and_least_privilege_command(tmp_pat
     assert {record["mode"] for record in bundle["records"]} == {None}
 
 
+def test_live_profile_pins_explicit_model_into_provider_command_and_receipt(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("CODEX_MODEL", "gpt-5-codex-mini")
+    result, output, calls = _run(tmp_path, monkeypatch)
+
+    assert result["execution_status"] == "completed"
+    invocations = [json.loads(line) for line in calls.read_text().splitlines()]
+    live = invocations[1]["argv"]
+    assert live[live.index("--model") + 1] == "gpt-5-codex-mini"
+    raw_evidence = json.loads((output / "raw-evidence.json").read_text())
+    assert raw_evidence["model"] == "gpt-5-codex-mini"
+
+
 def test_missing_credential_is_blocked_without_process_execution(tmp_path: Path, monkeypatch) -> None:
     binary, identity, calls = _fake_codex(tmp_path)
     monkeypatch.delenv(profile.API_KEY_ENV, raising=False)

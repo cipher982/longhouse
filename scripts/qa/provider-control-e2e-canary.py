@@ -823,13 +823,20 @@ def _compact_claude_result_event(event: dict[str, Any] | None, *, marker: str) -
     model = event.get("model")
     if isinstance(model, str) and model.strip():
         compact["model"] = model.strip()
-    for usage_key in ("usage", "modelUsage"):
-        usage = event.get(usage_key)
-        flattened_usage = _flatten_numeric_usage(usage)
-        if flattened_usage:
-            compact["usage"] = flattened_usage
-            compact["usage_source"] = usage_key
-            break
+    aggregate_usage = _flatten_numeric_usage(event.get("usage"))
+    model_usage = _flatten_numeric_usage(event.get("modelUsage"))
+    if aggregate_usage and model_usage:
+        compact["usage"] = {
+            **aggregate_usage,
+            **{f"modelUsage.{key}": value for key, value in model_usage.items()},
+        }
+        compact["usage_source"] = "usage+modelUsage"
+    elif aggregate_usage:
+        compact["usage"] = aggregate_usage
+        compact["usage_source"] = "usage"
+    elif model_usage:
+        compact["usage"] = model_usage
+        compact["usage_source"] = "modelUsage"
     total_cost = event.get("total_cost_usd")
     if isinstance(total_cost, (int, float)) and not isinstance(total_cost, bool):
         compact["total_cost_usd"] = total_cost

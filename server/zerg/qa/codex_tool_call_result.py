@@ -379,6 +379,7 @@ def run_codex_real_tool_command(
     namespace cannot initialize against the outer sandbox's read-only `/proc`.
     """
     command = f"{shlex.quote(sys.executable)} -c 'import secrets; print(secrets.token_hex(16))'"
+    model = os.environ.get("CODEX_MODEL") or None
     prompt = (
         "Use the shell tool exactly once to run exactly this one command: "
         f"{command}\nThen reply with only the command output, copied exactly."
@@ -428,8 +429,10 @@ def run_codex_real_tool_command(
             "never",
             "-C",
             str(workspace),
-            prompt,
         ]
+        if model:
+            argv.extend(["--model", model])
+        argv.append(prompt)
         env = {
             "PATH": os.environ.get("PATH", ""),
             API_KEY_ENV: api_key,
@@ -479,6 +482,7 @@ def run_codex_real_tool_command(
         "stdout": _redact(tool_stdout, api_key, managed_package_root),
         "stderr": _redact(tool_stderr, api_key, managed_package_root),
         "sandbox_helper": sandbox_helper_evidence,
+        "model": model,
     }
 
 
@@ -488,6 +492,7 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
     managed_package_resources = _managed_package_resources()
     managed_package_root = managed_package_resources[0] if managed_package_resources else None
     codex_sandbox, outer_sandbox_profile = _codex_sandbox_mode()
+    model = os.environ.get("CODEX_MODEL") or None
     repo_root = Path(__file__).resolve().parents[3]
     binary, actual_identity, runner_sha = identity_bridge._preflight(request, output_root, repo_root)  # noqa: SLF001
     generated_at = identity_bridge._now()  # noqa: SLF001
@@ -505,6 +510,7 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
         "reported_version": None,
         "version_probe": None,
         "tool_run": None,
+        "model": model,
     }
     if not api_key:
         outcomes = {assertion: AssertionOutcome.BLOCKED for assertion in ASSERTIONS}
@@ -632,8 +638,10 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
                 "never",
                 "-C",
                 str(workspace),
-                prompt,
             ]
+            if model:
+                argv.extend(["--model", model])
+            argv.append(prompt)
             tool_env = {
                 **version_env,
                 API_KEY_ENV: api_key,
@@ -713,6 +721,7 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
                 if oracle_result.final_agent_message_text is not None
                 else None
             ),
+            "model": model,
         }
 
     try:

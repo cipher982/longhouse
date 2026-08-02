@@ -318,6 +318,8 @@ def run_isolated_codex_operation(
             AGENTS_TOKEN_ENV: agents_token,
             PROVIDER_TOKEN_ENV: provider_token,
         }
+        if model := os.environ.get("CODEX_MODEL"):
+            strict_env["CODEX_MODEL"] = model
         original_env = os.environ.copy()
         try:
             os.environ.clear()
@@ -357,7 +359,7 @@ def run_isolated_managed_live_interrupt(
             repo_root=repo_root,
             api_url=api_url,
             agents_token=agents_token,
-            model=None,
+            model=os.environ.get("CODEX_MODEL"),
             bridge_start_timeout_secs=30,
             live_interrupt_timeout_secs=45,
         )
