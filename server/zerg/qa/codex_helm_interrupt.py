@@ -16,6 +16,7 @@ from typing import Callable
 
 from zerg.qa import codex_provider_release_canary as bridge_canary
 from zerg.qa import codex_release_identity as identity_bridge
+from zerg.qa import qualification_request
 from zerg.services.managed_provider_contracts import contract_for_provider
 from zerg.services.provider_capability_proof import AssertionOutcome
 from zerg.services.provider_capability_proof import EvidenceClass
@@ -493,16 +494,22 @@ def emit_proof_bundle(
         "complete": set(outcomes) == set(ASSERTIONS),
     }
     identity_bridge._atomic_json(output_root / "coverage-manifest.json", coverage)  # noqa: SLF001
-    identity_bridge._atomic_json(  # noqa: SLF001
-        output_root / "proof-bundle.json",
-        {
-            "artifact_kind": "provider_capability_proof_bundle",
-            "schema_version": 2,
-            "records": [record.serialize() for record in records],
-            "execution_metadata": execution,
-            "coverage_manifest": coverage,
-        },
-    )
+    bundle = {
+        "artifact_kind": "provider_capability_proof_bundle",
+        "schema_version": 2,
+        "records": [record.serialize() for record in records],
+        "execution_metadata": execution,
+        "coverage_manifest": coverage,
+    }
+    if request.get("schema_version") == qualification_request.SCHEMA_VERSION:
+        bundle.update(
+            {
+                "qualification_request_digest": request["semantic_digest"],
+                "qualification_request_policy": qualification_request.policy_payload(request),
+                "qualification_request_metadata": qualification_request.metadata_payload(request),
+            }
+        )
+    identity_bridge._atomic_json(output_root / "proof-bundle.json", bundle)  # noqa: SLF001
     return {
         "valid": True,
         "output_root": str(output_root),

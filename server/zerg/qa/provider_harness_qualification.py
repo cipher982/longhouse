@@ -27,6 +27,7 @@ import argparse
 import json
 import os
 import sys
+from collections.abc import Mapping
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -68,7 +69,7 @@ _HELM_INTERRUPT_STRICT_KEYS = frozenset(
 # contract truth. Everything else in the column must pass. A change to one of
 # these rows is a deliberate contract change and should update this gate.
 _EXPECTED_CODEX_FULL_COLUMN_LIMITS: dict[str, tuple[str, str | None]] = {
-    "interaction_semantics": ("blocked", "interaction_live_artifact_missing"),
+    "interaction_semantics": ("blocked", "interaction_live_policy_missing"),
     "action_matrix": ("blocked", None),
     "control_surface": ("blocked", None),
     "full_action_suite": ("blocked", "full_action_suite_has_explicit_gaps"),
@@ -79,7 +80,7 @@ _EXPECTED_CODEX_FULL_COLUMN_LIMITS: dict[str, tuple[str, str | None]] = {
 }
 
 _EXPECTED_CLAUDE_FULL_COLUMN_LIMITS: dict[str, tuple[str, str | None]] = {
-    "interaction_semantics": ("blocked", "interaction_live_artifact_missing"),
+    "interaction_semantics": ("blocked", "interaction_live_policy_missing"),
     "action_matrix": ("blocked", None),
     "control_surface": ("blocked", None),
     "full_action_suite": ("blocked", "full_action_suite_has_explicit_gaps"),
@@ -88,7 +89,7 @@ _EXPECTED_CLAUDE_FULL_COLUMN_LIMITS: dict[str, tuple[str, str | None]] = {
 }
 
 _EXPECTED_OPENCODE_FULL_COLUMN_LIMITS: dict[str, tuple[str, str | None]] = {
-    "interaction_semantics": ("blocked", "interaction_live_artifact_missing"),
+    "interaction_semantics": ("blocked", "interaction_live_policy_missing"),
     "action_matrix": ("blocked", None),
     "control_surface": ("blocked", None),
     "full_action_suite": ("blocked", "full_action_suite_has_explicit_gaps"),
@@ -104,7 +105,7 @@ _EXPECTED_ANTIGRAVITY_FULL_COLUMN_LIMITS: dict[str, tuple[str, str | None]] = {
 }
 
 _EXPECTED_CURSOR_FULL_COLUMN_LIMITS: dict[str, tuple[str, str | None]] = {
-    "interaction_semantics": ("blocked", "interaction_live_artifact_missing"),
+    "interaction_semantics": ("blocked", "interaction_live_policy_missing"),
     "action_matrix": ("blocked", None),
     "control_surface": ("blocked", None),
     "full_action_suite": ("blocked", "full_action_suite_has_explicit_gaps"),
@@ -118,6 +119,14 @@ _FULL_COLUMN_LIMITS = {
     "antigravity": _EXPECTED_ANTIGRAVITY_FULL_COLUMN_LIMITS,
     "cursor": _EXPECTED_CURSOR_FULL_COLUMN_LIMITS,
 }
+
+_LIVE_INTERACTION_ALLOWED_BLOCKED_CODES = frozenset(
+    {
+        "interaction_live_probe_setup_failed",
+        "interaction_semantics_assertion_failed",
+        "missing_isolated_auth",
+    }
+)
 
 _FULL_COLUMN_ALLOWED_GAP_KINDS = {
     "codex": frozenset({"passed", "provider_contract_unsupported", "missing_live_canary"}),
@@ -254,14 +263,23 @@ def _strict_outcomes(strict_result: dict[str, Any], *, required_keys: frozenset[
     return {key: AssertionOutcome(value) for key, value in strict_oracle.items()}
 
 
-def _full_column_gate(harness_payload: dict[str, Any], *, provider: str = "codex") -> dict[str, Any]:
+def _full_column_gate(
+    harness_payload: dict[str, Any],
+    *,
+    provider: str = "codex",
+    qualification_request_digest: str | None = None,
+    interaction_evidence_class: str | None = None,
+) -> dict[str, Any]:
     """Fail closed unless a complete provider column has only known limits."""
 
     try:
-        expected_limits = _FULL_COLUMN_LIMITS[provider]
+        expected_limits = dict(_FULL_COLUMN_LIMITS[provider])
         allowed_gap_kinds = _FULL_COLUMN_ALLOWED_GAP_KINDS[provider]
     except KeyError:
         raise RequestError(f"no full-column gate is registered for provider {provider!r}") from None
+
+    if interaction_evidence_class == "hermetic" and "interaction_semantics" in expected_limits:
+        expected_limits["interaction_semantics"] = ("pass", None)
 
     results = harness_payload.get("results")
     if not isinstance(results, list):
@@ -287,7 +305,11 @@ def _full_column_gate(harness_payload: dict[str, Any], *, provider: str = "codex
         result = matches[0]
         actual = (result.get("status"), result.get("failure_code"))
         expected = expected_limits.get(scenario, ("pass", None))
-        if actual != expected:
+        live_interaction_attempted = scenario == "interaction_semantics" and interaction_evidence_class == "live_no_token"
+        actual_is_allowed_live_result = live_interaction_attempted and (
+            actual == ("pass", None) or (actual[0] == "blocked" and actual[1] in _LIVE_INTERACTION_ALLOWED_BLOCKED_CODES)
+        )
+        if actual != expected and not actual_is_allowed_live_result:
             unexpected_results.append(
                 {
                     "scenario": scenario,
@@ -304,7 +326,18 @@ def _full_column_gate(harness_payload: dict[str, Any], *, provider: str = "codex
     unexpected_gap_kinds = {str(kind): count for kind, count in gap_counts.items() if kind not in allowed_gap_kinds and count}
     missing_actions = coverage.get("missing_provider_actions")
     coverage_complete = isinstance(missing_actions, list) and not missing_actions
-    passed = not cardinality_errors and not unexpected_results and not unexpected_gap_kinds and coverage_complete
+    interaction_matches = by_scenario.get("interaction_semantics", [])
+    interaction_digests: set[str] = set()
+    for result in interaction_matches:
+        observed_digest = result.get("qualification_request_digest")
+        result_data = result.get("data")
+        if observed_digest is None and isinstance(result_data, Mapping):
+            observed_digest = result_data.get("qualification_request_digest")
+        if isinstance(observed_digest, str):
+            interaction_digests.add(observed_digest)
+    observed_request_digest = next(iter(interaction_digests), None) if len(interaction_digests) == 1 else None
+    request_binding_ok = qualification_request_digest is None or observed_request_digest == qualification_request_digest
+    passed = not cardinality_errors and not unexpected_results and not unexpected_gap_kinds and coverage_complete and request_binding_ok
     return {
         "status": "pass" if passed else "fail",
         "provider": provider,
@@ -320,6 +353,8 @@ def _full_column_gate(harness_payload: dict[str, Any], *, provider: str = "codex
         "coverage_gap_kind_counts": gap_counts,
         "unexpected_coverage_gap_kinds": unexpected_gap_kinds,
         "missing_provider_actions": missing_actions,
+        "qualification_request_digest": observed_request_digest,
+        "qualification_request_binding": "pass" if request_binding_ok else "mismatch_or_missing",
     }
 
 
@@ -355,11 +390,16 @@ def run_codex_tool_call_result(request_path: Path, output_root: Path) -> dict[st
                 evidence_root=output_root / "harness-evidence",
                 provider_bins={"codex": provider_bin},
                 provider_builds={"codex": build_ref},
+                qualification_request=request,
             )
         )
     probe_result = _scenario_result(harness_payload, provider="codex", scenario="probe_identity")
     strict_result = _scenario_result(harness_payload, provider="codex", scenario="codex_tool_call_result_strict")
-    full_column_gate = _full_column_gate(harness_payload)
+    full_column_gate = _full_column_gate(
+        harness_payload,
+        qualification_request_digest=request.get("semantic_digest"),
+        interaction_evidence_class=(request.get("scenario_evidence") or {}).get("interaction_semantics"),
+    )
 
     post_execution_identity = identity_bridge._sha256_file(  # noqa: SLF001
         provider_bin
@@ -435,6 +475,7 @@ def run_codex_helm_interrupt(request_path: Path, output_root: Path) -> dict[str,
                 evidence_root=output_root / "harness-evidence",
                 provider_bins={"codex": provider_bin},
                 provider_builds={"codex": build_ref},
+                qualification_request=request,
             )
         )
     probe_result = _scenario_result(harness_payload, provider="codex", scenario="probe_identity")
@@ -525,6 +566,7 @@ def _claude_full_column_executor(
             evidence_root=evidence_root / "harness-evidence",
             provider_bins={"claude": binary},
             provider_builds={"claude": build_ref},
+            qualification_request=request,
         )
     )
     launch_result = _scenario_result(
@@ -537,7 +579,12 @@ def _claude_full_column_executor(
         provider="claude",
         scenario=LIVE_TOKEN_HARNESS_SCENARIO,
     )
-    full_column_gate = _full_column_gate(harness_payload, provider="claude")
+    full_column_gate = _full_column_gate(
+        harness_payload,
+        provider="claude",
+        qualification_request_digest=request.get("semantic_digest"),
+        interaction_evidence_class=(request.get("scenario_evidence") or {}).get("interaction_semantics"),
+    )
 
     no_token_verdict = {
         "pass": "green",
@@ -637,6 +684,7 @@ def _opencode_full_column_executor(
             evidence_root=evidence_root / "harness-evidence",
             provider_bins={"opencode": binary},
             provider_builds={"opencode": build_ref},
+            qualification_request=request,
         )
     )
     managed_result = _scenario_result(
@@ -654,7 +702,12 @@ def _opencode_full_column_executor(
         provider="opencode",
         scenario=LIVE_TOKEN_HARNESS_SCENARIO,
     )
-    full_column_gate = _full_column_gate(harness_payload, provider="opencode")
+    full_column_gate = _full_column_gate(
+        harness_payload,
+        provider="opencode",
+        qualification_request_digest=request.get("semantic_digest"),
+        interaction_evidence_class=(request.get("scenario_evidence") or {}).get("interaction_semantics"),
+    )
     canaries = _opencode_server_canaries(managed_result, evidence_root=evidence_root)
     assertions = opencode_server_qualification.opencode_server_contract_oracle(canaries)
 
@@ -753,6 +806,7 @@ def _antigravity_full_column_executor(
             evidence_root=evidence_root / "harness-evidence",
             provider_bins={"antigravity": binary},
             provider_builds={"antigravity": build_ref},
+            qualification_request=request,
         )
     )
     launch_result = _scenario_result(
@@ -765,7 +819,12 @@ def _antigravity_full_column_executor(
         provider="antigravity",
         scenario="managed_session_e2e",
     )
-    full_column_gate = _full_column_gate(harness_payload, provider="antigravity")
+    full_column_gate = _full_column_gate(
+        harness_payload,
+        provider="antigravity",
+        qualification_request_digest=request.get("semantic_digest"),
+        interaction_evidence_class=(request.get("scenario_evidence") or {}).get("interaction_semantics"),
+    )
     canaries = _antigravity_hook_canaries(launch_result, evidence_root=evidence_root)
     assertions = antigravity_hook_qualification.antigravity_hook_inbox_oracle(canaries)
 

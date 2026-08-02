@@ -29,6 +29,7 @@ from uuid import uuid5
 
 from zerg.provider_cli_contract import PROVIDER_CLI_BINARY_BY_PROVIDER
 from zerg.provider_cli_contract import PROVIDER_CLI_ENV_BY_PROVIDER
+from zerg.qa import qualification_request as qualification_request_contract
 from zerg.qa.provider_build_store import GENERATED_FAKE_PROVENANCE
 from zerg.qa.provider_build_store import ProviderBuildRef
 from zerg.qa.provider_build_store import verify_provider_builds
@@ -703,6 +704,8 @@ class HarnessOptions:
     old_proof_paths: Mapping[str, Path] | None = None
     new_proof_paths: Mapping[str, Path] | None = None
     baseline_root: Path | None = None
+    qualification_request: Mapping[str, Any] | None = None
+    interaction_artifact_path: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -871,10 +874,14 @@ class UniversalProviderAdapter:
         *,
         provider_bin: Path | None = None,
         provider_build: ProviderBuildRef | None = None,
+        qualification_request: Mapping[str, Any] | None = None,
+        interaction_artifact_path: Path | None = None,
     ) -> None:
         self.config = config
         self.provider_bin = provider_bin
         self.provider_build = provider_build
+        self.qualification_request = dict(qualification_request or {})
+        self.interaction_artifact_path = interaction_artifact_path
         self._probe_cache: dict[str, Any] | None = None
 
     @property
@@ -1885,27 +1892,73 @@ class UniversalProviderAdapter:
     def interaction_semantics(self, package: EvidencePackage) -> dict[str, Any]:
         """Capture/evaluate provider controls without rewriting raw history.
 
-        The release factory may provide a live artifact through an explicit
-        environment variable. CI and local fake builds use the same oracle over
-        generated provider-shaped evidence. A real build with no live artifact
-        stays blocked so a missing canary cannot look like a passing probe.
+        The release factory declares the requested evidence class in its
+        qualification request. CI and local fake builds use the same oracle
+        over generated provider-shaped evidence. A real build without an
+        explicit request policy stays blocked so a missing canary cannot look
+        like a passing probe.
         """
 
         from zerg.qa.provider_interaction_semantics import evaluate_observation
         from zerg.qa.provider_interaction_semantics import generated_fake_observation
         from zerg.qa.provider_interaction_semantics import jsonl_events
 
-        artifact_value = str(
-            os.environ.get("LONGHOUSE_PROVIDER_INTERACTION_ARTIFACT")
-            or os.environ.get(f"LONGHOUSE_{self.config.provider.upper()}_INTERACTION_ARTIFACT")
-            or ""
-        ).strip()
         observation: dict[str, Any] | None = None
         evidence_level = "hermetic"
         synthetic = False
-        if artifact_value:
+        request_payload = self.qualification_request
+        validated_request: dict[str, Any] | None = None
+        if request_payload.get("schema_version") == qualification_request_contract.SCHEMA_VERSION or request_payload.get("semantic_digest"):
             try:
-                loaded = json.loads(Path(artifact_value).expanduser().read_text(encoding="utf-8"))
+                validated_request = qualification_request_contract.validate(
+                    request_payload,
+                    provider=self.config.provider,
+                )
+            except qualification_request_contract.QualificationRequestError as exc:
+                payload = {
+                    "status": STATUS_FAIL,
+                    "scenario": "interaction_semantics",
+                    "failure_code": "interaction_qualification_request_invalid",
+                    "message": str(exc),
+                }
+                package.write_json("assertions/interaction_semantics.json", payload)
+                return payload
+        request_digest = validated_request.get("semantic_digest") if validated_request else None
+        scenario_evidence = validated_request.get("scenario_evidence") if validated_request else {}
+        requested_evidence = scenario_evidence.get("interaction_semantics") if isinstance(scenario_evidence, Mapping) else None
+        if self.config.provider == "antigravity" and requested_evidence not in {None, "hermetic"}:
+            payload = {
+                "status": STATUS_BLOCKED,
+                "scenario": "interaction_semantics",
+                "failure_code": "interaction_provider_policy_disabled",
+                "message": "Antigravity interaction control is policy-disabled; no managed TUI claim is made.",
+                "qualification_request_digest": request_digest,
+            }
+            package.write_json("assertions/interaction_semantics.json", payload)
+            return payload
+        generated_fake_build = self.provider_build is not None and self.provider_build.artifact_provenance == GENERATED_FAKE_PROVENANCE
+        if generated_fake_build and requested_evidence not in {None, "hermetic"}:
+            payload = {
+                "status": STATUS_BLOCKED,
+                "scenario": "interaction_semantics",
+                "failure_code": "interaction_live_requires_real_build",
+                "message": "Live interaction evidence requires a staged provider build, not a generated fake.",
+                "qualification_request_digest": request_digest,
+            }
+            package.write_json("assertions/interaction_semantics.json", payload)
+            return payload
+        if self.interaction_artifact_path is not None:
+            if validated_request is None:
+                payload = {
+                    "status": STATUS_FAIL,
+                    "scenario": "interaction_semantics",
+                    "failure_code": "interaction_qualification_request_required",
+                    "message": "An interaction artifact requires a validated qualification request.",
+                }
+                package.write_json("assertions/interaction_semantics.json", payload)
+                return payload
+            try:
+                loaded = json.loads(self.interaction_artifact_path.expanduser().read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError) as exc:
                 payload = {
                     "status": STATUS_FAIL,
@@ -1924,15 +1977,89 @@ class UniversalProviderAdapter:
                 }
                 package.write_json("assertions/interaction_semantics.json", payload)
                 return payload
+            if loaded.get("evidence_class") != requested_evidence:
+                payload = {
+                    "status": STATUS_FAIL,
+                    "scenario": "interaction_semantics",
+                    "failure_code": "interaction_artifact_evidence_mismatch",
+                    "message": "The interaction artifact evidence class did not match the qualification request.",
+                }
+                package.write_json("assertions/interaction_semantics.json", payload)
+                return payload
+            if requested_evidence == "hermetic":
+                if loaded.get("synthetic") is not True:
+                    payload = {
+                        "status": STATUS_FAIL,
+                        "scenario": "interaction_semantics",
+                        "failure_code": "interaction_artifact_non_synthetic",
+                        "message": "Hermetic interaction artifacts must declare synthetic evidence.",
+                        "qualification_request_digest": request_digest,
+                    }
+                    package.write_json("assertions/interaction_semantics.json", payload)
+                    return payload
+            else:
+                if loaded.get("synthetic") is not False:
+                    payload = {
+                        "status": STATUS_FAIL,
+                        "scenario": "interaction_semantics",
+                        "failure_code": "interaction_artifact_synthetic",
+                        "message": "Live interaction evidence cannot use a synthetic provider artifact.",
+                        "qualification_request_digest": request_digest,
+                    }
+                    package.write_json("assertions/interaction_semantics.json", payload)
+                    return payload
+                if loaded.get("provider_version") != validated_request.get("expected_provider_version") or loaded.get(
+                    "provider_executable_identity"
+                ) != validated_request.get("expected_executable_identity"):
+                    payload = {
+                        "status": STATUS_FAIL,
+                        "scenario": "interaction_semantics",
+                        "failure_code": "interaction_artifact_identity_mismatch",
+                        "message": "The interaction artifact provider identity did not match the qualification request.",
+                        "qualification_request_digest": request_digest,
+                    }
+                    package.write_json("assertions/interaction_semantics.json", payload)
+                    return payload
+            if loaded.get("qualification_request_digest") != request_digest:
+                payload = {
+                    "status": STATUS_FAIL,
+                    "scenario": "interaction_semantics",
+                    "failure_code": "interaction_artifact_request_mismatch",
+                    "message": "The interaction artifact was bound to a different qualification request.",
+                    "qualification_request_digest": request_digest,
+                }
+                package.write_json("assertions/interaction_semantics.json", payload)
+                return payload
             observation = loaded
-            evidence_level = str(observation.get("evidence_class") or "live_no_token")
+            evidence_level = requested_evidence
         elif self.provider_build is not None and self.provider_build.artifact_provenance == GENERATED_FAKE_PROVENANCE:
             observation = generated_fake_observation(self.config.provider)
             synthetic = True
-        elif self.config.provider == "antigravity":
+        elif self.config.provider == "antigravity" and requested_evidence in {None, "hermetic"}:
             observation = generated_fake_observation(self.config.provider)
             synthetic = True
-        elif os.environ.get("LONGHOUSE_PROVIDER_INTERACTION_LIVE") == "1":
+        elif requested_evidence == "hermetic":
+            observation = generated_fake_observation(self.config.provider)
+            synthetic = True
+        else:
+            if requested_evidence != "live_no_token":
+                payload = {
+                    "status": STATUS_BLOCKED,
+                    "scenario": "interaction_semantics",
+                    "failure_code": "interaction_live_policy_missing",
+                    "message": "A real provider build requires a live_no_token request policy or an explicit artifact.",
+                    "qualification_request_digest": request_digest,
+                    "operation_evidence": {
+                        "provider_interaction_semantics": {
+                            "status": STATUS_BLOCKED,
+                            "level": "none",
+                            "canary": "provider_interaction_probe",
+                            "failure_code": "interaction_live_policy_missing",
+                        }
+                    },
+                }
+                package.write_json("assertions/interaction_semantics.json", payload)
+                return payload
             from zerg.qa.provider_interaction_probe import produce_live_observation
 
             try:
@@ -1940,14 +2067,51 @@ class UniversalProviderAdapter:
                     self.config.provider,
                     provider_bin=self.provider_bin,
                     artifact_root=package.path("live-probe"),
+                    qualification_request_digest=request_digest,
                 )
                 evidence_level = str(observation.get("evidence_class") or "live_no_token")
+                if evidence_level != requested_evidence:
+                    payload = {
+                        "status": STATUS_BLOCKED,
+                        "scenario": "interaction_semantics",
+                        "failure_code": "interaction_live_probe_evidence_mismatch",
+                        "message": "The live producer evidence class did not match the qualification request.",
+                        "qualification_request_digest": request_digest,
+                    }
+                    package.write_json("assertions/interaction_semantics.json", payload)
+                    return payload
+                if observation.get("synthetic") is not False:
+                    payload = {
+                        "status": STATUS_FAIL,
+                        "scenario": "interaction_semantics",
+                        "failure_code": "interaction_live_probe_synthetic",
+                        "message": "A live interaction producer must return non-synthetic evidence.",
+                        "qualification_request_digest": request_digest,
+                    }
+                    package.write_json("assertions/interaction_semantics.json", payload)
+                    return payload
+                if (
+                    observation.get("provider") != self.config.provider
+                    or observation.get("provider_version") != validated_request.get("expected_provider_version")
+                    or observation.get("provider_executable_identity") != validated_request.get("expected_executable_identity")
+                    or observation.get("qualification_request_digest") != request_digest
+                ):
+                    payload = {
+                        "status": STATUS_FAIL,
+                        "scenario": "interaction_semantics",
+                        "failure_code": "interaction_live_probe_identity_mismatch",
+                        "message": "The live interaction producer did not bind provider identity and request digest.",
+                        "qualification_request_digest": request_digest,
+                    }
+                    package.write_json("assertions/interaction_semantics.json", payload)
+                    return payload
             except (OSError, RuntimeError, ValueError) as exc:
                 payload = {
                     "status": STATUS_BLOCKED,
                     "scenario": "interaction_semantics",
                     "failure_code": "interaction_live_probe_setup_failed",
                     "message": f"{type(exc).__name__}: {exc}",
+                    "qualification_request_digest": request_digest,
                     "operation_evidence": {
                         "provider_interaction_semantics": {
                             "status": STATUS_BLOCKED,
@@ -1959,25 +2123,13 @@ class UniversalProviderAdapter:
                 }
                 package.write_json("assertions/interaction_semantics.json", payload)
                 return payload
-        else:
-            payload = {
-                "status": STATUS_BLOCKED,
-                "scenario": "interaction_semantics",
-                "failure_code": "interaction_live_artifact_missing",
-                "message": "A real provider build requires an explicit live interaction artifact.",
-                "operation_evidence": {
-                    "provider_interaction_semantics": {
-                        "status": STATUS_BLOCKED,
-                        "level": "none",
-                        "canary": "provider_interaction_probe",
-                        "failure_code": "interaction_live_artifact_missing",
-                    }
-                },
-            }
-            package.write_json("assertions/interaction_semantics.json", payload)
-            return payload
 
         assert observation is not None
+        if request_digest:
+            observation = {
+                **observation,
+                "qualification_request_digest": request_digest,
+            }
         raw_observation_path = package.write_json("raw/provider-interaction-observation.json", observation)
         raw_events_path = package.write_text("events/provider-interaction-raw.jsonl", jsonl_events(observation))
         evaluation = evaluate_observation(self.config.provider, observation)
@@ -1993,6 +2145,7 @@ class UniversalProviderAdapter:
             "scenario": "interaction_semantics",
             "synthetic": synthetic or bool(observation.get("synthetic")),
             "evidence_class": evidence_level,
+            "qualification_request_digest": request_digest,
             "raw_observation_path": str(raw_observation_path),
             "raw_events_path": str(raw_events_path),
             "semantic_events_path": str(semantic_path),
@@ -5269,6 +5422,8 @@ def provider_configs() -> dict[str, AdapterConfig]:
 def adapter_registry(
     provider_bins: Mapping[str, Path] | None = None,
     provider_builds: Mapping[str, ProviderBuildRef] | None = None,
+    qualification_request: Mapping[str, Any] | None = None,
+    interaction_artifact_path: Path | None = None,
 ) -> dict[str, AgentHarnessAdapter]:
     # Lazy, function-body import (not module-level): provider_adapters
     # submodules import UniversalProviderAdapter/register_adapter from this
@@ -5290,6 +5445,8 @@ def adapter_registry(
             config,
             provider_bin=bins.get(provider),
             provider_build=builds.get(provider),
+            qualification_request=qualification_request,
+            interaction_artifact_path=interaction_artifact_path,
         )
     return registry
 
@@ -6597,7 +6754,12 @@ def run_harness(options: HarnessOptions) -> dict[str, Any]:
         if options.provider_builds is not None
         else options.provider_bins
     )
-    registry = adapter_registry(provider_bins, options.provider_builds)
+    registry = adapter_registry(
+        provider_bins,
+        options.provider_builds,
+        options.qualification_request,
+        options.interaction_artifact_path,
+    )
     results: list[ScenarioResult] = []
     for provider in options.providers:
         # A complete column is self-contained: baseline_compare emits the two

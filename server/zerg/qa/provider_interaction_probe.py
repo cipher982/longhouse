@@ -21,10 +21,16 @@ from datetime import UTC
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from typing import Mapping
 from uuid import uuid4
 
 from zerg.provider_cli_contract import PROVIDER_CLI_BINARY_BY_PROVIDER
 from zerg.provider_cli_contract import PROVIDER_CLI_ENV_BY_PROVIDER
+from zerg.qa import antigravity_release_identity
+from zerg.qa import claude_release_identity
+from zerg.qa import codex_release_identity
+from zerg.qa import cursor_release_identity
+from zerg.qa import opencode_release_identity
 from zerg.qa.claude_conversation_reset import _terminal_text
 from zerg.qa.claude_conversation_reset import _wait
 from zerg.qa.pty_session import ProviderPtySession
@@ -32,6 +38,101 @@ from zerg.qa.pty_session import wait_for_terminal_quiescence
 from zerg.services.managed_provider_contracts import contract_for_provider
 
 _DEFAULT_TIMEOUT_SECONDS = 60.0
+_PROVIDER_VERSION_PATTERNS = {
+    "antigravity": antigravity_release_identity.VERSION_LINE,
+    "claude": claude_release_identity.VERSION_LINE,
+    "codex": codex_release_identity._VERSION_LINE,
+    "cursor": cursor_release_identity.VERSION_LINE,
+    "opencode": opencode_release_identity.VERSION_LINE,
+}
+_NO_TOKEN_AUTH_ENV_NAMES = frozenset(
+    {
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_AUTH_TOKEN",
+        "CLAUDE_CODE_USE_VERTEX",
+        "CODEX_AGENTS_TOKEN",
+        "CODEX_API_KEY",
+        "CURSOR_ACCESS_TOKEN",
+        "CURSOR_API_KEY",
+        "GEMINI_API_KEY",
+        "GOOGLE_APPLICATION_CREDENTIALS",
+        "GOOGLE_API_KEY",
+        "GROQ_API_KEY",
+        "AWS_ACCESS_KEY_ID",
+        "AWS_CONFIG_FILE",
+        "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+        "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
+        "AWS_PROFILE",
+        "AWS_ROLE_ARN",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_SECURITY_TOKEN",
+        "AWS_SESSION_TOKEN",
+        "AWS_SHARED_CREDENTIALS_FILE",
+        "AWS_WEB_IDENTITY_TOKEN_FILE",
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "CLAUDE_CODE_USE_BEDROCK",
+        "OPENAI_API_KEY",
+        "OPENROUTER_API_KEY",
+        "TAVILY_API_KEY",
+        "XAI_API_KEY",
+        "ZAI_API_KEY",
+    }
+)
+_NO_TOKEN_AUTH_FLAG_ENV_NAMES = frozenset({"CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX"})
+_NO_TOKEN_SCRUB_ENV_NAMES = _NO_TOKEN_AUTH_ENV_NAMES | frozenset(
+    {
+        "ANTHROPIC_BASE_URL",
+        "ANTHROPIC_BEDROCK_BASE_URL",
+        "ANTHROPIC_MODEL",
+        "AWS_DEFAULT_REGION",
+        "AWS_EC2_METADATA_DISABLED",
+        "AWS_REGION",
+        "CODEX_API_URL",
+        "CODEX_HOME",
+        "CODEX_MANAGED_PACKAGE_ROOT",
+        "CLAUDE_CONFIG_DIR",
+        "CURSOR_MODEL",
+        "CURSOR_CONFIG_DIR",
+        "GOOGLE_CLOUD_LOCATION",
+        "GOOGLE_CLOUD_PROJECT",
+        "GOOGLE_CLOUD_REGION",
+        "OPENAI_API_BASE",
+        "OPENAI_BASE_URL",
+        "OPENCODE_CONFIG",
+        "OPENCODE_CONFIG_DIR",
+        "VERTEXAI_LOCATION",
+        "VERTEXAI_PROJECT",
+        "LONGHOUSE_ANTIGRAVITY_QUALIFICATION_HOME",
+        "LONGHOUSE_ANTIGRAVITY_QUALIFICATION_LIVE",
+        "ANTIGRAVITY_QUALIFICATION_HOME",
+        "LONGHOUSE_CLAUDE_QUALIFICATION_LIVE",
+        "LONGHOUSE_CLAUDE_INTERACTION_ARTIFACT",
+        "LONGHOUSE_CLAUDE_QUALIFICATION_USE_DEFAULT_HOME",
+        "LONGHOUSE_CODEX_BIN",
+        "LONGHOUSE_ENGINE_BIN",
+        "LONGHOUSE_OPENCODE_BIN",
+        "LONGHOUSE_OPENCODE_QUALIFICATION_MODEL",
+        "LONGHOUSE_PROVIDER_INTERACTION_ARTIFACT",
+        "LONGHOUSE_PROVIDER_INTERACTION_LIVE",
+    }
+)
+
+
+def _no_token_environment() -> dict[str, str]:
+    credentials = []
+    for name in sorted(_NO_TOKEN_AUTH_ENV_NAMES):
+        value = str(os.environ.get(name) or "").strip()
+        if value and (name not in _NO_TOKEN_AUTH_FLAG_ENV_NAMES or value.lower() in {"1", "true", "yes", "on"}):
+            credentials.append(name)
+    if credentials:
+        raise RuntimeError("live_no_token requires a credential-free environment; found: " + ", ".join(credentials))
+    environment = os.environ.copy()
+    for name in _NO_TOKEN_SCRUB_ENV_NAMES:
+        environment.pop(name, None)
+    # Prevent a provider SDK from discovering an instance/container role after
+    # the explicit environment has been scrubbed.
+    environment["AWS_EC2_METADATA_DISABLED"] = "true"
+    return environment
 
 
 def _looks_like_claude_auth_prompt(compact_terminal: str) -> bool:
@@ -74,17 +175,35 @@ def _resolve_binary(provider: str, configured: str | Path | None) -> Path:
     return path.resolve(strict=True)
 
 
-def _provider_version(binary: Path) -> str:
+def _provider_version(
+    provider: str,
+    binary: Path,
+    *,
+    environment: Mapping[str, str] | None = None,
+) -> str:
     result = subprocess.run(
         [str(binary), "--version"],
         text=True,
         capture_output=True,
         timeout=15,
         check=False,
+        env=dict(environment) if environment is not None else _no_token_environment(),
     )
     if result.returncode != 0:
         raise RuntimeError(f"provider version probe failed ({result.returncode}): {(result.stderr or result.stdout).strip()}")
-    return (result.stdout or result.stderr).strip().splitlines()[0].strip()
+    try:
+        pattern = _PROVIDER_VERSION_PATTERNS[provider]
+    except KeyError as exc:
+        raise RuntimeError(f"provider version grammar is not registered: {provider}") from exc
+    versions = {
+        match.group("version")
+        for stream in (result.stdout, result.stderr)
+        for line in stream.splitlines()
+        if (match := pattern.fullmatch(line.strip())) is not None
+    }
+    if len(versions) != 1:
+        raise RuntimeError(f"provider version output was not unambiguous for {provider}: {(result.stdout + result.stderr).strip()}")
+    return versions.pop()
 
 
 def _claude_transcript_paths(config_dir: Path) -> list[Path]:
@@ -150,6 +269,7 @@ def _claude_effort_probe(
     binary: Path,
     artifact_root: Path,
     timeout: float,
+    environment: Mapping[str, str],
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     probe_id = "claude_effort_command"
     invocation = uuid4().hex
@@ -162,7 +282,7 @@ def _claude_effort_probe(
     config_dir = output_root / "claude-config"
     config_dir.mkdir(mode=0o700)
     terminal_path = output_root / "terminal.raw"
-    env = os.environ.copy()
+    env = dict(environment)
     env["HOME"] = str(home)
     env["CLAUDE_CONFIG_DIR"] = str(config_dir)
     env["LONGHOUSE_CLAUDE_BIN"] = str(binary)
@@ -289,6 +409,7 @@ def produce_live_observation(
     *,
     provider_bin: Path | None,
     artifact_root: Path,
+    qualification_request_digest: str | None = None,
     timeout: float = _DEFAULT_TIMEOUT_SECONDS,
 ) -> dict[str, Any]:
     """Run the implemented no-token probes and return a replayable artifact."""
@@ -310,6 +431,7 @@ def produce_live_observation(
         }
 
     binary = _resolve_binary(provider, provider_bin)
+    no_token_environment = _no_token_environment()
     observation: dict[str, Any] = {
         "schema_version": 1,
         "artifact_kind": "provider_interaction_semantics_observation",
@@ -317,16 +439,23 @@ def produce_live_observation(
         "evidence_class": "live_no_token",
         "synthetic": False,
         "provider_bin": str(binary),
-        "provider_version": _provider_version(binary),
+        "provider_version": _provider_version(provider, binary, environment=no_token_environment),
         "provider_executable_identity": f"sha256:{_sha256(binary)}",
         "started_at": datetime.now(UTC).isoformat(),
         "probes": _declared_probe_rows(provider),
         "raw_events": [],
         "native_source_rows": [],
     }
+    if qualification_request_digest is not None:
+        observation["qualification_request_digest"] = qualification_request_digest
     if provider == "claude":
         try:
-            probe, source_rows = _claude_effort_probe(binary=binary, artifact_root=artifact_root, timeout=timeout)
+            probe, source_rows = _claude_effort_probe(
+                binary=binary,
+                artifact_root=artifact_root,
+                timeout=timeout,
+                environment=no_token_environment,
+            )
         except (OSError, RuntimeError, ValueError) as exc:
             probe = next(row for row in observation["probes"] if row["probe_id"] == "claude_effort_command")
             terminal_path = artifact_root / "claude-effort"

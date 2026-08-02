@@ -329,6 +329,49 @@ def test_full_column_gate_accepts_only_the_complete_known_codex_surface() -> Non
     assert gate["unexpected_results"] == []
 
 
+def test_full_column_gate_exposes_the_interaction_request_binding() -> None:
+    payload = _passing_full_column_payload()
+    digest = "sha256:" + "a" * 64
+    interaction = next(result for result in payload["results"] if result["scenario"] == "interaction_semantics")
+    interaction["data"] = {"qualification_request_digest": digest}
+
+    gate = bridge._full_column_gate(  # noqa: SLF001
+        payload,
+        qualification_request_digest=digest,
+    )
+
+    assert gate["status"] == "pass"
+    assert gate["qualification_request_digest"] == digest
+    assert gate["qualification_request_binding"] == "pass"
+
+
+@pytest.mark.parametrize(
+    ("status", "failure_code"),
+    (("pass", None), ("blocked", "interaction_live_probe_setup_failed")),
+)
+def test_full_column_gate_accepts_the_result_of_an_explicit_live_interaction_attempt(
+    status: str,
+    failure_code: str | None,
+) -> None:
+    payload = _passing_full_column_payload()
+    digest = "sha256:" + "a" * 64
+    interaction = next(result for result in payload["results"] if result["scenario"] == "interaction_semantics")
+    interaction["status"] = status
+    if failure_code is not None:
+        interaction["failure_code"] = failure_code
+    else:
+        interaction.pop("failure_code", None)
+    interaction["qualification_request_digest"] = digest
+
+    gate = bridge._full_column_gate(  # noqa: SLF001
+        payload,
+        qualification_request_digest=digest,
+        interaction_evidence_class="live_no_token",
+    )
+
+    assert gate["status"] == "pass"
+
+
 def test_full_column_gate_rejects_one_regressed_scenario() -> None:
     payload = _passing_full_column_payload()
     row = next(result for result in payload["results"] if result["scenario"] == "timeline_projection")
