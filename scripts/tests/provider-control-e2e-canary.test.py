@@ -121,6 +121,9 @@ print(json.dumps({{
     "is_error": False,
     "result": marker,
     "stop_reason": "end_turn",
+    "model": "claude-haiku-fake",
+    "usage": {{"input_tokens": 3, "output_tokens": 2}},
+    "total_cost_usd": 0.0001,
     "session_id": session_id,
 }}))
 """,
@@ -274,6 +277,9 @@ def test_claude_real_print_canary_requires_exact_marker_result() -> None:
         assert claude["auth_status"]["apiProvider"] == "fake-provider"
         assert claude["result_event"]["result_exact_match"] is True
         assert claude["result_event"]["session_id_present"] is True
+        assert claude["result_event"]["model"] == "claude-haiku-fake"
+        assert claude["result_event"]["usage"] == {"input_tokens": 3, "output_tokens": 2}
+        assert claude["result_event"]["total_cost_usd"] == 0.0001
         assert claude["operation_evidence"]["run_once"]["level"] == "live_token"
         assert claude["operation_evidence"]["live_token_behavior"]["level"] == "live_token"
         assert "stdout_tail" not in claude

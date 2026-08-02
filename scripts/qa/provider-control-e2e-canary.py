@@ -796,7 +796,7 @@ def _compact_claude_result_event(event: dict[str, Any] | None, *, marker: str) -
     if event is None:
         return None
     result_text = str(event.get("result") or "")
-    return {
+    compact = {
         "type": event.get("type"),
         "subtype": event.get("subtype"),
         "session_id_present": bool(event.get("session_id")),
@@ -807,6 +807,24 @@ def _compact_claude_result_event(event: dict[str, Any] | None, *, marker: str) -
         "result_sha256": hashlib.sha256(result_text.encode("utf-8")).hexdigest(),
         "result_exact_match": result_text.strip() == marker,
     }
+    model = event.get("model")
+    if isinstance(model, str) and model.strip():
+        compact["model"] = model.strip()
+    for usage_key in ("usage", "modelUsage"):
+        usage = event.get(usage_key)
+        if isinstance(usage, dict):
+            numeric_usage = {
+                str(key): value
+                for key, value in usage.items()
+                if isinstance(value, (int, float)) and not isinstance(value, bool)
+            }
+            if numeric_usage:
+                compact["usage"] = numeric_usage
+                break
+    total_cost = event.get("total_cost_usd")
+    if isinstance(total_cost, (int, float)) and not isinstance(total_cost, bool):
+        compact["total_cost_usd"] = total_cost
+    return compact
 
 
 def _run_claude_auth_status(binary: str, *, env: dict[str, str], root: Path) -> dict[str, Any]:
