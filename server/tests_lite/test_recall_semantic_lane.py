@@ -1,19 +1,13 @@
 """Tests for the dense/semantic lane wired into the live-catalog recall path.
 
-Regression coverage for the gaps a Sol review found in commit 169bcb329: the
-new code path was previously untested end to end because TESTING=1 makes
-``_semantic_recall_matches`` short-circuit before ever reaching the embedding
-call, the DB factory access, or the RRF merge -- so a crash in any of those
-would have shipped invisibly. These tests exercise the pure fusion/snippet
-logic directly and force the semantic path past its TESTING guard to prove
-it degrades to an empty list instead of raising when the DB factory is
-unavailable, which is exactly what live-catalog mode does not guarantee.
+Regression coverage for the gaps a Sol review found in commit 169bcb329. The
+semantic lane must execute under tests through injected boundaries, and every
+unavailable/timeout state must remain distinguishable from an honest miss.
 """
 
 from __future__ import annotations
 
 import asyncio
-import os
 from uuid import uuid4
 
 import numpy as np
@@ -66,21 +60,23 @@ def test_rrf_merge_respects_limit():
 
 
 @pytest.mark.asyncio
-async def test_semantic_recall_matches_short_circuits_under_testing_env():
-    """The documented TESTING=1 fast path never touches the DB factory or network."""
-    assert os.getenv("TESTING") == "1"
+async def test_semantic_recall_never_turns_missing_test_model_into_a_miss():
+    """TESTING is not permission to make an unavailable lane look empty."""
 
-    result = await agents_search._semantic_recall_matches(
-        query="anything",
-        project=None,
-        provider=None,
-        since_days=90,
-        include_test=False,
-        include_automation=False,
-        max_results=5,
-        timeout_seconds=5.0,
-    )
-    assert result == []
+    with pytest.raises(agents_search.HTTPException) as unavailable:
+        await agents_search._semantic_recall_matches(
+            query="anything",
+            project=None,
+            provider=None,
+            since_days=90,
+            include_test=False,
+            include_automation=False,
+            max_results=5,
+            timeout_seconds=5.0,
+            owner_id=42,
+        )
+    assert unavailable.value.status_code == 503
+    assert unavailable.value.detail["code"] == "embedder_unavailable"
 
 
 @pytest.mark.asyncio
@@ -91,7 +87,7 @@ async def test_semantic_recall_matches_times_out_gracefully(monkeypatch):
     fake_config = type("Cfg", (), {"model": "test-model", "dims": 4})()
     import zerg.models_config as models_config_module
 
-    monkeypatch.setattr(models_config_module, "get_embedding_config", lambda: fake_config)
+    monkeypatch.setattr(models_config_module, "get_embedding_space_config", lambda: fake_config)
 
     async def slow_generate_embedding(_text):
         await asyncio.sleep(5)
@@ -101,17 +97,20 @@ async def test_semantic_recall_matches_times_out_gracefully(monkeypatch):
 
     monkeypatch.setattr(local_embedder_module, "embed_query", slow_generate_embedding)
 
-    result = await agents_search._semantic_recall_matches(
-        query="slow query",
-        project=None,
-        provider=None,
-        since_days=90,
-        include_test=False,
-        include_automation=False,
-        max_results=5,
-        timeout_seconds=0.05,
-    )
-    assert result == []
+    with pytest.raises(agents_search.HTTPException) as timed_out:
+        await agents_search._semantic_recall_matches(
+            query="slow query",
+            project=None,
+            provider=None,
+            since_days=90,
+            include_test=False,
+            include_automation=False,
+            max_results=5,
+            timeout_seconds=0.05,
+            owner_id=42,
+        )
+    assert timed_out.value.status_code == 503
+    assert timed_out.value.detail["code"] == "dense_timed_out"
 
 
 @pytest.mark.asyncio
@@ -129,7 +128,7 @@ async def test_semantic_recall_matches_uses_live_catalog_embedding_rpc(monkeypat
     """
     monkeypatch.setenv("TESTING", "0")
     fake_config = type("Cfg", (), {"model": "test-model", "dims": 2})()
-    monkeypatch.setattr("zerg.models_config.get_embedding_config", lambda: fake_config)
+    monkeypatch.setattr("zerg.models_config.get_embedding_space_config", lambda: fake_config)
 
     async def fake_generate_embedding(_text):
         return np.array([1, 0], dtype=np.float32)
@@ -146,7 +145,8 @@ async def test_semantic_recall_matches_uses_live_catalog_embedding_rpc(monkeypat
                 "score": 0.9,
                 "event_index_start": 4,
                 "event_index_end": 5,
-                "start_order_time_us": None,
+                "generation_id": str(uuid4()),
+                "start_order_time_us": 123,
             }
         ]
 

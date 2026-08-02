@@ -16,8 +16,6 @@ from typing import Any
 from uuid import UUID
 from uuid import uuid4
 
-import numpy as np
-
 from zerg.services.provider_interaction_semantics import classify_provider_interaction
 
 SCHEMA_VERSION = 1
@@ -189,22 +187,6 @@ _CONTEXT_TARGET_BY_POSITION_SQL = """
 # numbered them, so reproducing this order here reproduces its clean indices.
 # `source_position` is stored zero-padded, which sorts identically to the
 # projector's integer compare.
-_EPISODE_LOCATOR_EVENTS_SQL = """
-    SELECT e.order_time_us, e.role, e.content_text, e.tool_output_text, e.tool_name,
-           e.provider, e.interaction_kind
-    FROM events e
-    JOIN session_index s ON s.session_id = e.session_id AND s.generation_id = e.generation_id
-    JOIN projection_membership m
-      ON m.session_id = e.session_id
-     AND m.generation_id = e.generation_id
-     AND m.desired_revision = s.indexed_through
-     AND m.object_id = e.source_object_id
-    WHERE e.session_id = ? AND e.generation_id = ?
-    ORDER BY e.order_time_us ASC, e.machine_id ASC, e.provider ASC,
-             e.opaque_source_id ASC, e.source_epoch ASC,
-             e.source_position ASC, e.event_subordinal ASC
-"""
-
 _CONTEXT_ROWS_SQL = """
     SELECT e.id AS search_event_id, e.event_id, e.source_object_id, e.record_ordinal,
            e.order_time_us, e.role, e.content_text, e.tool_name
@@ -526,6 +508,18 @@ def _initialize_schema(connection: sqlite3.Connection) -> None:
         );
         CREATE INDEX IF NOT EXISTS ix_episode_embeddings_session
             ON episode_embeddings(session_id);
+        CREATE TABLE IF NOT EXISTS embedding_publications (
+            session_id TEXT NOT NULL,
+            model TEXT NOT NULL,
+            dims INTEGER NOT NULL,
+            generation_id TEXT NOT NULL,
+            revision INTEGER NOT NULL,
+            expected_episode_count INTEGER NOT NULL,
+            completed_at TEXT NOT NULL,
+            PRIMARY KEY(session_id, model)
+        );
+        CREATE INDEX IF NOT EXISTS ix_embedding_publications_space
+            ON embedding_publications(model, dims, generation_id, revision);
         """
     )
     _add_missing_episode_columns(connection)
@@ -555,6 +549,25 @@ class SearchStore:
         self.connection.execute("DELETE FROM searchable_events WHERE order_time_us < ?", (_searchable_cutoff_us(),))
         self.connection.execute("PRAGMA optimize=0x10002")
         self._last_optimize_mono = time.monotonic()
+
+    def prune_inactive_embedding_spaces(self, *, active_model: str) -> dict[str, int]:
+        """Delete vectors that cannot be read by the single active space."""
+
+        self.connection.execute("BEGIN IMMEDIATE")
+        try:
+            vectors = self.connection.execute(
+                "DELETE FROM episode_embeddings WHERE model != ?",
+                (active_model,),
+            ).rowcount
+            publications = self.connection.execute(
+                "DELETE FROM embedding_publications WHERE model != ?",
+                (active_model,),
+            ).rowcount
+            self.connection.execute("COMMIT")
+        except BaseException:
+            self.connection.execute("ROLLBACK")
+            raise
+        return {"vectors": max(0, vectors), "publications": max(0, publications)}
 
     def ping(self) -> dict[str, object]:
         row = self.connection.execute("SELECT COUNT(*) AS count FROM session_index").fetchone()
@@ -843,6 +856,21 @@ class SearchStore:
                 self.connection.execute(
                     f"DELETE FROM episode_embeddings WHERE session_id = ? AND model = ?{suffix}", (session_id, model, *ordinals)
                 )
+                self.connection.execute(
+                    """
+                    INSERT INTO embedding_publications(
+                        session_id, model, dims, generation_id, revision,
+                        expected_episode_count, completed_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(session_id, model) DO UPDATE SET
+                        dims=excluded.dims,
+                        generation_id=excluded.generation_id,
+                        revision=excluded.revision,
+                        expected_episode_count=excluded.expected_episode_count,
+                        completed_at=excluded.completed_at
+                    """,
+                    (session_id, model, dims, generation_id, revision, len(ordinals), now),
+                )
             self.connection.execute("COMMIT")
         except BaseException:
             self.connection.execute("ROLLBACK")
@@ -858,188 +886,6 @@ class SearchStore:
         rows = self.connection.execute(sql, params).fetchall()
         # JSON object keys are strings; the projector converts them back to ordinals.
         return {"hashes": {str(row["episode_ordinal"]): str(row["content_hash"]) for row in rows}}
-
-    def backfill_episode_locators(
-        self,
-        *,
-        limit: int,
-        verify: bool = False,
-    ) -> dict[str, object]:
-        """Resolve start positions for episodes embedded before locators existed.
-
-        The locator is derived from the transcript, so it needs no model call and
-        no catalog read: this store already holds every field the clean
-        projection reads. Re-running that projection over the published events
-        reproduces the clean-message indices the projector recorded, which is
-        what turns ``event_index_start`` back into a transcript position.
-
-        ``verify`` recomputes locators for episodes that already have one and
-        reports whether the derivation agrees with what the projector wrote,
-        instead of writing anything. Run that first — if the two disagree, the
-        ordering assumption is wrong and a write pass would corrupt 80k rows
-        with plausible-looking positions.
-        """
-
-        episodes = self.connection.execute(
-            f"""
-            SELECT e.id, e.session_id, e.generation_id, e.episode_ordinal,
-                   e.event_index_start, e.start_order_time_us
-            FROM episode_embeddings e
-            JOIN session_index s
-              ON s.session_id = e.session_id AND s.generation_id = e.generation_id
-            WHERE e.event_index_start IS NOT NULL
-              AND e.start_order_time_us IS {"NOT NULL" if verify else "NULL"}
-            ORDER BY e.session_id ASC, e.episode_ordinal ASC
-            LIMIT ?
-            """,
-            (max(1, limit),),
-        ).fetchall()
-
-        scanned = 0
-        resolved = 0
-        unresolved = 0
-        agreed = 0
-        disagreed = 0
-        clean_cache: dict[tuple[str, str], dict[int, int]] = {}
-
-        for episode in episodes:
-            scanned += 1
-            key = (str(episode["session_id"]), str(episode["generation_id"]))
-            positions = clean_cache.get(key)
-            if positions is None:
-                positions = self._clean_index_positions(session_id=key[0], generation_id=key[1])
-                clean_cache[key] = positions
-            order_time = positions.get(int(episode["event_index_start"]))
-            if order_time is None:
-                unresolved += 1
-                continue
-            if verify:
-                if int(episode["start_order_time_us"]) == order_time:
-                    agreed += 1
-                else:
-                    disagreed += 1
-                continue
-            self.connection.execute(
-                "UPDATE episode_embeddings SET start_order_time_us = ? WHERE id = ?",
-                (order_time, episode["id"]),
-            )
-            resolved += 1
-
-        result: dict[str, object] = {
-            "scanned": scanned,
-            "unresolved": unresolved,
-            "exhausted": scanned < max(1, limit),
-        }
-        if verify:
-            result["agreed"] = agreed
-            result["disagreed"] = disagreed
-        else:
-            result["resolved"] = resolved
-        return result
-
-    def _clean_index_positions(self, *, session_id: str, generation_id: str) -> dict[int, int]:
-        """Map clean-message index to order time for one published generation."""
-
-        from zerg.services.clean_events import iter_clean_transcript_events
-
-        rows = self.connection.execute(_EPISODE_LOCATOR_EVENTS_SQL, (session_id, generation_id)).fetchall()
-        # The projector fed the chunker an integer order time and a sequential
-        # id, which makes its sort a no-op over this order. Feeding the same
-        # shapes keeps the clean indices identical rather than merely similar.
-        records = [
-            {
-                "id": index,
-                "timestamp": int(row["order_time_us"]),
-                "role": row["role"],
-                "content_text": row["content_text"],
-                "tool_output_text": row["tool_output_text"],
-                "tool_name": row["tool_name"],
-                "provider": row["provider"],
-                "interaction_kind": row["interaction_kind"],
-            }
-            for index, row in enumerate(rows)
-        ]
-        positions: dict[int, int] = {}
-        for clean_event in iter_clean_transcript_events(records):
-            if clean_event.event_id is None:
-                continue
-            positions[clean_event.index] = int(records[clean_event.event_id]["timestamp"])
-        return positions
-
-    def query_episode_embeddings(
-        self,
-        *,
-        model: str,
-        dims: int,
-        query_embedding: bytes,
-        owner_id: str,
-        limit: int,
-        project: str | None = None,
-        provider: str | None = None,
-        exclude_environments: list[str] | None = None,
-        since_iso: str | None = None,
-    ) -> dict[str, object]:
-        """Scope by SQL predicate against session_index, not an enumerated id list.
-
-        The earlier design required the caller to page through every visible
-        session id client-side and pass them as session_filter -- correct but
-        unbounded: at real corpus scale (tens of thousands of sessions) any
-        fixed page-count cap silently excludes older sessions from dense
-        search, exactly the sessions a paraphrase/causal query most needs to
-        reach. session_index already carries owner_id/project/provider/
-        environment/started_at (it's built for exactly this), so push the
-        same filters SQL has always used for lexical search here too --
-        no enumeration, no cap, scales with an index instead of a page limit.
-        """
-        sql = (
-            "SELECT e.session_id, e.episode_ordinal, e.event_index_start, e.event_index_end, "
-            "e.generation_id, e.start_order_time_us, e.embedding "
-            "FROM episode_embeddings e "
-            # Same generation fence as the resident loader: a superseded
-            # vector must not rank.
-            "JOIN session_index si ON si.session_id = e.session_id"
-            " AND si.generation_id = e.generation_id AND si.indexed_through = e.revision "
-            "WHERE e.model = ? AND e.dims = ? AND e.owner_id = ? AND si.owner_id = ?"
-        )
-        params: list[object] = [model, dims, owner_id, owner_id]
-        if project:
-            sql += " AND si.project = ?"
-            params.append(project)
-        if provider:
-            sql += " AND si.provider = ?"
-            params.append(provider)
-        if exclude_environments:
-            sql += f" AND si.environment NOT IN ({','.join('?' for _ in exclude_environments)})"
-            params.extend(exclude_environments)
-        if since_iso:
-            sql += " AND si.started_at >= ?"
-            params.append(since_iso)
-        rows = self.connection.execute(sql, params).fetchall()
-        if not rows:
-            return {"results": []}
-        query = np.frombuffer(query_embedding, dtype=np.float32)
-        vectors = np.vstack([np.frombuffer(row["embedding"], dtype=np.float32) for row in rows])
-        norms = np.linalg.norm(vectors, axis=1) * np.linalg.norm(query)
-        scores = np.divide(vectors @ query, norms, out=np.zeros_like(norms), where=norms != 0)
-        indices = np.argsort(-scores)[:limit]
-        return {
-            "results": [
-                {
-                    "session_id": str(rows[index]["session_id"]),
-                    "episode_ordinal": int(rows[index]["episode_ordinal"]),
-                    "score": float(scores[index]),
-                    "event_index_start": rows[index]["event_index_start"],
-                    "event_index_end": rows[index]["event_index_end"],
-                    # An episode is only locatable within the generation it was
-                    # embedded from. Returning the generation lets the caller
-                    # refuse to hydrate against a superseded one rather than
-                    # showing neighbours from a transcript that has since moved.
-                    "generation_id": str(rows[index]["generation_id"]),
-                    "start_order_time_us": rows[index]["start_order_time_us"],
-                }
-                for index in indices
-            ]
-        }
 
     def _update_existing_object_semantics(
         self,
@@ -1231,6 +1077,13 @@ class SearchStore:
                 """
                 DELETE FROM projection_membership
                 WHERE session_id = ? AND (generation_id != ? OR desired_revision != ?)
+                """,
+                (session_id, generation_id, desired_revision),
+            )
+            self.connection.execute(
+                """
+                DELETE FROM embedding_publications
+                WHERE session_id = ? AND (generation_id != ? OR revision != ?)
                 """,
                 (session_id, generation_id, desired_revision),
             )
@@ -1725,6 +1578,7 @@ class SearchStore:
             self.connection.execute("DELETE FROM events WHERE session_id = ?", (session_id,))
             self.connection.execute("DELETE FROM indexed_objects WHERE session_id = ?", (session_id,))
             self.connection.execute("DELETE FROM episode_embeddings WHERE session_id = ?", (session_id,))
+            self.connection.execute("DELETE FROM embedding_publications WHERE session_id = ?", (session_id,))
             self.connection.execute("COMMIT")
         except BaseException:
             self.connection.execute("ROLLBACK")

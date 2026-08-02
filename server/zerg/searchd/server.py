@@ -26,7 +26,7 @@ from zerg.catalogd.protocol import read_frame
 from zerg.catalogd.protocol import write_frame
 from zerg.embedding_space import ACTIVE_EMBEDDING_DIMS
 from zerg.embedding_space import ACTIVE_EMBEDDING_MODEL
-from zerg.searchd.dense_index import DenseIndex
+from zerg.searchd.dense_index import ResidentEpisodeIndex
 from zerg.searchd.store import SearchStore
 from zerg.searchd.store import WorklogPageTooLarge
 from zerg.searchd.store import WorklogSnapshotError
@@ -43,7 +43,7 @@ class _ReadDeadlineExceeded(RuntimeError):
     pass
 
 
-class _DenseIndexUnavailable(RuntimeError):
+class _ResidentEpisodeIndexUnavailable(RuntimeError):
     """The resident vector index is not loaded.
 
     Raised rather than returning no results, because an empty list is
@@ -54,6 +54,10 @@ class _DenseIndexUnavailable(RuntimeError):
 
 class _EmbeddingSpaceMismatch(RuntimeError):
     """The caller requested vectors from a space this daemon does not own."""
+
+
+class _EmbeddingCoverageIncomplete(RuntimeError):
+    """The active corpus has not been completely published into one space."""
 
 
 @dataclass(slots=True)
@@ -71,7 +75,7 @@ class SearchDaemon:
         self._lock_handle = None
         self._connection = None
         self._store: SearchStore | None = None
-        self._dense_index: DenseIndex | None = None
+        self._dense_index: ResidentEpisodeIndex | None = None
         self._executor: ThreadPoolExecutor | None = None
         self._read_workers: asyncio.Queue[_ReadWorker] | None = None
         self._all_read_workers: list[_ReadWorker] = []
@@ -104,11 +108,14 @@ class SearchDaemon:
             self._connection = open_search_database(self.database_path)
             self._store = SearchStore(self._connection)
             self._store.startup_maintenance()
+            pruned = self._store.prune_inactive_embedding_spaces(active_model=ACTIVE_EMBEDDING_MODEL)
+            if pruned["vectors"] or pruned["publications"]:
+                logger.info("searchd pruned inactive embedding spaces %s", pruned)
             # Load the resident vectors before the socket is published. A
             # searchd that answers `ping.ready` with an unloaded index lets a
             # semantic query return an empty success, which reads exactly like
             # an honest miss.
-            self._dense_index = DenseIndex(model=ACTIVE_EMBEDDING_MODEL, dims=ACTIVE_EMBEDDING_DIMS)
+            self._dense_index = ResidentEpisodeIndex(model=ACTIVE_EMBEDDING_MODEL, dims=ACTIVE_EMBEDDING_DIMS)
             self._dense_index.load(self._connection)
             logger.info("searchd resident index loaded vectors=%d", self._dense_index.size)
             self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="searchd-sqlite")
@@ -224,7 +231,8 @@ class SearchDaemon:
                     lambda store: store.ping(),
                     deadline_mono_ns=int(request.deadline_mono_ns),
                 )
-                return self._result(request, {**ping, "pid": os.getpid()})
+                coverage = self._dense_index.coverage.as_dict() if self._dense_index is not None else {"ready": False}
+                return self._result(request, {**ping, "pid": os.getpid(), "embedding_coverage": coverage})
             if request.method == "search.index.object.v2":
                 params = _index_object_params(request.params)
                 return self._result(request, await self._run(self._store.index_object, **params))
@@ -238,9 +246,6 @@ class SearchDaemon:
                     request,
                     await self._run_with_dense_refresh(self._store.write_episode_embeddings, **params),
                 )
-            if request.method == "search.embedding.locators.backfill.v2":
-                params = _embedding_locator_backfill_params(request.params)
-                return self._result(request, await self._run(self._store.backfill_episode_locators, **params))
             if request.method == "search.embedding.hashes.v2":
                 params = _embedding_hashes_params(request.params)
                 return self._result(
@@ -258,9 +263,11 @@ class SearchDaemon:
                 # indistinguishable to a caller and that is how a dead lane
                 # stayed dead.
                 if self._dense_index is None or not self._dense_index.ready:
-                    raise _DenseIndexUnavailable
+                    raise _ResidentEpisodeIndexUnavailable
                 if params["model"] != self._dense_index.model or params["dims"] != self._dense_index.dims:
                     raise _EmbeddingSpaceMismatch
+                if not self._dense_index.coverage.ready:
+                    raise _EmbeddingCoverageIncomplete
                 query = np.frombuffer(params.pop("query_embedding"), dtype="float32")
                 params.pop("model", None)
                 params.pop("dims", None)
@@ -334,13 +341,21 @@ class SearchDaemon:
             return self._error(request, exc.code, str(exc), retryable=exc.code in {"snapshot_capacity", "stale_snapshot"})
         except _ReadDeadlineExceeded:
             return self._error(request, "deadline_exceeded", "search read deadline exceeded", retryable=True)
-        except _DenseIndexUnavailable:
+        except _ResidentEpisodeIndexUnavailable:
             return self._error(request, "dense_index_unavailable", "the resident vector index is not loaded")
         except _EmbeddingSpaceMismatch:
             return self._error(
                 request,
                 "embedding_space_mismatch",
                 "the requested embedding model or dimensions do not match the resident index",
+            )
+        except _EmbeddingCoverageIncomplete:
+            details = self._dense_index.coverage.as_dict() if self._dense_index is not None else None
+            return self._error(
+                request,
+                "embedding_coverage_incomplete",
+                "the active embedding corpus is incomplete",
+                details=details,
             )
         except Exception:
             # Log the method and traceback. Returning a bare "internal" with no
@@ -477,10 +492,17 @@ class SearchDaemon:
         message: str,
         *,
         retryable: bool = False,
+        details: dict[str, object] | None = None,
     ) -> CatalogRpcResponse:
         return CatalogRpcResponse(
             id=request.id,
-            error=CatalogRpcError(code=code, message=message, retryable=retryable, retry_after_ms=None, details={}),
+            error=CatalogRpcError(
+                code=code,
+                message=message,
+                retryable=retryable,
+                retry_after_ms=None,
+                details=details or {},
+            ),
         )
 
 
@@ -646,17 +668,6 @@ def _publish_params(value: dict) -> dict:
     }
 
 
-def _embedding_locator_backfill_params(value: dict) -> dict:
-    _exact_keys(value, {"limit", "verify"})
-    limit = value["limit"]
-    verify = value["verify"]
-    if type(limit) is not int or not 1 <= limit <= 100_000:
-        raise ValueError("locator backfill limit is invalid")
-    if type(verify) is not bool:
-        raise ValueError("locator backfill verify flag is invalid")
-    return {"limit": limit, "verify": verify}
-
-
 def _embedding_write_params(value: dict) -> dict:
     _exact_keys(
         value,
@@ -675,8 +686,17 @@ def _embedding_write_params(value: dict) -> dict:
     dims = value["dims"]
     episodes = value["episodes"]
     desired_episode_ordinals = value["desired_episode_ordinals"]
-    if type(dims) is not int or not 1 <= dims <= 16_384 or not isinstance(episodes, list) or len(episodes) > 512:
+    complete = value["complete"]
+    if (
+        type(dims) is not int
+        or not 1 <= dims <= 16_384
+        or not isinstance(episodes, list)
+        or len(episodes) > 512
+        or type(complete) is not bool
+    ):
         raise ValueError("embedding write dimensions or episodes are invalid")
+    if complete != (desired_episode_ordinals is not None):
+        raise ValueError("complete embedding writes require the full desired episode set")
     if desired_episode_ordinals is not None:
         if (
             not isinstance(desired_episode_ordinals, list)
@@ -700,8 +720,17 @@ def _embedding_write_params(value: dict) -> dict:
         if type(episode["episode_ordinal"]) is not int or episode["episode_ordinal"] < 0:
             raise ValueError("embedding episode ordinal is invalid")
         start_order_time_us = episode["start_order_time_us"]
-        if start_order_time_us is not None and (type(start_order_time_us) is not int or start_order_time_us < 0):
+        if type(start_order_time_us) is not int or start_order_time_us < 0:
             raise ValueError("embedding episode start order time is invalid")
+        event_index_start = episode["event_index_start"]
+        event_index_end = episode["event_index_end"]
+        if (
+            type(event_index_start) is not int
+            or type(event_index_end) is not int
+            or event_index_start < 0
+            or event_index_end < event_index_start
+        ):
+            raise ValueError("embedding episode event range is invalid")
         if not isinstance(episode["content_hash"], str) or _HASH.fullmatch(episode["content_hash"]) is None:
             raise ValueError("embedding content hash is invalid")
         if not isinstance(encoded, str):
@@ -712,8 +741,11 @@ def _embedding_write_params(value: dict) -> dict:
             raise ValueError("embedding must be base64") from exc
         if len(embedding) != dims * 4:
             raise ValueError("embedding dimensions do not match payload")
-        if not np.isfinite(np.frombuffer(embedding, dtype=np.float32)).all():
+        vector = np.frombuffer(embedding, dtype=np.float32)
+        if not np.isfinite(vector).all():
             raise ValueError("embedding must be finite")
+        if not np.isclose(float(np.linalg.norm(vector)), 1.0, rtol=1e-4, atol=1e-4):
+            raise ValueError("embedding must be L2-normalized")
         parsed.append({**episode, "embedding": embedding})
     return {
         "session_id": _uuid(value["session_id"], "session_id"),
@@ -722,7 +754,7 @@ def _embedding_write_params(value: dict) -> dict:
         "revision": _revision(value["revision"], "revision"),
         "model": _text(value["model"], "model", 255),
         "dims": dims,
-        "complete": value["complete"] is True,
+        "complete": complete,
         "desired_episode_ordinals": desired_episode_ordinals,
         "episodes": parsed,
     }

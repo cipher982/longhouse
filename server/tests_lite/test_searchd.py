@@ -111,10 +111,10 @@ def test_embedding_write_contract_accepts_full_desired_episode_set():
                     "episode_ordinal": 2,
                     "event_index_start": 4,
                     "event_index_end": 5,
-                    "start_order_time_us": None,
+                    "start_order_time_us": 123,
                     "content_hash": "c" * 64,
                     "embedding": base64.b64encode(
-                        np.array([0, 0], dtype=np.float32).tobytes()
+                        np.array([1, 0], dtype=np.float32).tobytes()
                     ).decode("ascii"),
                 }
             ],
@@ -218,17 +218,13 @@ def test_nullable_episode_column_is_added_without_discarding_the_store(tmp_path)
         upgraded.close()
 
 
-def test_episode_embeddings_dedup_and_cosine_query(tmp_path):
+def test_episode_embeddings_deduplicate_exact_replays(tmp_path):
     connection = open_search_database(tmp_path / "search.db")
     store = SearchStore(connection)
     session_id = str(uuid4())
     published_generation = str(uuid4())
     owner_id = "owner-1"
     try:
-        # query_episode_embeddings scopes via a SQL join against session_index
-        # (owner/project/provider/environment/recency), not an enumerated id
-        # list -- it needs a real row there to match against, the same way
-        # production sessions always have one by the time they're embedded.
         connection.execute(
             """
             INSERT INTO session_index (
@@ -252,7 +248,7 @@ def test_episode_embeddings_dedup_and_cosine_query(tmp_path):
                     "episode_ordinal": 0,
                     "event_index_start": 0,
                     "event_index_end": 1,
-                    "start_order_time_us": None,
+                    "start_order_time_us": 100,
                     "content_hash": "a" * 64,
                     "embedding": np.array([1, 0], dtype=np.float32).tobytes(),
                 },
@@ -260,7 +256,7 @@ def test_episode_embeddings_dedup_and_cosine_query(tmp_path):
                     "episode_ordinal": 1,
                     "event_index_start": 2,
                     "event_index_end": 3,
-                    "start_order_time_us": None,
+                    "start_order_time_us": 200,
                     "content_hash": "b" * 64,
                     "embedding": np.array([0, 1], dtype=np.float32).tobytes(),
                 },
@@ -280,7 +276,7 @@ def test_episode_embeddings_dedup_and_cosine_query(tmp_path):
                     "episode_ordinal": 0,
                     "event_index_start": 0,
                     "event_index_end": 1,
-                    "start_order_time_us": None,
+                    "start_order_time_us": 100,
                     "content_hash": "a" * 64,
                     "embedding": np.array([1, 0], dtype=np.float32).tobytes(),
                 }
@@ -288,26 +284,32 @@ def test_episode_embeddings_dedup_and_cosine_query(tmp_path):
         )
         # A true replay -- same generation, same text -- still costs nothing.
         assert replay == {"written": 0, "skipped": 1}
-        results = store.query_episode_embeddings(
-            model="test-model",
-            dims=2,
-            query_embedding=np.array([1, 0], dtype=np.float32).tobytes(),
-            owner_id=owner_id,
-            limit=2,
-        )["results"]
-        assert [row["episode_ordinal"] for row in results] == [0, 1]
-        assert results[0]["score"] == pytest.approx(1.0)
+    finally:
+        connection.close()
 
-        # A query for a different owner must see nothing, even though the
-        # embeddings exist -- this is the tenant-isolation guarantee.
-        other_owner_results = store.query_episode_embeddings(
-            model="test-model",
-            dims=2,
-            query_embedding=np.array([1, 0], dtype=np.float32).tobytes(),
-            owner_id="owner-2",
-            limit=2,
-        )["results"]
-        assert other_owner_results == []
+
+def test_startup_prunes_every_inactive_embedding_space(tmp_path):
+    connection = open_search_database(tmp_path / "search.db")
+    store = SearchStore(connection)
+    try:
+        for model in (ACTIVE_EMBEDDING_MODEL, "retired/model"):
+            connection.execute(
+                """
+                INSERT INTO episode_embeddings(
+                    session_id, owner_id, generation_id, revision, episode_ordinal,
+                    event_index_start, event_index_end, start_order_time_us,
+                    model, dims, content_hash, embedding, updated_at
+                ) VALUES (?, '42', 'generation', 1, 0, 0, 1, 100, ?, 2, ?, ?, '2026-08-01T00:00:00+00:00')
+                """,
+                (model, model, hashlib.sha256(model.encode()).hexdigest(), np.array([1, 0], dtype="float32").tobytes()),
+            )
+        connection.commit()
+
+        assert store.prune_inactive_embedding_spaces(active_model=ACTIVE_EMBEDDING_MODEL) == {
+            "vectors": 1,
+            "publications": 0,
+        }
+        assert connection.execute("SELECT model FROM episode_embeddings").fetchall()[0][0] == ACTIVE_EMBEDDING_MODEL
     finally:
         connection.close()
 
@@ -1222,97 +1224,6 @@ def test_searchd_replays_late_semantic_correction_without_identity_conflict(tmp_
         assert connection.execute(
             "SELECT COUNT(*) FROM events WHERE source_object_id = ?", (object_id,)
         ).fetchone()[0] == 1
-    finally:
-        connection.close()
-
-
-def test_searchd_episode_locator_replays_render_semantics(tmp_path):
-    connection = open_search_database(tmp_path / "episode-locator.db")
-    store = SearchStore(connection)
-    session_id = str(uuid4())
-    generation_id = str(uuid4())
-    object_id = hashlib.sha256(b"claude-episode-locator").hexdigest()
-    now_us = int(datetime.now(UTC).timestamp() * 1_000_000)
-    records = [
-        {
-            "event_id": "command",
-            "record_ordinal": 0,
-            "order_time_us": now_us,
-            "source_position": 0,
-            "event_subordinal": 0,
-            "role": "user",
-            "content_text": "<command-name>/effort</command-name>",
-            "interaction_kind": "local_control",
-            "tool_name": None,
-            "tool_output_text": None,
-            "tool_call_id": None,
-            "thread_id": None,
-            "branch_kind": None,
-        },
-        {
-            "event_id": "prompt",
-            "record_ordinal": 1,
-            "order_time_us": now_us + 1,
-            "source_position": 1,
-            "event_subordinal": 0,
-            "role": "user",
-            "content_text": "Build the real episode",
-            "interaction_kind": "durable_user_message",
-            "tool_name": None,
-            "tool_output_text": None,
-            "tool_call_id": None,
-            "thread_id": None,
-            "branch_kind": None,
-        },
-        {
-            "event_id": "answer",
-            "record_ordinal": 2,
-            "order_time_us": now_us + 2,
-            "source_position": 2,
-            "event_subordinal": 0,
-            "role": "assistant",
-            "content_text": "Done",
-            "interaction_kind": "provider_system",
-            "tool_name": None,
-            "tool_output_text": None,
-            "tool_call_id": None,
-            "thread_id": None,
-            "branch_kind": None,
-        },
-    ]
-    try:
-        store.index_object(
-            session_id=session_id,
-            generation_id=generation_id,
-            object_id=object_id,
-            desired_revision=1,
-            provider="claude",
-            machine_id="cinder",
-            project="longhouse",
-            environment="local",
-            cwd="/workspace/longhouse",
-            git_repo="cipher982/longhouse",
-            opaque_source_id="claude/session.jsonl",
-            source_epoch=str(uuid4()),
-            records=records,
-        )
-        store.publish_generation(
-            session_id=session_id,
-            generation_id=generation_id,
-            owner_id="42",
-            desired_revision=1,
-            object_count=1,
-            object_set_hash=object_set_hash([object_id]),
-            event_count=len(records),
-            project="longhouse",
-            provider="claude",
-            environment="local",
-            cwd="/workspace/longhouse",
-            git_repo="cipher982/longhouse",
-            started_at=datetime.now(UTC).isoformat(),
-        )
-        positions = store._clean_index_positions(session_id=session_id, generation_id=generation_id)  # noqa: SLF001
-        assert positions == {0: now_us + 1, 1: now_us + 2}
     finally:
         connection.close()
 

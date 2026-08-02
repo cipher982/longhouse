@@ -10,18 +10,23 @@ reranking cannot retrieve what the first stage never returned.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import statistics
+import subprocess
 import time
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 
 QUERIES_PATH = Path(__file__).with_name("queries.jsonl")
 DEFAULT_URL = "https://david010.longhouse.ai"
 TOKEN_PATH = Path.home() / ".longhouse" / "machine" / "device-token"
+DEFAULT_MAX_FALSE_NEGATIVE_RATE = 0.671
+DEFAULT_MIN_RECALL_AT_5 = 0.329
 
 
 @dataclass
@@ -43,6 +48,10 @@ class Result:
     returned: list[str]
     latency_s: float
     error: str | None = None
+    lanes: tuple[str, ...] = ()
+    embedding_model: str | None = None
+    embedding_dims: int | None = None
+    embedding_revision: str | None = None
 
     def gold_rank(self) -> int | None:
         """1-based rank of the first gold session, or None if absent.
@@ -105,7 +114,7 @@ class Report:
         summary = {}
         for category, results in sorted(buckets.items()):
             if category == "absent":
-                good = sum(1 for r in results if not r.returned)
+                good = sum(1 for r in results if not r.error and not r.returned)
             else:
                 good = sum(1 for r in results if (rank := r.gold_rank()) is not None and rank <= 5)
             summary[category] = (good, len(results))
@@ -117,6 +126,34 @@ class Report:
             return (0.0, 0.0)
         p95_index = min(len(values) - 1, int(len(values) * 0.95))
         return (statistics.median(values), values[p95_index])
+
+    def errors(self) -> list[Result]:
+        return [result for result in self.results if result.error]
+
+    def gate_failures(self, *, max_false_negative_rate: float, min_recall_at_5: float) -> list[str]:
+        failures = []
+        if self.errors():
+            failures.append(f"{len(self.errors())} query(s) errored")
+        if self.false_negative_rate() > max_false_negative_rate:
+            failures.append(
+                f"false_negative_rate {self.false_negative_rate():.3f} exceeds {max_false_negative_rate:.3f}"
+            )
+        if self.recall_at(5) < min_recall_at_5:
+            failures.append(f"recall_at_5 {self.recall_at(5):.3f} is below {min_recall_at_5:.3f}")
+        return failures
+
+    def embedding_metadata(self) -> dict[str, object] | None:
+        values = {
+            (result.embedding_model, result.embedding_dims, result.embedding_revision)
+            for result in self.results
+            if result.embedding_model is not None
+        }
+        if not values:
+            return None
+        if len(values) != 1:
+            raise ValueError(f"evaluation observed multiple embedding spaces: {sorted(values)}")
+        model, dims, revision = values.pop()
+        return {"model": model, "dims": dims, "revision": revision}
 
 
 def load_queries() -> tuple[list[Query], set[str]]:
@@ -142,9 +179,7 @@ def load_queries() -> tuple[list[Query], set[str]]:
     return queries, excluded
 
 
-def search_recall(
-    query: str, *, base_url: str, token: str, limit: int, days: int, mode: str
-) -> list[str]:
+def search_recall(query: str, *, base_url: str, token: str, limit: int, days: int, mode: str) -> dict:
     params = urllib.parse.urlencode(
         {"query": query, "max_results": limit, "since_days": days, "context_turns": 0, "mode": mode}
     )
@@ -156,11 +191,19 @@ def search_recall(
     )
     with urllib.request.urlopen(request, timeout=30) as response:
         payload = json.load(response)
-    return [str(match.get("session_id") or "") for match in (payload.get("matches") or [])]
+    if not isinstance(payload, dict):
+        raise ValueError("recall returned a non-object response")
+    expected_lanes = {"lexical": ["lexical"], "semantic": ["dense"], "auto": ["lexical", "dense"]}[mode]
+    if payload.get("lanes") != expected_lanes:
+        raise ValueError(f"recall lane attribution mismatch: expected {expected_lanes}, got {payload.get('lanes')}")
+    matches = payload.get("matches")
+    if not isinstance(matches, list) or any(not isinstance(match, dict) for match in matches):
+        raise ValueError("recall returned malformed matches")
+    return payload
 
 
 def _search_mode(mode: str):
-    def search(query: str, *, base_url: str, token: str, limit: int, days: int) -> list[str]:
+    def search(query: str, *, base_url: str, token: str, limit: int, days: int) -> dict:
         return search_recall(query, base_url=base_url, token=token, limit=limit, days=days, mode=mode)
 
     return search
@@ -182,6 +225,8 @@ def main() -> int:
     parser.add_argument("--days", type=int, default=365)
     parser.add_argument("--verbose", action="store_true", help="Show every miss.")
     parser.add_argument("--json", action="store_true", help="Emit machine-readable output.")
+    parser.add_argument("--max-false-negative-rate", type=float, default=DEFAULT_MAX_FALSE_NEGATIVE_RATE)
+    parser.add_argument("--min-recall-at-5", type=float, default=DEFAULT_MIN_RECALL_AT_5)
     args = parser.parse_args()
 
     base_url = os.environ.get("LONGHOUSE_EVAL_URL", DEFAULT_URL).rstrip("/")
@@ -202,17 +247,60 @@ def main() -> int:
     for query in queries:
         started = time.monotonic()
         try:
-            returned = search(
+            payload = search(
                 query.query, base_url=base_url, token=token, limit=args.limit, days=args.days
             )
+            returned = [str(match.get("session_id") or "") for match in payload["matches"]]
             # Sessions that produced this work discuss retrieval itself and would
             # match every query about retrieval.
             returned = [s for s in returned if s not in excluded]
-            report.results.append(Result(query, returned, time.monotonic() - started))
+            report.results.append(
+                Result(
+                    query,
+                    returned,
+                    time.monotonic() - started,
+                    lanes=tuple(payload["lanes"]),
+                    embedding_model=payload.get("embedding_model"),
+                    embedding_dims=payload.get("embedding_dims"),
+                    embedding_revision=payload.get("embedding_revision"),
+                )
+            )
         except Exception as exc:  # noqa: BLE001 - report, never abort the sweep
             report.results.append(Result(query, [], time.monotonic() - started, error=str(exc)))
 
     p50, p95 = report.latencies()
+    gate_failures = report.gate_failures(
+        max_false_negative_rate=args.max_false_negative_rate,
+        min_recall_at_5=args.min_recall_at_5,
+    )
+    try:
+        git_sha = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=Path(__file__).resolve().parents[2],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        git_sha = "unknown"
+    query_set_sha256 = hashlib.sha256(QUERIES_PATH.read_bytes()).hexdigest()
+    metadata = {
+        "evaluated_at": datetime.now(UTC).isoformat(),
+        "base_url": base_url,
+        "git_sha": git_sha,
+        "query_set_sha256": query_set_sha256,
+        "query_count": len(report.results),
+        "limit": args.limit,
+        "days": args.days,
+        "expected_lanes": {"lexical": ["lexical"], "semantic": ["dense"], "auto": ["lexical", "dense"]}[
+            args.strategy
+        ],
+        "embedding_space": report.embedding_metadata(),
+        "thresholds": {
+            "max_false_negative_rate": args.max_false_negative_rate,
+            "min_recall_at_5": args.min_recall_at_5,
+        },
+    }
     if args.json:
         print(
             json.dumps(
@@ -225,11 +313,15 @@ def main() -> int:
                     "p50_s": round(p50, 3),
                     "p95_s": round(p95, 3),
                     "by_category": report.by_category(),
+                    "errors": len(report.errors()),
+                    "gate": "pass" if not gate_failures else "fail",
+                    "gate_failures": gate_failures,
+                    "metadata": metadata,
                 },
                 indent=2,
             )
         )
-        return 0
+        return 0 if not gate_failures else 1
 
     print(f"\nstrategy: {report.strategy}   queries: {len(report.results)}\n")
     print(f"  recall@5                 {report.recall_at(5):.1%}")
@@ -240,7 +332,7 @@ def main() -> int:
     for category, (good, total) in report.by_category().items():
         print(f"    {category:14s} {good}/{total}")
 
-    errors = [r for r in report.results if r.error]
+    errors = report.errors()
     if errors:
         print(f"\n  {len(errors)} query(s) errored (counted as misses):")
         for result in errors[:5]:
@@ -261,6 +353,12 @@ def main() -> int:
                 print(f"    [{result.query.category}] {result.query.id}: {result.query.query}")
                 print(f"      wanted {result.query.gold_sessions} got {result.returned[:5] or 'nothing'}")
     print()
+    if gate_failures:
+        print("  RELEASE GATE FAILED:")
+        for failure in gate_failures:
+            print(f"    - {failure}")
+        return 1
+    print("  RELEASE GATE PASSED")
     return 0
 
 

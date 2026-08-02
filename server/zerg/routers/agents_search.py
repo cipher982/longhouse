@@ -3,11 +3,11 @@
 import asyncio
 import base64
 import logging
-import os
 import time
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
+from typing import Literal
 from typing import Optional
 from uuid import UUID
 
@@ -18,6 +18,8 @@ from fastapi import Query
 from fastapi import Request
 from fastapi import Response
 from fastapi import status
+from pydantic import BaseModel
+from pydantic import ConfigDict
 
 from zerg.catalogd.client import CatalogRemoteError
 from zerg.catalogd.client import CatalogUnavailable
@@ -38,6 +40,27 @@ logger = logging.getLogger(__name__)
 RECALL_ROUTE_TIMEOUT_SECONDS = 5.0
 
 _catalog_db_dependency = catalog_db_dependency()
+
+
+class _DenseEpisodeHit(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    session_id: str
+    episode_ordinal: int
+    score: float
+    event_index_start: int | None
+    event_index_end: int | None
+    generation_id: str
+    start_order_time_us: int
+
+
+class _RecallContextPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    evidence_status: Literal["complete", "partial", "unavailable"]
+    evidence_reason: str | None
+    context: list[dict[str, object]]
+    total_events: int
 
 
 def _catalog_owner_id(auth: object) -> int:
@@ -116,7 +139,7 @@ async def search_storage_v2_context(
     start_order_time_us: int | None = None,
     context_turns: int,
     timeout_seconds: float,
-) -> dict[str, object]:
+) -> _RecallContextPayload:
     """Read bounded neighbor evidence from the same generation as a search hit.
 
     Lexical hits locate by searchd event id; semantic episode hits locate by
@@ -152,7 +175,7 @@ async def search_storage_v2_context(
                 "reason": reason,
             },
         ) from exc
-    return result
+    return _RecallContextPayload.model_validate(result)
 
 
 async def search_storage_v2_episode_embeddings(
@@ -167,7 +190,7 @@ async def search_storage_v2_episode_embeddings(
     provider: str | None = None,
     exclude_environments: list[str] | None = None,
     since_iso: str | None = None,
-) -> list[dict[str, object]]:
+) -> list[_DenseEpisodeHit]:
     """Query the derived dense index through searchd, never its SQLite file.
 
     Scoping is a SQL predicate against searchd's own session_index (owner,
@@ -179,7 +202,7 @@ async def search_storage_v2_episode_embeddings(
     """
     search = get_searchd_client()
     if search is None:
-        return []
+        raise CatalogUnavailable("searchd unavailable for search.embedding.query.v2")
     result = await search.call(
         "search.embedding.query.v2",
         {
@@ -195,7 +218,10 @@ async def search_storage_v2_episode_embeddings(
         },
         timeout_seconds=timeout_seconds,
     )
-    return [row for row in (result.get("results") or []) if isinstance(row, dict)]
+    raw_results = result.get("results")
+    if not isinstance(raw_results, list):
+        raise CatalogUnavailable("searchd returned an invalid dense result envelope")
+    return [_DenseEpisodeHit.model_validate(row) for row in raw_results]
 
 
 async def search_storage_v2_sessions(
@@ -258,24 +284,6 @@ async def search_storage_v2_sessions(
     return sessions
 
 
-def _embedding_unavailable_response(detail: str) -> HTTPException:
-    return HTTPException(
-        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-        detail=f"Embeddings unavailable: {detail}",
-    )
-
-
-def _embedding_corpus_unavailable_response(kind: str) -> HTTPException:
-    return HTTPException(
-        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-        detail=(
-            f"Embeddings unavailable: no {kind} embeddings are loaded for a nonempty "
-            "session corpus. Run POST /api/agents/backfill-embeddings or fix the "
-            "embedding worker before using semantic search."
-        ),
-    )
-
-
 async def _semantic_recall_matches(
     *,
     query: str,
@@ -299,21 +307,22 @@ async def _semantic_recall_matches(
     the caller can run real reciprocal rank fusion: a session found by both
     lanes should get credit from both, not just whichever ran first.
     """
-    from zerg.models_config import get_embedding_config
+    from zerg.models_config import get_embedding_space_config
     from zerg.services.local_embedder import LocalEmbedderUnavailable
     from zerg.services.local_embedder import embed_query
 
-    if os.getenv("TESTING") == "1":
-        # Tests do not carry model weights; skip deterministically rather than
-        # depend on a downloaded artifact.
-        return []
+    if timeout_seconds <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": "dense_timed_out", "message": "Dense recall had no execution budget."},
+        )
+    if owner_id is None or not query:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "invalid_dense_request", "message": "Dense recall requires an owner and query."},
+        )
 
-    if timeout_seconds <= 0 or owner_id is None:
-        return []
-
-    config = get_embedding_config()
-    if not config or not query:
-        return []
+    config = get_embedding_space_config()
 
     async def _run() -> list[RecallMatch]:
         query_vec = await embed_query(query)
@@ -325,7 +334,7 @@ async def _semantic_recall_matches(
         # filter, which caps out well before covering a real tenant's full
         # history (tens of thousands of sessions), silently excluding
         # exactly the older sessions a paraphrase query most needs to
-        # reach. See search.embedding.query.v2 / query_episode_embeddings.
+        # reach. See search.embedding.query.v2 and ResidentEpisodeIndex.
         exclude_environments: list[str] = []
         if not include_test:
             exclude_environments.extend(["test", "e2e"])
@@ -346,24 +355,24 @@ async def _semantic_recall_matches(
         )
         matches: list[RecallMatch] = []
         seen: set[str] = set()
-        for row in rows:
-            session_id = str(row.get("session_id") or "")
+        for raw_row in rows:
+            row = _DenseEpisodeHit.model_validate(raw_row)
+            session_id = row.session_id
             if not session_id or session_id in seen:
                 continue
             seen.add(session_id)
-            start_order_time_us = row.get("start_order_time_us")
             matches.append(
                 RecallMatch(
                     session_id=session_id,
-                    chunk_index=int(row.get("episode_ordinal") or 0),
-                    score=float(row.get("score") or 0.0),
-                    event_index_start=row.get("event_index_start"),
-                    event_index_end=row.get("event_index_end"),
+                    chunk_index=row.episode_ordinal,
+                    score=row.score,
+                    event_index_start=row.event_index_start,
+                    event_index_end=row.event_index_end,
                     # Carrying the generation the episode was embedded from is
                     # what lets hydration refuse a superseded transcript instead
                     # of showing neighbours that have since moved.
-                    generation_id=str(row.get("generation_id") or "") or None,
-                    start_order_time_us=int(start_order_time_us) if start_order_time_us is not None else None,
+                    generation_id=row.generation_id,
+                    start_order_time_us=row.start_order_time_us,
                 )
             )
             if len(matches) >= max_results:
@@ -381,9 +390,18 @@ async def _semantic_recall_matches(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={"code": "embedder_unavailable", "message": "The local embedding model is not loaded."},
         ) from None
+    except (CatalogRemoteError, CatalogUnavailable) as exc:
+        reason = exc.code if isinstance(exc, CatalogRemoteError) else "searchd_unavailable"
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": reason, "message": "The resident dense index is unavailable."},
+        ) from exc
     except TimeoutError:
         logger.warning("Dense recall exceeded its %.2fs budget", timeout_seconds)
-        return []
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": "dense_timed_out", "message": "Dense recall exceeded its execution budget."},
+        ) from None
 
 
 # Hydration gets its own slice of the request rather than the remainder. A lane
@@ -396,7 +414,12 @@ HYDRATION_RESERVED_SECONDS = 1.0
 CANDIDATE_DEPTH_FACTOR = 5
 
 
-def _rank_single_lane(matches: list[RecallMatch], *, limit: int) -> list[RecallMatch]:
+def _rank_single_lane(
+    matches: list[RecallMatch],
+    *,
+    limit: int,
+    lane: Literal["lexical", "dense"],
+) -> list[RecallMatch]:
     """Order one lane's own scores, deterministically.
 
     Ties break on session id so a repeated query cannot reorder its own results,
@@ -404,6 +427,9 @@ def _rank_single_lane(matches: list[RecallMatch], *, limit: int) -> list[RecallM
     """
 
     ordered = sorted(matches, key=lambda m: (-m.score, m.session_id))
+    for rank, match in enumerate(ordered, start=1):
+        match.retrieval_lanes = [lane]
+        match.lane_ranks = {lane: rank}
     return ordered[:limit]
 
 
@@ -477,6 +503,10 @@ async def _hydrate_recall_match(
     the model default, because a default is a claim nobody checked.
     """
 
+    if context_turns == 0:
+        match.evidence_status = "not_requested"
+        match.evidence_reason = None
+        return
     if match.generation_id is None or (match.match_event_id is None and match.start_order_time_us is None):
         match.evidence_status = "unavailable"
         match.evidence_reason = "search_hit_missing_locator"
@@ -498,24 +528,34 @@ async def _hydrate_recall_match(
         match.evidence_status = "partial"
         match.evidence_reason = str(detail.get("code") or "search_evidence_unavailable")
         return
-    match.context = [item for item in (evidence.get("context") or []) if isinstance(item, dict)]
-    match.total_events = int(evidence.get("total_events") or match.total_events)
+    evidence = _RecallContextPayload.model_validate(evidence)
+    match.context = evidence.context
+    match.total_events = evidence.total_events
     # Only the store may declare completeness. An absent status means the
     # response did not carry one, which is not evidence that everything arrived
     # — reading it as "complete" is how a silent contract change would look
     # like a healthy result.
-    reported = str(evidence.get("evidence_status") or "")
-    match.evidence_status = reported if reported in {"complete", "partial", "unavailable"} else "partial"
-    reason = evidence.get("evidence_reason")
+    reported = evidence.evidence_status
+    match.evidence_status = reported
+    reason = evidence.evidence_reason
     if reason is not None:
         match.evidence_reason = str(reason)
-    elif not reported:
-        match.evidence_reason = "search_evidence_status_absent"
     else:
         match.evidence_reason = None
     if match.evidence is None:
         match.evidence = _anchor_excerpt(match)
         match.context_text = match.evidence
+
+
+def _finalize_recall_evidence(matches: list[RecallMatch]) -> None:
+    """Make every wire status an explicit, internally consistent fact."""
+
+    for match in matches:
+        if match.evidence_status == "complete" and not match.evidence:
+            match.evidence_status = "partial"
+            match.evidence_reason = "complete_without_materialized_anchor"
+        elif match.evidence_status in {"partial", "unavailable"} and not match.evidence_reason:
+            match.evidence_reason = f"{match.evidence_status}_without_reason"
 
 
 def _anchor_excerpt(match: RecallMatch) -> str | None:
@@ -575,6 +615,8 @@ def _rrf_merge_recall_matches(
 
     ordered_ids = sorted(scores, key=lambda sid: scores[sid], reverse=True)
     merged = []
+    lexical_ranks = {match.session_id: rank for rank, match in enumerate(lexical, start=1)}
+    semantic_ranks = {match.session_id: rank for rank, match in enumerate(semantic, start=1)}
     for sid in ordered_ids[:limit]:
         match = best_rank[sid][1]
         # Report the value the ordering was actually made from. The lanes score
@@ -582,6 +624,8 @@ def _rrf_merge_recall_matches(
         # so passing the winner's raw lane score through made a fused list look
         # arbitrarily ordered to anyone reading the numbers.
         match.score = scores[sid]
+        match.retrieval_lanes = [lane for lane, ranks in (("lexical", lexical_ranks), ("dense", semantic_ranks)) if sid in ranks]
+        match.lane_ranks = {lane: ranks[sid] for lane, ranks in (("lexical", lexical_ranks), ("dense", semantic_ranks)) if sid in ranks}
         merged.append(match)
     return merged
 
@@ -650,9 +694,9 @@ async def recall_sessions(
     since_days: int = Query(90, ge=1, le=365, description="Days to look back"),
     max_results: int = Query(5, ge=1, le=20, description="Max matches"),
     context_turns: int = Query(2, ge=0, le=10, description="Context turns before/after match"),
-    context_mode: str = Query("forensic", description="Context projection mode: forensic|active_context"),
+    context_mode: Literal["forensic", "active_context"] = Query("forensic", description="Context projection mode: forensic|active_context"),
     include_automation: bool = Query(False, description="Include Hatch automation sessions in recall results"),
-    mode: str = "auto",
+    mode: Literal["auto", "lexical", "semantic"] = "auto",
     _auth: object = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> RecallResponse:
@@ -661,20 +705,33 @@ async def recall_sessions(
     request_started = getattr(request.state, "request_timeout_started_at", None)
     timing = ServerTimingRecorder(surface="recall")
 
+    allowed_query_params = {
+        "query",
+        "project",
+        "provider",
+        "include_test",
+        "since_days",
+        "max_results",
+        "context_turns",
+        "context_mode",
+        "include_automation",
+        "mode",
+    }
+    unknown_query_params = sorted(set(request.query_params) - allowed_query_params)
+    if unknown_query_params:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "unknown_query_parameters",
+                "message": "Recall request contains unsupported query parameters.",
+                "parameters": unknown_query_params,
+            },
+        )
+
     def remaining_budget() -> float:
         started = request_started if isinstance(request_started, float) else handler_started
         return max(0.05, RECALL_ROUTE_TIMEOUT_SECONDS - (time.perf_counter() - started) - 0.1)
 
-    if context_mode not in {"forensic", "active_context"}:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="context_mode must be one of: forensic, active_context",
-        )
-    if mode not in {"auto", "lexical", "semantic"}:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="mode must be one of: auto, lexical, semantic",
-        )
     if context_mode != "forensic":
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -724,10 +781,10 @@ async def recall_sessions(
     # first and fuse, which made the lane-specific evaluation meaningless: every
     # mode measured some amount of lexical.
     if mode == "lexical":
-        matches = _rank_single_lane(await lexical(), limit=max_results)
+        matches = _rank_single_lane(await lexical(), limit=max_results, lane="lexical")
         lanes = ("lexical",)
     elif mode == "semantic":
-        matches = _rank_single_lane(await dense(), limit=max_results)
+        matches = _rank_single_lane(await dense(), limit=max_results, lane="dense")
         lanes = ("dense",)
     else:
         lexical_matches, dense_matches = await asyncio.gather(lexical(), dense())
@@ -751,5 +808,19 @@ async def recall_sessions(
             )
         )
 
+    _finalize_recall_evidence(matches)
     timing.apply(response)
+    if "dense" in lanes:
+        from zerg.embedding_space import ACTIVE_EMBEDDING_DIMS
+        from zerg.embedding_space import ACTIVE_EMBEDDING_MODEL
+        from zerg.embedding_space import EMBEDDING_ARTIFACT_REVISION
+
+        return RecallResponse(
+            matches=matches,
+            total=len(matches),
+            lanes=list(lanes),
+            embedding_model=ACTIVE_EMBEDDING_MODEL,
+            embedding_dims=ACTIVE_EMBEDDING_DIMS,
+            embedding_revision=EMBEDDING_ARTIFACT_REVISION,
+        )
     return RecallResponse(matches=matches, total=len(matches), lanes=list(lanes))

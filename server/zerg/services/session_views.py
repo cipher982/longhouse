@@ -22,6 +22,7 @@ from typing import Optional
 from uuid import UUID
 
 from pydantic import BaseModel
+from pydantic import ConfigDict
 from pydantic import Field
 from sqlalchemy import and_
 from sqlalchemy import or_
@@ -1717,25 +1718,6 @@ class BackfillProgressResponse(BaseModel):
     total: int = 0
 
 
-class BackfillEmbeddingsResponse(BaseModel):
-    """Response for embedding backfill endpoint."""
-
-    status: str = Field(..., description="'started', 'already_running', or 'nothing_to_do'")
-    total: int = Field(0, description="Total sessions to process")
-    message: str = Field("", description="Human-readable status message")
-
-
-class BackfillEmbeddingsProgressResponse(BaseModel):
-    """Response for embedding backfill progress check."""
-
-    running: bool
-    embedded: int = 0
-    skipped: int = 0
-    errors: int = 0
-    remaining: int = 0
-    total: int = 0
-
-
 class MediaBackfillInlineDataUrlsResponse(BaseModel):
     """Response for guarded legacy inline media backfill."""
 
@@ -1798,6 +1780,8 @@ class SemanticSearchResponse(BaseModel):
 class RecallMatch(BaseModel):
     """A single recall match with context."""
 
+    model_config = ConfigDict(extra="forbid")
+
     session_id: str
     chunk_index: int
     score: float
@@ -1810,7 +1794,8 @@ class RecallMatch(BaseModel):
     intent: Optional[str] = None
     evidence: Optional[str] = None
     structured_hits: List[str] = Field(default_factory=list)
-    diagnostics: Dict[str, Any] = Field(default_factory=dict)
+    retrieval_lanes: List[Literal["lexical", "dense"]] = Field(default_factory=list)
+    lane_ranks: Dict[str, int] = Field(default_factory=dict)
     event_index_start: Optional[int] = None
     event_index_end: Optional[int] = None
     total_events: int = 0
@@ -1824,7 +1809,7 @@ class RecallMatch(BaseModel):
     # lane — which never reaches the hydrator — report complete evidence beside
     # a null context, so the highest-scoring recall results claimed to be the
     # most trustworthy while carrying nothing at all.
-    evidence_status: str = "unavailable"
+    evidence_status: Literal["complete", "partial", "unavailable", "not_requested"] = "unavailable"
     evidence_reason: Optional[str] = None
     # Internal routing only. A semantic episode locates itself by position in the
     # published ordering rather than by event id; the hydrator needs that, the
@@ -1835,9 +1820,11 @@ class RecallMatch(BaseModel):
 class RecallResponse(BaseModel):
     """Response for recall endpoint."""
 
+    model_config = ConfigDict(extra="forbid")
+
     matches: List[RecallMatch]
     total: int
-    lanes: List[str] = Field(
+    lanes: List[Literal["lexical", "dense"]] = Field(
         default_factory=list,
         description=(
             "Retrieval lanes that actually ran for this request. A dead lane went "
@@ -1845,6 +1832,9 @@ class RecallResponse(BaseModel):
             "produced it; this makes that visible to the caller."
         ),
     )
+    embedding_model: Optional[str] = None
+    embedding_dims: Optional[int] = None
+    embedding_revision: Optional[str] = None
 
 
 class CleanupRequest(BaseModel):

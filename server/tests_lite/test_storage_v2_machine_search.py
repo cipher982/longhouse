@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from types import SimpleNamespace
 
+import pytest
 from starlette.requests import Request
 
 from zerg.routers import agents_search
@@ -117,7 +118,7 @@ def test_recall_machine_search_uses_searchd_without_legacy_db(monkeypatch):
             context_turns=2,
             context_mode="forensic",
             include_automation=False,
-            mode="auto",
+            mode="lexical",
             _auth=SimpleNamespace(owner_id=7),
             _single=None,
         )
@@ -127,6 +128,40 @@ def test_recall_machine_search_uses_searchd_without_legacy_db(monkeypatch):
     assert response.matches[0].evidence == "the migration completed"
     assert response.matches[0].total_events == 12
     assert response.matches[0].context[0]["content_text"] == "please migrate"
+
+
+def test_recall_rejects_unknown_query_parameters_before_search():
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/api/agents/recall",
+            "headers": [],
+            "query_string": b"query=migration&limti=10",
+        }
+    )
+
+    with pytest.raises(agents_search.HTTPException) as exc_info:
+        asyncio.run(
+            agents_search.recall_sessions(
+                request=request,
+                query="migration",
+                project=None,
+                provider=None,
+                include_test=False,
+                since_days=90,
+                max_results=5,
+                context_turns=2,
+                context_mode="forensic",
+                include_automation=False,
+                mode="lexical",
+                _auth=SimpleNamespace(owner_id=7),
+                _single=None,
+            )
+        )
+
+    assert exc_info.value.status_code == 422
+    assert exc_info.value.detail["parameters"] == ["limti"]
 
 
 def test_machine_session_list_query_uses_searchd_without_legacy_db(monkeypatch):

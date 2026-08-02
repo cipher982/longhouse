@@ -125,8 +125,8 @@ async def test_match_without_any_locator_reports_why(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_absent_store_status_is_not_read_as_complete(monkeypatch):
-    """A response that carries no status is unknown, which is not the same as fine."""
+async def test_absent_store_status_fails_the_strict_contract(monkeypatch):
+    """A malformed response is an error, not evidence that hydration partially worked."""
 
     async def fake_context(**kwargs):
         return {"context": [], "total_events": 0}
@@ -140,10 +140,8 @@ async def test_absent_store_status_is_not_read_as_complete(monkeypatch):
         generation_id=str(uuid4()),
         match_event_id=99,
     )
-    await agents_search._hydrate_recall_match(match, owner_id=42, context_turns=2, timeout_seconds=5.0)
-
-    assert match.evidence_status == "partial"
-    assert match.evidence_reason == "search_evidence_status_absent"
+    with pytest.raises(ValueError):
+        await agents_search._hydrate_recall_match(match, owner_id=42, context_turns=2, timeout_seconds=5.0)
 
 
 @pytest.mark.asyncio

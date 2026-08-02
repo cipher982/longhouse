@@ -1,6 +1,6 @@
 """The resident vector index: one matrix, owned by the daemon, read by every worker.
 
-`query_episode_embeddings` used to rebuild this on every request — SELECT every
+The old SQL query path rebuilt this on every request — SELECT every
 matching row, `np.frombuffer` each blob, `np.vstack` 85 MB — measured at
 0.57-0.66s per query against a memory-bandwidth floor near 10ms. The vectors
 change a few times a minute and were being reconstructed thousands of times.
@@ -21,7 +21,7 @@ consistent matrix rather than one being mutated underneath it. Torn reads of a
 single row would be silent and produce a plausible wrong score, which is the
 failure mode this whole subsystem keeps having.
 
-Filters are applied **before** top-k, not after. `query_episode_embeddings`
+Filters are applied **before** top-k, not after. The retired SQL query
 scopes by owner, project, provider, environment and recency through
 `session_index` (``store.py:919-939``); selecting a global top-k and filtering it
 afterwards returns a different, silently smaller answer.
@@ -58,6 +58,34 @@ class _Snapshot:
         return int(self.vectors.shape[0])
 
 
+@dataclass(frozen=True)
+class EmbeddingCoverage:
+    ready: bool
+    expected_sessions: int
+    published_sessions: int
+    expected_episodes: int
+    current_episodes: int
+    invalid_vectors: int
+    unnormalized_vectors: int
+    unlocatable_episodes: int
+    episode_count_mismatches: int
+    missing_session_ids: tuple[str, ...]
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "ready": self.ready,
+            "expected_sessions": self.expected_sessions,
+            "published_sessions": self.published_sessions,
+            "expected_episodes": self.expected_episodes,
+            "current_episodes": self.current_episodes,
+            "invalid_vectors": self.invalid_vectors,
+            "unnormalized_vectors": self.unnormalized_vectors,
+            "unlocatable_episodes": self.unlocatable_episodes,
+            "episode_count_mismatches": self.episode_count_mismatches,
+            "missing_session_ids": list(self.missing_session_ids),
+        }
+
+
 _EMPTY = _Snapshot(
     vectors=np.zeros((0, 0), dtype="float32"),
     **{
@@ -80,7 +108,7 @@ _EMPTY = _Snapshot(
 )
 
 
-class DenseIndex:
+class ResidentEpisodeIndex:
     """Resident vectors for one embedding space, rebuilt from SQLite on demand.
 
     SQLite remains the store of record. This is a derived cache that can always
@@ -94,6 +122,7 @@ class DenseIndex:
         self._dims = dims
         self._snapshot = _EMPTY
         self._loaded = False
+        self._coverage = EmbeddingCoverage(False, 0, 0, 0, 0, 0, 0, 0, 0, ())
         self._write_lock = threading.Lock()
 
     @property
@@ -112,6 +141,10 @@ class DenseIndex:
         return self._snapshot.size
 
     @property
+    def coverage(self) -> EmbeddingCoverage:
+        return self._coverage
+
+    @property
     def model(self) -> str:
         return self._model
 
@@ -122,6 +155,20 @@ class DenseIndex:
     def load(self, connection) -> None:
         """Build the snapshot from SQLite. Called on the writer thread."""
 
+        publications = connection.execute(
+            """
+            SELECT s.session_id, p.expected_episode_count
+            FROM session_index s
+            LEFT JOIN embedding_publications p
+              ON p.session_id = s.session_id
+             AND p.model = ?
+             AND p.dims = ?
+             AND p.generation_id = s.generation_id
+             AND p.revision = s.indexed_through
+            ORDER BY s.session_id ASC
+            """,
+            (self._model, self._dims),
+        ).fetchall()
         rows = connection.execute(
             """
             SELECT e.session_id, e.episode_ordinal, e.generation_id, e.revision, e.embedding,
@@ -141,9 +188,67 @@ class DenseIndex:
             """,
             (self._model, self._dims),
         ).fetchall()
+        valid_rows, coverage = self._validate_coverage(publications, rows)
         with self._write_lock:
-            self._snapshot = self._build(rows)
+            self._snapshot = self._build(valid_rows)
+            self._coverage = coverage
             self._loaded = True
+
+    def _validate_coverage(self, publications, rows) -> tuple[list, EmbeddingCoverage]:
+        expected_by_session = {
+            str(row["session_id"]): int(row["expected_episode_count"]) for row in publications if row["expected_episode_count"] is not None
+        }
+        missing_sessions = tuple(str(row["session_id"]) for row in publications if row["expected_episode_count"] is None)
+        ordinals_by_session: dict[str, set[int]] = {}
+        valid_rows = []
+        invalid_vectors = 0
+        unnormalized_vectors = 0
+        unlocatable_episodes = 0
+        for row in rows:
+            session_id = str(row["session_id"])
+            ordinals_by_session.setdefault(session_id, set()).add(int(row["episode_ordinal"]))
+            payload = row["embedding"]
+            if not isinstance(payload, bytes) or len(payload) != self._dims * 4:
+                invalid_vectors += 1
+                continue
+            vector = np.frombuffer(payload, dtype="float32", count=self._dims)
+            if not np.isfinite(vector).all() or float(np.linalg.norm(vector)) <= 1e-6:
+                invalid_vectors += 1
+                continue
+            if not np.isclose(float(np.linalg.norm(vector)), 1.0, rtol=1e-4, atol=1e-4):
+                unnormalized_vectors += 1
+                continue
+            if row["start_order_time_us"] is None:
+                unlocatable_episodes += 1
+                continue
+            valid_rows.append(row)
+
+        count_mismatches = sum(
+            ordinals_by_session.get(session_id, set()) != set(range(expected_count))
+            for session_id, expected_count in expected_by_session.items()
+        )
+        expected_episodes = sum(expected_by_session.values())
+        current_episodes = len(rows)
+        ready = (
+            len(publications) == len(expected_by_session)
+            and current_episodes == expected_episodes
+            and invalid_vectors == 0
+            and unnormalized_vectors == 0
+            and unlocatable_episodes == 0
+            and count_mismatches == 0
+        )
+        return valid_rows, EmbeddingCoverage(
+            ready=ready,
+            expected_sessions=len(publications),
+            published_sessions=len(expected_by_session),
+            expected_episodes=expected_episodes,
+            current_episodes=current_episodes,
+            invalid_vectors=invalid_vectors,
+            unnormalized_vectors=unnormalized_vectors,
+            unlocatable_episodes=unlocatable_episodes,
+            episode_count_mismatches=count_mismatches,
+            missing_session_ids=missing_sessions[:20],
+        )
 
     def _build(self, rows) -> _Snapshot:
         count = len(rows)
@@ -152,11 +257,9 @@ class DenseIndex:
         vectors = np.empty((count, self._dims), dtype="float32")
         for index, row in enumerate(rows):
             vectors[index] = np.frombuffer(row["embedding"], dtype="float32", count=self._dims)
-        # Normalize once here rather than per query: cosine over unit vectors is
-        # a plain inner product, which is the whole point of keeping this
-        # resident.
-        norms = np.linalg.norm(vectors, axis=1, keepdims=True)
-        np.divide(vectors, np.clip(norms, 1e-9, None), out=vectors)
+        # Coverage validation proved these are finite unit vectors. Do not
+        # normalize malformed stored data here: repairing it during load would
+        # hide a broken projector behind plausible scores.
 
         def column(key, dtype, missing=None):
             return np.array([(row[key] if row[key] is not None else missing) for row in rows], dtype=dtype)

@@ -17,7 +17,7 @@ import pytest
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 
-from zerg.searchd.dense_index import DenseIndex
+from zerg.searchd.dense_index import ResidentEpisodeIndex
 from zerg.searchd.store import SearchStore
 from zerg.searchd.store import open_search_database
 
@@ -39,6 +39,12 @@ def _seed(connection, rows):
             " project, provider, environment, cwd, git_repo, started_at, published_at)"
             " VALUES (?,?,?,1,1,1,'h',1,1,1,0,0,?,?,?,NULL,NULL,?,?)",
             (session_id, "g-" + session_id, owner, project, provider, environment, started, started),
+        )
+        connection.execute(
+            "INSERT OR REPLACE INTO embedding_publications("
+            " session_id, model, dims, generation_id, revision, expected_episode_count, completed_at)"
+            " VALUES (?,?,?,?,1,1,'2026-08-01T00:00:00+00:00')",
+            (session_id, MODEL, DIMS, "g-" + session_id),
         )
         connection.execute(
             "INSERT INTO episode_embeddings("
@@ -64,18 +70,102 @@ def _index(tmp_path, rows):
     connection = open_search_database(tmp_path / "search.db")
     SearchStore(connection)  # ensure schema paths run as in production
     _seed(connection, rows)
-    index = DenseIndex(model=MODEL, dims=DIMS)
+    index = ResidentEpisodeIndex(model=MODEL, dims=DIMS)
     index.load(connection)
     return index, connection
 
 
+def _reference_search(
+    connection,
+    query,
+    *,
+    owner_id,
+    limit,
+    project=None,
+    provider=None,
+    exclude_environments=None,
+    since_iso=None,
+):
+    """Independent test oracle for the deleted per-request SQL implementation."""
+
+    sql = (
+        "SELECT e.session_id, e.embedding FROM episode_embeddings e "
+        "JOIN session_index s ON s.session_id=e.session_id "
+        "AND s.generation_id=e.generation_id AND s.indexed_through=e.revision "
+        "WHERE e.model=? AND e.dims=? AND e.owner_id=? AND s.owner_id=?"
+    )
+    params = [MODEL, DIMS, owner_id, owner_id]
+    if project:
+        sql += " AND s.project=?"
+        params.append(project)
+    if provider:
+        sql += " AND s.provider=?"
+        params.append(provider)
+    if exclude_environments:
+        sql += f" AND s.environment NOT IN ({','.join('?' for _ in exclude_environments)})"
+        params.extend(exclude_environments)
+    if since_iso:
+        sql += " AND s.started_at>=?"
+        params.append(since_iso)
+    rows = connection.execute(sql, params).fetchall()
+    ranked = sorted(
+        (
+            (float(np.frombuffer(row["embedding"], dtype="float32") @ query), str(row["session_id"]))
+            for row in rows
+        ),
+        reverse=True,
+    )
+    return [session_id for _score, session_id in ranked[:limit]]
+
+
 def test_not_ready_until_loaded():
     """An unloaded index must not look like an index that found nothing."""
-    index = DenseIndex(model=MODEL, dims=DIMS)
+    index = ResidentEpisodeIndex(model=MODEL, dims=DIMS)
     assert index.ready is False
     assert index.size == 0
     with pytest.raises(RuntimeError, match="not loaded"):
         index.search(_unit([1, 0, 0, 0]), owner_id="42", limit=1)
+
+
+def test_coverage_requires_a_current_complete_publication(tmp_path):
+    index, connection = _index(
+        tmp_path,
+        [("s1", 0, [1, 0, 0, 0], "42", "zerg", "claude", "local", "2026-07-01")],
+    )
+    try:
+        assert index.coverage.ready is True
+        connection.execute("DELETE FROM embedding_publications WHERE session_id = 's1'")
+        connection.commit()
+        index.load(connection)
+        assert index.coverage.ready is False
+        assert index.coverage.missing_session_ids == ("s1",)
+    finally:
+        connection.close()
+
+
+@pytest.mark.parametrize(
+    ("mutation", "field"),
+    [
+        ("UPDATE episode_embeddings SET start_order_time_us = NULL", "unlocatable_episodes"),
+        (
+            "UPDATE episode_embeddings SET embedding = zeroblob(16)",
+            "invalid_vectors",
+        ),
+    ],
+)
+def test_coverage_rejects_invalid_episode_rows(tmp_path, mutation, field):
+    index, connection = _index(
+        tmp_path,
+        [("s1", 0, [1, 0, 0, 0], "42", "zerg", "claude", "local", "2026-07-01")],
+    )
+    try:
+        connection.execute(mutation)
+        connection.commit()
+        index.load(connection)
+        assert index.coverage.ready is False
+        assert getattr(index.coverage, field) == 1
+    finally:
+        connection.close()
 
 
 def test_ranks_by_cosine(tmp_path):
@@ -252,8 +342,6 @@ def test_matches_the_sql_path_on_random_corpora(tmp_path):
     import itertools
     import random
 
-    from zerg.searchd.store import SearchStore
-
     rng = random.Random(20260801)
     projects = ["zerg", "other"]
     providers = ["claude", "codex"]
@@ -273,7 +361,6 @@ def test_matches_the_sql_path_on_random_corpora(tmp_path):
             )
         )
     index, connection = _index(tmp_path, rows)
-    store = SearchStore(connection)
     try:
         query = _unit([rng.random() for _ in range(DIMS)])
         for project, provider, excluded, since in itertools.product(
@@ -288,18 +375,17 @@ def test_matches_the_sql_path_on_random_corpora(tmp_path):
                 exclude_environments=excluded,
                 since_iso=since,
             )
-            sql = store.query_episode_embeddings(
-                model=MODEL,
-                dims=DIMS,
-                query_embedding=query.astype("float32").tobytes(),
+            reference = _reference_search(
+                connection,
+                query,
                 owner_id="42",
                 limit=5,
                 project=project,
                 provider=provider,
                 exclude_environments=excluded,
                 since_iso=since,
-            )["results"]
-            assert [r["session_id"] for r in resident] == [r["session_id"] for r in sql], (
+            )
+            assert [r["session_id"] for r in resident] == reference, (
                 f"divergence for project={project} provider={provider} excluded={excluded} since={since}"
             )
     finally:
