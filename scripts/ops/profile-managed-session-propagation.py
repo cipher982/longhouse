@@ -93,6 +93,7 @@ BATCH_REQUIRED_FAIL_VERDICTS = frozenset(
     if verdict not in {"pass", "contaminated"} and severity >= 1
 )
 BATCH_REQUIRED_INFRA_VERDICTS = frozenset({"contaminated"})
+CLEAN_BATCH_VERDICTS = frozenset({"pass", "slow"})
 TRANSPORT_FAILURE_PATTERNS = (
     "Request timed out connecting",
     "status of 524",
@@ -5501,10 +5502,9 @@ def percentile(values: list[int], pct: float) -> int | None:
 
 
 def aggregate_batch_cases(cases: list[dict[str, Any]]) -> dict[str, Any]:
-    metrics: dict[str, Any] = {}
-    for key in BATCH_METRIC_KEYS:
-        values = [value for case in cases if isinstance((value := case.get(key)), int)]
-        metrics[key] = {
+    def metric_stats(source_cases: list[dict[str, Any]], key: str) -> dict[str, Any]:
+        values = [value for case in source_cases if isinstance((value := case.get(key)), int)]
+        return {
             "count": len(values),
             "min": min(values) if values else None,
             "p50": percentile(values, 50),
@@ -5512,7 +5512,22 @@ def aggregate_batch_cases(cases: list[dict[str, Any]]) -> dict[str, Any]:
             "max": max(values) if values else None,
             "target": target_for_metric(key),
         }
+
+    metrics = {key: metric_stats(cases, key) for key in BATCH_METRIC_KEYS}
+    clean_cases = [case for case in cases if batch_case_is_clean(case)]
+    metrics["clean_observation_count"] = len(clean_cases)
+    metrics["clean_metrics"] = {key: metric_stats(clean_cases, key) for key in BATCH_METRIC_KEYS}
     return metrics
+
+
+def batch_case_is_clean(case: dict[str, Any]) -> bool:
+    """Return whether a case is eligible for clean distribution statistics."""
+
+    return (
+        case.get("verdict") in CLEAN_BATCH_VERDICTS
+        and not case.get("failure_classification")
+        and case.get("provider_timeout") is not True
+    )
 
 
 def summarize_batch_verdicts(child_runs: list[dict[str, Any]]) -> dict[str, Any]:
@@ -5607,7 +5622,7 @@ def write_batch_summary(
     rows.extend(
         [
             "",
-            "## Metrics",
+            "## All observed metrics",
             "",
             "| Metric | Count | Min | P50 | P95 | Max | Target |",
             "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
@@ -5615,6 +5630,38 @@ def write_batch_summary(
     )
     for key in BATCH_METRIC_KEYS:
         item = aggregate.get(key) or {}
+        rows.append(
+            "| "
+            + " | ".join(
+                [
+                    f"`{key}`",
+                    str(item.get("count") or 0),
+                    format_optional_ms(item.get("min")),
+                    format_optional_ms(item.get("p50")),
+                    format_optional_ms(item.get("p95")),
+                    format_optional_ms(item.get("max")),
+                    format_optional_ms(item.get("target")),
+                ]
+            )
+            + " |"
+        )
+    rows.extend(
+        [
+            "",
+            "## Clean metrics",
+            "",
+            "Clean means verdict `pass` or `slow`, with no failure classification or provider timeout. "
+            "Contaminated and incomplete observations remain in the all-observed table but are excluded here.",
+            "",
+            f"Clean observations: `{aggregate.get('clean_observation_count') or 0}`",
+            "",
+            "| Metric | Count | Min | P50 | P95 | Max | Target |",
+            "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+        ]
+    )
+    clean_metrics = aggregate.get("clean_metrics") or {}
+    for key in BATCH_METRIC_KEYS:
+        item = clean_metrics.get(key) or {}
         rows.append(
             "| "
             + " | ".join(
@@ -5694,6 +5741,23 @@ def batch_local_health_preflight() -> dict[str, Any]:
     }
 
 
+def batch_local_health_preflight_with_grace(
+    *, attempts: int = 6, retry_delay_seconds: float = 1.0
+) -> dict[str, Any]:
+    """Allow the engine's status file one bounded refresh window before aborting."""
+
+    last: dict[str, Any] = {}
+    for attempt in range(attempts):
+        last = batch_local_health_preflight()
+        if last.get("ok"):
+            return last
+        if attempt + 1 < attempts and last.get("reason") == "local_transport_currently_unhealthy":
+            time.sleep(retry_delay_seconds)
+            continue
+        return last
+    return last
+
+
 def run_batch(args: argparse.Namespace) -> int:
     if args.iterations < 1:
         raise SystemExit("--iterations must be >= 1")
@@ -5705,7 +5769,7 @@ def run_batch(args: argparse.Namespace) -> int:
     child_runs: list[dict[str, Any]] = []
     cases: list[dict[str, Any]] = []
     for index in range(args.iterations):
-        health = batch_local_health_preflight()
+        health = batch_local_health_preflight_with_grace()
         if not health.get("ok"):
             print(
                 f"[batch] aborting before iteration {index + 1}/{args.iterations}: "
