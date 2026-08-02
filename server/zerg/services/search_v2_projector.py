@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 
 PROJECTOR = "search-v2"
 PAGE_SIZE = 100
+PROJECTOR_WORKERS = max(1, int(os.getenv("LONGHOUSE_SEARCH_PROJECTOR_WORKERS", "4")))
 
 
 class SearchProjectionError(RuntimeError):
@@ -307,16 +308,20 @@ def _hash(value: object, field: str) -> str:
 _task: asyncio.Task[None] | None = None
 
 
-async def _run_forever(projector: SearchV2Projector) -> None:
+async def _run_worker(projector: SearchV2Projector) -> None:
     while True:
         try:
-            claimed = await projector.run_once()
+            claimed = await projector.run_once(limit=1)
             await asyncio.sleep(0 if claimed else 0.5)
         except asyncio.CancelledError:
             raise
         except Exception:
             logger.exception("Search-v2 projector tick failed")
             await asyncio.sleep(1.0)
+
+
+async def _run_forever(projector: SearchV2Projector, *, worker_count: int = PROJECTOR_WORKERS) -> None:
+    await asyncio.gather(*(_run_worker(projector) for _ in range(max(1, worker_count))))
 
 
 def start_search_v2_projector() -> bool:
