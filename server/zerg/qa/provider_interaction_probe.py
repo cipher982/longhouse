@@ -113,6 +113,7 @@ _NO_TOKEN_SCRUB_ENV_NAMES = _NO_TOKEN_AUTH_ENV_NAMES | frozenset(
         "ANTIGRAVITY_QUALIFICATION_HOME",
         "LONGHOUSE_CLAUDE_QUALIFICATION_LIVE",
         "LONGHOUSE_CLAUDE_INTERACTION_ARTIFACT",
+        "LONGHOUSE_CURSOR_GATE0_ARTIFACT",
         "LONGHOUSE_CODEX_BIN",
         "LONGHOUSE_ENGINE_BIN",
         "LONGHOUSE_OPENCODE_BIN",
@@ -523,7 +524,7 @@ def _cursor_model_probe(
         "--workspace",
         str(workspace),
         "--model",
-        "auto",
+        str(environment.get("CURSOR_MODEL") or "auto"),
     ]
     before_sources = _native_source_snapshot(home / ".cursor", artifact_root=artifact_root)
     result = subprocess.run(
@@ -965,9 +966,13 @@ def produce_live_observation(
     provider_bin: Path | None,
     artifact_root: Path,
     qualification_request_digest: str | None = None,
+    evidence_class: str = "live_no_token",
     timeout: float = _DEFAULT_TIMEOUT_SECONDS,
 ) -> dict[str, Any]:
-    """Run the implemented no-token probes and return a replayable artifact."""
+    """Run provider probes with the evidence class declared by the request."""
+
+    if evidence_class not in {"live_no_token", "live_token"}:
+        raise ValueError(f"unsupported live interaction evidence class: {evidence_class}")
 
     contract = contract_for_provider(provider)
     if contract is None:
@@ -986,15 +991,15 @@ def produce_live_observation(
         }
 
     binary = _resolve_binary(provider, provider_bin)
-    no_token_environment = _no_token_environment()
+    probe_environment = _no_token_environment() if evidence_class == "live_no_token" else os.environ.copy()
     observation: dict[str, Any] = {
         "schema_version": 1,
         "artifact_kind": "provider_interaction_semantics_observation",
         "provider": provider,
-        "evidence_class": "live_no_token",
+        "evidence_class": evidence_class,
         "synthetic": False,
         "provider_bin": str(binary),
-        "provider_version": _provider_version(provider, binary, environment=no_token_environment),
+        "provider_version": _provider_version(provider, binary, environment=probe_environment),
         "provider_executable_identity": f"sha256:{_sha256(binary)}",
         "started_at": datetime.now(UTC).isoformat(),
         "probes": _declared_probe_rows(provider),
@@ -1002,6 +1007,21 @@ def produce_live_observation(
         "native_source_rows": [],
         "native_source_root": str(artifact_root.resolve()),
     }
+    model_name = next(
+        (
+            str(probe_environment.get(name)).strip()
+            for name in (
+                "ANTHROPIC_MODEL",
+                "CODEX_MODEL",
+                "LONGHOUSE_OPENCODE_QUALIFICATION_MODEL",
+                "CURSOR_MODEL",
+            )
+            if str(probe_environment.get(name) or "").strip()
+        ),
+        None,
+    )
+    if model_name:
+        observation["model"] = model_name
     if qualification_request_digest is not None:
         observation["qualification_request_digest"] = qualification_request_digest
     if provider == "claude":
@@ -1010,7 +1030,7 @@ def produce_live_observation(
                 binary=binary,
                 artifact_root=artifact_root,
                 timeout=timeout,
-                environment=no_token_environment,
+                environment=probe_environment,
             )
         except (OSError, RuntimeError, ValueError) as exc:
             probe = next(row for row in observation["probes"] if row["probe_id"] == "claude_effort_command")
@@ -1041,7 +1061,7 @@ def produce_live_observation(
             binary=binary,
             artifact_root=artifact_root,
             timeout=timeout,
-            environment=no_token_environment,
+            environment=probe_environment,
         )
         observation["probes"] = rows
         observation["raw_events"] = [event for row in rows for event in row.get("raw_events") or []]
@@ -1051,7 +1071,7 @@ def produce_live_observation(
             binary=binary,
             artifact_root=artifact_root,
             timeout=timeout,
-            environment=no_token_environment,
+            environment=probe_environment,
         )
         observation["probes"] = rows
         observation["raw_events"] = [event for row in rows for event in row.get("raw_events") or []]
@@ -1061,7 +1081,7 @@ def produce_live_observation(
             binary=binary,
             artifact_root=artifact_root,
             timeout=timeout,
-            environment=no_token_environment,
+            environment=probe_environment,
         )
         observation["probes"] = rows
         observation["raw_events"] = [event for row in rows for event in row.get("raw_events") or []]
@@ -1078,6 +1098,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--provider-bin")
     parser.add_argument("--artifact-root", required=True, type=Path)
     parser.add_argument("--timeout", type=float, default=_DEFAULT_TIMEOUT_SECONDS)
+    parser.add_argument("--evidence-class", choices=("live_no_token", "live_token"), default="live_no_token")
     return parser
 
 
@@ -1088,6 +1109,7 @@ def main(argv: list[str] | None = None) -> int:
         provider_bin=Path(args.provider_bin) if args.provider_bin else None,
         artifact_root=args.artifact_root,
         timeout=args.timeout,
+        evidence_class=args.evidence_class,
     )
     output = args.artifact_root / "provider-interaction-observation.json"
     output.parent.mkdir(parents=True, exist_ok=True)

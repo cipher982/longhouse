@@ -28,12 +28,12 @@ providers:
     allow_failure: true
     max_build_age_seconds: null
   - provider: cursor
-    release_cadence: observed_only
-    release_executor: manual_snapshot
+    release_cadence: pinned_observed_install
+    release_executor: private_factory
     weekly_unconditional: true
-    allow_failure: true
+    allow_failure: false
     max_build_age_seconds: 2592000
 live_token:
-  cadence: manual
-  executor: manual
-  scheduled: false
+  cadence: private_factory_tick
+  executor: private_factory
+  scheduled: true

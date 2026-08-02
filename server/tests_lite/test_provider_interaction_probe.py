@@ -62,6 +62,7 @@ def test_no_token_environment_scrubs_provider_controls_and_configuration(monkeyp
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("LONGHOUSE_PROVIDER_INTERACTION_LIVE", "1")
     monkeypatch.setenv("LONGHOUSE_CLAUDE_INTERACTION_ARTIFACT", "/tmp/fixture.json")
+    monkeypatch.setenv("LONGHOUSE_CURSOR_GATE0_ARTIFACT", "/tmp/gate0.json")
     monkeypatch.setenv("LONGHOUSE_OPENCODE_QUALIFICATION_MODEL", "openrouter/model")
     monkeypatch.setenv("ANTHROPIC_MODEL", "claude-model")
     monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://example.invalid")
@@ -71,6 +72,7 @@ def test_no_token_environment_scrubs_provider_controls_and_configuration(monkeyp
 
     assert "LONGHOUSE_PROVIDER_INTERACTION_LIVE" not in environment
     assert "LONGHOUSE_CLAUDE_INTERACTION_ARTIFACT" not in environment
+    assert "LONGHOUSE_CURSOR_GATE0_ARTIFACT" not in environment
     assert "LONGHOUSE_OPENCODE_QUALIFICATION_MODEL" not in environment
     assert "ANTHROPIC_MODEL" not in environment
     assert "ANTHROPIC_BASE_URL" not in environment

@@ -2043,12 +2043,12 @@ class UniversalProviderAdapter:
             observation = generated_fake_observation(self.config.provider)
             synthetic = True
         else:
-            if requested_evidence != "live_no_token":
+            if requested_evidence not in {"live_no_token", "live_token"}:
                 payload = {
                     "status": STATUS_BLOCKED,
                     "scenario": "interaction_semantics",
                     "failure_code": "interaction_live_policy_missing",
-                    "message": "A real provider build requires a live_no_token request policy or an explicit artifact.",
+                    "message": "A real provider build requires a live interaction request policy or an explicit artifact.",
                     "qualification_request_digest": request_digest,
                     "operation_evidence": {
                         "provider_interaction_semantics": {
@@ -2069,6 +2069,7 @@ class UniversalProviderAdapter:
                     provider_bin=self.provider_bin,
                     artifact_root=package.path("live-probe"),
                     qualification_request_digest=request_digest,
+                    evidence_class=requested_evidence,
                 )
                 evidence_level = str(observation.get("evidence_class") or "live_no_token")
                 if evidence_level != requested_evidence:

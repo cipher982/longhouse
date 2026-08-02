@@ -17,6 +17,7 @@ CLOSURE_MANIFEST_VERSION = 2
 LOCK_SCHEMA_VERSION = 1
 GENERATED_FAKE_PROVENANCE = "generated_fake"
 STAGED_RELEASE_PROVENANCE = "staged_release"
+OBSERVED_INSTALL_PROVENANCE = "observed_install"
 _SAFE_SEGMENT = re.compile(r"^[A-Za-z0-9._-]+$")
 
 
@@ -263,6 +264,7 @@ def materialize_staged_provider_build(
     platform_name: str | None = None,
     architecture: str | None = None,
     closure_granularity: str = "full_installed_tree",
+    artifact_provenance: str = STAGED_RELEASE_PROVENANCE,
 ) -> ProviderBuildRef:
     """Snapshot an already acquired real provider closure into the build store.
 
@@ -272,6 +274,8 @@ def materialize_staged_provider_build(
     """
 
     _validate_segment("provider", provider)
+    if artifact_provenance not in {STAGED_RELEASE_PROVENANCE, OBSERVED_INSTALL_PROVENANCE}:
+        raise ProviderBuildStoreError(f"unsupported provider build provenance: {artifact_provenance}")
     _validate_segment("version", version)
     source_root = source_root.expanduser()
     if not source_root.is_dir():
@@ -293,7 +297,7 @@ def materialize_staged_provider_build(
     manifest = closure_manifest(source_root, granularity=closure_granularity)
     expected_digest = hashlib.sha256(_canonical_json(manifest)).hexdigest()
     expected_lock_entry = {
-        "artifact_provenance": STAGED_RELEASE_PROVENANCE,
+        "artifact_provenance": artifact_provenance,
         "closure_digest": expected_digest,
         "closure_manifest": manifest,
         "closure_manifest_version": CLOSURE_MANIFEST_VERSION,
@@ -332,7 +336,7 @@ def materialize_staged_provider_build(
         version=version,
         platform=platform_name,
         architecture=architecture,
-        artifact_provenance=STAGED_RELEASE_PROVENANCE,
+        artifact_provenance=artifact_provenance,
         closure_manifest_version=CLOSURE_MANIFEST_VERSION,
         closure_granularity=closure_granularity,
         closure_digest=expected_digest,

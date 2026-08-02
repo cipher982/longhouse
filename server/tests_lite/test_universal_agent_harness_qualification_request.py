@@ -68,12 +68,20 @@ def test_ambient_interaction_flag_does_not_enable_live_probe(tmp_path: Path, mon
 def test_qualification_request_policy_enables_live_probe(monkeypatch, tmp_path: Path) -> None:
     calls = []
 
-    def fake_probe(provider, *, provider_bin, artifact_root, qualification_request_digest, timeout=60.0):
+    def fake_probe(
+        provider,
+        *,
+        provider_bin,
+        artifact_root,
+        qualification_request_digest,
+        evidence_class,
+        timeout=60.0,
+    ):
         calls.append((provider, provider_bin, artifact_root, timeout))
         observation = generated_fake_observation(provider)
         observation.update(
             {
-                "evidence_class": "live_no_token",
+                "evidence_class": evidence_class,
                 "synthetic": False,
                 "provider_version": "2.1.219",
                 "provider_executable_identity": "sha256:" + "a" * 64,
@@ -117,6 +125,48 @@ def test_qualification_request_policy_enables_live_probe(monkeypatch, tmp_path: 
     assert result["scenario"] == "interaction_semantics"
 
 
+def test_live_token_request_reaches_the_credentialed_probe(monkeypatch, tmp_path: Path) -> None:
+    request = _live_request(tmp_path)
+    request["scenario_evidence"]["fixture"] = "live_token"
+    request["scenario_evidence"]["interaction_semantics"] = "live_token"
+    request["evidence_class"] = "live_token"
+    request["auth_mode"] = "factory_token"
+    request["semantic_digest"] = semantic_digest(request)
+    calls = []
+
+    def fake_probe(
+        provider,
+        *,
+        provider_bin,
+        artifact_root,
+        qualification_request_digest,
+        evidence_class,
+        timeout=60.0,
+    ):
+        calls.append(evidence_class)
+        observation = generated_fake_observation(provider)
+        observation.update(
+            {
+                "evidence_class": evidence_class,
+                "synthetic": False,
+                "provider_version": "2.1.219",
+                "provider_executable_identity": "sha256:" + "a" * 64,
+                "qualification_request_digest": qualification_request_digest,
+            }
+        )
+        return observation
+
+    from zerg.qa import provider_interaction_probe
+
+    monkeypatch.setattr(provider_interaction_probe, "produce_live_observation", fake_probe)
+    package = EvidencePackage(root=tmp_path / "evidence-live-token", provider="claude", scenario="interaction_semantics")
+
+    result = _adapter(tmp_path, request).interaction_semantics(package)
+
+    assert calls == ["live_token"]
+    assert result["scenario"] == "interaction_semantics"
+
+
 def test_live_probe_setup_block_binds_to_the_qualification_request(monkeypatch, tmp_path: Path) -> None:
     request = _live_request(tmp_path)
 
@@ -139,11 +189,19 @@ def test_live_probe_setup_block_binds_to_the_qualification_request(monkeypatch, 
 def test_live_probe_output_must_bind_to_request(monkeypatch, tmp_path: Path, mutation: str) -> None:
     request = _live_request(tmp_path)
 
-    def fake_probe(provider, *, provider_bin, artifact_root, qualification_request_digest, timeout=60.0):
+    def fake_probe(
+        provider,
+        *,
+        provider_bin,
+        artifact_root,
+        qualification_request_digest,
+        evidence_class,
+        timeout=60.0,
+    ):
         observation = generated_fake_observation(provider)
         observation.update(
             {
-                "evidence_class": "live_no_token",
+                "evidence_class": evidence_class,
                 "synthetic": False,
                 "provider_version": "2.1.219",
                 "provider_executable_identity": "sha256:" + "a" * 64,

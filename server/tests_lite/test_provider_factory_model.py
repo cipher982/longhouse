@@ -71,10 +71,23 @@ def test_release_poll_runs_the_deployed_profile_for_automated_providers(facts, p
     assert cell.scenario_ids
 
 
-def test_release_poll_never_runs_for_cursor(facts) -> None:
+def test_release_poll_never_runs_for_cursor_staged_release(facts) -> None:
     cell = plan_run(facts, "cursor", "staged_release", "release_poll")
     assert cell.status == "never_run"
-    assert "no registered release lane" in cell.reason
+    assert "observed install" in cell.reason
+
+
+def test_release_poll_runs_for_cursor_observed_install(facts) -> None:
+    cell = plan_run(facts, "cursor", "observed_install", "release_poll")
+    assert cell.status == "runs"
+    assert cell.qualification_profile == "cursor_observed_install_v1"
+    assert cell.harness_scenarios == facts.default_harness_scenarios
+    assert cell.credential_requirement == (
+        "CURSOR_API_KEY",
+        "CURSOR_MODEL",
+        "LONGHOUSE_CLI_BIN",
+        "LONGHOUSE_ENGINE_BIN",
+    )
 
 
 def test_release_poll_never_runs_against_generated_fake_provenance(facts) -> None:
