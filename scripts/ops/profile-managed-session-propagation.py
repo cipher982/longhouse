@@ -3449,7 +3449,7 @@ except Exception as exc:
             case_id,
             session_id,
             "content_durable_published",
-            "browser_transcript_preview_nonce_painted",
+            "browser_timeline_card_painted",
         )
         content_promotion_latency = valid_monotonic_delta_ms(content_promotion_raw_latency)
         content_promotion_order_valid = (

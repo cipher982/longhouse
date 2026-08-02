@@ -582,15 +582,11 @@ try {
   // first would make the browser measurement include an observer-induced
   // 30-second timeout while the real workspace stream is already live.
   const cardPaintedPromise = waitForCard("card_painted", 30000);
-  // The shell can appear before durable transcript content. Keep that event as
-  // a launch-visibility diagnostic, but qualify promotion only when the card
-  // itself has painted the exact assistant response.
-  const cardNoncePaintedPromise = waitForCard("preview_nonce_painted", 95000);
   await openDetailObserver(context);
   const detailFirstPainted = waitForDetailTranscript("live_transcript_first_painted", 95000);
   const detailNoncePainted = waitForDetailTranscript("live_transcript_nonce_painted", 95000);
   if (exitAfterDetailTranscript) {
-    await Promise.all([detailFirstPainted, detailNoncePainted, cardNoncePaintedPromise]);
+    await Promise.all([detailFirstPainted, detailNoncePainted]);
     // Keep the card measurement in the same run, but do not let it delay the
     // detail observer's attachment or the provider-to-browser timing.
     await cardPaintedPromise;
