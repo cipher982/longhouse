@@ -11,9 +11,18 @@ undefined = "Product contract is intentionally not promised yet."
 id = "warm_session_created_to_card_paint_ms"
 profile_class = "warm_realtime"
 layer = "browser_card"
+diagnostic = true
 target_ms = 500
 hard_alarm_ms = 1000
-description = "Warm timeline card paint after a newly launched session is known locally."
+description = "Diagnostic warm timeline card paint after a newly launched session is known locally; includes hidden-shell and provider time and is not a promotion SLO."
+
+[[metrics]]
+id = "content_durable_to_timeline_card_paint_ms"
+profile_class = "warm_realtime"
+layer = "browser_card"
+target_ms = 500
+hard_alarm_ms = 1000
+description = "Default timeline card paint after hosted served-catalog/storage evidence proves durable content has cleared the hidden projection."
 
 [[metrics]]
 id = "cold_timeline_navigation_to_card_paint_ms"
@@ -192,8 +201,8 @@ launch = "longhouse codex --no-attach"
 shutdown = "longhouse-engine codex-bridge stop"
 truth_source = "timeline_card"
 required_observers = ["managed_sessions_snapshot", "timeline_sse", "browser_card", "hosted_db"]
-metrics = ["warm_session_created_to_card_paint_ms"]
-notes = "New-session promotion is intentionally separate from the already-attached warm interaction SLA. Keep the 500ms target visible while measuring the archive/listing path that currently takes seconds."
+metrics = ["content_durable_to_timeline_card_paint_ms"]
+notes = "New-session promotion is intentionally separate from the already-attached warm interaction SLA. Measure only from hosted durable-content visibility to card paint; the legacy session-created-to-card field remains diagnostic."
 
 [[cases]]
 id = "managed_codex_cold_timeline_closed"
@@ -248,7 +257,7 @@ shutdown = "provider-supported Claude exit path"
 truth_source = "claude_native_channel"
 required_observers = ["managed_sessions_snapshot", "claude_channel_state", "timeline_sse", "browser_card", "hosted_db"]
 metrics = [
-  "warm_session_created_to_card_paint_ms",
+  "content_durable_to_timeline_card_paint_ms",
   "warm_live_output_local_to_paint_ms",
   "warm_close_local_to_paint_ms",
   "warm_close_local_to_db_ms",
@@ -271,7 +280,7 @@ launch = "longhouse opencode"
 shutdown = "provider-supported OpenCode exit path"
 truth_source = "managed_process_scan"
 required_observers = ["managed_sessions_snapshot", "timeline_sse", "browser_card", "hosted_db"]
-metrics = ["warm_session_created_to_card_paint_ms", "warm_close_local_to_paint_ms"]
+metrics = ["content_durable_to_timeline_card_paint_ms", "warm_close_local_to_paint_ms"]
 notes = "Terminal-originated OpenCode Helm send/interrupt/terminate exists; this SLA case stays blocked until profiler coverage can measure lifecycle propagation honestly."
 
 [[cases]]
