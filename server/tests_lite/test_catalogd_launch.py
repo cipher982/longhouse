@@ -18,6 +18,7 @@ from zerg.models.live_store import LiveArchiveOutbox
 from zerg.models.live_store import LiveLaunchReadiness
 from zerg.models.live_store import LiveSessionCatalog
 from zerg.models.live_store import LiveSessionConnection
+from zerg.models.live_store import LiveSessionInputReceipt
 from zerg.models.live_store import LiveSessionLaunchAttempt
 from zerg.models.live_store import LiveSessionRun
 from zerg.services.live_archive_outbox import MANAGED_LOCAL_LAUNCH_KIND
@@ -91,6 +92,238 @@ async def test_catalogd_owns_managed_local_launch_transaction(daemon_paths):
         outbox = db.query(LiveArchiveOutbox).order_by(LiveArchiveOutbox.id).all()
         assert [row.kind for row in outbox] == [MANAGED_LOCAL_LAUNCH_KIND]
     engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_catalogd_resumes_ended_managed_thread_with_one_new_run(daemon_paths):
+    database_path, socket_path = daemon_paths
+    session_id = uuid4()
+    provider_thread_id = str(uuid4())
+    launch = _local_launch_payload(
+        session_id=session_id,
+        provider="codex",
+        managed_transport="codex_app_server",
+        attach_command=f"longhouse codex attach --session-id {session_id}",
+        provider_session_id=provider_thread_id,
+    )
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        initial = await client.call("session.launch.local.create.v2", {"launch": launch})
+        ended_at = datetime.now(UTC)
+        await client.call(
+            "session.runtime.apply.v2",
+            {
+                "events": [
+                    {
+                        "runtime_key": f"codex:{session_id}",
+                        "session_id": str(session_id),
+                        "thread_id": None,
+                        "run_id": initial["run_id"],
+                        "provider": "codex",
+                        "device_id": "cinder",
+                        "source": "codex_bridge",
+                        "kind": "terminal_signal",
+                        "phase": "finished",
+                        "tool_name": None,
+                        "occurred_at": ended_at.isoformat(),
+                        "freshness_ms": 60_000,
+                        "dedupe_key": f"provider-exit:{initial['run_id']}",
+                        "payload": {
+                            "terminal_state": "process_gone",
+                            "terminal_reason": "provider_exit",
+                        },
+                    }
+                ]
+            },
+        )
+        receipt_id = str(uuid4())
+        await client.call(
+            "session.input.receipt.upsert.v2",
+            {
+                "receipt": {
+                    "owner_id": 7,
+                    "session_id": str(session_id),
+                    "provider": "codex",
+                    "text": "possibly stale input",
+                    "intent": "queue",
+                    "status": "queued",
+                    "client_request_id": receipt_id,
+                    "device_id": "cinder",
+                    "thread_id": None,
+                    "archive_session_input_id": None,
+                    "control_command_id": None,
+                    "delivery_request_id": None,
+                    "enqueue_archive_projection": False,
+                    "error": None,
+                    "expires_at": None,
+                }
+            },
+        )
+        delivering_receipt_id = str(uuid4())
+        await client.call(
+            "session.input.receipt.upsert.v2",
+            {
+                "receipt": {
+                    "owner_id": 7,
+                    "session_id": str(session_id),
+                    "provider": "codex",
+                    "text": "input claimed by the crashed run",
+                    "intent": "queue",
+                    "status": "delivering",
+                    "client_request_id": delivering_receipt_id,
+                    "device_id": "cinder",
+                    "thread_id": None,
+                    "archive_session_input_id": None,
+                    "control_command_id": None,
+                    "delivery_request_id": "old-run-delivery",
+                    "enqueue_archive_projection": False,
+                    "error": None,
+                    "expires_at": None,
+                }
+            },
+        )
+        attempt_id = uuid4()
+        resume = {
+            "owner_id": 7,
+            "session_id": str(session_id),
+            "provider": "codex",
+            "provider_thread_id": provider_thread_id,
+            "device_id": "cinder",
+            "cwd": "/workspace/longhouse",
+            "resume_attempt_id": str(attempt_id),
+            "started_at": (ended_at + timedelta(seconds=1)).isoformat(),
+            "expires_at": (ended_at + timedelta(minutes=5)).isoformat(),
+        }
+        resumed = await client.call("session.launch.local.resume.v2", {"resume": resume})
+        assert resumed["created"] is True
+        assert resumed["run_id"] != initial["run_id"]
+        replay = await client.call("session.launch.local.resume.v2", {"resume": resume})
+        assert replay["exact_replay"] is True
+
+        second = {**resume, "resume_attempt_id": str(uuid4())}
+        with pytest.raises(CatalogRemoteError) as exc_info:
+            await client.call("session.launch.local.resume.v2", {"resume": second})
+        assert exc_info.value.code == "conflict"
+        assert "current run" in str(exc_info.value)
+        confirmed = await client.call(
+            "session.launch.local.finish.v2",
+            {
+                "outcome": {
+                    "session_id": str(session_id),
+                    "run_id": resumed["run_id"],
+                    "owner_id": 7,
+                    "device_id": "cinder",
+                    "state": "adopted",
+                    "error_code": None,
+                    "error_message": None,
+                    "observed_at": (ended_at + timedelta(seconds=2)).isoformat(),
+                }
+            },
+        )
+        assert confirmed["launch"]["launch_state"] == "live"
+
+        with pytest.raises(CatalogRemoteError) as exc_info:
+            await client.call(
+                "session.launch.local.finish.v2",
+                {
+                    "outcome": {
+                        "session_id": str(session_id),
+                        "run_id": initial["run_id"],
+                        "owner_id": 7,
+                        "device_id": "cinder",
+                        "state": "failed",
+                        "error_code": "provider_launch_failed",
+                        "error_message": "delayed retry from crashed generation",
+                        "observed_at": (ended_at + timedelta(seconds=3)).isoformat(),
+                    }
+                },
+            )
+        assert exc_info.value.code == "conflict"
+    finally:
+        await client.close()
+        await daemon.close()
+
+    engine = create_catalog_engine(database_path)
+    initialize_catalog_schema(engine)
+    with Session(engine) as db:
+        runs = db.query(LiveSessionRun).order_by(LiveSessionRun.started_at).all()
+        assert [run.id for run in runs] == [initial["run_id"], resumed["run_id"]]
+        assert runs[0].ended_at is not None
+        assert runs[1].ended_at is None
+        assert runs[1].launch_origin == "longhouse_continued"
+        connections = db.query(LiveSessionConnection).order_by(LiveSessionConnection.id).all()
+        assert [row.run_id for row in connections] == [initial["run_id"], resumed["run_id"]]
+        assert [row.state for row in connections] == ["ended", "detached"]
+        attempts = db.query(LiveSessionLaunchAttempt).order_by(LiveSessionLaunchAttempt.id).all()
+        assert attempts[1].client_request_id == str(attempt_id)
+        assert attempts[1].run_id == resumed["run_id"]
+        assert attempts[1].state == "adopted"
+        assert db.get(LiveLaunchReadiness, str(session_id)).state == "adopted"
+        assert db.get(LiveSessionCatalog, str(session_id)).ended_at is None
+        receipts = {row.client_request_id: row for row in db.query(LiveSessionInputReceipt).all()}
+        assert receipts[receipt_id].status == "queued"
+        assert receipts[receipt_id].error_json is None
+        assert receipts[delivering_receipt_id].status == "failed"
+        assert '"code": "delivery_unknown"' in receipts[delivering_receipt_id].error_json
+    engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_catalogd_resume_rejects_provider_thread_mismatch(daemon_paths):
+    database_path, socket_path = daemon_paths
+    session_id = uuid4()
+    launch = _local_launch_payload(
+        session_id=session_id,
+        provider="codex",
+        managed_transport="codex_app_server",
+        attach_command="",
+        provider_session_id=str(uuid4()),
+    )
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        initial = await client.call("session.launch.local.create.v2", {"launch": launch})
+        now = datetime.now(UTC)
+        await client.call(
+            "session.launch.local.finish.v2",
+            {
+                "outcome": {
+                    "session_id": str(session_id),
+                    "run_id": initial["run_id"],
+                    "owner_id": 7,
+                    "device_id": "cinder",
+                    "state": "failed",
+                    "error_code": "provider_launch_failed",
+                    "error_message": None,
+                    "observed_at": now.isoformat(),
+                }
+            },
+        )
+        with pytest.raises(CatalogRemoteError) as exc_info:
+            await client.call(
+                "session.launch.local.resume.v2",
+                {
+                    "resume": {
+                        "owner_id": 7,
+                        "session_id": str(session_id),
+                        "provider": "codex",
+                        "provider_thread_id": str(uuid4()),
+                        "device_id": "cinder",
+                        "cwd": "/workspace/longhouse",
+                        "resume_attempt_id": str(uuid4()),
+                        "started_at": (now + timedelta(seconds=1)).isoformat(),
+                        "expires_at": (now + timedelta(minutes=5)).isoformat(),
+                    }
+                },
+            )
+        assert exc_info.value.code == "conflict"
+        assert "primary thread" in str(exc_info.value)
+    finally:
+        await client.close()
+        await daemon.close()
 
 
 @pytest.mark.asyncio

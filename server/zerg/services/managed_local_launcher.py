@@ -65,6 +65,15 @@ def managed_local_run_id_for_session(session_id: UUID | str) -> UUID:
     return uuid5(NAMESPACE_URL, f"longhouse:managed-local-run:{session_id}")
 
 
+def managed_local_resume_run_id(session_id: UUID | str, resume_attempt_id: UUID | str) -> UUID:
+    """Stable run identity for one idempotent managed-session resume attempt."""
+
+    return uuid5(
+        NAMESPACE_URL,
+        f"longhouse:managed-local-resume:{session_id}:{resume_attempt_id}",
+    )
+
+
 class ManagedLocalLaunchError(RuntimeError):
     """Expected managed-local launch failure with user-facing detail."""
 
@@ -152,7 +161,7 @@ def _resolve_runner(db: Session, owner_id: int, target: str, *, required: bool =
 def _require_runner_ready(runner, *, owner_id: int) -> None:
     if runner.status == "revoked":
         raise ManagedLocalLaunchError(
-            f"Remote command Runner '{runner.name}' has been revoked. This is separate from the Machine Agent " "that ships transcripts.",
+            f"Remote command Runner '{runner.name}' has been revoked. This is separate from the Machine Agent that ships transcripts.",
             status_code=409,
         )
 
@@ -167,7 +176,7 @@ def _require_runner_ready(runner, *, owner_id: int) -> None:
     capabilities = runner.capabilities or []
     if "exec.full" not in capabilities:
         raise ManagedLocalLaunchError(
-            f"Remote command Runner '{runner.name}' must have exec.full capability for " "browser-launched managed sessions",
+            f"Remote command Runner '{runner.name}' must have exec.full capability for browser-launched managed sessions",
             status_code=400,
         )
 
@@ -234,7 +243,7 @@ def build_managed_local_launch_plan(
 
     if provider == "claude" and params.native_claude_channels_available is False:
         raise ManagedLocalLaunchError(
-            "Native Claude channels are unavailable on this machine. Longhouse now requires " "the local Claude channel bridge.",
+            "Native Claude channels are unavailable on this machine. Longhouse now requires the local Claude channel bridge.",
             status_code=412,
         )
 
@@ -412,5 +421,6 @@ __all__ = [
     "launch_managed_local_session",
     "launch_managed_local_session_sync",
     "materialize_managed_local_launch_plan_sync",
+    "managed_local_resume_run_id",
     "resolve_managed_local_launch_runner",
 ]

@@ -3241,6 +3241,195 @@ class CatalogStore:
                 "commit_seq": str(commit_seq),
             }
 
+    def resume_local_launch(self, *, resume: dict[str, Any]) -> dict[str, Any]:
+        """Atomically claim one new run for an ended managed provider thread."""
+
+        from zerg.services.live_catalog_launch import attach_live_catalog_control
+        from zerg.services.live_catalog_launch import live_launch_result
+        from zerg.services.live_launch_readiness import upsert_live_launch_readiness
+        from zerg.services.managed_local_launcher import managed_local_resume_run_id
+
+        session_id = str(resume["session_id"])
+        attempt_id = str(resume["resume_attempt_id"])
+        run_id = str(managed_local_resume_run_id(session_id, attempt_id))
+        command_id = f"managed-resume-{attempt_id}"
+        observed_at = resume["started_at"]
+        with _write_transaction(self.engine) as connection:
+            orm = Session(bind=connection, join_transaction_mode="create_savepoint", expire_on_commit=False)
+            try:
+                existing = (
+                    orm.query(LiveSessionLaunchAttempt)
+                    .filter(
+                        LiveSessionLaunchAttempt.session_id == session_id,
+                        LiveSessionLaunchAttempt.client_request_id == attempt_id,
+                    )
+                    .one_or_none()
+                )
+                if existing is not None:
+                    existing_run = orm.get(LiveSessionRun, run_id)
+                    existing_alias = (
+                        orm.query(LiveSessionThreadAlias)
+                        .filter(
+                            LiveSessionThreadAlias.thread_id == str(existing.thread_id or ""),
+                            LiveSessionThreadAlias.provider == str(resume["provider"]),
+                            LiveSessionThreadAlias.alias_kind == "provider_session_id",
+                            LiveSessionThreadAlias.alias_value == str(resume["provider_thread_id"]),
+                        )
+                        .first()
+                    )
+                    exact = (
+                        str(existing.run_id or "") == run_id
+                        and str(existing.provider) == str(resume["provider"])
+                        and str(existing.host_id or "") == str(resume["device_id"])
+                        and int(existing.owner_id or 0) == int(resume["owner_id"])
+                        and existing_run is not None
+                        and str(existing_run.cwd or "") == str(resume["cwd"])
+                        and existing_alias is not None
+                    )
+                    result = live_launch_result(existing) if exact else None
+                    orm.rollback()
+                    return {
+                        "created": False,
+                        "exact_replay": exact,
+                        "conflict": None if exact else "resume attempt identity was reused with different attributes",
+                        "run_id": run_id,
+                        "launch": _json_launch_result(result) if result is not None else None,
+                        "commit_seq": str(_current_commit_seq(connection)),
+                    }
+
+                catalog = orm.get(LiveSessionCatalog, session_id)
+                original_attempt = (
+                    orm.query(LiveSessionLaunchAttempt)
+                    .filter(LiveSessionLaunchAttempt.session_id == session_id)
+                    .order_by(LiveSessionLaunchAttempt.id.asc())
+                    .first()
+                )
+                if catalog is None or original_attempt is None or not catalog.primary_thread_id:
+                    orm.rollback()
+                    return {"conflict": "managed session is not present in the live catalog"}
+                thread_id = str(catalog.primary_thread_id)
+                identity_matches = (
+                    str(catalog.provider) == str(resume["provider"])
+                    and str(catalog.device_id or "") == str(resume["device_id"])
+                    and str(catalog.cwd or "") == str(resume["cwd"])
+                    and int(original_attempt.owner_id or 0) == int(resume["owner_id"])
+                )
+                if not identity_matches:
+                    orm.rollback()
+                    return {"conflict": "managed resume contract does not match the retained session"}
+                provider_alias = (
+                    orm.query(LiveSessionThreadAlias)
+                    .filter(
+                        LiveSessionThreadAlias.thread_id == thread_id,
+                        LiveSessionThreadAlias.provider == str(resume["provider"]),
+                        LiveSessionThreadAlias.alias_kind == "provider_session_id",
+                        LiveSessionThreadAlias.alias_value == str(resume["provider_thread_id"]),
+                    )
+                    .first()
+                )
+                if provider_alias is None:
+                    orm.rollback()
+                    return {"conflict": "provider thread does not match the session primary thread"}
+                open_run = (
+                    orm.query(LiveSessionRun).filter(LiveSessionRun.thread_id == thread_id, LiveSessionRun.ended_at.is_(None)).first()
+                )
+                if open_run is not None:
+                    orm.rollback()
+                    return {"conflict": "managed session already has a current run"}
+
+                # A receipt claimed by the ended run may have reached the
+                # provider even when its acknowledgement did not. Settle that
+                # uncertainty explicitly. Unclaimed queued input remains
+                # queued, but Resume itself does not claim or deliver it.
+                stale_receipts = (
+                    orm.query(LiveSessionInputReceipt)
+                    .filter(
+                        LiveSessionInputReceipt.session_id == session_id,
+                        LiveSessionInputReceipt.status == "delivering",
+                    )
+                    .all()
+                )
+                for receipt in stale_receipts:
+                    receipt.status = "failed"
+                    receipt.error_json = json.dumps(
+                        {
+                            "code": "delivery_unknown",
+                            "message": "Input was not carried across the managed-session recovery boundary; retry explicitly.",
+                        },
+                        sort_keys=True,
+                    )
+                    receipt.updated_at = observed_at
+
+                run = LiveSessionRun(
+                    id=run_id,
+                    thread_id=thread_id,
+                    provider=str(resume["provider"]),
+                    host_id=str(resume["device_id"]),
+                    cwd=str(resume["cwd"]),
+                    launch_origin="longhouse_continued",
+                    started_at=observed_at,
+                )
+                orm.add(run)
+                attempt = LiveSessionLaunchAttempt(
+                    session_id=session_id,
+                    thread_id=thread_id,
+                    run_id=run_id,
+                    provider=str(resume["provider"]),
+                    host_id=str(resume["device_id"]),
+                    owner_id=int(resume["owner_id"]),
+                    execution_lifetime="live_control",
+                    client_request_id=attempt_id,
+                    command_id=command_id,
+                    state="pending",
+                    expires_at=resume["expires_at"],
+                    created_at=observed_at,
+                    updated_at=observed_at,
+                )
+                orm.add(attempt)
+                orm.flush()
+                attach_live_catalog_control(
+                    orm,
+                    session_id=session_id,
+                    provider=str(resume["provider"]),
+                    device_id=str(resume["device_id"]),
+                    state="detached",
+                    run_id=run_id,
+                    provider_session_id=str(resume["provider_thread_id"]),
+                    launch_origin="longhouse_continued",
+                    observed_at=observed_at,
+                )
+                upsert_live_launch_readiness(
+                    orm,
+                    session_id=UUID(session_id),
+                    owner_id=int(resume["owner_id"]),
+                    device_id=str(resume["device_id"]),
+                    provider=str(resume["provider"]),
+                    execution_lifetime="live_control",
+                    state="pending",
+                    command_id=command_id,
+                    client_request_id=attempt_id,
+                    machine_id=str(resume["device_id"]),
+                    project=str(catalog.project or ""),
+                    expires_at=resume["expires_at"],
+                    now=observed_at,
+                )
+                result = live_launch_result(attempt)
+                orm.commit()
+            except BaseException:
+                orm.rollback()
+                raise
+            finally:
+                orm.close()
+            commit_seq = _advance_commit_seq(connection, observed_at)
+            return {
+                "created": True,
+                "exact_replay": False,
+                "conflict": None,
+                "run_id": run_id,
+                "launch": _json_launch_result(result),
+                "commit_seq": str(commit_seq),
+            }
+
     def finish_local_launch(self, *, outcome: dict[str, Any]) -> dict[str, Any]:
         """Commit the provider-observed result of one registered Helm launch."""
 
@@ -3250,13 +3439,32 @@ class CatalogStore:
 
         session_id = str(outcome["session_id"])
         run_id = str(outcome["run_id"])
-        command_id = f"managed-local-{session_id}"
         observed_at = outcome["observed_at"]
         requested_state = str(outcome["state"])
         with _write_transaction(self.engine) as connection:
             orm = Session(bind=connection, join_transaction_mode="create_savepoint", expire_on_commit=False)
             try:
-                attempt = orm.query(LiveSessionLaunchAttempt).filter(LiveSessionLaunchAttempt.command_id == command_id).one_or_none()
+                attempt = (
+                    orm.query(LiveSessionLaunchAttempt)
+                    .filter(
+                        LiveSessionLaunchAttempt.session_id == session_id,
+                        LiveSessionLaunchAttempt.run_id == run_id,
+                    )
+                    .one_or_none()
+                )
+                if attempt is None:
+                    # The original local-launch attempt predates assignment of
+                    # its deterministic run id. Resume attempts are born with
+                    # run_id and must never fall through to this legacy key.
+                    attempt = (
+                        orm.query(LiveSessionLaunchAttempt)
+                        .filter(
+                            LiveSessionLaunchAttempt.session_id == session_id,
+                            LiveSessionLaunchAttempt.command_id == f"managed-local-{session_id}",
+                            LiveSessionLaunchAttempt.run_id.is_(None),
+                        )
+                        .one_or_none()
+                    )
                 if attempt is None:
                     orm.rollback()
                     return {"found": False, "idempotency_conflict": False}
@@ -3270,6 +3478,20 @@ class CatalogStore:
                     and str(run.host_id or "") == str(outcome["device_id"])
                 )
                 if not identity_matches:
+                    orm.rollback()
+                    return {"found": True, "idempotency_conflict": True}
+
+                latest_run_id = (
+                    orm.query(LiveSessionRun.id)
+                    .filter(LiveSessionRun.thread_id == run.thread_id)
+                    .order_by(LiveSessionRun.started_at.desc(), LiveSessionRun.id.desc())
+                    .limit(1)
+                    .scalar()
+                )
+                if str(latest_run_id or "") != run_id:
+                    # A safe-retried outcome from an older launch generation
+                    # must not overwrite session-keyed readiness or catalog
+                    # state owned by a newer resumed run.
                     orm.rollback()
                     return {"found": True, "idempotency_conflict": True}
 
@@ -3295,6 +3517,7 @@ class CatalogStore:
                     return {"found": True, "idempotency_conflict": True}
 
                 attempt.run_id = run_id
+                command_id = str(attempt.command_id or "")
                 update_live_launch_catalog_outcome(
                     orm,
                     session_id=UUID(session_id),

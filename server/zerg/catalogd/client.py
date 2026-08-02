@@ -57,6 +57,7 @@ _SAFE_RETRY_METHODS = {
     "session.console.turn.starting_for_device.v2",
     "session.console.turn.update.v2",
     "session.launch.local.create.v2",
+    "session.launch.local.resume.v2",
     "session.launch.local.finish.v2",
     "interaction.register.v2",
     "interaction.list.v2",

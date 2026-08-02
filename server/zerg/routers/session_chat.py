@@ -175,6 +175,9 @@ class ConsoleSessionCreateResponse(BaseModel):
 async def _launch_managed_local_session_serialized(
     db: Session,
     params: ManagedLocalLaunchParams,
+    *,
+    resume_attempt_id: uuid.UUID | None = None,
+    provider_thread_id: str | None = None,
 ) -> tuple[Any, ManagedLocalSessionLaunchResponse]:
     runner = (
         None
@@ -184,13 +187,20 @@ async def _launch_managed_local_session_serialized(
     plan = build_managed_local_launch_plan(params, runner=runner)
     # Validate the provider-specific response contract before persisting the
     # launch. Catalogd remains the authority for the returned run identity.
-    planned_run_id = str(managed_local_run_id_for_session(plan.session_id))
+    if resume_attempt_id is not None:
+        from zerg.services.managed_local_launcher import managed_local_resume_run_id
+
+        planned_run_id = str(managed_local_resume_run_id(plan.session_id, resume_attempt_id))
+    else:
+        planned_run_id = str(managed_local_run_id_for_session(plan.session_id))
     _managed_local_launch_response_from_plan(plan, run_id=planned_run_id)
     run_id = await _write_hot_managed_local_launch_readiness(
         plan,
         owner_id=params.owner_id,
         git_repo=params.git_repo,
         git_branch=params.git_branch,
+        resume_attempt_id=resume_attempt_id,
+        provider_thread_id=provider_thread_id,
     )
     launch_response = _managed_local_launch_response_from_plan(plan, run_id=run_id, owner_id=params.owner_id)
     return None, launch_response
@@ -202,6 +212,8 @@ async def _write_hot_managed_local_launch_readiness(
     owner_id: int,
     git_repo: str | None,
     git_branch: str | None,
+    resume_attempt_id: uuid.UUID | None = None,
+    provider_thread_id: str | None = None,
 ) -> str:
     now = datetime.now(timezone.utc)
     expires_at = now + timedelta(seconds=_MANAGED_LOCAL_HOT_LAUNCH_LEASE_SECS)
@@ -241,7 +253,25 @@ async def _write_hot_managed_local_launch_readiness(
             },
         }
         try:
-            result = await catalogd.call("session.launch.local.create.v2", {"launch": launch})
+            if resume_attempt_id is not None:
+                result = await catalogd.call(
+                    "session.launch.local.resume.v2",
+                    {
+                        "resume": {
+                            "owner_id": int(owner_id),
+                            "session_id": str(plan.session_id),
+                            "provider": plan.provider,
+                            "provider_thread_id": provider_thread_id,
+                            "device_id": plan.source_name,
+                            "cwd": plan.cwd,
+                            "resume_attempt_id": str(resume_attempt_id),
+                            "started_at": now.isoformat(),
+                            "expires_at": expires_at.isoformat(),
+                        }
+                    },
+                )
+            else:
+                result = await catalogd.call("session.launch.local.create.v2", {"launch": launch})
             run_id = str(result.get("run_id") or "").strip()
             if not run_id:
                 raise RuntimeError("catalogd local launch response is missing run_id")
@@ -400,6 +430,16 @@ class ManagedLocalThisDeviceLaunchRequest(BaseModel):
             "Optional client-minted session UUID for Degraded Helm. Retries and later "
             "convergence must reuse this identity instead of minting a replacement."
         ),
+    )
+    resume_attempt_id: uuid.UUID | None = Field(
+        None,
+        description="Idempotency identity for an explicit managed-session resume",
+    )
+    provider_thread_id: str | None = Field(
+        None,
+        min_length=1,
+        max_length=512,
+        description="Provider thread identity that the resumed run must retain",
     )
 
 
@@ -1553,6 +1593,17 @@ async def launch_managed_local_this_device(
     # machine_name is a display label; routing is always by device_id.
     runner_target = token_device_id
 
+    if (body.resume_attempt_id is None) != (body.provider_thread_id is None):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="resume_attempt_id and provider_thread_id must be supplied together",
+        )
+    if body.resume_attempt_id is not None and body.session_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="managed resume requires session_id",
+        )
+
     try:
         params = ManagedLocalLaunchParams(
             owner_id=owner_id,
@@ -1574,7 +1625,15 @@ async def launch_managed_local_this_device(
         )
         # Managed-local launch is user-facing and hot-path critical. Claim live
         # readiness first; the archive row converges through LiveArchiveOutbox.
-        result, launch_response = await _launch_managed_local_session_serialized(db, params)
+        if body.resume_attempt_id is None:
+            result, launch_response = await _launch_managed_local_session_serialized(db, params)
+        else:
+            result, launch_response = await _launch_managed_local_session_serialized(
+                db,
+                params,
+                resume_attempt_id=body.resume_attempt_id,
+                provider_thread_id=body.provider_thread_id,
+            )
     except ManagedLocalLaunchError as exc:
         if db is not None:
             db.rollback()

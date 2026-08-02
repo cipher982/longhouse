@@ -223,6 +223,9 @@ struct CodexLaunchArgs {
     model: Option<String>,
     #[arg(long)]
     model_reasoning_effort: Option<String>,
+    /// Resume an ended managed Codex session without changing its provider thread.
+    #[arg(long)]
+    resume_session: Option<String>,
     #[arg(long)]
     dangerously_bypass_approvals_and_sandbox: bool,
 }
@@ -345,12 +348,18 @@ struct BridgeState {
     status: Option<String>,
     thread_id: Option<String>,
     #[serde(default)]
+    thread_path: Option<String>,
+    #[serde(default)]
     run_id: Option<String>,
     /// Present only once teardown has committed a terminal outcome. Its
     /// absence distinguishes a stale `stopped` file written by an older engine
     /// from a genuine durable commit.
     #[serde(default)]
     stopped_at: Option<String>,
+    #[serde(default)]
+    terminal_state: Option<String>,
+    #[serde(default)]
+    terminal_reason: Option<String>,
 }
 
 fn paired_engine_path() -> anyhow::Result<PathBuf> {
@@ -1422,8 +1431,19 @@ fn ensure_claude_channel_prerequisite(binary: &str) -> anyhow::Result<()> {
 fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
     let cwd = std::fs::canonicalize(&args.cwd)
         .with_context(|| format!("resolve {}", args.cwd.display()))?;
-    let (url, token, machine_name) = resolve_codex_config(args.url, args.token)?;
-    let codex_bin = resolve_codex_binary(args.codex_bin)?;
+    let (url, token, machine_name) = resolve_codex_config(args.url.clone(), args.token.clone())?;
+    let codex_bin = resolve_codex_binary(args.codex_bin.clone())?;
+    if let Some(session_id) = args.resume_session.as_deref() {
+        return launch_managed_codex_resume(
+            &args,
+            session_id,
+            &cwd,
+            &url,
+            &token,
+            &machine_name,
+            &codex_bin,
+        );
+    }
     let payload = ManagedLaunchRegistration {
         provider: "codex",
         cwd: &cwd,
@@ -1539,7 +1559,15 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
         );
         return Ok(());
     }
-    if let Err(error) = record_codex_contract(&response.session_id, &cwd, &codex_bin, launch_mode) {
+    if let Err(error) = record_codex_contract(
+        &response.session_id,
+        &cwd,
+        &codex_bin,
+        launch_mode,
+        args.model.as_deref(),
+        args.model_reasoning_effort.as_deref(),
+        args.dangerously_bypass_approvals_and_sandbox,
+    ) {
         eprintln!("Longhouse warning: could not record managed-session contract: {error}");
     }
     let tui_result = run_codex_tui_with_recovery(
@@ -1547,6 +1575,7 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
         &bridge.ws_url,
         &cwd,
         &response.session_id,
+        None,
         args.model.as_deref(),
         args.model_reasoning_effort.as_deref(),
         args.dangerously_bypass_approvals_and_sandbox,
@@ -1559,16 +1588,337 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
     )
 }
 
+fn launch_managed_codex_resume(
+    args: &CodexLaunchArgs,
+    session_id: &str,
+    cwd: &Path,
+    url: &str,
+    token: &str,
+    machine_name: &str,
+    codex_bin: &str,
+) -> anyhow::Result<()> {
+    validate_session_id(session_id).context("--resume-session must be a Longhouse session UUID")?;
+    if args.no_attach || !args.attach || !interactive_stdio() {
+        anyhow::bail!("managed Codex resume currently requires an interactive attached terminal");
+    }
+    let target = validate_codex_resume_target(args, session_id, cwd, codex_bin)?;
+    let resume_attempt_id = Uuid::new_v4().to_string();
+    let payload = ManagedLaunchRegistration {
+        provider: "codex",
+        cwd,
+        project: args.project.as_deref(),
+        display_name: args.name.as_deref(),
+        loop_mode: &args.loop_mode,
+        machine_name,
+        permission_mode: if target.bypass {
+            PermissionMode::Bypass
+        } else {
+            PermissionMode::ProviderLocal
+        },
+        extra: vec![
+            ("session_id", json!(session_id)),
+            ("resume_attempt_id", json!(resume_attempt_id)),
+            ("provider_thread_id", json!(target.thread_id)),
+        ],
+    }
+    .to_json();
+    let runtime = tokio::runtime::Runtime::new()?;
+    let response = register_managed_launch(
+        &runtime,
+        url,
+        token,
+        "Codex resume",
+        &payload,
+        Some(session_id),
+    )?;
+    let mut launch_transaction =
+        ManagedLaunchTransaction::new(&runtime, url, token, &response.session_id, &response.run_id);
+    let coordination_token = response.require_authority("Codex", "codex_app_server")?;
+    let engine = paired_engine_path()?;
+    let mut bridge_command = Command::new(&engine);
+    bridge_command
+        .args([
+            "codex-bridge",
+            "start",
+            "--session-id",
+            &response.session_id,
+            "--run-id",
+            &response.run_id,
+            "--cwd",
+        ])
+        .arg(cwd)
+        .args([
+            "--url",
+            url,
+            "--codex-bin",
+            codex_bin,
+            "--launch-mode",
+            "tui",
+            "--resume-thread-id",
+            &target.thread_id,
+            "--resume-thread-path",
+            &target.thread_path,
+            "--json",
+        ])
+        .env("LONGHOUSE_CODEX_BRIDGE_TOKEN", token)
+        .env("LONGHOUSE_COORDINATION_TOKEN", coordination_token);
+    if let Some(model) = &target.model {
+        bridge_command.args(["--model", model]);
+    }
+    if let Some(effort) = &target.model_reasoning_effort {
+        bridge_command.args(["--model-reasoning-effort", effort]);
+    }
+    let output = bridge_command
+        .output()
+        .context("resume native Codex bridge")?;
+    if !output.status.success() {
+        stop_and_restore_failed_codex_resume(&response.session_id, &response.run_id, &target);
+        anyhow::bail!(
+            "Codex bridge resume failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    let bridge: BridgeStartResponse = match serde_json::from_slice(&output.stdout) {
+        Ok(bridge) => bridge,
+        Err(error) => {
+            stop_and_restore_failed_codex_resume(&response.session_id, &response.run_id, &target);
+            return Err(error).context("parse resumed Codex bridge response");
+        }
+    };
+    if bridge.thread_id.as_deref() != Some(target.thread_id.as_str()) {
+        stop_and_restore_failed_codex_resume(&response.session_id, &response.run_id, &target);
+        anyhow::bail!("Codex resumed a different provider thread; the new run was stopped");
+    }
+    if let Err(error) = launch_transaction.confirm() {
+        stop_and_restore_failed_codex_resume(&response.session_id, &response.run_id, &target);
+        return Err(error);
+    }
+    if let Err(error) = record_codex_contract(
+        &response.session_id,
+        cwd,
+        codex_bin,
+        "tui",
+        target.model.as_deref(),
+        target.model_reasoning_effort.as_deref(),
+        target.bypass,
+    ) {
+        eprintln!("Longhouse warning: could not refresh managed-session contract: {error}");
+    }
+    println!(
+        "Managed Codex resumed\n→ {}/s/{}",
+        url.trim_end_matches('/'),
+        response
+            .session_id
+            .split('-')
+            .next()
+            .unwrap_or(&response.session_id)
+    );
+    if target.bypass {
+        eprintln!("Longhouse notice: retained bypass permission mode is active.");
+    }
+    let tui_result = run_codex_tui_with_recovery(
+        codex_bin,
+        &bridge.ws_url,
+        cwd,
+        &response.session_id,
+        Some(&target.thread_id),
+        target.model.as_deref(),
+        target.model_reasoning_effort.as_deref(),
+        target.bypass,
+    );
+    finish_codex_tui_session(
+        tui_result,
+        &response.session_id,
+        Some(response.run_id.as_str()),
+        Some(machine_name),
+    )
+}
+
+struct CodexResumeTarget {
+    thread_id: String,
+    thread_path: String,
+    model: Option<String>,
+    model_reasoning_effort: Option<String>,
+    bypass: bool,
+    recovery_state: Vec<u8>,
+}
+
+fn stop_and_restore_failed_codex_resume(
+    session_id: &str,
+    run_id: &str,
+    target: &CodexResumeTarget,
+) {
+    let safe_to_restore = match stop_codex_bridge(session_id, Some(run_id), "bridge_start_failed") {
+        Ok(TeardownOutcome::Committed { .. } | TeardownOutcome::NoDurableRecord { .. }) => true,
+        Ok(TeardownOutcome::Unresponsive { detail }) => {
+            eprintln!("Longhouse warning: failed resume bridge is still live: {detail}");
+            false
+        }
+        Err(error) => {
+            eprintln!("Longhouse warning: failed resume bridge cleanup failed: {error:#}");
+            false
+        }
+    };
+    if !safe_to_restore {
+        return;
+    }
+    let Ok(state_path) = codex_bridge_state_path(session_id) else {
+        return;
+    };
+    let temporary = state_path.with_extension(format!("json.restore.{}", std::process::id()));
+    if let Err(error) = std::fs::write(&temporary, &target.recovery_state)
+        .and_then(|()| std::fs::rename(&temporary, &state_path))
+    {
+        let _ = std::fs::remove_file(&temporary);
+        eprintln!("Longhouse warning: could not restore resumable crash evidence: {error}");
+    }
+}
+
+fn validate_codex_resume_target(
+    args: &CodexLaunchArgs,
+    session_id: &str,
+    cwd: &Path,
+    codex_bin: &str,
+) -> anyhow::Result<CodexResumeTarget> {
+    let state_path = codex_bridge_state_path(session_id)?;
+    let recovery_state =
+        std::fs::read(&state_path).with_context(|| format!("read {}", state_path.display()))?;
+    let state: BridgeState = serde_json::from_slice(&recovery_state)
+        .with_context(|| format!("parse {}", state_path.display()))?;
+    if state.status.as_deref() != Some("stopped")
+        || state.stopped_at.is_none()
+        || state.terminal_state.as_deref() != Some("process_gone")
+        || !matches!(
+            state.terminal_reason.as_deref(),
+            Some("provider_exit" | "process_gone" | "provider_signal")
+        )
+    {
+        anyhow::bail!("managed Codex session has no recoverable provider-exit fact");
+    }
+    let thread_id = state
+        .thread_id
+        .filter(|value| !value.trim().is_empty())
+        .context("managed Codex session has no retained provider thread")?;
+    let thread_path = state
+        .thread_path
+        .filter(|value| !value.trim().is_empty())
+        .context("managed Codex session has no retained rollout path")?;
+    if !Path::new(&thread_path).is_file() {
+        anyhow::bail!("managed Codex rollout is missing: {thread_path}");
+    }
+
+    let contract_path = codex_contract_path(session_id)?;
+    let contract: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(&contract_path)
+            .with_context(|| format!("read retained contract {}", contract_path.display()))?,
+    )
+    .with_context(|| format!("parse retained contract {}", contract_path.display()))?;
+    if contract
+        .get("schema_version")
+        .and_then(serde_json::Value::as_u64)
+        != Some(2)
+    {
+        anyhow::bail!("managed Codex contract predates safe resume; start a new session");
+    }
+    let canonical_cwd = std::fs::canonicalize(cwd)?;
+    let contract_cwd = contract
+        .pointer("/workspace/canonical_cwd")
+        .and_then(serde_json::Value::as_str)
+        .context("managed Codex contract has no canonical cwd")?;
+    if Path::new(contract_cwd) != canonical_cwd {
+        anyhow::bail!("managed Codex resume cwd differs from the retained contract");
+    }
+    let canonical_bin = std::fs::canonicalize(codex_bin)
+        .with_context(|| format!("resolve retained Codex binary {codex_bin}"))?;
+    let contract_bin = contract
+        .pointer("/provider_binary/path")
+        .and_then(serde_json::Value::as_str)
+        .context("managed Codex contract has no provider binary path")?;
+    if Path::new(contract_bin) != canonical_bin {
+        anyhow::bail!("managed Codex binary differs from the retained contract");
+    }
+    let current_version = codex_binary_version(codex_bin)?;
+    if contract
+        .pointer("/provider_binary/version")
+        .and_then(serde_json::Value::as_str)
+        != Some(current_version.as_str())
+    {
+        anyhow::bail!("managed Codex version differs from the retained contract");
+    }
+    let options = contract
+        .get("options")
+        .context("managed Codex contract has no launch options")?;
+    let retained_model = options
+        .get("model")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    let retained_effort = options
+        .get("model_reasoning_effort")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    let retained_bypass = options
+        .get("bypass")
+        .and_then(serde_json::Value::as_bool)
+        .context("managed Codex contract has no bypass option")?;
+    if args
+        .model
+        .as_deref()
+        .is_some_and(|value| Some(value) != retained_model.as_deref())
+        || args
+            .model_reasoning_effort
+            .as_deref()
+            .is_some_and(|value| Some(value) != retained_effort.as_deref())
+        || (args.dangerously_bypass_approvals_and_sandbox && !retained_bypass)
+    {
+        anyhow::bail!("explicit managed Codex launch options differ from the retained contract");
+    }
+    Ok(CodexResumeTarget {
+        thread_id,
+        thread_path,
+        model: retained_model,
+        model_reasoning_effort: retained_effort,
+        bypass: retained_bypass,
+        recovery_state,
+    })
+}
+
 fn run_codex_tui(
     codex_bin: &str,
     ws_url: &str,
     cwd: &Path,
     session_id: &str,
+    resume_thread_id: Option<&str>,
     model: Option<&str>,
     effort: Option<&str>,
     bypass: bool,
 ) -> anyhow::Result<i32> {
+    let mut command = build_codex_tui_command(
+        codex_bin,
+        ws_url,
+        cwd,
+        session_id,
+        resume_thread_id,
+        model,
+        effort,
+        bypass,
+    );
+    run_foreground_command(&mut command).context("run stock Codex TUI")
+}
+
+fn build_codex_tui_command(
+    codex_bin: &str,
+    ws_url: &str,
+    cwd: &Path,
+    session_id: &str,
+    resume_thread_id: Option<&str>,
+    model: Option<&str>,
+    effort: Option<&str>,
+    bypass: bool,
+) -> Command {
     let mut command = Command::new(codex_bin);
+    if let Some(thread_id) = resume_thread_id {
+        command.args(["resume", thread_id]);
+    }
     command.args(["-c", "check_for_update_on_startup=false"]);
     if let Some(effort) = effort {
         command.args(["-c", &format!("model_reasoning_effort={effort}")]);
@@ -1583,7 +1933,7 @@ fn run_codex_tui(
         .args(["--enable", "tui_app_server", "--remote", ws_url])
         .current_dir(cwd)
         .env("LONGHOUSE_MANAGED_SESSION_ID", session_id);
-    run_foreground_command(&mut command).context("run stock Codex TUI")
+    command
 }
 
 fn run_codex_tui_with_recovery(
@@ -1591,16 +1941,35 @@ fn run_codex_tui_with_recovery(
     ws_url: &str,
     cwd: &Path,
     session_id: &str,
+    resume_thread_id: Option<&str>,
     model: Option<&str>,
     effort: Option<&str>,
     bypass: bool,
 ) -> anyhow::Result<i32> {
-    let exit = run_codex_tui(codex_bin, ws_url, cwd, session_id, model, effort, bypass)?;
+    let exit = run_codex_tui(
+        codex_bin,
+        ws_url,
+        cwd,
+        session_id,
+        resume_thread_id,
+        model,
+        effort,
+        bypass,
+    )?;
     if exit != 1 || !codex_bridge_reattachable(session_id) {
         return Ok(exit);
     }
     eprintln!("Codex terminal exited with code 1; reattaching to the healthy managed session…");
-    run_codex_tui(codex_bin, ws_url, cwd, session_id, model, effort, bypass)
+    run_codex_tui(
+        codex_bin,
+        ws_url,
+        cwd,
+        session_id,
+        resume_thread_id,
+        model,
+        effort,
+        bypass,
+    )
 }
 
 fn finish_codex_tui_session(
@@ -1967,7 +2336,7 @@ fn run_foreground_command_after_spawn(
 #[derive(Debug)]
 enum TeardownOutcome {
     /// The bridge committed a terminal state. Normal close.
-    Committed,
+    Committed { terminal_reason: Option<String> },
     /// No durable stop record. Nothing local can reconstruct the terminal
     /// event, so this is reported honestly rather than as a clean close — but
     /// it does not fail the user's exit, because the bridge is already gone
@@ -2091,7 +2460,9 @@ fn classify_codex_teardown(
             detail: format!("{detail}; bridge state has no durable terminal record"),
         };
     }
-    TeardownOutcome::Committed
+    TeardownOutcome::Committed {
+        terminal_reason: state.terminal_reason,
+    }
 }
 
 fn read_codex_bridge_state(state_path: &Path) -> anyhow::Result<BridgeState> {
@@ -2110,8 +2481,18 @@ fn finish_codex_teardown(
     provider_exit: i32,
 ) -> anyhow::Result<i32> {
     match outcome {
-        TeardownOutcome::Committed => {
-            remove_codex_contract_best_effort(session_id);
+        TeardownOutcome::Committed { terminal_reason } => {
+            let recoverable_provider_exit = matches!(
+                terminal_reason.as_deref(),
+                Some("provider_exit" | "process_gone" | "provider_signal")
+            );
+            if recoverable_provider_exit {
+                eprintln!(
+                    "Longhouse notice: Codex exited unexpectedly. Resume the same thread with `longhouse codex --resume-session {session_id}`."
+                );
+            } else {
+                remove_codex_contract_best_effort(session_id);
+            }
             if let Some(machine_name) = banner_machine_name.filter(|_| provider_exit == 0) {
                 print_helm_closed(machine_name);
             }
@@ -2161,20 +2542,25 @@ fn record_codex_contract(
     cwd: &Path,
     codex_bin: &str,
     launch_mode: &str,
+    model: Option<&str>,
+    model_reasoning_effort: Option<&str>,
+    bypass: bool,
 ) -> anyhow::Result<()> {
     let path = codex_contract_path(session_id)?;
     let canonical_cwd = std::fs::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf());
+    let canonical_bin = std::fs::canonicalize(codex_bin)
+        .with_context(|| format!("resolve managed Codex binary {codex_bin}"))?;
     let payload = json!({
-        "schema_version": 1,
+        "schema_version": 2,
         "session_id": session_id,
         "provider": "codex",
         "launch_mode": launch_mode,
         "created_at": chrono::Utc::now().to_rfc3339(),
         "longhouse_build": build_identity::BuildIdentity::current().qualified(),
         "provider_binary": {
-            "path": codex_bin,
+            "path": canonical_bin,
             "source": "path",
-            "version": serde_json::Value::Null,
+            "version": codex_binary_version(codex_bin)?,
         },
         "workspace": {
             "cwd": cwd,
@@ -2184,6 +2570,11 @@ fn record_codex_contract(
         "control": {
             "kind": "codex_bridge",
             "state_path": codex_bridge_state_path(session_id)?,
+        },
+        "options": {
+            "model": model,
+            "model_reasoning_effort": model_reasoning_effort,
+            "bypass": bypass,
         },
     });
     let parent = path
@@ -2204,6 +2595,21 @@ fn record_codex_contract(
     std::fs::rename(&temporary, &path)
         .with_context(|| format!("install managed Codex contract {}", path.display()))?;
     Ok(())
+}
+
+fn codex_binary_version(codex_bin: &str) -> anyhow::Result<String> {
+    let output = Command::new(codex_bin)
+        .arg("--version")
+        .output()
+        .with_context(|| format!("read Codex version from {codex_bin}"))?;
+    if !output.status.success() {
+        anyhow::bail!("Codex --version exited {}", output.status);
+    }
+    let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if version.is_empty() {
+        anyhow::bail!("Codex --version returned an empty version");
+    }
+    Ok(version)
 }
 
 fn remove_codex_contract(session_id: &str) -> anyhow::Result<()> {
@@ -2227,9 +2633,15 @@ fn attach_managed_codex(args: CodexAttachArgs) -> anyhow::Result<()> {
         .filter(|url| !url.trim().is_empty())
         .context("managed Codex session is not reattachable")?;
     let codex_bin = resolve_codex_binary(args.codex_bin.or(Some(state.codex_bin)))?;
-    if let Err(error) =
-        record_codex_contract(&args.session_id, Path::new(&state.cwd), &codex_bin, "tui")
-    {
+    if let Err(error) = record_codex_contract(
+        &args.session_id,
+        Path::new(&state.cwd),
+        &codex_bin,
+        "tui",
+        args.model.as_deref(),
+        args.model_reasoning_effort.as_deref(),
+        args.dangerously_bypass_approvals_and_sandbox,
+    ) {
         eprintln!("Longhouse warning: could not record managed-session contract: {error}");
     }
     attach_codex_tui(&args.session_id)?;
@@ -2238,6 +2650,7 @@ fn attach_managed_codex(args: CodexAttachArgs) -> anyhow::Result<()> {
         &ws_url,
         Path::new(&state.cwd),
         &args.session_id,
+        state.thread_id.as_deref(),
         args.model.as_deref(),
         args.model_reasoning_effort.as_deref(),
         args.dangerously_bypass_approvals_and_sandbox,
@@ -2314,6 +2727,41 @@ mod tests {
         assert!(command.is_none());
         assert!(launch.no_attach);
         assert!(launch.attach);
+    }
+
+    #[test]
+    fn codex_parser_accepts_explicit_managed_resume() {
+        let session_id = "22222222-2222-4222-8222-222222222222";
+        let cli =
+            Cli::try_parse_from(["longhouse", "codex", "--resume-session", session_id]).unwrap();
+        let Commands::Codex { command, launch } = cli.command.unwrap() else {
+            panic!("expected codex command");
+        };
+        assert!(command.is_none());
+        assert_eq!(launch.resume_session.as_deref(), Some(session_id));
+    }
+
+    #[test]
+    fn resumed_codex_tui_names_the_pinned_provider_thread() {
+        let command = build_codex_tui_command(
+            "codex",
+            "ws://127.0.0.1:4321",
+            Path::new("/tmp"),
+            "11111111-1111-4111-8111-111111111111",
+            Some("22222222-2222-4222-8222-222222222222"),
+            Some("gpt-test"),
+            Some("high"),
+            true,
+        );
+        let args = command
+            .get_args()
+            .map(|value| value.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(args[0], "resume");
+        assert_eq!(args[1], "22222222-2222-4222-8222-222222222222");
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["--remote", "ws://127.0.0.1:4321"]));
     }
 
     #[test]
@@ -2408,15 +2856,113 @@ mod tests {
                 ("CLAUDE_CONFIG_DIR", None::<String>),
             ],
             || {
-                record_codex_contract(session_id, &cwd, "/usr/bin/codex", "detached_ui").unwrap();
+                let codex = temp.path().join("codex");
+                std::fs::write(&codex, "#!/bin/sh\necho 'codex-cli 1.2.3'\n").unwrap();
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&codex, std::fs::Permissions::from_mode(0o755)).unwrap();
+                record_codex_contract(
+                    session_id,
+                    &cwd,
+                    codex.to_str().unwrap(),
+                    "detached_ui",
+                    Some("gpt-test"),
+                    Some("high"),
+                    true,
+                )
+                .unwrap();
                 let path = codex_contract_path(session_id).unwrap();
                 let payload: serde_json::Value =
                     serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
                 assert_eq!(payload["provider"], "codex");
                 assert_eq!(payload["launch_mode"], "detached_ui");
                 assert_eq!(payload["control"]["kind"], "codex_bridge");
+                assert_eq!(payload["schema_version"], 2);
+                assert_eq!(payload["provider_binary"]["version"], "codex-cli 1.2.3");
+                assert_eq!(payload["options"]["model"], "gpt-test");
                 remove_codex_contract(session_id).unwrap();
                 assert!(!path.exists());
+            },
+        );
+    }
+
+    #[test]
+    fn codex_resume_requires_matching_contract_and_provider_exit_fact() {
+        let temp = tempfile::tempdir().unwrap();
+        let cwd = temp.path().join("workspace");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let rollout = temp.path().join("rollout.jsonl");
+        std::fs::write(&rollout, "{}\n").unwrap();
+        let codex = temp.path().join("codex");
+        std::fs::write(&codex, "#!/bin/sh\necho 'codex-cli 1.2.3'\n").unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&codex, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let session_id = "22222222-2222-4222-8222-222222222222";
+        temp_env::with_var(
+            "LONGHOUSE_HOME",
+            Some(temp.path().display().to_string()),
+            || {
+                record_codex_contract(
+                    session_id,
+                    &cwd,
+                    codex.to_str().unwrap(),
+                    "tui",
+                    Some("gpt-retained"),
+                    Some("high"),
+                    true,
+                )
+                .unwrap();
+                let state_path = codex_bridge_state_path(session_id).unwrap();
+                std::fs::create_dir_all(state_path.parent().unwrap()).unwrap();
+                std::fs::write(
+                    &state_path,
+                    serde_json::to_vec(&json!({
+                        "cwd": cwd,
+                        "codex_bin": codex,
+                        "status": "stopped",
+                        "thread_id": "33333333-3333-4333-8333-333333333333",
+                        "thread_path": rollout,
+                        "run_id": "44444444-4444-4444-8444-444444444444",
+                        "stopped_at": "2026-08-02T00:00:00Z",
+                        "terminal_state": "process_gone",
+                        "terminal_reason": "provider_exit"
+                    }))
+                    .unwrap(),
+                )
+                .unwrap();
+                let args = CodexLaunchArgs {
+                    cwd: cwd.clone(),
+                    project: None,
+                    name: None,
+                    loop_mode: "assist".to_string(),
+                    attach: true,
+                    no_attach: false,
+                    url: None,
+                    token: None,
+                    codex_bin: Some(codex.display().to_string()),
+                    model: None,
+                    model_reasoning_effort: None,
+                    resume_session: Some(session_id.to_string()),
+                    dangerously_bypass_approvals_and_sandbox: false,
+                };
+                let target =
+                    validate_codex_resume_target(&args, session_id, &cwd, codex.to_str().unwrap())
+                        .unwrap();
+                assert_eq!(target.thread_id, "33333333-3333-4333-8333-333333333333");
+                assert_eq!(target.model.as_deref(), Some("gpt-retained"));
+                assert_eq!(target.model_reasoning_effort.as_deref(), Some("high"));
+                assert!(target.bypass);
+
+                let other_cwd = temp.path().join("other");
+                std::fs::create_dir_all(&other_cwd).unwrap();
+                let error = validate_codex_resume_target(
+                    &args,
+                    session_id,
+                    &other_cwd,
+                    codex.to_str().unwrap(),
+                )
+                .err()
+                .unwrap();
+                assert!(format!("{error:#}").contains("cwd differs"));
             },
         );
     }

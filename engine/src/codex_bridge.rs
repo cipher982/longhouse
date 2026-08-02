@@ -3706,8 +3706,10 @@ async fn process_notification(
             if let Some(next_id) = different_notification_thread_id(&params, context) {
                 let next_path = extract_notification_thread_path(&params);
                 let can_follow_active_tui_thread =
-                    active_tui_thread_switch_can_follow(method, context);
-                if can_follow_active_tui_thread || unused_prestarted_tui_thread_can_yield(context) {
+                    active_tui_thread_switch_can_follow(method, config, context);
+                if can_follow_active_tui_thread
+                    || unused_prestarted_tui_thread_can_yield(config, context)
+                {
                     let previous_thread_id = context.state.thread_id.clone();
                     if adopt_thread_identity(
                         config,
@@ -3772,7 +3774,7 @@ async fn process_notification(
             if let Some(next_id) = different_notification_thread_id(&params, context) {
                 if context.rejected_thread_ids.contains(&next_id) {
                     return Ok(None);
-                } else if active_tui_thread_switch_can_follow(method, context) {
+                } else if active_tui_thread_switch_can_follow(method, config, context) {
                     adopted_active_tui_thread = adopt_thread_identity(
                         config,
                         context,
@@ -4084,7 +4086,13 @@ fn different_notification_thread_id(params: &Value, context: &BridgeContext) -> 
     Some(next_id)
 }
 
-fn unused_prestarted_tui_thread_can_yield(context: &BridgeContext) -> bool {
+fn unused_prestarted_tui_thread_can_yield(
+    config: &BridgeRunConfig,
+    context: &BridgeContext,
+) -> bool {
+    if config.resume_thread_id.is_some() {
+        return false;
+    }
     if context.state.launch_mode.as_deref() != Some(LAUNCH_MODE_TUI) {
         return false;
     }
@@ -4110,8 +4118,13 @@ fn unused_prestarted_tui_thread_can_yield(context: &BridgeContext) -> bool {
         .unwrap_or(true)
 }
 
-fn active_tui_thread_switch_can_follow(method: &str, context: &BridgeContext) -> bool {
+fn active_tui_thread_switch_can_follow(
+    method: &str,
+    config: &BridgeRunConfig,
+    context: &BridgeContext,
+) -> bool {
     context.state.launch_mode.as_deref() == Some(LAUNCH_MODE_TUI)
+        && config.resume_thread_id.is_none()
         && matches!(method, "thread/started" | "thread/status/changed")
 }
 
@@ -8390,6 +8403,30 @@ mod tests {
         assert_eq!(context.state.status, "ready");
         assert_eq!(context.state.last_error, None);
         assert!(!context.rejected_thread_ids.contains("thr-tui"));
+    }
+
+    #[test]
+    fn resumed_tui_cannot_replace_the_pinned_provider_thread() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut config = make_test_run_config(&temp);
+        config.resume_thread_id = Some("thr-resumed".to_string());
+        config.resume_thread_path = Some("/tmp/resumed.jsonl".to_string());
+        let mut context = make_test_context(&temp);
+        context.state.launch_mode = Some(LAUNCH_MODE_TUI.to_string());
+        context.state.thread_id = Some("thr-resumed".to_string());
+        context.state.thread_path = Some("/tmp/resumed.jsonl".to_string());
+
+        assert!(!active_tui_thread_switch_can_follow(
+            "thread/started",
+            &config,
+            &context,
+        ));
+        assert!(!active_tui_thread_switch_can_follow(
+            "thread/status/changed",
+            &config,
+            &context,
+        ));
+        assert!(!unused_prestarted_tui_thread_can_yield(&config, &context,));
     }
 
     #[tokio::test]

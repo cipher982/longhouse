@@ -740,6 +740,7 @@
       "providers": [
         "antigravity",
         "claude",
+        "codex",
         "cursor",
         "opencode"
       ]

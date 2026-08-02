@@ -286,6 +286,8 @@ class CatalogDaemon:
             return await self._update_console_turn(request)
         if request.method == "session.launch.local.create.v2":
             return await self._create_local_launch(request)
+        if request.method == "session.launch.local.resume.v2":
+            return await self._resume_local_launch(request)
         if request.method == "session.launch.local.finish.v2":
             return await self._finish_local_launch(request)
         if request.method == "interaction.register.v2":
@@ -1373,6 +1375,20 @@ class CatalogDaemon:
         result = await self._run_store(self._store.create_local_launch, launch=launch)
         if result.get("idempotency_conflict") is True:
             return self._error(request, "conflict", "local launch identity was reused with different attributes")
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _resume_local_launch(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"resume"}:
+            return self._error(request, "invalid_request", "session.launch.local.resume.v2 requires resume")
+        try:
+            resume = _validate_local_resume_rpc(request.params["resume"])
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        assert self._store is not None
+        result = await self._run_store(self._store.resume_local_launch, resume=resume)
+        conflict = str(result.get("conflict") or "").strip()
+        if conflict:
+            return self._error(request, "conflict", conflict)
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _finish_local_launch(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
@@ -3414,6 +3430,17 @@ _LOCAL_LAUNCH_OUTCOME_FIELDS = {
     "error_message",
     "observed_at",
 }
+_LOCAL_RESUME_FIELDS = {
+    "owner_id",
+    "session_id",
+    "provider",
+    "provider_thread_id",
+    "device_id",
+    "cwd",
+    "resume_attempt_id",
+    "started_at",
+    "expires_at",
+}
 _INTERACTION_REGISTRATION_FIELDS = {
     "session_id",
     "runtime_key",
@@ -3578,6 +3605,30 @@ def _validate_local_launch_rpc(value: object) -> dict:
     if runner_id is not None and (type(runner_id) is not int or runner_id <= 0):
         raise ValueError("local launch.plan.source_runner_id must be a positive integer or null")
     result["plan"] = plan
+    return result
+
+
+def _validate_local_resume_rpc(value: object) -> dict:
+    if not isinstance(value, dict) or set(value) != _LOCAL_RESUME_FIELDS:
+        raise ValueError("local resume has invalid fields")
+    result = dict(value)
+    if type(result["owner_id"]) is not int or result["owner_id"] <= 0:
+        raise ValueError("local resume.owner_id must be a positive integer")
+    for field in ("session_id", "resume_attempt_id"):
+        if not _is_canonical_uuid(result[field]):
+            raise ValueError(f"local resume.{field} must be a canonical UUID")
+    for field, maximum in (
+        ("provider", 64),
+        ("provider_thread_id", 512),
+        ("device_id", 255),
+        ("cwd", 4096),
+    ):
+        if not _is_string(result[field], maximum=maximum):
+            raise ValueError(f"local resume.{field} must contain 1 to {maximum} characters")
+    result["started_at"] = _parse_datetime(result["started_at"], "local resume.started_at")
+    result["expires_at"] = _parse_datetime(result["expires_at"], "local resume.expires_at")
+    if result["expires_at"] <= result["started_at"]:
+        raise ValueError("local resume.expires_at must be later than started_at")
     return result
 
 
