@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import threading
 from dataclasses import dataclass
+from dataclasses import replace
 
 import numpy as np
 
@@ -151,6 +152,18 @@ class ResidentEpisodeIndex:
     @property
     def dims(self) -> int:
         return self._dims
+
+    def invalidate(self) -> None:
+        """Close the coverage gate while a committed mutation awaits refresh.
+
+        Keep the prior immutable matrix alive for readers that already hold a
+        reference, but do not let a new semantic query serve it as current.
+        The next successful ``load`` atomically replaces both the matrix and
+        its coverage proof.
+        """
+
+        with self._write_lock:
+            self._coverage = replace(self._coverage, ready=False)
 
     def load(self, connection) -> None:
         """Build the snapshot from SQLite. Called on the writer thread."""

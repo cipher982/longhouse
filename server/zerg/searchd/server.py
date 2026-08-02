@@ -38,6 +38,8 @@ _PROVIDER = re.compile(r"[a-z0-9][a-z0-9_-]{0,31}\Z")
 _ROLES = {"user", "assistant", "tool", "system"}
 logger = logging.getLogger(__name__)
 
+_DENSE_REFRESH_COALESCE_SECONDS = 0.01
+
 
 class _ReadDeadlineExceeded(RuntimeError):
     pass
@@ -76,6 +78,10 @@ class SearchDaemon:
         self._connection = None
         self._store: SearchStore | None = None
         self._dense_index: ResidentEpisodeIndex | None = None
+        self._dense_refresh_task: asyncio.Task[None] | None = None
+        self._dense_refresh_generation = 0
+        self._dense_refreshed_generation = 0
+        self._dense_refresh_waiters: list[tuple[int, asyncio.Future[None]]] = []
         self._executor: ThreadPoolExecutor | None = None
         self._read_workers: asyncio.Queue[_ReadWorker] | None = None
         self._all_read_workers: list[_ReadWorker] = []
@@ -120,6 +126,10 @@ class SearchDaemon:
             self._dense_index = ResidentEpisodeIndex(model=ACTIVE_EMBEDDING_MODEL, dims=ACTIVE_EMBEDDING_DIMS)
             self._dense_index.load(self._connection)
             logger.info("searchd resident index loaded vectors=%d", self._dense_index.size)
+            # The commit -> invalidate -> coalesced refresh ordering below is
+            # correct because mutations and snapshot loads share exactly one
+            # FIFO executor. Raising this count can publish a snapshot that
+            # predates a concurrent committed mutation.
             self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="searchd-sqlite")
             worker_count = min(2, max(1, (os.cpu_count() or 1) // 2))
             self._read_workers = asyncio.Queue(maxsize=worker_count)
@@ -156,6 +166,17 @@ class SearchDaemon:
             self._server = None
         self._unlink_socket()
         self._store = None
+        # Every refresh waiter represents a mutation already committed to
+        # SQLite. A closing daemon need not rebuild a snapshot it will never
+        # serve; acknowledge those commits and let the next start load them.
+        for _, waiter in self._dense_refresh_waiters:
+            if not waiter.done():
+                waiter.set_result(None)
+        self._dense_refresh_waiters.clear()
+        if self._dense_refresh_task is not None:
+            self._dense_refresh_task.cancel()
+            await asyncio.gather(self._dense_refresh_task, return_exceptions=True)
+            self._dense_refresh_task = None
         if self._executor is not None:
             self._executor.shutdown(wait=True, cancel_futures=True)
             self._executor = None
@@ -391,23 +412,75 @@ class SearchDaemon:
         return await asyncio.get_running_loop().run_in_executor(self._executor, lambda: function(**kwargs))
 
     async def _run_with_dense_refresh(self, function, **kwargs):
-        """Commit one writer mutation, then publish a complete new dense snapshot.
+        """Commit a mutation, then await its coalesced dense snapshot.
 
-        The writer executor serializes both operations. Readers retain the prior
-        immutable snapshot until ``load`` swaps the new one, so they can observe
-        the complete state before or after a commit but never a partially rebuilt
-        matrix. SQLite remains authoritative if the process dies between them.
+        Rebuilding and revalidating the full matrix after every projector RPC
+        makes corpus backfill quadratic in the number of committed batches.
+        Concurrent mutations now share one rebuild. Coverage is invalidated as
+        soon as each commit returns, so a new semantic query fails loudly until
+        the immutable replacement snapshot includes that mutation. SQLite
+        remains authoritative if the process dies between commit and refresh.
         """
 
         assert self._executor is not None
-
-        def mutate_and_refresh():
-            result = function(**kwargs)
-            if self._dense_index is not None and self._connection is not None:
-                self._dense_index.load(self._connection)
+        result = await asyncio.get_running_loop().run_in_executor(self._executor, lambda: function(**kwargs))
+        if self._dense_index is None or self._connection is None:
             return result
+        self._dense_index.invalidate()
+        self._dense_refresh_generation += 1
+        generation = self._dense_refresh_generation
+        waiter = asyncio.get_running_loop().create_future()
+        self._dense_refresh_waiters.append((generation, waiter))
+        if self._dense_refresh_task is None or self._dense_refresh_task.done():
+            self._dense_refresh_task = asyncio.create_task(self._refresh_dense_snapshots(), name="searchd-dense-refresh")
+        await waiter
+        return result
 
-        return await asyncio.get_running_loop().run_in_executor(self._executor, mutate_and_refresh)
+    async def _refresh_dense_snapshots(self) -> None:
+        assert self._executor is not None
+        try:
+            while self._dense_refreshed_generation < self._dense_refresh_generation:
+                await asyncio.sleep(_DENSE_REFRESH_COALESCE_SECONDS)
+                target_generation = self._dense_refresh_generation
+                assert self._dense_index is not None and self._connection is not None
+                retry_seconds = 0.05
+                while True:
+                    try:
+                        await asyncio.get_running_loop().run_in_executor(
+                            self._executor,
+                            lambda: self._dense_index.load(self._connection),
+                        )
+                        break
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        # The committed SQLite state is still authoritative and
+                        # coverage remains closed. Retry here so one transient
+                        # read/allocation failure cannot disable dense recall
+                        # until an unrelated future mutation happens to arrive.
+                        logger.exception("searchd dense snapshot refresh failed; retrying")
+                        await asyncio.sleep(retry_seconds)
+                        retry_seconds = min(1.0, retry_seconds * 2)
+                self._dense_refreshed_generation = target_generation
+                remaining: list[tuple[int, asyncio.Future[None]]] = []
+                for generation, waiter in self._dense_refresh_waiters:
+                    if generation <= target_generation:
+                        if not waiter.done():
+                            waiter.set_result(None)
+                    else:
+                        remaining.append((generation, waiter))
+                self._dense_refresh_waiters = remaining
+        except BaseException as exc:
+            for _, waiter in self._dense_refresh_waiters:
+                if not waiter.done():
+                    if isinstance(exc, asyncio.CancelledError):
+                        waiter.cancel()
+                    else:
+                        waiter.set_exception(exc)
+            self._dense_refresh_waiters.clear()
+            raise
+        finally:
+            self._dense_refresh_task = None
 
     def _new_read_worker(self, name: str) -> _ReadWorker:
         connection = open_search_read_database(self.database_path)

@@ -848,6 +848,142 @@ async def test_dense_rpc_enforces_space_and_refreshes_after_write_and_delete(tmp
 
 
 @pytest.mark.asyncio
+async def test_dense_refresh_coalesces_concurrent_writer_mutations(tmp_path):
+    socket_parent = Path("/tmp") / f"lhs-{uuid4().hex[:8]}"
+    socket_parent.mkdir(mode=0o700)
+    daemon = SearchDaemon(database_path=tmp_path / "search.db", socket_path=socket_parent / "s")
+    await daemon.start()
+    assert daemon._dense_index is not None
+    original_load = daemon._dense_index.load
+    loads = 0
+
+    def counted_load(connection):
+        nonlocal loads
+        loads += 1
+        original_load(connection)
+
+    daemon._dense_index.load = counted_load
+    try:
+        await asyncio.gather(*(daemon._run_with_dense_refresh(lambda value=value: {"value": value}) for value in range(12)))
+        assert 1 <= loads < 12
+        assert daemon._dense_index.coverage.ready is True
+    finally:
+        await daemon.close()
+        socket_parent.rmdir()
+
+
+@pytest.mark.asyncio
+async def test_dense_refresh_retries_without_reopening_coverage_gate(tmp_path):
+    socket_parent = Path("/tmp") / f"lhs-{uuid4().hex[:8]}"
+    socket_parent.mkdir(mode=0o700)
+    daemon = SearchDaemon(database_path=tmp_path / "search.db", socket_path=socket_parent / "s")
+    await daemon.start()
+    assert daemon._dense_index is not None
+    original_load = daemon._dense_index.load
+    attempts = 0
+
+    def transient_load(connection):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise sqlite3.OperationalError("transient test failure")
+        original_load(connection)
+
+    daemon._dense_index.load = transient_load
+    try:
+        result = await daemon._run_with_dense_refresh(lambda: {"committed": True})
+        assert result == {"committed": True}
+        assert attempts == 2
+        assert daemon._dense_index.coverage.ready is True
+    finally:
+        await daemon.close()
+        socket_parent.rmdir()
+
+
+@pytest.mark.asyncio
+async def test_searchd_close_acknowledges_committed_refresh_waiter(tmp_path):
+    socket_parent = Path("/tmp") / f"lhs-{uuid4().hex[:8]}"
+    socket_parent.mkdir(mode=0o700)
+    daemon = SearchDaemon(database_path=tmp_path / "search.db", socket_path=socket_parent / "s")
+    await daemon.start()
+    assert daemon._dense_index is not None
+    entered = threading.Event()
+    release = threading.Event()
+
+    def blocked_load(_connection):
+        entered.set()
+        assert release.wait(timeout=2)
+
+    daemon._dense_index.load = blocked_load
+    mutation = asyncio.create_task(daemon._run_with_dense_refresh(lambda: {"committed": True}))
+    close_task: asyncio.Task[None] | None = None
+    try:
+        assert await asyncio.to_thread(entered.wait, 1)
+        close_task = asyncio.create_task(daemon.close())
+        assert await mutation == {"committed": True}
+        release.set()
+        await close_task
+    finally:
+        release.set()
+        await asyncio.gather(mutation, return_exceptions=True)
+        if close_task is not None:
+            await asyncio.gather(close_task, return_exceptions=True)
+        else:
+            await daemon.close()
+        socket_parent.rmdir()
+
+
+@pytest.mark.asyncio
+async def test_dense_gate_closes_until_coalesced_refresh_is_published(tmp_path):
+    socket_parent = Path("/tmp") / f"lhs-{uuid4().hex[:8]}"
+    socket_parent.mkdir(mode=0o700)
+    socket_path = socket_parent / "s"
+    daemon = SearchDaemon(database_path=tmp_path / "search.db", socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    assert daemon._dense_index is not None
+    original_load = daemon._dense_index.load
+    entered = threading.Event()
+    release = threading.Event()
+
+    def blocked_load(connection):
+        entered.set()
+        assert release.wait(timeout=2)
+        original_load(connection)
+
+    daemon._dense_index.load = blocked_load
+    mutation = asyncio.create_task(daemon._run_with_dense_refresh(lambda: {"committed": True}))
+    vector = np.zeros(ACTIVE_EMBEDDING_DIMS, dtype=np.float32)
+    vector[0] = 1.0
+    query = {
+        "model": ACTIVE_EMBEDDING_MODEL,
+        "owner_id": "42",
+        "dims": ACTIVE_EMBEDDING_DIMS,
+        "query_embedding": base64.b64encode(vector.tobytes()).decode("ascii"),
+        "limit": 5,
+        "project": None,
+        "provider": None,
+        "exclude_environments": None,
+        "since_iso": None,
+    }
+    try:
+        assert await asyncio.to_thread(entered.wait, 1)
+        assert daemon._dense_index.coverage.ready is False
+        with pytest.raises(CatalogRemoteError) as incomplete:
+            await client.call("search.embedding.query.v2", query)
+        assert incomplete.value.code == "embedding_coverage_incomplete"
+        release.set()
+        assert await mutation == {"committed": True}
+        assert daemon._dense_index.coverage.ready is True
+    finally:
+        release.set()
+        await asyncio.gather(mutation, return_exceptions=True)
+        await client.close()
+        await daemon.close()
+        socket_parent.rmdir()
+
+
+@pytest.mark.asyncio
 async def test_searchd_publishes_only_complete_generations_and_serves_search_worklog(tmp_path):
     socket_parent = Path("/tmp") / f"lhs-{uuid4().hex[:8]}"
     socket_parent.mkdir(mode=0o700)
