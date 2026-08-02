@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import io
 from dataclasses import replace
+from urllib.error import HTTPError
 
 import pytest
 
@@ -55,3 +56,24 @@ def test_corrupt_cached_file_is_replaced(tmp_path, monkeypatch):
     embedding_artifact.provision_embedding_artifact(root, opener=lambda _url: io.BytesIO(payload))
 
     assert (root / "model.onnx").read_bytes() == payload
+
+
+def test_download_retries_rate_limit_with_retry_after(monkeypatch):
+    attempts = 0
+    delays: list[float] = []
+
+    def urlopen(_request, *, timeout):
+        nonlocal attempts
+        attempts += 1
+        assert timeout == embedding_artifact._DOWNLOAD_TIMEOUT_SECONDS
+        if attempts == 1:
+            raise HTTPError("https://huggingface.co/model", 429, "rate limited", {"Retry-After": "3"}, None)
+        return io.BytesIO(b"model")
+
+    monkeypatch.setattr(embedding_artifact.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(embedding_artifact.time, "sleep", delays.append)
+
+    with embedding_artifact._open_url("https://huggingface.co/model") as response:
+        assert response.read() == b"model"
+    assert attempts == 2
+    assert delays == [3.0]

@@ -73,6 +73,29 @@ COPY server/uv.lock server/pyproject.toml ./
 RUN uv sync --frozen --no-install-project --no-dev
 
 # =============================================================================
+# Stage 2.5: Fetch the checksum-pinned embedding model
+# =============================================================================
+FROM python:3.12-slim-bookworm AS embedding-model
+
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /provision
+
+# Keep this layer independent of the application source. Backend-only changes
+# must not redownload a 600MB immutable model or consume Hugging Face rate limit.
+COPY server/zerg/__init__.py ./zerg/__init__.py
+COPY server/zerg/services/__init__.py ./zerg/services/__init__.py
+COPY server/zerg/embedding_space.py ./zerg/embedding_space.py
+COPY server/zerg/services/embedding_artifact.py ./zerg/services/embedding_artifact.py
+COPY config/models.json /config/models.json
+
+RUN MODELS_CONFIG_PATH=/config/models.json \
+    LONGHOUSE_EMBED_MODEL_DIR=/opt/longhouse/embedding-model \
+    PYTHONPATH=/provision \
+    python -c "from zerg.services.embedding_artifact import provision_embedding_artifact; provision_embedding_artifact()"
+
+# =============================================================================
 # Stage 3: Build Backend Application
 # =============================================================================
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS backend-builder
@@ -121,14 +144,6 @@ assert hasattr(conn, 'set_progress_handler'), 'set_progress_handler unavailable'
 assert hasattr(conn, 'interrupt'), 'interrupt unavailable'; \
 conn.close(); print(f'pysqlite3 OK: SQLite {v}, FTS5 + dbstat + progress handler available')"
 
-# Fetch the exact checksum-pinned retrieval model during the image build. The
-# runtime provisioner revalidates these files at startup, while self-hosted
-# wheel installs use the same code to populate their persistent data directory.
-RUN MODELS_CONFIG_PATH=/config/models.json \
-    LONGHOUSE_EMBED_MODEL_DIR=/opt/longhouse/embedding-model \
-    PYTHONPATH=/repo/server \
-    ./.venv/bin/python -c "from zerg.services.embedding_artifact import provision_embedding_artifact; provision_embedding_artifact()"
-
 # =============================================================================
 # Stage 4: Production Runtime
 # =============================================================================
@@ -172,7 +187,9 @@ COPY --from=backend-builder --chown=longhouse:longhouse /config /config
 # Copy schemas (see the matching COPY in the backend-builder stage above)
 COPY --from=backend-builder --chown=longhouse:longhouse /schemas /schemas
 
-COPY --from=backend-builder --chown=longhouse:longhouse /opt/longhouse/embedding-model /opt/longhouse/embedding-model
+# The build stage downloads and checksum-verifies the exact immutable model;
+# runtime startup verifies the copied bytes again before loading ONNX.
+COPY --from=embedding-model --chown=longhouse:longhouse /opt/longhouse/embedding-model /opt/longhouse/embedding-model
 
 # Bootstrap pip in the venv so job packs can pip-install their own deps at startup
 RUN /app/.venv/bin/python -m ensurepip --default-pip 2>/dev/null || true

@@ -6,6 +6,8 @@ import fcntl
 import hashlib
 import os
 import tempfile
+import time
+import urllib.error
 import urllib.request
 from collections.abc import Callable
 from pathlib import Path
@@ -19,6 +21,8 @@ from zerg.embedding_space import EMBEDDING_ARTIFACT_REVISION
 from zerg.embedding_space import EmbeddingArtifactFile
 
 _DOWNLOAD_TIMEOUT_SECONDS = 120
+_DOWNLOAD_ATTEMPTS = 5
+_RETRYABLE_HTTP_STATUSES = frozenset({429, 500, 502, 503, 504})
 _COPY_BYTES = 1024 * 1024
 
 
@@ -71,7 +75,27 @@ def _download_url(entry: EmbeddingArtifactFile) -> str:
 
 def _open_url(url: str) -> BinaryIO:
     request = urllib.request.Request(url, headers={"User-Agent": "Longhouse embedding artifact provisioner"})
-    return urllib.request.urlopen(request, timeout=_DOWNLOAD_TIMEOUT_SECONDS)  # noqa: S310 - pinned HTTPS host and digest
+    for attempt in range(_DOWNLOAD_ATTEMPTS):
+        try:
+            return urllib.request.urlopen(  # noqa: S310 - pinned HTTPS host and digest
+                request,
+                timeout=_DOWNLOAD_TIMEOUT_SECONDS,
+            )
+        except urllib.error.HTTPError as exc:
+            retryable = exc.code in _RETRYABLE_HTTP_STATUSES
+            if not retryable or attempt == _DOWNLOAD_ATTEMPTS - 1:
+                raise EmbeddingArtifactError(f"embedding artifact download failed: HTTP {exc.code}") from exc
+            retry_after = exc.headers.get("Retry-After") if exc.headers is not None else None
+            try:
+                delay = max(0.0, min(30.0, float(retry_after))) if retry_after is not None else 2**attempt
+            except ValueError:
+                delay = 2**attempt
+            time.sleep(delay)
+        except (TimeoutError, urllib.error.URLError) as exc:
+            if attempt == _DOWNLOAD_ATTEMPTS - 1:
+                raise EmbeddingArtifactError("embedding artifact download failed after retries") from exc
+            time.sleep(2**attempt)
+    raise AssertionError("unreachable")
 
 
 def _download_one(
