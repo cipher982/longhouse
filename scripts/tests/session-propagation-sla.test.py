@@ -104,6 +104,21 @@ def test_empty_projection_proof_and_failed_empty_launch() -> None:
     assert promotion["proven"] is True
 
 
+def test_hosted_assistant_proof_accepts_storage_count_when_preview_is_replaced() -> None:
+    data = {
+        "storage_session": {
+            "first_user_message_preview": "Reply with exactly LH_PROBE",
+            "last_visible_text_preview": "provider shell text",
+            "user_messages": 1,
+            "assistant_messages": 1,
+        }
+    }
+    assert profiler.hosted_assistant_events_contain(data, "LH_PROBE") is True
+
+    data["storage_session"]["assistant_messages"] = 0
+    assert profiler.hosted_assistant_events_contain(data, "LH_PROBE") is False
+
+
 def test_promotion_delta_rejects_out_of_order_observation() -> None:
     instance = profiler.Profiler.__new__(profiler.Profiler)
     instance.observations = [

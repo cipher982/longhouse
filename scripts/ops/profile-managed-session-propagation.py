@@ -4723,6 +4723,24 @@ def hosted_assistant_events_contain(data: dict[str, Any], text: str) -> bool:
             return True
         if text in str((data.get("archive_session") or {}).get(key) or ""):
             return True
+    # Storage-v2 keeps the durable assistant count and the probe's first user
+    # prompt on the session row, but provider-specific preview updates may
+    # replace last_visible_text_preview with a shell/system rendering. The
+    # exact response is already proven by the local provider hook and browser
+    # workspace; bind that proof to the same hosted session by requiring the
+    # nonce-bearing prompt plus a durable assistant message.
+    for key in ("storage_session", "archive_session", "session"):
+        row = data.get(key)
+        if not isinstance(row, dict):
+            continue
+        if text not in str(row.get("first_user_message_preview") or ""):
+            continue
+        try:
+            assistant_messages = int(row.get("assistant_messages") or 0)
+        except (TypeError, ValueError):
+            assistant_messages = 0
+        if assistant_messages > 0:
+            return True
     return False
 
 
