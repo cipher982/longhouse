@@ -29,7 +29,12 @@ logger = logging.getLogger(__name__)
 PROJECTOR = "search-v2"
 PAGE_SIZE = 100
 PROJECTOR_WORKERS = max(1, int(os.getenv("LONGHOUSE_SEARCH_PROJECTOR_WORKERS", "4")))
-PROJECTOR_LEASE_SECONDS = max(300, int(os.getenv("LONGHOUSE_SEARCH_PROJECTOR_LEASE_SECONDS", "900")))
+# Production has sessions with more than 1,500 immutable render objects. A
+# complete fenced pass over those objects can exceed 15 minutes under ordinary
+# catalog/search contention, so a shorter lease lets another worker reclaim the
+# row and invalidate the original completion token while useful work is still
+# running. Keep the lease longer than the measured full-session pass.
+PROJECTOR_LEASE_SECONDS = max(3_600, int(os.getenv("LONGHOUSE_SEARCH_PROJECTOR_LEASE_SECONDS", "3600")))
 
 
 class SearchProjectionError(RuntimeError):

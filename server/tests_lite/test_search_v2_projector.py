@@ -114,7 +114,7 @@ async def test_search_projector_overlaps_claimed_sessions(monkeypatch):
     assert await projector.run_once(limit=2) == 2
     assert started == {"one", "two"}
     claim_call = next(params for method, params in catalog.calls if method == "projector.state.claim.v2")
-    assert claim_call["lease_seconds"] == PROJECTOR_LEASE_SECONDS == 900
+    assert claim_call["lease_seconds"] == PROJECTOR_LEASE_SECONDS == 3_600
 
 
 @pytest.mark.asyncio
