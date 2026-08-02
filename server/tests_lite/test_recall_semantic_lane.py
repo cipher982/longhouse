@@ -93,13 +93,13 @@ async def test_semantic_recall_matches_times_out_gracefully(monkeypatch):
 
     monkeypatch.setattr(models_config_module, "get_embedding_config", lambda: fake_config)
 
-    async def slow_generate_embedding(_text, _config):
+    async def slow_generate_embedding(_text):
         await asyncio.sleep(5)
         return np.zeros(4, dtype=np.float32)
 
-    import zerg.services.session_processing.embeddings as embeddings_module
+    import zerg.services.local_embedder as local_embedder_module
 
-    monkeypatch.setattr(embeddings_module, "generate_embedding", slow_generate_embedding)
+    monkeypatch.setattr(local_embedder_module, "embed_query", slow_generate_embedding)
 
     result = await agents_search._semantic_recall_matches(
         query="slow query",
@@ -131,7 +131,7 @@ async def test_semantic_recall_matches_uses_live_catalog_embedding_rpc(monkeypat
     fake_config = type("Cfg", (), {"model": "test-model", "dims": 2})()
     monkeypatch.setattr("zerg.models_config.get_embedding_config", lambda: fake_config)
 
-    async def fake_generate_embedding(_text, _config):
+    async def fake_generate_embedding(_text):
         return np.array([1, 0], dtype=np.float32)
 
     candidate_session_id = str(uuid4())
@@ -150,9 +150,9 @@ async def test_semantic_recall_matches_uses_live_catalog_embedding_rpc(monkeypat
             }
         ]
 
-    import zerg.services.session_processing.embeddings as embeddings_module
+    import zerg.services.local_embedder as local_embedder_module
 
-    monkeypatch.setattr(embeddings_module, "generate_embedding", fake_generate_embedding)
+    monkeypatch.setattr(local_embedder_module, "embed_query", fake_generate_embedding)
     monkeypatch.setattr(agents_search, "search_storage_v2_episode_embeddings", fake_query)
     result = await agents_search._semantic_recall_matches(
         query="important answer",

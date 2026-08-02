@@ -63,7 +63,16 @@ class Report:
     results: list[Result] = field(default_factory=list)
 
     def _answerable(self) -> list[Result]:
-        return [r for r in self.results if r.query.expects_evidence and not r.error]
+        """Answer-present queries, errors included.
+
+        Errors used to be filtered out here, which let a completely broken
+        retrieval strategy report a *better* false-negative rate than a working
+        one: every failure left the denominator instead of counting against it.
+        A query that errored returned no evidence, which is the same outcome for
+        the agent as a miss, so it is scored as one.
+        """
+
+        return [r for r in self.results if r.query.expects_evidence]
 
     def recall_at(self, k: int) -> float:
         answerable = self._answerable()
@@ -133,9 +142,11 @@ def load_queries() -> tuple[list[Query], set[str]]:
     return queries, excluded
 
 
-def search_fts(query: str, *, base_url: str, token: str, limit: int, days: int) -> list[str]:
+def search_recall(
+    query: str, *, base_url: str, token: str, limit: int, days: int, mode: str
+) -> list[str]:
     params = urllib.parse.urlencode(
-        {"query": query, "limit": limit, "since_days": days, "context_turns": 0}
+        {"query": query, "max_results": limit, "since_days": days, "context_turns": 0, "mode": mode}
     )
     request = urllib.request.Request(
         f"{base_url}/api/agents/recall?{params}",
@@ -148,12 +159,25 @@ def search_fts(query: str, *, base_url: str, token: str, limit: int, days: int) 
     return [str(match.get("session_id") or "") for match in (payload.get("matches") or [])]
 
 
-STRATEGIES = {"fts": search_fts}
+def _search_mode(mode: str):
+    def search(query: str, *, base_url: str, token: str, limit: int, days: int) -> list[str]:
+        return search_recall(query, base_url=base_url, token=token, limit=limit, days=days, mode=mode)
+
+    return search
+
+
+# "fts" was a misnomer: it sent no mode, so it hit the fused default. Keep the
+# lanes explicit so a dead one is visible instead of being averaged away.
+STRATEGIES = {
+    "lexical": _search_mode("lexical"),
+    "semantic": _search_mode("semantic"),
+    "auto": _search_mode("auto"),
+}
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--strategy", default="fts", choices=sorted(STRATEGIES))
+    parser.add_argument("--strategy", default="auto", choices=sorted(STRATEGIES))
     parser.add_argument("--limit", type=int, default=10)
     parser.add_argument("--days", type=int, default=365)
     parser.add_argument("--verbose", action="store_true", help="Show every miss.")
@@ -218,9 +242,16 @@ def main() -> int:
 
     errors = [r for r in report.results if r.error]
     if errors:
-        print(f"\n  {len(errors)} query(s) errored:")
+        print(f"\n  {len(errors)} query(s) errored (counted as misses):")
         for result in errors[:5]:
             print(f"    {result.query.id}: {result.error}")
+
+    if errors and len(errors) / max(1, len(report.results)) > 0.05:
+        print(
+            f"\n  UNRELIABLE: {len(errors)}/{len(report.results)} queries errored. "
+            "These score as misses, so the numbers above are a floor, not a measurement. "
+            "Fix the errors and re-run before treating any of this as a gate."
+        )
 
     if args.verbose:
         misses = [r for r in report.results if r.query.expects_evidence and r.gold_rank() is None]

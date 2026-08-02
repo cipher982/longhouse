@@ -290,21 +290,22 @@ async def _semantic_recall_matches(
 ) -> list[RecallMatch]:
     """Dense recall over episode-level embeddings via searchd's episode_embeddings.
 
-    Best effort end to end: no config, no embeddings yet, a failed API call,
-    or an exhausted timeout all degrade to an empty list rather than failing
-    the request -- lexical recall already returned above this call.
+    The query is embedded in-process. It used to be a live third-party call
+    whose 27s tail could not fit the 5s route budget, so the lane silently
+    returned nothing on every slow call while spending the whole budget; see
+    zerg/services/local_embedder.py.
 
     Returns the full ranked list (not deduped against lexical results) so
     the caller can run real reciprocal rank fusion: a session found by both
     lanes should get credit from both, not just whichever ran first.
     """
     from zerg.models_config import get_embedding_config
-    from zerg.services.session_processing.embeddings import generate_embedding
+    from zerg.services.local_embedder import LocalEmbedderUnavailable
+    from zerg.services.local_embedder import embed_query
 
     if os.getenv("TESTING") == "1":
-        # Embedding generation always makes a live API call; unit tests never
-        # mock this path, so skip it deterministically rather than let a
-        # stray real API key make a test flaky or network-dependent.
+        # Tests do not carry model weights; skip deterministically rather than
+        # depend on a downloaded artifact.
         return []
 
     if timeout_seconds <= 0 or owner_id is None:
@@ -315,7 +316,7 @@ async def _semantic_recall_matches(
         return []
 
     async def _run() -> list[RecallMatch]:
-        query_vec = await generate_embedding(query, config)
+        query_vec = await embed_query(query)
 
         # Scoping is a SQL predicate against searchd's own session_index
         # (owner/project/provider/environment/recency), not an enumerated
@@ -371,7 +372,17 @@ async def _semantic_recall_matches(
 
     try:
         return await asyncio.wait_for(_run(), timeout=timeout_seconds)
-    except Exception:
+    except LocalEmbedderUnavailable:
+        # A missing model is a deployment fault, not "no results". Swallowing it
+        # is how the previous remote lane stayed dead for days: an empty list is
+        # indistinguishable from an honest miss.
+        logger.error("Dense recall unavailable: local embedder is not loaded")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": "embedder_unavailable", "message": "The local embedding model is not loaded."},
+        ) from None
+    except TimeoutError:
+        logger.warning("Dense recall exceeded its %.2fs budget", timeout_seconds)
         return []
 
 
