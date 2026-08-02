@@ -20,6 +20,7 @@ from zerg.qa.managed_claude_live import build_managed_claude_command  # noqa: E4
 from zerg.qa.managed_claude_live import channel_send  # noqa: E402,F401
 from zerg.qa.managed_claude_live import compact_terminal_text  # noqa: E402,F401
 from zerg.qa.managed_claude_live import default_output_root  # noqa: E402
+from zerg.qa.managed_claude_live import find_channel_session_id  # noqa: E402,F401
 from zerg.qa.managed_claude_live import monotonic_ms  # noqa: E402,F401
 from zerg.qa.managed_claude_live import read_json_file  # noqa: E402,F401
 from zerg.qa.managed_claude_live import run_id_now  # noqa: E402

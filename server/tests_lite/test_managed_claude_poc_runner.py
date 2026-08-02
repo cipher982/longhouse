@@ -150,6 +150,28 @@ def test_read_json_file_returns_dict_only(tmp_path):
     assert runner.read_json_file(tmp_path / "missing.json") is None
 
 
+def test_find_channel_session_id_resolves_longhouse_id_by_cwd(tmp_path, monkeypatch):
+    runner = _load_runner()
+    cwd = tmp_path / "workspace"
+    sessions = tmp_path / ".claude" / "channels" / "longhouse" / "sessions"
+    sessions.mkdir(parents=True)
+    session_id = "44444444-4444-4444-8444-444444444444"
+    (sessions / f"{session_id}.json").write_text(
+        json.dumps(
+            {
+                "session_id": session_id,
+                "provider_session_id": "55555555-5555-4555-8555-555555555555",
+                "cwd": str(cwd.resolve()),
+                "ready": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    assert runner.find_channel_session_id(cwd) == session_id
+
+
 def test_build_channel_send_command_adds_steer_metadata():
     runner = _load_runner()
 
