@@ -1096,7 +1096,8 @@ try:
         timeout=timeout,
     ) as response:
         if response.status_code != 200:
-            emit("error", error=f"status={response.status_code} body={response.text[:500]}")
+            body = response.read().decode("utf-8", errors="replace")
+            emit("error", error=f"status={response.status_code} body={body[:500]}")
             raise SystemExit(0)
         emit("ready")
         deadline = time.monotonic() + 90
