@@ -87,6 +87,7 @@ print(json.dumps({{
     "subtype": "init",
     "session_id": session_id,
     "claude_code_version": "2.1.181-fake",
+    "model": "claude-haiku-fake",
 }}))
 if {mode!r} == "api_error":
     print(json.dumps({{
@@ -121,7 +122,6 @@ print(json.dumps({{
     "is_error": False,
     "result": marker,
     "stop_reason": "end_turn",
-    "model": "claude-haiku-fake",
     "usage": {{"input_tokens": 3, "output_tokens": 2}},
     "total_cost_usd": 0.0001,
     "session_id": session_id,

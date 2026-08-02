@@ -827,6 +827,16 @@ def _compact_claude_result_event(event: dict[str, Any] | None, *, marker: str) -
     return compact
 
 
+def _claude_observed_model(events: list[dict[str, Any]]) -> str | None:
+    for event in events:
+        model = event.get("model")
+        if not isinstance(model, str) and isinstance(event.get("message"), dict):
+            model = event["message"].get("model")
+        if isinstance(model, str) and model.strip() and model != "<synthetic>":
+            return model.strip()
+    return None
+
+
 def _run_claude_auth_status(binary: str, *, env: dict[str, str], root: Path) -> dict[str, Any]:
     stdout_path = root / "claude-auth-status-stdout.json"
     stderr_path = root / "claude-auth-status-stderr.log"
@@ -968,6 +978,9 @@ def run_claude_real_print_canary(args: argparse.Namespace, root: Path) -> dict[s
     result_events = [event for event in events if event.get("type") == "result"]
     result_event = result_events[-1] if result_events else None
     compact_result = _compact_claude_result_event(result_event, marker=marker)
+    observed_model = _claude_observed_model(events)
+    if compact_result is not None and "model" not in compact_result and observed_model is not None:
+        compact_result["model"] = observed_model
     session_ids = sorted({str(event.get("session_id") or "").strip() for event in events if str(event.get("session_id") or "").strip()})
     evidence = {
         "provider_version": version,
@@ -991,6 +1004,7 @@ def run_claude_real_print_canary(args: argparse.Namespace, root: Path) -> dict[s
         "marker_sha256": hashlib.sha256(marker.encode("utf-8")).hexdigest(),
         "prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
         "result_event": compact_result,
+        "model": observed_model,
     }
     if parse_error:
         return _claude_real_print_failure(
