@@ -5752,6 +5752,21 @@ def format_optional_ms(value: Any) -> str:
     return "-" if value is None else str(value)
 
 
+def local_transport_is_currently_healthy(data: dict[str, Any]) -> bool:
+    transport = data.get("transport") or {}
+    spool = data.get("spool") or {}
+    if str(transport.get("status") or "") == "healthy":
+        return int(spool.get("pending_count") or 0) == 0
+
+    transport_health = data.get("transport_health") or {}
+    return (
+        str(transport_health.get("status") or "") != "offline"
+        and transport_health.get("last_ship_result") == "ok"
+        and int(transport_health.get("consecutive_failures") or 0) == 0
+        and int(transport_health.get("spool_pending") or 0) == 0
+    )
+
+
 def batch_local_health_preflight() -> dict[str, Any]:
     completed = run_cmd(["longhouse", "local-health", "--json"], timeout=30)
     data = safe_json_loads(completed.stdout)
@@ -5767,13 +5782,7 @@ def batch_local_health_preflight() -> dict[str, Any]:
     outbox = data.get("outbox") or {}
     outbox_oldest_age = outbox.get("oldest_age_seconds")
     outbox_stale = isinstance(outbox_oldest_age, (int, float)) and outbox_oldest_age > 10
-    current_transport_ok = (
-        str(transport_health.get("status") or "") != "offline"
-        and transport_health.get("last_ship_result") == "ok"
-        and int(transport_health.get("consecutive_failures") or 0) == 0
-        and int(transport_health.get("spool_pending") or 0) == 0
-        and not outbox_stale
-    )
+    current_transport_ok = local_transport_is_currently_healthy(data) and not outbox_stale
     ok = completed.returncode == 0 and not outbox_stale and (health_state == "healthy" or current_transport_ok)
     return {
         "ok": ok,
@@ -5788,6 +5797,7 @@ def batch_local_health_preflight() -> dict[str, Any]:
         "headline": data.get("headline"),
         "reasons": data.get("reasons") or [],
         "transport_health": transport_health,
+        "transport": data.get("transport") or {},
         "outbox": outbox,
     }
 

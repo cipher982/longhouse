@@ -181,6 +181,23 @@ def test_cursor_stop_accepts_already_detached_session() -> None:
     assert not profiler.cursor_helm_stop_already_complete(result)
 
 
+def test_batch_preflight_accepts_current_healthy_transport_schema() -> None:
+    assert profiler.local_transport_is_currently_healthy(
+        {
+            "health_state": "degraded",
+            "reasons": ["engine_evidence_stale"],
+            "transport": {"status": "healthy"},
+            "spool": {"pending_count": 0},
+        }
+    )
+    assert not profiler.local_transport_is_currently_healthy(
+        {
+            "transport": {"status": "degraded"},
+            "spool": {"pending_count": 0},
+        }
+    )
+
+
 def test_manifest_moves_legacy_metric_out_of_hard_targeting() -> None:
     manifest = profiler.sla_manifest()
     assert profiler.metric_is_diagnostic(manifest, "warm_session_created_to_card_paint_ms")
