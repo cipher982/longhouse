@@ -609,7 +609,7 @@ fn register(
     permission_mode: &str,
 ) -> anyhow::Result<ManagedLaunchResponse> {
     let (url, token, machine_name) = registration_credentials(config)?;
-    let payload = crate::managed_launch_payload::ManagedLaunchRegistration {
+    let mut payload = crate::managed_launch_payload::ManagedLaunchRegistration {
         provider: "cursor",
         cwd,
         project: config.project.as_deref(),
@@ -626,6 +626,14 @@ fn register(
         extra: vec![("session_id", json!(session_id))],
     }
     .to_json();
+    let (launch_actor, launch_surface) =
+        crate::managed_launch_payload::interactive_human_shell_provenance();
+    if let Some(actor) = launch_actor {
+        payload["launch_actor"] = json!(actor);
+    }
+    if let Some(surface) = launch_surface {
+        payload["launch_surface"] = json!(surface);
+    }
     let runtime = tokio::runtime::Runtime::new()?;
     let response = crate::managed_launch_lifecycle::register_managed_launch(
         &runtime,

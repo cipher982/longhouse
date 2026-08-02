@@ -18,6 +18,7 @@
 //! everybody.
 
 use serde_json::{json, Value};
+use std::io::IsTerminal;
 use std::path::Path;
 use std::process::Command;
 
@@ -54,6 +55,42 @@ impl PermissionMode {
         } else {
             PermissionMode::RemoteApprove
         }
+    }
+}
+
+/// Return provenance for a provider launched from an attached human terminal.
+/// Managed Helm launchers share this contract so durable ingest can safely
+/// promote their first content into the default timeline.
+pub fn interactive_human_shell_provenance() -> (Option<&'static str>, Option<&'static str>) {
+    let hidden = std::env::var("LONGHOUSE_ORIGIN_KIND")
+        .ok()
+        .is_some_and(|value| !value.trim().is_empty());
+    let sidechain = matches!(
+        std::env::var("LONGHOUSE_IS_SIDECHAIN")
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase()
+            .as_str(),
+        "1" | "true" | "yes" | "on"
+    );
+    human_shell_provenance_for_terminal(
+        std::io::stdin().is_terminal(),
+        std::io::stdout().is_terminal(),
+        hidden,
+        sidechain,
+    )
+}
+
+fn human_shell_provenance_for_terminal(
+    stdin_is_terminal: bool,
+    stdout_is_terminal: bool,
+    hidden: bool,
+    sidechain: bool,
+) -> (Option<&'static str>, Option<&'static str>) {
+    if stdin_is_terminal && stdout_is_terminal && !hidden && !sidechain {
+        (Some("human_shell"), Some("terminal"))
+    } else {
+        (None, None)
     }
 }
 
@@ -181,6 +218,30 @@ mod tests {
             "remote_approve"
         );
         assert_eq!(PermissionMode::ProviderLocal.as_wire(), "provider_local");
+    }
+
+    #[test]
+    fn human_shell_provenance_requires_visible_terminal_and_no_hidden_origin() {
+        assert_eq!(
+            human_shell_provenance_for_terminal(true, true, false, false),
+            (Some("human_shell"), Some("terminal"))
+        );
+        for (stdin_is_terminal, stdout_is_terminal, hidden, sidechain) in [
+            (false, true, false, false),
+            (true, false, false, false),
+            (true, true, true, false),
+            (true, true, false, true),
+        ] {
+            assert_eq!(
+                human_shell_provenance_for_terminal(
+                    stdin_is_terminal,
+                    stdout_is_terminal,
+                    hidden,
+                    sidechain,
+                ),
+                (None, None)
+            );
+        }
     }
 
     #[test]
