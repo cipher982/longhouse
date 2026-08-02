@@ -6870,7 +6870,16 @@ class CatalogStore:
                 connection.execute(
                     update(table)
                     .where(table.c.projector == projector, table.c.session_id == session_key)
-                    .values(desired_revision=desired_revision, commit_seq=commit_seq, updated_at=commit_time)
+                    .values(
+                        desired_revision=desired_revision,
+                        status="idle",
+                        failure_count=0,
+                        last_error_code=None,
+                        last_error_message=None,
+                        retry_at=None,
+                        commit_seq=commit_seq,
+                        updated_at=commit_time,
+                    )
                 )
             updated = (
                 connection.execute(select(table).where(table.c.projector == projector, table.c.session_id == session_key)).mappings().one()
@@ -6929,6 +6938,7 @@ class CatalogStore:
             eligible_predicates = [
                 table.c.projector == projector,
                 table.c.desired_revision > table.c.completed_revision,
+                table.c.status != "quarantined",
                 or_(table.c.claim_expires_at.is_(None), table.c.claim_expires_at <= now),
                 or_(table.c.retry_at.is_(None), table.c.retry_at <= now),
             ]
@@ -7076,6 +7086,11 @@ class CatalogStore:
                 return {"claim_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
             commit_time = datetime.now(UTC)
             commit_seq = _advance_commit_seq(connection, commit_time)
+            # Corrupt render objects are isolated from the hot retry queue.
+            # Other permanent errors, such as a tenant embedding-model
+            # mismatch, retain their explicit retry policy so configuration
+            # repair can recover them without changing projector state.
+            permanent = error_code == "render_object_permanent"
             connection.execute(
                 update(table)
                 .where(table.c.projector == projector, table.c.session_id == session_key)
@@ -7084,11 +7099,11 @@ class CatalogStore:
                     claim_token=None,
                     worker_id=None,
                     claim_expires_at=None,
-                    status="failed",
+                    status="quarantined" if permanent else "failed",
                     failure_count=int(row["failure_count"] or 0) + 1,
                     last_error_code=error_code,
                     last_error_message=error_message,
-                    retry_at=retry_at,
+                    retry_at=None if permanent else retry_at,
                     last_failure_token=claim_token,
                     commit_seq=commit_seq,
                     updated_at=commit_time,

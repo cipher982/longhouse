@@ -17,6 +17,7 @@ from zerg.searchd.store import object_set_hash
 from zerg.services.render_object_workers import RenderObjectWorkerPool
 from zerg.services.render_object_workers import get_render_object_worker_pool
 from zerg.services.searchd_supervisor import get_searchd_projector_client
+from zerg.storage_v2.render_objects import RenderObjectCorruptError
 
 logger = logging.getLogger(__name__)
 
@@ -108,7 +109,11 @@ class SearchV2Projector:
         except Exception as exc:
             failure_count = int(state.get("failure_count", 0)) if isinstance(state, dict) else 0
             retry_seconds = min(300, 5 * (2 ** min(failure_count, 6)))
-            code = exc.code if isinstance(exc, SearchProjectionError) else "projection_failed"
+            code = (
+                "render_object_permanent"
+                if isinstance(exc, RenderObjectCorruptError)
+                else (exc.code if isinstance(exc, SearchProjectionError) else "projection_failed")
+            )
             message = str(exc)[:2_048] or type(exc).__name__
             session_value = state.get("session_id") if isinstance(state, dict) else None
             if isinstance(session_value, str):
@@ -122,7 +127,11 @@ class SearchV2Projector:
                         "error_code": code,
                         "error_message": message,
                         "failed_at": failed_at.isoformat(),
-                        "retry_at": (failed_at + timedelta(seconds=retry_seconds)).isoformat(),
+                        "retry_at": (
+                            failed_at.isoformat()
+                            if code.endswith("_permanent")
+                            else (failed_at + timedelta(seconds=retry_seconds)).isoformat()
+                        ),
                     },
                 )
             logger.warning("Search-v2 projection failed session=%s code=%s error=%s", session_value, code, message)

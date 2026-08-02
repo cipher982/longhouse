@@ -291,6 +291,75 @@ async def test_projector_state_coalesces_claims_completion_failure_and_restart(d
 
 
 @pytest.mark.asyncio
+async def test_permanent_projector_failure_is_quarantined_until_revision_advances(daemon_paths):
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    session_id = str(uuid4())
+    projector = "search-v2"
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        advance = {
+            "projector": projector,
+            "session_id": session_id,
+            "desired_revision": 1,
+            "observed_at": now.isoformat(),
+        }
+        await client.call("projector.state.advance.v2", advance)
+        claim_token = str(uuid4())
+        claim = {
+            "projector": projector,
+            "worker_id": "worker-a",
+            "claim_token": claim_token,
+            "now": now.isoformat(),
+            "lease_seconds": 60,
+            "limit": 10,
+        }
+        claimed = await client.call("projector.state.claim.v2", claim)
+        assert claimed["claimed"][0]["claimed_revision"] == "1"
+
+        failed = await client.call(
+            "projector.state.fail.v2",
+            {
+                "projector": projector,
+                "session_id": session_id,
+                "claim_token": claim_token,
+                "error_code": "render_object_permanent",
+                "error_message": "render object shape/version is invalid",
+                "failed_at": now.isoformat(),
+                "retry_at": now.isoformat(),
+            },
+        )
+        assert failed["state"]["status"] == "quarantined"
+        assert failed["state"]["retry_at"] is None
+
+        parked = await client.call(
+            "projector.state.claim.v2",
+            {**claim, "claim_token": str(uuid4()), "now": (now + timedelta(hours=1)).isoformat()},
+        )
+        assert parked["claimed"] == []
+
+        advanced = await client.call(
+            "projector.state.advance.v2",
+            {**advance, "desired_revision": 2, "observed_at": (now + timedelta(hours=1)).isoformat()},
+        )
+        assert advanced["state"]["status"] == "idle"
+        recovered = await client.call(
+            "projector.state.claim.v2",
+            {
+                **claim,
+                "claim_token": str(uuid4()),
+                "now": (now + timedelta(hours=1)).isoformat(),
+            },
+        )
+        assert recovered["claimed"][0]["claimed_revision"] == "2"
+    finally:
+        await client.close()
+        await daemon.close()
+
+
+@pytest.mark.asyncio
 async def test_search_projector_claims_newest_revision_first_without_changing_other_projectors(daemon_paths):
     database_path, socket_path = daemon_paths
     now = datetime.now(UTC).replace(microsecond=0)

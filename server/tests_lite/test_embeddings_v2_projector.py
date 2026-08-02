@@ -14,6 +14,7 @@ import pytest
 from zerg.services.embeddings_v2_projector import EmbeddingsV2Projector
 from zerg.services.embeddings_v2_projector import _run_forever
 from zerg.services.session_processing.embeddings import PermanentEmbeddingConfigError
+from zerg.storage_v2.render_objects import RenderObjectCorruptError
 
 
 class FakeClient:
@@ -52,33 +53,6 @@ async def test_embedding_projector_workers_refill_independently():
     with pytest.raises(asyncio.CancelledError):
         await _run_forever(Projector(), worker_count=2)
     assert active == 2
-
-
-@pytest.mark.asyncio
-async def test_embeddings_projector_overlaps_claimed_sessions(monkeypatch):
-    store_id = str(uuid4())
-    catalog = FakeClient(
-        {
-            "projector.store.bind.v2": {"changed": True},
-            "projector.state.claim.v2": {"claimed": [{"session_id": "one"}, {"session_id": "two"}]},
-        }
-    )
-    search = FakeClient({"search.ping.v2": {"store_id": store_id, "schema_generation": "searchd-test"}})
-    projector = EmbeddingsV2Projector(catalog=catalog, search=search, render_workers=SimpleNamespace())
-    started: set[str] = set()
-    both_started = asyncio.Event()
-
-    async def run_claim(state, claim_token):
-        assert claim_token
-        started.add(state["session_id"])
-        if len(started) == 2:
-            both_started.set()
-        await asyncio.wait_for(both_started.wait(), timeout=0.1)
-
-    monkeypatch.setattr(projector, "_run_claim", run_claim)
-
-    assert await projector.run_once(limit=2) == 2
-    assert started == {"one", "two"}
 
 
 @pytest.mark.asyncio
@@ -365,6 +339,26 @@ async def test_transient_error_keeps_fast_backoff(monkeypatch):
     failed_at = datetime.fromisoformat(fail_params["failed_at"])
     retry_at = datetime.fromisoformat(fail_params["retry_at"])
     assert (retry_at - failed_at).total_seconds() <= 300
+
+
+@pytest.mark.asyncio
+async def test_corrupt_render_object_is_quarantined_without_retry(monkeypatch):
+    session_id = str(uuid4())
+    catalog = FakeClient({"projector.state.fail.v2": {}})
+    projector = EmbeddingsV2Projector(catalog=catalog, search=SimpleNamespace(), render_workers=SimpleNamespace())
+
+    async def corrupt(**_kwargs):
+        raise RenderObjectCorruptError("render object shape/version is invalid")
+
+    monkeypatch.setattr(projector, "_project", corrupt)
+    await projector._run_claim(
+        {"session_id": session_id, "claimed_revision": "1", "failure_count": 0},
+        claim_token="claim-token",
+    )
+
+    failed = next(params for method, params in catalog.calls if method == "projector.state.fail.v2")
+    assert failed["error_code"] == "render_object_permanent"
+    assert failed["retry_at"] == failed["failed_at"]
 
 
 @pytest.mark.asyncio

@@ -21,6 +21,7 @@ from zerg.services.session_processing.embeddings import PermanentEmbeddingConfig
 from zerg.services.session_processing.embeddings import embedding_to_bytes
 from zerg.services.session_processing.embeddings import generate_embeddings
 from zerg.services.session_processing.embeddings import iter_turn_chunks
+from zerg.storage_v2.render_objects import RenderObjectCorruptError
 
 logger = logging.getLogger(__name__)
 PROJECTOR = "embeddings-v1"
@@ -118,23 +119,37 @@ class EmbeddingsV2Projector:
             # genuinely transient and should keep retrying quickly, so this
             # must check the specific subclass, not ValueError broadly.
             is_permanent = isinstance(exc, PermanentEmbeddingConfigError)
+            is_render_permanent = isinstance(exc, RenderObjectCorruptError)
             if isinstance(session_id, str):
                 failures = int(state.get("failure_count", 0)) if isinstance(state, dict) else 0
                 failed_at = datetime.now(UTC)
-                retry_delay = timedelta(hours=24) if is_permanent else timedelta(seconds=min(300, 5 * 2 ** min(failures, 6)))
+                retry_delay = (
+                    timedelta(hours=24)
+                    if is_permanent
+                    else timedelta(0)
+                    if is_render_permanent
+                    else timedelta(seconds=min(300, 5 * 2 ** min(failures, 6)))
+                )
+                error_code = (
+                    "render_object_permanent"
+                    if is_render_permanent
+                    else ("embedding_config_permanent" if is_permanent else "embedding_projection_failed")
+                )
                 await self.catalog.call(
                     "projector.state.fail.v2",
                     {
                         "projector": PROJECTOR,
                         "session_id": session_id,
                         "claim_token": claim_token,
-                        "error_code": "embedding_config_permanent" if is_permanent else "embedding_projection_failed",
+                        "error_code": error_code,
                         "error_message": str(exc)[:2048] or type(exc).__name__,
                         "failed_at": failed_at.isoformat(),
-                        "retry_at": (failed_at + retry_delay).isoformat(),
+                        "retry_at": (failed_at.isoformat() if is_render_permanent else (failed_at + retry_delay).isoformat()),
                     },
                 )
-            (logger.error if is_permanent else logger.warning)("Embedding projection failed session=%s error=%s", session_id, exc)
+            (logger.error if is_permanent or is_render_permanent else logger.warning)(
+                "Embedding projection failed session=%s error=%s", session_id, exc
+            )
 
     async def _project(self, *, session_id: str, claimed_revision: int) -> bool:
         from zerg.models_config import get_embedding_config
