@@ -9,6 +9,7 @@ from uuid import uuid4
 import numpy as np
 import pytest
 
+from zerg.services.embeddings_v2_projector import PROJECTOR_LEASE_SECONDS
 from zerg.services.embeddings_v2_projector import EmbeddingsV2Projector
 from zerg.services.embeddings_v2_projector import _run_forever
 from zerg.services.local_embedder import LocalEmbedderUnavailable
@@ -145,6 +146,8 @@ async def test_embeddings_projector_overlaps_claimed_sessions(monkeypatch):
 
     assert await projector.run_once(limit=2) == 2
     assert started == {"one", "two"}
+    claim_call = next(params for method, params in catalog.calls if method == "projector.state.claim.v2")
+    assert claim_call["lease_seconds"] == PROJECTOR_LEASE_SECONDS == 900
 
 
 @pytest.mark.asyncio

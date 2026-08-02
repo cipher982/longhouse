@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 PROJECTOR = EMBEDDING_PROJECTOR_ID
 SOURCE_PAGE_SIZE = 1_000
 PROJECTOR_WORKERS = max(1, int(os.getenv("LONGHOUSE_EMBEDDING_PROJECTOR_WORKERS", "4")))
+PROJECTOR_LEASE_SECONDS = max(300, int(os.getenv("LONGHOUSE_EMBEDDING_PROJECTOR_LEASE_SECONDS", "900")))
 
 
 class EmbeddingPublicationPending(RuntimeError):
@@ -55,7 +56,7 @@ class EmbeddingsV2Projector:
                 "worker_id": self.worker_id,
                 "claim_token": claim_token,
                 "now": observed_at.isoformat(),
-                "lease_seconds": 300,
+                "lease_seconds": PROJECTOR_LEASE_SECONDS,
                 "limit": limit,
             },
         )
