@@ -7182,27 +7182,48 @@ class CatalogStore:
             ]
             if projector != "search-v2":
                 eligible_predicates.append(~select(tombstones.c.session_id).where(tombstones.c.session_id == table.c.session_id).exists())
-            if projector == "search-v2":
-                claim_order = (table.c.desired_revision.desc(), table.c.session_id.asc())
-            elif projector == EMBEDDING_PROJECTOR_ID:
+            if projector == EMBEDDING_PROJECTOR_ID:
                 search_state = table.alias("search_state")
-                search_published = (
-                    select(search_state.c.session_id)
-                    .where(
-                        search_state.c.projector == "search-v2",
-                        search_state.c.session_id == table.c.session_id,
-                        search_state.c.completed_revision >= search_state.c.desired_revision,
+                published = (
+                    connection.execute(
+                        select(table)
+                        .join(
+                            search_state,
+                            and_(
+                                search_state.c.projector == "search-v2",
+                                search_state.c.session_id == table.c.session_id,
+                                search_state.c.completed_revision >= search_state.c.desired_revision,
+                            ),
+                        )
+                        .where(*eligible_predicates)
+                        .order_by(table.c.session_id.asc())
+                        .limit(limit)
                     )
-                    .exists()
+                    .mappings()
+                    .all()
                 )
-                claim_order = (
-                    case((search_published, 0), else_=1),
-                    table.c.updated_at.asc(),
-                    table.c.session_id.asc(),
+                selected_session_ids = [str(row["session_id"]) for row in published]
+                remaining = limit - len(published)
+                fallback_predicates = [*eligible_predicates]
+                if selected_session_ids:
+                    fallback_predicates.append(table.c.session_id.notin_(selected_session_ids))
+                fallback = (
+                    connection.execute(select(table).where(*fallback_predicates).order_by(table.c.session_id.asc()).limit(remaining))
+                    .mappings()
+                    .all()
+                    if remaining > 0
+                    else []
                 )
+                eligible = [*published, *fallback]
             else:
-                claim_order = (table.c.updated_at.asc(), table.c.session_id.asc())
-            eligible = connection.execute(select(table).where(*eligible_predicates).order_by(*claim_order).limit(limit)).mappings().all()
+                claim_order = (
+                    (table.c.desired_revision.desc(), table.c.session_id.asc())
+                    if projector == "search-v2"
+                    else (table.c.updated_at.asc(), table.c.session_id.asc())
+                )
+                eligible = (
+                    connection.execute(select(table).where(*eligible_predicates).order_by(*claim_order).limit(limit)).mappings().all()
+                )
             if not eligible:
                 return {
                     "claimed": [],

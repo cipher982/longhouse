@@ -410,7 +410,7 @@ async def test_embedding_projector_claims_search_published_sessions_first(daemon
                 "claim_token": str(uuid4()),
                 "now": (now + timedelta(seconds=4)).isoformat(),
                 "lease_seconds": 60,
-                "limit": 1,
+                "limit": 2,
             },
         )
         render_claim = await client.call(
@@ -425,7 +425,7 @@ async def test_embedding_projector_claims_search_published_sessions_first(daemon
             },
         )
 
-        assert embedding_claim["claimed"][0]["session_id"] == published_session
+        assert [row["session_id"] for row in embedding_claim["claimed"]] == [published_session, inactive_session]
         assert render_claim["claimed"][0]["session_id"] == inactive_session
     finally:
         await client.close()
