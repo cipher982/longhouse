@@ -85,6 +85,7 @@ _NO_TOKEN_AUTH_ENV_NAMES = frozenset(
     }
 )
 _NO_TOKEN_AUTH_FLAG_ENV_NAMES = frozenset({"CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX"})
+_NO_TOKEN_FALSE_FLAG_VALUES = frozenset({"0", "false", "no", "off"})
 _NO_TOKEN_SCRUB_ENV_NAMES = _NO_TOKEN_AUTH_ENV_NAMES | frozenset(
     {
         "ANTHROPIC_BASE_URL",
@@ -128,7 +129,7 @@ def _no_token_environment() -> dict[str, str]:
     credentials = []
     for name in sorted(_NO_TOKEN_AUTH_ENV_NAMES):
         value = str(os.environ.get(name) or "").strip()
-        if value and (name not in _NO_TOKEN_AUTH_FLAG_ENV_NAMES or value.lower() in {"1", "true", "yes", "on"}):
+        if value and (name not in _NO_TOKEN_AUTH_FLAG_ENV_NAMES or value.casefold() not in _NO_TOKEN_FALSE_FLAG_VALUES):
             credentials.append(name)
     if credentials:
         raise RuntimeError("live_no_token requires a credential-free environment; found: " + ", ".join(credentials))
