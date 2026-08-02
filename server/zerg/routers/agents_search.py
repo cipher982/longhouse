@@ -200,6 +200,7 @@ async def search_storage_v2_episode_embeddings(
     provider: str | None = None,
     exclude_environments: list[str] | None = None,
     since_iso: str | None = None,
+    environment: str | None = None,
 ) -> list[_DenseEpisodeHit]:
     """Query the derived dense index through searchd, never its SQLite file.
 
@@ -223,6 +224,7 @@ async def search_storage_v2_episode_embeddings(
             "limit": min(200, max(1, limit)),
             "project": project,
             "provider": provider,
+            "environment": environment,
             "exclude_environments": exclude_environments,
             "since_iso": since_iso,
         },
@@ -305,6 +307,7 @@ async def _semantic_recall_matches(
     max_results: int,
     timeout_seconds: float,
     owner_id: int | None = None,
+    environment: Optional[str] = None,
 ) -> list[RecallMatch]:
     """Dense recall over episode-level embeddings via searchd's episode_embeddings.
 
@@ -360,6 +363,7 @@ async def _semantic_recall_matches(
             timeout_seconds=timeout_seconds,
             project=project,
             provider=provider,
+            environment=environment,
             exclude_environments=exclude_environments or None,
             since_iso=since_iso,
         )
@@ -412,6 +416,50 @@ async def _semantic_recall_matches(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={"code": "dense_timed_out", "message": "Dense recall exceeded its execution budget."},
         ) from None
+
+
+async def search_storage_v2_semantic_sessions(
+    *,
+    owner_id: int,
+    query: str,
+    project: str | None,
+    provider: str | None,
+    environment: str | None,
+    days_back: int,
+    limit: int,
+    include_test: bool,
+) -> list[SessionResponse]:
+    """Return full session views ranked by the actual resident dense lane."""
+
+    matches = await _semantic_recall_matches(
+        query=query,
+        project=project,
+        provider=provider,
+        environment=environment,
+        since_days=days_back,
+        include_test=include_test,
+        include_automation=False,
+        max_results=limit,
+        timeout_seconds=RECALL_ROUTE_TIMEOUT_SECONDS,
+        owner_id=owner_id,
+    )
+    projected = await asyncio.gather(
+        *(asyncio.to_thread(read_live_catalog_session, UUID(match.session_id), owner_id=owner_id) for match in matches)
+    )
+    sessions: list[SessionResponse] = []
+    for (session, _provider_alias, _commit_seq), match in zip(projected, matches, strict=True):
+        if session is None or session.user_hidden_from_timeline or session.user_messages <= 0:
+            continue
+        if environment is not None and session.environment != environment:
+            continue
+        if not include_test and session.environment in {"test", "e2e"}:
+            continue
+        if session.environment == "automation":
+            continue
+        sessions.append(session.model_copy(update={"match_score": match.score}))
+        if len(sessions) >= limit:
+            break
+    return sessions
 
 
 # Hydration gets its own slice of the request rather than the remainder. A lane
@@ -561,11 +609,21 @@ def _finalize_recall_evidence(matches: list[RecallMatch]) -> None:
     """Make every wire status an explicit, internally consistent fact."""
 
     for match in matches:
-        if match.evidence_status == "complete" and not match.evidence:
+        has_evidence = bool(match.evidence)
+        has_context = bool(match.context)
+        if match.evidence_status == "complete" and (not has_evidence or not has_context):
             match.evidence_status = "partial"
-            match.evidence_reason = "complete_without_materialized_anchor"
-        elif match.evidence_status in {"partial", "unavailable"} and not match.evidence_reason:
+            match.evidence_reason = "complete_without_materialized_evidence"
+        if match.evidence_status == "partial" and not (has_evidence or has_context):
+            match.evidence_status = "unavailable"
+            match.evidence_reason = match.evidence_reason or "partial_without_materialized_evidence"
+        if match.evidence_status == "unavailable" and (has_evidence or has_context):
+            match.evidence_status = "partial"
+            match.evidence_reason = match.evidence_reason or "context_unavailable"
+        if match.evidence_status in {"partial", "unavailable"} and not match.evidence_reason:
             match.evidence_reason = f"{match.evidence_status}_without_reason"
+        if match.evidence_status == "not_requested":
+            match.evidence_reason = None
 
 
 def _anchor_excerpt(match: RecallMatch) -> str | None:
@@ -670,7 +728,7 @@ async def semantic_search_sessions(
             },
         )
     with timing.span("search_query"):
-        sessions = await search_storage_v2_sessions(
+        sessions = await search_storage_v2_semantic_sessions(
             owner_id=_catalog_owner_id(_auth),
             query=query,
             project=project,
@@ -679,7 +737,6 @@ async def semantic_search_sessions(
             days_back=days_back,
             limit=limit,
             include_test=include_test,
-            hide_autonomous=True,
         )
     # Machine surface: identity and provenance, none of the browser's control
     # or presentation state. Ten full session payloads exceeded the MCP token

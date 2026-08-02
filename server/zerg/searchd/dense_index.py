@@ -301,6 +301,7 @@ class ResidentEpisodeIndex:
         limit: int,
         project: str | None = None,
         provider: str | None = None,
+        environment: str | None = None,
         exclude_environments: list[str] | None = None,
         since_iso: str | None = None,
     ) -> list[dict[str, object]]:
@@ -315,6 +316,8 @@ class ResidentEpisodeIndex:
             keep &= snapshot.projects == project
         if provider:
             keep &= snapshot.providers == provider
+        if environment:
+            keep &= snapshot.environments == environment
         if exclude_environments:
             for environment in exclude_environments:
                 keep &= snapshot.environments != environment

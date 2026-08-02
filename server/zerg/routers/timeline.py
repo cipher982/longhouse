@@ -18,6 +18,7 @@ from datetime import timedelta
 from datetime import timezone
 from threading import Lock
 from time import monotonic
+from types import SimpleNamespace
 from typing import Optional
 from uuid import UUID
 
@@ -69,7 +70,6 @@ from zerg.services.session_shares import SessionShareError
 from zerg.services.session_shares import resolve_session_share
 from zerg.services.session_views import DemoSeedResponse
 from zerg.services.session_views import FiltersResponse
-from zerg.services.session_views import RecallMatch
 from zerg.services.session_views import RecallResponse
 from zerg.services.session_views import SemanticSearchResponse
 from zerg.services.session_views import SessionActionRequest
@@ -324,55 +324,37 @@ async def semantic_search_timeline_sessions(
     days_back: int = Query(14, ge=1, le=365, description="Days to look back"),
     limit: int = Query(10, ge=1, le=50, description="Max results"),
     context_mode: str = Query("forensic", description="Context projection mode: forensic|active_context"),
-    db: Session | None = Depends(_sessions_router.session_detail_db_dependency),
     current_user=Depends(get_current_browser_user),
 ):
     timing = ServerTimingRecorder(surface="search")
-    if database_module.live_catalog_enabled():
-        with timing.span("search_query"):
-            searched = await _search_storage_v2_timeline(
-                owner_id=int(current_user.id),
-                params=TimelineSessionListParams(
-                    project=project,
-                    provider=provider,
-                    environment=environment,
-                    include_test=include_test,
-                    hide_autonomous=True,
-                    include_automation=False,
-                    device_id=None,
-                    days_back=days_back,
-                    query=query,
-                    limit=limit,
-                    offset=0,
-                    sort="relevance",
-                    mode="lexical",
-                    context_mode=context_mode,
-                ),
-            )
-        sessions = [card.head for card in searched.sessions]
-        result = SemanticSearchResponse(sessions=sessions, total=searched.total, has_real_sessions=bool(sessions))
-        timing.apply(response)
-        return result
-    assert db is not None
-    return await _search_router.semantic_search_sessions(
-        response=response,
-        query=query,
-        project=project,
-        provider=provider,
-        environment=environment,
-        include_test=include_test,
-        days_back=days_back,
-        limit=limit,
-        context_mode=context_mode,
-        db=db,
-        _auth=None,
-        _single=None,
-    )
+    if context_mode != "forensic":
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "search_mode_unsupported",
+                "message": "Storage-v2 search does not yet project active-context boundaries.",
+            },
+        )
+    with timing.span("search_query"):
+        sessions = await _search_router.search_storage_v2_semantic_sessions(
+            owner_id=int(current_user.id),
+            query=query,
+            project=project,
+            provider=provider,
+            environment=environment,
+            include_test=include_test,
+            days_back=days_back,
+            limit=limit,
+        )
+    result = SemanticSearchResponse(sessions=sessions, total=len(sessions), has_real_sessions=bool(sessions))
+    timing.apply(response)
+    return result
 
 
 @router.get("/recall", response_model=RecallResponse)
 async def recall_timeline_sessions(
     request: Request,
+    response: Response,
     query: str = Query(..., description="What to search for"),
     project: Optional[str] = Query(None, description="Filter by project"),
     provider: Optional[str] = Query(None, description="Filter by provider"),
@@ -381,61 +363,16 @@ async def recall_timeline_sessions(
     max_results: int = Query(5, ge=1, le=25, description="Max matches"),
     context_turns: int = Query(2, ge=0, le=10, description="Context turns before/after match"),
     context_mode: str = Query("forensic", description="Context projection mode: forensic|active_context"),
-    db: Session | None = Depends(_sessions_router.session_detail_db_dependency),
     current_user=Depends(get_current_browser_user),
 ):
-    if database_module.live_catalog_enabled():
-        search = get_searchd_client()
-        if search is None:
-            raise HTTPException(
-                status_code=503,
-                detail={"code": "search_unavailable", "message": "The derived search index is unavailable."},
-            )
-        now = datetime.now(timezone.utc)
-        try:
-            result = await search.call(
-                "search.query.v2",
-                {
-                    "owner_id": str(current_user.id),
-                    "query": query,
-                    "project": project,
-                    "provider": provider,
-                    "environment": None,
-                    "window_start_us": int((now - timedelta(days=since_days)).timestamp() * 1_000_000),
-                    "window_end_us": None,
-                    "limit": max_results,
-                },
-            )
-        except (CatalogRemoteError, CatalogUnavailable) as exc:
-            raise HTTPException(
-                status_code=503,
-                detail={"code": "search_unavailable", "message": "The derived search index is unavailable."},
-            ) from exc
-        matches = []
-        for row in result.get("results") or []:
-            if not isinstance(row, dict):
-                continue
-            snippet = str(row.get("content_snippet") or row.get("tool_output_snippet") or "")
-            matches.append(
-                RecallMatch(
-                    session_id=str(row["session_id"]),
-                    chunk_index=int(row.get("record_ordinal") or 0),
-                    score=1.0 / (1.0 + abs(float(row.get("rank") or 0.0))),
-                    context_text=snippet or None,
-                    evidence=snippet or None,
-                    total_events=0,
-                    context=[],
-                    # This path returns the match snippet and never hydrates
-                    # neighbour turns, so it is partial by construction rather
-                    # than by anything going wrong.
-                    evidence_status="partial",
-                    evidence_reason="snippet_only",
-                )
-            )
-        return RecallResponse(matches=matches, total=len(matches))
-    assert db is not None
+    # The browser is a presentation client of the canonical machine surface.
+    # Keeping a second lexical-only implementation here made the web panel's
+    # "search by meaning" claim false even while /api/agents/recall served the
+    # local dense lane correctly. Delegate with the browser user's owner scope;
+    # typed coverage/unavailability failures must reach the UI unchanged.
     return await _search_router.recall_sessions(
         request=request,
+        response=response,
         query=query,
         project=project,
         provider=provider,
@@ -444,8 +381,9 @@ async def recall_timeline_sessions(
         max_results=max_results,
         context_turns=context_turns,
         context_mode=context_mode,
-        db=db,
-        _auth=None,
+        include_automation=False,
+        mode="auto",
+        _auth=SimpleNamespace(owner_id=current_user.id),
         _single=None,
     )
 

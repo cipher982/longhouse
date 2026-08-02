@@ -23,6 +23,7 @@ os.environ.setdefault("TESTING", "1")
 
 from zerg.routers import agents_search
 from zerg.services.session_views import RecallMatch
+from zerg.services.session_views import RecallResponse
 
 
 def _timing() -> dict[str, float | int]:
@@ -46,6 +47,92 @@ def test_internal_locator_never_reaches_the_wire():
 
     assert match.start_order_time_us == 1785605093280000
     assert "start_order_time_us" not in match.model_dump()
+
+
+def test_finalizer_normalizes_evidence_states_into_one_truthful_algebra():
+    complete_without_context = RecallMatch(
+        session_id=str(uuid4()),
+        chunk_index=0,
+        score=0.5,
+        evidence="matching snippet",
+        evidence_status="complete",
+    )
+    unavailable_with_material = RecallMatch(
+        session_id=str(uuid4()),
+        chunk_index=0,
+        score=0.4,
+        evidence="matching snippet",
+        evidence_status="unavailable",
+        evidence_reason="context_unavailable",
+    )
+    partial_without_material = RecallMatch(
+        session_id=str(uuid4()),
+        chunk_index=0,
+        score=0.3,
+        evidence_status="partial",
+        evidence_reason="context_timed_out",
+    )
+    complete_without_material = RecallMatch(
+        session_id=str(uuid4()),
+        chunk_index=0,
+        score=0.2,
+        evidence_status="complete",
+    )
+
+    agents_search._finalize_recall_evidence(
+        [complete_without_context, unavailable_with_material, partial_without_material, complete_without_material]
+    )
+
+    assert (complete_without_context.evidence_status, complete_without_context.evidence_reason) == (
+        "partial",
+        "complete_without_materialized_evidence",
+    )
+    assert unavailable_with_material.evidence_status == "partial"
+    assert partial_without_material.evidence_status == "unavailable"
+    assert complete_without_material.evidence_status == "unavailable"
+
+
+def test_recall_response_enforces_lane_space_and_evidence_consistency():
+    valid_match = RecallMatch(
+        session_id=str(uuid4()),
+        chunk_index=0,
+        score=0.7,
+        evidence="the answer",
+        context=[{"role": "assistant", "content_text": "the answer"}],
+        evidence_status="complete",
+        retrieval_lanes=["dense"],
+        lane_ranks={"dense": 1},
+    )
+    response = RecallResponse(
+        matches=[valid_match],
+        total=1,
+        lanes=["dense"],
+        embedding_model="google/embeddinggemma-300m",
+        embedding_dims=256,
+        embedding_revision="a" * 40,
+    )
+    assert response.total == 1
+
+    with pytest.raises(ValueError, match="embedding-space identity"):
+        RecallResponse(matches=[], total=0, lanes=["dense"])
+    with pytest.raises(ValueError, match="lane attribution"):
+        RecallResponse(
+            matches=[valid_match.model_copy(update={"lane_ranks": {"lexical": 1}})],
+            total=1,
+            lanes=["dense"],
+            embedding_model="google/embeddinggemma-300m",
+            embedding_dims=256,
+            embedding_revision="a" * 40,
+        )
+    with pytest.raises(ValueError, match="complete recall evidence"):
+        RecallResponse(
+            matches=[valid_match.model_copy(update={"context": []})],
+            total=1,
+            lanes=["dense"],
+            embedding_model="google/embeddinggemma-300m",
+            embedding_dims=256,
+            embedding_revision="a" * 40,
+        )
 
 
 @pytest.mark.asyncio

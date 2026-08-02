@@ -168,5 +168,6 @@ async def test_semantic_recall_matches_uses_live_catalog_embedding_rpc(monkeypat
     assert [match.chunk_index for match in result] == [3]
     assert seen["model"] == "test-model"
     assert seen["owner_id"] == 42
+    assert seen["environment"] is None
     assert seen["exclude_environments"] == ["test", "e2e", "automation"]
     assert seen["since_iso"] is not None

@@ -800,6 +800,7 @@ async def test_dense_rpc_enforces_space_and_refreshes_after_write_and_delete(tmp
         "limit": 5,
         "project": None,
         "provider": None,
+        "environment": None,
         "exclude_environments": None,
         "since_iso": None,
     }
@@ -963,6 +964,7 @@ async def test_dense_gate_closes_until_coalesced_refresh_is_published(tmp_path):
         "limit": 5,
         "project": None,
         "provider": None,
+        "environment": None,
         "exclude_environments": None,
         "since_iso": None,
     }

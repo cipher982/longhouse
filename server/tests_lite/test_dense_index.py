@@ -83,6 +83,7 @@ def _reference_search(
     limit,
     project=None,
     provider=None,
+    environment=None,
     exclude_environments=None,
     since_iso=None,
 ):
@@ -101,6 +102,9 @@ def _reference_search(
     if provider:
         sql += " AND s.provider=?"
         params.append(provider)
+    if environment:
+        sql += " AND s.environment=?"
+        params.append(environment)
     if exclude_environments:
         sql += f" AND s.environment NOT IN ({','.join('?' for _ in exclude_environments)})"
         params.extend(exclude_environments)
@@ -109,10 +113,7 @@ def _reference_search(
         params.append(since_iso)
     rows = connection.execute(sql, params).fetchall()
     ranked = sorted(
-        (
-            (float(np.frombuffer(row["embedding"], dtype="float32") @ query), str(row["session_id"]))
-            for row in rows
-        ),
+        ((float(np.frombuffer(row["embedding"], dtype="float32") @ query), str(row["session_id"])) for row in rows),
         reverse=True,
     )
     return [session_id for _score, session_id in ranked[:limit]]
@@ -363,8 +364,12 @@ def test_matches_the_sql_path_on_random_corpora(tmp_path):
     index, connection = _index(tmp_path, rows)
     try:
         query = _unit([rng.random() for _ in range(DIMS)])
-        for project, provider, excluded, since in itertools.product(
-            [None, "zerg"], [None, "claude"], [None, ["test"], ["test", "development"]], [None, "2026-04-01"]
+        for project, provider, environment, excluded, since in itertools.product(
+            [None, "zerg"],
+            [None, "claude"],
+            [None, "local", "development"],
+            [None, ["test"], ["test", "development"]],
+            [None, "2026-04-01"],
         ):
             resident = index.search(
                 query,
@@ -372,6 +377,7 @@ def test_matches_the_sql_path_on_random_corpora(tmp_path):
                 limit=5,
                 project=project,
                 provider=provider,
+                environment=environment,
                 exclude_environments=excluded,
                 since_iso=since,
             )
@@ -382,11 +388,12 @@ def test_matches_the_sql_path_on_random_corpora(tmp_path):
                 limit=5,
                 project=project,
                 provider=provider,
+                environment=environment,
                 exclude_environments=excluded,
                 since_iso=since,
             )
             assert [r["session_id"] for r in resident] == reference, (
-                f"divergence for project={project} provider={provider} excluded={excluded} since={since}"
+                f"divergence for project={project} provider={provider} environment={environment} excluded={excluded} since={since}"
             )
     finally:
         connection.close()

@@ -905,7 +905,18 @@ def _embedding_source_params(value: dict) -> dict:
 def _embedding_query_params(value: dict) -> dict:
     _exact_keys(
         value,
-        {"model", "owner_id", "dims", "query_embedding", "limit", "project", "provider", "exclude_environments", "since_iso"},
+        {
+            "model",
+            "owner_id",
+            "dims",
+            "query_embedding",
+            "limit",
+            "project",
+            "provider",
+            "environment",
+            "exclude_environments",
+            "since_iso",
+        },
     )
     dims = value["dims"]
     if type(dims) is not int or not 1 <= dims <= 16_384 or type(value["limit"]) is not int or not 1 <= value["limit"] <= 200:
@@ -931,6 +942,7 @@ def _embedding_query_params(value: dict) -> dict:
         "limit": value["limit"],
         "project": _text(value["project"], "project", 255, optional=True),
         "provider": _text(value["provider"], "provider", 32, optional=True),
+        "environment": _text(value["environment"], "environment", 32, optional=True),
         "exclude_environments": exclude_environments,
         "since_iso": _text(value["since_iso"], "since_iso", 64, optional=True),
     }

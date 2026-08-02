@@ -5,10 +5,13 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI
+from fastapi import Response
 from starlette.requests import Request
 
 from zerg.routers import agents_search
 from zerg.routers import agents_sessions
+from zerg.routers import timeline
+from zerg.services.session_views import RecallResponse
 
 
 def _request(path: str) -> Request:
@@ -35,7 +38,7 @@ def test_semantic_machine_search_uses_searchd_without_legacy_db(monkeypatch):
         observed.update(kwargs)
         return []
 
-    monkeypatch.setattr(agents_search, "search_storage_v2_sessions", search_v2)
+    monkeypatch.setattr(agents_search, "search_storage_v2_semantic_sessions", search_v2)
 
     response = asyncio.run(
         agents_search.semantic_search_sessions(
@@ -55,6 +58,7 @@ def test_semantic_machine_search_uses_searchd_without_legacy_db(monkeypatch):
     assert response.total == 0
     assert observed["owner_id"] == 7
     assert observed["query"] == "database migration"
+    assert observed["environment"] is None
 
 
 def test_storage_v2_machine_search_hydrates_hits_with_owner_scope(monkeypatch):
@@ -173,6 +177,43 @@ def test_recall_rejects_unknown_query_parameters_before_search():
 
     assert exc_info.value.status_code == 422
     assert exc_info.value.detail["parameters"] == ["limti"]
+
+
+def test_browser_recall_delegates_to_canonical_auto_pipeline(monkeypatch):
+    observed = {}
+
+    async def canonical_recall(**kwargs):
+        observed.update(kwargs)
+        return RecallResponse(
+            matches=[],
+            total=0,
+            lanes=["lexical", "dense"],
+            embedding_model="google/embeddinggemma-300m",
+            embedding_dims=256,
+            embedding_revision="a" * 40,
+        )
+
+    monkeypatch.setattr(timeline._search_router, "recall_sessions", canonical_recall)
+    response = asyncio.run(
+        timeline.recall_timeline_sessions(
+            request=_request("/api/timeline/recall"),
+            response=Response(),
+            query="database migration",
+            project=None,
+            provider=None,
+            include_test=False,
+            since_days=90,
+            max_results=5,
+            context_turns=2,
+            context_mode="forensic",
+            current_user=SimpleNamespace(id=7),
+        )
+    )
+
+    assert response.lanes == ["lexical", "dense"]
+    assert observed["mode"] == "auto"
+    assert observed["include_automation"] is False
+    assert observed["_auth"].owner_id == 7
 
 
 def test_machine_session_list_query_uses_searchd_without_legacy_db(monkeypatch):

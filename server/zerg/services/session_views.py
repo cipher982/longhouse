@@ -24,6 +24,7 @@ from uuid import UUID
 from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import Field
+from pydantic import model_validator
 from sqlalchemy import and_
 from sqlalchemy import or_
 
@@ -1835,6 +1836,55 @@ class RecallResponse(BaseModel):
     embedding_model: Optional[str] = None
     embedding_dims: Optional[int] = None
     embedding_revision: Optional[str] = None
+
+    @model_validator(mode="after")
+    def validate_recall_contract(self) -> "RecallResponse":
+        if self.total != len(self.matches):
+            raise ValueError("recall total must equal the number of matches")
+        if not self.lanes or len(self.lanes) != len(set(self.lanes)):
+            raise ValueError("recall lanes must be a non-empty unique list")
+
+        lane_set = set(self.lanes)
+        embedding_identity = (self.embedding_model, self.embedding_dims, self.embedding_revision)
+        if "dense" in lane_set:
+            if any(value is None for value in embedding_identity):
+                raise ValueError("dense recall requires a complete embedding-space identity")
+            assert self.embedding_model is not None and self.embedding_dims is not None and self.embedding_revision is not None
+            if (
+                not self.embedding_model
+                or self.embedding_dims <= 0
+                or len(self.embedding_revision) != 40
+                or any(char not in "0123456789abcdef" for char in self.embedding_revision)
+            ):
+                raise ValueError("dense recall embedding-space identity is invalid")
+        elif any(value is not None for value in embedding_identity):
+            raise ValueError("lexical-only recall must not claim an embedding-space identity")
+
+        for match in self.matches:
+            match_lanes = match.retrieval_lanes
+            if (
+                not match_lanes
+                or len(match_lanes) != len(set(match_lanes))
+                or not set(match_lanes).issubset(lane_set)
+                or set(match.lane_ranks) != set(match_lanes)
+                or any(type(rank) is not int or rank <= 0 for rank in match.lane_ranks.values())
+            ):
+                raise ValueError("recall match lane attribution is inconsistent")
+
+            has_evidence = bool(match.evidence)
+            has_context = bool(match.context)
+            if match.evidence_status == "complete":
+                if not has_evidence or not has_context or match.evidence_reason is not None:
+                    raise ValueError("complete recall evidence requires an anchor, context, and no failure reason")
+            elif match.evidence_status == "partial":
+                if not (has_evidence or has_context) or not match.evidence_reason:
+                    raise ValueError("partial recall evidence requires material and a reason")
+            elif match.evidence_status == "unavailable":
+                if has_evidence or has_context or not match.evidence_reason:
+                    raise ValueError("unavailable recall evidence requires no material and a reason")
+            elif match.evidence_reason is not None or has_context:
+                raise ValueError("not-requested recall evidence cannot claim context or a failure reason")
+        return self
 
 
 class CleanupRequest(BaseModel):
