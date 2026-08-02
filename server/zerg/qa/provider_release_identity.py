@@ -17,6 +17,7 @@ from typing import Any
 from typing import Callable
 from typing import Pattern
 
+from zerg.qa import qualification_request
 from zerg.services.managed_provider_contracts import contract_for_provider
 from zerg.services.provider_capability_proof import AssertionOutcome
 from zerg.services.provider_capability_proof import EvidenceClass
@@ -128,11 +129,18 @@ def load_request(
         raise RequestError(f"invalid request JSON: {exc}") from exc
     if not isinstance(payload, dict):
         raise RequestError("request must be an object")
-    unknown = set(payload) - REQUEST_KEYS
-    if unknown:
-        raise RequestError(f"unknown request keys: {sorted(unknown)}")
-    if payload.get("schema_version") != SCHEMA_VERSION:
-        raise RequestError("schema_version must be 1")
+    schema_version = payload.get("schema_version")
+    if schema_version == qualification_request.SCHEMA_VERSION:
+        try:
+            payload = qualification_request.validate(payload, provider=provider, profile=profile)
+        except qualification_request.QualificationRequestError as exc:
+            raise RequestError(str(exc)) from exc
+    else:
+        unknown = set(payload) - REQUEST_KEYS
+        if unknown:
+            raise RequestError(f"unknown request keys: {sorted(unknown)}")
+        if schema_version != SCHEMA_VERSION:
+            raise RequestError("schema_version must be 1 or 2")
     if payload.get("provider") != provider or payload.get("profile") != profile:
         raise RequestError("unsupported provider/profile")
     for key in REQUEST_KEYS - {
@@ -441,6 +449,14 @@ def run_identity_profile(
         "execution_metadata": execution,
         "coverage_manifest": coverage,
     }
+    if request.get("schema_version") == qualification_request.SCHEMA_VERSION:
+        bundle.update(
+            {
+                "qualification_request_digest": request["semantic_digest"],
+                "qualification_request_policy": qualification_request.policy_payload(request),
+                "qualification_request_metadata": qualification_request.metadata_payload(request),
+            }
+        )
     atomic_json(output_root / "proof-bundle.json", bundle)
     return {
         "valid": True,

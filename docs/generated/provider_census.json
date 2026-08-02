@@ -7,7 +7,7 @@
     "cursor",
     "opencode"
   ],
-  "file_count": 219,
+  "file_count": 223,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -1022,6 +1022,23 @@
       ]
     },
     {
+      "path": "server/tests_lite/test_provider_interaction_probe.py",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "cursor",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_provider_interaction_semantics.py",
+      "providers": [
+        "claude",
+        "codex"
+      ]
+    },
+    {
       "path": "server/tests_lite/test_provider_live_proof.py",
       "providers": [
         "claude",
@@ -1388,6 +1405,13 @@
       ]
     },
     {
+      "path": "server/tests_lite/test_universal_agent_harness_qualification_request.py",
+      "providers": [
+        "claude",
+        "opencode"
+      ]
+    },
+    {
       "path": "server/tests_lite/test_unmanaged_snapshot_coverage.py",
       "providers": [
         "cursor",
@@ -1492,6 +1516,16 @@
       ]
     },
     {
+      "path": "server/zerg/qa/provider_interaction_probe.py",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "cursor",
+        "opencode"
+      ]
+    },
+    {
       "path": "server/zerg/qa/provider_live_canary.py",
       "providers": [
         "antigravity",
@@ -1522,6 +1556,7 @@
     {
       "path": "server/zerg/qa/universal_agent_harness.py",
       "providers": [
+        "antigravity",
         "claude",
         "codex",
         "cursor",

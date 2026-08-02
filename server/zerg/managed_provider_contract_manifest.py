@@ -132,6 +132,19 @@ _CAPABILITY_EVIDENCE_CLASSES = frozenset({"hermetic", "live_no_token", "live_tok
 _CAPABILITY_REASON_CODES = frozenset(
     {"semantic_proof_missing", "upstream_unavailable", "upstream_unknown", "longhouse_unimplemented", "policy_disabled"}
 )
+_INTERACTION_PROBE_DISPOSITIONS = frozenset({"implemented", "not_implemented", "upstream_absent", "policy_disabled"})
+_INTERACTION_PROBE_EVIDENCE_CLASSES = frozenset({"hermetic", "live_no_token", "live_token"})
+_INTERACTION_PROBE_KINDS = frozenset(
+    {
+        "durable_user_message",
+        "local_control",
+        "local_control_output",
+        "provider_system",
+        "conversation_boundary",
+        "unknown_user_input",
+    }
+)
+_INTERACTION_PROBE_SURFACES = frozenset({"helm_tui", "console", "shadow", "provider_file", "hook"})
 
 
 def _is_sha256_digest(value: object) -> bool:
@@ -374,6 +387,79 @@ def _validate_factory_contract(item: dict[str, Any]) -> None:
     for name, value in proof_profiles.items():
         if value not in _PROOF_PROFILE_VALUES:
             raise ValueError(f"managed provider contract {provider}: proof_profiles.{name} must be one of {sorted(_PROOF_PROFILE_VALUES)}")
+    _validate_interaction_probes(item)
+
+
+def _validate_interaction_probes(item: dict[str, Any]) -> None:
+    provider = str(item.get("provider") or "<unknown>")
+    probes = item.get("interaction_probes")
+    if not isinstance(probes, list) or not probes:
+        raise ValueError(f"managed provider contract {provider}: interaction_probes must be a non-empty list")
+    required_keys = {
+        "probe_id",
+        "surface",
+        "input_sequence",
+        "acknowledgement_oracle",
+        "native_sources",
+        "raw_markers",
+        "raw_output_markers",
+        "expected_interaction_kind",
+        "expected_title_eligibility",
+        "expected_model_turn",
+        "changes_provider_state",
+        "source_surface",
+        "state_mutation_scope",
+        "evidence_class",
+        "disposition",
+        "canary",
+    }
+    seen: set[str] = set()
+    for probe in probes:
+        if not isinstance(probe, dict):
+            raise ValueError(f"managed provider contract {provider}: interaction_probes entries must be objects")
+        missing = required_keys - set(probe)
+        if missing:
+            raise ValueError(f"managed provider contract {provider}: interaction probe is missing {', '.join(sorted(missing))}")
+        for field in (
+            "probe_id",
+            "surface",
+            "acknowledgement_oracle",
+            "expected_interaction_kind",
+            "source_surface",
+            "state_mutation_scope",
+            "evidence_class",
+            "disposition",
+            "canary",
+        ):
+            if not isinstance(probe[field], str) or not probe[field].strip():
+                raise ValueError(f"managed provider contract {provider}: interaction probe {field} must be a non-empty string")
+        probe_id = str(probe["probe_id"])
+        if probe_id in seen:
+            raise ValueError(f"managed provider contract {provider}: duplicate interaction probe {probe_id!r}")
+        seen.add(probe_id)
+        if probe["surface"] not in _INTERACTION_PROBE_SURFACES:
+            raise ValueError(f"managed provider contract {provider}: interaction probe {probe_id} has unknown surface {probe['surface']!r}")
+        for field in ("input_sequence", "native_sources", "raw_markers", "raw_output_markers"):
+            value = probe[field]
+            if not isinstance(value, list) or not all(isinstance(entry, str) and entry.strip() for entry in value):
+                raise ValueError(
+                    f"managed provider contract {provider}: interaction probe {probe_id}.{field} must be a non-empty string list"
+                )
+        if probe["expected_interaction_kind"] not in _INTERACTION_PROBE_KINDS:
+            raise ValueError(f"managed provider contract {provider}: interaction probe {probe_id} has unknown interaction kind")
+        if probe["source_surface"] not in _INTERACTION_PROBE_SURFACES:
+            raise ValueError(f"managed provider contract {provider}: interaction probe {probe_id} has unknown source surface")
+        if not isinstance(probe["expected_title_eligibility"], bool):
+            raise ValueError(
+                f"managed provider contract {provider}: interaction probe {probe_id}.expected_title_eligibility must be boolean"
+            )
+        for field in ("expected_model_turn", "changes_provider_state"):
+            if probe[field] is not None and not isinstance(probe[field], bool):
+                raise ValueError(f"managed provider contract {provider}: interaction probe {probe_id}.{field} must be boolean or null")
+        if probe["evidence_class"] not in _INTERACTION_PROBE_EVIDENCE_CLASSES:
+            raise ValueError(f"managed provider contract {provider}: interaction probe {probe_id}.evidence_class is invalid")
+        if probe["disposition"] not in _INTERACTION_PROBE_DISPOSITIONS:
+            raise ValueError(f"managed provider contract {provider}: interaction probe {probe_id}.disposition is invalid")
     _validate_release_channel(item)
 
 

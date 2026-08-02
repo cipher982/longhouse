@@ -48,6 +48,33 @@ class ProviderReleaseChannel:
 
 
 @dataclass(frozen=True)
+class ProviderInteractionProbe:
+    """One provider-native control interaction the factory can qualify.
+
+    These fields describe the probe and its expected semantic result. They do
+    not replace the raw provider transcript; the live canary must preserve that
+    transcript and the harness evaluates it against this contract.
+    """
+
+    probe_id: str
+    surface: str
+    input_sequence: tuple[str, ...]
+    acknowledgement_oracle: str
+    native_sources: tuple[str, ...]
+    raw_markers: tuple[str, ...]
+    raw_output_markers: tuple[str, ...]
+    expected_interaction_kind: str
+    expected_title_eligibility: bool
+    expected_model_turn: bool | None
+    changes_provider_state: bool | None
+    source_surface: str
+    state_mutation_scope: str
+    evidence_class: str
+    disposition: str
+    canary: str
+
+
+@dataclass(frozen=True)
 class ManagedProviderContract:
     provider: str
     display_name: str
@@ -67,6 +94,7 @@ class ManagedProviderContract:
     # ingest, archive, and transcript scenarios but are excluded from
     # control-proof lanes. The factory derives its provider set from this field.
     support_tier: str = "launch"
+    interaction_probes: tuple[ProviderInteractionProbe, ...] = ()
     # Facts the universal harness used to hardcode as provider name checks.
     permission_prompt_surface: bool = False
     external_event_channel: str | None = None
@@ -179,6 +207,28 @@ class ManagedProviderContract:
 
 def managed_provider_contract_from_item(item: dict[str, object]) -> ManagedProviderContract:
     release_item = dict(item.get("release_channel") or {})
+    interaction_probes = tuple(
+        ProviderInteractionProbe(
+            probe_id=str(probe["probe_id"]),
+            surface=str(probe["surface"]),
+            input_sequence=tuple(str(value) for value in probe.get("input_sequence") or ()),
+            acknowledgement_oracle=str(probe["acknowledgement_oracle"]),
+            native_sources=tuple(str(value) for value in probe.get("native_sources") or ()),
+            raw_markers=tuple(str(value) for value in probe.get("raw_markers") or ()),
+            raw_output_markers=tuple(str(value) for value in probe.get("raw_output_markers") or ()),
+            expected_interaction_kind=str(probe["expected_interaction_kind"]),
+            expected_title_eligibility=bool(probe["expected_title_eligibility"]),
+            expected_model_turn=(bool(probe["expected_model_turn"]) if probe.get("expected_model_turn") is not None else None),
+            changes_provider_state=(bool(probe["changes_provider_state"]) if probe.get("changes_provider_state") is not None else None),
+            source_surface=str(probe["source_surface"]),
+            state_mutation_scope=str(probe["state_mutation_scope"]),
+            evidence_class=str(probe["evidence_class"]),
+            disposition=str(probe["disposition"]),
+            canary=str(probe["canary"]),
+        )
+        for probe in item.get("interaction_probes") or ()
+        if isinstance(probe, dict)
+    )
     return ManagedProviderContract(
         provider=str(item["provider"]),
         display_name=str(item["display_name"]),
@@ -194,6 +244,7 @@ def managed_provider_contract_from_item(item: dict[str, object]) -> ManagedProvi
         presentation_ruleset=str(item.get("presentation_ruleset") or ""),
         proof_profiles={str(name): str(profile) for name, profile in dict(item.get("proof_profiles") or {}).items()},
         support_tier=str(item.get("support_tier") or "launch"),
+        interaction_probes=interaction_probes,
         release_channel=ProviderReleaseChannel(
             channel=str(release_item["channel"]),
             coordinate=str(release_item["coordinate"]),

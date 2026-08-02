@@ -1,0 +1,30 @@
+{
+  "auth_mode": "none",
+  "evidence_class": "hermetic",
+  "expected_executable_identity": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "expected_provider_build_granularity": "single_asset",
+  "expected_provider_build_identity": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "expected_provider_version": "2.1.219",
+  "invocation_id": "fixture-run-001",
+  "kind": "provider_qualification",
+  "longhouse_git_sha": "cccccccccccccccccccccccccccccccccccccccc",
+  "producer_class": "release_factory",
+  "producer_version": "2",
+  "profile": "claude_real_print_v1",
+  "provider": "claude",
+  "provider_bin": "/tmp/qualification/claude",
+  "release_identity": "github:anthropic:claude-code@2.1.219",
+  "release_tag": "2.1.219",
+  "run_reference": "provider-factory://claude/fixture-run-001",
+  "scenario_evidence": {
+    "claude_real_print_v1": "hermetic",
+    "interaction_semantics": "hermetic"
+  },
+  "scenario_ids": [
+    "claude_real_print_v1",
+    "interaction_semantics"
+  ],
+  "schema_version": 2,
+  "semantic_digest": "sha256:718686e24c0053df9f799511724602f6e10b87c04f1ca060dd332a7c9c576f79",
+  "trigger": "release_poll"
+}

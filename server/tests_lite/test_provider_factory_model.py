@@ -38,10 +38,11 @@ def test_orphaned_scenario_ids_are_a_subset_of_schema_scenario_ids(facts) -> Non
     assert PUSH_CODEX_COORDINATION_SCENARIO_ID not in ORPHANED_CAPABILITY_SCENARIO_IDS
 
 
-def test_default_harness_scenarios_has_22_entries(facts) -> None:
-    assert len(facts.default_harness_scenarios) == 22
+def test_default_harness_scenarios_has_23_entries(facts) -> None:
+    assert len(facts.default_harness_scenarios) == 23
     assert "probe_identity" in facts.default_harness_scenarios
     assert "managed_session_e2e" in facts.default_harness_scenarios
+    assert "interaction_semantics" in facts.default_harness_scenarios
 
 
 def test_push_harness_scenarios_is_the_smaller_ci_set(facts) -> None:

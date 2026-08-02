@@ -15,6 +15,7 @@ from typing import Any
 from typing import Callable
 
 from zerg.qa import provider_release_identity as identity
+from zerg.qa import qualification_request
 from zerg.services.provider_capability_proof import AssertionOutcome
 from zerg.services.provider_capability_proof import EvidenceClass
 from zerg.services.provider_capability_proof import ProviderCapabilityProofRecord
@@ -236,16 +237,22 @@ def run_semantic_profile(
     execution["semantic_evidence_digest"] = raw_digest
     identity.atomic_json(output_root / "execution-summary.json", execution)
     identity.atomic_json(output_root / "coverage-manifest.json", coverage)
-    identity.atomic_json(
-        output_root / "proof-bundle.json",
-        {
-            "artifact_kind": "provider_capability_proof_bundle",
-            "schema_version": 2,
-            "records": [record.serialize() for record in records],
-            "execution_metadata": execution,
-            "coverage_manifest": coverage,
-        },
-    )
+    bundle = {
+        "artifact_kind": "provider_capability_proof_bundle",
+        "schema_version": 2,
+        "records": [record.serialize() for record in records],
+        "execution_metadata": execution,
+        "coverage_manifest": coverage,
+    }
+    if request.get("schema_version") == qualification_request.SCHEMA_VERSION:
+        bundle.update(
+            {
+                "qualification_request_digest": request["semantic_digest"],
+                "qualification_request_policy": qualification_request.policy_payload(request),
+                "qualification_request_metadata": qualification_request.metadata_payload(request),
+            }
+        )
+    identity.atomic_json(output_root / "proof-bundle.json", bundle)
     return {
         "valid": True,
         "output_root": str(output_root),

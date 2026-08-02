@@ -21,6 +21,7 @@ PERF_PROOF_OUTPUT ?= artifacts/perf-proof/perf-proof.json
 .PHONY: test-antigravity-conversation-reset test-claude-conversation-reset test-codex-conversation-reset test-cursor-conversation-reset test-opencode-conversation-reset
 .PHONY: validate-dogfood-runtime test-storage-v2-b2 test-shipper-synthetic-live-bench
 .PHONY: validate-playwright-install
+.PHONY: provider-interaction-probe
 .PHONY: test-cursor-console-product-e2e cursor-observed-install-qualification
 .PHONY: profile-ios-live-console
 .PHONY: validate-native-device-entrypoints
@@ -579,6 +580,9 @@ validate-provider-cli-canaries: ## @internal Provider release canary wrapper tes
 	@python3 scripts/tests/provider-live-proof-publish.test.py
 	@python3 scripts/tests/provider-live-route-e2e.test.py
 	@$(MAKE) provider-release-proof-universal-smoke UNIVERSAL_SCENARIO="adapter_conformance action_matrix control_surface old_new_release_diff"
+
+provider-interaction-probe: ## Run the explicit provider-native interaction probe
+	@cd server && uv run python -m zerg.qa.provider_interaction_probe $(ARGS)
 
 provider-release-proof: ## Emit provider release proof artifact; set PROVIDER=... and optional PROVIDER_BIN=...
 	@set -eu; \

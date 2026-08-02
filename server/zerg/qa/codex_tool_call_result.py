@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from zerg.qa import codex_release_identity as identity_bridge
+from zerg.qa import qualification_request
 from zerg.services.managed_provider_contracts import contract_for_provider
 from zerg.services.provider_capability_proof import AssertionOutcome
 from zerg.services.provider_capability_proof import EvidenceClass
@@ -307,6 +308,14 @@ def emit_proof_bundle(
         "execution_metadata": execution,
         "coverage_manifest": coverage,
     }
+    if request.get("schema_version") == qualification_request.SCHEMA_VERSION:
+        bundle.update(
+            {
+                "qualification_request_digest": request["semantic_digest"],
+                "qualification_request_policy": qualification_request.policy_payload(request),
+                "qualification_request_metadata": qualification_request.metadata_payload(request),
+            }
+        )
     identity_bridge._atomic_json(output_root / "proof-bundle.json", bundle)  # noqa: SLF001
     return {
         "valid": True,
