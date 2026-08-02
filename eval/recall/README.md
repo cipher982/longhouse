@@ -60,9 +60,11 @@ python eval/recall/run_eval.py --strategy auto --verbose
 Requires a device token at `~/.longhouse/machine/device-token`, or
 `LONGHOUSE_EVAL_TOKEN` and `LONGHOUSE_EVAL_URL`.
 
-The command is a release gate, not a reporting-only benchmark. It exits nonzero
-for any request error, incorrect lane attribution, false-negative rate above the
-recorded hybrid baseline, or recall@5 below that baseline. JSON output includes
+The command is a release gate, not a reporting-only benchmark. It requests 25
+results and exits nonzero for any request error, incorrect lane attribution,
+false-negative rate above the recorded hybrid baseline, recall@5 below that
+baseline, or a regression against the full-corpus Qwen3-8B @256d category floors
+at k=25 (exact 11, paraphrase 16, causal 7, supersession 6). JSON output includes
 the exact endpoint, git SHA, query-set digest, thresholds, lane contract, and
 embedding model/revision observed from the live response.
 

@@ -59,3 +59,20 @@ def test_healthy_run_passes_and_reports_one_embedding_space():
         "dims": 256,
         "revision": "a" * 40,
     }
+
+
+def test_category_regression_fails_the_release_gate_at_25():
+    evaluator = _module()
+    query = evaluator.Query("answer", "causal", "why", ["gold"])
+    report = evaluator.Report(
+        strategy="semantic",
+        results=[evaluator.Result(query, [*[f"other-{i}" for i in range(24)], "gold-session"], 0.02)],
+    )
+
+    assert report.by_category(5) == {"causal": (0, 1)}
+    assert report.by_category(25) == {"causal": (1, 1)}
+    assert report.gate_failures(
+        max_false_negative_rate=1.0,
+        min_recall_at_5=0.0,
+        min_category_hits_at_25={"causal": 2},
+    ) == ["causal_hits_at_25 1/1 is below 2"]

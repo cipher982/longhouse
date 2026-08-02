@@ -18,8 +18,10 @@ import subprocess
 import time
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from dataclasses import dataclass
+from dataclasses import field
+from datetime import UTC
+from datetime import datetime
 from pathlib import Path
 
 QUERIES_PATH = Path(__file__).with_name("queries.jsonl")
@@ -27,6 +29,15 @@ DEFAULT_URL = "https://david010.longhouse.ai"
 TOKEN_PATH = Path.home() / ".longhouse" / "machine" / "device-token"
 DEFAULT_MAX_FALSE_NEGATIVE_RATE = 0.671
 DEFAULT_MIN_RECALL_AT_5 = 0.329
+# Full-corpus Qwen3-8B @256d baseline measured at k=25. The replacement must
+# improve aggregate recall without buying that gain by regressing any one of
+# the four answer-present query classes.
+DEFAULT_MIN_CATEGORY_HITS_AT_25 = {
+    "exact": 11,
+    "paraphrase": 16,
+    "causal": 7,
+    "supersession": 6,
+}
 
 
 @dataclass
@@ -107,7 +118,7 @@ class Report:
             return 0.0
         return sum(1 for r in absent if not r.returned) / len(absent)
 
-    def by_category(self) -> dict[str, tuple[int, int]]:
+    def by_category(self, k: int = 5) -> dict[str, tuple[int, int]]:
         buckets: dict[str, list[Result]] = {}
         for result in self.results:
             buckets.setdefault(result.query.category, []).append(result)
@@ -116,7 +127,7 @@ class Report:
             if category == "absent":
                 good = sum(1 for r in results if not r.error and not r.returned)
             else:
-                good = sum(1 for r in results if (rank := r.gold_rank()) is not None and rank <= 5)
+                good = sum(1 for r in results if (rank := r.gold_rank()) is not None and rank <= k)
             summary[category] = (good, len(results))
         return summary
 
@@ -130,7 +141,13 @@ class Report:
     def errors(self) -> list[Result]:
         return [result for result in self.results if result.error]
 
-    def gate_failures(self, *, max_false_negative_rate: float, min_recall_at_5: float) -> list[str]:
+    def gate_failures(
+        self,
+        *,
+        max_false_negative_rate: float,
+        min_recall_at_5: float,
+        min_category_hits_at_25: dict[str, int] | None = None,
+    ) -> list[str]:
         failures = []
         if self.errors():
             failures.append(f"{len(self.errors())} query(s) errored")
@@ -140,6 +157,11 @@ class Report:
             )
         if self.recall_at(5) < min_recall_at_5:
             failures.append(f"recall_at_5 {self.recall_at(5):.3f} is below {min_recall_at_5:.3f}")
+        category_results = self.by_category(25)
+        for category, minimum in (min_category_hits_at_25 or {}).items():
+            hits, total = category_results.get(category, (0, 0))
+            if hits < minimum:
+                failures.append(f"{category}_hits_at_25 {hits}/{total} is below {minimum}")
         return failures
 
     def embedding_metadata(self) -> dict[str, object] | None:
@@ -221,7 +243,7 @@ STRATEGIES = {
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--strategy", default="auto", choices=sorted(STRATEGIES))
-    parser.add_argument("--limit", type=int, default=10)
+    parser.add_argument("--limit", type=int, default=25)
     parser.add_argument("--days", type=int, default=365)
     parser.add_argument("--verbose", action="store_true", help="Show every miss.")
     parser.add_argument("--json", action="store_true", help="Emit machine-readable output.")
@@ -272,6 +294,7 @@ def main() -> int:
     gate_failures = report.gate_failures(
         max_false_negative_rate=args.max_false_negative_rate,
         min_recall_at_5=args.min_recall_at_5,
+        min_category_hits_at_25=DEFAULT_MIN_CATEGORY_HITS_AT_25,
     )
     try:
         git_sha = subprocess.run(
@@ -299,6 +322,7 @@ def main() -> int:
         "thresholds": {
             "max_false_negative_rate": args.max_false_negative_rate,
             "min_recall_at_5": args.min_recall_at_5,
+            "min_category_hits_at_25": DEFAULT_MIN_CATEGORY_HITS_AT_25,
         },
     }
     if args.json:
@@ -312,7 +336,8 @@ def main() -> int:
                     "correct_abstention_rate": round(report.correct_abstention_rate(), 3),
                     "p50_s": round(p50, 3),
                     "p95_s": round(p95, 3),
-                    "by_category": report.by_category(),
+                    "by_category_at_5": report.by_category(5),
+                    "by_category_at_25": report.by_category(25),
                     "errors": len(report.errors()),
                     "gate": "pass" if not gate_failures else "fail",
                     "gate_failures": gate_failures,
@@ -329,8 +354,11 @@ def main() -> int:
     print(f"  false 'nothing found'    {report.false_negative_rate():.1%}   <- gate")
     print(f"  correct abstention       {report.correct_abstention_rate():.1%}")
     print(f"  latency p50/p95          {p50:.2f}s / {p95:.2f}s\n")
-    for category, (good, total) in report.by_category().items():
-        print(f"    {category:14s} {good}/{total}")
+    categories_at_5 = report.by_category(5)
+    categories_at_25 = report.by_category(25)
+    for category, (good, total) in categories_at_5.items():
+        at_25 = categories_at_25[category][0]
+        print(f"    {category:14s} @{5} {good}/{total}  @{25} {at_25}/{total}")
 
     errors = report.errors()
     if errors:
