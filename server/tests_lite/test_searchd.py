@@ -96,14 +96,16 @@ def test_worklog_export_preserves_messages_within_the_boundary():
 
 
 def test_embedding_write_contract_accepts_full_desired_episode_set():
+    vector = np.zeros(ACTIVE_EMBEDDING_DIMS, dtype=np.float32)
+    vector[0] = 1.0
     params = _embedding_write_params(
         {
             "session_id": str(uuid4()),
             "owner_id": "owner-1",
             "generation_id": str(uuid4()),
             "revision": "3",
-            "model": "test-model",
-            "dims": 2,
+            "model": ACTIVE_EMBEDDING_MODEL,
+            "dims": ACTIVE_EMBEDDING_DIMS,
             "complete": True,
             "desired_episode_ordinals": [0, 1, 2],
             "episodes": [
@@ -113,7 +115,7 @@ def test_embedding_write_contract_accepts_full_desired_episode_set():
                     "event_index_end": 5,
                     "start_order_time_us": 123,
                     "content_hash": "c" * 64,
-                    "embedding": base64.b64encode(np.array([1, 0], dtype=np.float32).tobytes()).decode("ascii"),
+                    "embedding": base64.b64encode(vector.tobytes()).decode("ascii"),
                 }
             ],
         }
@@ -131,8 +133,8 @@ def test_embedding_write_contract_rejects_invalid_desired_episode_set(ordinals):
                 "owner_id": "owner-1",
                 "generation_id": str(uuid4()),
                 "revision": "3",
-                "model": "test-model",
-                "dims": 2,
+                "model": ACTIVE_EMBEDDING_MODEL,
+                "dims": ACTIVE_EMBEDDING_DIMS,
                 "complete": True,
                 "desired_episode_ordinals": ordinals,
                 "episodes": [],
@@ -814,29 +816,37 @@ async def test_dense_rpc_enforces_space_and_refreshes_after_write_and_delete(tmp
             await client.call("search.embedding.query.v2", {**query_params, "model": "wrong-space"})
         assert mismatch.value.code == "embedding_space_mismatch"
 
-        await client.call(
-            "search.embedding.write.v2",
-            {
-                "session_id": session_id,
-                "owner_id": owner_id,
-                "generation_id": generation_id,
-                "revision": "1",
-                "model": ACTIVE_EMBEDDING_MODEL,
-                "dims": ACTIVE_EMBEDDING_DIMS,
-                "complete": True,
-                "desired_episode_ordinals": [0],
-                "episodes": [
-                    {
-                        "episode_ordinal": 0,
-                        "event_index_start": 0,
-                        "event_index_end": 1,
-                        "start_order_time_us": 1,
-                        "content_hash": "a" * 64,
-                        "embedding": base64.b64encode(vector.tobytes()).decode("ascii"),
-                    }
-                ],
-            },
-        )
+        write_params = {
+            "session_id": session_id,
+            "owner_id": owner_id,
+            "generation_id": generation_id,
+            "revision": "1",
+            "model": ACTIVE_EMBEDDING_MODEL,
+            "dims": ACTIVE_EMBEDDING_DIMS,
+            "complete": True,
+            "desired_episode_ordinals": [0],
+            "episodes": [
+                {
+                    "episode_ordinal": 0,
+                    "event_index_start": 0,
+                    "event_index_end": 1,
+                    "start_order_time_us": 1,
+                    "content_hash": "a" * 64,
+                    "embedding": base64.b64encode(vector.tobytes()).decode("ascii"),
+                }
+            ],
+        }
+        with pytest.raises(CatalogRemoteError) as write_mismatch:
+            await client.call("search.embedding.write.v2", {**write_params, "model": "wrong-space"})
+        assert write_mismatch.value.code == "embedding_space_mismatch"
+        with pytest.raises(CatalogRemoteError) as hashes_mismatch:
+            await client.call(
+                "search.embedding.hashes.v2",
+                {"session_id": session_id, "model": "wrong-space", "dims": ACTIVE_EMBEDDING_DIMS},
+            )
+        assert hashes_mismatch.value.code == "embedding_space_mismatch"
+
+        await client.call("search.embedding.write.v2", write_params)
         results = (await client.call("search.embedding.query.v2", query_params))["results"]
         assert [row["session_id"] for row in results] == [session_id]
 

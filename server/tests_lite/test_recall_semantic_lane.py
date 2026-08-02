@@ -60,6 +60,38 @@ def test_rrf_merge_respects_limit():
 
 
 @pytest.mark.asyncio
+async def test_dense_rpc_response_rejects_malformed_rows_and_envelopes(monkeypatch):
+    class FakeSearch:
+        async def call(self, _method, _params, *, timeout_seconds):
+            assert timeout_seconds == 1.0
+            return {
+                "results": [
+                    {
+                        "session_id": str(uuid4()),
+                        "episode_ordinal": 0,
+                        "score": float("nan"),
+                        "event_index_start": 0,
+                        "event_index_end": 1,
+                        "generation_id": str(uuid4()),
+                        "start_order_time_us": 1,
+                    }
+                ],
+                "unexpected": True,
+            }
+
+    monkeypatch.setattr(agents_search, "get_searchd_client", lambda: FakeSearch())
+    with pytest.raises(ValueError):
+        await agents_search.search_storage_v2_episode_embeddings(
+            model="test-model",
+            owner_id=42,
+            dims=2,
+            query_embedding=np.array([1.0, 0.0], dtype=np.float32).tobytes(),
+            limit=5,
+            timeout_seconds=1.0,
+        )
+
+
+@pytest.mark.asyncio
 async def test_semantic_recall_never_turns_missing_test_model_into_a_miss():
     """TESTING is not permission to make an unavailable lane look empty."""
 

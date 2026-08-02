@@ -30,6 +30,19 @@ def _timing() -> dict[str, float | int]:
     return {"admit_ms": 0.0, "sql_ms": 0.1, "active_readers": 1, "queued_readers": 0}
 
 
+def _context_row(content: str, *, order_time_us: int = 100, role: str = "assistant") -> dict[str, object]:
+    return {
+        "search_event_id": order_time_us,
+        "event_id": f"event-{order_time_us}",
+        "source_object_id": "a" * 64,
+        "record_ordinal": order_time_us,
+        "order_time_us": order_time_us,
+        "role": role,
+        "content_text": content,
+        "tool_name": None,
+    }
+
+
 def test_a_bare_match_is_unavailable_not_complete():
     """The default is the whole bug. An unhydrated match must not claim completeness."""
     match = RecallMatch(session_id=str(uuid4()), chunk_index=0, score=0.62)
@@ -147,7 +160,7 @@ async def test_semantic_match_with_a_locator_hydrates(monkeypatch):
         return {
             "evidence_status": "complete",
             "evidence_reason": None,
-            "context": [{"role": "assistant", "content_text": "the migration applied cleanly"}],
+            "context": [_context_row("the migration applied cleanly")],
             "total_events": 590,
             "timing": _timing(),
         }
@@ -243,6 +256,29 @@ async def test_absent_store_status_fails_the_strict_contract(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_malformed_context_turn_fails_the_strict_contract(monkeypatch):
+    async def fake_context(**_kwargs):
+        return {
+            "evidence_status": "complete",
+            "evidence_reason": None,
+            "context": [{**_context_row("the answer"), "unexpected": True}],
+            "total_events": 1,
+            "timing": _timing(),
+        }
+
+    monkeypatch.setattr(agents_search, "search_storage_v2_context", fake_context)
+    match = RecallMatch(
+        session_id=str(uuid4()),
+        chunk_index=0,
+        score=0.4,
+        generation_id=str(uuid4()),
+        match_event_id=99,
+    )
+    with pytest.raises(ValueError):
+        await agents_search._hydrate_recall_match(match, owner_id=42, context_turns=2, timeout_seconds=5.0)
+
+
+@pytest.mark.asyncio
 async def test_semantic_match_carries_evidence_beside_its_context(monkeypatch):
     """A null `evidence` next to a populated `context` is its own small lie.
 
@@ -257,9 +293,9 @@ async def test_semantic_match_carries_evidence_beside_its_context(monkeypatch):
             "evidence_status": "complete",
             "evidence_reason": None,
             "context": [
-                {"order_time_us": 100, "role": "user", "content_text": "earlier turn, before the anchor"},
-                {"order_time_us": 200, "role": "assistant", "content_text": "the anchored episode text"},
-                {"order_time_us": 300, "role": "user", "content_text": "later turn"},
+                _context_row("earlier turn, before the anchor", order_time_us=100, role="user"),
+                _context_row("the anchored episode text", order_time_us=200),
+                _context_row("later turn", order_time_us=300, role="user"),
             ],
             "total_events": 42,
             "timing": _timing(),
@@ -286,7 +322,7 @@ async def test_lexical_snippet_is_not_overwritten_by_the_anchor(monkeypatch):
         return {
             "evidence_status": "complete",
             "evidence_reason": None,
-            "context": [{"order_time_us": 200, "role": "assistant", "content_text": "neighbour text"}],
+            "context": [_context_row("neighbour text", order_time_us=200)],
             "total_events": 42,
             "timing": _timing(),
         }

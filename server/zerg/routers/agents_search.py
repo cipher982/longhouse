@@ -20,6 +20,8 @@ from fastapi import Response
 from fastapi import status
 from pydantic import BaseModel
 from pydantic import ConfigDict
+from pydantic import Field
+from pydantic import model_validator
 
 from zerg.catalogd.client import CatalogRemoteError
 from zerg.catalogd.client import CatalogUnavailable
@@ -43,19 +45,38 @@ _catalog_db_dependency = catalog_db_dependency()
 
 
 class _DenseEpisodeHit(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", strict=True, allow_inf_nan=False)
 
     session_id: str
-    episode_ordinal: int
+    episode_ordinal: int = Field(ge=0)
     score: float
-    event_index_start: int | None
-    event_index_end: int | None
+    event_index_start: int | None = Field(ge=0)
+    event_index_end: int | None = Field(ge=0)
     generation_id: str
-    start_order_time_us: int
+    start_order_time_us: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def validate_identity(self) -> "_DenseEpisodeHit":
+        for field, value in (("session_id", self.session_id), ("generation_id", self.generation_id)):
+            try:
+                parsed = UUID(value)
+            except ValueError as exc:
+                raise ValueError(f"{field} must be a canonical UUID") from exc
+            if str(parsed) != value:
+                raise ValueError(f"{field} must be a canonical UUID")
+        if self.event_index_start is not None and self.event_index_end is not None and self.event_index_end < self.event_index_start:
+            raise ValueError("dense hit event range is invalid")
+        return self
+
+
+class _DenseQueryPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    results: list[_DenseEpisodeHit]
 
 
 class _SearchReadTiming(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", strict=True, allow_inf_nan=False)
 
     admit_ms: float
     sql_ms: float
@@ -63,13 +84,26 @@ class _SearchReadTiming(BaseModel):
     queued_readers: int
 
 
+class _RecallContextTurn(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    search_event_id: int = Field(ge=1)
+    event_id: str = Field(min_length=1)
+    source_object_id: str = Field(pattern=r"^[0-9a-f]{64}$")
+    record_ordinal: int = Field(ge=0)
+    order_time_us: int = Field(ge=0)
+    role: Literal["user", "assistant"]
+    content_text: str
+    tool_name: str | None
+
+
 class _RecallContextPayload(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", strict=True)
 
     evidence_status: Literal["complete", "partial", "unavailable"]
     evidence_reason: str | None
-    context: list[dict[str, object]]
-    total_events: int
+    context: list[_RecallContextTurn]
+    total_events: int = Field(ge=0)
     timing: _SearchReadTiming
 
 
@@ -230,10 +264,7 @@ async def search_storage_v2_episode_embeddings(
         },
         timeout_seconds=timeout_seconds,
     )
-    raw_results = result.get("results")
-    if not isinstance(raw_results, list):
-        raise CatalogUnavailable("searchd returned an invalid dense result envelope")
-    return [_DenseEpisodeHit.model_validate(row) for row in raw_results]
+    return _DenseQueryPayload.model_validate(result).results
 
 
 async def search_storage_v2_sessions(
@@ -587,7 +618,7 @@ async def _hydrate_recall_match(
         match.evidence_reason = str(detail.get("code") or "search_evidence_unavailable")
         return
     evidence = _RecallContextPayload.model_validate(evidence)
-    match.context = evidence.context
+    match.context = [turn.model_dump() for turn in evidence.context]
     match.total_events = evidence.total_events
     # Only the store may declare completeness. An absent status means the
     # response did not carry one, which is not evidence that everything arrived

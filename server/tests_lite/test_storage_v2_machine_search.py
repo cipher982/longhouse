@@ -115,7 +115,18 @@ def test_recall_machine_search_uses_searchd_without_legacy_db(monkeypatch):
             "evidence_status": "complete",
             "evidence_reason": None,
             "total_events": 12,
-            "context": [{"role": "user", "content_text": "please migrate"}],
+            "context": [
+                {
+                    "search_event_id": 9,
+                    "event_id": "event-9",
+                    "source_object_id": "a" * 64,
+                    "record_ordinal": 4,
+                    "order_time_us": 100,
+                    "role": "user",
+                    "content_text": "please migrate",
+                    "tool_name": None,
+                }
+            ],
             "timing": {"admit_ms": 0.0, "sql_ms": 0.1, "active_readers": 1, "queued_readers": 0},
         }
 

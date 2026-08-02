@@ -798,6 +798,7 @@ def _embedding_write_params(value: dict) -> dict:
         },
     )
     dims = value["dims"]
+    model = _text(value["model"], "model", 255)
     episodes = value["episodes"]
     desired_episode_ordinals = value["desired_episode_ordinals"]
     complete = value["complete"]
@@ -809,6 +810,8 @@ def _embedding_write_params(value: dict) -> dict:
         or type(complete) is not bool
     ):
         raise ValueError("embedding write dimensions or episodes are invalid")
+    if model != ACTIVE_EMBEDDING_MODEL or dims != ACTIVE_EMBEDDING_DIMS:
+        raise _EmbeddingSpaceMismatch
     if complete != (desired_episode_ordinals is not None):
         raise ValueError("complete embedding writes require the full desired episode set")
     if desired_episode_ordinals is not None:
@@ -866,7 +869,7 @@ def _embedding_write_params(value: dict) -> dict:
         "owner_id": _text(value["owner_id"], "owner_id", 64),
         "generation_id": _uuid(value["generation_id"], "generation_id"),
         "revision": _revision(value["revision"], "revision"),
-        "model": _text(value["model"], "model", 255),
+        "model": model,
         "dims": dims,
         "complete": complete,
         "desired_episode_ordinals": desired_episode_ordinals,
@@ -876,7 +879,11 @@ def _embedding_write_params(value: dict) -> dict:
 
 def _embedding_hashes_params(value: dict) -> dict:
     _exact_keys(value, {"session_id", "model", "dims"})
-    return {"session_id": _uuid(value["session_id"], "session_id"), "model": _text(value["model"], "model", 255), "dims": value["dims"]}
+    model = _text(value["model"], "model", 255)
+    dims = value["dims"]
+    if model != ACTIVE_EMBEDDING_MODEL or dims != ACTIVE_EMBEDDING_DIMS:
+        raise _EmbeddingSpaceMismatch
+    return {"session_id": _uuid(value["session_id"], "session_id"), "model": model, "dims": dims}
 
 
 def _embedding_source_params(value: dict) -> dict:
