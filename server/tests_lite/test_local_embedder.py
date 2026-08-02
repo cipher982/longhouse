@@ -118,8 +118,13 @@ def test_queries_and_documents_use_their_prescribed_prefixes():
     assert seen[1].startswith(DOCUMENT_PREFIX)
 
 
-def test_document_batches_are_length_sorted_but_returned_in_caller_order():
+def test_document_batches_are_length_sorted_but_returned_in_caller_order(monkeypatch):
     """Sorting is a throughput detail; the caller must not have to know about it."""
+    import zerg.services.local_embedder as local_embedder_module
+
+    # Keep all three distinct stub outputs in one model call. Production uses
+    # one-document quanta so an interactive query can preempt between episodes.
+    monkeypatch.setattr(local_embedder_module, "EMBED_DOCUMENT_MICROBATCH", 3)
     # Distinct unit vectors so each input's output is identifiable.
     embedder = _embedder([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0]])
     texts = ["short", "a much much much longer document here", "medium length one"]

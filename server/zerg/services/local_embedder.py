@@ -48,7 +48,11 @@ logger = logging.getLogger(__name__)
 # the rest of the process.
 EMBED_INTRA_OP_THREADS = int(os.getenv("LONGHOUSE_EMBED_THREADS", "4"))
 EMBED_MAX_TOKENS = int(os.getenv("LONGHOUSE_EMBED_MAX_TOKENS", "1024"))
-EMBED_DOCUMENT_MICROBATCH = int(os.getenv("LONGHOUSE_EMBED_DOCUMENT_MICROBATCH", "8"))
+# ONNX cannot be preempted inside one run. A batch of eight realistic episodes
+# held the lane for 300-520 ms on Apple Silicon despite query priority. One
+# document per quantum bounds interactive waiting at one document forward pass;
+# operators can raise it only when throughput matters more than recall latency.
+EMBED_DOCUMENT_MICROBATCH = int(os.getenv("LONGHOUSE_EMBED_DOCUMENT_MICROBATCH", "1"))
 
 
 class LocalEmbedderUnavailable(RuntimeError):
