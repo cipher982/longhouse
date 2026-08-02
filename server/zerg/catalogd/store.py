@@ -484,7 +484,7 @@ class CatalogStore:
             if not missing:
                 return {"inserted": 0, "eligible_sessions": len(eligible)}
             now = datetime.now(UTC)
-            commit_seq = _advance_commit_seq(connection, now)
+            commit_seq = _current_commit_seq(connection)
             connection.execute(
                 insert(states),
                 [

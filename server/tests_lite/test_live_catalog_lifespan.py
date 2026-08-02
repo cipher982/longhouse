@@ -71,6 +71,13 @@ async def test_production_live_catalog_lifespan_delegates_schema_to_catalogd(mon
         calls.append("search_projector_start")
         return True
 
+    def provision_embedding_model():
+        calls.append("embedding_provision")
+        return "/verified/model"
+
+    def initialize_embedding_model(_config, _model_dir):
+        calls.append("embedding_initialize")
+
     async def stop_search_projector():
         calls.append("search_projector_stop")
 
@@ -131,6 +138,8 @@ async def test_production_live_catalog_lifespan_delegates_schema_to_catalogd(mon
     monkeypatch.setattr("zerg.services.raw_object_workers.close_raw_object_worker_pool", stop_raw_workers)
     monkeypatch.setattr("zerg.services.render_object_workers.get_render_object_worker_pool", lambda: StorageWorkers("render"))
     monkeypatch.setattr("zerg.services.render_object_workers.close_render_object_worker_pool", stop_render_workers)
+    monkeypatch.setattr("zerg.services.embedding_artifact.provision_embedding_artifact", provision_embedding_model)
+    monkeypatch.setattr("zerg.services.local_embedder.initialize_local_embedder", initialize_embedding_model)
     monkeypatch.setattr("zerg.services.live_control_catalog.run_live_catalog_input_recovery_loop", completed_loop)
     monkeypatch.setattr("zerg.services.storage_session_titles.run_storage_title_reconciler", title_loop)
     monkeypatch.setattr(
@@ -145,11 +154,13 @@ async def test_production_live_catalog_lifespan_delegates_schema_to_catalogd(mon
     app = FastAPI()
     async with lifespan_module.lifespan(app):
         await asyncio.sleep(0)
-        assert calls[:6] == [
+        assert calls[:8] == [
             "catalogd_start",
             "searchd_start",
             "raw_workers_start",
             "render_workers_start",
+            "embedding_provision",
+            "embedding_initialize",
             "search_projector_start",
             "runner_start",
         ]
