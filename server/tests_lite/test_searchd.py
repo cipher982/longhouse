@@ -18,6 +18,8 @@ import pytest
 from zerg.catalogd.client import CatalogClient
 from zerg.catalogd.client import CatalogRemoteError
 from zerg.catalogd.client import CatalogUnavailable
+from zerg.embedding_space import ACTIVE_EMBEDDING_DIMS
+from zerg.embedding_space import ACTIVE_EMBEDDING_MODEL
 from zerg.searchd.server import SearchDaemon
 from zerg.searchd.server import _embedding_write_params
 from zerg.searchd.store import _PUBLISH_AGGREGATES_SQL
@@ -220,6 +222,7 @@ def test_episode_embeddings_dedup_and_cosine_query(tmp_path):
     connection = open_search_database(tmp_path / "search.db")
     store = SearchStore(connection)
     session_id = str(uuid4())
+    published_generation = str(uuid4())
     owner_id = "owner-1"
     try:
         # query_episode_embeddings scopes via a SQL join against session_index
@@ -235,12 +238,12 @@ def test_episode_embeddings_dedup_and_cosine_query(tmp_path):
                 started_at, published_at
             ) VALUES (?, ?, ?, 1, 1, 1, 'hash', 2, 1, 1, 0, 0, 'proj', 'codex', 'local', NULL, NULL, ?, ?)
             """,
-            (session_id, str(uuid4()), owner_id, "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00"),
+            (session_id, published_generation, owner_id, "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00"),
         )
         first = store.write_episode_embeddings(
             session_id=session_id,
             owner_id=owner_id,
-            generation_id=str(uuid4()),
+            generation_id=published_generation,
             revision=1,
             model="test-model",
             dims=2,
@@ -268,7 +271,7 @@ def test_episode_embeddings_dedup_and_cosine_query(tmp_path):
         replay = store.write_episode_embeddings(
             session_id=session_id,
             owner_id=owner_id,
-            generation_id=str(uuid4()),
+            generation_id=published_generation,
             revision=1,
             model="test-model",
             dims=2,
@@ -283,6 +286,7 @@ def test_episode_embeddings_dedup_and_cosine_query(tmp_path):
                 }
             ],
         )
+        # A true replay -- same generation, same text -- still costs nothing.
         assert replay == {"written": 0, "skipped": 1}
         results = store.query_episode_embeddings(
             model="test-model",
@@ -655,6 +659,91 @@ async def test_timed_out_search_is_interrupted_before_later_reads(tmp_path):
     finally:
         for worker, original_search in zip(daemon._all_read_workers, original_searches, strict=True):
             worker.store.search = original_search
+        await client.close()
+        await daemon.close()
+        socket_parent.rmdir()
+
+
+@pytest.mark.asyncio
+async def test_dense_rpc_enforces_space_and_refreshes_after_write_and_delete(tmp_path):
+    """The daemon wiring, not a hand-called index load, owns snapshot freshness."""
+
+    socket_parent = Path("/tmp") / f"lhs-{uuid4().hex[:8]}"
+    socket_parent.mkdir(mode=0o700)
+    socket_path = socket_parent / "s"
+    daemon = SearchDaemon(database_path=tmp_path / "search.db", socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    session_id = str(uuid4())
+    generation_id = str(uuid4())
+    owner_id = "42"
+    vector = np.zeros(ACTIVE_EMBEDDING_DIMS, dtype=np.float32)
+    vector[0] = 1.0
+
+    def publish_stub() -> None:
+        assert daemon._connection is not None
+        daemon._connection.execute(
+            """
+            INSERT INTO session_index(
+                session_id, generation_id, owner_id, desired_revision, indexed_through,
+                object_count, object_set_hash, event_count, user_messages, assistant_messages,
+                tool_calls, is_sidechain, project, provider, environment, cwd, git_repo,
+                started_at, published_at
+            ) VALUES (?, ?, ?, 1, 1, 1, 'hash', 2, 1, 1, 0, 0,
+                      'longhouse', 'codex', 'local', NULL, NULL, ?, ?)
+            """,
+            (session_id, generation_id, owner_id, "2026-08-01T00:00:00+00:00", "2026-08-01T00:00:00+00:00"),
+        )
+        daemon._connection.commit()
+
+    query_params = {
+        "model": ACTIVE_EMBEDDING_MODEL,
+        "owner_id": owner_id,
+        "dims": ACTIVE_EMBEDDING_DIMS,
+        "query_embedding": base64.b64encode(vector.tobytes()).decode("ascii"),
+        "limit": 5,
+        "project": None,
+        "provider": None,
+        "exclude_environments": None,
+        "since_iso": None,
+    }
+    try:
+        await daemon._run(publish_stub)
+        assert (await client.call("search.embedding.query.v2", query_params))["results"] == []
+
+        with pytest.raises(CatalogRemoteError) as mismatch:
+            await client.call("search.embedding.query.v2", {**query_params, "model": "wrong-space"})
+        assert mismatch.value.code == "embedding_space_mismatch"
+
+        await client.call(
+            "search.embedding.write.v2",
+            {
+                "session_id": session_id,
+                "owner_id": owner_id,
+                "generation_id": generation_id,
+                "revision": "1",
+                "model": ACTIVE_EMBEDDING_MODEL,
+                "dims": ACTIVE_EMBEDDING_DIMS,
+                "complete": True,
+                "desired_episode_ordinals": [0],
+                "episodes": [
+                    {
+                        "episode_ordinal": 0,
+                        "event_index_start": 0,
+                        "event_index_end": 1,
+                        "start_order_time_us": 1,
+                        "content_hash": "a" * 64,
+                        "embedding": base64.b64encode(vector.tobytes()).decode("ascii"),
+                    }
+                ],
+            },
+        )
+        results = (await client.call("search.embedding.query.v2", query_params))["results"]
+        assert [row["session_id"] for row in results] == [session_id]
+
+        await client.call("search.session.delete.v2", {"session_id": session_id})
+        assert (await client.call("search.embedding.query.v2", query_params))["results"] == []
+    finally:
         await client.close()
         await daemon.close()
         socket_parent.rmdir()

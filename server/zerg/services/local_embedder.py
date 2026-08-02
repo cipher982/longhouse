@@ -32,6 +32,9 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+from zerg.embedding_space import DOCUMENT_PREFIX
+from zerg.embedding_space import QUERY_PREFIX
+
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from zerg.models_config import EmbeddingConfig
 
@@ -43,9 +46,6 @@ logger = logging.getLogger(__name__)
 # the rest of the process.
 EMBED_INTRA_OP_THREADS = int(os.getenv("LONGHOUSE_EMBED_THREADS", "4"))
 EMBED_MAX_TOKENS = int(os.getenv("LONGHOUSE_EMBED_MAX_TOKENS", "1024"))
-
-QUERY_PREFIX = "task: search result | query: "
-DOCUMENT_PREFIX = "title: none | text: "
 
 
 class LocalEmbedderUnavailable(RuntimeError):
@@ -88,7 +88,12 @@ class LocalEmbedder:
         tokenizer.enable_padding()
         tokenizer.enable_truncation(max_length=EMBED_MAX_TOKENS)
         names = [o.name for o in session.get_outputs()]
-        self._embedding_output = names.index("sentence_embedding") if "sentence_embedding" in names else 0
+        if "sentence_embedding" not in names:
+            # Falling back to output 0 would silently embed with whatever tensor
+            # happened to come first — plausible-looking numbers from the wrong
+            # head, which no test downstream could distinguish from correct ones.
+            raise LocalEmbedderUnavailable(f"model exposes no sentence_embedding output, found {names}")
+        self._embedding_output = names.index("sentence_embedding")
         self._session = session
         self._tokenizer = tokenizer
         logger.info("Local embedder loaded model=%s threads=%d", model_path, EMBED_INTRA_OP_THREADS)
@@ -111,24 +116,39 @@ class LocalEmbedder:
         # Truncate then renormalize: Matryoshka dimensions are only valid as a
         # prefix of the full vector, and cosine over an unnormalized prefix is
         # not the similarity the model was trained for.
+        if vectors.shape[1] < self._dims:
+            raise LocalEmbedderUnavailable(f"model returned {vectors.shape[1]} dims, need at least {self._dims}")
         vectors = vectors[:, : self._dims]
         norms = np.linalg.norm(vectors, axis=1, keepdims=True)
-        return vectors / np.clip(norms, 1e-9, None)
+        # A zero or non-finite vector normalizes to something that scores an
+        # equal, meaningless similarity against everything — it would rank
+        # rather than fail, which is the worst available outcome.
+        if not np.isfinite(vectors).all() or float(norms.min()) <= 1e-6:
+            raise LocalEmbedderUnavailable("model produced a zero or non-finite embedding")
+        return vectors / norms
 
     def embed_queries(self, texts: list[str]) -> np.ndarray:
         with self._lock:
             return self._encode([QUERY_PREFIX + t for t in texts])
 
     def embed_documents(self, texts: list[str]) -> np.ndarray:
-        """Embed corpus text, longest first.
+        """Embed corpus text, returning vectors in the caller's order.
 
-        Batches pad to their longest member, so mixing a 20-token episode with a
-        1000-token one makes the short one cost as much as the long one. Sorting
-        by length before batching is most of the corpus throughput.
+        Batches pad to their longest member, so a 20-token episode batched with
+        a 1000-token one costs as much as the long one. Sorting by length here
+        and restoring the caller's order afterwards is most of the corpus
+        throughput, and it stays an implementation detail rather than an
+        ordering the caller has to know about.
         """
 
+        if not texts:
+            return np.zeros((0, self._dims), dtype="float32")
+        order = sorted(range(len(texts)), key=lambda i: len(texts[i]), reverse=True)
         with self._lock:
-            return self._encode([DOCUMENT_PREFIX + t for t in texts])
+            packed = self._encode([DOCUMENT_PREFIX + texts[i] for i in order])
+        restored = np.empty_like(packed)
+        restored[order] = packed
+        return restored
 
 
 _embedder: LocalEmbedder | None = None

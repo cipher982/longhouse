@@ -72,7 +72,8 @@ func makeSessionStateFacts(
             tone: accessLabel == nil ? (owned ? "live" : "search") : "quiet",
             observedAt: nil
         ),
-        transcript: nil
+        transcript: nil,
+        commitSeq: nil
     )
 }
 

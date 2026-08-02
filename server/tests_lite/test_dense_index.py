@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 
 import numpy as np
+import pytest
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
@@ -73,6 +74,8 @@ def test_not_ready_until_loaded():
     index = DenseIndex(model=MODEL, dims=DIMS)
     assert index.ready is False
     assert index.size == 0
+    with pytest.raises(RuntimeError, match="not loaded"):
+        index.search(_unit([1, 0, 0, 0]), owner_id="42", limit=1)
 
 
 def test_ranks_by_cosine(tmp_path):
@@ -175,5 +178,129 @@ def test_locator_and_generation_ride_along(tmp_path):
         assert hit["episode_ordinal"] == 3
         assert hit["generation_id"] == "g-s1"
         assert hit["start_order_time_us"] == 1000
+    finally:
+        connection.close()
+
+
+def test_superseded_generation_cannot_rank(tmp_path):
+    """A vector from an old generation must not occupy top-k.
+
+    Joining vectors to sessions by id alone let a superseded embedding rank and
+    then fail to hydrate — the worst combination, because it displaces a current
+    vector with a hit that cannot produce evidence. The fence is on the
+    published generation, so a stale row is invisible rather than merely
+    deprioritised.
+    """
+    rows = [("s1", 0, [1, 0, 0, 0], "42", "zerg", "claude", "local", "2026-07-01")]
+    index, connection = _index(tmp_path, rows)
+    try:
+        assert index.size == 1
+        # The session republishes under a new generation; the vector still
+        # points at the old one.
+        connection.execute("UPDATE session_index SET generation_id = 'g-new' WHERE session_id = 's1'")
+        connection.commit()
+        index.load(connection)
+        assert index.size == 0
+        assert index.search(_unit([1, 0, 0, 0]), owner_id="42", limit=5) == []
+    finally:
+        connection.close()
+
+
+def test_superseded_revision_cannot_rank(tmp_path):
+    """Generation identity alone is insufficient when one generation republishes."""
+
+    rows = [("s1", 0, [1, 0, 0, 0], "42", "zerg", "claude", "local", "2026-07-01")]
+    index, connection = _index(tmp_path, rows)
+    try:
+        assert index.size == 1
+        connection.execute("UPDATE session_index SET indexed_through = 2, desired_revision = 2 WHERE session_id = 's1'")
+        connection.commit()
+        index.load(connection)
+        assert index.size == 0
+    finally:
+        connection.close()
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        np.array([1, 0, 0], dtype="float32"),
+        np.array([1, 0, 0, 0, 0], dtype="float32"),
+        np.array([0, 0, 0, 0], dtype="float32"),
+        np.array([np.nan, 0, 0, 0], dtype="float32"),
+    ],
+)
+def test_query_vector_must_match_the_space(query, tmp_path):
+    index, connection = _index(
+        tmp_path,
+        [("s1", 0, [1, 0, 0, 0], "42", "zerg", "claude", "local", "2026-07-01")],
+    )
+    try:
+        with pytest.raises(ValueError):
+            index.search(query, owner_id="42", limit=1)
+    finally:
+        connection.close()
+
+
+def test_matches_the_sql_path_on_random_corpora(tmp_path):
+    """Equivalence against the implementation this replaces, not against my expectations.
+
+    Hand-written expectations only prove the resident index agrees with what I
+    imagined; they cannot catch a filter I translated wrongly. This runs both
+    implementations over the same generated corpus and every filter combination.
+    """
+    import itertools
+    import random
+
+    from zerg.searchd.store import SearchStore
+
+    rng = random.Random(20260801)
+    projects = ["zerg", "other"]
+    providers = ["claude", "codex"]
+    environments = ["local", "test", "development"]
+    rows = []
+    for n in range(60):
+        rows.append(
+            (
+                f"s{n}",
+                0,
+                [rng.random() for _ in range(DIMS)],
+                "42" if n % 5 else "99",
+                projects[n % 2],
+                providers[n % 2],
+                environments[n % 3],
+                f"2026-0{1 + n % 7}-01",
+            )
+        )
+    index, connection = _index(tmp_path, rows)
+    store = SearchStore(connection)
+    try:
+        query = _unit([rng.random() for _ in range(DIMS)])
+        for project, provider, excluded, since in itertools.product(
+            [None, "zerg"], [None, "claude"], [None, ["test"], ["test", "development"]], [None, "2026-04-01"]
+        ):
+            resident = index.search(
+                query,
+                owner_id="42",
+                limit=5,
+                project=project,
+                provider=provider,
+                exclude_environments=excluded,
+                since_iso=since,
+            )
+            sql = store.query_episode_embeddings(
+                model=MODEL,
+                dims=DIMS,
+                query_embedding=query.astype("float32").tobytes(),
+                owner_id="42",
+                limit=5,
+                project=project,
+                provider=provider,
+                exclude_environments=excluded,
+                since_iso=since,
+            )["results"]
+            assert [r["session_id"] for r in resident] == [r["session_id"] for r in sql], (
+                f"divergence for project={project} provider={provider} excluded={excluded} since={since}"
+            )
     finally:
         connection.close()

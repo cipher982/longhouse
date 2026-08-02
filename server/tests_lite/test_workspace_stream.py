@@ -151,6 +151,33 @@ def test_workspace_stream_skips_when_unchanged(tmp_path):
 
 
 @patch.object(timeline_mod, "_wait_for_session_change", lambda _sub: _noop_coro())
+def test_live_catalog_workspace_stream_does_not_skip_unverified_initial_snapshot():
+    """Fresh live-catalog attaches must reconcile before waiting for a wake."""
+    from zerg.services.session_pubsub import reset_pubsub_for_test
+
+    reset_pubsub_for_test()
+    session_id = uuid4()
+
+    async def _run():
+        events: list[dict] = []
+        async for event in timeline_mod._live_catalog_workspace_stream(
+            _DisconnectAfterNCycles(2),
+            session_id=session_id,
+            skip_initial=True,
+            last_event_id=None,
+            known_workspace_fingerprint="snapshot-before-attach",
+        ):
+            events.append(event)
+        return events
+
+    grouped = _collect_stream_events(asyncio.run(_run()))
+
+    assert len(grouped.get("workspace_changed", [])) == 1
+    assert grouped["workspace_changed"][0]["session_id"] == str(session_id)
+    assert grouped["workspace_changed"][0]["pubsub_seq"] == 0
+
+
+@patch.object(timeline_mod, "_wait_for_session_change", lambda _sub: _noop_coro())
 def test_workspace_stream_detects_new_event(tmp_path):
     """Stream should emit workspace_changed when new events are ingested."""
     sf = _make_db(tmp_path)
@@ -563,6 +590,7 @@ def test_workspace_stream_wake_includes_fanout_metadata(tmp_path):
     assert len(changed_events) == 1
     assert changed_events[0]["id"] == "1"
     changed = json.loads(changed_events[0]["data"])
+    assert changed["change_kind"] == "ingest"
     assert changed["latest_event_id"] > 0
     assert changed["pubsub_seq"] == 1
     assert changed["server_fanout_at_ms"] == 1_779_220_000_150
@@ -629,6 +657,7 @@ def test_workspace_stream_title_update_wakes_on_anchor_title_change(tmp_path):
     assert len(changed_events) == 1
     assert changed_events[0]["id"] == "1"
     changed = json.loads(changed_events[0]["data"])
+    assert changed["change_kind"] == "title_update"
     assert changed["session_id"] == str(session_id)
     assert changed["pubsub_seq"] == 1
     assert changed["transcript_preview"] is None
@@ -1070,6 +1099,7 @@ def test_live_catalog_workspace_event_matches_ios_required_contract():
         {
             "kind": "transcript_preview",
             "server_fanout_at_ms": 1234,
+            "catalog_commit_seq": "41",
             "transcript_preview": {
                 "event_id": 7,
                 "text": "visible before durability",
@@ -1106,7 +1136,9 @@ def test_live_catalog_workspace_event_matches_ios_required_contract():
 
     events = asyncio.run(_run())
     changed = json.loads(next(event["data"] for event in events if event["event"] == "workspace_changed"))
+    assert changed["change_kind"] == "transcript_preview"
     assert changed["latest_event_id"] == -7
+    assert changed["catalog_commit_seq"] == 41
     assert changed["transcript_preview"]["text"] == "visible before durability"
     # Required, non-optional fields in SessionWorkspaceStream.WorkspaceChanged.
     assert isinstance(changed["session_id"], str)

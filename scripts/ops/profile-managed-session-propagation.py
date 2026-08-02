@@ -45,8 +45,8 @@ CODEX_LONGHOUSE_HOOK_SCRIPT = Path.home() / ".codex" / "hooks" / "longhouse-code
 BROWSER_UI_OBSERVER_SCRIPT = ROOT / "scripts" / "ops" / "managed_profiler" / "browser_ui_observer.mjs"
 HOSTED_CONTAINER_PREFIX = "longhouse-"
 HOSTED_RUNTIME_OBSERVATION_LIMIT = 200
-METRICS_SCHEMA_VERSION = 3
-BATCH_METRICS_SCHEMA_VERSION = 2
+METRICS_SCHEMA_VERSION = 4
+BATCH_METRICS_SCHEMA_VERSION = 3
 PENDING_BROWSER_SESSION_ID = "__pending_browser_session__"
 BATCH_METRIC_KEYS = (
     "cold_timeline_navigation_to_card_paint_ms",
@@ -63,6 +63,10 @@ BATCH_METRIC_KEYS = (
     "browser_workspace_stream_to_first_paint_ms",
     "browser_workspace_stream_to_tail_paint_ms",
     "browser_workspace_stream_after_sse_ms",
+    "browser_runtime_state_stream_to_paint_ms",
+    "browser_runtime_state_fanout_to_paint_ms",
+    "web_state_render_beacon_p50_ms",
+    "ios_state_render_beacon_p50_ms",
     "close_observed_ms",
     "bridge_live_ingest_lag_ms",
     "browser_timeline_card_from_session_id_ms",
@@ -333,12 +337,14 @@ class Profiler:
         managed = [
             item
             for item in data.get("managed_sessions", [])
+            if isinstance(item, dict)
             if str(item.get("session_id") or item.get("id") or "") == session_id
             or str(item.get("provider_session_id") or "") == session_id
         ]
         unmanaged = [
             item
             for item in data.get("unmanaged_session_bindings", [])
+            if isinstance(item, dict)
             if str(item.get("session_id") or item.get("id") or "") == session_id
             or str(item.get("provider_session_id") or "") == session_id
         ]
@@ -358,14 +364,17 @@ class Profiler:
         completed = run_cmd(cmd, timeout=60)
         data = safe_json_loads(completed.stdout)
         if isinstance(data, dict):
-            return data
+            database = data.get("database")
+            return database if isinstance(database, dict) else data
         return self.hosted_db_direct(session_id)
 
     def hosted_db_direct(self, session_id: str) -> dict[str, Any] | None:
         script = r"""
-import json, sqlite3, sys
+import json, os, sqlite3, sys
 subdomain, sid, runtime_observation_limit = sys.argv[1], sys.argv[2], int(sys.argv[3])
-path = f"/var/app-data/longhouse/{subdomain}/longhouse.db"
+path = f"/var/app-data/longhouse/{subdomain}/longhouse-live.db"
+if not os.path.exists(path):
+    path = f"/var/app-data/longhouse/{subdomain}/longhouse.db"
 conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
 conn.row_factory = sqlite3.Row
 def table(name):
@@ -376,11 +385,40 @@ def one(sql, params=()):
     r = conn.execute(sql, params).fetchone()
     return dict(r) if r else None
 payload = {"db_path": path, "session_id": sid}
+if table("live_sessions"):
+    payload["catalog_schema"] = "live"
+    payload["live_session"] = one("SELECT * FROM live_sessions WHERE session_id=?", (sid,))
+    payload["session"] = payload["live_session"]
+    payload["runtime_state"] = one(
+        "SELECT * FROM live_runtime_state WHERE session_id=? ORDER BY updated_at DESC LIMIT 1", (sid,)
+    )
+    payload["timeline_card"] = one("SELECT * FROM live_timeline_cards WHERE session_id=?", (sid,))
+    payload["interactions"] = rows(
+        '''SELECT id, provider, source, reply_transport, kind, status, can_respond,
+                  occurred_at, last_seen_at, resolved_at, expires_at, projection_json
+           FROM live_interaction_requests WHERE session_id=?
+           ORDER BY occurred_at DESC LIMIT ?''',
+        (sid, runtime_observation_limit),
+    ) if table("live_interaction_requests") else []
+    payload["event_stats"] = None
+    payload["recent_events"] = []
+else:
+    payload["catalog_schema"] = "legacy"
+
 if table("sessions"):
-    payload["session"] = one("SELECT id, provider, project, device_id, cwd, started_at, ended_at, last_activity_at, user_messages, assistant_messages, tool_calls, provider_session_id, summary_title, execution_home, managed_transport, source_runner_name, managed_session_name FROM sessions WHERE id=? OR provider_session_id=?", (sid, sid))
-if table("session_runtime_state"):
+    session_columns = {row[1] for row in conn.execute("PRAGMA table_info(sessions)")}
+    if "session_id" in session_columns:
+        archived_session = one("SELECT * FROM sessions WHERE session_id=?", (sid,))
+    elif "id" in session_columns:
+        archived_session = one("SELECT * FROM sessions WHERE id=? OR provider_session_id=?", (sid, sid))
+    else:
+        archived_session = None
+    if archived_session is not None:
+        payload["archive_session"] = archived_session
+        payload["session"] = archived_session
+if table("session_runtime_state") and "runtime_state" not in payload:
     payload["runtime_state"] = one("SELECT * FROM session_runtime_state WHERE session_id=? ORDER BY updated_at DESC LIMIT 1", (sid,))
-if table("events"):
+if table("events") and "event_stats" not in payload:
     payload["event_stats"] = one("SELECT count(*) AS count, min(timestamp) AS first_timestamp, max(timestamp) AS last_timestamp FROM events WHERE session_id=?", (sid,))
     payload["recent_events"] = rows("SELECT id, role, tool_name, substr(coalesce(content_text, tool_output_text, ''), 1, 500) AS text, timestamp FROM events WHERE session_id=? ORDER BY id DESC LIMIT 20", (sid,))
 if table("session_observations"):
@@ -400,6 +438,18 @@ if table("session_observations"):
             "payload_json": json.dumps(inner, sort_keys=True),
         })
         payload["runtime_observations"].append(row)
+    client_rows = rows("SELECT id, source, observed_at, received_at, payload_json FROM session_observations WHERE session_id=? AND source_domain='client' AND kind='client_render' ORDER BY id DESC LIMIT ?", (sid, runtime_observation_limit))
+    payload["client_render_observations"] = []
+    for row in client_rows:
+        payload_json = row.pop("payload_json") or "{}"
+        decoded = json.loads(payload_json)
+        inner = decoded.get("payload") if isinstance(decoded, dict) else {}
+        if not isinstance(inner, dict) or "render_kind" not in inner:
+            inner = decoded if isinstance(decoded, dict) else {}
+        row["payload"] = inner
+        payload["client_render_observations"].append(row)
+else:
+    payload["client_render_observations"] = []
 print(json.dumps(payload, default=str))
 """
         proc = subprocess.run(
@@ -447,7 +497,35 @@ print(json.dumps(payload, default=str))
         if self._browser_session_cookie:
             return self._browser_session_cookie
 
+        explicit_token = os.environ.get("LONGHOUSE_BROWSER_SESSION_TOKEN") or os.environ.get("LONGHOUSE_DEVICE_TOKEN")
+        if explicit_token and explicit_token.strip():
+            self._browser_session_cookie = explicit_token.strip()
+            return self._browser_session_cookie
+
+        machine_state_path = Path.home() / ".longhouse" / "machine" / "state.json"
+        machine_state = read_json(machine_state_path)
+        configured_url = str((machine_state or {}).get("runtime_url") or "").rstrip("/")
+        target_url = self.browser_ui_base_url.rstrip("/")
+        if configured_url == target_url:
+            device_token_path = machine_state_path.parent / "device-token"
+            try:
+                device_token = device_token_path.read_text().strip()
+            except OSError:
+                device_token = ""
+            if device_token:
+                self._browser_session_cookie = device_token
+                return self._browser_session_cookie
+
         script = r"""
+import os
+
+# Hosted runtime API processes deliberately do not open the catalog-owned live
+# SQLite store through the retired default session factory.  This isolated
+# profiler subprocess needs the live store only to mint a browser token for
+# the real user-facing surfaces.
+os.environ["DATABASE_URL"] = "sqlite:////data/longhouse-live.db"
+os.environ["TESTING"] = "1"
+
 from zerg.auth.session_tokens import _issue_access_token
 from zerg.database import db_session
 from zerg.models.models import User
@@ -1057,7 +1135,20 @@ def session_from_event(data):
     if not isinstance(obj, dict):
         return None
     session = obj.get("session")
-    if isinstance(session, dict) and session.get("thread_id") == sid:
+    if not isinstance(session, dict):
+        return None
+    candidates = [
+        session.get("id"),
+        session.get("thread_id"),
+        session.get("session_id"),
+    ]
+    for child_key in ("head", "current", "latest"):
+        child = session.get(child_key)
+        if isinstance(child, dict):
+            candidates.extend(
+                [child.get("id"), child.get("thread_id"), child.get("session_id")]
+            )
+    if sid in {str(candidate) for candidate in candidates if candidate is not None}:
         return session
     return None
 
@@ -1284,6 +1375,15 @@ except Exception as exc:
             "session_id_received": "browser_session_id_received",
             "detail_navigation_started": "browser_detail_navigation_started",
             "detail_loaded": "browser_detail_loaded",
+            "detail_workspace_request": "browser_detail_workspace_request",
+            "detail_workspace_response": "browser_detail_workspace_response",
+            "detail_workspace_failed": "browser_detail_workspace_failed",
+            "detail_workspace_root_ready": "browser_detail_workspace_root_ready",
+            "detail_workspace_stream_ready": "browser_detail_workspace_stream_ready",
+            "client_render_beacon_request": "browser_client_render_beacon_request",
+            "client_render_beacon_response": "browser_client_render_beacon_response",
+            "client_render_beacon_failed": "browser_client_render_beacon_failed",
+            "client_render_beacon_payload": "browser_client_render_beacon_payload",
             "timeline_page_closed_after_card": "browser_timeline_page_closed_after_card",
             "timeline_stream_connected": "browser_timeline_stream_connected",
             "timeline_stream_heartbeat": "browser_timeline_stream_heartbeat",
@@ -1292,6 +1392,7 @@ except Exception as exc:
             "timeline_stream_workspace_connected": "browser_workspace_stream_connected",
             "timeline_stream_workspace_changed": "browser_workspace_stream_changed",
             "timeline_stream_workspace_preview_changed": "browser_workspace_preview_stream_changed",
+            "runtime_state_painted": "browser_runtime_state_painted",
             "live_transcript_first_painted": "browser_live_transcript_first_painted",
             "live_transcript_nonce_painted": "browser_live_transcript_nonce_painted",
         }
@@ -1303,6 +1404,8 @@ except Exception as exc:
             "close_painted_timeout": "browser_close_card_painted_timeout",
             "live_transcript_first_painted_timeout": "browser_live_transcript_first_painted_timeout",
             "live_transcript_nonce_painted_timeout": "browser_live_transcript_nonce_painted_timeout",
+            "detail_workspace_root_ready_timeout": "browser_detail_workspace_root_ready_timeout",
+            "runtime_state_timeout": "browser_runtime_state_painted_timeout",
         }
         if observer_kind == "cold":
             event_map = {
@@ -1501,8 +1604,9 @@ except Exception as exc:
             self.project,
             "--name",
             name,
+            "--url",
+            self.browser_ui_base_url,
             "--no-attach",
-            "--no-open",
         ]
         if self.args.codex_model:
             launch_cmd.extend(["--model", self.args.codex_model])
@@ -1516,7 +1620,15 @@ except Exception as exc:
             timeout=90,
         )
         session_id = parse_session_id(launch.stdout)
-        ws_url = parse_remote_target(launch.stdout)
+        ws_url = None
+        if session_id:
+            ws_url = parse_remote_target(launch.stdout)
+            if not ws_url:
+                ws_url = self.wait_bridge_ws_url(
+                    session_id,
+                    case_id=case_id,
+                    ownership=ownership,
+                )
         if not session_id or not ws_url:
             raise RuntimeError(f"managed launch did not return session/ws url: {launch.short()}")
         self.observe(
@@ -1538,51 +1650,55 @@ except Exception as exc:
                 case_id=case_id,
                 ownership=ownership,
             )
-        self.poll_timeline_session(
-            session_id,
-            case_id=case_id,
-            ownership=ownership,
-            predicate=timeline_has_card,
-            event="timeline_card_visible_pre_ingest",
-            timeout=30,
-            interval=0.25,
-        )
+        if self.args.profile != "warm-live":
+            self.poll_timeline_session(
+                session_id,
+                case_id=case_id,
+                ownership=ownership,
+                predicate=timeline_has_card,
+                event="timeline_card_visible_pre_ingest",
+                timeout=30,
+                interval=0.25,
+            )
         self.write_snapshot(case_id, ownership, session_id, "post_launch")
 
-        tui_log = self.output_dir / f"{session_id}-managed-tui.log"
-        tui_cmd = [
-            "/opt/homebrew/bin/codex",
-            "-c",
-            "check_for_update_on_startup=false",
-        ]
-        if self.args.codex_effort:
-            tui_cmd.extend(["-c", f"model_reasoning_effort={self.args.codex_effort}"])
-        if self.args.codex_model:
-            tui_cmd.extend(["--model", self.args.codex_model])
-        tui_cmd.extend(["--enable", "tui_app_server", "--remote", ws_url, "--no-alt-screen"])
-        remote_exec = f"LONGHOUSE_MANAGED_SESSION_ID={shlex.quote(session_id)} exec {shlex.join(tui_cmd)}"
-        remote_cmd = (
-            "stty rows 40 cols 120 2>/dev/null || true; "
-            "export LINES=40 COLUMNS=120 TERM=${TERM:-xterm-256color}; "
-            f"{remote_exec}"
-        )
-        tui = subprocess.Popen(
-            ["script", "-q", str(tui_log), "zsh", "-lc", remote_cmd],
-            cwd=str(ROOT),
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-        self.observe(
-            case_id=case_id,
-            provider="codex",
-            ownership=ownership,
-            source="harness",
-            event="remote_tui_started",
-            session_id=session_id,
-            payload={"pid": tui.pid, "log": str(tui_log)},
-        )
+        tui: subprocess.Popen[str] | None = None
+        precondition: dict[str, Any] | None = None
+        if self.args.profile != "warm-live":
+            tui_log = self.output_dir / f"{session_id}-managed-tui.log"
+            tui_cmd = [
+                "/opt/homebrew/bin/codex",
+                "-c",
+                "check_for_update_on_startup=false",
+            ]
+            if self.args.codex_effort:
+                tui_cmd.extend(["-c", f"model_reasoning_effort={self.args.codex_effort}"])
+            if self.args.codex_model:
+                tui_cmd.extend(["--model", self.args.codex_model])
+            tui_cmd.extend(["--enable", "tui_app_server", "--remote", ws_url, "--no-alt-screen"])
+            remote_exec = f"LONGHOUSE_MANAGED_SESSION_ID={shlex.quote(session_id)} exec {shlex.join(tui_cmd)}"
+            remote_cmd = (
+                "stty rows 40 cols 120 2>/dev/null || true; "
+                "export LINES=40 COLUMNS=120 TERM=${TERM:-xterm-256color}; "
+                f"{remote_exec}"
+            )
+            tui = subprocess.Popen(
+                ["script", "-q", str(tui_log), "zsh", "-lc", remote_cmd],
+                cwd=str(ROOT),
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            self.observe(
+                case_id=case_id,
+                provider="codex",
+                ownership=ownership,
+                source="harness",
+                event="remote_tui_started",
+                session_id=session_id,
+                payload={"pid": tui.pid, "log": str(tui_log)},
+            )
         state = self.wait_bridge_thread(session_id, case_id=case_id, ownership=ownership)
         thread_id = state.get("thread_id") if state else None
         thread_path = Path(str(state.get("thread_path") or "")) if state else None
@@ -1597,13 +1713,14 @@ except Exception as exc:
             session_id=session_id,
             payload={"thread_id": thread_id, "state": state},
         )
-        precondition = self.wait_codex_tui_precondition(
-            tui_log,
-            case_id=case_id,
-            ownership=ownership,
-            session_id=session_id,
-            timeout=8,
-        )
+        if tui is not None:
+            precondition = self.wait_codex_tui_precondition(
+                tui_log,
+                case_id=case_id,
+                ownership=ownership,
+                session_id=session_id,
+                timeout=8,
+            )
         if precondition:
             self.write_snapshot(case_id, ownership, session_id, "provider_precondition")
             self.observe(
@@ -1661,11 +1778,17 @@ except Exception as exc:
                 ownership=ownership,
             )
         if self.args.profile == "warm-live":
-            browser_ready = self.wait_for_observation(
+            browser_session_ready = self.wait_for_observation(
                 case_id,
                 session_id,
-                "browser_timeline_card_painted",
-                timeout=30,
+                "browser_session_id_received",
+                timeout=15,
+            )
+            browser_workspace_ready = self.wait_for_observation(
+                case_id,
+                session_id,
+                "browser_detail_workspace_stream_ready",
+                timeout=45,
             )
             sse_ready = self.wait_for_observation(
                 case_id,
@@ -1673,7 +1796,7 @@ except Exception as exc:
                 "timeline_transcript_preview_sse_ready",
                 timeout=10,
             )
-            if browser_ready and sse_ready:
+            if browser_session_ready and browser_workspace_ready and sse_ready:
                 self.observe(
                     case_id=case_id,
                     provider="codex",
@@ -1682,7 +1805,8 @@ except Exception as exc:
                     event="warm_ready_at",
                     session_id=session_id,
                     payload={
-                        "browser_card_ready": True,
+                        "browser_session_ready": True,
+                        "browser_workspace_stream_ready": True,
                         "timeline_sse_ready": True,
                     },
                 )
@@ -1696,7 +1820,8 @@ except Exception as exc:
                     session_id=session_id,
                     payload={
                         "reason": "warm_live_precondition_timeout",
-                        "browser_card_ready": browser_ready,
+                        "browser_session_ready": browser_session_ready,
+                        "browser_workspace_stream_ready": browser_workspace_ready,
                         "timeline_sse_ready": sse_ready,
                     },
                 )
@@ -1729,7 +1854,8 @@ except Exception as exc:
                     "thread_path": str(thread_path) if thread_path else None,
                     "precondition": {
                         "reason": "warm_live_precondition_timeout",
-                        "browser_card_ready": browser_ready,
+                        "browser_session_ready": browser_session_ready,
+                        "browser_workspace_stream_ready": browser_workspace_ready,
                         "timeline_sse_ready": sse_ready,
                     },
                 }
@@ -2233,6 +2359,27 @@ except Exception as exc:
         )
         return last
 
+    def wait_bridge_ws_url(self, session_id: str, *, case_id: str, ownership: str) -> str | None:
+        state_path = BRIDGE_ROOT / f"{session_id}.json"
+        deadline = time.monotonic() + 30
+        last = None
+        while time.monotonic() < deadline:
+            last = read_json(state_path)
+            ws_url = str((last or {}).get("ws_url") or "").strip()
+            if ws_url:
+                return ws_url
+            time.sleep(0.25)
+        self.observe(
+            case_id=case_id,
+            provider="codex",
+            ownership=ownership,
+            source="codex_bridge_state",
+            event="managed_ws_url_timeout",
+            session_id=session_id,
+            payload={"state_path": str(state_path), "last": last},
+        )
+        return None
+
     def poll_local_assistant_response(
         self,
         path: Path,
@@ -2456,8 +2603,22 @@ except Exception as exc:
         )
         requires_durable = not active_metrics or "durable_archive_local_to_hosted_ms" in active_metrics
         hosted = self.hosted_db_direct(session_id) or {}
+        if not hosted.get("session"):
+            # The catalog-owned live store and the debug helper can briefly
+            # observe different SQLite generations during archive promotion.
+            # Keep the direct reader as the primary timing source, but use the
+            # same canonical debug snapshot for final verdict identity when it
+            # has the durable row the direct read missed.
+            hosted_fallback = self.hosted_debug(session_id) or {}
+            if hosted_fallback.get("session"):
+                hosted = {**hosted, **hosted_fallback}
         session = hosted.get("session") or {}
         runtime = hosted.get("runtime_state") or {}
+        state_settlement = self.runtime_state_settlement_metrics(case_id, session_id)
+        client_state = state_render_beacon_metrics(
+            hosted,
+            self.browser_client_render_beacons(case_id, session_id),
+        )
         contains = hosted_assistant_events_contain(hosted, nonce)
         closed = lifecycle_closed(hosted)
         transcript_latency = self.event_delta_ms(
@@ -2820,6 +2981,17 @@ except Exception as exc:
             "browser_workspace_stream_to_first_paint_ms": browser_workspace_to_first_paint_latency,
             "browser_workspace_stream_to_tail_paint_ms": browser_workspace_to_tail_paint_latency,
             "browser_workspace_stream_after_sse_ms": browser_workspace_after_sse_latency,
+            "browser_runtime_state_stream_to_paint_ms": state_settlement.get("stream_to_paint_ms"),
+            "browser_runtime_state_fanout_to_paint_ms": state_settlement.get("fanout_to_paint_ms"),
+            "browser_runtime_state_settlement_count": state_settlement.get("count", 0),
+            "web_state_render_beacon_count": client_state.get("web_count", 0),
+            "web_state_render_beacon_p50_ms": client_state.get("web_p50_ms"),
+            "web_state_render_beacon_p95_ms": client_state.get("web_p95_ms"),
+            "web_state_render_beacon_source": client_state.get("source"),
+            "ios_state_render_beacon_count": client_state.get("ios_count", 0),
+            "ios_state_render_beacon_p50_ms": client_state.get("ios_p50_ms"),
+            "ios_state_render_beacon_p95_ms": client_state.get("ios_p95_ms"),
+            "state_render_beacon_count": client_state.get("count", 0),
             "warm_ready_to_prompt_ms": warm_ready_to_prompt_latency,
             "warm_live_prompt_to_sse_first_ms": first_live_sse_latency,
             "warm_live_prompt_to_browser_first_paint_ms": browser_live_first_latency,
@@ -3012,6 +3184,18 @@ except Exception as exc:
             transcript += f" browser_workspace_stream_to_tail_paint={browser_workspace_to_tail_paint_latency}ms"
         if browser_workspace_after_sse_latency is not None:
             transcript += f" browser_workspace_stream_after_sse={browser_workspace_after_sse_latency}ms"
+        if state_settlement.get("count"):
+            transcript += (
+                f" runtime_state_settlements={state_settlement['count']}"
+                f" stream_to_paint_p50={state_settlement.get('stream_to_paint_ms')}ms"
+                f" fanout_to_paint_p50={state_settlement.get('fanout_to_paint_ms')}ms"
+            )
+        if client_state.get("count"):
+            transcript += (
+                f" state_beacons={client_state['count']}"
+                f" web_p50={client_state.get('web_p50_ms')}ms"
+                f" ios_p50={client_state.get('ios_p50_ms')}ms"
+            )
         if transcript_ingest.get("ingest_lag_ms") is not None:
             transcript += f" server_ingest_lag={transcript_ingest['ingest_lag_ms']}ms"
         if transcript_ingest.get("skew_adjusted_lag_ms") is not None:
@@ -3205,6 +3389,31 @@ except Exception as exc:
         )
         return "pass", metrics["notes"], metrics
 
+    def browser_client_render_beacons(self, case_id: str, session_id: str) -> list[dict[str, Any]]:
+        """Return browser beacon payloads when live-catalog persistence is unavailable."""
+        beacons: list[dict[str, Any]] = []
+        for row in self.observations:
+            if row.get("case_id") != case_id or row.get("session_id") != session_id:
+                continue
+            if row.get("event") not in {
+                "browser_client_render_beacon_request",
+                "browser_cold_client_render_beacon_request",
+                "browser_client_render_beacon_payload",
+                "browser_cold_client_render_beacon_payload",
+            }:
+                continue
+            payload = row.get("payload")
+            values = payload.get("beacons") if isinstance(payload, dict) else None
+            if not isinstance(values, list):
+                continue
+            for value in values:
+                if not isinstance(value, dict):
+                    continue
+                if str(value.get("session_id") or "") != session_id:
+                    continue
+                beacons.append(value)
+        return beacons
+
     def event_delta_ms(self, case_id: str, session_id: str, start_event: str, end_event: str) -> int | None:
         start = None
         for row in self.observations:
@@ -3320,6 +3529,64 @@ except Exception as exc:
             return None
         return end - max(starts)
 
+    def runtime_state_settlement_metrics(self, case_id: str, session_id: str) -> dict[str, Any]:
+        """Match each browser state paint to the catalog commit that woke it."""
+        streams: dict[int, list[tuple[int, dict[str, Any]]]] = {}
+        for row in self.observations:
+            if row.get("case_id") != case_id or row.get("session_id") != session_id:
+                continue
+            if row.get("event") not in {
+                "browser_workspace_stream_changed",
+                "browser_cold_workspace_stream_changed",
+            }:
+                continue
+            payload = row.get("payload")
+            detail = payload.get("detail") if isinstance(payload, dict) else None
+            if not isinstance(detail, dict):
+                continue
+            commit_seq = int_or_none(detail.get("catalog_commit_seq"))
+            observed = row.get("observed_at_monotonic_ms")
+            if commit_seq is None or not isinstance(observed, int):
+                continue
+            streams.setdefault(commit_seq, []).append((observed, detail))
+
+        settlements: list[dict[str, int]] = []
+        for row in self.observations:
+            if row.get("case_id") != case_id or row.get("session_id") != session_id:
+                continue
+            if row.get("event") not in {
+                "browser_runtime_state_painted",
+                "browser_cold_runtime_state_painted",
+            }:
+                continue
+            payload = row.get("payload")
+            if not isinstance(payload, dict):
+                continue
+            commit_seq = int_or_none(payload.get("stream_catalog_commit_seq"))
+            observed = row.get("observed_at_monotonic_ms")
+            candidates = streams.get(commit_seq or 0, [])
+            if commit_seq is None or not isinstance(observed, int) or not candidates:
+                continue
+            previous = [item for item in candidates if item[0] <= observed]
+            if not previous:
+                continue
+            stream_observed, detail = max(previous, key=lambda item: item[0])
+            item = {"stream_to_paint_ms": observed - stream_observed}
+            fanout_at_ms = int_or_none(detail.get("server_fanout_at_ms"))
+            paint_at_ms = payload_wall_timestamp(row)
+            if fanout_at_ms is not None and paint_at_ms is not None and paint_at_ms >= fanout_at_ms:
+                item["fanout_to_paint_ms"] = paint_at_ms - fanout_at_ms
+            settlements.append(item)
+
+        stream_values = [item["stream_to_paint_ms"] for item in settlements]
+        fanout_values = [item["fanout_to_paint_ms"] for item in settlements if "fanout_to_paint_ms" in item]
+        return {
+            "count": len(settlements),
+            "stream_to_paint_ms": percentile(stream_values, 50),
+            "fanout_to_paint_ms": percentile(fanout_values, 50),
+            "settlements": settlements,
+        }
+
     def terminal_received_delta_from_event_ms(
         self,
         case_id: str,
@@ -3428,7 +3695,10 @@ def redact_cmd(cmd: list[str]) -> list[str]:
 
 
 def parse_session_id(text: str) -> str | None:
-    match = re.search(r"Session ID:\s*([0-9a-fA-F-]{36})", text)
+    match = re.search(
+        r"(?:Session ID:|Attach:\s+longhouse\s+codex\s+attach\s+--session-id)\s*([0-9a-fA-F-]{36})",
+        text,
+    )
     return match.group(1) if match else None
 
 
@@ -3588,6 +3858,18 @@ def hosted_assistant_events_contain(data: dict[str, Any], text: str) -> bool:
         if str(event.get("role") or "") != "assistant":
             continue
         if text in str(event.get("text") or ""):
+            return True
+    # Catalog-backed hosted tenants keep the durable transcript in `sessions`
+    # while live provisional text is held separately.  The profiler must be
+    # able to prove the archived assistant result in either schema.
+    for key in (
+        "last_assistant_message_preview",
+        "last_visible_text_preview",
+        "transcript_preview",
+    ):
+        if text in str((data.get("session") or {}).get(key) or ""):
+            return True
+        if text in str((data.get("archive_session") or {}).get(key) or ""):
             return True
     return False
 
@@ -3828,6 +4110,57 @@ def compact_hosted(data: dict[str, Any]) -> dict[str, Any]:
         "event_stats": data.get("event_stats"),
         "recent_events": (data.get("recent_events") or [])[:5],
         "runtime_observations": (data.get("runtime_observations") or [])[:5],
+        "client_render_observation_stats": data.get("client_render_observation_stats"),
+        "client_render_observations": (
+            data.get("client_render_observations") or data.get("recent_client_render_observations") or []
+        )[:20],
+    }
+
+
+def state_render_beacon_metrics(
+    data: dict[str, Any],
+    browser_beacons: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    rows = data.get("client_render_observations") or data.get("recent_client_render_observations") or []
+    by_surface: dict[str, list[int]] = {"web": [], "ios": []}
+    source = "persisted"
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        payload = row.get("payload") if isinstance(row.get("payload"), dict) else row
+        if payload.get("render_kind") != "state":
+            continue
+        surface = str(payload.get("surface") or "").strip().lower()
+        latency = int_or_none(payload.get("latency_ms"))
+        if surface in by_surface and latency is not None and latency >= 0:
+            by_surface[surface].append(latency)
+    # Live-catalog tenants intentionally do not persist client observations in
+    # the legacy SQL store. The browser observer captures the exact beacon
+    # request instead, preserving a real client-side settlement measurement.
+    if not any(by_surface.values()):
+        source = "browser_request"
+        for payload in browser_beacons or []:
+            if str(payload.get("render_kind") or "") != "state":
+                continue
+            surface = str(payload.get("surface") or "").strip().lower()
+            emitted = int_or_none(payload.get("emitted_at_ms"))
+            rendered = int_or_none(payload.get("rendered_at_ms"))
+            skew = int_or_none(payload.get("clock_skew_ms")) or 0
+            if surface not in by_surface or emitted is None or rendered is None:
+                continue
+            latency = rendered - skew - emitted
+            if latency >= 0:
+                by_surface[surface].append(latency)
+    all_values = by_surface["web"] + by_surface["ios"]
+    return {
+        "source": source if any(by_surface.values()) else None,
+        "count": len(all_values),
+        "web_count": len(by_surface["web"]),
+        "web_p50_ms": percentile(by_surface["web"], 50),
+        "web_p95_ms": percentile(by_surface["web"], 95),
+        "ios_count": len(by_surface["ios"]),
+        "ios_p50_ms": percentile(by_surface["ios"], 50),
+        "ios_p95_ms": percentile(by_surface["ios"], 95),
     }
 
 
@@ -3919,8 +4252,8 @@ def summarize_local_health(data: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def terminate_process(proc: subprocess.Popen[str]) -> None:
-    if proc.poll() is not None:
+def terminate_process(proc: subprocess.Popen[str] | None) -> None:
+    if proc is None or proc.poll() is not None:
         return
     try:
         proc.terminate()

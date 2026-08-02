@@ -92,7 +92,9 @@ impl<'a> SessionPhaseStore<'a> {
     /// LWW upsert. Always stores RFC3339 with `+00:00`, so string comparison in
     /// the `WHERE` clause is monotonic. A single statement keeps the check and
     /// the write atomic — no SELECT-then-write race between writers on
-    /// different connections.
+    /// different connections. Every accepted write also gets a monotonically
+    /// increasing revision so the daemon can detect an accepted update even
+    /// when its observed timestamp does not advance the global maximum.
     ///
     /// Unknown provider phases are retained as raw evidence. The typed
     /// heartbeat projection maps them to canonical `unknown`; legacy readers
@@ -107,14 +109,19 @@ impl<'a> SessionPhaseStore<'a> {
                 phase,
                 tool_name,
                 source,
-                observed_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                observed_at,
+                revision
+            ) VALUES (
+                ?1, ?2, ?3, ?4, ?5, ?6,
+                COALESCE((SELECT MAX(revision) FROM session_phase_state), 0) + 1
+            )
             ON CONFLICT(session_id) DO UPDATE SET
                 provider = excluded.provider,
                 phase = excluded.phase,
                 tool_name = excluded.tool_name,
                 source = excluded.source,
-                observed_at = excluded.observed_at
+                observed_at = excluded.observed_at,
+                revision = excluded.revision
              WHERE session_phase_state.observed_at <= excluded.observed_at",
             params![
                 signal.session_id,

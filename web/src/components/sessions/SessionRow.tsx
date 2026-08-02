@@ -137,6 +137,9 @@ export function SessionRow({
       data-session-id={session.id}
       data-thread-id={thread.thread_id}
       data-status={statusTone}
+      data-activity-state={session.session_state.activity.state}
+      data-activity-observed-at={session.session_state.activity.observed_at ?? undefined}
+      data-state-commit-seq={session.session_state.commit_seq ?? undefined}
       data-closed={isClosed ? "true" : "false"}
       data-unread={unread ? "true" : undefined}
       data-dragging={dragging ? "true" : undefined}

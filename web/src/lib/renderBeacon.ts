@@ -16,6 +16,7 @@ interface BeaconPayload {
   event_id: string;
   session_id: string | null;
   surface: "web";
+  render_kind?: "event" | "state";
   managed: boolean;
   emitted_at_ms: number;
   rendered_at_ms: number;
@@ -23,6 +24,9 @@ interface BeaconPayload {
   server_fanout_at_ms?: number | null;
   client_received_at_ms?: number | null;
   pubsub_seq?: number | null;
+  state_commit_seq?: number | null;
+  state_phase?: string | null;
+  state_observed_at_ms?: number | null;
 }
 
 let _skewMs = 0;
@@ -52,6 +56,9 @@ export function emitRenderBeacon(params: {
   serverFanoutAtMs?: number | null;
   clientReceivedAtMs?: number | null;
   pubsubSeq?: number | null;
+  stateCommitSeq?: number | null;
+  statePhase?: string | null;
+  stateObservedAtMs?: number | null;
 }): void {
   if (typeof window === "undefined") return;
   if (!params.latestEventEmittedAtMs) return;
@@ -64,6 +71,7 @@ export function emitRenderBeacon(params: {
       event_id: String(params.latestEventId),
       session_id: params.sessionId,
       surface: "web",
+      render_kind: "event",
       managed: params.managed,
       emitted_at_ms: params.latestEventEmittedAtMs!,
       rendered_at_ms: Date.now(),
@@ -71,6 +79,9 @@ export function emitRenderBeacon(params: {
       server_fanout_at_ms: params.serverFanoutAtMs ?? null,
       client_received_at_ms: params.clientReceivedAtMs ?? null,
       pubsub_seq: params.pubsubSeq ?? null,
+      state_commit_seq: params.stateCommitSeq ?? null,
+      state_phase: params.statePhase ?? null,
+      state_observed_at_ms: params.stateObservedAtMs ?? null,
     };
 
     try {
@@ -87,5 +98,62 @@ export function emitRenderBeacon(params: {
   };
 
   // rAF + setTimeout(0) gets us past layout + paint in most browsers.
+  window.requestAnimationFrame(() => window.setTimeout(send, 0));
+}
+
+/**
+ * Emit a beacon for a canonical runtime-state commit even when no durable
+ * transcript event accompanied the wake. The server fanout timestamp is the
+ * state-lane emission coordinate; the normal client clock correction applies.
+ */
+export function emitStateRenderBeacon(params: {
+  sessionId: string;
+  catalogCommitSeq: number;
+  statePhase?: string | null;
+  stateObservedAtMs?: number | null;
+  managed: boolean;
+  serverFanoutAtMs?: number | null;
+  clientReceivedAtMs?: number | null;
+  pubsubSeq?: number | null;
+}): void {
+  if (typeof window === "undefined") return;
+  if (!Number.isFinite(params.catalogCommitSeq) || params.catalogCommitSeq <= 0) return;
+  if (!params.serverFanoutAtMs) return;
+
+  const beaconKey = `${params.sessionId}:state:${params.catalogCommitSeq}`;
+  if (beaconKey === _lastBeaconedEventKey) return;
+  _lastBeaconedEventKey = beaconKey;
+
+  const send = () => {
+    const payload: BeaconPayload = {
+      event_id: `state:${params.catalogCommitSeq}`,
+      session_id: params.sessionId,
+      surface: "web",
+      render_kind: "state",
+      managed: params.managed,
+      emitted_at_ms: params.serverFanoutAtMs!,
+      rendered_at_ms: Date.now(),
+      clock_skew_ms: _skewMs,
+      server_fanout_at_ms: params.serverFanoutAtMs,
+      client_received_at_ms: params.clientReceivedAtMs ?? null,
+      pubsub_seq: params.pubsubSeq ?? null,
+      state_commit_seq: params.catalogCommitSeq,
+      state_phase: params.statePhase ?? null,
+      state_observed_at_ms: params.stateObservedAtMs ?? null,
+    };
+
+    try {
+      const url = buildUrl("/telemetry/client-render");
+      const body = JSON.stringify(payload);
+      if (navigator.sendBeacon) {
+        navigator.sendBeacon(url, new Blob([body], { type: "application/json" }));
+      } else {
+        void fetch(url, { method: "POST", body, headers: { "Content-Type": "application/json" } });
+      }
+    } catch {
+      // Beacon is best-effort.
+    }
+  };
+
   window.requestAnimationFrame(() => window.setTimeout(send, 0));
 }

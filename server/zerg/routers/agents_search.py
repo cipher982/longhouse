@@ -386,6 +386,84 @@ async def _semantic_recall_matches(
         return []
 
 
+# Hydration gets its own slice of the request rather than the remainder. A lane
+# that runs long must cost results, not evidence.
+HYDRATION_RESERVED_SECONDS = 1.0
+
+# Fuse deeper than we return. Truncating each lane to max_results before RRF
+# means agreement below that rank can never surface, which is most of what rank
+# fusion is for.
+CANDIDATE_DEPTH_FACTOR = 5
+
+
+def _rank_single_lane(matches: list[RecallMatch], *, limit: int) -> list[RecallMatch]:
+    """Order one lane's own scores, deterministically.
+
+    Ties break on session id so a repeated query cannot reorder its own results,
+    which would read as retrieval instability rather than a coin flip.
+    """
+
+    ordered = sorted(matches, key=lambda m: (-m.score, m.session_id))
+    return ordered[:limit]
+
+
+async def _lexical_recall_matches(
+    *,
+    owner_id: int,
+    query: str,
+    project: Optional[str],
+    provider: Optional[str],
+    since_days: int,
+    include_test: bool,
+    include_automation: bool,
+    candidate_depth: int,
+    timeout_seconds: float,
+) -> list[RecallMatch]:
+    """FTS discovery, one match per session, best row wins."""
+
+    rows = await search_storage_v2_rows(
+        owner_id=owner_id,
+        query=query,
+        project=project,
+        provider=provider,
+        environment=None,
+        days_back=since_days,
+        limit=min(200, candidate_depth),
+        timeout_seconds=timeout_seconds,
+    )
+    matches: list[RecallMatch] = []
+    seen: set[str] = set()
+    for row in rows:
+        session_id = str(row.get("session_id") or "")
+        environment = str(row.get("environment") or "")
+        if not session_id or session_id in seen:
+            continue
+        if not include_test and environment in {"test", "e2e"}:
+            continue
+        if not include_automation and environment == "automation":
+            continue
+        seen.add(session_id)
+        snippet = str(row.get("content_snippet") or row.get("tool_output_snippet") or "")
+        matches.append(
+            RecallMatch(
+                session_id=session_id,
+                chunk_index=int(row.get("record_ordinal") or 0),
+                score=1.0 / (1.0 + abs(float(row.get("rank") or 0.0))),
+                context_text=snippet or None,
+                evidence=snippet or None,
+                total_events=int(row.get("event_count") or 0),
+                context=[],
+                match_event_id=int(row["search_event_id"]) if row.get("search_event_id") is not None else None,
+                generation_id=str(row.get("generation_id") or "") or None,
+                source_object_id=str(row.get("source_object_id") or "") or None,
+                record_ordinal=int(row.get("record_ordinal") or 0),
+            )
+        )
+        if len(matches) >= candidate_depth:
+            break
+    return matches
+
+
 async def _hydrate_recall_match(
     match: RecallMatch,
     *,
@@ -607,62 +685,54 @@ async def recall_sessions(
         )
 
     owner_id = _catalog_owner_id(_auth)
-    with timing.span("discovery"):
-        rows = await search_storage_v2_rows(
-            owner_id=owner_id,
-            query=query,
-            project=project,
-            provider=provider,
-            environment=None,
-            days_back=since_days,
-            limit=min(200, max_results * 8),
-            timeout_seconds=remaining_budget(),
-        )
-    matches: list[RecallMatch] = []
-    seen: set[str] = set()
-    for row in rows:
-        session_id = str(row.get("session_id") or "")
-        environment = str(row.get("environment") or "")
-        if not session_id or session_id in seen:
-            continue
-        if not include_test and environment in {"test", "e2e"}:
-            continue
-        if not include_automation and environment == "automation":
-            continue
-        seen.add(session_id)
-        snippet = str(row.get("content_snippet") or row.get("tool_output_snippet") or "")
-        matches.append(
-            RecallMatch(
-                session_id=session_id,
-                chunk_index=int(row.get("record_ordinal") or 0),
-                score=1.0 / (1.0 + abs(float(row.get("rank") or 0.0))),
-                context_text=snippet or None,
-                evidence=snippet or None,
-                total_events=int(row.get("event_count") or 0),
-                context=[],
-                match_event_id=int(row["search_event_id"]) if row.get("search_event_id") is not None else None,
-                generation_id=str(row.get("generation_id") or "") or None,
-                source_object_id=str(row.get("source_object_id") or "") or None,
-                record_ordinal=int(row.get("record_ordinal") or 0),
-            )
-        )
-        if len(matches) >= max_results:
-            break
+    candidate_depth = min(200, max(max_results, max_results * CANDIDATE_DEPTH_FACTOR))
 
-    if mode in {"auto", "semantic"}:
-        with timing.span("semantic"):
-            semantic_matches = await _semantic_recall_matches(
+    # Reserved, not leftover. Hydration used to receive whatever discovery had
+    # not already spent, which in practice was the 0.05s floor, so matches came
+    # back "partial / search_evidence_unavailable" whenever a lane ran long.
+    discovery_deadline = max(0.05, remaining_budget() - HYDRATION_RESERVED_SECONDS)
+
+    async def lexical() -> list[RecallMatch]:
+        with timing.span("lexical"):
+            return await _lexical_recall_matches(
+                owner_id=owner_id,
                 query=query,
                 project=project,
                 provider=provider,
                 since_days=since_days,
                 include_test=include_test,
                 include_automation=include_automation,
-                max_results=max_results,
-                timeout_seconds=remaining_budget(),
+                candidate_depth=candidate_depth,
+                timeout_seconds=discovery_deadline,
+            )
+
+    async def dense() -> list[RecallMatch]:
+        with timing.span("dense"):
+            return await _semantic_recall_matches(
+                query=query,
+                project=project,
+                provider=provider,
+                since_days=since_days,
+                include_test=include_test,
+                include_automation=include_automation,
+                max_results=candidate_depth,
+                timeout_seconds=discovery_deadline,
                 owner_id=owner_id,
             )
-        matches = _rrf_merge_recall_matches(matches, semantic_matches, limit=max_results)
+
+    # Each mode runs exactly the lanes it names. `semantic` used to run lexical
+    # first and fuse, which made the lane-specific evaluation meaningless: every
+    # mode measured some amount of lexical.
+    if mode == "lexical":
+        matches = _rank_single_lane(await lexical(), limit=max_results)
+        lanes = ("lexical",)
+    elif mode == "semantic":
+        matches = _rank_single_lane(await dense(), limit=max_results)
+        lanes = ("dense",)
+    else:
+        lexical_matches, dense_matches = await asyncio.gather(lexical(), dense())
+        matches = _rrf_merge_recall_matches(lexical_matches, dense_matches, limit=max_results)
+        lanes = ("lexical", "dense")
 
     # Hydrate after fusion, not before. Hydrating the lexical list first meant
     # semantic matches never reached the hydrator at all — they were appended
@@ -675,11 +745,11 @@ async def recall_sessions(
                     match,
                     owner_id=owner_id,
                     context_turns=context_turns,
-                    timeout_seconds=remaining_budget(),
+                    timeout_seconds=max(0.05, remaining_budget()),
                 )
                 for match in matches
             )
         )
 
     timing.apply(response)
-    return RecallResponse(matches=matches, total=len(matches))
+    return RecallResponse(matches=matches, total=len(matches), lanes=list(lanes))

@@ -245,6 +245,7 @@ def publish_session_runtime_update(
     session_id: str,
     provider: str | None,
     source: str | None,
+    catalog_commit_seq: str | int | None = None,
 ) -> None:
     """Wake session and timeline subscribers after persisted runtime state changes."""
     payload = {
@@ -254,6 +255,8 @@ def publish_session_runtime_update(
         "source": source,
         "server_fanout_at_ms": int(datetime.now(timezone.utc).timestamp() * 1000),
     }
+    if catalog_commit_seq is not None:
+        payload["catalog_commit_seq"] = int(catalog_commit_seq)
     bus = get_pubsub()
     bus.publish(topic_session(session_id), payload)
     bus.publish(TOPIC_TIMELINE, payload)

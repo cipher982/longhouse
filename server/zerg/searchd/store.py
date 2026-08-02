@@ -752,14 +752,46 @@ class SearchStore:
         try:
             for episode in episodes:
                 existing = self.connection.execute(
-                    "SELECT content_hash, dims, revision FROM episode_embeddings WHERE session_id = ? AND episode_ordinal = ? AND model = ?",
+                    "SELECT content_hash, dims, revision, generation_id, owner_id, start_order_time_us"
+                    " FROM episode_embeddings WHERE session_id = ? AND episode_ordinal = ? AND model = ?",
                     (session_id, episode["episode_ordinal"], model),
                 ).fetchone()
                 if existing is not None and int(existing["revision"]) > revision:
                     skipped += 1
                     continue
                 if existing is not None and existing["content_hash"] == episode["content_hash"] and int(existing["dims"]) == dims:
-                    skipped += 1
+                    # Unchanged text may reuse the vector bytes, but not the
+                    # provenance. Skipping the whole row left the old
+                    # generation, revision, owner and locator in place, so a
+                    # republished session kept vectors pointing at a superseded
+                    # generation -- they still ranked, then failed to hydrate,
+                    # while the current generation's vectors were absent.
+                    provenance_matches = (
+                        str(existing["generation_id"]) == generation_id
+                        and str(existing["owner_id"]) == owner_id
+                        and existing["start_order_time_us"] == episode.get("start_order_time_us")
+                    )
+                    if provenance_matches:
+                        skipped += 1
+                        continue
+                    self.connection.execute(
+                        "UPDATE episode_embeddings SET generation_id = ?, revision = ?, owner_id = ?,"
+                        " event_index_start = ?, event_index_end = ?, start_order_time_us = ?, updated_at = ?"
+                        " WHERE session_id = ? AND episode_ordinal = ? AND model = ?",
+                        (
+                            generation_id,
+                            revision,
+                            owner_id,
+                            episode["event_index_start"],
+                            episode["event_index_end"],
+                            episode.get("start_order_time_us"),
+                            now,
+                            session_id,
+                            episode["episode_ordinal"],
+                            model,
+                        ),
+                    )
+                    written += 1
                     continue
                 self.connection.execute(
                     """
@@ -963,7 +995,10 @@ class SearchStore:
             "SELECT e.session_id, e.episode_ordinal, e.event_index_start, e.event_index_end, "
             "e.generation_id, e.start_order_time_us, e.embedding "
             "FROM episode_embeddings e "
-            "JOIN session_index si ON si.session_id = e.session_id "
+            # Same generation fence as the resident loader: a superseded
+            # vector must not rank.
+            "JOIN session_index si ON si.session_id = e.session_id"
+            " AND si.generation_id = e.generation_id AND si.indexed_through = e.revision "
             "WHERE e.model = ? AND e.dims = ? AND e.owner_id = ? AND si.owner_id = ?"
         )
         params: list[object] = [model, dims, owner_id, owner_id]

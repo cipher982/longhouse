@@ -145,6 +145,18 @@ struct SessionView: View {
             guard let detail = viewModel.detail else { return }
             Task { await liveActivityManager.update(detail: detail) }
         }
+        .onChange(of: viewModel.detail?.stateFacts.commitSeq) { _, _ in
+            // Runtime-only catalog updates can leave the transcript payload
+            // unchanged, so WebKit diagnostics are not guaranteed to fire.
+            // The state view itself has rendered once SwiftUI observes the
+            // canonical commit change; report that settlement independently.
+            Task {
+                await viewModel.recordStateRenderBeacon(
+                    sessionId: sessionId,
+                    appState: appState
+                )
+            }
+        }
         .refreshable { await viewModel.reload(sessionId: sessionId, appState: appState) }
     }
 
@@ -1597,6 +1609,7 @@ final class SessionViewModel: ObservableObject {
         let serverFanoutAtMs: Int64?
         let clientReceivedAtMs: Int64
         let clockSkewMs: Int
+        let catalogCommitSeq: Int64?
         let pubsubSeq: Int?
     }
 
@@ -2145,11 +2158,25 @@ final class SessionViewModel: ObservableObject {
         )
         guard diagnostics.stage == "rendered" || diagnostics.stage == "failed" else { return }
         guard let api = apiFactory(appState.serverURL) else { return }
+        await reportStateRenderBeacon(
+            api: api,
+            sessionId: sessionId,
+            webkitDiagnostics: diagnostics
+        )
         await reportRenderBeacon(
             api: api,
             sessionId: sessionId,
             events: lastWorkspaceEvents,
             webkitDiagnostics: diagnostics
+        )
+    }
+
+    func recordStateRenderBeacon(sessionId: String, appState: AppState) async {
+        guard let api = apiFactory(appState.serverURL) else { return }
+        await reportStateRenderBeacon(
+            api: api,
+            sessionId: sessionId,
+            webkitDiagnostics: nil
         )
     }
 
@@ -2307,6 +2334,7 @@ final class SessionViewModel: ObservableObject {
                 serverFanoutAtMs: change.server_fanout_at_ms,
                 clientReceivedAtMs: nowMs,
                 clockSkewMs: clockSkewMs,
+                catalogCommitSeq: change.catalog_commit_seq,
                 pubsubSeq: change.pubsub_seq
             )
             if let seq = change.pubsub_seq {
@@ -2314,7 +2342,7 @@ final class SessionViewModel: ObservableObject {
             }
             openWaterfall?.mark(
                 "stream_changed",
-                "latest=\(change.latest_event_id) seq=\(change.pubsub_seq ?? 0) preview=\(change.transcript_preview != nil)"
+                "latest=\(change.latest_event_id) seq=\(change.pubsub_seq ?? 0) catalog_commit=\(change.catalog_commit_seq ?? 0) preview=\(change.transcript_preview != nil)"
             )
             if let transcriptPreview = change.transcript_preview?.sessionTranscriptPreview {
                 applyRealtimeTranscriptPreview(transcriptPreview, sessionId: sessionId)
@@ -2984,6 +3012,10 @@ final class SessionViewModel: ObservableObject {
             serverFanoutAtMs: realtimeTelemetry?.serverFanoutAtMs,
             clientReceivedAtMs: realtimeTelemetry?.clientReceivedAtMs,
             pubsubSeq: realtimeTelemetry?.pubsubSeq,
+            stateCommitSeq: realtimeTelemetry?.catalogCommitSeq,
+            statePhase: detail?.stateFacts.activityState,
+            stateObservedAtMs: detail?.stateFacts.activityObservedAt.flatMap { LonghouseDateParser.parse($0) }
+                .map { Int64($0.timeIntervalSince1970 * 1000) },
             webkit: webkitDiagnostics
         ) {
             await api.postRenderBeacon(payload)
@@ -2991,6 +3023,38 @@ final class SessionViewModel: ObservableObject {
         if pendingTelemetry != nil {
             pendingRealtimeTelemetry = nil
         }
+    }
+
+    private func reportStateRenderBeacon(
+        api: SessionWorkspaceClient,
+        sessionId: String,
+        webkitDiagnostics: RenderBeaconReporter.WebKitDiagnostics?
+    ) async {
+        if let stage = webkitDiagnostics?.stage, stage != "rendered" { return }
+        guard let pendingTelemetry = pendingRealtimeTelemetry,
+              let catalogCommitSeq = pendingTelemetry.catalogCommitSeq,
+              catalogCommitSeq > 0,
+              let serverFanoutAtMs = pendingTelemetry.serverFanoutAtMs else {
+            return
+        }
+        let managed = detail?.stateFacts.controlOwnership == "owned"
+        guard let payload = await RenderBeaconReporter.shared.payload(
+            sessionId: sessionId,
+            latestEventId: "state:\(catalogCommitSeq)",
+            emittedAt: Date(timeIntervalSince1970: TimeInterval(serverFanoutAtMs) / 1000),
+            managed: managed,
+            clockSkewMs: pendingTelemetry.clockSkewMs,
+            serverFanoutAtMs: serverFanoutAtMs,
+            clientReceivedAtMs: pendingTelemetry.clientReceivedAtMs,
+            pubsubSeq: pendingTelemetry.pubsubSeq,
+            renderKind: "state",
+            stateCommitSeq: catalogCommitSeq,
+            statePhase: detail?.stateFacts.activityState,
+            stateObservedAtMs: detail?.stateFacts.activityObservedAt.flatMap { LonghouseDateParser.parse($0) }
+                .map { Int64($0.timeIntervalSince1970 * 1000) },
+            webkit: webkitDiagnostics
+        ) else { return }
+        await api.postRenderBeacon(payload)
     }
 
     var liveActivityFingerprint: String {

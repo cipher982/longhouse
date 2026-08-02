@@ -72,7 +72,8 @@ private func previewStateFacts(
             observedAt: nil
         ),
         access: nil,
-        transcript: nil
+        transcript: nil,
+        commitSeq: nil
     )
 }
 
