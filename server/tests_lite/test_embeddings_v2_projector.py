@@ -111,6 +111,34 @@ async def test_embeddings_projector_overlaps_claimed_sessions(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_embedding_projector_deletes_retired_session(monkeypatch):
+    session_id = str(uuid4())
+    store_id = str(uuid4())
+    catalog = FakeClient(
+        {
+            "projector.store.bind.v2": {},
+            "projector.state.claim.v2": {
+                "claimed": [{"session_id": session_id, "claimed_revision": "9", "failure_count": 0}]
+            },
+            "storage.session.render_objects.list.v2": {"found": True, "deleted": False, "retired": True},
+            "projector.state.complete.v2": {},
+        }
+    )
+    search = FakeClient(
+        {
+            "search.ping.v2": {"store_id": store_id, "schema_generation": "test"},
+            "search.session.delete.v2": {"deleted": True},
+        }
+    )
+    monkeypatch.setattr("zerg.models_config.get_embedding_space_config", lambda: SimpleNamespace(model="test", dims=2))
+    projector = EmbeddingsV2Projector(catalog=catalog, search=search, render_workers=SimpleNamespace(), worker_id="test")
+
+    assert await projector.run_once(now=datetime.now(UTC)) == 1
+    assert any(method == "search.session.delete.v2" for method, _ in search.calls)
+    assert any(method == "projector.state.complete.v2" for method, _ in catalog.calls)
+
+
+@pytest.mark.asyncio
 async def test_embeddings_projector_chunks_dedups_writes_and_completes(monkeypatch):
     session_id, generation_id, store_id = (str(uuid4()) for _ in range(3))
     object_id = hashlib.sha256(b"render").hexdigest()

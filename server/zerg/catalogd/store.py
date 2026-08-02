@@ -470,9 +470,11 @@ class CatalogStore:
                 )
             ).all()
             existing = {
-                (str(row.projector), str(row.session_id))
+                (str(row.projector), str(row.session_id)): int(row.desired_revision)
                 for row in connection.execute(
-                    select(states.c.projector, states.c.session_id).where(states.c.projector.in_(KNOWN_PROJECTORS))
+                    select(states.c.projector, states.c.session_id, states.c.desired_revision).where(
+                        states.c.projector.in_(KNOWN_PROJECTORS)
+                    )
                 )
             }
             missing = [
@@ -481,28 +483,53 @@ class CatalogStore:
                 for projector in KNOWN_PROJECTORS
                 if (projector, str(session_id)) not in existing
             ]
-            if not missing:
-                return {"inserted": 0, "eligible_sessions": len(eligible)}
             now = datetime.now(UTC)
             commit_seq = _current_commit_seq(connection)
-            connection.execute(
-                insert(states),
-                [
-                    {
-                        "projector": projector,
-                        "session_id": session_id,
-                        "desired_revision": revision,
-                        "completed_revision": 0,
-                        "status": "idle",
-                        "failure_count": 0,
-                        "commit_seq": commit_seq,
-                        "created_at": now,
-                        "updated_at": now,
-                    }
-                    for projector, session_id, revision in missing
-                ],
-            )
-            return {"inserted": len(missing), "eligible_sessions": len(eligible)}
+            if missing:
+                connection.execute(
+                    insert(states),
+                    [
+                        {
+                            "projector": projector,
+                            "session_id": session_id,
+                            "desired_revision": revision,
+                            "completed_revision": 0,
+                            "status": "idle",
+                            "failure_count": 0,
+                            "commit_seq": commit_seq,
+                            "created_at": now,
+                            "updated_at": now,
+                        }
+                        for projector, session_id, revision in missing
+                    ],
+                )
+            retired = connection.execute(
+                select(sessions.c.session_id, sessions.c.commit_seq).where(sessions.c.render_state == "retired")
+            ).all()
+            advanced_retired = 0
+            for session_id, revision in retired:
+                session_key = str(session_id)
+                for projector in KNOWN_PROJECTORS:
+                    current = existing.get((projector, session_key))
+                    if current is None or current >= int(revision):
+                        continue
+                    connection.execute(
+                        update(states)
+                        .where(states.c.projector == projector, states.c.session_id == session_key)
+                        .values(
+                            desired_revision=int(revision),
+                            claimed_revision=None,
+                            claim_token=None,
+                            worker_id=None,
+                            claim_expires_at=None,
+                            status="idle",
+                            retry_at=None,
+                            commit_seq=commit_seq,
+                            updated_at=now,
+                        )
+                    )
+                    advanced_retired += 1
+            return {"inserted": len(missing), "eligible_sessions": len(eligible), "advanced_retired": advanced_retired}
 
     def retire_archive_outbox(self) -> dict[str, int | str]:
         """Remove dead monolith projections and retain launch rows only as completed receipts."""
@@ -5387,6 +5414,26 @@ class CatalogStore:
                                     updated_at=commit_time,
                                 )
                             )
+                            projector_table = ProjectorState.__table__
+                            for projector_name in KNOWN_PROJECTORS:
+                                connection.execute(
+                                    update(projector_table)
+                                    .where(
+                                        projector_table.c.projector == projector_name,
+                                        projector_table.c.session_id == replaced_session_id,
+                                    )
+                                    .values(
+                                        desired_revision=commit_seq,
+                                        claimed_revision=None,
+                                        claim_token=None,
+                                        worker_id=None,
+                                        claim_expires_at=None,
+                                        status="idle",
+                                        retry_at=None,
+                                        commit_seq=commit_seq,
+                                        updated_at=commit_time,
+                                    )
+                                )
                 connection.execute(
                     insert(epoch).values(
                         source_epoch=epoch_key,
@@ -6609,6 +6656,7 @@ class CatalogStore:
             return {
                 "found": session_row is not None and deleted is None,
                 "deleted": deleted is not None,
+                "retired": session_row is not None and session_row["render_state"] == "retired",
                 "deletion_revision": str(deleted) if deleted is not None else None,
                 "snapshot_revision": str(snapshot_revision),
                 "current_generation_id": current_generation,

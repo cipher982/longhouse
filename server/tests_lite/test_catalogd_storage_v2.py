@@ -1878,3 +1878,115 @@ async def test_active_embedding_projector_state_becomes_claimable_on_render_comp
     finally:
         await client.close()
         await daemon.close()
+
+
+@pytest.mark.asyncio
+async def test_source_epoch_replacement_advances_retired_projectors(daemon_paths):
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    old_epoch = uuid4()
+    new_epoch = uuid4()
+    old_session = uuid4()
+    new_session = uuid4()
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        old_raw = _raw_params(
+            epoch=old_epoch,
+            session_id=old_session,
+            start=0,
+            end=6,
+            records=(b"old\n",),
+            sealed_at=now,
+        )
+        old_raw.update(
+            render_state="ready",
+            render_manifest=_render_manifest(uuid4(), seed=b"old-render", source_epoch=old_epoch),
+            projectors=["search-v2", EMBEDDING_PROJECTOR_ID],
+        )
+        old_commit = await client.call("storage.raw_object.commit.v2", old_raw)
+
+        replacement = _raw_params(
+            epoch=new_epoch,
+            predecessor=old_epoch,
+            session_id=new_session,
+            start=6,
+            end=7,
+            records=(b"new\n",),
+            sealed_at=now + timedelta(seconds=1),
+        )
+        replacement.update(
+            render_state="ready",
+            render_manifest=_render_manifest(uuid4(), seed=b"new-render", source_epoch=new_epoch, position=6),
+            projectors=["search-v2", EMBEDDING_PROJECTOR_ID],
+        )
+        replaced = await client.call("storage.raw_object.commit.v2", replacement)
+        assert int(replaced["receipt"]["commit_seq"]) > int(old_commit["receipt"]["commit_seq"])
+
+        engine = create_catalog_engine(database_path)
+        with engine.connect() as connection:
+            retired = connection.exec_driver_sql(
+                "SELECT render_state, commit_seq FROM sessions WHERE session_id = ?",
+                (str(old_session),),
+            ).one()
+            states = connection.exec_driver_sql(
+                "SELECT projector, desired_revision, claim_token, status FROM projector_state "
+                "WHERE session_id = ? ORDER BY projector",
+                (str(old_session),),
+            ).all()
+        assert retired[0] == "retired"
+        assert all(row[1] == retired[1] and row[2] is None and row[3] == "idle" for row in states)
+
+        # Startup repair must also heal sessions retired before this invariant
+        # was introduced, including stale claims stuck on the old snapshot.
+        with engine.begin() as connection:
+            connection.exec_driver_sql(
+                "UPDATE projector_state SET desired_revision = ?, claimed_revision = ?, claim_token = ?, "
+                "worker_id = ?, claim_expires_at = ?, status = ?, retry_at = ? WHERE session_id = ?",
+                (
+                    int(old_commit["receipt"]["commit_seq"]),
+                    int(old_commit["receipt"]["commit_seq"]),
+                    "stale-claim",
+                    "dead-worker",
+                    now + timedelta(minutes=5),
+                    "retry",
+                    now + timedelta(minutes=5),
+                    str(old_session),
+                ),
+            )
+        assert CatalogStore(engine).ensure_known_projector_states()["advanced_retired"] == 2
+        with engine.connect() as connection:
+            repaired_states = connection.exec_driver_sql(
+                "SELECT desired_revision, claimed_revision, claim_token, worker_id, claim_expires_at, status, retry_at "
+                "FROM projector_state WHERE session_id = ?",
+                (str(old_session),),
+            ).all()
+        engine.dispose()
+        assert all(
+            row[0] == retired[1]
+            and row[1] is None
+            and row[2] is None
+            and row[3] is None
+            and row[4] is None
+            and row[5] == "idle"
+            and row[6] is None
+            for row in repaired_states
+        )
+
+        page = await client.call(
+            "storage.session.render_objects.list.v2",
+            {
+                "session_id": str(old_session),
+                "generation_id": None,
+                "snapshot_revision": int(retired[1]),
+                "after_object_id": None,
+                "limit": 100,
+            },
+        )
+        assert page["found"] is True
+        assert page["retired"] is True
+        assert page["objects"] == []
+    finally:
+        await client.close()
+        await daemon.close()

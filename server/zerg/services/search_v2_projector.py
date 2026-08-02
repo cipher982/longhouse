@@ -173,7 +173,7 @@ class SearchV2Projector:
                     "limit": PAGE_SIZE,
                 },
             )
-            if page.get("deleted") is True:
+            if page.get("deleted") is True or page.get("retired") is True:
                 await self.search.call("search.session.delete.v2", {"session_id": session_id})
                 return
             if page.get("found") is not True:
