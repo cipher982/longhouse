@@ -1,7 +1,9 @@
 """Session response fallback behaviour and first-message projections."""
 
 import os
-from datetime import datetime, timezone
+from datetime import datetime
+from datetime import timedelta
+from datetime import timezone
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -11,11 +13,14 @@ os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
-from zerg.database import Base, make_engine, make_sessionmaker
+from zerg.database import Base
+from zerg.database import make_engine
+from zerg.database import make_sessionmaker
 from zerg.dependencies.agents_auth import verify_agents_token
-from zerg.models.agents import AgentEvent, AgentSession, TimelineCard
+from zerg.models.agents import AgentEvent
+from zerg.models.agents import AgentSession
+from zerg.models.agents import TimelineCard
 from zerg.services.session_hot_cards import upsert_timeline_card_from_session
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -87,7 +92,10 @@ def test_sessions_list_includes_first_user_message(tmp_path):
     """GET /api/agents/sessions returns first_user_message for each session."""
     from fastapi.testclient import TestClient
 
-    from zerg.database import Base, get_db, make_engine, make_sessionmaker
+    from zerg.database import Base
+    from zerg.database import get_db
+    from zerg.database import make_engine
+    from zerg.database import make_sessionmaker
     from zerg.main import api_app
 
     db_path = tmp_path / "test_first_msg.db"
@@ -136,7 +144,10 @@ def test_sessions_list_uses_preview_backfill_for_existing_rows(tmp_path):
     """Legacy rows need an explicit backfill; request-time lists stay hot-only."""
     from fastapi.testclient import TestClient
 
-    from zerg.database import Base, get_db, make_engine, make_sessionmaker
+    from zerg.database import Base
+    from zerg.database import get_db
+    from zerg.database import make_engine
+    from zerg.database import make_sessionmaker
     from zerg.main import api_app
     from zerg.services.session_preview_backfill import backfill_missing_session_previews
 
@@ -252,3 +263,48 @@ def test_preview_backfill_creates_missing_timeline_card_for_hot_legacy_row(tmp_p
     assert card.last_visible_text_preview == "Already latest"
     assert card.last_user_message_preview == "Already last user"
     assert card.last_assistant_message_preview == "Already last assistant"
+
+
+def test_preview_backfill_keeps_latest_assistant_in_last_visible_projection(tmp_path):
+    from zerg.services.session_preview_backfill import backfill_missing_session_previews
+
+    factory = _make_db(tmp_path, "semantic_last_visible.db")
+    session = _seed_session(
+        factory,
+        first_user_message_preview=None,
+        last_user_message_preview=None,
+        last_assistant_message_preview=None,
+    )
+    base = datetime.now(timezone.utc)
+    db = factory()
+    try:
+        db.add_all(
+            [
+                AgentEvent(
+                    session_id=session.id,
+                    role="user",
+                    content_text="real prompt",
+                    timestamp=base,
+                    interaction_kind="durable_user_message",
+                    title_eligible=1,
+                ),
+                AgentEvent(
+                    session_id=session.id,
+                    role="assistant",
+                    content_text="latest answer",
+                    timestamp=base + timedelta(seconds=1),
+                    interaction_kind="provider_system",
+                    title_eligible=0,
+                ),
+            ]
+        )
+        db.commit()
+
+        result = backfill_missing_session_previews(db, limit=10)
+        db.commit()
+        repaired = db.query(AgentSession).filter(AgentSession.id == session.id).one()
+    finally:
+        db.close()
+
+    assert result.last_visible_filled == 1
+    assert repaired.last_visible_text_preview == "latest answer"

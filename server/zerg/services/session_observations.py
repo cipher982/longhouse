@@ -392,6 +392,9 @@ def record_provider_event_observation(
     source_offset: int | None = None,
     raw_json: str | None = None,
     compaction_kind: str | None = None,
+    interaction_kind: str | None = None,
+    interaction_context_key: str | None = None,
+    title_eligible: bool | None = None,
     event_uuid: str | None = None,
     parent_event_uuid: str | None = None,
     received_at: datetime | None = None,
@@ -431,6 +434,9 @@ def record_provider_event_observation(
         # raw bytes are not persisted here. Fall back to classifying the payload
         # raw only when the caller did not supply it (older callers).
         "compaction_kind": compaction_kind if compaction_kind is not None else _classify_compaction_kind(raw_json),
+        "interaction_kind": interaction_kind,
+        "interaction_context_key": interaction_context_key,
+        "title_eligible": title_eligible,
     }
     if raw_json is not None:
         payload["raw_json"] = raw_json

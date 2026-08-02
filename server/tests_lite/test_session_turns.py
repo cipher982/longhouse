@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 from datetime import datetime
 from datetime import timedelta
@@ -71,6 +72,58 @@ def _seed_session(db):
     db.commit()
     db.refresh(session)
     return session
+
+
+def test_latest_semantic_user_event_honors_persisted_ineligible_fact_without_raw_json(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+
+    with SessionLocal() as db:
+        session = _seed_session(db)
+        db.add(
+            AgentEvent(
+                session_id=session.id,
+                role="user",
+                content_text="provider-local control without archived raw evidence",
+                title_eligible=0,
+                interaction_kind=None,
+                timestamp=datetime.now(timezone.utc),
+            )
+        )
+        db.commit()
+
+        latest = session_turns_service._latest_semantic_user_event_map(
+            db,
+            [session.id],
+            {session.id: "claude"},
+        )
+
+        assert session.id not in latest
+
+
+def test_semantic_turn_rederives_claude_raw_control_over_stale_eligible_bit(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+
+    with SessionLocal() as db:
+        session = _seed_session(db)
+        event = AgentEvent(
+            session_id=session.id,
+            role="user",
+            content_text="<command-name>/effort</command-name>",
+            raw_json=json.dumps(
+                {
+                    "type": "user",
+                    "isMeta": True,
+                    "message": {"role": "user", "content": "<command-name>/effort</command-name>"},
+                }
+            ),
+            title_eligible=1,
+            interaction_kind="durable_user_message",
+            timestamp=datetime.now(timezone.utc),
+        )
+        db.add(event)
+        db.commit()
+
+        assert session_turns_service._semantic_turn_event(event, provider="claude") is False
 
 
 def test_session_turn_lifecycle_tracks_active_terminal_and_durable_events(tmp_path):
@@ -445,6 +498,50 @@ def test_materialize_managed_transcript_turns_backfills_native_completed_turns_i
 
         assert materialize_managed_transcript_turns(db, session_id=session.id) == 0
         assert db.query(SessionTurn).filter(SessionTurn.session_id == session.id).count() == 1
+
+
+def test_materialize_managed_transcript_turns_ignores_claude_local_control_rows(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+
+    with SessionLocal() as db:
+        session = _seed_session(db)
+        command_at = datetime(2026, 4, 23, 20, 0, 0, tzinfo=timezone.utc)
+        prompt_at = command_at + timedelta(seconds=1)
+        assistant_at = prompt_at + timedelta(seconds=18)
+        command = "<command-name>/effort</command-name><command-args>high</command-args>"
+        db.add_all(
+            [
+                AgentEvent(
+                    session_id=session.id,
+                    role="user",
+                    content_text=command,
+                    raw_json=json.dumps({"type": "user", "isMeta": True, "message": {"role": "user", "content": command}}),
+                    timestamp=command_at,
+                ),
+                AgentEvent(
+                    session_id=session.id,
+                    role="user",
+                    content_text="Investigate the real request",
+                    timestamp=prompt_at,
+                ),
+                AgentEvent(
+                    session_id=session.id,
+                    role="assistant",
+                    content_text="done",
+                    timestamp=assistant_at,
+                ),
+            ]
+        )
+        db.commit()
+
+        assert materialize_managed_transcript_turns(db, session_id=session.id) == 1
+        row = db.query(SessionTurn).filter(SessionTurn.session_id == session.id).one()
+        prompt_event = (
+            db.query(AgentEvent)
+            .filter(AgentEvent.session_id == session.id, AgentEvent.content_text == "Investigate the real request")
+            .one()
+        )
+        assert row.user_event_id == prompt_event.id
 
 
 def test_materialize_recent_managed_transcript_turns_backfills_pending_turn_after_active_phase(tmp_path):

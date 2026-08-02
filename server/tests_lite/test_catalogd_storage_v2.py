@@ -67,12 +67,13 @@ def _raw_params(
     predecessor: UUID | None = None,
     opaque_source_id: str = "history.jsonl",
     machine_id: str = "cinder",
+    provider: str = "codex",
 ) -> dict:
     record_hashes = tuple(hashlib.sha256(record).digest() for record in records)
     identity = EnvelopeIdentity(
         tenant_id="tenant-a",
         machine_id=machine_id,
-        provider="codex",
+        provider=provider,
         opaque_source_id=opaque_source_id,
         source_epoch=epoch,
         range_kind="byte_offset",
@@ -89,7 +90,7 @@ def _raw_params(
         "owner_id": "42",
         "session_id": str(session_id),
         "machine_id": machine_id,
-        "provider": "codex",
+        "provider": provider,
         "opaque_source_id": opaque_source_id,
         "source_epoch": str(epoch),
         "predecessor_source_epoch": str(predecessor) if predecessor is not None else None,
@@ -135,6 +136,7 @@ def _render_manifest(
     position: int = 0,
     opaque_source_id: str = "history.jsonl",
     source_epoch: UUID | None = None,
+    provider: str = "codex",
 ) -> dict:
     source_epoch = source_epoch or UUID("018f0c3a-7b2d-7f10-8a11-123456789abc")
     object_hash = hashlib.sha256(seed).hexdigest()
@@ -142,7 +144,7 @@ def _render_manifest(
         [
             1_700_000_000_000_000 + position,
             "cinder",
-            "codex",
+            provider,
             opaque_source_id,
             str(source_epoch),
             position,
@@ -352,6 +354,252 @@ async def test_ready_render_manifest_switches_generation_with_raw_receipt(daemon
 
 
 @pytest.mark.asyncio
+async def test_semantic_projection_repair_updates_legacy_catalog_aggregates_and_title(daemon_paths):
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    epoch = UUID("018f0c3a-7b2d-7f10-8a11-123456789abc")
+    session_id = uuid4()
+    generation_id = uuid4()
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        raw = _raw_params(epoch=epoch, session_id=session_id, start=0, end=6, records=(b"hello\n",), sealed_at=now)
+        raw.update(render_state="ready", render_manifest=_render_manifest(generation_id), projectors=["search-v2"])
+        await client.call("storage.raw_object.commit.v2", raw)
+
+        repaired = await client.call(
+            "storage.session.semantic_projection.repair.v2",
+            {
+                "session_id": str(session_id),
+                "owner_id": "42",
+                "generation_id": str(generation_id),
+                "objects": [
+                    {
+                        "object_id": raw["render_manifest"]["object_id"],
+                        "event_count": 1,
+                        "user_messages": 1,
+                        "assistant_messages": 0,
+                        "tool_calls": 0,
+                        "first_user_message_preview": "The real prompt",
+                        "last_visible_text_preview": "The real prompt",
+                    }
+                ],
+                "observed_at": (now + timedelta(seconds=1)).isoformat(),
+            },
+        )
+
+        assert repaired["complete"] is True
+        assert repaired["updated_object_count"] == 1
+        session = await client.call("storage.session.read.v2", {"session_id": str(session_id)})
+        assert session["session"]["semantic_projection_version"] == 1
+        assert session["session"]["first_user_message_preview"] == "The real prompt"
+        assert session["session"]["summary_title"] == "The real prompt"
+        assert session["session"]["anchor_title"] is None
+    finally:
+        await client.close()
+        await daemon.close()
+
+
+@pytest.mark.asyncio
+async def test_empty_render_object_is_repairable_and_can_complete_semantic_projection(daemon_paths):
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    epoch = UUID("018f0c3a-7b2d-7f10-8a11-123456789abc")
+    session_id = uuid4()
+    generation_id = uuid4()
+    empty_render = _render_manifest(generation_id, source_epoch=epoch)
+    empty_render.update(
+        event_count=0,
+        first_order_key=None,
+        last_order_key=None,
+        user_messages=0,
+        assistant_messages=0,
+        tool_calls=0,
+        first_user_message_preview=None,
+        last_visible_text_preview=None,
+        semantic_projection_version=0,
+    )
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        raw = _raw_params(epoch=epoch, session_id=session_id, start=0, end=1, records=(b"\n",), sealed_at=now)
+        raw.update(render_state="ready", render_manifest=empty_render, projectors=["search-v2"])
+        await client.call("storage.raw_object.commit.v2", raw)
+        session = await client.call("storage.session.read.v2", {"session_id": str(session_id)})
+
+        objects = await client.call(
+            "storage.session.render_objects.list.v2",
+            {
+                "session_id": str(session_id),
+                "generation_id": str(generation_id),
+                "snapshot_revision": int(session["commit_seq"]),
+                "after_object_id": None,
+                "limit": 100,
+            },
+        )
+        assert objects["snapshot_object_count"] == 1
+        assert objects["snapshot_event_count"] == 0
+        assert len(objects["objects"]) == 1
+        assert objects["objects"][0]["event_count"] == 0
+
+        repaired = await client.call(
+            "storage.session.semantic_projection.repair.v2",
+            {
+                "session_id": str(session_id),
+                "owner_id": "42",
+                "generation_id": str(generation_id),
+                "objects": [
+                    {
+                        "object_id": empty_render["object_id"],
+                        "event_count": 0,
+                        "user_messages": 0,
+                        "assistant_messages": 0,
+                        "tool_calls": 0,
+                        "first_user_message_preview": None,
+                        "last_visible_text_preview": None,
+                    }
+                ],
+                "observed_at": (now + timedelta(seconds=1)).isoformat(),
+            },
+        )
+
+        assert repaired["complete"] is True
+        assert repaired["updated_object_count"] == 1
+        refreshed = await client.call("storage.session.read.v2", {"session_id": str(session_id)})
+        assert refreshed["session"]["semantic_projection_version"] == 1
+    finally:
+        await client.close()
+        await daemon.close()
+
+
+@pytest.mark.asyncio
+async def test_semantic_repair_preserves_an_unrelated_frozen_title(daemon_paths):
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    epoch = UUID("018f0c3a-7b2d-7f10-8a11-123456789abc")
+    session_id = uuid4()
+    generation_id = uuid4()
+    render = _render_manifest(generation_id, source_epoch=epoch)
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        raw = _raw_params(epoch=epoch, session_id=session_id, start=0, end=1, records=(b"prompt\n",), sealed_at=now)
+        raw.update(render_state="ready", render_manifest=render, projectors=["search-v2"])
+        await client.call("storage.raw_object.commit.v2", raw)
+        await client.call(
+            "storage.session.title.complete.v2",
+            {
+                "session_id": str(session_id),
+                "title": "Human title",
+                "completed_at": (now + timedelta(seconds=1)).isoformat(),
+            },
+        )
+
+        repaired = await client.call(
+            "storage.session.semantic_projection.repair.v2",
+            {
+                "session_id": str(session_id),
+                "owner_id": "42",
+                "generation_id": str(generation_id),
+                "objects": [
+                    {
+                        "object_id": render["object_id"],
+                        "event_count": 1,
+                        "user_messages": 1,
+                        "assistant_messages": 0,
+                        "tool_calls": 0,
+                        "first_user_message_preview": "Build it",
+                        "last_visible_text_preview": "Build it",
+                    }
+                ],
+                "observed_at": (now + timedelta(seconds=2)).isoformat(),
+            },
+        )
+
+        assert repaired["complete"] is True
+        refreshed = await client.call("storage.session.read.v2", {"session_id": str(session_id)})
+        assert refreshed["session"]["semantic_projection_version"] == 1
+        assert refreshed["session"]["anchor_title"] == "Human title"
+        assert refreshed["session"]["summary_title"] == "Human title"
+    finally:
+        await client.close()
+        await daemon.close()
+
+
+@pytest.mark.asyncio
+async def test_semantic_projection_repair_clears_control_only_fallback_title(daemon_paths):
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    epoch = UUID("018f0c3a-7b2d-7f10-8a11-123456789abc")
+    session_id = uuid4()
+    generation_id = uuid4()
+    render = _render_manifest(generation_id, source_epoch=epoch, provider="claude")
+    render.update(
+        user_messages=1,
+        first_user_message_preview="Effort level settings",
+        last_visible_text_preview="Effort level settings",
+    )
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        raw = _raw_params(
+            epoch=epoch,
+            session_id=session_id,
+            start=0,
+            end=1,
+            records=(b"/effort\n",),
+            sealed_at=now,
+            provider="claude",
+        )
+        raw.update(render_state="ready", render_manifest=render, projectors=["search-v2"])
+        await client.call("storage.raw_object.commit.v2", raw)
+        await client.call(
+            "storage.session.title.complete.v2",
+            {
+                "session_id": str(session_id),
+                "title": "Effort controls",
+                "completed_at": (now + timedelta(seconds=1)).isoformat(),
+            },
+        )
+        before = await client.call("storage.session.read.v2", {"session_id": str(session_id)})
+        assert before["session"]["summary_title"] == "Effort controls"
+
+        repaired = await client.call(
+            "storage.session.semantic_projection.repair.v2",
+            {
+                "session_id": str(session_id),
+                "owner_id": "42",
+                "generation_id": str(generation_id),
+                "objects": [
+                    {
+                        "object_id": render["object_id"],
+                        "event_count": 1,
+                        "user_messages": 0,
+                        "assistant_messages": 0,
+                        "tool_calls": 0,
+                        "first_user_message_preview": None,
+                        "last_visible_text_preview": None,
+                    }
+                ],
+                "observed_at": (now + timedelta(seconds=1)).isoformat(),
+            },
+        )
+
+        assert repaired["complete"] is True
+        after = await client.call("storage.session.read.v2", {"session_id": str(session_id)})
+        assert after["session"]["first_user_message_preview"] is None
+        assert after["session"]["summary_title"] is None
+        assert after["session"]["anchor_title"] is None
+    finally:
+        await client.close()
+        await daemon.close()
+
+
+@pytest.mark.asyncio
 async def test_revision_generation_drift_returns_conflict_instead_of_catalog_failure(daemon_paths):
     database_path, socket_path = daemon_paths
     now = datetime.now(UTC).replace(microsecond=0)
@@ -555,6 +803,60 @@ async def test_storage_title_fallback_is_immediate_and_ai_completion_is_write_on
 
 
 @pytest.mark.asyncio
+async def test_claude_title_candidates_wait_for_semantic_repair(daemon_paths):
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    epoch = UUID("018f0c3a-7b2d-7f10-8a11-123456789abc")
+    session_id = uuid4()
+    generation_id = uuid4()
+    render = _render_manifest(generation_id, source_epoch=epoch, provider="claude")
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        raw = _raw_params(
+            epoch=epoch,
+            session_id=session_id,
+            start=0,
+            end=1,
+            records=(b"provider command\n",),
+            sealed_at=now,
+            provider="claude",
+        )
+        raw.update(render_state="ready", render_manifest=render, projectors=["search-v2"])
+        await client.call("storage.raw_object.commit.v2", raw)
+
+        pending = await client.call("storage.session.title.candidates.v2", {"limit": 10})
+        assert pending["sessions"] == []
+
+        await client.call(
+            "storage.session.semantic_projection.repair.v2",
+            {
+                "session_id": str(session_id),
+                "owner_id": "42",
+                "generation_id": str(generation_id),
+                "objects": [
+                    {
+                        "object_id": render["object_id"],
+                        "event_count": 1,
+                        "user_messages": 1,
+                        "assistant_messages": 0,
+                        "tool_calls": 0,
+                        "first_user_message_preview": "Build it",
+                        "last_visible_text_preview": "Build it",
+                    }
+                ],
+                "observed_at": (now + timedelta(seconds=1)).isoformat(),
+            },
+        )
+        ready = await client.call("storage.session.title.candidates.v2", {"limit": 10})
+        assert [row["session_id"] for row in ready["sessions"]] == [str(session_id)]
+    finally:
+        await client.close()
+        await daemon.close()
+
+
+@pytest.mark.asyncio
 async def test_storage_session_delete_fences_replay_retires_manifests_and_queues_search_cleanup(daemon_paths):
     database_path, socket_path = daemon_paths
     now = datetime.now(UTC).replace(microsecond=0)
@@ -693,6 +995,88 @@ async def test_render_object_projection_pages_are_frozen_at_claimed_revision(dae
             first["render_manifest"]["object_id"],
             second["render_manifest"]["object_id"],
         }
+    finally:
+        await client.close()
+        await daemon.close()
+
+
+@pytest.mark.asyncio
+async def test_semantic_repair_revision_keeps_next_render_object_page_visible(daemon_paths):
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    epoch = UUID("018f0c3a-7b2d-7f10-8a11-123456789abc")
+    session_id = uuid4()
+    generation_id = uuid4()
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        first = _raw_params(epoch=epoch, session_id=session_id, start=0, end=6, records=(b"first\n",), sealed_at=now)
+        first.update(
+            render_state="ready",
+            render_manifest=_render_manifest(generation_id, seed=b"first", position=0),
+            projectors=["search-v2"],
+        )
+        await client.call("storage.raw_object.commit.v2", first)
+        second = _raw_params(epoch=epoch, session_id=session_id, start=6, end=12, records=(b"second\n",), sealed_at=now)
+        second.update(
+            render_state="ready",
+            render_manifest=_render_manifest(generation_id, seed=b"second", position=6),
+            projectors=["search-v2"],
+        )
+        committed = await client.call("storage.raw_object.commit.v2", second)
+        snapshot_revision = int(committed["receipt"]["commit_seq"])
+
+        first_page = await client.call(
+            "storage.session.render_objects.list.v2",
+            {
+                "session_id": str(session_id),
+                "generation_id": str(generation_id),
+                "snapshot_revision": snapshot_revision,
+                "after_object_id": None,
+                "limit": 1,
+            },
+        )
+        first_object = first_page["objects"][0]
+        second_object_id = (
+            first["render_manifest"]["object_id"]
+            if first_object["object_id"] == second["render_manifest"]["object_id"]
+            else second["render_manifest"]["object_id"]
+        )
+        repaired = await client.call(
+            "storage.session.semantic_projection.repair.v2",
+            {
+                "session_id": str(session_id),
+                "owner_id": "42",
+                "generation_id": str(generation_id),
+                "objects": [
+                    {
+                        "object_id": first_object["object_id"],
+                        "event_count": first_object["event_count"],
+                        "user_messages": 1,
+                        "assistant_messages": 0,
+                        "tool_calls": 0,
+                        "first_user_message_preview": "Repaired first",
+                        "last_visible_text_preview": "Repaired first",
+                    }
+                ],
+                "observed_at": (now + timedelta(seconds=1)).isoformat(),
+            },
+        )
+        assert int(repaired["commit_seq"]) > snapshot_revision
+
+        second_page = await client.call(
+            "storage.session.render_objects.list.v2",
+            {
+                "session_id": str(session_id),
+                "generation_id": str(generation_id),
+                "snapshot_revision": int(repaired["commit_seq"]),
+                "after_object_id": first_object["object_id"],
+                "limit": 1,
+            },
+        )
+        assert second_page["snapshot_object_count"] == 2
+        assert [row["object_id"] for row in second_page["objects"]] == [second_object_id]
     finally:
         await client.close()
         await daemon.close()

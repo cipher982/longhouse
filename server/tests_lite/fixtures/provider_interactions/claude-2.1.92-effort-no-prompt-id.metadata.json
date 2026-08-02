@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "fixture": "claude-2.1.92-effort-no-prompt-id.jsonl",
+  "provider": "claude",
+  "provider_version": "2.1.92",
+  "evidence_class": "captured_provider_shape",
+  "source_artifact": {
+    "source_path": "~/.claude/projects/-Users-davidrose-git-sauron/eaa4041a-0402-4afd-8b79-f64fdd3bd292.jsonl",
+    "session_id": "eaa4041a-0402-4afd-8b79-f64fdd3bd292",
+    "source_file_sha256": "fe083bb33a7462921d28f6fa2c75a8153a1669680ee3eee18bee8664d8b0afce",
+    "source_line_range": [3, 5],
+    "source_line_sha256": [
+      "03b55952d6f6be66ec1a4cf59ac0513ed3886571a9762a7bdf0712a5038653d6",
+      "3f2226a8e319eae7cdd0618b66438b4e33a9a1f1b4769c46d762e8412e1a4923",
+      "ad899377c483b70a598c77da7bf6da07773c085dfc195bc2528869e7edc5920f"
+    ],
+    "captured_at": "2026-04-07T19:38:18.754Z",
+    "native_event_uuids": [
+      "aca6c622-5db9-4aac-9316-fa04ff469868",
+      "82d39e60-2a6c-4217-82a7-1e9f3c5dc330",
+      "92c64e0e-1806-4a61-bc14-c6f30cdefda6"
+    ]
+  },
+  "normalization": "The committed JSONL keeps the native uuid/parentUuid sequence shape while normalizing provider-specific text, identifiers, and timestamps for deterministic tests. The cited source capture is Claude Code 2.1.92; the fixture is named and versioned accordingly."
+}

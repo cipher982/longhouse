@@ -30,7 +30,12 @@ from zerg.services.agent_heartbeat_health import load_machine_transport_health_m
 from zerg.services.agents.kernel_capabilities import project_session_capabilities
 from zerg.services.claude_channel_text import strip_claude_channel_wrapper
 from zerg.services.managed_provider_contracts import trusted_non_runner_control_planes
+from zerg.services.provider_interaction_semantics import seed_persisted_provider_interaction_context
+from zerg.services.provider_interaction_semantics import seed_provider_interaction_sequence_context
+from zerg.services.provider_interaction_semantics import semantic_event_included
+from zerg.services.provider_interaction_semantics import semantic_projection_facts
 from zerg.services.provisional_events import durable_transcript_event_predicate
+from zerg.services.raw_json_compression import decode_raw_json
 from zerg.services.session_observations import OBS_KIND_RUNTIME_SIGNAL
 from zerg.services.write_serializer import get_write_serializer
 from zerg.utils.time import normalize_utc
@@ -353,6 +358,7 @@ def materialize_managed_transcript_turns(
         return 0
 
     events_query = db.query(AgentEvent).filter(AgentEvent.session_id == session_id).filter(durable_transcript_event_predicate())
+    semantic_context_events: list[AgentEvent] | None = None
     if incremental:
         event_floor = _transcript_materialization_event_floor(existing_turns)
         if event_floor is not None:
@@ -375,10 +381,31 @@ def materialize_managed_transcript_turns(
     if not events:
         return 0
 
+    if incremental and event_floor is not None:
+        # Incremental materialization intentionally pairs only new rows, but a
+        # Claude command can need a persisted/native caveat that arrived in an
+        # earlier batch. Load prior user rows as semantic evidence without
+        # feeding them back into turn creation.
+        semantic_context_events = (
+            db.query(AgentEvent)
+            .filter(AgentEvent.session_id == session_id)
+            .filter(AgentEvent.id <= max(int(event.id) for event in events))
+            .filter(AgentEvent.role == "user")
+            .filter(durable_transcript_event_predicate())
+            .order_by(AgentEvent.timestamp.asc(), AgentEvent.id.asc())
+            .all()
+        )
+
     claimed_user_event_ids = {int(turn.user_event_id) for turn in existing_turns if getattr(turn, "user_event_id", None) is not None}
     claimed_assistant_event_ids = {
         int(turn.durable_assistant_event_id) for turn in existing_turns if getattr(turn, "durable_assistant_event_id", None) is not None
     }
+
+    events = _semantic_turn_events(
+        events,
+        provider=str(session.provider or ""),
+        context_events=semantic_context_events,
+    )
 
     created = 0
     for user_event, assistant_event in _iter_completed_transcript_turn_pairs(events):
@@ -459,18 +486,14 @@ def materialize_pending_managed_transcript_turn(
     if existing_pending is not None:
         return False
 
-    latest_user = (
-        db.query(AgentEvent.id, AgentEvent.timestamp, AgentEvent.content_text)
-        .filter(AgentEvent.session_id == session_id)
-        .filter(durable_transcript_event_predicate())
-        .filter(AgentEvent.role == "user")
-        .order_by(AgentEvent.id.desc())
-        .limit(1)
-        .one_or_none()
-    )
-    if latest_user is None:
+    latest_user_event = _latest_semantic_user_event_map(
+        db,
+        [session_id],
+        {session_id: str(session.provider or "")},
+    ).get(session_id)
+    if latest_user_event is None:
         return False
-    latest_user_id, latest_user_at, latest_user_text = latest_user
+    latest_user_id, latest_user_at, latest_user_text = latest_user_event
     latest_response_id = (
         db.query(func.max(AgentEvent.id))
         .filter(AgentEvent.session_id == session_id)
@@ -629,17 +652,16 @@ def _load_unanswered_user_prompt_map(db: Session, session_ids: list[UUID]) -> di
     if not session_ids:
         return {}
 
-    latest_user_rows = (
-        db.query(AgentEvent.session_id, func.max(AgentEvent.id))
-        .filter(AgentEvent.session_id.in_(session_ids))
-        .filter(durable_transcript_event_predicate())
-        .filter(AgentEvent.role == "user")
-        .group_by(AgentEvent.session_id)
-        .all()
-    )
-    latest_user_id_by_session = {
-        session_id: int(event_id) for session_id, event_id in latest_user_rows if session_id is not None and event_id is not None
+    provider_by_session = {
+        session.id: str(session.provider or "") for session in db.query(AgentSession).filter(AgentSession.id.in_(session_ids)).all()
     }
+    latest_user_events = _latest_semantic_user_event_map(db, session_ids, provider_by_session)
+    latest_user_id_by_session: dict[UUID, int] = {}
+    latest_user_timestamp_by_session: dict[UUID, datetime] = {}
+    for session_id, (event_id, timestamp, _content) in latest_user_events.items():
+        latest_user_id_by_session[session_id] = int(event_id)
+        if timestamp is not None:
+            latest_user_timestamp_by_session[session_id] = timestamp
     if not latest_user_id_by_session:
         return {}
 
@@ -663,9 +685,11 @@ def _load_unanswered_user_prompt_map(db: Session, session_ids: list[UUID]) -> di
     if not candidate_user_ids:
         return {}
 
-    latest_user_events = db.query(AgentEvent.session_id, AgentEvent.timestamp).filter(AgentEvent.id.in_(candidate_user_ids)).all()
     active_phase_conditions = []
-    for session_id, timestamp in latest_user_events:
+    for session_id, user_event_id in latest_user_id_by_session.items():
+        if user_event_id not in candidate_user_ids:
+            continue
+        timestamp = latest_user_timestamp_by_session.get(session_id)
         observed_after = normalize_utc(timestamp)
         if session_id is None or observed_after is None:
             continue
@@ -695,6 +719,84 @@ def _load_unanswered_user_prompt_map(db: Session, session_ids: list[UUID]) -> di
         .all()
     )
     return {row[0]: True for row in rows if row[0] is not None}
+
+
+def _latest_semantic_user_event_map(
+    db: Session,
+    session_ids: list[UUID],
+    provider_by_session: dict[UUID, str],
+) -> dict[UUID, tuple[int, datetime | None, str | None]]:
+    """Find latest semantic prompts with a bounded current-row fast path.
+
+    Persisted ``title_eligible=1`` rows are resolved by the indexed column.
+    Legacy rows are replayed in transcript order so provider-local controls can
+    seed the sequence context before a later sibling row is examined.
+    """
+    if not session_ids:
+        return {}
+    ordered_ids = list(dict.fromkeys(session_ids))
+    latest: dict[UUID, tuple[int, datetime | None, str | None]] = {}
+    known_rows = (
+        db.query(AgentEvent.session_id, AgentEvent.id, AgentEvent.timestamp, AgentEvent.content_text)
+        .filter(AgentEvent.session_id.in_(ordered_ids))
+        .filter(durable_transcript_event_predicate())
+        .filter(AgentEvent.role == "user")
+        .filter(AgentEvent.title_eligible == 1)
+        .order_by(AgentEvent.session_id.asc(), AgentEvent.id.desc())
+        .yield_per(256)
+    )
+    for session_id, event_id, timestamp, content_text in known_rows:
+        if session_id not in latest:
+            latest[session_id] = (int(event_id), timestamp, content_text)
+
+    interaction_sequence_contexts: dict[UUID, dict[str, object]] = {}
+    legacy_rows = (
+        db.query(
+            AgentEvent.session_id,
+            AgentEvent.id,
+            AgentEvent.timestamp,
+            AgentEvent.content_text,
+            AgentEvent.raw_json,
+            AgentEvent.raw_json_z,
+            AgentEvent.raw_json_codec,
+            AgentEvent.interaction_kind,
+            AgentEvent.title_eligible,
+        )
+        .filter(AgentEvent.session_id.in_(ordered_ids))
+        .filter(durable_transcript_event_predicate())
+        .filter(AgentEvent.role == "user")
+        .filter(
+            or_(
+                AgentEvent.title_eligible.is_(None),
+                AgentEvent.title_eligible == 0,
+                AgentEvent.interaction_kind.in_(("local_control", "local_control_output", "conversation_boundary")),
+            )
+        )
+        .order_by(AgentEvent.session_id.asc(), AgentEvent.timestamp.asc(), AgentEvent.id.asc())
+        .yield_per(256)
+    )
+    for row in legacy_rows:
+        sequence_context = interaction_sequence_contexts.setdefault(row.session_id, {})
+        raw_json = decode_raw_json(row)
+        if not semantic_event_included(
+            provider_by_session.get(row.session_id, ""),
+            role="user",
+            content_text=row.content_text,
+            raw_json=raw_json,
+            interaction_kind=row.interaction_kind,
+            # Replay the row even when a persisted semantic bit exists so a
+            # Claude caveat can seed the context for a later legacy sibling.
+            # If the raw provider record is unavailable, the persisted
+            # parser-owned bit is the only trustworthy boundary fact left.
+            title_eligible=row.title_eligible if raw_json is None else None,
+            sequence_context=sequence_context,
+        ):
+            continue
+        candidate = (int(row.id), row.timestamp, row.content_text)
+        current = latest.get(row.session_id)
+        if current is None or candidate[0] > current[0]:
+            latest[row.session_id] = candidate
+    return latest
 
 
 def get_session_turn_by_id(
@@ -1035,6 +1137,8 @@ def maybe_mark_session_turn_durable(
     if not pending_turns:
         return None
 
+    session_provider = str(db.query(AgentSession.provider).filter(AgentSession.id == session_id).scalar() or "")
+
     for idx, turn in enumerate(pending_turns):
         baseline_event_id = turn.baseline_event_id or 0
         events = (
@@ -1047,12 +1151,13 @@ def maybe_mark_session_turn_durable(
             .order_by(AgentEvent.timestamp.asc(), AgentEvent.id.asc())
             .all()
         )
+        semantic_events = _semantic_turn_events(events, provider=session_provider)
         expected_hash = turn.expected_user_text_hash
         if expected_hash:
-            match = _match_durable_turn_by_hash(events=events, expected_user_text_hash=expected_hash)
+            match = _match_durable_turn_by_hash(events=semantic_events, expected_user_text_hash=expected_hash)
         else:
             match = _match_durable_turn_by_window(
-                events=events,
+                events=semantic_events,
                 user_event_id=turn.user_event_id,
                 submitted_after=normalize_utc(turn.user_submitted_at),
                 submitted_before=normalize_utc(pending_turns[idx + 1].user_submitted_at) if idx + 1 < len(pending_turns) else None,
@@ -1207,6 +1312,50 @@ def _iter_completed_transcript_turn_pairs(
     if current_user is not None and last_assistant is not None:
         completed_pairs.append((current_user, last_assistant))
     return completed_pairs
+
+
+def _semantic_turn_events(
+    events: list[AgentEvent],
+    *,
+    provider: str,
+    context_events: list[AgentEvent] | None = None,
+) -> list[AgentEvent]:
+    sequence_context: dict[str, object] = {}
+    evidence_events = context_events if context_events is not None else events
+    raw_values = [decode_raw_json(event) for event in evidence_events]
+    seed_provider_interaction_sequence_context(provider, raw_values, sequence_context)
+    seed_persisted_provider_interaction_context(
+        provider,
+        evidence_events,
+        sequence_context,
+    )
+    return [event for event in events if _semantic_turn_event(event, provider=provider, sequence_context=sequence_context)]
+
+
+def _semantic_turn_event(
+    event: AgentEvent,
+    *,
+    provider: str,
+    sequence_context: dict[str, object] | None = None,
+) -> bool:
+    """Keep provider-local controls out of reconstructed turn boundaries."""
+
+    # ``title_eligible`` is a user-event boundary fact. Assistant and tool
+    # records remain semantic transcript events even though their persisted
+    # value is false by construction.
+    if str(getattr(event, "role", "") or "").strip().lower() != "user":
+        return True
+    raw_json = decode_raw_json(event)
+    semantic = semantic_projection_facts(
+        provider,
+        role=getattr(event, "role", None),
+        content_text=getattr(event, "content_text", None),
+        raw_json=raw_json,
+        interaction_kind=getattr(event, "interaction_kind", None),
+        title_eligible=(getattr(event, "title_eligible", None) if raw_json is None else None),
+        sequence_context=sequence_context,
+    )
+    return bool(semantic["title_eligible"])
 
 
 def _reconstructed_turn_request_id(

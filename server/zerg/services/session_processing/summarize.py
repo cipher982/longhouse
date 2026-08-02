@@ -254,6 +254,7 @@ async def summarize_events(
     """
     transcript = build_transcript(
         events,
+        provider=str((metadata or {}).get("provider")) if (metadata or {}).get("provider") else None,
         include_tool_calls=False,
         token_budget=context_budget,
     )

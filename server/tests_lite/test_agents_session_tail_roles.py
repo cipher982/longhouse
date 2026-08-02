@@ -31,6 +31,7 @@ from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.main import api_app
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
+from zerg.services.agents.store import AgentsStore
 
 _TS = datetime(2026, 7, 21, 18, 0, 0, tzinfo=timezone.utc)
 
@@ -145,6 +146,70 @@ def test_tail_roles_filter_reaches_past_the_limit_window(tmp_path):
         payload = resp.json()
         assert payload["total"] == 1, "the buried user turn must survive the limit window"
         assert payload["events"][0]["role"] == "user"
+    finally:
+        cleanup()
+
+
+def test_session_preview_skips_provider_controls_before_limit(tmp_path):
+    factory, cleanup = _setup_app(tmp_path)
+    session_id = uuid4()
+    try:
+        with factory() as db:
+            session = AgentSession(id=session_id, provider="claude", environment="test", started_at=_TS)
+            db.add(session)
+            db.flush()
+            db.add_all(
+                [
+                    AgentEvent(
+                        session_id=session_id,
+                        role="user",
+                        content_text="provider-local control without raw evidence",
+                        title_eligible=0,
+                        raw_json=None,
+                        timestamp=_TS - timedelta(seconds=1),
+                    ),
+                    AgentEvent(
+                        session_id=session_id,
+                        role="user",
+                        content_text="<command-name>/effort</command-name>",
+                        raw_json='{"type":"user","isMeta":true,"message":{"role":"user","content":"<command-name>/effort</command-name>"}}',
+                        timestamp=_TS,
+                    ),
+                    AgentEvent(
+                        session_id=session_id,
+                        role="user",
+                        content_text="real prompt",
+                        raw_json='{"message":{"content":"real prompt"}}',
+                        timestamp=_TS + timedelta(seconds=1),
+                    ),
+                    AgentEvent(
+                        session_id=session_id,
+                        role="assistant",
+                        content_text="real response",
+                        raw_json='{"message":{"content":"real response"}}',
+                        timestamp=_TS + timedelta(seconds=2),
+                    ),
+                ]
+            )
+            db.commit()
+            preview = AgentsStore(db).get_session_preview(session_id, 2)
+            first_user = AgentsStore(db).get_first_message_map([session_id], role="user")
+            from zerg.services.session_summaries import events_to_dicts
+
+            summary_events = events_to_dicts(
+                db.query(AgentEvent)
+                .filter(AgentEvent.session_id == session_id)
+                .order_by(AgentEvent.timestamp.asc(), AgentEvent.id.asc())
+                .all(),
+                provider="claude",
+            )
+
+        assert [(event.role, event.content_text) for event in preview] == [
+            ("user", "real prompt"),
+            ("assistant", "real response"),
+        ]
+        assert first_user == {session_id: "real prompt"}
+        assert [event["content_text"] for event in summary_events if event["role"] == "user"] == ["real prompt"]
     finally:
         cleanup()
 

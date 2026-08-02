@@ -7,13 +7,16 @@ only, not assistant_messages, so the UI shows accurate conversation turns.
 import json
 from datetime import datetime
 from datetime import timezone
+from pathlib import Path
 from unittest.mock import patch
 from uuid import uuid4
 
+import pytest
 from sqlalchemy.orm import sessionmaker
 
 from zerg.database import initialize_database
 from zerg.database import make_engine
+from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.routers.health import _session_enrichment_lag_check
 from zerg.services.agents import AgentsStore
@@ -40,7 +43,7 @@ def _claude_local_command_event(content: str, offset: int) -> EventIngest:
     return EventIngest(
         role="user",
         content_text=content,
-        raw_json=json.dumps({"type": "user", "message": {"role": "user", "content": content}}),
+        raw_json=json.dumps({"type": "user", "isMeta": True, "message": {"role": "user", "content": content}}),
         timestamp=_ts(),
         source_path="/claude/session.jsonl",
         source_offset=offset,
@@ -268,6 +271,505 @@ def test_claude_command_then_real_prompt_uses_prompt_for_counts_and_title_trigge
     assert session.first_user_message_preview == prompt
     assert session.last_visible_text_preview == prompt
     trigger.assert_called_once_with(str(session_id), reason="first_user_event")
+
+
+def test_captured_claude_effort_fixture_uses_only_real_prompt_for_ingest_semantics(tmp_path):
+    store, db, _ = _make_store(tmp_path)
+    session_id = uuid4()
+    fixture = Path(__file__).parent / "fixtures/provider_interactions/claude-2.1.219-effort.jsonl"
+    rows = [json.loads(line) for line in fixture.read_text().splitlines()]
+    events = [
+        EventIngest(
+            role=row["message"]["role"],
+            content_text=row["message"]["content"],
+            raw_json=json.dumps(row),
+            timestamp=_ts(),
+            source_path="/claude/session.jsonl",
+            source_offset=index,
+        )
+        for index, row in enumerate(rows)
+    ]
+
+    with patch("zerg.services.session_title_trigger.maybe_start_initial_title_generation") as trigger:
+        result = store.ingest_session(
+            SessionIngest(
+                id=session_id,
+                provider="claude",
+                environment="test",
+                project="test",
+                device_id="dev",
+                cwd="/tmp",
+                started_at=_ts(),
+                events=events,
+            )
+        )
+
+    session = db.query(AgentSession).filter_by(id=session_id).one()
+    stored_events = db.query(AgentEvent).filter_by(session_id=session_id).order_by(AgentEvent.id.asc()).all()
+    assert result.events_inserted == 4
+    assert [event.interaction_kind for event in stored_events] == [
+        "local_control",
+        "local_control",
+        "local_control_output",
+        "durable_user_message",
+    ]
+    assert session.user_messages == 1
+    assert session.first_user_message_preview == rows[-1]["message"]["content"]
+    assert session.last_visible_text_preview == rows[-1]["message"]["content"]
+    trigger.assert_called_once_with(str(session_id), reason="first_user_event")
+
+
+def test_captured_claude_effort_split_across_ingest_batches_keeps_context(tmp_path):
+    store, db, _ = _make_store(tmp_path)
+    session_id = uuid4()
+    fixture = Path(__file__).parent / "fixtures/provider_interactions/claude-2.1.219-effort.jsonl"
+    rows = [json.loads(line) for line in fixture.read_text().splitlines()]
+
+    def event(row, offset):
+        return EventIngest(
+            role=row["message"]["role"],
+            content_text=row["message"]["content"],
+            raw_json=json.dumps(row),
+            timestamp=_ts(),
+            source_path="/claude/session.jsonl",
+            source_offset=offset,
+        )
+
+    store.ingest_session(
+        SessionIngest(
+            id=session_id,
+            provider="claude",
+            environment="test",
+            project="test",
+            device_id="dev",
+            cwd="/tmp",
+            started_at=_ts(),
+            events=[event(rows[0], 0)],
+        )
+    )
+
+    with patch("zerg.services.session_title_trigger.maybe_start_initial_title_generation") as trigger:
+        store.ingest_session(
+            SessionIngest(
+                id=session_id,
+                provider="claude",
+                environment="test",
+                project="test",
+                device_id="dev",
+                cwd="/tmp",
+                started_at=_ts(),
+                events=[event(rows[1], 1), event(rows[2], 2), event(rows[3], 3)],
+            )
+        )
+
+    session = db.query(AgentSession).filter_by(id=session_id).one()
+    stored_events = db.query(AgentEvent).filter_by(session_id=session_id).order_by(AgentEvent.id.asc()).all()
+    assert [event.interaction_kind for event in stored_events] == [
+        "local_control",
+        "local_control",
+        "local_control_output",
+        "durable_user_message",
+    ]
+    assert [event.interaction_context_key for event in stored_events[:3]] == [
+        "prompt-effort-1",
+        "prompt-effort-1",
+        "prompt-effort-1",
+    ]
+    assert session.user_messages == 1
+    assert session.first_user_message_preview == rows[-1]["message"]["content"]
+    trigger.assert_called_once_with(str(session_id), reason="first_user_event")
+
+
+def test_claude_command_before_caveat_in_one_ingest_batch_is_reclassified(tmp_path):
+    store, db, _ = _make_store(tmp_path)
+    session_id = uuid4()
+    prompt_id = "prompt-effort-reversed"
+    command = {
+        "type": "user",
+        "promptId": prompt_id,
+        "message": {"role": "user", "content": "<command-name>/effort</command-name>"},
+    }
+    caveat = {
+        "type": "user",
+        "isMeta": True,
+        "promptId": prompt_id,
+        "message": {"role": "user", "content": "<local-command-caveat>native</local-command-caveat>"},
+    }
+
+    def event(row: dict[str, object], offset: int) -> EventIngest:
+        content = row["message"]
+        assert isinstance(content, dict)
+        return EventIngest(
+            role="user",
+            content_text=str(content["content"]),
+            raw_json=json.dumps(row),
+            timestamp=_ts(),
+            source_path="/claude/session.jsonl",
+            source_offset=offset,
+        )
+
+    store.ingest_session(
+        SessionIngest(
+            id=session_id,
+            provider="claude",
+            environment="test",
+            project="test",
+            device_id="dev",
+            cwd="/tmp",
+            started_at=_ts(),
+            events=[event(command, 0), event(caveat, 1)],
+        )
+    )
+
+    session = db.query(AgentSession).filter_by(id=session_id).one()
+    stored = db.query(AgentEvent).filter_by(session_id=session_id).order_by(AgentEvent.id.asc()).all()
+    assert [row.interaction_kind for row in stored] == ["local_control", "local_control"]
+    assert session.user_messages == 0
+    assert session.first_user_message_preview is None
+    assert session.last_visible_text_preview is None
+
+
+def test_claude_later_caveat_repairs_prior_ingest_batch(tmp_path):
+    store, db, _ = _make_store(tmp_path)
+    session_id = uuid4()
+    prompt_id = "prompt-effort-cross-batch"
+    command = {
+        "type": "user",
+        "promptId": prompt_id,
+        "message": {"role": "user", "content": "<command-name>/effort</command-name>"},
+    }
+    caveat = {
+        "type": "user",
+        "isMeta": True,
+        "promptId": prompt_id,
+        "message": {"role": "user", "content": "<local-command-caveat>native</local-command-caveat>"},
+    }
+
+    def event(row: dict[str, object], offset: int) -> EventIngest:
+        content = row["message"]
+        assert isinstance(content, dict)
+        return EventIngest(
+            role="user",
+            content_text=str(content["content"]),
+            raw_json=json.dumps(row),
+            timestamp=_ts(),
+            source_path="/claude/session.jsonl",
+            source_offset=offset,
+        )
+
+    store.ingest_session(
+        SessionIngest(
+            id=session_id,
+            provider="claude",
+            environment="test",
+            project="test",
+            device_id="dev",
+            cwd="/tmp",
+            started_at=_ts(),
+            events=[event(command, 0)],
+        )
+    )
+    store.ingest_session(
+        SessionIngest(
+            id=session_id,
+            provider="claude",
+            environment="test",
+            project="test",
+            device_id="dev",
+            cwd="/tmp",
+            started_at=_ts(),
+            events=[event(caveat, 1)],
+        )
+    )
+
+    session = db.query(AgentSession).filter_by(id=session_id).one()
+    stored = db.query(AgentEvent).filter_by(session_id=session_id).order_by(AgentEvent.id.asc()).all()
+    assert [row.interaction_kind for row in stored] == ["local_control", "local_control"]
+    assert session.user_messages == 0
+    assert session.first_user_message_preview is None
+    assert session.last_visible_text_preview is None
+
+
+@pytest.mark.parametrize(
+    ("synchronous_projections", "synchronous_session_counts", "incremental_session_counts"),
+    [
+        (True, True, False),
+        (False, False, True),
+    ],
+)
+def test_archive_primary_late_claude_caveat_repairs_counts_without_legacy_raw(
+    tmp_path,
+    synchronous_projections,
+    synchronous_session_counts,
+    incremental_session_counts,
+):
+    store, db, _ = _make_store(tmp_path)
+    session_id = uuid4()
+    prompt_id = "prompt-effort-archive-primary"
+    command = {
+        "type": "user",
+        "promptId": prompt_id,
+        "message": {"role": "user", "content": "<command-name>/effort</command-name>"},
+    }
+    caveat = {
+        "type": "user",
+        "isMeta": True,
+        "promptId": prompt_id,
+        "message": {"role": "user", "content": "<local-command-caveat>native</local-command-caveat>"},
+    }
+
+    def event(row: dict[str, object], offset: int) -> EventIngest:
+        content = row["message"]
+        assert isinstance(content, dict)
+        return EventIngest(
+            role="user",
+            content_text=str(content["content"]),
+            raw_json=json.dumps(row),
+            timestamp=_ts(),
+            source_path="/claude/session.jsonl",
+            source_offset=offset,
+        )
+
+    ingest_options = {
+        "synchronous_projections": synchronous_projections,
+        "synchronous_session_counts": synchronous_session_counts,
+        "incremental_session_counts": incremental_session_counts,
+        "write_legacy_raw": False,
+        "trigger_initial_title_generation": False,
+    }
+    store.ingest_session(
+        SessionIngest(
+            id=session_id,
+            provider="claude",
+            environment="test",
+            project="test",
+            device_id="dev",
+            cwd="/tmp",
+            started_at=_ts(),
+            events=[event(command, 0)],
+        ),
+        **ingest_options,
+    )
+    first = db.query(AgentSession).filter_by(id=session_id).one()
+    assert first.user_messages == 1
+    assert first.first_user_message_preview == command["message"]["content"]
+
+    store.ingest_session(
+        SessionIngest(
+            id=session_id,
+            provider="claude",
+            environment="test",
+            project="test",
+            device_id="dev",
+            cwd="/tmp",
+            started_at=_ts(),
+            events=[event(caveat, 1)],
+        ),
+        **ingest_options,
+    )
+
+    session = db.query(AgentSession).filter_by(id=session_id).one()
+    stored = db.query(AgentEvent).filter_by(session_id=session_id).order_by(AgentEvent.id.asc()).all()
+    assert [row.interaction_kind for row in stored] == ["local_control", "local_control"]
+    assert [row.raw_json for row in stored] == [None, None]
+    assert session.user_messages == 0
+    assert session.first_user_message_preview is None
+    assert session.last_visible_text_preview is None
+
+
+def test_archive_primary_late_claude_caveat_repairs_uuid_lineage_without_prompt_id(tmp_path):
+    store, db, _ = _make_store(tmp_path)
+    session_id = uuid4()
+    command = {
+        "type": "user",
+        "uuid": "command-archive-primary",
+        "parentUuid": "caveat-archive-primary",
+        "message": {"role": "user", "content": "<command-name>/effort</command-name>"},
+    }
+    caveat = {
+        "type": "user",
+        "isMeta": True,
+        "uuid": "caveat-archive-primary",
+        "message": {"role": "user", "content": "<local-command-caveat>native</local-command-caveat>"},
+    }
+
+    def event(row: dict[str, object], offset: int) -> EventIngest:
+        content = row["message"]
+        assert isinstance(content, dict)
+        return EventIngest(
+            role="user",
+            content_text=str(content["content"]),
+            raw_json=json.dumps(row),
+            timestamp=_ts(),
+            source_path="/claude/session.jsonl",
+            source_offset=offset,
+        )
+
+    options = {
+        "synchronous_projections": True,
+        "synchronous_session_counts": True,
+        "write_legacy_raw": False,
+        "trigger_initial_title_generation": False,
+    }
+    store.ingest_session(
+        SessionIngest(
+            id=session_id,
+            provider="claude",
+            environment="test",
+            project="test",
+            device_id="dev",
+            cwd="/tmp",
+            started_at=_ts(),
+            events=[event(command, 0)],
+        ),
+        **options,
+    )
+    assert db.query(AgentSession).filter_by(id=session_id).one().user_messages == 1
+
+    store.ingest_session(
+        SessionIngest(
+            id=session_id,
+            provider="claude",
+            environment="test",
+            project="test",
+            device_id="dev",
+            cwd="/tmp",
+            started_at=_ts(),
+            events=[event(caveat, 1)],
+        ),
+        **options,
+    )
+
+    session = db.query(AgentSession).filter_by(id=session_id).one()
+    stored = db.query(AgentEvent).filter_by(session_id=session_id).order_by(AgentEvent.id.asc()).all()
+    assert [row.interaction_kind for row in stored] == ["local_control", "local_control"]
+    assert [row.interaction_context_key for row in stored] == [
+        "uuid:command-archive-primary",
+        "uuid:caveat-archive-primary",
+    ]
+    assert session.user_messages == 0
+    assert session.first_user_message_preview is None
+    assert session.last_visible_text_preview is None
+
+
+def test_captured_claude_effort_without_prompt_id_split_across_batches_keeps_uuid_context(tmp_path):
+    store, db, _ = _make_store(tmp_path)
+    session_id = uuid4()
+    fixture = Path(__file__).parent / "fixtures/provider_interactions/claude-2.1.92-effort-no-prompt-id.jsonl"
+    rows = [json.loads(line) for line in fixture.read_text().splitlines()]
+
+    def event(row, offset):
+        return EventIngest(
+            role=row["message"]["role"],
+            content_text=row["message"]["content"],
+            raw_json=json.dumps(row),
+            timestamp=_ts(),
+            source_path="/claude/session.jsonl",
+            source_offset=offset,
+        )
+
+    store.ingest_session(
+        SessionIngest(
+            id=session_id,
+            provider="claude",
+            environment="test",
+            project="test",
+            device_id="dev",
+            cwd="/tmp",
+            started_at=_ts(),
+            events=[event(rows[0], 0)],
+        )
+    )
+
+    with patch("zerg.services.session_title_trigger.maybe_start_initial_title_generation") as trigger:
+        store.ingest_session(
+            SessionIngest(
+                id=session_id,
+                provider="claude",
+                environment="test",
+                project="test",
+                device_id="dev",
+                cwd="/tmp",
+                started_at=_ts(),
+                events=[event(rows[1], 1), event(rows[2], 2), event(rows[3], 3)],
+            )
+        )
+
+    session = db.query(AgentSession).filter_by(id=session_id).one()
+    stored_events = db.query(AgentEvent).filter_by(session_id=session_id).order_by(AgentEvent.id.asc()).all()
+    assert [event.interaction_kind for event in stored_events] == [
+        "local_control",
+        "local_control",
+        "local_control_output",
+        "durable_user_message",
+    ]
+    assert [event.interaction_context_key for event in stored_events[:3]] == [
+        "uuid:claude-caveat-1",
+        "uuid:claude-command-1",
+        "uuid:claude-output-1",
+    ]
+    assert session.user_messages == 1
+    assert session.first_user_message_preview == rows[-1]["message"]["content"]
+    trigger.assert_called_once_with(str(session_id), reason="first_user_event")
+
+
+def test_oversized_claude_prompt_id_keeps_context_across_ingest_batches(tmp_path):
+    store, db, _ = _make_store(tmp_path)
+    session_id = uuid4()
+    prompt_id = "p" * 512
+    caveat = {
+        "type": "user",
+        "isMeta": True,
+        "promptId": prompt_id,
+        "message": {"role": "user", "content": "<local-command-caveat>native</local-command-caveat>"},
+    }
+    command = {
+        "type": "user",
+        "promptId": prompt_id,
+        "message": {"role": "user", "content": "<command-name>/effort</command-name>"},
+    }
+
+    def event(row: dict[str, object], offset: int) -> EventIngest:
+        message = row["message"]
+        assert isinstance(message, dict)
+        return EventIngest(
+            role="user",
+            content_text=str(message["content"]),
+            raw_json=json.dumps(row),
+            timestamp=_ts(),
+            source_path="/claude/session.jsonl",
+            source_offset=offset,
+        )
+
+    store.ingest_session(
+        SessionIngest(
+            id=session_id,
+            provider="claude",
+            environment="test",
+            project="test",
+            device_id="dev",
+            cwd="/tmp",
+            started_at=_ts(),
+            events=[event(caveat, 0)],
+        )
+    )
+    store.ingest_session(
+        SessionIngest(
+            id=session_id,
+            provider="claude",
+            environment="test",
+            project="test",
+            device_id="dev",
+            cwd="/tmp",
+            started_at=_ts(),
+            events=[event(command, 1)],
+        )
+    )
+
+    stored = db.query(AgentEvent).filter_by(session_id=session_id).order_by(AgentEvent.id.asc()).all()
+    assert [event.interaction_kind for event in stored] == ["local_control", "local_control"]
+    assert stored[0].interaction_context_key == stored[1].interaction_context_key
+    assert len(stored[0].interaction_context_key.encode("utf-8")) <= 255
 
 
 def test_incremental_count_ingest_triggers_initial_title_generation(tmp_path):

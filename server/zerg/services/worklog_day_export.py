@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from contextlib import suppress
 from datetime import date
 from datetime import datetime
@@ -18,6 +19,12 @@ from sqlalchemy.orm import Session
 
 from zerg.catalogd.client import CatalogClient
 from zerg.models.agents import AgentSession
+from zerg.services.provider_interaction_semantics import interaction_context_key_parts
+from zerg.services.provider_interaction_semantics import seed_provider_interaction_sequence_context
+from zerg.services.provider_interaction_semantics import semantic_event_included
+from zerg.services.provider_interaction_semantics import semantic_projection_facts
+from zerg.services.raw_json_compression import CODEC_ZSTD
+from zerg.services.raw_json_compression import decompress_raw_json
 from zerg.services.session_kernel_projection import project_session_lineage_fields
 from zerg.utils.time import UTCBaseModel
 
@@ -26,6 +33,7 @@ WORKLOG_DAY_V2_SOURCE = "longhouse-worklog-search-v2"
 _WORKLOG_RPC_PAGE_SIZE = 500
 _WORKLOG_MAX_PAGES = 200
 _WORKLOG_RPC_TIMEOUT_SECONDS = 5.0
+_WORKLOG_BOUNDARY_CONTEXT_ROWS = 8
 
 WORKLOG_DAY_SESSIONS_SQL = """
 WITH active_sessions AS (
@@ -69,10 +77,19 @@ ORDER BY COALESCE(active.first_message_at, active.first_event_at), s.started_at,
 
 WORKLOG_DAY_MESSAGE_SQL = """
 SELECT
+    e.id AS row_id,
     e.session_id,
     e.role,
     e.content_text,
-    e.timestamp
+    e.timestamp,
+    s.provider,
+    e.raw_json,
+    e.raw_json_z,
+    e.raw_json_codec,
+    e.interaction_kind,
+    e.interaction_context_key,
+    e.title_eligible,
+    0 AS is_context
 FROM events AS e INDEXED BY ix_events_timestamp
 JOIN sessions s ON s.id = e.session_id
 WHERE e.timestamp >= :window_start_utc AND e.timestamp < :window_end_utc
@@ -81,6 +98,39 @@ WHERE e.timestamp >= :window_start_utc AND e.timestamp < :window_end_utc
   AND (:include_test = 1 OR s.environment NOT IN ('test', 'e2e'))
 ORDER BY e.session_id, e.timestamp, e.id
 """
+
+WORKLOG_DAY_BOUNDARY_CONTEXT_SQL = f"""
+SELECT
+    e.id AS row_id,
+    e.session_id,
+    e.role,
+    e.content_text,
+    e.timestamp,
+    s.provider,
+    e.raw_json,
+    e.raw_json_z,
+    e.raw_json_codec,
+    e.interaction_kind,
+    e.interaction_context_key,
+    e.title_eligible,
+    1 AS is_context
+FROM events AS e INDEXED BY ix_events_session_timestamp
+JOIN sessions s ON s.id = e.session_id
+WHERE e.session_id = :session_id
+  AND e.timestamp < :window_start_utc
+  AND e.role IN ('user', 'assistant')
+  AND e.content_text IS NOT NULL
+  AND (:include_test = 1 OR s.environment NOT IN ('test', 'e2e'))
+ORDER BY e.timestamp DESC, e.id DESC
+LIMIT {_WORKLOG_BOUNDARY_CONTEXT_ROWS}
+"""
+
+
+def _worklog_raw_json(row: Mapping[str, object]) -> str | None:
+    if int(row.get("raw_json_codec") or 0) == CODEC_ZSTD and row.get("raw_json_z") is not None:
+        return decompress_raw_json(row["raw_json_z"])
+    raw_json = row.get("raw_json")
+    return str(raw_json) if raw_json is not None else None
 
 
 class WorklogDaySession(UTCBaseModel):
@@ -191,8 +241,99 @@ def build_worklog_day_export(
         "include_test": 1 if include_test else 0,
     }
     session_rows = list(db.execute(text(WORKLOG_DAY_SESSIONS_SQL), params).mappings().all())
-    event_rows = list(db.execute(text(WORKLOG_DAY_MESSAGE_SQL), params).mappings().all())
+    message_rows = [dict(row) for row in db.execute(text(WORKLOG_DAY_MESSAGE_SQL), params).mappings().all()]
+    boundary_rows: list[dict[str, object]] = []
+    for session_id in {str(row["session_id"]) for row in message_rows}:
+        boundary_params = {**params, "session_id": session_id}
+        boundary_rows.extend(dict(row) for row in db.execute(text(WORKLOG_DAY_BOUNDARY_CONTEXT_SQL), boundary_params).mappings().all())
+    message_rows.extend(boundary_rows)
+    message_rows.sort(key=lambda row: (str(row["session_id"]), str(row["timestamp"]), int(row["row_id"])))
+    event_rows = []
+    sequence_contexts: dict[str, dict[str, object]] = {}
+    raw_events_by_session: dict[str, tuple[str, list[object]]] = {}
+    for row in message_rows:
+        raw_json = _worklog_raw_json(row)
+        if raw_json is not None:
+            session_key = str(row["session_id"])
+            provider = str(row["provider"] or "unknown")
+            session_provider, session_raw_events = raw_events_by_session.setdefault(
+                session_key,
+                (provider, []),
+            )
+            session_raw_events.append(raw_json)
+    for session_key, (provider, raw_events) in raw_events_by_session.items():
+        seed_provider_interaction_sequence_context(
+            provider,
+            raw_events,
+            sequence_contexts.setdefault(session_key, {}),
+        )
+    for row in message_rows:
+        if _worklog_raw_json(row) is not None or str(row["provider"] or "").strip().lower() != "claude":
+            continue
+        if str(row["interaction_kind"] or "") not in {
+            "local_control",
+            "local_control_output",
+            "conversation_boundary",
+        }:
+            continue
+        sequence_context = sequence_contexts.setdefault(str(row["session_id"]), {})
+        for context_key in interaction_context_key_parts(str(row["interaction_context_key"] or "").strip()):
+            if context_key.startswith("uuid:"):
+                sequence_context.setdefault("claude_local_command_uuids", set()).add(context_key.removeprefix("uuid:"))
+            else:
+                sequence_context.setdefault("claude_local_command_prompt_ids", set()).add(context_key)
+    # Context is session-scoped, so each complete message window is replayed
+    # independently. A day query can contain multiple sessions.
+    for row in message_rows:
+        session_key = str(row["session_id"])
+        sequence_context = sequence_contexts.setdefault(session_key, {})
+        raw_json = _worklog_raw_json(row)
+        persisted_key = str(row["interaction_context_key"] or "").strip()
+        if raw_json is None and str(row["interaction_kind"] or "") in {
+            "local_control",
+            "local_control_output",
+            "conversation_boundary",
+        }:
+            for context_key in interaction_context_key_parts(persisted_key):
+                if context_key.startswith("uuid:"):
+                    sequence_context.setdefault("claude_local_command_uuids", set()).add(context_key.removeprefix("uuid:"))
+                else:
+                    sequence_context.setdefault("claude_local_command_prompt_ids", set()).add(context_key)
+        facts = semantic_projection_facts(
+            str(row["provider"] or "unknown"),
+            role=str(row["role"] or ""),
+            content_text=row["content_text"],
+            raw_json=raw_json,
+            interaction_kind=(str(row["interaction_kind"]) if row["interaction_kind"] is not None else None),
+            title_eligible=(row["title_eligible"] if raw_json is None else None),
+            sequence_context=sequence_context,
+        )
+        if semantic_event_included(
+            str(row["provider"] or "unknown"),
+            role=str(row["role"] or ""),
+            content_text=row["content_text"],
+            raw_json=raw_json,
+            interaction_kind=facts["interaction_kind"],
+            title_eligible=facts["title_eligible"],
+            sequence_context=sequence_context,
+        ) and not bool(row["is_context"]):
+            event_rows.append(row)
     sidechains = _sidechain_map(db, [str(row["id"]) for row in session_rows])
+    semantic_by_session: dict[str, list[Mapping[str, object]]] = {}
+    for row in event_rows:
+        semantic_by_session.setdefault(str(row["session_id"]), []).append(row)
+
+    def session_order(row: Mapping[str, object]) -> tuple[float, str, str]:
+        semantic_rows = semantic_by_session.get(str(row["id"])) or []
+        first_semantic = _coerce_datetime(semantic_rows[0]["timestamp"]) if semantic_rows else None
+        first_event = first_semantic or _coerce_datetime(row["first_event_at"])
+        return (
+            first_event.timestamp() if first_event is not None else float("inf"),
+            str(row["started_at"] or ""),
+            str(row["id"]),
+        )
+
+    session_rows.sort(key=session_order)
 
     sessions = [
         WorklogDaySession(
@@ -208,8 +349,10 @@ def build_worklog_day_export(
             is_sidechain=bool(sidechains.get(str(row["id"]), False)),
             first_event_at=_coerce_datetime(row["first_event_at"]),
             last_event_at=_coerce_datetime(row["last_event_at"]),
-            first_message_at=_coerce_datetime(row["first_message_at"]),
-            message_count=int(row["message_count"] or 0),
+            first_message_at=(
+                _coerce_datetime(semantic_by_session[str(row["id"])][0]["timestamp"]) if semantic_by_session.get(str(row["id"])) else None
+            ),
+            message_count=len(semantic_by_session.get(str(row["id"]), [])),
             event_count=int(row["event_count"] or 0),
         )
         for row in session_rows

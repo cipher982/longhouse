@@ -162,13 +162,13 @@ def _chunk_batches(chunks: Sequence[EmbeddingChunk]) -> list[list[EmbeddingChunk
     return [list(chunks[i : i + batch_size]) for i in range(0, len(chunks), batch_size)]
 
 
-def prepare_turn_chunks(events: list[dict]) -> list[EmbeddingChunk]:
+def prepare_turn_chunks(events: list[dict], *, provider: str | None = None) -> list[EmbeddingChunk]:
     """Prepare episode-level embedding chunks for recall.
 
     Detects episode boundaries (one user event through everything up to the
     next) and creates one chunk per episode.
     """
-    return list(iter_turn_chunks(events))
+    return list(iter_turn_chunks(events, provider=provider))
 
 
 @dataclass(frozen=True)
@@ -184,14 +184,14 @@ class _TranscriptTurn:
     source_event_id_start: int | None = None
 
 
-def _iter_clean_turns(events: list[Mapping[str, object]]) -> Iterator[_TranscriptTurn]:
+def _iter_clean_turns(events: list[Mapping[str, object]], *, provider: str | None = None) -> Iterator[_TranscriptTurn]:
     ordered = sorted(events, key=_event_sort_key)
     current_role: str | None = None
     current_texts: list[str] = []
     current_start = 0
     current_source_id: int | None = None
 
-    for clean_event in iter_clean_transcript_events(ordered):
+    for clean_event in iter_clean_transcript_events(ordered, provider=provider):
         content = clean_event.content
         role = clean_event.role
         if current_role is None:
@@ -225,7 +225,7 @@ def _iter_clean_turns(events: list[Mapping[str, object]]) -> Iterator[_Transcrip
         )
 
 
-def iter_turn_chunks(events: list[dict]) -> Iterator[EmbeddingChunk]:
+def iter_turn_chunks(events: list[dict], *, provider: str | None = None) -> Iterator[EmbeddingChunk]:
     """Yield episode-level embedding chunks without provider or DB work.
 
     An episode spans one user event through everything up to (but not
@@ -266,7 +266,7 @@ def iter_turn_chunks(events: list[dict]) -> Iterator[EmbeddingChunk]:
         chunk_idx += 1
         return chunk
 
-    for turn in _iter_clean_turns(events):
+    for turn in _iter_clean_turns(events, provider=provider):
         if turn.role == "user" and pending_start is not None:
             chunk = _flush()
             if chunk is not None:

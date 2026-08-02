@@ -14,9 +14,14 @@ from uuid import uuid4
 
 from zerg.catalogd.client import CatalogClient
 from zerg.searchd.store import object_set_hash
+from zerg.services.raw_object_workers import RawObjectWorkerPool
+from zerg.services.raw_object_workers import get_raw_object_worker_pool
 from zerg.services.render_object_workers import RenderObjectWorkerPool
 from zerg.services.render_object_workers import get_render_object_worker_pool
 from zerg.services.searchd_supervisor import get_searchd_projector_client
+from zerg.services.storage_v2_semantics import StorageV2SemanticRecoveryError
+from zerg.services.storage_v2_semantics import StorageV2SemanticRecoveryPermanentError
+from zerg.services.storage_v2_semantics import recover_render_interaction_kinds
 
 logger = logging.getLogger(__name__)
 
@@ -37,13 +42,17 @@ class SearchV2Projector:
         catalog: CatalogClient,
         search: CatalogClient,
         render_workers: RenderObjectWorkerPool,
+        raw_workers: RawObjectWorkerPool | None = None,
         worker_id: str | None = None,
     ) -> None:
         self.catalog = catalog
         self.search = search
         self.render_workers = render_workers
+        self.raw_workers = raw_workers
         self.worker_id = worker_id or f"search-v2:{os.getpid()}"
         self._bound_store_id: str | None = None
+        self._raw_manifest_cache: dict[str, dict[str, dict[str, object]]] = {}
+        self._sequence_context_cache: dict[tuple[str, str, str, str, str], dict[str, object]] = {}
 
     async def run_once(self, *, limit: int = 4, now: datetime | None = None) -> int:
         observed_at = now or datetime.now(UTC)
@@ -108,7 +117,16 @@ class SearchV2Projector:
         except Exception as exc:
             failure_count = int(state.get("failure_count", 0)) if isinstance(state, dict) else 0
             retry_seconds = min(300, 5 * (2 ** min(failure_count, 6)))
-            code = exc.code if isinstance(exc, SearchProjectionError) else "projection_failed"
+            if isinstance(exc, StorageV2SemanticRecoveryPermanentError):
+                code = "semantic_recovery_permanent"
+            elif isinstance(exc, StorageV2SemanticRecoveryError):
+                # A legacy render object cannot be safely projected without
+                # its immutable raw companion. Keep it explicitly retryable;
+                # never classify the render text heuristically.
+                code = "semantic_recovery_pending"
+                retry_seconds = max(retry_seconds, 60)
+            else:
+                code = exc.code if isinstance(exc, SearchProjectionError) else "projection_failed"
             message = str(exc)[:2_048] or type(exc).__name__
             session_value = state.get("session_id") if isinstance(state, dict) else None
             if isinstance(session_value, str):
@@ -122,12 +140,18 @@ class SearchV2Projector:
                         "error_code": code,
                         "error_message": message,
                         "failed_at": failed_at.isoformat(),
-                        "retry_at": (failed_at + timedelta(seconds=retry_seconds)).isoformat(),
+                        "retry_at": (
+                            failed_at.isoformat()
+                            if code == "semantic_recovery_permanent"
+                            else (failed_at + timedelta(seconds=retry_seconds)).isoformat()
+                        ),
                     },
                 )
             logger.warning("Search-v2 projection failed session=%s code=%s error=%s", session_value, code, message)
 
     async def _project(self, *, session_id: str, claimed_revision: int) -> None:
+        self._raw_manifest_cache.pop(session_id, None)
+        self._sequence_context_cache = {key: value for key, value in self._sequence_context_cache.items() if key[0] != session_id}
         generation_id: str | None = None
         after_object_id: str | None = None
         expected_objects: int | None = None
@@ -179,6 +203,7 @@ class SearchV2Projector:
                     generation_id=generation_id,
                     claimed_revision=claimed_revision,
                     session=session,
+                    sequence_context_cache=self._sequence_context_cache,
                 )
                 object_id = _hash(manifest.get("object_id") if isinstance(manifest, dict) else None, "object_id")
                 if object_ids and object_id <= object_ids[-1]:
@@ -226,6 +251,7 @@ class SearchV2Projector:
         generation_id: str,
         claimed_revision: int,
         session: dict[str, Any],
+        sequence_context_cache: dict[tuple[str, str, str, str, str], dict[str, object]],
     ) -> int:
         if not isinstance(manifest, dict):
             raise SearchProjectionError("invalid_catalog_response", "render manifest row is invalid")
@@ -238,6 +264,27 @@ class SearchV2Projector:
         spec = decoded.spec
         if str(spec.session_id) != session_id or str(spec.render_generation) != generation_id or decoded.object_hash != object_id:
             raise SearchProjectionError("render_corrupt", "render object identity does not match its catalog manifest")
+        owner_id = session.get("owner_id")
+        if owner_id is None:
+            raise SearchProjectionError(
+                "semantic_recovery_pending",
+                "storage session owner is required for semantic recovery",
+            )
+        recovered_kinds = {}
+        source_envelope_id = getattr(spec, "source_envelope_id", None)
+        if source_envelope_id:
+            recovered_kinds = await recover_render_interaction_kinds(
+                catalog=self.catalog,
+                raw_workers=self.raw_workers,
+                session_id=session_id,
+                owner_id=str(owner_id),
+                provider=spec.provider,
+                records=spec.records,
+                source_envelope_id=source_envelope_id,
+                manifest_cache=self._raw_manifest_cache,
+                sequence_context_cache=sequence_context_cache,
+                reclassify_sequence_controls=spec.provider.strip().lower() == "claude",
+            )
         records = [
             {
                 "event_id": record.event_id,
@@ -246,6 +293,7 @@ class SearchV2Projector:
                 "source_position": record.source_position,
                 "event_subordinal": record.event_subordinal,
                 "role": record.role,
+                "interaction_kind": (recovered_kinds[ordinal] if ordinal in recovered_kinds else getattr(record, "interaction_kind", None)),
                 "content_text": record.content_text,
                 "tool_name": record.tool_name,
                 "tool_output_text": record.tool_output_text,
@@ -333,6 +381,7 @@ def start_search_v2_projector() -> bool:
         catalog=catalog,
         search=search,
         render_workers=get_render_object_worker_pool(),
+        raw_workers=get_raw_object_worker_pool(),
     )
     _task = asyncio.create_task(_run_forever(projector), name="search-v2-projector")
     return True

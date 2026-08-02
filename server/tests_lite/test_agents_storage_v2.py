@@ -19,8 +19,8 @@ from zerg.catalogd.server import CatalogDaemon
 from zerg.config import get_settings
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
-from zerg.services.raw_object_workers import RawObjectWorkerPool
 from zerg.services.raw_object_workers import RawObjectWorkerBusy
+from zerg.services.raw_object_workers import RawObjectWorkerPool
 from zerg.storage_v2.contracts import EnvelopeIdentity
 from zerg.storage_v2.contracts import RenderDetailCursor
 from zerg.storage_v2.contracts import envelope_id
@@ -210,6 +210,126 @@ async def test_storage_v2_render_reader_saturation_is_not_reported_as_corruption
     assert raised.value.status_code == 503
     assert raised.value.detail["code"] == "render_read_busy"
     assert raised.value.headers == {"Retry-After": "1"}
+
+
+@pytest.mark.asyncio
+async def test_storage_v2_render_reader_surfaces_semantic_recovery_pending(monkeypatch):
+    session_id = uuid4()
+    generation_id = uuid4()
+    object_hash = "a" * 64
+    source_envelope_id = "b" * 64
+
+    class _Catalog:
+        async def call(self, method, _params):
+            assert method == "storage.session.render_manifest.v2"
+            return {
+                "found": True,
+                "current_generation_id": str(generation_id),
+                "generation": {"generation_id": str(generation_id), "event_count": 1},
+                "objects": [
+                    {
+                        "object_path": "render.zst",
+                        "object_hash": object_hash,
+                        "source_envelope_id": source_envelope_id,
+                    }
+                ],
+            }
+
+    class _RenderPool:
+        async def read(self, *_args, **_kwargs):
+            return SimpleNamespace(
+                object_hash=object_hash,
+                spec=SimpleNamespace(
+                    session_id=session_id,
+                    render_generation=generation_id,
+                    source_envelope_id=source_envelope_id,
+                    provider="claude",
+                    records=(SimpleNamespace(),),
+                ),
+            )
+
+    class _RawPool:
+        pass
+
+    async def pending_recovery(**_kwargs):
+        raise storage_router.StorageV2SemanticRecoveryError("raw companion unavailable")
+
+    monkeypatch.setattr(storage_router, "get_catalogd_client", lambda: _Catalog())
+    monkeypatch.setattr(storage_router, "get_render_object_worker_pool", lambda: _RenderPool())
+    monkeypatch.setattr(storage_router, "get_raw_object_worker_pool", lambda: _RawPool())
+    monkeypatch.setattr(storage_router, "recover_render_interaction_kinds", pending_recovery)
+
+    with pytest.raises(storage_router.HTTPException) as raised:
+        await storage_router.read_storage_v2_session_events_page(
+            session_id=session_id,
+            owner_id="1",
+            cursor=None,
+            anchor="tail",
+            limit=20,
+        )
+
+    assert raised.value.status_code == 503
+    assert raised.value.detail["code"] == "semantic_recovery_pending"
+    assert raised.value.headers == {"Retry-After": "60"}
+
+
+@pytest.mark.asyncio
+async def test_storage_v2_timeline_repairs_stale_semantic_catalog_projection(monkeypatch):
+    session_id = uuid4()
+    generation_id = uuid4()
+
+    class _Catalog:
+        def __init__(self):
+            self.timeline_calls = 0
+
+        async def call(self, method, _params):
+            assert method == "storage.session.timeline.list.v2"
+            self.timeline_calls += 1
+            return {
+                "sessions": [
+                    {
+                        "session_id": str(session_id),
+                        "semantic_projection_version": 0 if self.timeline_calls == 1 else 1,
+                        "current_render_generation": str(generation_id),
+                    }
+                ],
+                "has_more": False,
+                "commit_seq": "7",
+                "observed_at": "2026-08-01T00:00:00+00:00",
+            }
+
+    catalog = _Catalog()
+    repairs: list[dict[str, object]] = []
+
+    async def _repair(**kwargs):
+        repairs.append(kwargs)
+        return {"complete": True, "updated_object_count": 1}
+
+    render_workers = object()
+    raw_workers = object()
+    monkeypatch.setattr(storage_router, "get_catalogd_client", lambda: catalog)
+    monkeypatch.setattr(storage_router, "get_render_object_worker_pool", lambda: render_workers)
+    monkeypatch.setattr(storage_router, "get_raw_object_worker_pool", lambda: raw_workers)
+    monkeypatch.setattr(storage_router, "repair_storage_session_semantic_projection", _repair)
+
+    app = FastAPI()
+    app.include_router(storage_router.router)
+    app.dependency_overrides[verify_agents_token] = lambda: SimpleNamespace(device_id="cinder", owner_id=42)
+    app.dependency_overrides[require_single_tenant] = lambda: None
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/agents/storage/v2/sessions")
+
+    assert response.status_code == 200, response.text
+    assert catalog.timeline_calls == 2
+    assert len(repairs) == 1
+    assert repairs[0]["catalog"] is catalog
+    assert repairs[0]["render_workers"] is render_workers
+    assert repairs[0]["raw_workers"] is raw_workers
+    assert repairs[0]["session_id"] == str(session_id)
+    assert repairs[0]["owner_id"] == "42"
+    assert repairs[0]["generation_id"] == str(generation_id)
+    assert response.json()["sessions"][0]["semantic_projection_version"] == 1
 
 
 @pytest.mark.asyncio

@@ -30,6 +30,7 @@ from sqlalchemy import literal
 from sqlalchemy import or_
 from sqlalchemy import select
 from sqlalchemy import text
+from sqlalchemy import true
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
@@ -57,13 +58,18 @@ from zerg.services.internal_sessions import classify_provider_proof_environment
 from zerg.services.internal_sessions import internal_canary_session_clause
 from zerg.services.internal_sessions import is_internal_canary_provider_filter
 from zerg.services.internal_sessions import provider_proof_session_clause
-from zerg.services.provider_interaction_semantics import title_eligible_provider_event
+from zerg.services.provider_interaction_semantics import classify_provider_interaction
+from zerg.services.provider_interaction_semantics import interaction_context_key_parts
+from zerg.services.provider_interaction_semantics import seed_persisted_provider_interaction_context
+from zerg.services.provider_interaction_semantics import seed_provider_interaction_sequence_context
+from zerg.services.provider_interaction_semantics import semantic_projection_facts
 from zerg.services.provisional_events import durable_transcript_event_predicate
 from zerg.services.provisional_events import visible_transcript_event_predicate
 from zerg.services.raw_json_compression import CODEC_PLAIN
 from zerg.services.raw_json_compression import CODEC_ZSTD
 from zerg.services.raw_json_compression import compress_raw_json
 from zerg.services.raw_json_compression import decode_raw_json
+from zerg.services.raw_json_compression import decompress_raw_json
 from zerg.services.session_graph_projection import workflow_run_projection
 from zerg.services.session_graph_projection import workflow_runs_for_session
 from zerg.services.session_hot_cards import upsert_timeline_card_from_session
@@ -95,6 +101,13 @@ from .models import SessionProjectionPage
 from .models import SourceLineIngest
 from .models import SourceRewindHintIngest
 
+
+def _decode_event_raw_json_values(raw_json, raw_json_z, raw_json_codec):
+    if int(raw_json_codec or 0) == CODEC_ZSTD and raw_json_z is not None:
+        return decompress_raw_json(raw_json_z)
+    return raw_json
+
+
 logger = logging.getLogger(__name__)
 
 _SESSION_FIRST_USER_PREVIEW_CHARS = 300
@@ -114,16 +127,67 @@ def _bounded_session_preview(value: str | None, *, max_len: int) -> str | None:
     return stripped[:max_len]
 
 
-def _first_user_text_from_ingest(data: SessionIngest) -> str | None:
-    for event in data.events:
-        if str(event.role or "").strip().lower() != "user":
-            continue
-        if not title_eligible_provider_event(
+def _classify_ingest_interactions(
+    data: SessionIngest,
+    *,
+    sequence_context: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Classify one ingest batch once, preserving provider sequence evidence."""
+
+    sequence_context = sequence_context if sequence_context is not None else {}
+    seed_provider_interaction_sequence_context(
+        data.provider,
+        [event.raw_json for event in data.events],
+        sequence_context,
+    )
+    return [
+        classify_provider_interaction(
             data.provider,
             role=event.role,
             content_text=event.content_text,
             raw_json=event.raw_json,
-        ):
+            sequence_context=sequence_context,
+        )
+        for event in data.events
+    ]
+
+
+def _seed_ingest_interaction_sequence_context(
+    db: Session,
+    *,
+    session_id: UUID,
+    provider: str | None,
+) -> dict[str, Any]:
+    """Carry provider sequence evidence across independently committed batches."""
+
+    if str(provider or "").strip().lower() != "claude":
+        return {}
+
+    sequence_context: dict[str, Any] = {}
+    rows = (
+        db.query(AgentEvent)
+        .filter(AgentEvent.session_id == session_id)
+        .filter(AgentEvent.role == "user")
+        .filter(
+            or_(
+                AgentEvent.interaction_kind.in_(("local_control", "local_control_output", "conversation_boundary")),
+                AgentEvent.interaction_context_key.isnot(None),
+                AgentEvent.raw_json.isnot(None),
+                AgentEvent.raw_json_z.isnot(None),
+            )
+        )
+        .order_by(AgentEvent.id.asc())
+        .all()
+    )
+    raw_values = [decode_raw_json(row) for row in rows]
+    seed_provider_interaction_sequence_context(provider, raw_values, sequence_context)
+    seed_persisted_provider_interaction_context(provider, rows, sequence_context)
+    return sequence_context
+
+
+def _first_user_text_from_ingest(data: SessionIngest, interactions: list[dict[str, Any]]) -> str | None:
+    for event, interaction in zip(data.events, interactions, strict=True):
+        if not interaction["title_eligible"]:
             continue
         preview = _bounded_session_preview(
             event.content_text,
@@ -1069,6 +1133,7 @@ class AgentsStore:
                     WHERE events_fts MATCH :query
                       AND e.session_id IN :session_ids
                       AND COALESCE(e.event_origin, 'durable') = 'durable'
+                      AND (e.role != 'user' OR e.title_eligible = 1 OR e.title_eligible IS NULL)
                 )
                 SELECT session_id, event_id, role, tool_name, content_text, tool_output_text
                 FROM ranked
@@ -1149,7 +1214,36 @@ class AgentsStore:
 
         if not self._fts_available():
             raise RuntimeError("FTS5 is required for session search but is not available.")
-        return self._fts_match_map(session_ids, query)
+        matches = self._fts_match_map(session_ids, query)
+        # FTS cannot express Claude's sequence-dependent legacy NULL facts.
+        # Reconcile only sessions that still have those rows; current sessions
+        # stay on the indexed path.
+        for session_id in session_ids:
+            if not self._has_legacy_user_semantics(session_id):
+                continue
+            events = self.get_session_events(
+                session_id,
+                query=query,
+                context_mode=context_mode,
+                branch_mode=branch_mode,
+                limit=1,
+                offset=0,
+            )
+            if not events:
+                matches.pop(session_id, None)
+                continue
+            event = events[0]
+            matches[session_id] = {
+                "event_id": event.id,
+                "snippet": (
+                    self._build_snippet(event.content_text, query)
+                    or self._build_snippet(event.tool_output_text, query)
+                    or self._build_snippet(event.tool_name, query)
+                    or ""
+                ),
+                "role": event.role,
+            }
+        return matches
 
     def _fts_session_ids(
         self,
@@ -1172,6 +1266,7 @@ class AgentsStore:
                     JOIN events e ON e.id = events_fts.rowid
                     WHERE events_fts MATCH :query
                       AND COALESCE(e.event_origin, 'durable') = 'durable'
+                      AND (e.role != 'user' OR e.title_eligible = 1 OR e.title_eligible IS NULL)
                     """
                 ),
                 {"query": self._fts_query(query)},
@@ -1185,7 +1280,8 @@ class AgentsStore:
                     except ValueError:
                         continue
                 session_ids.append(session_id)
-            if context_mode != "active_context" and branch_mode != "head":
+            needs_semantic_replay = any(self._has_legacy_user_semantics(session_id) for session_id in session_ids)
+            if context_mode != "active_context" and branch_mode != "head" and not needs_semantic_replay:
                 return session_ids
 
             # Branch/head projection and active-context projection both require
@@ -1811,6 +1907,9 @@ class AgentsStore:
                     raw_json=event.raw_json,
                     raw_json_z=event.raw_json_z,
                     raw_json_codec=event.raw_json_codec,
+                    interaction_kind=event.interaction_kind,
+                    interaction_context_key=getattr(event, "interaction_context_key", None),
+                    title_eligible=event.title_eligible,
                     compaction_kind=event.compaction_kind,
                     event_uuid=event.event_uuid,
                     parent_event_uuid=event.parent_event_uuid,
@@ -1854,15 +1953,31 @@ class AgentsStore:
         user_count = 0
         first_user_preview: str | None = None
         last_user_preview: str | None = None
+        interaction_sequence_context: dict[str, object] = _seed_ingest_interaction_sequence_context(
+            self.db,
+            session_id=session_id,
+            provider=session_obj.provider,
+        )
         for event in user_events:
             if str(event.content_text or "").strip().lower() == "warmup":
                 continue
-            if not title_eligible_provider_event(
+            raw_json = decode_raw_json(event)
+            rederive_claude_kind = str(session_obj.provider or "").strip().lower() == "claude" and raw_json is not None
+            semantics = semantic_projection_facts(
                 session_obj.provider,
                 role=event.role,
                 content_text=event.content_text,
-                raw_json=decode_raw_json(event),
-            ):
+                raw_json=raw_json,
+                interaction_kind=None if rederive_claude_kind else getattr(event, "interaction_kind", None),
+                title_eligible=(getattr(event, "title_eligible", None) if raw_json is None else None),
+                sequence_context=interaction_sequence_context,
+            )
+            if rederive_claude_kind:
+                event.interaction_kind = semantics["interaction_kind"]
+                event.title_eligible = int(bool(semantics["title_eligible"]))
+                if semantics["interaction_context_key"] is not None:
+                    event.interaction_context_key = semantics["interaction_context_key"]
+            if not semantics["title_eligible"]:
                 continue
             user_count += 1
             if first_user_preview is None:
@@ -1905,23 +2020,51 @@ class AgentsStore:
             .filter(AgentEvent.role.in_(("user", "assistant")))
             .filter(or_(AgentEvent.role != "assistant", AgentEvent.tool_name.is_(None)))
             .filter(AgentEvent.content_text.isnot(None))
-            .order_by(AgentEvent.timestamp.desc(), AgentEvent.id.desc())
+            .order_by(AgentEvent.timestamp.asc(), AgentEvent.id.asc())
             .yield_per(100)
         )
-        last_visible_event = next(
-            (
-                event
-                for event in visible_events
-                if event.role != "user"
-                or title_eligible_provider_event(
-                    session_obj.provider,
-                    role=event.role,
-                    content_text=event.content_text,
-                    raw_json=decode_raw_json(event),
-                )
-            ),
-            None,
-        )
+        last_visible_event: AgentEvent | None = None
+        visible_sequence_context: dict[str, object] = {}
+        if str(session_obj.provider or "").strip().lower() == "claude":
+            # Unlike the incremental ingest path, this replay can see a
+            # complete committed session. Seed all native and persisted
+            # context before judging the first visible row so a caveat in a
+            # later batch can repair an earlier command preview as well as
+            # the counts above.
+            visible_context_rows = (
+                self.db.query(AgentEvent)
+                .filter(AgentEvent.session_id == session_id)
+                .filter(AgentEvent.branch_id == head_branch_id)
+                .filter(thread_filter)
+                .filter(visible_transcript_event_predicate())
+                .filter(AgentEvent.role == "user")
+                .filter(AgentEvent.content_text.isnot(None))
+                .order_by(AgentEvent.timestamp.asc(), AgentEvent.id.asc())
+                .all()
+            )
+            seed_provider_interaction_sequence_context(
+                session_obj.provider,
+                [decode_raw_json(event) for event in visible_context_rows],
+                visible_sequence_context,
+            )
+            seed_persisted_provider_interaction_context(
+                session_obj.provider,
+                visible_context_rows,
+                visible_sequence_context,
+            )
+        for event in visible_events:
+            raw_json = decode_raw_json(event)
+            semantics = semantic_projection_facts(
+                session_obj.provider,
+                role=event.role,
+                content_text=event.content_text,
+                raw_json=raw_json,
+                interaction_kind=getattr(event, "interaction_kind", None),
+                title_eligible=(getattr(event, "title_eligible", None) if raw_json is None else None),
+                sequence_context=visible_sequence_context,
+            )
+            if event.role != "user" or semantics["title_eligible"]:
+                last_visible_event = event
         last_visible_preview = last_visible_event.content_text if last_visible_event is not None else None
         last_assistant_preview = (
             self.db.query(AgentEvent.content_text)
@@ -2079,7 +2222,6 @@ class AgentsStore:
         session_id = data.id if data.id else uuid4()
         source_lines = self._normalize_source_lines_for_ingest(data)
         primary_source_path = self._primary_source_path_for_ingest(data, source_lines)
-        first_user_text_from_ingest = _first_user_text_from_ingest(data)
         origin_kind = _normalize_origin_kind(data.origin_kind)
         origin_hidden_from_default_timeline = _hidden_from_default_timeline_for_origin(origin_kind)
         lineage_parent_provider_session_id = _hatch_lineage_parent_provider_session_id(data, primary_source_path)
@@ -2229,6 +2371,16 @@ class AgentsStore:
             if existing is not None and data.provider_session_id and _has_managed_binding_evidence(self.db, existing, data):
                 self._record_provider_binding_missing(data=data, session=existing)
         session_created = False
+        interaction_sequence_context = _seed_ingest_interaction_sequence_context(
+            self.db,
+            session_id=session_id,
+            provider=data.provider,
+        )
+        interaction_facts = _classify_ingest_interactions(
+            data,
+            sequence_context=interaction_sequence_context,
+        )
+        first_user_text_from_ingest = _first_user_text_from_ingest(data, interaction_facts)
 
         if existing:
             if resolved_child_thread is None:
@@ -2488,12 +2640,13 @@ class AgentsStore:
 
         stage_started = time.monotonic()
         try:
-            for event_data in data.events:
+            for event_index, event_data in enumerate(data.events):
                 event_hash = self._compute_event_hash(event_data)
                 event_uuid, parent_event_uuid = self._extract_event_lineage(event_data.raw_json)
                 event_leaf_uuid = self._extract_leaf_uuid(event_data.raw_json)
                 if event_leaf_uuid:
                     leaf_uuid_hint = event_leaf_uuid
+                interaction = interaction_facts[event_index]
 
                 observation_result = record_provider_event_observation(
                     self.db,
@@ -2518,6 +2671,9 @@ class AgentsStore:
                     # write_legacy_raw gate) so the structured marker survives even
                     # when raw bytes are not persisted to the observation payload.
                     compaction_kind=classify_compaction_kind(event_data.raw_json),
+                    interaction_kind=interaction["interaction_kind"],
+                    interaction_context_key=interaction.get("interaction_context_key"),
+                    title_eligible=interaction["title_eligible"],
                     event_uuid=event_uuid,
                     parent_event_uuid=parent_event_uuid,
                     received_at=provider_events_received_at,
@@ -2545,6 +2701,9 @@ class AgentsStore:
                             raw_json_z=raw_json_z,
                             raw_json_codec=CODEC_ZSTD if raw_json_z else CODEC_PLAIN,
                             compaction_kind=classify_compaction_kind(event_data.raw_json),
+                            interaction_kind=interaction["interaction_kind"],
+                            interaction_context_key=interaction.get("interaction_context_key"),
+                            title_eligible=interaction["title_eligible"],
                             schema_version=1,
                             event_uuid=event_uuid,
                             parent_event_uuid=parent_event_uuid,
@@ -2568,12 +2727,7 @@ class AgentsStore:
                     is_warmup = bool(role == "user" and content_clean and content_clean.lower() == "warmup")
                     event_ts = _normalize_utc_naive(event_data.timestamp) or datetime.min
                     event_order = int(event_data.source_offset or 0)
-                    title_eligible = title_eligible_provider_event(
-                        data.provider,
-                        role=role,
-                        content_text=content_text,
-                        raw_json=event_data.raw_json,
-                    )
+                    title_eligible = bool(interaction["title_eligible"])
                     if role == "user" and not is_warmup and title_eligible:
                         user_count_delta += 1
                         if content_clean:
@@ -2746,7 +2900,16 @@ class AgentsStore:
         stage_started = time.monotonic()
         head_branch_for_counts = self._align_head_branch_from_leaf_uuid(session_id, ingest_branch.id, leaf_uuid_hint)
         sync_session_counts = synchronous_projections if synchronous_session_counts is None else synchronous_session_counts
-        if sync_session_counts:
+        late_provider_control = str(data.provider or "").strip().lower() == "claude" and any(
+            interaction["interaction_kind"]
+            in {
+                "local_control",
+                "local_control_output",
+                "conversation_boundary",
+            }
+            for interaction in interaction_facts
+        )
+        if sync_session_counts or (incremental_session_counts and late_provider_control):
             self._sync_session_counts_to_head(session_id, head_branch_for_counts)
         elif incremental_session_counts:
             self._apply_incremental_session_count_deltas(
@@ -3937,6 +4100,160 @@ class AgentsStore:
         by_id = {row.id: row for row in rows}
         return [by_id[session_id] for session_id in session_ids if session_id in by_id]
 
+    def _message_candidate_map(
+        self,
+        session_ids: List[UUID],
+        *,
+        role: str,
+        first: bool,
+    ) -> dict[UUID, tuple[datetime, int, str]]:
+        """Return one first/last candidate per session without full-history ORM loads.
+
+        New rows are selected with a window over the persisted semantic bit. The
+        legacy-null path is queried separately and only decoded when an old row
+        still needs provider-native evidence. This keeps current list requests
+        index-backed while preserving mixed old/new databases.
+        """
+        if not session_ids:
+            return {}
+        ordered_ids = list(dict.fromkeys(session_ids))
+        heads_subq = (
+            select(
+                AgentSessionBranch.session_id.label("session_id"),
+                func.max(AgentSessionBranch.id).label("head_branch_id"),
+            )
+            .where(AgentSessionBranch.session_id.in_(ordered_ids))
+            .where(AgentSessionBranch.is_head == 1)
+            .group_by(AgentSessionBranch.session_id)
+            .subquery()
+        )
+        ordering = (AgentEvent.timestamp.asc(), AgentEvent.id.asc()) if first else (AgentEvent.timestamp.desc(), AgentEvent.id.desc())
+        ranked = (
+            select(
+                AgentEvent.session_id.label("session_id"),
+                AgentEvent.timestamp.label("timestamp"),
+                AgentEvent.id.label("event_id"),
+                AgentEvent.content_text.label("content_text"),
+                func.row_number().over(partition_by=AgentEvent.session_id, order_by=ordering).label("row_number"),
+            )
+            .select_from(AgentEvent)
+            .outerjoin(AgentSession, AgentSession.id == AgentEvent.session_id)
+            .outerjoin(heads_subq, AgentEvent.session_id == heads_subq.c.session_id)
+            .where(AgentEvent.session_id.in_(ordered_ids))
+            .where(durable_transcript_event_predicate())
+            .where(AgentEvent.role == role)
+            .where(AgentEvent.content_text.isnot(None))
+            .where(AgentEvent.content_text != "")
+            .where(
+                and_(
+                    AgentEvent.title_eligible == 1,
+                    or_(
+                        AgentSession.provider != "claude",
+                        and_(AgentEvent.raw_json.is_(None), AgentEvent.raw_json_z.is_(None)),
+                    ),
+                )
+                if role == "user"
+                else true()
+            )
+            .where(
+                or_(
+                    heads_subq.c.head_branch_id.is_(None),
+                    AgentEvent.branch_id == heads_subq.c.head_branch_id,
+                )
+            )
+        ).subquery()
+        known_rows = self.db.execute(
+            select(ranked.c.session_id, ranked.c.timestamp, ranked.c.event_id, ranked.c.content_text).where(ranked.c.row_number == 1)
+        ).all()
+        known: dict[UUID, tuple[datetime, int, str]] = {
+            row.session_id: (row.timestamp, int(row.event_id), row.content_text)
+            for row in known_rows
+            if row.session_id is not None and row.timestamp is not None and row.content_text
+        }
+        if role != "user":
+            return known
+
+        # A legacy-null record has no persisted decision. Decode the old raw
+        # sequence in chronological order so a provider caveat can establish
+        # context before its sibling command row is considered.
+        legacy_rows = self.db.execute(
+            select(
+                AgentEvent.session_id,
+                AgentEvent.role,
+                AgentEvent.timestamp,
+                AgentEvent.id,
+                AgentEvent.content_text,
+                AgentEvent.raw_json,
+                AgentEvent.raw_json_z,
+                AgentEvent.raw_json_codec,
+                AgentEvent.interaction_kind,
+                AgentEvent.title_eligible,
+                AgentSession.provider,
+            )
+            .select_from(AgentEvent)
+            .join(AgentSession, AgentSession.id == AgentEvent.session_id)
+            .outerjoin(heads_subq, AgentEvent.session_id == heads_subq.c.session_id)
+            .where(AgentEvent.session_id.in_(ordered_ids))
+            .where(durable_transcript_event_predicate())
+            .where(AgentEvent.role == role)
+            .where(AgentEvent.content_text.isnot(None))
+            .where(AgentEvent.content_text != "")
+            .where(
+                or_(
+                    AgentEvent.title_eligible.is_(None),
+                    AgentEvent.title_eligible == 0,
+                    AgentEvent.interaction_kind.in_(
+                        (
+                            "local_control",
+                            "local_control_output",
+                            "conversation_boundary",
+                        )
+                    ),
+                    and_(
+                        AgentSession.provider == "claude",
+                        or_(AgentEvent.raw_json.isnot(None), AgentEvent.raw_json_z.isnot(None)),
+                    ),
+                )
+            )
+            .where(
+                or_(
+                    heads_subq.c.head_branch_id.is_(None),
+                    AgentEvent.branch_id == heads_subq.c.head_branch_id,
+                )
+            )
+            .order_by(
+                AgentEvent.session_id.asc(),
+                AgentEvent.timestamp.asc(),
+                AgentEvent.id.asc(),
+            )
+        ).yield_per(256)
+        legacy: dict[UUID, tuple[datetime, int, str]] = {}
+        interaction_sequence_contexts: dict[UUID, dict[str, object]] = {}
+        for row in legacy_rows:
+            if row.timestamp is None or not row.content_text:
+                continue
+            sequence_context = interaction_sequence_contexts.setdefault(row.session_id, {})
+            raw_json = _decode_event_raw_json_values(row.raw_json, row.raw_json_z, row.raw_json_codec)
+            semantics = semantic_projection_facts(
+                row.provider,
+                role=row.role,
+                content_text=row.content_text,
+                raw_json=raw_json,
+                interaction_kind=row.interaction_kind,
+                title_eligible=(row.title_eligible if raw_json is None else None),
+                sequence_context=sequence_context,
+            )
+            if not semantics["title_eligible"] or (first and row.session_id in legacy):
+                continue
+            legacy[row.session_id] = (row.timestamp, int(row.id), row.content_text)
+
+        candidates = dict(known)
+        for session_id, candidate in legacy.items():
+            current = candidates.get(session_id)
+            if current is None or (candidate[:2] < current[:2] if first else candidate[:2] > current[:2]):
+                candidates[session_id] = candidate
+        return candidates
+
     def get_first_message_map(
         self,
         session_ids: List[UUID],
@@ -3944,62 +4261,15 @@ class AgentsStore:
         role: str,
         max_len: int | None = None,
     ) -> dict[UUID, str]:
-        """Return first message per session for a given role."""
-        if not session_ids:
-            return {}
-
-        heads_subq = (
-            select(
-                AgentSessionBranch.session_id.label("session_id"),
-                func.max(AgentSessionBranch.id).label("head_branch_id"),
-            )
-            .where(AgentSessionBranch.session_id.in_(session_ids))
-            .where(AgentSessionBranch.is_head == 1)
-            .group_by(AgentSessionBranch.session_id)
-            .subquery()
-        )
-        rn = (
-            func.row_number()
-            .over(
-                partition_by=AgentEvent.session_id,
-                order_by=AgentEvent.timestamp.asc(),
-            )
-            .label("rn")
-        )
-
-        subq = (
-            select(
-                AgentEvent.session_id.label("session_id"),
-                AgentEvent.content_text.label("content_text"),
-                rn,
-            )
-            .select_from(AgentEvent)
-            .outerjoin(heads_subq, AgentEvent.session_id == heads_subq.c.session_id)
-            .where(AgentEvent.session_id.in_(session_ids))
-            .where(durable_transcript_event_predicate())
-            .where(AgentEvent.role == role)
-            .where(AgentEvent.content_text.isnot(None))
-            .where(
-                or_(
-                    heads_subq.c.head_branch_id.is_(None),
-                    AgentEvent.branch_id == heads_subq.c.head_branch_id,
-                )
-            )
-            .subquery()
-        )
-
-        stmt = select(subq.c.session_id, subq.c.content_text).where(subq.c.rn == 1)
-        rows = self.db.execute(stmt).fetchall()
-
-        result: dict[UUID, str] = {}
-        for session_id, content in rows:
-            if not content:
-                continue
-            if max_len is not None:
-                content = content[:max_len]
-            result[session_id] = content
-
-        return result
+        """Return the first semantic message per session for a given role."""
+        return {
+            session_id: content[:max_len] if max_len is not None else content
+            for session_id, (_timestamp, _event_id, content) in self._message_candidate_map(
+                session_ids,
+                role=role,
+                first=True,
+            ).items()
+        }
 
     def get_last_message_map(
         self,
@@ -4008,65 +4278,15 @@ class AgentsStore:
         role: str,
         max_len: int | None = None,
     ) -> dict[UUID, str]:
-        """Return last message per session for a given role.
-
-        Uses a window function to avoid N+1 queries. Truncates content
-        to max_len if provided.
-        """
-        if not session_ids:
-            return {}
-
-        heads_subq = (
-            select(
-                AgentSessionBranch.session_id.label("session_id"),
-                func.max(AgentSessionBranch.id).label("head_branch_id"),
-            )
-            .where(AgentSessionBranch.session_id.in_(session_ids))
-            .where(AgentSessionBranch.is_head == 1)
-            .group_by(AgentSessionBranch.session_id)
-            .subquery()
-        )
-        rn = (
-            func.row_number()
-            .over(
-                partition_by=AgentEvent.session_id,
-                order_by=AgentEvent.timestamp.desc(),
-            )
-            .label("rn")
-        )
-
-        subq = (
-            select(
-                AgentEvent.session_id.label("session_id"),
-                AgentEvent.content_text.label("content_text"),
-                rn,
-            )
-            .select_from(AgentEvent)
-            .outerjoin(heads_subq, AgentEvent.session_id == heads_subq.c.session_id)
-            .where(AgentEvent.session_id.in_(session_ids))
-            .where(AgentEvent.role == role)
-            .where(AgentEvent.content_text.isnot(None))
-            .where(
-                or_(
-                    heads_subq.c.head_branch_id.is_(None),
-                    AgentEvent.branch_id == heads_subq.c.head_branch_id,
-                )
-            )
-            .subquery()
-        )
-
-        stmt = select(subq.c.session_id, subq.c.content_text).where(subq.c.rn == 1)
-        rows = self.db.execute(stmt).fetchall()
-
-        result: dict[UUID, str] = {}
-        for session_id, content in rows:
-            if not content:
-                continue
-            if max_len is not None:
-                content = content[:max_len]
-            result[session_id] = content
-
-        return result
+        """Return last message per session after the provider semantic boundary."""
+        return {
+            session_id: content[:max_len] if max_len is not None else content
+            for session_id, (_timestamp, _event_id, content) in self._message_candidate_map(
+                session_ids,
+                role=role,
+                first=False,
+            ).items()
+        }
 
     def get_last_activity_map(self, session_ids: List[UUID]) -> dict[UUID, datetime]:
         """Return last activity timestamp per session (denormalized column read)."""
@@ -4081,7 +4301,7 @@ class AgentsStore:
         return {session_id: ts for session_id, ts in rows}
 
     def get_last_timestamp_by_role_map(self, session_ids: List[UUID], role: str) -> dict[UUID, datetime]:
-        """Return the timestamp of the last event with the given role, per session."""
+        """Return the timestamp of the last durable event with the given role."""
         if not session_ids:
             return {}
         from sqlalchemy import func as sa_func
@@ -4114,19 +4334,36 @@ class AgentsStore:
         return {session_id: ts for session_id, ts in rows}
 
     def get_session_preview(self, session_id: UUID, last_n: int) -> List[AgentEvent]:
-        """Return last N user/assistant messages for preview (chronological)."""
+        """Return last N semantic user/assistant messages for preview (chronological)."""
+        provider = self.db.query(AgentSession.provider).filter(AgentSession.id == session_id).scalar()
         stmt = (
             select(AgentEvent)
             .where(AgentEvent.session_id == session_id)
             .where(AgentEvent.role.in_(["user", "assistant"]))
             .where(AgentEvent.content_text.isnot(None))
             .where(visible_transcript_event_predicate())
-            .order_by(AgentEvent.timestamp.desc())
-            .limit(last_n)
+            .order_by(AgentEvent.timestamp.asc(), AgentEvent.id.asc())
         )
         stmt = self._apply_branch_mode_filter(stmt, session_id, "head")
-        rows = list(self.db.execute(stmt).scalars().all())
-        rows.reverse()
+        rows: list[AgentEvent] = []
+        interaction_sequence_context: dict[str, object] = {}
+        for event in self.db.execute(stmt).scalars().yield_per(100):
+            raw_json = decode_raw_json(event)
+            semantics = semantic_projection_facts(
+                provider,
+                role=event.role,
+                content_text=event.content_text,
+                raw_json=raw_json,
+                interaction_kind=getattr(event, "interaction_kind", None),
+                title_eligible=(getattr(event, "title_eligible", None) if raw_json is None else None),
+                sequence_context=interaction_sequence_context,
+            )
+            if event.role == "user":
+                if not semantics["title_eligible"]:
+                    continue
+            rows.append(event)
+            if len(rows) > last_n:
+                rows.pop(0)
         return rows
 
     def _fts_matching_ids(self, session_id: UUID, query: str) -> Optional[List[int]]:
@@ -4148,6 +4385,7 @@ class AgentsStore:
                     WHERE events_fts MATCH :q
                       AND e.session_id = :sid
                       AND COALESCE(e.event_origin, 'durable') = 'durable'
+                      AND (e.role != 'user' OR e.title_eligible = 1 OR e.title_eligible IS NULL)
                     """
                 ),
                 {"q": self._fts_query(query), "sid": str(session_id)},
@@ -4164,6 +4402,13 @@ class AgentsStore:
         Returns (stmt, should_return_empty) — the latter is True when FTS returns no matches.
         """
         matching_ids = self._fts_matching_ids(session_id, query)
+        stmt = stmt.where(
+            or_(
+                AgentEvent.role != "user",
+                AgentEvent.title_eligible == 1,
+                AgentEvent.title_eligible.is_(None),
+            )
+        )
         if matching_ids is not None:
             if not matching_ids:
                 return stmt, True
@@ -4326,6 +4571,66 @@ class AgentsStore:
             return stmt
         return stmt.where(predicate)
 
+    def _has_legacy_user_semantics(self, session_id: UUID) -> bool:
+        return bool(
+            self.db.execute(
+                select(AgentEvent.id)
+                .where(
+                    AgentEvent.session_id == session_id,
+                    AgentEvent.role == "user",
+                    AgentEvent.title_eligible.is_(None),
+                    AgentEvent.content_text.isnot(None),
+                )
+                .limit(1)
+            ).first()
+        )
+
+    @staticmethod
+    def _semantic_event_ids(
+        rows: list[AgentEvent],
+        *,
+        provider: str | None,
+    ) -> set[int]:
+        """Replay legacy rows before applying a request-time result page."""
+
+        sequence_context: dict[str, object] = {}
+        seed_provider_interaction_sequence_context(
+            provider,
+            [decode_raw_json(event) for event in rows],
+            sequence_context,
+        )
+        seed_persisted_provider_interaction_context(
+            provider,
+            rows,
+            sequence_context,
+        )
+        included: set[int] = set()
+        for event in rows:
+            persisted_key = str(event.interaction_context_key or "").strip()
+            if event.interaction_kind in {
+                "local_control",
+                "local_control_output",
+                "conversation_boundary",
+            }:
+                for context_key in interaction_context_key_parts(persisted_key):
+                    if context_key.startswith("uuid:"):
+                        sequence_context.setdefault("claude_local_command_uuids", set()).add(context_key.removeprefix("uuid:"))
+                    else:
+                        sequence_context.setdefault("claude_local_command_prompt_ids", set()).add(context_key)
+            raw_json = decode_raw_json(event)
+            facts = semantic_projection_facts(
+                provider,
+                role=event.role,
+                content_text=event.content_text,
+                raw_json=raw_json,
+                interaction_kind=event.interaction_kind,
+                title_eligible=(event.title_eligible if raw_json is None else None),
+                sequence_context=sequence_context,
+            )
+            if event.role != "user" or facts["title_eligible"]:
+                included.add(int(event.id))
+        return included
+
     def get_session_events(
         self,
         session_id: UUID,
@@ -4341,6 +4646,7 @@ class AgentsStore:
         load_from_end: bool = False,
     ) -> List[AgentEvent]:
         """Get events for a session with optional filtering."""
+        provider = self.db.query(AgentSession.provider).filter(AgentSession.id == session_id).scalar()
         stmt = (
             select(AgentEvent)
             .where(AgentEvent.session_id == session_id)
@@ -4362,10 +4668,34 @@ class AgentsStore:
         if tool_name:
             stmt = stmt.where(AgentEvent.tool_name == tool_name)
 
+        legacy_semantic_filter = self._has_legacy_user_semantics(session_id) and (roles is None or "user" in roles)
+        context_stmt = stmt
         if query:
             stmt, empty = self._apply_query_filter(stmt, session_id, query)
             if empty:
                 return []
+
+        if legacy_semantic_filter:
+            # The SQL query intentionally keeps legacy NULL rows visible so
+            # real old prompts do not disappear. Replay the unfiltered
+            # chronological session as context, then filter the requested
+            # query/page rows against that semantic decision. In particular,
+            # an FTS hit on Claude's command row must still see the preceding
+            # caveat even when the caveat itself does not match the query.
+            context_rows = list(self.db.execute(context_stmt.order_by(None).order_by(AgentEvent.timestamp, AgentEvent.id)).scalars().all())
+            included_ids = self._semantic_event_ids(
+                context_rows,
+                provider=provider,
+            )
+            rows = list(
+                self.db.execute(stmt.order_by(None).order_by(AgentEvent.timestamp, AgentEvent.id).limit(None).offset(None)).scalars().all()
+            )
+            rows = [event for event in rows if int(event.id) in included_ids]
+            if load_from_end:
+                start = max(0, len(rows) - limit - offset)
+            else:
+                start = offset
+            return rows[start : start + limit]
 
         if load_from_end:
             total_stmt = select(func.count()).select_from(stmt.order_by(None).subquery())
@@ -4464,6 +4794,24 @@ class AgentsStore:
         branch_mode: str = "head",
     ) -> int:
         """Count events for a session with the same filters as get_session_events."""
+        if self._has_legacy_user_semantics(session_id) and (roles is None or "user" in roles):
+            # The SQL count cannot represent Claude's sequence-dependent
+            # legacy NULL rows. Reuse the exact request-time semantic replay
+            # so search pagination does not report controls that the page
+            # correctly hides (or hide real prompts that are still unbackfilled).
+            return len(
+                self.get_session_events(
+                    session_id,
+                    thread_id=thread_id,
+                    roles=roles,
+                    tool_name=tool_name,
+                    query=query,
+                    context_mode=context_mode,
+                    branch_mode=branch_mode,
+                    limit=1_000_000_000,
+                    offset=0,
+                )
+            )
         stmt = (
             select(func.count())
             .select_from(AgentEvent)

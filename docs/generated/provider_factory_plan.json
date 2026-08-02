@@ -18,43 +18,21 @@
     "weekly_cron",
     "manual"
   ],
-  "never_run_count": 33,
-  "runs_count": 27,
+  "never_run_count": 45,
+  "runs_count": 15,
   "cells": [
     {
       "provider": "antigravity",
       "build_provenance": "generated_fake",
       "trigger": "manual",
-      "status": "runs",
-      "reason": "has at least one capability-proof assertion no automated trigger can satisfy",
+      "status": "never_run",
+      "reason": "manual qualification requires an explicit observed provider install",
       "qualification_profile": null,
       "qualification_profiles": [],
-      "scenario_ids": [
-        "antigravity_hook_inbox",
-        "antigravity_turn_boundary_quiescent"
-      ],
+      "scenario_ids": [],
       "harness_scenarios": [],
       "credential_requirement": [],
-      "assertion_status": [
-        {
-          "assertion_id": "activity_returns_to_quiescent_at_turn_boundary",
-          "scenario_id": "antigravity_turn_boundary_quiescent",
-          "acceptable_evidence": [
-            "live_token"
-          ],
-          "producible_evidence": [],
-          "satisfiable": false
-        },
-        {
-          "assertion_id": "real_print_injection_observed",
-          "scenario_id": "antigravity_hook_inbox",
-          "acceptable_evidence": [
-            "live_token"
-          ],
-          "producible_evidence": [],
-          "satisfiable": false
-        }
-      ]
+      "assertion_status": []
     },
     {
       "provider": "antigravity",
@@ -128,8 +106,8 @@
       "provider": "antigravity",
       "build_provenance": "observed_install",
       "trigger": "manual",
-      "status": "runs",
-      "reason": "has at least one capability-proof assertion no automated trigger can satisfy",
+      "status": "never_run",
+      "reason": "remaining capability-proof assertions for antigravity have no registered evidence producer: ['activity_returns_to_quiescent_at_turn_boundary', 'real_print_injection_observed']",
       "qualification_profile": null,
       "qualification_profiles": [],
       "scenario_ids": [
@@ -202,36 +180,14 @@
       "provider": "antigravity",
       "build_provenance": "staged_release",
       "trigger": "manual",
-      "status": "runs",
-      "reason": "has at least one capability-proof assertion no automated trigger can satisfy",
+      "status": "never_run",
+      "reason": "manual qualification requires an explicit observed provider install",
       "qualification_profile": null,
       "qualification_profiles": [],
-      "scenario_ids": [
-        "antigravity_hook_inbox",
-        "antigravity_turn_boundary_quiescent"
-      ],
+      "scenario_ids": [],
       "harness_scenarios": [],
       "credential_requirement": [],
-      "assertion_status": [
-        {
-          "assertion_id": "activity_returns_to_quiescent_at_turn_boundary",
-          "scenario_id": "antigravity_turn_boundary_quiescent",
-          "acceptable_evidence": [
-            "live_token"
-          ],
-          "producible_evidence": [],
-          "satisfiable": false
-        },
-        {
-          "assertion_id": "real_print_injection_observed",
-          "scenario_id": "antigravity_hook_inbox",
-          "acceptable_evidence": [
-            "live_token"
-          ],
-          "producible_evidence": [],
-          "satisfiable": false
-        }
-      ]
+      "assertion_status": []
     },
     {
       "provider": "antigravity",
@@ -325,26 +281,14 @@
       "provider": "claude",
       "build_provenance": "generated_fake",
       "trigger": "manual",
-      "status": "runs",
-      "reason": "has at least one capability-proof assertion no automated trigger can satisfy",
+      "status": "never_run",
+      "reason": "manual qualification requires an explicit observed provider install",
       "qualification_profile": null,
       "qualification_profiles": [],
-      "scenario_ids": [
-        "claude_turn_boundary_quiescent"
-      ],
+      "scenario_ids": [],
       "harness_scenarios": [],
       "credential_requirement": [],
-      "assertion_status": [
-        {
-          "assertion_id": "activity_returns_to_quiescent_at_turn_boundary",
-          "scenario_id": "claude_turn_boundary_quiescent",
-          "acceptable_evidence": [
-            "live_token"
-          ],
-          "producible_evidence": [],
-          "satisfiable": false
-        }
-      ]
+      "assertion_status": []
     },
     {
       "provider": "claude",
@@ -418,8 +362,8 @@
       "provider": "claude",
       "build_provenance": "observed_install",
       "trigger": "manual",
-      "status": "runs",
-      "reason": "has at least one capability-proof assertion no automated trigger can satisfy",
+      "status": "never_run",
+      "reason": "remaining capability-proof assertions for claude have no registered evidence producer: ['activity_returns_to_quiescent_at_turn_boundary']",
       "qualification_profile": null,
       "qualification_profiles": [],
       "scenario_ids": [
@@ -482,26 +426,14 @@
       "provider": "claude",
       "build_provenance": "staged_release",
       "trigger": "manual",
-      "status": "runs",
-      "reason": "has at least one capability-proof assertion no automated trigger can satisfy",
+      "status": "never_run",
+      "reason": "manual qualification requires an explicit observed provider install",
       "qualification_profile": null,
       "qualification_profiles": [],
-      "scenario_ids": [
-        "claude_turn_boundary_quiescent"
-      ],
+      "scenario_ids": [],
       "harness_scenarios": [],
       "credential_requirement": [],
-      "assertion_status": [
-        {
-          "assertion_id": "activity_returns_to_quiescent_at_turn_boundary",
-          "scenario_id": "claude_turn_boundary_quiescent",
-          "acceptable_evidence": [
-            "live_token"
-          ],
-          "producible_evidence": [],
-          "satisfiable": false
-        }
-      ]
+      "assertion_status": []
     },
     {
       "provider": "claude",
@@ -602,36 +534,14 @@
       "provider": "codex",
       "build_provenance": "generated_fake",
       "trigger": "manual",
-      "status": "runs",
-      "reason": "has at least one capability-proof assertion no automated trigger can satisfy",
+      "status": "never_run",
+      "reason": "manual qualification requires an explicit observed provider install",
       "qualification_profile": null,
       "qualification_profiles": [],
-      "scenario_ids": [
-        "codex_coordination_awareness_post_compaction",
-        "codex_turn_boundary_quiescent"
-      ],
+      "scenario_ids": [],
       "harness_scenarios": [],
       "credential_requirement": [],
-      "assertion_status": [
-        {
-          "assertion_id": "activity_returns_to_quiescent_at_turn_boundary",
-          "scenario_id": "codex_turn_boundary_quiescent",
-          "acceptable_evidence": [
-            "live_token"
-          ],
-          "producible_evidence": [],
-          "satisfiable": false
-        },
-        {
-          "assertion_id": "coordination_instructions_model_visible_after_compaction",
-          "scenario_id": "codex_coordination_awareness_post_compaction",
-          "acceptable_evidence": [
-            "live_token"
-          ],
-          "producible_evidence": [],
-          "satisfiable": false
-        }
-      ]
+      "assertion_status": []
     },
     {
       "provider": "codex",
@@ -729,8 +639,8 @@
       "provider": "codex",
       "build_provenance": "observed_install",
       "trigger": "manual",
-      "status": "runs",
-      "reason": "has at least one capability-proof assertion no automated trigger can satisfy",
+      "status": "never_run",
+      "reason": "remaining capability-proof assertions for codex have no registered evidence producer: ['activity_returns_to_quiescent_at_turn_boundary', 'coordination_instructions_model_visible_after_compaction']",
       "qualification_profile": null,
       "qualification_profiles": [],
       "scenario_ids": [
@@ -803,36 +713,14 @@
       "provider": "codex",
       "build_provenance": "staged_release",
       "trigger": "manual",
-      "status": "runs",
-      "reason": "has at least one capability-proof assertion no automated trigger can satisfy",
+      "status": "never_run",
+      "reason": "manual qualification requires an explicit observed provider install",
       "qualification_profile": null,
       "qualification_profiles": [],
-      "scenario_ids": [
-        "codex_coordination_awareness_post_compaction",
-        "codex_turn_boundary_quiescent"
-      ],
+      "scenario_ids": [],
       "harness_scenarios": [],
       "credential_requirement": [],
-      "assertion_status": [
-        {
-          "assertion_id": "activity_returns_to_quiescent_at_turn_boundary",
-          "scenario_id": "codex_turn_boundary_quiescent",
-          "acceptable_evidence": [
-            "live_token"
-          ],
-          "producible_evidence": [],
-          "satisfiable": false
-        },
-        {
-          "assertion_id": "coordination_instructions_model_visible_after_compaction",
-          "scenario_id": "codex_coordination_awareness_post_compaction",
-          "acceptable_evidence": [
-            "live_token"
-          ],
-          "producible_evidence": [],
-          "satisfiable": false
-        }
-      ]
+      "assertion_status": []
     },
     {
       "provider": "codex",
@@ -1121,26 +1009,14 @@
       "provider": "opencode",
       "build_provenance": "generated_fake",
       "trigger": "manual",
-      "status": "runs",
-      "reason": "has at least one capability-proof assertion no automated trigger can satisfy",
+      "status": "never_run",
+      "reason": "manual qualification requires an explicit observed provider install",
       "qualification_profile": null,
       "qualification_profiles": [],
-      "scenario_ids": [
-        "opencode_turn_boundary_quiescent"
-      ],
+      "scenario_ids": [],
       "harness_scenarios": [],
       "credential_requirement": [],
-      "assertion_status": [
-        {
-          "assertion_id": "activity_returns_to_quiescent_at_turn_boundary",
-          "scenario_id": "opencode_turn_boundary_quiescent",
-          "acceptable_evidence": [
-            "live_token"
-          ],
-          "producible_evidence": [],
-          "satisfiable": false
-        }
-      ]
+      "assertion_status": []
     },
     {
       "provider": "opencode",
@@ -1214,8 +1090,8 @@
       "provider": "opencode",
       "build_provenance": "observed_install",
       "trigger": "manual",
-      "status": "runs",
-      "reason": "has at least one capability-proof assertion no automated trigger can satisfy",
+      "status": "never_run",
+      "reason": "remaining capability-proof assertions for opencode have no registered evidence producer: ['activity_returns_to_quiescent_at_turn_boundary']",
       "qualification_profile": null,
       "qualification_profiles": [],
       "scenario_ids": [
@@ -1278,26 +1154,14 @@
       "provider": "opencode",
       "build_provenance": "staged_release",
       "trigger": "manual",
-      "status": "runs",
-      "reason": "has at least one capability-proof assertion no automated trigger can satisfy",
+      "status": "never_run",
+      "reason": "manual qualification requires an explicit observed provider install",
       "qualification_profile": null,
       "qualification_profiles": [],
-      "scenario_ids": [
-        "opencode_turn_boundary_quiescent"
-      ],
+      "scenario_ids": [],
       "harness_scenarios": [],
       "credential_requirement": [],
-      "assertion_status": [
-        {
-          "assertion_id": "activity_returns_to_quiescent_at_turn_boundary",
-          "scenario_id": "opencode_turn_boundary_quiescent",
-          "acceptable_evidence": [
-            "live_token"
-          ],
-          "producible_evidence": [],
-          "satisfiable": false
-        }
-      ]
+      "assertion_status": []
     },
     {
       "provider": "opencode",

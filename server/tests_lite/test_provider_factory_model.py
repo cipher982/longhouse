@@ -176,18 +176,28 @@ def test_manual_trigger_runs_full_column_for_cursor_observed_install(facts) -> N
     assert "Gate 0" in cell.reason
 
 
-def test_manual_trigger_runs_for_codex_because_of_the_live_token_gap(facts) -> None:
+def test_manual_trigger_never_runs_for_codex_without_an_evidence_producer(facts) -> None:
     # coordination_instructions_model_visible_after_compaction needs a real
     # manual run even though the scenario_id also has an automated CI producer.
     cell = plan_run(facts, "codex", "observed_install", "manual")
-    assert cell.status == "runs"
+    assert cell.status == "never_run"
+    assert "no registered evidence producer" in cell.reason
     assert cell.scenario_ids == (PUSH_CODEX_COORDINATION_SCENARIO_ID, "codex_turn_boundary_quiescent")
 
 
-def test_manual_trigger_runs_for_antigravity_because_live_print_is_permanently_blocked(facts) -> None:
+def test_manual_trigger_never_runs_for_antigravity_without_an_evidence_producer(facts) -> None:
     cell = plan_run(facts, "antigravity", "observed_install", "manual")
-    assert cell.status == "runs"
+    assert cell.status == "never_run"
+    assert "no registered evidence producer" in cell.reason
     assert "antigravity_hook_inbox" in cell.scenario_ids
+
+
+@pytest.mark.parametrize("build_provenance", ("generated_fake", "staged_release"))
+def test_manual_trigger_never_advertises_non_observed_provider_provenance(facts, build_provenance: str) -> None:
+    cell = plan_run(facts, "codex", build_provenance, "manual")
+
+    assert cell.status == "never_run"
+    assert "observed provider install" in cell.reason
 
 
 def test_plan_run_rejects_unknown_provider(facts) -> None:

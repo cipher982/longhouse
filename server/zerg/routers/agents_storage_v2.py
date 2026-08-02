@@ -31,6 +31,10 @@ from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.device_token import DeviceToken
 from zerg.services.catalogd_supervisor import get_catalogd_client
+from zerg.services.provider_interaction_semantics import classify_provider_interaction
+from zerg.services.provider_interaction_semantics import seed_provider_interaction_sequence_context
+from zerg.services.provider_interaction_semantics import semantic_event_included
+from zerg.services.provider_interaction_semantics import semantic_projection_facts
 from zerg.services.raw_object_workers import RawObjectWorkerBusy
 from zerg.services.raw_object_workers import RawObjectWorkerError
 from zerg.services.raw_object_workers import RawObjectWorkerPool
@@ -40,6 +44,11 @@ from zerg.services.render_object_workers import RenderObjectWorkerBusy
 from zerg.services.render_object_workers import RenderObjectWorkerError
 from zerg.services.render_object_workers import RenderObjectWorkerPool
 from zerg.services.render_object_workers import get_render_object_worker_pool
+from zerg.services.storage_v2_semantics import StorageV2SemanticRecoveryError
+from zerg.services.storage_v2_semantics import StorageV2SemanticRecoveryPermanentError
+from zerg.services.storage_v2_semantics import enrich_render_interaction_kinds
+from zerg.services.storage_v2_semantics import recover_render_interaction_kinds
+from zerg.services.storage_v2_semantics import repair_storage_session_semantic_projection
 from zerg.storage_v2.contracts import DurableReceipt
 from zerg.storage_v2.contracts import EnvelopeIdentity
 from zerg.storage_v2.contracts import RawExportCursor
@@ -62,6 +71,7 @@ from zerg.storage_v2.raw_objects import RawObjectSpec
 from zerg.storage_v2.raw_objects import RawObjectValidationError
 from zerg.storage_v2.raw_objects import RawRecord
 from zerg.storage_v2.raw_objects import validate_raw_object_spec
+from zerg.storage_v2.render_objects import SEMANTIC_PROJECTION_VERSION
 from zerg.storage_v2.render_objects import RenderObjectCorruptError
 from zerg.storage_v2.render_objects import RenderObjectSpec
 from zerg.storage_v2.render_objects import RenderObjectValidationError
@@ -110,7 +120,7 @@ _EXPECTED_SESSION_FIELDS = {
 }
 _OPTIONAL_SESSION_FIELDS = {"provider_session_id"}
 _EXPECTED_RENDER_FIELDS = {"generation_id", "parser_revision", "ordering_revision", "records"}
-_EXPECTED_RENDER_RECORD_FIELDS = {
+_LEGACY_RENDER_RECORD_FIELDS = {
     "event_id",
     "order_time_us",
     "source_position",
@@ -125,6 +135,7 @@ _EXPECTED_RENDER_RECORD_FIELDS = {
     "branch_kind",
     "raw_record_ordinal",
 }
+_EXPECTED_RENDER_RECORD_FIELDS = _LEGACY_RENDER_RECORD_FIELDS | {"interaction_kind"}
 _RENDER_MANIFEST_LIMIT = 1_000
 _RENDER_READ_BATCH = 2
 _MAX_MEDIA_REFS = 1_000
@@ -385,9 +396,10 @@ def _parse_render_spec(
     wire_records = value["records"]
     if not isinstance(wire_records, list) or len(wire_records) > MAX_RECORDS:
         raise ValueError(f"render.records must contain at most {MAX_RECORDS} items")
-    records: list[RenderRecord] = []
+    record_payloads: list[dict[str, Any]] = []
+    records_by_raw_ordinal: dict[int, list[int]] = {}
     for item in wire_records:
-        if not isinstance(item, dict) or set(item) != _EXPECTED_RENDER_RECORD_FIELDS:
+        if not isinstance(item, dict) or set(item) not in (_LEGACY_RENDER_RECORD_FIELDS, _EXPECTED_RENDER_RECORD_FIELDS):
             raise ValueError("each render record has invalid fields")
         for field in ("order_time_us", "source_position", "event_subordinal", "raw_record_ordinal"):
             if type(item[field]) is not int:
@@ -396,7 +408,61 @@ def _parse_render_spec(
             raise ValueError("render record source_position is outside the raw envelope")
         if not 0 <= item["raw_record_ordinal"] < len(raw_spec.records):
             raise ValueError("render record raw_record_ordinal is outside the raw envelope")
-        records.append(RenderRecord(**item))
+        record_payloads.append(dict(item))
+        records_by_raw_ordinal.setdefault(item["raw_record_ordinal"], []).append(len(record_payloads) - 1)
+
+    interaction_sequence_context: dict[str, object] = {}
+    raw_values: list[object] = []
+    for raw_record in raw_spec.records:
+        try:
+            raw_values.append(raw_record.data.decode("utf-8"))
+        except UnicodeDecodeError:
+            raw_values.append(None)
+    seed_provider_interaction_sequence_context(raw_spec.provider, raw_values, interaction_sequence_context)
+    for raw_ordinal, raw_json in enumerate(raw_values):
+        record_indexes = records_by_raw_ordinal.get(raw_ordinal, ())
+        if record_indexes:
+            for record_index in record_indexes:
+                record_payload = record_payloads[record_index]
+                supplied_kind = record_payload.get("interaction_kind")
+                classification = semantic_projection_facts(
+                    raw_spec.provider,
+                    role=record_payload["role"],
+                    content_text=record_payload["content_text"],
+                    raw_json=raw_json,
+                    interaction_kind=supplied_kind,
+                    sequence_context=interaction_sequence_context,
+                )
+                computed_kind = classification["interaction_kind"]
+                # Claude's raw envelope remains authoritative inside
+                # semantic_projection_facts. For other providers the parser
+                # is the only provider-aware source of normalized control
+                # facts, so preserve its explicit fact while still allowing
+                # the shared classifier to validate the shape.
+                if supplied_kind is not None and supplied_kind != computed_kind:
+                    logger.warning(
+                        "storage-v2 parser semantic fact changed during normalization: "
+                        "provider=%s supplied=%s computed=%s envelope=%s ordinal=%s",
+                        raw_spec.provider,
+                        supplied_kind,
+                        computed_kind,
+                        source_envelope_id,
+                        raw_ordinal,
+                    )
+                record_payload["interaction_kind"] = computed_kind
+            continue
+        raw_role = _raw_record_role(raw_json)
+        if raw_role is not None:
+            classify_provider_interaction(
+                raw_spec.provider,
+                role=raw_role,
+                content_text=None,
+                raw_json=raw_json,
+                source_surface="provider_file-raw-only",
+                sequence_context=interaction_sequence_context,
+            )
+
+    records = [RenderRecord(**record_payload) for record_payload in record_payloads]
     spec = RenderObjectSpec(
         session_id=raw_spec.session_id,
         render_generation=generation_id,
@@ -411,6 +477,26 @@ def _parse_render_spec(
     )
     validate_render_object_spec(spec)
     return spec
+
+
+def _raw_record_role(raw_json: object) -> str | None:
+    if not isinstance(raw_json, str):
+        return None
+    try:
+        raw_value = json.loads(raw_json)
+    except (TypeError, json.JSONDecodeError):
+        return None
+    if not isinstance(raw_value, dict):
+        return None
+    message = raw_value.get("message")
+    if isinstance(message, dict) and isinstance(message.get("role"), str):
+        return str(message["role"])
+    role = raw_value.get("role")
+    if isinstance(role, str):
+        return role
+    if raw_value.get("type") in {"user", "assistant", "tool", "system"}:
+        return str(raw_value["type"])
+    return None
 
 
 def _parse_envelope(
@@ -919,6 +1005,19 @@ async def _commit_admitted_envelope(
         if objects[0].get("receipt") is not None:
             return _validated_receipt(objects[0]["receipt"])
 
+        owner_value = getattr(auth_token, "owner_id", None)
+        render_spec = parsed["render_spec"]
+        if render_spec is not None:
+            parsed["render_spec"] = await enrich_render_interaction_kinds(
+                catalog=catalogd,
+                raw_workers=raw_workers,
+                session_id=str(spec.session_id),
+                owner_id=str(owner_value) if owner_value is not None else None,
+                raw_spec=spec,
+                render_spec=render_spec,
+                manifest_cache={},
+            )
+
         if lane == "repair":
             await _admit_historical_storage(
                 admitted_bytes=sum(len(record.data) for record in spec.records),
@@ -966,8 +1065,12 @@ async def _commit_admitted_envelope(
                 "tool_calls": sealed_render.tool_calls,
                 "first_user_message_preview": sealed_render.first_user_message_preview,
                 "last_visible_text_preview": sealed_render.last_visible_text_preview,
+                # Claude local-command evidence can arrive in a later raw
+                # envelope. Keep its catalog projection explicitly pending so
+                # timeline/search/embedding projectors replay the complete raw
+                # stream before treating the first user row as durable.
+                "semantic_projection_version": (0 if render_spec.provider.strip().lower() == "claude" else SEMANTIC_PROJECTION_VERSION),
             }
-        owner_value = getattr(auth_token, "owner_id", None)
         committed = await catalogd.call(
             "storage.raw_object.commit.v2",
             {
@@ -1057,6 +1160,19 @@ async def _commit_admitted_envelope(
         ) from exc
     except RawObjectValidationError as exc:
         raise _http_error(status.HTTP_422_UNPROCESSABLE_ENTITY, "invalid_envelope", str(exc)) from exc
+    except StorageV2SemanticRecoveryPermanentError as exc:
+        raise _http_error(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "semantic_recovery_permanent",
+            "Provider interaction evidence exceeds the safe replay bound; manual repair is required.",
+        ) from exc
+    except StorageV2SemanticRecoveryError as exc:
+        raise _http_error(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "semantic_recovery_pending",
+            "Provider interaction semantics are pending immutable raw history; retry the envelope.",
+            headers={"Retry-After": "60"},
+        ) from exc
     except RawObjectWorkerError as exc:
         raise _http_error(
             status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -1212,6 +1328,66 @@ async def list_storage_v2_sessions(
             "catalog_response_invalid",
             "The session catalog returned an invalid timeline page.",
         )
+    stale_sessions = [
+        item
+        for item in sessions
+        if isinstance(item, dict)
+        and int(item.get("semantic_projection_version") or 0) < SEMANTIC_PROJECTION_VERSION
+        and item.get("current_render_generation")
+    ]
+    if stale_sessions:
+        render_workers = get_render_object_worker_pool()
+        raw_workers = get_raw_object_worker_pool()
+        try:
+            for item in stale_sessions:
+                repaired = await repair_storage_session_semantic_projection(
+                    catalog=catalogd,
+                    render_workers=render_workers,
+                    raw_workers=raw_workers,
+                    session_id=str(item["session_id"]),
+                    owner_id=str(owner_value),
+                    generation_id=str(item["current_render_generation"]),
+                )
+                if repaired.get("complete") is not True:
+                    raise StorageV2SemanticRecoveryError("semantic projection repair did not converge")
+            # The original page was selected from the old aggregate. Re-read
+            # it after repair so pagination and titles reflect the same facts.
+            result = await catalogd.call(
+                "storage.session.timeline.list.v2",
+                {
+                    "owner_id": str(owner_value),
+                    "before_last_activity_at": (
+                        before_last_activity_at.astimezone(UTC).isoformat() if before_last_activity_at is not None else None
+                    ),
+                    "before_session_id": str(before_session_id) if before_session_id is not None else None,
+                    "project": project,
+                    "provider": provider,
+                    "include_test": include_test,
+                    "limit": limit,
+                },
+            )
+            sessions = result.get("sessions")
+            if not isinstance(sessions, list):
+                raise StorageV2SemanticRecoveryError("catalog returned an invalid repaired timeline page")
+        except (CatalogUnavailable, CatalogRemoteError) as exc:
+            raise _http_error(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "catalog_unavailable",
+                "The session catalog is temporarily unavailable.",
+            ) from exc
+        except StorageV2SemanticRecoveryPermanentError as exc:
+            raise _http_error(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "semantic_recovery_permanent",
+                "Provider interaction evidence exceeds the safe replay bound; manual repair is required.",
+            ) from exc
+        except StorageV2SemanticRecoveryError as exc:
+            raise _http_error(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "semantic_recovery_pending",
+                "Provider interaction semantics are pending immutable raw history; retry shortly.",
+                headers={"Retry-After": "60"},
+            ) from exc
     next_cursor = None
     if result.get("has_more") is True and sessions:
         last = sessions[-1]
@@ -1478,6 +1654,9 @@ async def read_storage_v2_session_events_page(
         ) from exc
 
     workers = get_render_object_worker_pool()
+    raw_workers = get_raw_object_worker_pool()
+    raw_manifest_cache: dict[str, dict[str, dict[str, object]]] = {}
+    sequence_context_cache: dict[tuple[str, str, str, str, str], dict[str, object]] = {}
     ordered_events: list[tuple[tuple[int, str, str, str, str, int, int], dict[str, object]]] = []
     next_object_index = 0
     cursor_key = _cursor_order_key(decoded_cursor) if decoded_cursor is not None else None
@@ -1503,7 +1682,33 @@ async def read_storage_v2_session_events_page(
                     or decoded.object_hash != item.get("object_hash")
                 ):
                     raise ValueError("render object does not match its catalog manifest")
-                for record in spec.records:
+                recovered_kinds = await recover_render_interaction_kinds(
+                    catalog=catalogd,
+                    raw_workers=raw_workers,
+                    session_id=str(session_id),
+                    owner_id=owner_id,
+                    provider=spec.provider,
+                    records=spec.records,
+                    source_envelope_id=spec.source_envelope_id,
+                    manifest_cache=raw_manifest_cache,
+                    sequence_context_cache=sequence_context_cache,
+                    reclassify_sequence_controls=spec.provider.strip().lower() == "claude",
+                )
+                for ordinal, record in enumerate(spec.records):
+                    recovered_kind = recovered_kinds.get(ordinal)
+                    # A legacy render object may have persisted the ambiguous
+                    # command as durable before a later Claude caveat arrived.
+                    # Raw replay is authoritative for the current projection;
+                    # only fall back to the stored fact when replay has no
+                    # answer because evidence is unavailable.
+                    interaction_kind = recovered_kind if recovered_kind is not None else getattr(record, "interaction_kind", None)
+                    if not semantic_event_included(
+                        spec.provider,
+                        role=record.role,
+                        content_text=record.content_text,
+                        interaction_kind=interaction_kind,
+                    ):
+                        continue
                     key = _render_record_order_key(decoded, record)
                     if (anchor == "start" and (cursor_key is None or key > cursor_key)) or (
                         anchor == "tail" and (cursor_key is None or key < cursor_key)
@@ -1526,7 +1731,26 @@ async def read_storage_v2_session_events_page(
             "Session history is temporarily busy; retry shortly.",
             headers={"Retry-After": "1"},
         ) from exc
-    except (KeyError, TypeError, ValueError, RenderObjectCorruptError, RenderObjectWorkerError) as exc:
+    except StorageV2SemanticRecoveryPermanentError as exc:
+        raise _http_error(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "semantic_recovery_permanent",
+            "Provider interaction evidence exceeds the safe replay bound; manual repair is required.",
+        ) from exc
+    except StorageV2SemanticRecoveryError as exc:
+        raise _http_error(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "semantic_recovery_pending",
+            "Provider interaction semantics are pending immutable raw history; retry shortly.",
+            headers={"Retry-After": "60"},
+        ) from exc
+    except (
+        KeyError,
+        TypeError,
+        ValueError,
+        RenderObjectCorruptError,
+        RenderObjectWorkerError,
+    ) as exc:
         raise _http_error(
             status.HTTP_503_SERVICE_UNAVAILABLE,
             "render_read_failed",

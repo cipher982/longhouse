@@ -1231,6 +1231,13 @@ def _migrate_agents_columns(engine: Engine) -> None:
                         ") WHERE last_activity_at IS NULL"
                     )
                 )
+                # ``metadata.create_all`` and additive column migration do not
+                # create indexes on an existing events table. These columns are
+                # used by every semantic projection, so repair the indexes on
+                # both greenfield and upgraded databases.
+                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_events_interaction_kind ON events(interaction_kind)"))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_events_interaction_context_key ON events(interaction_context_key)"))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_events_title_eligible ON events(title_eligible)"))
             # Split the historical overloaded ended_at meaning. Provider/run
             # exit ends the matching run; only explicit user closure changes
             # durable session disposition.

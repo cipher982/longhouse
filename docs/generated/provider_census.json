@@ -7,7 +7,7 @@
     "cursor",
     "opencode"
   ],
-  "file_count": 224,
+  "file_count": 231,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -624,6 +624,13 @@
       ]
     },
     {
+      "path": "server/tests_lite/test_agents_session_tail_roles.py",
+      "providers": [
+        "claude",
+        "codex"
+      ]
+    },
+    {
       "path": "server/tests_lite/test_agents_sessions_queryless_listing.py",
       "providers": [
         "claude",
@@ -647,6 +654,7 @@
     {
       "path": "server/tests_lite/test_agents_storage_v2.py",
       "providers": [
+        "claude",
         "codex",
         "cursor"
       ]
@@ -728,6 +736,13 @@
       ]
     },
     {
+      "path": "server/tests_lite/test_catalogd_storage_v2.py",
+      "providers": [
+        "claude",
+        "codex"
+      ]
+    },
+    {
       "path": "server/tests_lite/test_console_turns.py",
       "providers": [
         "claude",
@@ -786,6 +801,13 @@
         "codex",
         "cursor",
         "opencode"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_embeddings_v2_projector.py",
+      "providers": [
+        "claude",
+        "codex"
       ]
     },
     {
@@ -1041,6 +1063,7 @@
     {
       "path": "server/tests_lite/test_provider_interaction_semantics.py",
       "providers": [
+        "antigravity",
         "claude",
         "codex"
       ]
@@ -1123,6 +1146,13 @@
     },
     {
       "path": "server/tests_lite/test_rewind_branch_projection.py",
+      "providers": [
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_search_v2_projector.py",
       "providers": [
         "claude",
         "codex"
@@ -1340,6 +1370,13 @@
       ]
     },
     {
+      "path": "server/tests_lite/test_storage_v2_render_objects.py",
+      "providers": [
+        "claude",
+        "codex"
+      ]
+    },
+    {
       "path": "server/tests_lite/test_storage_v2_workspace.py",
       "providers": [
         "codex",
@@ -1429,6 +1466,13 @@
       "path": "server/tests_lite/test_usage_stats.py",
       "providers": [
         "antigravity",
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_worklog_day_export_api.py",
+      "providers": [
         "claude",
         "codex"
       ]
@@ -1568,6 +1612,13 @@
         "codex",
         "cursor",
         "opencode"
+      ]
+    },
+    {
+      "path": "server/zerg/routers/agents_storage_v2.py",
+      "providers": [
+        "claude",
+        "cursor"
       ]
     },
     {

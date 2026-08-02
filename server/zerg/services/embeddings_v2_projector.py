@@ -13,6 +13,8 @@ from uuid import UUID
 from uuid import uuid4
 
 from zerg.catalogd.client import CatalogClient
+from zerg.services.raw_object_workers import RawObjectWorkerPool
+from zerg.services.raw_object_workers import get_raw_object_worker_pool
 from zerg.services.render_object_workers import RenderObjectWorkerPool
 from zerg.services.render_object_workers import get_render_object_worker_pool
 from zerg.services.session_processing.embeddings import EMBEDDING_BATCH_SIZE
@@ -21,6 +23,9 @@ from zerg.services.session_processing.embeddings import PermanentEmbeddingConfig
 from zerg.services.session_processing.embeddings import embedding_to_bytes
 from zerg.services.session_processing.embeddings import generate_embeddings
 from zerg.services.session_processing.embeddings import iter_turn_chunks
+from zerg.services.storage_v2_semantics import StorageV2SemanticRecoveryError
+from zerg.services.storage_v2_semantics import StorageV2SemanticRecoveryPermanentError
+from zerg.services.storage_v2_semantics import recover_render_interaction_kinds
 
 logger = logging.getLogger(__name__)
 PROJECTOR = "embeddings-v1"
@@ -29,13 +34,22 @@ PAGE_SIZE = 100
 
 class EmbeddingsV2Projector:
     def __init__(
-        self, *, catalog: CatalogClient, search: CatalogClient, render_workers: RenderObjectWorkerPool, worker_id: str | None = None
+        self,
+        *,
+        catalog: CatalogClient,
+        search: CatalogClient,
+        render_workers: RenderObjectWorkerPool,
+        raw_workers: RawObjectWorkerPool | None = None,
+        worker_id: str | None = None,
     ) -> None:
         self.catalog = catalog
         self.search = search
         self.render_workers = render_workers
+        self.raw_workers = raw_workers
         self.worker_id = worker_id or f"embeddings-v2:{os.getpid()}"
         self._bound_store_id: str | None = None
+        self._raw_manifest_cache: dict[str, dict[str, dict[str, object]]] = {}
+        self._sequence_context_cache: dict[tuple[str, str, str, str, str], dict[str, object]] = {}
 
     async def run_once(self, *, limit: int = 4, now: datetime | None = None) -> int:
         observed_at = now or datetime.now(UTC)
@@ -118,20 +132,41 @@ class EmbeddingsV2Projector:
             # genuinely transient and should keep retrying quickly, so this
             # must check the specific subclass, not ValueError broadly.
             is_permanent = isinstance(exc, PermanentEmbeddingConfigError)
+            is_semantic_recovery_permanent = isinstance(exc, StorageV2SemanticRecoveryPermanentError)
+            is_semantic_recovery_pending = isinstance(exc, StorageV2SemanticRecoveryError) and not is_semantic_recovery_permanent
             if isinstance(session_id, str):
                 failures = int(state.get("failure_count", 0)) if isinstance(state, dict) else 0
                 failed_at = datetime.now(UTC)
-                retry_delay = timedelta(hours=24) if is_permanent else timedelta(seconds=min(300, 5 * 2 ** min(failures, 6)))
+                retry_delay = (
+                    timedelta(seconds=max(60, min(300, 5 * 2 ** min(failures, 6))))
+                    if is_semantic_recovery_pending
+                    else timedelta(seconds=min(300, 5 * 2 ** min(failures, 6)))
+                    if not (is_permanent or is_semantic_recovery_permanent)
+                    else timedelta(0)
+                )
+                error_code = (
+                    "embedding_config_permanent"
+                    if is_permanent
+                    else "semantic_recovery_permanent"
+                    if is_semantic_recovery_permanent
+                    else "semantic_recovery_pending"
+                    if is_semantic_recovery_pending
+                    else "embedding_projection_failed"
+                )
                 await self.catalog.call(
                     "projector.state.fail.v2",
                     {
                         "projector": PROJECTOR,
                         "session_id": session_id,
                         "claim_token": claim_token,
-                        "error_code": "embedding_config_permanent" if is_permanent else "embedding_projection_failed",
+                        "error_code": error_code,
                         "error_message": str(exc)[:2048] or type(exc).__name__,
                         "failed_at": failed_at.isoformat(),
-                        "retry_at": (failed_at + retry_delay).isoformat(),
+                        "retry_at": (
+                            failed_at.isoformat()
+                            if is_permanent or is_semantic_recovery_permanent
+                            else (failed_at + retry_delay).isoformat()
+                        ),
                     },
                 )
             (logger.error if is_permanent else logger.warning)("Embedding projection failed session=%s error=%s", session_id, exc)
@@ -142,6 +177,8 @@ class EmbeddingsV2Projector:
         config = get_embedding_config()
         if config is None:
             return True
+        self._raw_manifest_cache.pop(session_id, None)
+        self._sequence_context_cache = {key: value for key, value in self._sequence_context_cache.items() if key[0] != session_id}
         generation_id: str | None = None
         after_object_id: str | None = None
         records: list[dict[str, object]] = []
@@ -197,10 +234,31 @@ class EmbeddingsV2Projector:
                     or decoded.object_hash != object_id
                 ):
                     raise ValueError("render object identity does not match manifest")
+                session = page.get("session")
+                if not isinstance(session, dict) or session.get("owner_id") is None:
+                    raise ValueError("catalog omitted embedding session owner")
+                recovered_kinds = {}
+                source_envelope_id = getattr(decoded.spec, "source_envelope_id", None)
+                if source_envelope_id:
+                    recovered_kinds = await recover_render_interaction_kinds(
+                        catalog=self.catalog,
+                        raw_workers=self.raw_workers,
+                        session_id=session_id,
+                        owner_id=str(session["owner_id"]),
+                        provider=decoded.spec.provider,
+                        records=decoded.spec.records,
+                        source_envelope_id=source_envelope_id,
+                        manifest_cache=self._raw_manifest_cache,
+                        sequence_context_cache=self._sequence_context_cache,
+                        reclassify_sequence_controls=decoded.spec.provider.strip().lower() == "claude",
+                    )
                 records.extend(
                     {
                         "role": record.role,
                         "content_text": record.content_text,
+                        "interaction_kind": (
+                            recovered_kinds[ordinal] if ordinal in recovered_kinds else getattr(record, "interaction_kind", None)
+                        ),
                         "tool_name": record.tool_name,
                         "tool_output_text": record.tool_output_text,
                         "timestamp": record.order_time_us,
@@ -211,7 +269,7 @@ class EmbeddingsV2Projector:
                         "source_position": record.source_position,
                         "event_subordinal": record.event_subordinal,
                     }
-                    for record in decoded.spec.records
+                    for ordinal, record in enumerate(decoded.spec.records)
                 )
             if page.get("has_more") is not True:
                 break
@@ -235,7 +293,7 @@ class EmbeddingsV2Projector:
         )
         for index, record in enumerate(records):
             record["id"] = index
-        chunks = list(iter_turn_chunks(records))
+        chunks = list(iter_turn_chunks(records, provider=str(records[0]["provider"]) if records else None))
         hashes_result = await self.search.call(
             "search.embedding.hashes.v2", {"session_id": session_id, "model": config.model, "dims": config.dims}
         )
@@ -358,7 +416,14 @@ def start_embeddings_v2_projector() -> bool:
     if catalog is None or search is None:
         return False
     _task = asyncio.create_task(
-        _run_forever(EmbeddingsV2Projector(catalog=catalog, search=search, render_workers=get_render_object_worker_pool())),
+        _run_forever(
+            EmbeddingsV2Projector(
+                catalog=catalog,
+                search=search,
+                render_workers=get_render_object_worker_pool(),
+                raw_workers=get_raw_object_worker_pool(),
+            )
+        ),
         name="embeddings-v2-projector",
     )
     return True

@@ -12,6 +12,7 @@ import pytest
 
 from zerg.services.embeddings_v2_projector import EmbeddingsV2Projector
 from zerg.services.session_processing.embeddings import PermanentEmbeddingConfigError
+from zerg.services.storage_v2_semantics import StorageV2SemanticRecoveryError
 
 
 class FakeClient:
@@ -39,7 +40,18 @@ async def test_embeddings_projector_chunks_dedups_writes_and_completes(monkeypat
     records = (
         SimpleNamespace(
             role="user",
+            content_text="<command-name>/effort</command-name>",
+            interaction_kind="local_control",
+            tool_name=None,
+            tool_output_text=None,
+            order_time_us=0,
+            source_position=0,
+            event_subordinal=0,
+        ),
+        SimpleNamespace(
+            role="user",
             content_text="find the important answer",
+            interaction_kind="durable_user_message",
             tool_name=None,
             tool_output_text=None,
             order_time_us=1,
@@ -49,6 +61,7 @@ async def test_embeddings_projector_chunks_dedups_writes_and_completes(monkeypat
         SimpleNamespace(
             role="assistant",
             content_text="the important answer is here",
+            interaction_kind="provider_system",
             tool_name=None,
             tool_output_text=None,
             order_time_us=2,
@@ -63,7 +76,7 @@ async def test_embeddings_projector_chunks_dedups_writes_and_completes(monkeypat
             render_generation=UUID(generation_id),
             records=records,
             machine_id="machine",
-            provider="codex",
+            provider="claude",
             opaque_source_id="source",
             source_epoch=uuid4(),
         ),
@@ -95,7 +108,10 @@ async def test_embeddings_projector_chunks_dedups_writes_and_completes(monkeypat
     config = SimpleNamespace(model="test-model", dims=2)
     monkeypatch.setattr("zerg.models_config.get_embedding_config", lambda: config)
 
+    seen_texts = []
+
     async def vectors(texts, _config):
+        seen_texts.extend(texts)
         return [np.array([1, 0], dtype=np.float32) for _ in texts]
 
     monkeypatch.setattr("zerg.services.embeddings_v2_projector.generate_embeddings", vectors)
@@ -105,7 +121,26 @@ async def test_embeddings_projector_chunks_dedups_writes_and_completes(monkeypat
     assert write["episodes"][0]["episode_ordinal"] == 0
     assert write["complete"] is True
     assert write["desired_episode_ordinals"] == [0]
+    assert len(seen_texts) == 1
+    assert "<command-name>/effort</command-name>" not in seen_texts[0]
     assert any(method == "projector.state.complete.v2" for method, _ in catalog.calls)
+
+    decoded.spec.source_envelope_id = "a" * 64
+
+    async def pending_recovery(**_kwargs):
+        raise StorageV2SemanticRecoveryError("raw companion unavailable")
+
+    monkeypatch.setattr("zerg.services.embeddings_v2_projector.recover_render_interaction_kinds", pending_recovery)
+    missing_raw_projector = EmbeddingsV2Projector(
+        catalog=catalog,
+        search=search,
+        render_workers=FakeWorkers(decoded),
+        raw_workers=FakeWorkers(decoded),
+        worker_id="missing-raw",
+    )
+    assert await missing_raw_projector.run_once(now=datetime.now(UTC)) == 1
+    failed = [params for method, params in catalog.calls if method == "projector.state.fail.v2"][-1]
+    assert failed["error_code"] == "semantic_recovery_pending"
 
 
 @pytest.mark.asyncio
@@ -238,11 +273,8 @@ def _minimal_claim_setup(session_id, generation_id, store_id):
 
 
 @pytest.mark.asyncio
-async def test_permanent_config_error_gets_long_retry_and_error_log(monkeypatch, caplog):
-    """A deterministic config error (bad provider, persistent dims mismatch) must not
-    get the same fast exponential backoff as a transient catalog/network hiccup --
-    retrying it will produce the identical failure forever and just burns API calls.
-    """
+async def test_permanent_config_error_is_marked_for_quarantine_and_error_log(monkeypatch, caplog):
+    """A deterministic config error is handed to catalog quarantine, not a retry timer."""
     session_id, generation_id, store_id = (str(uuid4()) for _ in range(3))
     catalog, search, decoded = _minimal_claim_setup(session_id, generation_id, store_id)
     config = SimpleNamespace(model="test-model", dims=2)
@@ -262,16 +294,13 @@ async def test_permanent_config_error_gets_long_retry_and_error_log(monkeypatch,
     assert fail_params["error_code"] == "embedding_config_permanent"
     failed_at = datetime.fromisoformat(fail_params["failed_at"])
     retry_at = datetime.fromisoformat(fail_params["retry_at"])
-    assert (retry_at - failed_at).total_seconds() >= 23 * 3600
+    assert retry_at == failed_at
     assert any(record.levelno == logging.ERROR for record in caplog.records)
 
 
 @pytest.mark.asyncio
 async def test_transient_error_keeps_fast_backoff(monkeypatch):
-    """A generic/transient failure (network blip, catalog drift) must keep the
-    existing fast exponential backoff, not get parked behind the 24h permanent-error
-    delay -- only PermanentEmbeddingConfigError should ever get the long retry.
-    """
+    """A generic/transient failure keeps the existing fast exponential backoff."""
     session_id, generation_id, store_id = (str(uuid4()) for _ in range(3))
     catalog, search, decoded = _minimal_claim_setup(session_id, generation_id, store_id)
     config = SimpleNamespace(model="test-model", dims=2)

@@ -477,6 +477,7 @@ def _index_object_params(value: dict) -> dict:
         "source_position",
         "event_subordinal",
         "role",
+        "interaction_kind",
         "content_text",
         "tool_name",
         "tool_output_text",
@@ -499,6 +500,7 @@ def _index_object_params(value: dict) -> dict:
             or type(record["event_subordinal"]) is not int
             or not 0 <= record["event_subordinal"] < 1 << 32
             or record["role"] not in _ROLES
+            or (record["interaction_kind"] is not None and not isinstance(record["interaction_kind"], str))
         ):
             raise ValueError("search record identity is invalid")
         for field, maximum in (
@@ -508,6 +510,7 @@ def _index_object_params(value: dict) -> dict:
             ("tool_call_id", 255),
             ("thread_id", 255),
             ("branch_kind", 64),
+            ("interaction_kind", 64),
         ):
             item = record[field]
             if item is not None and (not isinstance(item, str) or len(item.encode()) > maximum):

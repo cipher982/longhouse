@@ -591,7 +591,7 @@ def _initialize_storage_telemetry_accounting(engine: Engine) -> None:
                 (SELECT COUNT(*) FROM projector_state
                     WHERE projector = 'search-v2' AND desired_revision > completed_revision),
                 (SELECT COUNT(*) FROM projector_state
-                    WHERE projector = 'search-v2' AND status = 'failed'),
+                    WHERE projector = 'search-v2' AND status IN ('failed', 'quarantined')),
                 (SELECT COUNT(*) FROM projector_state
                     WHERE projector = 'search-v2' AND claim_token IS NOT NULL),
                 ?
@@ -699,7 +699,7 @@ def _initialize_storage_telemetry_accounting(engine: Engine) -> None:
                     search_projector_lagging = search_projector_lagging
                         + CASE WHEN NEW.desired_revision > NEW.completed_revision THEN 1 ELSE 0 END,
                     search_projector_failed = search_projector_failed
-                        + CASE WHEN NEW.status = 'failed' THEN 1 ELSE 0 END,
+                        + CASE WHEN NEW.status IN ('failed', 'quarantined') THEN 1 ELSE 0 END,
                     search_projector_claimed = search_projector_claimed
                         + CASE WHEN NEW.claim_token IS NOT NULL THEN 1 ELSE 0 END,
                     updated_at = CURRENT_TIMESTAMP WHERE singleton = 1;
@@ -716,8 +716,8 @@ def _initialize_storage_telemetry_accounting(engine: Engine) -> None:
                         + CASE WHEN NEW.projector = 'search-v2'
                             AND NEW.desired_revision > NEW.completed_revision THEN 1 ELSE 0 END,
                     search_projector_failed = search_projector_failed
-                        - CASE WHEN OLD.projector = 'search-v2' AND OLD.status = 'failed' THEN 1 ELSE 0 END
-                        + CASE WHEN NEW.projector = 'search-v2' AND NEW.status = 'failed' THEN 1 ELSE 0 END,
+                        - CASE WHEN OLD.projector = 'search-v2' AND OLD.status IN ('failed', 'quarantined') THEN 1 ELSE 0 END
+                        + CASE WHEN NEW.projector = 'search-v2' AND NEW.status IN ('failed', 'quarantined') THEN 1 ELSE 0 END,
                     search_projector_claimed = search_projector_claimed
                         - CASE WHEN OLD.projector = 'search-v2' AND OLD.claim_token IS NOT NULL THEN 1 ELSE 0 END
                         + CASE WHEN NEW.projector = 'search-v2' AND NEW.claim_token IS NOT NULL THEN 1 ELSE 0 END,
@@ -730,7 +730,7 @@ def _initialize_storage_telemetry_accounting(engine: Engine) -> None:
                     search_projector_lagging = search_projector_lagging
                         - CASE WHEN OLD.desired_revision > OLD.completed_revision THEN 1 ELSE 0 END,
                     search_projector_failed = search_projector_failed
-                        - CASE WHEN OLD.status = 'failed' THEN 1 ELSE 0 END,
+                        - CASE WHEN OLD.status IN ('failed', 'quarantined') THEN 1 ELSE 0 END,
                     search_projector_claimed = search_projector_claimed
                         - CASE WHEN OLD.claim_token IS NOT NULL THEN 1 ELSE 0 END,
                     updated_at = CURRENT_TIMESTAMP WHERE singleton = 1;

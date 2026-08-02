@@ -439,6 +439,88 @@ async def test_projector_store_replacement_requeues_completed_state_exactly_once
 
 
 @pytest.mark.asyncio
+async def test_permanent_projector_failure_is_quarantined_until_new_revision(daemon_paths):
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    session_id = str(uuid4())
+    projector = "search-v2"
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        advance = {
+            "projector": projector,
+            "session_id": session_id,
+            "desired_revision": 1,
+            "observed_at": now.isoformat(),
+        }
+        await client.call("projector.state.advance.v2", advance)
+        claim_token = str(uuid4())
+        claimed = await client.call(
+            "projector.state.claim.v2",
+            {
+                "projector": projector,
+                "worker_id": "search-worker",
+                "claim_token": claim_token,
+                "now": now.isoformat(),
+                "lease_seconds": 60,
+                "limit": 10,
+            },
+        )
+        assert claimed["claimed"][0]["claimed_revision"] == "1"
+        failed = await client.call(
+            "projector.state.fail.v2",
+            {
+                "projector": projector,
+                "session_id": session_id,
+                "claim_token": claim_token,
+                "error_code": "semantic_recovery_permanent",
+                "error_message": "snapshot is too large",
+                "failed_at": now.isoformat(),
+                "retry_at": (now + timedelta(days=1)).isoformat(),
+            },
+        )
+        assert failed["state"]["status"] == "quarantined"
+        assert failed["state"]["retry_at"] is None
+
+        blocked = await client.call(
+            "projector.state.claim.v2",
+            {
+                "projector": projector,
+                "worker_id": "search-worker",
+                "claim_token": str(uuid4()),
+                "now": (now + timedelta(days=30)).isoformat(),
+                "lease_seconds": 60,
+                "limit": 10,
+            },
+        )
+        assert blocked["claimed"] == []
+
+        unchanged = await client.call("projector.state.advance.v2", advance)
+        assert unchanged["changed"] is False
+        await client.call(
+            "projector.state.advance.v2",
+            {**advance, "desired_revision": 2},
+        )
+        reopened = await client.call(
+            "projector.state.claim.v2",
+            {
+                "projector": projector,
+                "worker_id": "search-worker",
+                "claim_token": str(uuid4()),
+                "now": now.isoformat(),
+                "lease_seconds": 60,
+                "limit": 10,
+            },
+        )
+        assert reopened["claimed"][0]["claimed_revision"] == "2"
+        assert reopened["claimed"][0]["status"] == "claimed"
+    finally:
+        await client.close()
+        await daemon.close()
+
+
+@pytest.mark.asyncio
 async def test_projector_state_cannot_resurrect_or_claim_tombstoned_session(daemon_paths):
     database_path, socket_path = daemon_paths
     now = datetime.now(UTC).replace(microsecond=0)

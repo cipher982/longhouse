@@ -12,6 +12,10 @@ from dataclasses import field
 from datetime import datetime
 
 from zerg.services.clean_events import extract_content as _extract_content
+from zerg.services.provider_interaction_semantics import seed_persisted_provider_interaction_context
+from zerg.services.provider_interaction_semantics import seed_provider_interaction_sequence_context
+from zerg.services.provider_interaction_semantics import semantic_event_included
+from zerg.services.provider_interaction_semantics import semantic_projection_facts
 from zerg.services.transcript_content import redact_secrets as _redact_secrets
 from zerg.services.transcript_content import strip_noise as _strip_noise
 
@@ -119,6 +123,7 @@ def detect_turns(messages: list[SessionMessage]) -> list[Turn]:
 def build_transcript(
     events: list[dict],
     *,
+    provider: str | None = None,
     include_tool_calls: bool = False,
     tool_output_max_chars: int = 500,
     strip_noise: bool = True,
@@ -133,6 +138,7 @@ def build_transcript(
             Required keys: ``role``, ``content_text``, ``timestamp``.
             Optional: ``tool_name``, ``tool_input_json``, ``tool_output_text``,
             ``session_id``.
+        provider: Provider name used to classify provider-local user records.
         include_tool_calls: If False (default), skip tool-result events.
         tool_output_max_chars: Max chars to keep from ``tool_output_text``.
         strip_noise: Remove XML noise tags (system-reminder, etc.).
@@ -153,8 +159,43 @@ def build_transcript(
         session_id = str(events[0].get("session_id", ""))
 
     messages: list[SessionMessage] = []
+    sequence_context: dict[str, object] = {}
+    raw_events_by_provider: dict[str, list[object]] = {}
+    for event in events:
+        raw_json = event.get("raw_json")
+        if raw_json is not None:
+            event_provider = event.get("provider") or provider
+            raw_events_by_provider.setdefault(str(event_provider or "unknown"), []).append(raw_json)
+    event_providers = {str(event.get("provider") or provider or "unknown") for event in events}
+    for event_provider in event_providers:
+        seed_provider_interaction_sequence_context(
+            event_provider,
+            raw_events_by_provider.get(event_provider, []),
+            sequence_context,
+        )
+        seed_persisted_provider_interaction_context(event_provider, events, sequence_context)
 
     for event in events:
+        event_provider = event.get("provider") or provider
+        facts = semantic_projection_facts(
+            str(event_provider) if event_provider is not None else None,
+            role=str(event.get("role") or ""),
+            content_text=str(event.get("content_text") or ""),
+            raw_json=event.get("raw_json"),
+            interaction_kind=(str(event.get("interaction_kind")) if event.get("interaction_kind") is not None else None),
+            title_eligible=event.get("title_eligible"),
+            sequence_context=sequence_context,
+        )
+        if not semantic_event_included(
+            str(event_provider) if event_provider is not None else None,
+            role=str(event.get("role") or ""),
+            content_text=str(event.get("content_text") or ""),
+            raw_json=event.get("raw_json"),
+            interaction_kind=facts["interaction_kind"],
+            title_eligible=facts["title_eligible"],
+            sequence_context=sequence_context,
+        ):
+            continue
         content = _extract_content(event, include_tool_calls, tool_output_max_chars)
         if content is None:
             continue

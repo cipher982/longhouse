@@ -407,6 +407,7 @@ def _identity_scenario(
     launch_args: list[str],
     timeout: float,
     model: str | None,
+    probe_prompt: str | None = None,
 ) -> dict[str, Any]:
     longhouse_session_id = str(uuid4())
     launch_marker = f"LONGHOUSE_CURSOR_GATE0_BOOT_{name.upper()}_{uuid4().hex[:10]}"
@@ -438,9 +439,9 @@ def _identity_scenario(
             after_count=max(0, boot_event_count - 1),
             timeout=timeout,
         )
-        marker = f"LONGHOUSE_CURSOR_GATE0_{name.upper()}_{uuid4().hex[:10]}"
+        probe_text = probe_prompt or f"Reply with exactly LONGHOUSE_CURSOR_GATE0_{name.upper()}_{uuid4().hex[:10]} and nothing else."
         before = len(read_hook_events(events_path))
-        session.submit_idle(f"Reply with exactly {marker} and nothing else.")
+        session.submit_idle(probe_text)
         prompt = wait_for_hook(
             events_path,
             longhouse_session_id=longhouse_session_id,
@@ -465,7 +466,7 @@ def _identity_scenario(
             after_count=before,
             timeout=timeout,
         )
-        expected_prompt_digest = _marker_digest(f"Reply with exactly {marker} and nothing else.")
+        expected_prompt_digest = _marker_digest(probe_text)
         facts = {
             "status": "passed",
             "started_at": started_at,
@@ -477,6 +478,8 @@ def _identity_scenario(
             "cursor_pid": session.process.pid,
             "process_alive_after_turn": session.alive(),
             "first_hook_event": first.get("event"),
+            "prompt_sha256": prompt.get("prompt_sha256"),
+            "expected_prompt_sha256": expected_prompt_digest,
             "prompt_digest_matches": prompt.get("prompt_sha256") == expected_prompt_digest,
             "response_digest_present": bool(response.get("text_sha256")),
             "stop_status": stop.get("status"),
@@ -1333,6 +1336,7 @@ def run_gate0(args: argparse.Namespace) -> dict[str, Any]:
             launch_args=["--resume", provider_id],
             timeout=args.timeout,
             model=args.model,
+            probe_prompt=args.input_prompt,
         )
         first_identity = report["scenarios"]["create_chat_resume"]
         report["scenarios"]["native_resume_continuity"] = _resume_scenario(
@@ -1437,6 +1441,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cursor-bin", help="Explicit stock cursor-agent binary")
     parser.add_argument("--model", help="Optional model override for low-cost proof turns")
+    parser.add_argument(
+        "--input-prompt",
+        help="Exact prompt to bind into the create_chat_resume evidence for universal send_receive qualification.",
+    )
     parser.add_argument("--timeout", type=float, default=_DEFAULT_TIMEOUT_SECONDS)
     parser.add_argument(
         "--conversation-reset-only",

@@ -24,7 +24,9 @@ from zerg.config import get_settings
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.services.internal_sessions import classify_provider_proof_environment
-from zerg.services.provider_interaction_semantics import title_eligible_provider_event
+from zerg.services.provider_interaction_semantics import seed_persisted_provider_interaction_context
+from zerg.services.provider_interaction_semantics import seed_provider_interaction_sequence_context
+from zerg.services.provider_interaction_semantics import semantic_projection_facts
 from zerg.services.provisional_events import durable_transcript_event_predicate
 from zerg.services.raw_json_compression import decode_raw_json
 from zerg.services.session_title import freeze_anchor_title
@@ -95,14 +97,39 @@ def _summary_content_values(summary: Any) -> dict[str, str]:
 def events_to_dicts(events: list[AgentEvent], *, provider: str | None = None) -> list[dict]:
     """Convert ORM AgentEvent rows to plain dicts for summarization."""
     result: list[dict] = []
+    interaction_sequence_context: dict[str, object] = {}
+    raw_events_by_provider: dict[str, list[object]] = {}
     for event in events:
         event_provider = provider or getattr(getattr(event, "session", None), "provider", None)
-        if event.role == "user" and not title_eligible_provider_event(
+        raw_json = decode_raw_json(event)
+        if raw_json is not None:
+            raw_events_by_provider.setdefault(str(event_provider or "unknown"), []).append(raw_json)
+    event_providers = {str(provider or getattr(getattr(event, "session", None), "provider", None) or "unknown") for event in events}
+    for event_provider in event_providers:
+        provider_events = [
+            event
+            for event in events
+            if str(provider or getattr(getattr(event, "session", None), "provider", None) or "unknown") == event_provider
+        ]
+        seed_provider_interaction_sequence_context(
+            event_provider,
+            raw_events_by_provider.get(event_provider, []),
+            interaction_sequence_context,
+        )
+        seed_persisted_provider_interaction_context(event_provider, provider_events, interaction_sequence_context)
+    for event in events:
+        event_provider = provider or getattr(getattr(event, "session", None), "provider", None)
+        raw_json = decode_raw_json(event)
+        semantics = semantic_projection_facts(
             event_provider,
             role=event.role,
             content_text=event.content_text,
-            raw_json=decode_raw_json(event),
-        ):
+            raw_json=raw_json,
+            interaction_kind=getattr(event, "interaction_kind", None),
+            title_eligible=(getattr(event, "title_eligible", None) if raw_json is None else None),
+            sequence_context=interaction_sequence_context,
+        )
+        if event.role == "user" and not semantics["title_eligible"]:
             continue
         result.append(
             {
@@ -154,14 +181,36 @@ def _load_summary_event_chunk(
         has_more = len(rows) > limit
         rows = rows[:limit]
 
+    interaction_sequence_context: dict[str, object] = {}
+    if rows and str(provider or "").strip().lower() == "claude":
+        # A bounded summary tail can begin in the middle of Claude's local
+        # command envelope. Replay the immediately preceding raw rows first so
+        # the caveat is available even when the summary window omitted it.
+        prior_rows = base_query.filter(AgentEvent.id < int(rows[0].id)).order_by(AgentEvent.id.desc()).limit(256).all()
+        seed_provider_interaction_sequence_context(
+            provider,
+            [decode_raw_json(prior_row) for prior_row in reversed(prior_rows)] + [decode_raw_json(row) for row in rows],
+            interaction_sequence_context,
+        )
+        seed_persisted_provider_interaction_context(
+            provider,
+            [*prior_rows, *rows],
+            interaction_sequence_context,
+        )
+
     events = []
     for row in rows:
-        if row.role == "user" and not title_eligible_provider_event(
+        raw_json = decode_raw_json(row)
+        semantics = semantic_projection_facts(
             provider,
             role=row.role,
             content_text=row.content_text,
-            raw_json=decode_raw_json(row),
-        ):
+            raw_json=raw_json,
+            interaction_kind=getattr(row, "interaction_kind", None),
+            title_eligible=(getattr(row, "title_eligible", None) if raw_json is None else None),
+            sequence_context=interaction_sequence_context,
+        )
+        if row.role == "user" and not semantics["title_eligible"]:
             continue
         events.append(
             {
@@ -344,11 +393,12 @@ async def generate_initial_title_impl(session_id: str) -> bool:
             return False
 
         first_user_message = (session.first_user_message_preview or "").strip()
-        if first_user_message and not title_eligible_provider_event(
-            session.provider,
-            role="user",
-            content_text=first_user_message,
-        ):
+        # The denormalized preview is already produced through the semantic
+        # boundary. Do not reclassify its text without raw/provider evidence:
+        # a Claude control record can look like an ordinary marker string.
+        # Sessions without a semantic user count still need the event lookup
+        # below, because their preview may predate the boundary.
+        if int(session.user_messages or 0) <= 0:
             first_user_message = ""
         if not first_user_message:
             user_events = (
@@ -359,21 +409,35 @@ async def generate_initial_title_impl(session_id: str) -> bool:
                 .order_by(AgentEvent.timestamp.asc(), AgentEvent.id.asc())
                 .all()
             )
-            first_user_message = next(
-                (
-                    str(event.content_text or "").strip()
-                    for event in user_events
-                    if str(event.content_text or "").strip()
-                    and str(event.content_text or "").strip().lower() != "warmup"
-                    and title_eligible_provider_event(
-                        session.provider,
-                        role=event.role,
-                        content_text=event.content_text,
-                        raw_json=decode_raw_json(event),
-                    )
-                ),
-                "",
+            interaction_sequence_context: dict[str, object] = {}
+            seed_provider_interaction_sequence_context(
+                session.provider,
+                [decode_raw_json(event) for event in user_events],
+                interaction_sequence_context,
             )
+            seed_persisted_provider_interaction_context(
+                session.provider,
+                user_events,
+                interaction_sequence_context,
+            )
+            first_user_message = ""
+            for event in user_events:
+                content = str(event.content_text or "").strip()
+                if not content or content.lower() == "warmup":
+                    continue
+                raw_json = decode_raw_json(event)
+                semantics = semantic_projection_facts(
+                    session.provider,
+                    role=event.role,
+                    content_text=event.content_text,
+                    raw_json=raw_json,
+                    interaction_kind=getattr(event, "interaction_kind", None),
+                    title_eligible=(getattr(event, "title_eligible", None) if raw_json is None else None),
+                    sequence_context=interaction_sequence_context,
+                )
+                if semantics["title_eligible"]:
+                    first_user_message = content
+                    break
         if not first_user_message:
             await record_initial_title_failure(session_id, "missing_durable_user_message")
             return False

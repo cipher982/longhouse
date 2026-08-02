@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -16,6 +17,7 @@ from zerg.qa import codex_release_identity
 from zerg.qa import codex_tool_call_result
 from zerg.qa import opencode_server_qualification
 from zerg.qa import provider_harness_qualification as bridge
+from zerg.qa import provider_interaction_semantics as interaction_semantics
 from zerg.qa import provider_release_identity
 from zerg.qa.provider_factory_model import DEFAULT_HARNESS_SCENARIOS
 from zerg.qa.provider_factory_model import LIVE_TOKEN_HARNESS_SCENARIO
@@ -213,6 +215,82 @@ def _passing_claude_full_column_payload() -> dict:
     }
 
 
+def _live_claude_interaction_data(
+    tmp_path: Path,
+    *,
+    digest: str,
+    evidence_class: str = "live_no_token",
+) -> dict[str, object]:
+    observation = interaction_semantics.generated_fake_observation("claude")
+    effort_probe = next(row for row in observation["probes"] if row["probe_id"] == "claude_effort_command")
+    observation["probes"] = [effort_probe]
+    observation["raw_events"] = [*effort_probe["raw_events"], *observation["raw_events"][-2:]]
+    observation.update(
+        {
+            "evidence_class": evidence_class,
+            "synthetic": False,
+                "provider_version": "2.1.220",
+                "provider_executable_identity": "sha256:" + "a" * 64,
+                "qualification_request_digest": digest,
+                "native_source_root": str(tmp_path),
+            }
+        )
+    for index, row in enumerate(observation["probes"]):
+        events = row.get("raw_events") or []
+        if not events:
+            continue
+        source_path = tmp_path / f"claude-probe-{index}.jsonl"
+        lines = [
+            json.dumps(event, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+            for event in events
+        ]
+        source_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        source_bytes = source_path.read_bytes()
+        source_rows = []
+        offset = 0
+        for line, event in zip(lines, events, strict=True):
+            source_rows.append(
+                {
+                    "source_path": str(source_path),
+                    "source_offset": offset,
+                    "line": line,
+                    "line_sha256": hashlib.sha256(line.encode("utf-8")).hexdigest(),
+                    "event_sha256": interaction_semantics.raw_event_digest(event),
+                    "source_binding": "file_bytes_at_offset",
+                    "source_file_bytes": len(source_bytes),
+                    "source_file_sha256": hashlib.sha256(source_bytes).hexdigest(),
+                }
+            )
+            offset += len(line.encode("utf-8")) + 1
+        row["status"] = "observed"
+        row["capture_complete"] = True
+        row["post_interaction_quiescent"] = True
+        row["native_source_rows"] = source_rows
+        row["capture_receipt"] = {
+            "stable_snapshots": 3,
+            "stable_seconds": 1.5,
+            "raw_event_count": len(source_rows),
+            "window_sha256": hashlib.sha256(
+                "".join(source["event_sha256"] for source in source_rows).encode("ascii")
+            ).hexdigest(),
+        }
+
+    observation_path = tmp_path / "provider-interaction-observation.json"
+    events_path = tmp_path / "provider-interaction-raw.jsonl"
+    observation_path.write_text(json.dumps(observation, sort_keys=True), encoding="utf-8")
+    events_path.write_text(interaction_semantics.jsonl_events(observation), encoding="utf-8")
+    evaluation = interaction_semantics.evaluate_observation("claude", observation)
+    assert evaluation["status"] == "pass"
+    return {
+        **evaluation,
+        "verification_scope": "provider_native",
+        "evidence_class": evidence_class,
+        "raw_observation_path": str(observation_path),
+        "raw_events_path": str(events_path),
+        "qualification_request_digest": digest,
+    }
+
+
 def _passing_opencode_full_column_payload(evidence_root: Path) -> dict:
     results = []
     for scenario in DEFAULT_HARNESS_SCENARIOS:
@@ -324,6 +402,7 @@ def test_full_column_gate_accepts_only_the_complete_known_codex_surface() -> Non
     gate = bridge._full_column_gate(_passing_full_column_payload())  # noqa: SLF001
 
     assert gate["status"] == "pass"
+    assert gate["provider_status"] == "not_applicable"
     assert gate["expected_scenario_count"] == 23
     assert gate["captured_scenario_count"] == 23
     assert gate["unexpected_results"] == []
@@ -346,30 +425,92 @@ def test_full_column_gate_exposes_the_interaction_request_binding() -> None:
 
 
 @pytest.mark.parametrize(
-    ("status", "failure_code"),
-    (("pass", None), ("blocked", "interaction_live_probe_setup_failed")),
+    ("status", "failure_code", "evidence_class"),
+    (
+        ("pass", None, "live_no_token"),
+        ("pass", None, "live_token"),
+        ("blocked", "interaction_live_probe_setup_failed", "live_no_token"),
+    ),
 )
 def test_full_column_gate_accepts_the_result_of_an_explicit_live_interaction_attempt(
     status: str,
     failure_code: str | None,
+    evidence_class: str,
+    tmp_path: Path,
+    monkeypatch,
 ) -> None:
-    payload = _passing_full_column_payload()
+    payload = _passing_claude_full_column_payload()
     digest = "sha256:" + "a" * 64
-    interaction = next(result for result in payload["results"] if result["scenario"] == "interaction_semantics")
+    interaction = next(
+        result for result in payload["results"] if result["scenario"] == "interaction_semantics"
+    )
     interaction["status"] = status
     if failure_code is not None:
         interaction["failure_code"] = failure_code
     else:
         interaction.pop("failure_code", None)
+        contract = interaction_semantics.contract_for_provider("claude")
+        assert contract is not None
+        reduced_contract = replace(contract, interaction_probes=(contract.interaction_probes[0],))
+        monkeypatch.setattr(
+            interaction_semantics,
+            "contract_for_provider",
+            lambda _provider: reduced_contract,
+        )
+        interaction["data"] = _live_claude_interaction_data(
+            tmp_path,
+            digest=digest,
+            evidence_class=evidence_class,
+        )
     interaction["qualification_request_digest"] = digest
 
     gate = bridge._full_column_gate(  # noqa: SLF001
         payload,
+        provider="claude",
         qualification_request_digest=digest,
-        interaction_evidence_class="live_no_token",
+        interaction_evidence_class=evidence_class,
     )
 
     assert gate["status"] == "pass"
+    assert gate["provider_status"] == ("pass" if status == "pass" else "blocked")
+
+
+def test_full_column_gate_rejects_live_pass_without_materialized_raw_provenance(tmp_path: Path) -> None:
+    payload = _passing_full_column_payload()
+    interaction = next(result for result in payload["results"] if result["scenario"] == "interaction_semantics")
+    interaction["status"] = "pass"
+    interaction.pop("failure_code", None)
+    interaction["data"] = {
+        "verification_scope": "provider_native",
+        "provider_status": "pass",
+        "evidence_class": "live_no_token",
+        "raw_observation_path": str(tmp_path / "missing-observation.json"),
+        "raw_events_path": str(tmp_path / "missing-events.jsonl"),
+        "assertions": [
+            {
+                "probe_id": "provider_control",
+                "status": "pass",
+                "evidence_basis": {"raw_provenance": "pass"},
+            }
+        ],
+    }
+
+    gate = bridge._full_column_gate(  # noqa: SLF001
+        payload,
+        interaction_evidence_class="live_no_token",
+    )
+
+    assert gate["status"] == "fail"
+    assert gate["provider_status"] == "fail"
+    assert gate["unexpected_results"] == [
+        {
+            "scenario": "interaction_semantics",
+            "expected_status": "blocked",
+            "expected_failure_code": "interaction_live_policy_missing",
+            "actual_status": "pass",
+            "actual_failure_code": "interaction_live_provenance_missing",
+        }
+    ]
 
 
 def test_full_column_gate_rejects_one_regressed_scenario() -> None:

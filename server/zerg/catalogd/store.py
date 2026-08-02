@@ -5675,6 +5675,7 @@ class CatalogStore:
                         tool_calls=render_manifest["tool_calls"],
                         first_user_message_preview=render_manifest["first_user_message_preview"],
                         last_visible_text_preview=render_manifest["last_visible_text_preview"],
+                        semantic_projection_version=render_manifest.get("semantic_projection_version", 0),
                         first_order_key=render_manifest["first_order_key"],
                         last_order_key=render_manifest["last_order_key"],
                         **_render_order_columns(
@@ -5693,9 +5694,21 @@ class CatalogStore:
                         "assistant_messages": int((existing_session or {}).get("assistant_messages") or 0)
                         + render_manifest["assistant_messages"],
                         "tool_calls": int((existing_session or {}).get("tool_calls") or 0) + render_manifest["tool_calls"],
+                        "semantic_projection_version": (
+                            0
+                            if provider.strip().lower() == "claude"
+                            else (
+                                int(render_manifest.get("semantic_projection_version", 0))
+                                if existing_session is None or existing_session.get("current_render_generation") is None
+                                else min(
+                                    int(existing_session.get("semantic_projection_version") or 0),
+                                    int(render_manifest.get("semantic_projection_version", 0)),
+                                )
+                            )
+                        ),
                     }
                     immediate_title = sanitize_title(render_manifest["first_user_message_preview"], max_words=6)
-                    if not (existing_session or {}).get("summary_title") and immediate_title:
+                    if provider.strip().lower() != "claude" and not (existing_session or {}).get("summary_title") and immediate_title:
                         projection_values["summary_title"] = immediate_title
                     if not (existing_session or {}).get("first_user_message_preview") and render_manifest["first_user_message_preview"]:
                         projection_values["first_user_message_preview"] = render_manifest["first_user_message_preview"]
@@ -5767,6 +5780,7 @@ class CatalogStore:
                     and render_manifest["user_messages"] > 0
                     and int((existing_session or {}).get("user_messages") or 0) == 0
                     and not (existing_session or {}).get("anchor_title")
+                    and int(render_manifest.get("semantic_projection_version", 0)) >= 1
                 ),
             }
 
@@ -6077,6 +6091,7 @@ class CatalogStore:
                     select(table)
                     .where(
                         table.c.user_messages > 0,
+                        or_(table.c.provider != "claude", table.c.semantic_projection_version >= 1),
                         or_(table.c.anchor_title.is_(None), table.c.anchor_title == ""),
                         or_(table.c.title_last_error.is_(None), table.c.title_last_error != "no_meaningful_user_text"),
                         or_(table.c.title_retry_at.is_(None), table.c.title_retry_at <= observed_at),
@@ -6559,6 +6574,152 @@ class CatalogStore:
                 "observed_at": observed_at.isoformat(),
             }
 
+    def repair_storage_semantic_projection(
+        self,
+        *,
+        session_id: UUID,
+        owner_id: str,
+        generation_id: UUID,
+        objects: tuple[dict[str, Any], ...],
+        observed_at: datetime,
+    ) -> dict[str, Any]:
+        """Apply verified semantic aggregates without rewriting immutable objects."""
+
+        sessions = StorageSession.__table__
+        generations = RenderGeneration.__table__
+        render_objects = RenderObject.__table__
+        tombstones = LiveSessionTombstone.__table__
+        projectors = ProjectorState.__table__
+        session_key = str(session_id)
+        generation_key = str(generation_id)
+        if not 0 <= len(objects) <= 1_000 or len({str(item.get("object_id")) for item in objects}) != len(objects):
+            return {"invalid_request": True}
+        with _write_transaction(self.engine) as connection:
+            deleted = connection.execute(
+                select(tombstones.c.deletion_revision).where(tombstones.c.session_id == session_key)
+            ).scalar_one_or_none()
+            if deleted is not None:
+                return {"session_deleted": True, "deletion_revision": str(deleted)}
+            session_row = (
+                connection.execute(select(sessions).where(sessions.c.session_id == session_key, sessions.c.owner_id == owner_id))
+                .mappings()
+                .first()
+            )
+            generation_row = (
+                connection.execute(
+                    select(generations).where(
+                        generations.c.generation_id == generation_key,
+                        generations.c.session_id == session_key,
+                        generations.c.state == "current",
+                    )
+                )
+                .mappings()
+                .first()
+            )
+            if session_row is None or generation_row is None:
+                return {"not_found": True, "commit_seq": str(_current_commit_seq(connection))}
+            rows = list(
+                connection.execute(
+                    select(render_objects).where(
+                        render_objects.c.session_id == session_key,
+                        render_objects.c.generation_id == generation_key,
+                        render_objects.c.retired_at.is_(None),
+                    )
+                )
+                .mappings()
+                .all()
+            )
+            by_id = {str(row["object_id"]): row for row in rows}
+            updates: list[tuple[str, dict[str, Any]]] = []
+            for item in objects:
+                object_id = str(item.get("object_id") or "")
+                row = by_id.get(object_id)
+                if row is None:
+                    return {"conflict": True, "commit_seq": str(_current_commit_seq(connection))}
+                event_count = item.get("event_count")
+                if type(event_count) is not int or event_count != int(row["event_count"]):
+                    return {"conflict": True, "commit_seq": str(_current_commit_seq(connection))}
+                values = {
+                    "user_messages": int(item.get("user_messages") or 0),
+                    "assistant_messages": int(item.get("assistant_messages") or 0),
+                    "tool_calls": int(item.get("tool_calls") or 0),
+                    "first_user_message_preview": item.get("first_user_message_preview"),
+                    "last_visible_text_preview": item.get("last_visible_text_preview"),
+                    "semantic_projection_version": 1,
+                }
+                if any(row[field] != value for field, value in values.items()):
+                    updates.append((object_id, values))
+
+            updates_by_id = {object_id: values for object_id, values in updates}
+            complete_after = all(
+                int(
+                    updates_by_id.get(str(row["object_id"]), {}).get(
+                        "semantic_projection_version",
+                        row["semantic_projection_version"] or 0,
+                    )
+                )
+                >= 1
+                for row in rows
+            )
+            commit_time = _as_aware_utc(observed_at) or datetime.now(UTC)
+            commit_seq = _current_commit_seq(connection)
+            if updates:
+                commit_seq = _advance_commit_seq(connection, commit_time)
+                for object_id, values in updates:
+                    connection.execute(
+                        update(render_objects).where(render_objects.c.object_id == object_id).values(**values, commit_seq=commit_seq)
+                    )
+
+            needs_recompute = complete_after and (bool(updates) or int(session_row["semantic_projection_version"] or 0) < 1)
+            if needs_recompute:
+                _recompute_render_generation_projection(
+                    connection,
+                    session_id=session_key,
+                    generation_id=generation_key,
+                    commit_seq=commit_seq,
+                    commit_time=commit_time,
+                    reset_derived_title=int(session_row["semantic_projection_version"] or 0) < 1,
+                    semantic_projection_version=1,
+                )
+            elif updates:
+                connection.execute(
+                    update(sessions)
+                    .where(sessions.c.session_id == session_key)
+                    .values(semantic_projection_version=0, commit_seq=commit_seq, updated_at=commit_time)
+                )
+            reopened_projectors = 0
+            if complete_after:
+                reopened_projectors = int(
+                    connection.execute(
+                        update(projectors)
+                        .where(
+                            projectors.c.session_id == session_key,
+                            projectors.c.status == "quarantined",
+                        )
+                        .values(
+                            desired_revision=func.max(projectors.c.desired_revision, commit_seq),
+                            status="idle",
+                            failure_count=0,
+                            last_error_code=None,
+                            last_error_message=None,
+                            retry_at=None,
+                            commit_seq=commit_seq,
+                            updated_at=commit_time,
+                        )
+                    ).rowcount
+                    or 0
+                )
+            return {
+                "changed": bool(updates or needs_recompute),
+                "complete": complete_after,
+                "updated_object_count": len(updates),
+                "reopened_projectors": reopened_projectors,
+                "session": _storage_session_dto(
+                    connection.execute(select(sessions).where(sessions.c.session_id == session_key)).mappings().one()
+                ),
+                "commit_seq": str(commit_seq),
+            }
+
     def commit_media_object(
         self,
         *,
@@ -6844,11 +7005,23 @@ class CatalogStore:
                     )
                 )
             else:
-                connection.execute(
-                    update(table)
-                    .where(table.c.projector == projector, table.c.session_id == session_key)
-                    .values(desired_revision=desired_revision, commit_seq=commit_seq, updated_at=commit_time)
-                )
+                reset_quarantine = row["status"] == "quarantined"
+                values = {
+                    "desired_revision": desired_revision,
+                    "commit_seq": commit_seq,
+                    "updated_at": commit_time,
+                }
+                if reset_quarantine:
+                    values.update(
+                        {
+                            "status": "idle",
+                            "failure_count": 0,
+                            "last_error_code": None,
+                            "last_error_message": None,
+                            "retry_at": None,
+                        }
+                    )
+                connection.execute(update(table).where(table.c.projector == projector, table.c.session_id == session_key).values(**values))
             updated = (
                 connection.execute(select(table).where(table.c.projector == projector, table.c.session_id == session_key)).mappings().one()
             )
@@ -6906,6 +7079,7 @@ class CatalogStore:
             eligible_predicates = [
                 table.c.projector == projector,
                 table.c.desired_revision > table.c.completed_revision,
+                table.c.status != "quarantined",
                 or_(table.c.claim_expires_at.is_(None), table.c.claim_expires_at <= now),
                 or_(table.c.retry_at.is_(None), table.c.retry_at <= now),
             ]
@@ -7053,6 +7227,7 @@ class CatalogStore:
                 return {"claim_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
             commit_time = datetime.now(UTC)
             commit_seq = _advance_commit_seq(connection, commit_time)
+            permanent = error_code.endswith("_permanent")
             connection.execute(
                 update(table)
                 .where(table.c.projector == projector, table.c.session_id == session_key)
@@ -7061,11 +7236,11 @@ class CatalogStore:
                     claim_token=None,
                     worker_id=None,
                     claim_expires_at=None,
-                    status="failed",
+                    status="quarantined" if permanent else "failed",
                     failure_count=int(row["failure_count"] or 0) + 1,
                     last_error_code=error_code,
                     last_error_message=error_message,
-                    retry_at=retry_at,
+                    retry_at=None if permanent else retry_at,
                     last_failure_token=claim_token,
                     commit_seq=commit_seq,
                     updated_at=commit_time,
@@ -9040,6 +9215,8 @@ def _recompute_render_generation_projection(
     generation_id: str,
     commit_seq: int,
     commit_time: datetime,
+    reset_derived_title: bool = False,
+    semantic_projection_version: int | None = None,
 ) -> None:
     """Rebuild bounded heads after the rare source-epoch replacement path."""
 
@@ -9097,25 +9274,131 @@ def _recompute_render_generation_projection(
         "updated_at": commit_time,
     }
     connection.execute(update(generation).where(generation.c.generation_id == generation_id).values(**generation_values))
-    connection.execute(
-        update(sessions)
-        .where(sessions.c.session_id == session_id)
-        .values(
-            current_render_generation=generation_id,
-            user_messages=sum(int(row["user_messages"]) for row in rows),
-            assistant_messages=sum(int(row["assistant_messages"]) for row in rows),
-            tool_calls=sum(int(row["tool_calls"]) for row in rows),
-            summary_title=func.coalesce(
-                sessions.c.summary_title,
-                sanitize_title(
-                    str(first_preview_row["first_user_message_preview"]) if first_preview_row is not None else None,
-                    max_words=6,
-                ),
+    session_row = connection.execute(select(sessions).where(sessions.c.session_id == session_id)).mappings().first()
+    projection_values: dict[str, Any] = {
+        "current_render_generation": generation_id,
+        "user_messages": sum(int(row["user_messages"]) for row in rows),
+        "assistant_messages": sum(int(row["assistant_messages"]) for row in rows),
+        "tool_calls": sum(int(row["tool_calls"]) for row in rows),
+        "semantic_projection_version": (
+            semantic_projection_version
+            if semantic_projection_version is not None
+            else min((int(row["semantic_projection_version"] or 0) for row in rows), default=0)
+        ),
+        "summary_title": func.coalesce(
+            sessions.c.summary_title,
+            sanitize_title(
+                str(first_preview_row["first_user_message_preview"]) if first_preview_row is not None else None,
+                max_words=6,
             ),
-            first_user_message_preview=(str(first_preview_row["first_user_message_preview"]) if first_preview_row is not None else None),
-            last_visible_text_preview=(str(last_preview_row["last_visible_text_preview"]) if last_preview_row is not None else None),
+        ),
+        "first_user_message_preview": (str(first_preview_row["first_user_message_preview"]) if first_preview_row is not None else None),
+        "last_visible_text_preview": (str(last_preview_row["last_visible_text_preview"]) if last_preview_row is not None else None),
+    }
+    reset_title = bool(
+        reset_derived_title
+        and session_row is not None
+        and _semantic_title_needs_reset(
+            old_first_preview=session_row["first_user_message_preview"],
+            old_summary_title=session_row["summary_title"],
+            old_anchor_title=session_row["anchor_title"],
+            new_first_preview=projection_values["first_user_message_preview"],
         )
     )
+    if reset_title:
+        # A pre-semantic title may have been generated from a provider-local
+        # command. Clear both the drifting summary and its frozen headline so
+        # the normal title reconciler can regenerate from the recovered first
+        # conversational prompt. There is no user-editable title field here;
+        # anchor_title is the write-once AI projection.
+        projection_values.update(
+            {
+                "summary_title": sanitize_title(
+                    str(projection_values["first_user_message_preview"] or ""),
+                    max_words=6,
+                ),
+                "anchor_title": None,
+                "title_retry_at": commit_time,
+                "title_last_error": None,
+            }
+        )
+    connection.execute(update(sessions).where(sessions.c.session_id == session_id).values(**projection_values))
+    if reset_title:
+        connection.execute(
+            update(LiveSessionCatalog.__table__)
+            .where(LiveSessionCatalog.__table__.c.session_id == session_id)
+            .values(
+                summary_title=None,
+                anchor_title=None,
+                title_retry_at=commit_time,
+                title_last_error=None,
+                first_user_message_preview=projection_values["first_user_message_preview"],
+                last_visible_text_preview=projection_values["last_visible_text_preview"],
+                user_messages=projection_values["user_messages"],
+                assistant_messages=projection_values["assistant_messages"],
+                tool_calls=projection_values["tool_calls"],
+                updated_at=commit_time,
+            )
+        )
+        connection.execute(
+            update(LiveTimelineCard.__table__)
+            .where(LiveTimelineCard.__table__.c.session_id == session_id)
+            .values(
+                summary_title=None,
+                first_user_message_preview=projection_values["first_user_message_preview"],
+                last_visible_text_preview=projection_values["last_visible_text_preview"],
+                user_messages=projection_values["user_messages"],
+                assistant_messages=projection_values["assistant_messages"],
+                tool_calls=projection_values["tool_calls"],
+                updated_at=commit_time,
+            )
+        )
+
+
+def _semantic_title_needs_reset(
+    *,
+    old_first_preview: object,
+    old_summary_title: object,
+    old_anchor_title: object,
+    new_first_preview: object,
+) -> bool:
+    """Reset titles when semantic repair removes the entire first-message set.
+
+    Storage-v2 version-zero is also used for unrelated legacy rows. When a
+    repaired projection still has a conversational first message, preserve a
+    frozen title unless it plainly equals the old fallback or contains native
+    control markup. When the repaired projection has no first message at all,
+    the old title cannot be justified by semantic content; this also handles
+    an LLM title that paraphrased a provider-local control.
+    """
+
+    old_first = str(old_first_preview or "").strip()
+    new_first = str(new_first_preview or "").strip()
+    if not old_first or old_first == new_first:
+        return False
+    old_fallback = sanitize_title(old_first, max_words=6)
+    lowered = old_first.lower()
+    old_first_was_control = any(
+        marker in lowered
+        for marker in (
+            "<local-command-caveat>",
+            "<local-command-stdout>",
+            "<command-name>",
+            "<command-message>",
+            "<command-args>",
+        )
+    )
+    if not new_first:
+        # A control-only session has no replacement preview. The old AI title
+        # may be a paraphrase, so comparing strings cannot establish that it
+        # is safe to keep. This path only runs while converting a version-zero
+        # projection whose complete aggregate now has no semantic prompt.
+        return bool(str(old_summary_title or "").strip() or str(old_anchor_title or "").strip())
+    if old_fallback and str(old_summary_title or "").strip() == old_fallback:
+        return True
+    if old_fallback and str(old_anchor_title or "").strip() == old_fallback:
+        return True
+    return old_first_was_control
 
 
 def _minimum_order_key(left: object, right: object) -> str | None:
@@ -9172,6 +9455,7 @@ def _storage_session_dto(row) -> dict[str, Any]:
         "first_user_message_preview": row["first_user_message_preview"],
         "last_visible_text_preview": row["last_visible_text_preview"],
         "transcript_revision": str(row["transcript_revision"]),
+        "semantic_projection_version": int(row["semantic_projection_version"] or 0),
         "current_render_generation": row["current_render_generation"],
         "raw_state": str(row["raw_state"]),
         "render_state": str(row["render_state"]),
@@ -9272,6 +9556,7 @@ def _render_object_manifest_dto(row) -> dict[str, Any]:
         "tool_calls": int(row["tool_calls"]),
         "first_user_message_preview": row["first_user_message_preview"],
         "last_visible_text_preview": row["last_visible_text_preview"],
+        "semantic_projection_version": int(row["semantic_projection_version"] or 0),
         "first_order_key": row["first_order_key"],
         "last_order_key": row["last_order_key"],
         "commit_seq": str(row["commit_seq"]),

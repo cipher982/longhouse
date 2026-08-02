@@ -16,6 +16,10 @@ from dataclasses import dataclass
 from datetime import datetime
 from datetime import timezone
 
+from zerg.services.provider_interaction_semantics import seed_persisted_provider_interaction_context
+from zerg.services.provider_interaction_semantics import seed_provider_interaction_sequence_context
+from zerg.services.provider_interaction_semantics import semantic_event_included
+from zerg.services.provider_interaction_semantics import semantic_projection_facts
 from zerg.services.transcript_content import is_tool_result
 from zerg.services.transcript_content import redact_secrets
 from zerg.services.transcript_content import strip_noise
@@ -95,12 +99,53 @@ def iter_clean_transcript_events(
     events: list[Mapping[str, object]],
     *,
     include_tool_calls: bool = False,
+    provider: str | None = None,
 ) -> Iterator[CleanTranscriptEvent]:
-    """Yield content-bearing events in the clean index space used by turn embeddings."""
+    """Yield semantic content events in the clean index space.
+
+    The raw event list is intentionally untouched. This is the projection used
+    by embeddings, turn boundaries, and locator backfills, so provider-local
+    control rows must be removed before assigning clean indices.
+    """
     ordered = sorted(events, key=event_sort_key)
     message_index = 0
+    sequence_context: dict[str, object] = {}
+    raw_events_by_provider: dict[str, list[object]] = {}
+    for event in ordered:
+        raw_json = event.get("raw_json")
+        if raw_json is not None:
+            event_provider = event.get("provider") or provider
+            raw_events_by_provider.setdefault(str(event_provider or "unknown"), []).append(raw_json)
+    event_providers = {str(event.get("provider") or provider or "unknown") for event in ordered}
+    for event_provider in event_providers:
+        seed_provider_interaction_sequence_context(
+            event_provider,
+            raw_events_by_provider.get(event_provider, []),
+            sequence_context,
+        )
+        seed_persisted_provider_interaction_context(event_provider, ordered, sequence_context)
 
     for event in ordered:
+        event_provider = event.get("provider") or provider
+        facts = semantic_projection_facts(
+            str(event_provider) if event_provider is not None else None,
+            role=str(event.get("role") or ""),
+            content_text=str(event.get("content_text") or ""),
+            raw_json=event.get("raw_json"),
+            interaction_kind=(str(event.get("interaction_kind")) if event.get("interaction_kind") is not None else None),
+            title_eligible=event.get("title_eligible"),
+            sequence_context=sequence_context,
+        )
+        if not semantic_event_included(
+            str(event_provider) if event_provider is not None else None,
+            role=str(event.get("role") or ""),
+            content_text=str(event.get("content_text") or ""),
+            raw_json=event.get("raw_json"),
+            interaction_kind=facts["interaction_kind"],
+            title_eligible=facts["title_eligible"],
+            sequence_context=sequence_context,
+        ):
+            continue
         content = extract_content(event, include_tool_calls=include_tool_calls, tool_output_max_chars=500)
         if content is None:
             continue

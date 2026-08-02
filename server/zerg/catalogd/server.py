@@ -377,6 +377,8 @@ class CatalogDaemon:
             return await self._read_storage_session_render_manifest(request)
         if request.method == "storage.session.render_objects.list.v2":
             return await self._list_storage_session_render_objects(request)
+        if request.method == "storage.session.semantic_projection.repair.v2":
+            return await self._repair_storage_semantic_projection(request)
         if request.method == "storage.media.commit.v2":
             return await self._commit_media_object(request)
         if request.method == "storage.media.read.v2":
@@ -2345,6 +2347,71 @@ class CatalogDaemon:
         )
         return CatalogRpcResponse(id=request.id, result=result)
 
+    async def _repair_storage_semantic_projection(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        expected = {"session_id", "owner_id", "generation_id", "objects", "observed_at"}
+        if set(request.params) != expected:
+            return self._error(
+                request,
+                "invalid_request",
+                "storage.session.semantic_projection.repair.v2 has invalid parameters",
+            )
+        try:
+            session_id = _canonical_uuid(request.params["session_id"], "session_id")
+            generation_id = _canonical_uuid(request.params["generation_id"], "generation_id")
+            owner_id = _bounded_text(request.params["owner_id"], "owner_id", 64)
+            raw_objects = request.params["objects"]
+            if not isinstance(raw_objects, list) or not 0 <= len(raw_objects) <= 1_000:
+                raise ValueError("objects must contain 0 through 1000 rows")
+            objects: list[dict[str, object]] = []
+            for item in raw_objects:
+                if not isinstance(item, dict):
+                    raise ValueError("semantic repair object must be an object")
+                object_expected = {
+                    "object_id",
+                    "event_count",
+                    "user_messages",
+                    "assistant_messages",
+                    "tool_calls",
+                    "first_user_message_preview",
+                    "last_visible_text_preview",
+                }
+                if set(item) != object_expected:
+                    raise ValueError("semantic repair object has invalid fields")
+                if not _is_hash(item["object_id"]):
+                    raise ValueError("semantic repair object_id must be lowercase SHA-256 hex")
+                for field in ("event_count", "user_messages", "assistant_messages", "tool_calls"):
+                    value = item[field]
+                    if type(value) is not int or not 0 <= value <= 10_000:
+                        raise ValueError(f"semantic repair {field} exceeds its bound")
+                for field in ("first_user_message_preview", "last_visible_text_preview"):
+                    value = item[field]
+                    if value is not None:
+                        item[field] = _bounded_text(value, f"semantic repair {field}", 2_000)
+                objects.append(dict(item))
+            if len({str(item["object_id"]) for item in objects}) != len(objects):
+                raise ValueError("semantic repair objects must be unique")
+            observed_at = _parse_datetime(request.params["observed_at"], "observed_at")
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        assert self._store is not None
+        result = await self._run_store(
+            self._store.repair_storage_semantic_projection,
+            session_id=session_id,
+            owner_id=owner_id,
+            generation_id=generation_id,
+            objects=tuple(objects),
+            observed_at=observed_at,
+        )
+        if result.get("session_deleted"):
+            return self._error(request, "session_deleted", "session has a durable deletion fence")
+        if result.get("not_found"):
+            return self._error(request, "not_found", "session or current render generation was not found")
+        if result.get("conflict"):
+            return self._error(request, "conflict", "semantic repair does not match the current render generation")
+        if result.get("invalid_request"):
+            return self._error(request, "invalid_request", "semantic repair request is invalid")
+        return CatalogRpcResponse(id=request.id, result=result)
+
     async def _commit_media_object(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
         expected = {"media_hash", "state", "mime_type", "byte_size", "object_path", "session_refs", "observed_at"}
         if set(request.params) != expected:
@@ -3098,10 +3165,13 @@ def _validate_render_manifest(value: object, *, render_state: str) -> dict | Non
         "tool_calls",
         "first_user_message_preview",
         "last_visible_text_preview",
+        "semantic_projection_version",
     }
-    if set(value) != expected:
+    legacy_expected = expected - {"semantic_projection_version"}
+    if set(value) not in (expected, legacy_expected):
         raise ValueError("render_manifest has invalid fields")
     result = dict(value)
+    result.setdefault("semantic_projection_version", 0)
     result["generation_id"] = _canonical_uuid(result["generation_id"], "generation_id")
     for field in ("parser_revision", "ordering_revision"):
         result[field] = _canonical_storage_text(result[field], field=field, maximum_bytes=128)
@@ -3123,6 +3193,8 @@ def _validate_render_manifest(value: object, *, render_state: str) -> dict | Non
     ):
         if type(result[field]) is not int or not 0 <= result[field] <= maximum:
             raise ValueError(f"render_manifest.{field} exceeds its bound")
+    if type(result["semantic_projection_version"]) is not int or not 0 <= result["semantic_projection_version"] <= 1:
+        raise ValueError("render_manifest.semantic_projection_version is invalid")
     for field, maximum in (
         ("first_order_key", 4_096),
         ("last_order_key", 4_096),

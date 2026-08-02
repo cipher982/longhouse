@@ -183,6 +183,9 @@ class StorageSession(CatalogBase):
     first_user_message_preview = Column(Text, nullable=True)
     last_visible_text_preview = Column(Text, nullable=True)
     transcript_revision = Column(BigInteger, nullable=False, server_default=text("0"))
+    # 0 means the row predates parser-owned semantic interaction facts. The
+    # Runtime Host can replay immutable raw history and advance it to 1.
+    semantic_projection_version = Column(Integer, nullable=False, server_default=text("0"))
     current_render_generation = Column(String(36), nullable=True, index=True)
     raw_state = Column(String(16), nullable=False, server_default=text("'pending'"), index=True)
     render_state = Column(String(16), nullable=False, server_default=text("'pending'"), index=True)
@@ -357,6 +360,7 @@ class RenderObject(CatalogBase):
     tool_calls = Column(Integer, nullable=False, server_default=text("0"))
     first_user_message_preview = Column(Text, nullable=True)
     last_visible_text_preview = Column(Text, nullable=True)
+    semantic_projection_version = Column(Integer, nullable=False, server_default=text("0"))
     first_order_key = Column(Text, nullable=True)
     last_order_key = Column(Text, nullable=True)
     first_order_time_us = Column(BigInteger, nullable=True)

@@ -13,7 +13,15 @@ from uuid import UUID
 
 import zstandard
 
-FORMAT_VERSION = 2
+from zerg.services.provider_interaction_semantics import VALID_INTERACTION_KINDS
+from zerg.services.provider_interaction_semantics import semantic_event_included
+
+# Version 3 adds parser-owned interaction facts to each render record. Keep
+# reading v2 objects so an explicit migration can replay old raw companions;
+# new objects must advertise the additive wire contract to older readers.
+FORMAT_VERSION = 3
+SEMANTIC_PROJECTION_VERSION = 1
+_READABLE_FORMAT_VERSIONS = frozenset({2, FORMAT_VERSION})
 MAX_RENDER_BYTES = 4 * 1024 * 1024
 MAX_RENDER_EVENTS = 10_000
 MAX_RENDER_COMPRESSED_BYTES = 8 * 1024 * 1024
@@ -47,6 +55,10 @@ class RenderRecord:
     thread_id: str | None = None
     branch_kind: str | None = None
     raw_record_ordinal: int = 0
+    # Parser-owned semantic fact. Raw provider records stay in the companion
+    # raw object; this field lets render/search consumers avoid reinterpreting
+    # user-visible provider control markup.
+    interaction_kind: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -211,7 +223,7 @@ def decode_render_object(payload: bytes) -> RenderObjectSpec:
         "source_envelope_id",
         "source_epoch",
     }
-    if not isinstance(decoded, dict) or set(decoded) != expected or decoded["format_version"] != FORMAT_VERSION:
+    if not isinstance(decoded, dict) or set(decoded) != expected or decoded["format_version"] not in _READABLE_FORMAT_VERSIONS:
         raise RenderObjectCorruptError("render object shape/version is invalid")
     try:
         records = tuple(RenderRecord(**record) for record in decoded["records"])
@@ -229,7 +241,7 @@ def decode_render_object(payload: bytes) -> RenderObjectSpec:
         )
         _validate_spec(spec)
     except (TypeError, ValueError, RenderObjectValidationError) as exc:
-        raise RenderObjectCorruptError("render object facts violate the v2 contract") from exc
+        raise RenderObjectCorruptError("render object facts violate the render contract") from exc
     return spec
 
 
@@ -259,10 +271,13 @@ def _validate_spec(spec: RenderObjectSpec) -> None:
             ("tool_call_id", 255),
             ("thread_id", 255),
             ("branch_kind", 64),
+            ("interaction_kind", 64),
         ):
             value = getattr(record, field)
             if value is not None and (not isinstance(value, str) or len(value.encode("utf-8")) > maximum):
                 raise RenderObjectValidationError(f"render {field} is invalid or exceeds its bound")
+        if record.interaction_kind is not None and record.interaction_kind not in VALID_INTERACTION_KINDS:
+            raise RenderObjectValidationError("render interaction_kind is not a known semantic fact")
         if record.tool_input_json is not None:
             try:
                 tool_json = json.dumps(record.tool_input_json, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
@@ -295,20 +310,41 @@ def _order_key(spec: RenderObjectSpec, record: RenderRecord) -> str:
 
 def _aggregate(spec: RenderObjectSpec) -> dict[str, object]:
     records = spec.records
-    first_user = next((record.content_text for record in records if record.role == "user" and record.content_text), None)
+    semantic_records = tuple(
+        record
+        for record in records
+        if semantic_event_included(
+            spec.provider,
+            role=record.role,
+            content_text=record.content_text,
+            interaction_kind=record.interaction_kind,
+        )
+    )
+    first_user = next((record.content_text for record in semantic_records if record.role == "user" and record.content_text), None)
     last_visible = next(
-        (record.content_text or record.tool_output_text for record in reversed(records) if record.content_text or record.tool_output_text),
+        (
+            record.content_text or record.tool_output_text
+            for record in reversed(semantic_records)
+            if record.content_text or record.tool_output_text
+        ),
         None,
     )
     return {
         "first_order_key": _order_key(spec, records[0]) if records else None,
         "last_order_key": _order_key(spec, records[-1]) if records else None,
-        "user_messages": sum(record.role == "user" for record in records),
+        "user_messages": sum(record.role == "user" for record in semantic_records),
         "assistant_messages": sum(record.role == "assistant" and record.tool_name is None for record in records),
         "tool_calls": sum(record.tool_name is not None for record in records),
         "first_user_message_preview": _preview(first_user),
         "last_visible_text_preview": _preview(last_visible),
     }
+
+
+def aggregate_render_object(spec: RenderObjectSpec) -> dict[str, object]:
+    """Return the derived catalog facts for an already-validated render spec."""
+
+    _validate_spec(spec)
+    return _aggregate(spec)
 
 
 def _preview(value: str | None) -> str | None:
@@ -346,7 +382,9 @@ __all__ = [
     "RenderObjectSpec",
     "RenderObjectValidationError",
     "RenderRecord",
+    "SEMANTIC_PROJECTION_VERSION",
     "SealedRenderObject",
+    "aggregate_render_object",
     "decode_render_object",
     "encode_render_object",
     "read_render_object",

@@ -7,19 +7,19 @@
 | codex | release_poll | staged_release | runs — 2 qualification scenarios + 23 harness scenarios |
 | codex | push | generated_fake | runs — 1 scenario |
 | codex | weekly_cron | generated_fake | runs — 23 scenarios |
-| codex | manual | observed_install | runs — 2 scenarios |
+| codex | manual | observed_install | never runs — remaining capability-proof assertions for codex have no registered evidence producer: ['activity_returns_to_quiescent_at_turn_boundary', 'coordination_instructions_model_visible_after_compaction'] |
 | claude | release_poll | staged_release | runs — 1 qualification scenario + 23 harness scenarios |
 | claude | push | generated_fake | runs — 4 scenarios |
 | claude | weekly_cron | generated_fake | runs — 23 scenarios |
-| claude | manual | observed_install | runs — 1 scenario |
+| claude | manual | observed_install | never runs — remaining capability-proof assertions for claude have no registered evidence producer: ['activity_returns_to_quiescent_at_turn_boundary'] |
 | opencode | release_poll | staged_release | runs — 1 qualification scenario + 23 harness scenarios |
 | opencode | push | generated_fake | runs — 4 scenarios |
 | opencode | weekly_cron | generated_fake | runs — 23 scenarios |
-| opencode | manual | observed_install | runs — 1 scenario |
+| opencode | manual | observed_install | never runs — remaining capability-proof assertions for opencode have no registered evidence producer: ['activity_returns_to_quiescent_at_turn_boundary'] |
 | antigravity | release_poll | staged_release | runs — 1 qualification scenario + 23 harness scenarios |
 | antigravity | push | generated_fake | runs — 4 scenarios |
 | antigravity | weekly_cron | generated_fake | runs — 23 scenarios |
-| antigravity | manual | observed_install | runs — 2 scenarios |
+| antigravity | manual | observed_install | never runs — remaining capability-proof assertions for antigravity have no registered evidence producer: ['activity_returns_to_quiescent_at_turn_boundary', 'real_print_injection_observed'] |
 | cursor | release_poll | staged_release | never runs — cursor has no registered release lane (no *_lane() in provider_factory/registry.py) |
 | cursor | push | generated_fake | runs — 4 scenarios |
 | cursor | weekly_cron | generated_fake | runs — 23 scenarios |

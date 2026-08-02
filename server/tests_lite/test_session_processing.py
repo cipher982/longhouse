@@ -12,27 +12,24 @@ Tests cover:
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
 
 import pytest
+
 import zerg.services.session_processing.tokens as tokens_mod
-
-from zerg.services.session_processing import (
-    SessionMessage,
-    SessionTranscript,
-    Turn,
-    build_transcript,
-    count_tokens,
-    detect_turns,
-    is_tool_result,
-    redact_secrets,
-    strip_noise,
-    truncate,
-)
-
+from zerg.services.session_processing import SessionMessage
+from zerg.services.session_processing import SessionTranscript
+from zerg.services.session_processing import build_transcript
+from zerg.services.session_processing import count_tokens
+from zerg.services.session_processing import detect_turns
+from zerg.services.session_processing import is_tool_result
+from zerg.services.session_processing import redact_secrets
+from zerg.services.session_processing import strip_noise
+from zerg.services.session_processing import truncate
 
 # =====================================================================
 # Fixtures — sample AgentEvent dicts
@@ -41,6 +38,108 @@ from zerg.services.session_processing import (
 def _ts(hour: int, minute: int = 0) -> datetime:
     """Helper to build a UTC timestamp on a fixed date."""
     return datetime(2026, 2, 11, hour, minute, 0, tzinfo=timezone.utc)
+
+
+def test_build_transcript_uses_first_semantic_user_event_for_claude() -> None:
+    command = "<command-name>/effort</command-name><command-args>high</command-args>"
+    events = [
+        {
+            "role": "user",
+            "content_text": command,
+            "raw_json": json.dumps({"type": "user", "isMeta": True, "message": {"role": "user", "content": command}}),
+            "timestamp": _ts(9, 0),
+            "session_id": "semantic",
+        },
+        {"role": "assistant", "content_text": "local state updated", "timestamp": _ts(9, 1), "session_id": "semantic"},
+        {"role": "user", "content_text": "Fix the title bug", "timestamp": _ts(9, 2), "session_id": "semantic"},
+    ]
+
+    transcript = build_transcript(events, provider="claude")
+
+    assert [message.content for message in transcript.messages] == ["local state updated", "Fix the title bug"]
+    assert transcript.first_user_message == "Fix the title bug"
+
+
+def test_build_transcript_replays_legacy_claude_command_sequence() -> None:
+    caveat = "<local-command-caveat>native control</local-command-caveat>"
+    command = "<command-name>/effort</command-name>"
+    events = [
+        {
+            "role": "user",
+            "content_text": caveat,
+            "raw_json": json.dumps(
+                {
+                    "type": "user",
+                    "isMeta": True,
+                    "promptId": "legacy-effort",
+                    "message": {"role": "user", "content": caveat},
+                }
+            ),
+            "timestamp": _ts(9, 0),
+            "session_id": "legacy-sequence",
+        },
+        {
+            "role": "user",
+            "content_text": command,
+            "raw_json": json.dumps(
+                {
+                    "type": "user",
+                    "promptId": "legacy-effort",
+                    "message": {"role": "user", "content": command},
+                }
+            ),
+            "timestamp": _ts(9, 1),
+            "session_id": "legacy-sequence",
+        },
+        {
+            "role": "user",
+            "content_text": "Build the feature",
+            "timestamp": _ts(9, 2),
+            "session_id": "legacy-sequence",
+        },
+    ]
+
+    transcript = build_transcript(events, provider="claude", strip_noise=False, redact_secrets=False)
+
+    assert [message.content for message in transcript.messages] == ["Build the feature"]
+
+
+def test_build_transcript_uses_late_persisted_claude_caveat_for_raw_command() -> None:
+    command = "<command-name>/effort</command-name>"
+    events = [
+        {
+            "role": "user",
+            "content_text": command,
+            "raw_json": json.dumps(
+                {
+                    "type": "user",
+                    "promptId": "persisted-late-effort",
+                    "message": {"role": "user", "content": command},
+                }
+            ),
+            "timestamp": _ts(9, 0),
+            "session_id": "persisted-sequence",
+        },
+        {
+            "role": "user",
+            "content_text": "native control caveat",
+            "interaction_kind": "local_control",
+            "interaction_context_key": "persisted-late-effort",
+            "title_eligible": False,
+            "timestamp": _ts(9, 1),
+            "session_id": "persisted-sequence",
+        },
+        {
+            "role": "user",
+            "content_text": "Build the feature",
+            "timestamp": _ts(9, 2),
+            "session_id": "persisted-sequence",
+        },
+    ]
+
+    transcript = build_transcript(events, provider="claude", strip_noise=False, redact_secrets=False)
+
+    assert [message.content for message in transcript.messages] == ["Build the feature"]
 
 
 SAMPLE_EVENTS: list[dict] = [

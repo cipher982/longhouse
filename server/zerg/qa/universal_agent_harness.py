@@ -150,6 +150,7 @@ STATUS_NOT_APPLICABLE = "not_applicable"
 STATUS_BLOCKED = "blocked"
 STATUS_FLAKY = "flaky"
 STATUS_XFAIL_WITH_EXPIRY = "xfail_with_expiry"
+DEFAULT_HARNESS_PROMPT = "LONGHOUSE UNIVERSAL HARNESS"
 STATUSES = (
     STATUS_PASS,
     STATUS_FAIL,
@@ -2151,8 +2152,11 @@ class UniversalProviderAdapter:
             "semantic_events_path": str(semantic_path),
             "operation_evidence": {
                 "provider_interaction_semantics": {
-                    "status": evaluation.get("status"),
-                    "level": evidence_level if evaluation.get("status") == STATUS_PASS else "none",
+                    # Hermetic evidence can prove the shared classifier and
+                    # projection code, but it cannot prove provider behavior.
+                    # Keep that distinction explicit in the factory receipt.
+                    "status": evaluation.get("provider_status", evaluation.get("status")),
+                    "level": evidence_level if evaluation.get("provider_status", evaluation.get("status")) == STATUS_PASS else "none",
                     "canary": "provider_interaction_probe",
                     "failure_code": evaluation.get("failure_code"),
                 }
@@ -5954,7 +5958,7 @@ def run_launch_managed_session(adapter: AgentHarnessAdapter, package: EvidencePa
 
 def run_send_receive(adapter: AgentHarnessAdapter, package: EvidencePackage, prompt: str | None) -> ScenarioResult:
     adapter.prepare(package)
-    payload = adapter.send_receive(package, prompt or "LONGHOUSE UNIVERSAL HARNESS")
+    payload = adapter.send_receive(package, prompt or DEFAULT_HARNESS_PROMPT)
     adapter.cleanup(package)
     return scenario_result(
         provider=adapter.config.provider,
@@ -6482,6 +6486,11 @@ def run_scenario(
         package.write_json("assertions/scenario.json", payload)
         return scenario_result(provider=adapter.config.provider, scenario=scenario, package=package, payload=payload)
     package = EvidencePackage(root=evidence_root, provider=adapter.config.provider, scenario=scenario)
+    if scenario in {"managed_session_e2e", "live_token_streaming"}:
+        # Cursor Gate 0 binds every provider operation that can send input to
+        # the exact bytes captured here. Keep the default deterministic and
+        # make an explicitly supplied prompt the only alternate input.
+        package.write_text("input/prompt.txt", prompt or DEFAULT_HARNESS_PROMPT)
     runner = SCENARIO_RUNNERS[scenario]
     if scenario == "parse_ingest_project":
         result = runner(adapter, package, fixture_path)  # type: ignore[misc]

@@ -42,6 +42,15 @@ def _gate0_artifact(tmp_path: Path, *, identity: str) -> Path:
                     name: {
                         "status": "passed",
                         "provider_conversation_id": "cursor-session-1",
+                        **(
+                            {
+                                "prompt_sha256": hashlib.sha256(
+                                    "LONGHOUSE UNIVERSAL HARNESS".encode("utf-8")
+                                ).hexdigest()
+                            }
+                            if name == "create_chat_resume"
+                            else {}
+                        ),
                     }
                     for name in (
                         "workspace_trust",

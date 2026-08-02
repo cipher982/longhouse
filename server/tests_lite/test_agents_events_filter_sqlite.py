@@ -1,5 +1,6 @@
 """Tests for get_session_events() filtering: tool_name, query, roles, and count."""
 
+import json
 from datetime import datetime
 from datetime import timezone
 
@@ -111,6 +112,78 @@ def test_filter_by_query_content_search(tmp_path):
         for e in events
     ]
     assert any("secretvalue" in t for t in matched_texts)
+
+
+def test_query_search_keeps_legacy_nullable_user_rows_until_semantic_backfill(tmp_path):
+    store, db = _make_store(tmp_path, "legacy_nullable_query.db")
+    session = _seed_session(store)
+
+    legacy_user = (
+        db.query(AgentEvent)
+        .filter(AgentEvent.session_id == session, AgentEvent.role == "user")
+        .one()
+    )
+    legacy_user.title_eligible = None
+    db.commit()
+
+    events = store.get_session_events(session, query="please run a bash command")
+
+    assert any(event.id == legacy_user.id for event in events)
+
+
+def test_query_search_excludes_claude_local_control_rows(tmp_path):
+    store, _ = _make_store(tmp_path, "semantic_query.db")
+    ts = datetime(2026, 2, 5, tzinfo=timezone.utc)
+    session = store.ingest_session(
+        SessionIngest(
+            provider="claude",
+            environment="test",
+            project="filter-test",
+            device_id="dev",
+            cwd="/tmp",
+            started_at=ts,
+            events=[
+                EventIngest(
+                    role="user",
+                    content_text="<local-command-caveat>native</local-command-caveat>",
+                    raw_json=json.dumps(
+                        {
+                            "type": "user",
+                            "isMeta": True,
+                            "promptId": "semantic-query",
+                            "message": {"role": "user", "content": "<local-command-caveat>native</local-command-caveat>"},
+                        }
+                    ),
+                    timestamp=ts,
+                    source_path="/tmp/s.jsonl",
+                    source_offset=0,
+                ),
+                EventIngest(
+                    role="user",
+                    content_text="<local-command-stdout>Set effort level to high</local-command-stdout>",
+                    raw_json=json.dumps(
+                        {
+                            "type": "user",
+                            "promptId": "semantic-query",
+                            "message": {
+                                "role": "user",
+                                "content": "<local-command-stdout>Set effort level to high</local-command-stdout>",
+                            },
+                        }
+                    ),
+                    timestamp=ts,
+                    source_path="/tmp/s.jsonl",
+                    source_offset=1,
+                ),
+            ],
+        )
+    ).session_id
+
+    assert store.get_session_events(session, query="effort") == []
+    assert store.count_session_events(session, query="effort") == 0
+    sessions, total = store.list_sessions(include_test=True, query="effort")
+    assert sessions == []
+    assert total == 0
 
 
 def test_filter_by_query_no_match(tmp_path):

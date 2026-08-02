@@ -1,0 +1,4 @@
+{"type":"user","isMeta":true,"uuid":"claude-caveat-1","parentUuid":null,"message":{"role":"user","content":"<local-command-caveat>Caveat: local commands are not prompts.</local-command-caveat>"},"version":"2.1.92"}
+{"type":"user","uuid":"claude-command-1","parentUuid":"claude-caveat-1","message":{"role":"user","content":"<command-name>/effort</command-name>\n<command-message>effort</command-message>\n<command-args>high</command-args>"},"version":"2.1.92"}
+{"type":"user","uuid":"claude-output-1","parentUuid":"claude-command-1","message":{"role":"user","content":"<local-command-stdout>Set effort level to high</local-command-stdout>"},"version":"2.1.92"}
+{"type":"user","uuid":"claude-prompt-1","parentUuid":"claude-output-1","message":{"role":"user","content":"Reply with exactly CLAUDE_COMMAND_SEMANTICS_NO_PROMPT_ID and nothing else."},"version":"2.1.92"}

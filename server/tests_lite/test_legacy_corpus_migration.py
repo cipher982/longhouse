@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from dataclasses import replace
 from datetime import UTC
 from datetime import datetime
@@ -29,6 +30,8 @@ from zerg.services.legacy_corpus_migration import LegacyCorpusConverter
 from zerg.services.legacy_corpus_migration import LegacyHighWatermark
 from zerg.services.legacy_corpus_migration import _legacy_source_epoch
 from zerg.services.legacy_corpus_migration import _normalized_event_source
+from zerg.services.legacy_corpus_migration import _render_record
+from zerg.services.legacy_corpus_migration import _seed_legacy_claude_context
 from zerg.services.legacy_corpus_migration import _source_batches
 from zerg.services.legacy_corpus_migration import _SourceRecord
 from zerg.services.legacy_corpus_migration import create_inventory_run
@@ -317,6 +320,66 @@ async def test_streaming_uses_synthetic_raw_only_for_events_without_source_evide
     assert sum(payload["render_manifest"]["event_count"] for payload in synthetic_commits) == 1
     assert sum(len(payload["record_hashes"]) for payload in synthetic_commits) == 1
     assert result.parity_matches is True
+
+
+def test_streaming_legacy_seed_handles_command_before_caveat(legacy_db):
+    session = _session(provider="claude")
+    prompt_id = "prompt-stream-reversed"
+    command = "<command-name>/effort</command-name>"
+    caveat = "<local-command-caveat>native</local-command-caveat>"
+    with legacy_db() as db:
+        db.add(session)
+        db.flush()
+        for event_id, content, raw in (
+            (
+                1,
+                command,
+                {
+                    "type": "user",
+                    "promptId": prompt_id,
+                    "message": {"role": "user", "content": command},
+                },
+            ),
+            (
+                2,
+                caveat,
+                {
+                    "type": "user",
+                    "isMeta": True,
+                    "promptId": prompt_id,
+                    "message": {"role": "user", "content": caveat},
+                },
+            ),
+        ):
+            db.add(
+                AgentEvent(
+                    id=event_id,
+                    session_id=session.id,
+                    role="user",
+                    content_text=content,
+                    timestamp=datetime(2026, 7, 12, 0, 0, event_id, tzinfo=UTC),
+                    source_path="streamed.jsonl",
+                    source_offset=event_id,
+                    event_hash=hashlib.sha256(f"streamed:{event_id}".encode()).hexdigest(),
+                    raw_json=json.dumps(raw),
+                    raw_json_codec=0,
+                )
+            )
+        db.commit()
+        watermark = freeze_high_watermark(db)
+        context: dict[str, object] = {}
+        _seed_legacy_claude_context(db, session.id, watermark, context)
+        rendered = _render_record(
+            db.query(AgentEvent).filter(AgentEvent.id == 1).one(),
+            0,
+            0,
+            session.id,
+            head_branch_id=None,
+            provider="claude",
+            sequence_context=context,
+        )
+
+    assert rendered.interaction_kind == "local_control"
 
 
 @pytest.mark.asyncio

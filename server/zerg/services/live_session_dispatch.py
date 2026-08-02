@@ -15,6 +15,7 @@ from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_SEN
 from zerg.services.managed_control_dispatcher import select_managed_control_transport
 from zerg.services.managed_local_control import ManagedLocalSendResult
 from zerg.services.managed_local_control import send_text_to_managed_local_session
+from zerg.services.provider_interaction_semantics import classify_provider_interaction
 from zerg.session_execution_home import SessionExecutionHome
 
 
@@ -95,11 +96,14 @@ async def _fake_send_text_to_live_session(
     from zerg.services.agents.kernel_writes import ensure_primary_thread
 
     primary_thread = ensure_primary_thread(db, session)
+    interaction = classify_provider_interaction(session.provider, role="user", content_text=text)
     event = AgentEvent(
         session_id=session.id,
         thread_id=primary_thread.id,
         role="user",
         content_text=text,
+        interaction_kind=interaction["interaction_kind"],
+        title_eligible=interaction["title_eligible"],
         timestamp=now,
         branch_id=head_branch_id,
     )

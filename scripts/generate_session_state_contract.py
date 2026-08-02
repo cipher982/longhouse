@@ -46,8 +46,10 @@ def validate() -> list[str]:
     errors: list[str] = []
     if schema.get("schema_version") != 1:
         errors.append("schema_version must be 1")
-    if schema.get("state_contract_version") != 1 or schema.get("presentation_policy_version") != 1:
-        errors.append("contract and presentation policy versions must be 1")
+    for field in ("state_contract_version", "presentation_policy_version"):
+        value = schema.get(field)
+        if type(value) is not int or value < 1:
+            errors.append(f"{field} must be a positive integer")
 
     python_text = PYTHON_PROJECTOR.read_text(encoding="utf-8")
     for constant, expected in (

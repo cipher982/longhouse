@@ -1,8 +1,14 @@
 """Tests for explicit heavy SQLite migration planning/runs."""
 
+import json
 import os
+from datetime import datetime
+from datetime import timezone
+from unittest.mock import patch
+from uuid import uuid4
 
 from sqlalchemy import text
+from sqlalchemy.orm import sessionmaker
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
@@ -13,7 +19,12 @@ from zerg.database import _migrate_agents_columns as _migrate_agents_columns_raw
 from zerg.database import initialize_database
 from zerg.database import make_engine
 from zerg.db_migrations import apply_heavy_migrations
+from zerg.db_migrations import ensure_migration_ledger
 from zerg.db_migrations import plan_heavy_migrations
+from zerg.models.agents import AgentSession
+from zerg.services.agents import AgentsStore
+from zerg.services.agents import EventIngest
+from zerg.services.agents import SessionIngest
 
 
 def _migrate_agents_columns(engine):
@@ -605,6 +616,308 @@ def test_session_identity_kernel_backfill_is_explicit_heavy_migration(tmp_path):
         assert int(conn.execute(text("SELECT COUNT(*) FROM session_runs")).scalar() or 0) == 1
 
 
+def test_provider_interaction_semantics_backfill_classifies_legacy_claude_rows(tmp_path):
+    db_path = tmp_path / "legacy_provider_semantics.db"
+    engine = make_engine(f"sqlite:///{db_path}")
+    _make_legacy_schema(engine)
+    _migrate_agents_columns(engine)
+
+    command = (
+        "<command-name>/effort</command-name>\n"
+        "            <command-message>effort</command-message>\n"
+        "            <command-args>high</command-args>"
+    )
+    output = "<local-command-stdout>Set effort level to high</local-command-stdout>"
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                INSERT INTO events (
+                    session_id, role, content_text, timestamp, source_path, source_offset,
+                    event_hash, raw_json
+                ) VALUES (
+                    :session_id, 'user', :caveat, CURRENT_TIMESTAMP, '/tmp/s.jsonl', 2,
+                    'caveat-hash', :caveat_raw
+                ), (
+                    :session_id, 'user', :command, CURRENT_TIMESTAMP, '/tmp/s.jsonl', 3,
+                    'command-hash', :command_raw
+                ), (
+                    :session_id, 'user', :output, CURRENT_TIMESTAMP, '/tmp/s.jsonl', 4,
+                    'output-hash', :output_raw
+                )
+                """
+            ),
+            {
+                "session_id": "00000000-0000-0000-0000-000000000001",
+                "caveat": "<local-command-caveat>local command</local-command-caveat>",
+                "caveat_raw": json.dumps(
+                    {
+                        "type": "user",
+                        "isMeta": True,
+                        "promptId": "prompt-effort-1",
+                        "message": {"role": "user", "content": "<local-command-caveat>local command</local-command-caveat>"},
+                    }
+                ),
+                "command": command,
+                "command_raw": json.dumps(
+                    {"type": "user", "promptId": "prompt-effort-1", "message": {"role": "user", "content": command}}
+                ),
+                "output": output,
+                "output_raw": json.dumps(
+                    {"type": "user", "promptId": "prompt-effort-1", "message": {"role": "user", "content": output}}
+                ),
+            },
+        )
+        # Simulate a partial prior backfill: the caveat has facts, but its
+        # same-prompt command/output siblings do not. The migration must replay
+        # the complete session sequence so those siblings inherit context.
+        conn.execute(
+            text(
+                """
+                UPDATE events
+                SET interaction_kind = 'local_control', title_eligible = 0
+                WHERE session_id = :session_id AND source_offset = 2
+                """
+            ),
+            {"session_id": "00000000-0000-0000-0000-000000000001"},
+        )
+
+    run_items = apply_heavy_migrations(engine)
+    semantic_run = next(item for item in run_items if item.name == "20260801_provider_interaction_semantics_backfill")
+    assert semantic_run.status == "applied"
+
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text(
+                """
+                SELECT content_text, interaction_kind, title_eligible, interaction_context_key
+                FROM events
+                WHERE session_id = :session_id
+                ORDER BY id
+                """
+            ),
+            {"session_id": "00000000-0000-0000-0000-000000000001"},
+        ).fetchall()
+
+    assert rows[0].interaction_kind == "durable_user_message"
+    assert rows[0].title_eligible == 1
+    assert rows[1].interaction_kind == "local_control"
+    assert rows[1].title_eligible == 0
+    assert rows[1].interaction_context_key == "prompt-effort-1"
+    assert rows[2].interaction_kind == "local_control"
+    assert rows[2].title_eligible == 0
+    assert rows[2].interaction_context_key == "prompt-effort-1"
+    assert rows[3].interaction_kind == "local_control_output"
+    assert rows[3].title_eligible == 0
+    assert rows[3].interaction_context_key == "prompt-effort-1"
+
+
+def test_provider_interaction_reclassification_repairs_prior_successful_backfill(tmp_path):
+    db_path = tmp_path / "prior_provider_semantics.db"
+    engine = make_engine(f"sqlite:///{db_path}")
+    _make_legacy_schema(engine)
+    _migrate_agents_columns(engine)
+    command = "<command-name>/effort</command-name><command-args>high</command-args>"
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                UPDATE events
+                SET content_text = :command,
+                    raw_json = :raw_json,
+                    interaction_kind = 'durable_user_message',
+                    title_eligible = 1,
+                    interaction_context_key = 'prompt-effort-1'
+                WHERE id = 1
+                """
+            ),
+            {
+                "command": command,
+                "raw_json": json.dumps(
+                    {
+                        "type": "user",
+                        "isMeta": True,
+                        "promptId": "prompt-effort-1",
+                        "message": {"role": "user", "content": command},
+                    }
+                ),
+            },
+        )
+    ensure_migration_ledger(engine)
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                INSERT INTO migration_runs (migration_name, status, details, finished_at)
+                VALUES (
+                    '20260801_provider_interaction_semantics_backfill',
+                    'succeeded',
+                    'legacy prior run without sequence replay',
+                    CURRENT_TIMESTAMP
+                )
+                """
+            )
+        )
+
+    run_items = apply_heavy_migrations(engine)
+    repair_run = next(
+        item
+        for item in run_items
+        if item.name == "20260802_provider_interaction_semantics_reclassification"
+    )
+    assert repair_run.status == "applied"
+
+    with engine.connect() as conn:
+        row = conn.execute(
+            text(
+                """
+                SELECT interaction_kind, title_eligible, interaction_context_key
+                FROM events
+                WHERE id = 1
+                """
+            )
+        ).one()
+    assert row.interaction_kind == "local_control"
+    assert row.title_eligible == 0
+    assert row.interaction_context_key == "prompt-effort-1"
+
+
+def test_provider_interaction_semantics_backfill_replays_reversed_claude_envelope(tmp_path):
+    db_path = tmp_path / "reversed_provider_semantics.db"
+    engine = make_engine(f"sqlite:///{db_path}")
+    _make_legacy_schema(engine)
+    _migrate_agents_columns(engine)
+    prompt_id = "prompt-effort-reversed"
+    command = "<command-name>/effort</command-name>"
+    caveat = "<local-command-caveat>native</local-command-caveat>"
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                UPDATE events
+                SET role = 'user', content_text = :command, raw_json = :command_raw
+                WHERE id = 1
+                """
+            ),
+            {
+                "command": command,
+                "command_raw": json.dumps(
+                    {
+                        "type": "user",
+                        "promptId": prompt_id,
+                        "message": {"role": "user", "content": command},
+                    }
+                ),
+            },
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO events (
+                    session_id, role, content_text, timestamp, source_path, source_offset,
+                    event_hash, raw_json
+                ) VALUES (
+                    :session_id, 'user', :caveat, CURRENT_TIMESTAMP, '/tmp/s.jsonl', 2,
+                    'reversed-caveat-hash', :caveat_raw
+                )
+                """
+            ),
+            {
+                "session_id": "00000000-0000-0000-0000-000000000001",
+                "caveat": caveat,
+                "caveat_raw": json.dumps(
+                    {
+                        "type": "user",
+                        "isMeta": True,
+                        "promptId": prompt_id,
+                        "message": {"role": "user", "content": caveat},
+                    }
+                ),
+            },
+        )
+
+    run_items = apply_heavy_migrations(engine)
+    semantic_run = next(item for item in run_items if item.name == "20260801_provider_interaction_semantics_backfill")
+    assert semantic_run.status == "applied"
+
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text(
+                """
+                SELECT interaction_kind, title_eligible, interaction_context_key
+                FROM events
+                ORDER BY id
+                """
+            )
+        ).fetchall()
+    assert [row.interaction_kind for row in rows] == ["local_control", "local_control"]
+    assert [row.title_eligible for row in rows] == [0, 0]
+    assert [row.interaction_context_key for row in rows] == [prompt_id, prompt_id]
+
+
+def test_projection_repair_handles_preclassified_stale_title(tmp_path):
+    db_path = tmp_path / "preclassified_provider_semantics.db"
+    engine = make_engine(f"sqlite:///{db_path}")
+    initialize_database(engine)
+    factory = sessionmaker(bind=engine)
+    db = factory()
+    store = AgentsStore(db)
+    session_id = uuid4()
+    timestamp = datetime(2026, 8, 1, tzinfo=timezone.utc)
+    caveat = "<local-command-caveat>native local command</local-command-caveat>"
+    command = "<command-name>/effort</command-name><command-args>high</command-args>"
+    output = "<local-command-stdout>Set effort level to high</local-command-stdout>"
+    prompt = "Build the feature"
+
+    def event(content: str, offset: int, *, is_meta: bool = False) -> EventIngest:
+        row = {
+            "type": "user",
+            "promptId": "prompt-effort-1",
+            "message": {"role": "user", "content": content},
+        }
+        if is_meta:
+            row["isMeta"] = True
+        return EventIngest(
+            role="user",
+            content_text=content,
+            raw_json=json.dumps(row),
+            timestamp=timestamp,
+            source_path="/claude/session.jsonl",
+            source_offset=offset,
+        )
+
+    with patch("zerg.services.session_title_trigger.maybe_start_initial_title_generation"):
+        store.ingest_session(
+            SessionIngest(
+                id=session_id,
+                provider="claude",
+                environment="test",
+                project="longhouse",
+                device_id="cinder",
+                cwd="/tmp/longhouse",
+                started_at=timestamp,
+                events=[event(caveat, 0, is_meta=True), event(command, 1), event(output, 2), event(prompt, 3)],
+            )
+        )
+
+    session = db.query(AgentSession).filter_by(id=session_id).one()
+    session.first_user_message_preview = command
+    session.summary_title = "Effort level settings"
+    session.anchor_title = "Effort level settings"
+    db.commit()
+
+    run_items = apply_heavy_migrations(engine)
+    repair_run = next(
+        item for item in run_items if item.name == "20260802_provider_interaction_semantic_projection_repair"
+    )
+    assert repair_run.status == "applied"
+
+    db.expire_all()
+    repaired = db.query(AgentSession).filter_by(id=session_id).one()
+    assert repaired.user_messages == 1
+    assert repaired.first_user_message_preview == prompt
+    assert repaired.summary_title == "Build the feature"
+    assert repaired.anchor_title is None
 def test_apply_heavy_migrations_is_idempotent_and_records_ledger(tmp_path):
     db_path = tmp_path / "legacy_apply.db"
     engine = make_engine(f"sqlite:///{db_path}")
@@ -639,6 +952,8 @@ def test_apply_heavy_migrations_is_idempotent_and_records_ledger(tmp_path):
     assert ledger_rows == [
         ("20260304_events_branch_backfill", "succeeded"),
         ("20260304_source_lines_branch_revision_rebuild", "succeeded"),
+        ("20260801_provider_interaction_semantics_backfill", "succeeded"),
+        ("20260802_provider_interaction_semantic_projection_repair", "succeeded"),
     ]
 
     normalized_sql = "".join(ch for ch in _table_sql(engine, "source_lines").lower() if not ch.isspace())

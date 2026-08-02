@@ -18,7 +18,11 @@ from zerg.models.agents import AgentSessionBranch
 from zerg.models.agents import AgentSourceLine
 from zerg.models.agents import SessionObservation
 from zerg.models.agents import SessionRuntimeState
+from zerg.services.provider_interaction_semantics import seed_persisted_provider_interaction_context
+from zerg.services.provider_interaction_semantics import seed_provider_interaction_sequence_context
+from zerg.services.provider_interaction_semantics import semantic_projection_facts
 from zerg.services.provisional_events import durable_transcript_event_predicate
+from zerg.services.raw_json_compression import decode_raw_json
 from zerg.services.session_observation_reducers import reduce_bridge_transcript_observation
 from zerg.services.session_observation_reducers import reduce_provider_event_observation
 from zerg.services.session_observation_reducers import reduce_source_line_observation
@@ -84,11 +88,17 @@ def rebuild_session_observation_projections(
     runtime_signals_reduced = 0
     skipped_observations = 0
     errors: list[SessionObservationReducerError] = []
+    interaction_sequence_contexts: dict[str, dict[str, object]] = {}
 
     for observation in observations:
         try:
             if observation.kind == OBS_KIND_PROVIDER_EVENT:
-                reduction = reduce_provider_event_observation(db, observation)
+                context_key = str(observation.session_id or runtime_key or "")
+                reduction = reduce_provider_event_observation(
+                    db,
+                    observation,
+                    sequence_context=interaction_sequence_contexts.setdefault(context_key, {}),
+                )
                 if reduction.event is not None:
                     provider_events_reduced += 1
                 else:
@@ -297,11 +307,29 @@ def _recompute_session_metadata(db: Session, *, session_id: UUID) -> None:
         .filter(AgentEvent.branch_id == int(head_branch_id))
         .filter(durable_transcript_event_predicate())
     )
-    session_obj.user_messages = int(
-        base_query.filter(AgentEvent.role == "user")
-        .filter(or_(AgentEvent.content_text.is_(None), func.lower(func.trim(AgentEvent.content_text)) != "warmup"))
-        .count()
+    legacy_events = list(base_query.order_by(AgentEvent.timestamp.asc(), AgentEvent.id.asc()).yield_per(256))
+    interaction_sequence_context: dict[str, object] = {}
+    raw_values = [decode_raw_json(event) for event in legacy_events]
+    seed_provider_interaction_sequence_context(session_obj.provider, raw_values, interaction_sequence_context)
+    seed_persisted_provider_interaction_context(
+        session_obj.provider,
+        legacy_events,
+        interaction_sequence_context,
     )
+    user_count = 0
+    for event, raw_json in zip(legacy_events, raw_values, strict=True):
+        semantics = semantic_projection_facts(
+            session_obj.provider,
+            role=event.role,
+            content_text=event.content_text,
+            raw_json=raw_json,
+            interaction_kind=event.interaction_kind,
+            title_eligible=(event.title_eligible if raw_json is None else None),
+            sequence_context=interaction_sequence_context,
+        )
+        if event.role == "user" and str(event.content_text or "").strip().lower() != "warmup" and bool(semantics["title_eligible"]):
+            user_count += 1
+    session_obj.user_messages = int(user_count)
     session_obj.assistant_messages = int(base_query.filter(AgentEvent.role == "assistant").filter(AgentEvent.tool_name.is_(None)).count())
     session_obj.tool_calls = int(base_query.filter(AgentEvent.role == "assistant").filter(AgentEvent.tool_name.isnot(None)).count())
 
@@ -433,6 +461,9 @@ def _copy_event_prefix(
                 raw_json=event.raw_json,
                 raw_json_z=event.raw_json_z,
                 raw_json_codec=event.raw_json_codec,
+                interaction_kind=event.interaction_kind,
+                interaction_context_key=getattr(event, "interaction_context_key", None),
+                title_eligible=event.title_eligible,
                 compaction_kind=event.compaction_kind,
                 event_uuid=event.event_uuid,
                 parent_event_uuid=event.parent_event_uuid,

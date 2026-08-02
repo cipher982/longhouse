@@ -1,5 +1,6 @@
 """Tests for embedding utilities: round-trip serialization, sanitization, and episode chunking."""
 
+import json
 from datetime import datetime
 from datetime import timezone
 from types import SimpleNamespace
@@ -20,6 +21,62 @@ def test_embedding_roundtrip():
     encoded = embedding_to_bytes(original)
     decoded = bytes_to_embedding(encoded, 4)
     np.testing.assert_array_almost_equal(original, decoded)
+
+
+def test_claude_local_control_does_not_start_an_embedding_episode() -> None:
+    caveat = "<local-command-caveat>native control</local-command-caveat>"
+    command = "<command-name>/effort</command-name><command-args>high</command-args>"
+    events = [
+        {
+            "id": 0,
+            "role": "user",
+            "content_text": caveat,
+            "raw_json": json.dumps(
+                {
+                    "type": "user",
+                    "isMeta": True,
+                    "promptId": "legacy-effort",
+                    "message": {"role": "user", "content": caveat},
+                }
+            ),
+            "timestamp": 1,
+        },
+        {
+            "id": 1,
+            "role": "user",
+            "content_text": command,
+            "raw_json": json.dumps(
+                {
+                    "type": "user",
+                    "promptId": "legacy-effort",
+                    "message": {"role": "user", "content": command},
+                }
+            ),
+            "timestamp": 2,
+        },
+        {
+            "id": 2,
+            "role": "user",
+            "content_text": "<local-command-stdout>state updated</local-command-stdout>",
+            "raw_json": json.dumps(
+                {
+                    "type": "user",
+                    "promptId": "legacy-effort",
+                    "message": {"role": "user", "content": "<local-command-stdout>state updated</local-command-stdout>"},
+                }
+            ),
+            "timestamp": 3,
+        },
+        {"id": 3, "role": "user", "content_text": "Build the feature", "timestamp": 4},
+        {"id": 4, "role": "assistant", "content_text": "Done", "timestamp": 5},
+    ]
+
+    chunks = prepare_turn_chunks(events, provider="claude")
+
+    assert len(chunks) == 1
+    assert chunks[0].event_index_start == 0
+    assert command not in chunks[0].text
+    assert "Build the feature" in chunks[0].text
 
 
 @pytest.mark.asyncio

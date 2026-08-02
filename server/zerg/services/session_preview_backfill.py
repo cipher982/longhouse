@@ -18,8 +18,12 @@ from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import AgentSessionBranch
 from zerg.models.agents import TimelineCard
+from zerg.services.provider_interaction_semantics import seed_persisted_provider_interaction_context
+from zerg.services.provider_interaction_semantics import seed_provider_interaction_sequence_context
+from zerg.services.provider_interaction_semantics import semantic_projection_facts
 from zerg.services.provisional_events import durable_transcript_event_predicate
 from zerg.services.provisional_events import visible_transcript_event_predicate
+from zerg.services.raw_json_compression import decode_raw_json
 from zerg.services.session_hot_cards import upsert_timeline_card_from_session
 
 SESSION_FIRST_USER_PREVIEW_CHARS = 300
@@ -212,7 +216,9 @@ def _preview_map(
         role_filter = AgentEvent.role == "user"
         content_filter = func.lower(func.trim(AgentEvent.content_text)) != "warmup"
     elif kind == "last_user":
-        order_by = (AgentEvent.timestamp.desc(), AgentEvent.id.desc())
+        # Replay chronologically so a Claude command row can see an earlier
+        # caveat before we choose the final eligible message.
+        order_by = (AgentEvent.timestamp.asc(), AgentEvent.id.asc())
         transcript_predicate = durable_transcript_event_predicate()
         role_filter = AgentEvent.role == "user"
         content_filter = func.lower(func.trim(AgentEvent.content_text)) != "warmup"
@@ -222,42 +228,84 @@ def _preview_map(
         role_filter = AgentEvent.role == "assistant"
         content_filter = AgentEvent.tool_name.is_(None)
     elif kind == "last_visible":
-        order_by = (AgentEvent.timestamp.desc(), AgentEvent.id.desc())
+        # The same ordering is required for provider sequence context. The
+        # reducer below overwrites the candidate as later visible rows arrive.
+        order_by = (AgentEvent.timestamp.asc(), AgentEvent.id.asc())
         transcript_predicate = visible_transcript_event_predicate()
         role_filter = AgentEvent.role.in_(("user", "assistant"))
         content_filter = or_(AgentEvent.role != "assistant", AgentEvent.tool_name.is_(None))
     else:
         raise ValueError(f"unsupported preview kind: {kind}")
 
-    row_number = (
-        func.row_number()
-        .over(
-            partition_by=AgentEvent.session_id,
-            order_by=order_by,
-        )
-        .label("rn")
+    rows = list(
+        db.execute(
+            select(
+                AgentEvent.session_id,
+                AgentEvent.role,
+                AgentEvent.content_text,
+                AgentEvent.tool_name,
+                AgentEvent.raw_json,
+                AgentEvent.raw_json_z,
+                AgentEvent.raw_json_codec,
+                AgentEvent.interaction_kind,
+                AgentEvent.interaction_context_key,
+                AgentEvent.title_eligible,
+                AgentSession.provider,
+            )
+            .select_from(AgentEvent)
+            .join(AgentSession, AgentSession.id == AgentEvent.session_id)
+            .outerjoin(head_branches, AgentEvent.session_id == head_branches.c.session_id)
+            .where(AgentEvent.session_id.in_(session_ids))
+            .where(or_(head_branches.c.head_branch_id.is_(None), AgentEvent.branch_id == head_branches.c.head_branch_id))
+            .where(or_(AgentSession.primary_thread_id.is_(None), AgentEvent.thread_id == AgentSession.primary_thread_id))
+            .where(transcript_predicate)
+            .where(role_filter)
+            .where(AgentEvent.content_text.isnot(None))
+            .where(content_filter)
+            .order_by(AgentEvent.session_id.asc(), *order_by)
+        ).yield_per(256)
     )
-    subquery = (
-        select(
-            AgentEvent.session_id.label("session_id"),
-            AgentEvent.content_text.label("content_text"),
-            row_number,
-        )
-        .select_from(AgentEvent)
-        .join(AgentSession, AgentSession.id == AgentEvent.session_id)
-        .outerjoin(head_branches, AgentEvent.session_id == head_branches.c.session_id)
-        .where(AgentEvent.session_id.in_(session_ids))
-        .where(or_(head_branches.c.head_branch_id.is_(None), AgentEvent.branch_id == head_branches.c.head_branch_id))
-        .where(or_(AgentSession.primary_thread_id.is_(None), AgentEvent.thread_id == AgentSession.primary_thread_id))
-        .where(transcript_predicate)
-        .where(role_filter)
-        .where(AgentEvent.content_text.isnot(None))
-        .where(content_filter)
-        .subquery()
-    )
-    rows = db.execute(select(subquery.c.session_id, subquery.c.content_text).where(subquery.c.rn == 1)).all()
     result: dict[UUID, str] = {}
-    for session_id, content in rows:
+    interaction_sequence_contexts: dict[UUID, dict[str, object]] = {}
+    raw_values_by_session: dict[UUID, list[object]] = {}
+    events_by_session: dict[UUID, list[AgentEvent]] = {}
+    providers_by_session: dict[UUID, str] = {}
+    for event in rows:
+        raw_json = decode_raw_json(event)
+        session_id = event.session_id
+        providers_by_session.setdefault(session_id, str(event.provider or ""))
+        raw_values_by_session.setdefault(session_id, []).append(raw_json)
+        events_by_session.setdefault(session_id, []).append(event)
+    for session_id, raw_values in raw_values_by_session.items():
+        sequence_context = interaction_sequence_contexts.setdefault(session_id, {})
+        seed_provider_interaction_sequence_context(
+            providers_by_session[session_id],
+            raw_values,
+            sequence_context,
+        )
+        seed_persisted_provider_interaction_context(
+            providers_by_session[session_id],
+            events_by_session[session_id],
+            sequence_context,
+        )
+    for event in rows:
+        session_id = event.session_id
+        content = event.content_text
+        if session_id in result and kind in {"first_user", "last_assistant"}:
+            continue
+        sequence_context = interaction_sequence_contexts.setdefault(session_id, {})
+        raw_json = decode_raw_json(event)
+        semantics = semantic_projection_facts(
+            event.provider,
+            role=event.role,
+            content_text=content,
+            raw_json=raw_json,
+            interaction_kind=event.interaction_kind,
+            title_eligible=(event.title_eligible if raw_json is None else None),
+            sequence_context=sequence_context,
+        )
+        if event.role == "user" and not semantics["title_eligible"]:
+            continue
         preview = _bounded_preview(content, max_len=max_len)
         if preview:
             result[session_id] = preview

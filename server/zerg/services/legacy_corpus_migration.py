@@ -9,6 +9,7 @@ import hashlib
 import json
 import sqlite3
 from collections import defaultdict
+from collections.abc import MutableMapping
 from dataclasses import asdict
 from dataclasses import dataclass
 from datetime import UTC
@@ -41,6 +42,8 @@ from zerg.services.archive_store import FilesystemArchiveStore
 from zerg.services.archive_transcript import archive_owning_session_ids
 from zerg.services.archive_transcript import load_session_source_line_bytes
 from zerg.services.media_store import absolute_media_path
+from zerg.services.provider_interaction_semantics import classify_provider_interaction
+from zerg.services.provider_interaction_semantics import seed_provider_interaction_sequence_context
 from zerg.services.raw_json_compression import decode_raw_json
 from zerg.services.raw_json_compression import decompress_raw_json
 from zerg.storage_v2.media_objects import MediaObjectError
@@ -50,6 +53,7 @@ from zerg.storage_v2.raw_objects import MAX_RECORD_BYTES
 from zerg.storage_v2.raw_objects import RawObjectSpec
 from zerg.storage_v2.raw_objects import RawRecord
 from zerg.storage_v2.raw_objects import seal_raw_object
+from zerg.storage_v2.render_objects import SEMANTIC_PROJECTION_VERSION
 from zerg.storage_v2.render_objects import RenderObjectSpec
 from zerg.storage_v2.render_objects import RenderObjectValidationError
 from zerg.storage_v2.render_objects import RenderRecord
@@ -441,6 +445,13 @@ class LegacyCorpusConverter:
         consumed_event_ids: set[int] = set()
         rendered_records: list[RenderRecord] = []
         render_failures: list[str] = []
+        interaction_sequence_context: dict[str, Any] = {}
+        if str(session.provider or "").strip().lower() == "claude":
+            seed_provider_interaction_sequence_context(
+                session.provider,
+                [decode_raw_json(event) for event in events],
+                interaction_sequence_context,
+            )
         epoch_plans: dict[tuple[str, str], tuple[UUID, UUID | None]] = {}
         owner_id = await self._active_owner_id() if batches else None
 
@@ -490,7 +501,15 @@ class LegacyCorpusConverter:
                 for event in event_groups.get((item.source_path, item.source_offset), ()):
                     if event.id in consumed_event_ids:
                         continue
-                    rendered = _render_record(event, position, index, session_id, head_branch_id=head_branch_id)
+                    rendered = _render_record(
+                        event,
+                        position,
+                        index,
+                        session_id,
+                        head_branch_id=head_branch_id,
+                        provider=session.provider,
+                        sequence_context=interaction_sequence_context,
+                    )
                     render_records.append(rendered)
                     consumed_event_ids.add(int(event.id))
             render_records.sort(key=_render_order_key)
@@ -575,6 +594,9 @@ class LegacyCorpusConverter:
         expected_events = _EventParityProof(session_id)
         rendered_events = _EventParityProof(session_id)
         render_failures: list[str] = []
+        interaction_sequence_context: dict[str, Any] = {}
+        if str(session.provider or "").strip().lower() == "claude":
+            _seed_legacy_claude_context(db, session_id, watermark, interaction_sequence_context)
 
         work_path: Path | None = None
         try:
@@ -590,6 +612,7 @@ class LegacyCorpusConverter:
                 rendered_events=rendered_events,
                 render_failures=render_failures,
                 replace_existing_epochs=replace_existing_epochs,
+                interaction_sequence_context=interaction_sequence_context,
             )
             source_missing = max(0, source_expected - source_covered)
             await self._stream_normalized_events(
@@ -605,6 +628,7 @@ class LegacyCorpusConverter:
                 render_failures=render_failures,
                 matched_events_path=work_path,
                 replace_existing_epochs=replace_existing_epochs,
+                interaction_sequence_context=interaction_sequence_context,
             )
         finally:
             if work_path is not None:
@@ -647,6 +671,7 @@ class LegacyCorpusConverter:
         rendered_events: _EventParityProof,
         render_failures: list[str],
         replace_existing_epochs: bool,
+        interaction_sequence_context: MutableMapping[str, Any],
     ) -> tuple[int, Path]:
         session_id = UUID(str(session.id))
         archive_store = self.archive_store or create_archive_store()
@@ -757,6 +782,7 @@ class LegacyCorpusConverter:
                     rendered_events=rendered_events,
                     render_failures=render_failures,
                     replace_existing_epochs=replace_existing_epochs,
+                    interaction_sequence_context=interaction_sequence_context,
                 )
                 del inline_page, inline_rows
                 _return_free_heap_to_os()
@@ -794,6 +820,7 @@ class LegacyCorpusConverter:
                             rendered_events=rendered_events,
                             render_failures=render_failures,
                             replace_existing_epochs=replace_existing_epochs,
+                            interaction_sequence_context=interaction_sequence_context,
                         )
                         archive_page.clear()
                         _return_free_heap_to_os()
@@ -812,6 +839,7 @@ class LegacyCorpusConverter:
                         rendered_events=rendered_events,
                         render_failures=render_failures,
                         replace_existing_epochs=replace_existing_epochs,
+                        interaction_sequence_context=interaction_sequence_context,
                     )
                     archive_page.clear()
                     _return_free_heap_to_os()
@@ -835,6 +863,7 @@ class LegacyCorpusConverter:
         rendered_events: _EventParityProof,
         render_failures: list[str],
         replace_existing_epochs: bool,
+        interaction_sequence_context: MutableMapping[str, Any],
     ) -> int:
         connection.execute("DELETE FROM migration_archive_page")
         connection.executemany(
@@ -927,6 +956,8 @@ class LegacyCorpusConverter:
                             index,
                             session_id,
                             head_branch_id=head_branch_id,
+                            provider=session.provider,
+                            sequence_context=interaction_sequence_context,
                         )
                         for index, record in enumerate(adjusted.records)
                         for event in event_groups.get((record.source_path, record.source_offset), ())
@@ -970,6 +1001,7 @@ class LegacyCorpusConverter:
         render_failures: list[str],
         matched_events_path: Path,
         replace_existing_epochs: bool,
+        interaction_sequence_context: MutableMapping[str, Any],
     ) -> None:
         session_id = UUID(str(session.id))
         source_path = f"legacy-unmatched-events:{session_id}"
@@ -1053,6 +1085,8 @@ class LegacyCorpusConverter:
                             index,
                             session_id,
                             head_branch_id=head_branch_id,
+                            provider=session.provider,
+                            sequence_context=interaction_sequence_context,
                         )
                         for index, record in enumerate(adjusted.records)
                         for event in event_groups.get((record.source_path, record.source_offset), ())
@@ -1552,11 +1586,28 @@ def _render_record(
     session_id: UUID,
     *,
     head_branch_id: int | None,
+    provider: str | None = None,
+    sequence_context: MutableMapping[str, Any] | None = None,
 ) -> RenderRecord:
     timestamp = event.timestamp
     if timestamp.tzinfo is None:
         timestamp = timestamp.replace(tzinfo=UTC)
     thread_id = str(event.thread_id or _stable_uuid("thread", str(session_id), str(event.branch_id or 0)))
+    interaction_kind = getattr(event, "interaction_kind", None)
+    raw_json = decode_raw_json(event)
+    if str(provider or "").strip().lower() == "claude" and raw_json is not None:
+        # A parser-owned legacy fact may predate complete raw replay. For
+        # Claude, the raw envelope is authoritative and the caller supplies a
+        # session-scoped sequence context.
+        interaction_kind = None
+    if interaction_kind is None and provider is not None:
+        interaction_kind = classify_provider_interaction(
+            provider,
+            role=event.role,
+            content_text=event.content_text,
+            raw_json=raw_json,
+            sequence_context=sequence_context,
+        )["interaction_kind"]
     return RenderRecord(
         event_id=f"legacy:{event.id or 0}",
         order_time_us=int(timestamp.timestamp() * 1_000_000),
@@ -1571,7 +1622,37 @@ def _render_record(
         thread_id=_bounded_render_text(thread_id, 255),
         branch_kind="head" if head_branch_id is None or event.branch_id in {None, head_branch_id} else "abandoned",
         raw_record_ordinal=raw_record_ordinal,
+        interaction_kind=interaction_kind,
     )
+
+
+def _seed_legacy_claude_context(
+    db: Session,
+    session_id: UUID,
+    watermark: LegacyHighWatermark,
+    sequence_context: MutableMapping[str, Any],
+) -> None:
+    """Seed native caveats before streaming a legacy session's render pages."""
+
+    caveats: list[object] = []
+    rows = (
+        db.query(AgentEvent.raw_json, AgentEvent.raw_json_z, AgentEvent.raw_json_codec)
+        .filter(AgentEvent.session_id == session_id, AgentEvent.id <= watermark.event_id)
+        .filter(AgentEvent.role == "user")
+        .order_by(AgentEvent.timestamp.asc(), AgentEvent.id.asc())
+        .yield_per(STREAMING_SQL_PAGE)
+    )
+    for row in rows:
+        raw_json = row.raw_json
+        if int(row.raw_json_codec or 0) == 1 and row.raw_json_z is not None:
+            raw_json = decompress_raw_json(row.raw_json_z)
+        if isinstance(raw_json, str) and "<local-command-caveat>" in raw_json:
+            caveats.append(raw_json)
+        elif isinstance(raw_json, dict):
+            content = raw_json.get("message", {}).get("content") if isinstance(raw_json.get("message"), dict) else ""
+            if isinstance(content, str) and "<local-command-caveat>" in content:
+                caveats.append(raw_json)
+    seed_provider_interaction_sequence_context("claude", caveats, sequence_context)
 
 
 def _bounded_render_text(value: object, maximum_bytes: int) -> str | None:
@@ -1634,6 +1715,7 @@ def _raw_commit(
             "tool_calls": sealed_render.tool_calls,
             "first_user_message_preview": sealed_render.first_user_message_preview,
             "last_visible_text_preview": sealed_render.last_visible_text_preview,
+            "semantic_projection_version": SEMANTIC_PROJECTION_VERSION,
         }
     return {
         "protocol_version": 2,

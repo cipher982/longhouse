@@ -38,6 +38,7 @@ from zerg.qa import codex_helm_interrupt
 from zerg.qa import codex_release_identity as identity_bridge
 from zerg.qa import codex_tool_call_result
 from zerg.qa import opencode_server_qualification
+from zerg.qa import provider_interaction_semantics as interaction_semantics
 from zerg.qa import provider_release_identity
 from zerg.qa import provider_release_semantic_oracles as semantic_oracles
 from zerg.qa import provider_semantic_qualification as semantic
@@ -263,6 +264,61 @@ def _strict_outcomes(strict_result: dict[str, Any], *, required_keys: frozenset[
     return {key: AssertionOutcome(value) for key, value in strict_oracle.items()}
 
 
+def _validated_live_interaction_artifacts(
+    provider: str,
+    data: Mapping[str, Any],
+) -> bool:
+    """Re-evaluate live evidence from the materialized files named by a result.
+
+    The harness result is a projection and may be hand-assembled by a caller.
+    A path string and ``raw_provenance=pass`` are therefore insufficient on
+    their own. Re-read both files, bind the JSONL to the observation, and run
+    the provider-native oracle again so the full-column gate is grounded in
+    the actual artifact bytes.
+    """
+
+    observation_path_value = data.get("raw_observation_path")
+    events_path_value = data.get("raw_events_path")
+    if not isinstance(observation_path_value, str) or not observation_path_value.strip():
+        return False
+    if not isinstance(events_path_value, str) or not events_path_value.strip():
+        return False
+    try:
+        observation_path = Path(observation_path_value).expanduser().resolve()
+        events_path = Path(events_path_value).expanduser().resolve()
+        observation = json.loads(observation_path.read_text(encoding="utf-8"))
+        events_text = events_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return False
+    if not isinstance(observation, Mapping):
+        return False
+    if (
+        observation.get("provider") != provider
+        or observation.get("evidence_class") not in {"live_no_token", "live_token"}
+        or observation.get("synthetic") is not False
+        or events_text != interaction_semantics.jsonl_events(observation)
+    ):
+        return False
+    try:
+        materialized_root = Path(os.path.commonpath((str(observation_path.parent), str(events_path.parent)))).resolve(strict=True)
+        independent = interaction_semantics.evaluate_observation(
+            provider,
+            observation,
+            source_root=str(materialized_root),
+        )
+    except Exception:  # noqa: BLE001 - an invalid evidence file fails closed
+        return False
+    if independent.get("status") != "pass" or independent.get("provider_status") != "pass":
+        return False
+    if data.get("evidence_class") != observation.get("evidence_class"):
+        return False
+    if data.get("provider_status") != independent.get("provider_status"):
+        return False
+    if data.get("assertions") != independent.get("assertions"):
+        return False
+    return True
+
+
 def _full_column_gate(
     harness_payload: dict[str, Any],
     *,
@@ -299,15 +355,40 @@ def _full_column_gate(
     }
     cardinality_errors = {scenario: len(matches) for scenario, matches in by_scenario.items() if len(matches) != 1}
     unexpected_results: list[dict[str, Any]] = []
+    interaction_live_pass_provenance = False
     for scenario, matches in by_scenario.items():
         if len(matches) != 1:
             continue
         result = matches[0]
         actual = (result.get("status"), result.get("failure_code"))
         expected = expected_limits.get(scenario, ("pass", None))
-        live_interaction_attempted = scenario == "interaction_semantics" and interaction_evidence_class == "live_no_token"
+        live_interaction_attempted = scenario == "interaction_semantics" and interaction_evidence_class in {
+            "live_no_token",
+            "live_token",
+        }
+        live_pass_provenance = False
+        if live_interaction_attempted and actual == ("pass", None):
+            data = result.get("data")
+            assertions = data.get("assertions") if isinstance(data, Mapping) else None
+            probe_assertions = (
+                [row for row in assertions if isinstance(row, Mapping) and row.get("probe_id") != "shared_title_boundary"]
+                if isinstance(assertions, list)
+                else []
+            )
+            live_pass_provenance = (
+                isinstance(data, Mapping)
+                and data.get("verification_scope") == "provider_native"
+                and data.get("provider_status") == "pass"
+                and data.get("evidence_class") in {"live_no_token", "live_token"}
+                and bool(probe_assertions)
+                and all(row.get("status") == "pass" for row in probe_assertions)
+                and _validated_live_interaction_artifacts(provider, data)
+            )
+            if live_interaction_attempted:
+                interaction_live_pass_provenance = live_pass_provenance
         actual_is_allowed_live_result = live_interaction_attempted and (
-            actual == ("pass", None) or (actual[0] == "blocked" and actual[1] in _LIVE_INTERACTION_ALLOWED_BLOCKED_CODES)
+            (actual == ("pass", None) and live_pass_provenance)
+            or (actual[0] == "blocked" and actual[1] in _LIVE_INTERACTION_ALLOWED_BLOCKED_CODES)
         )
         if actual != expected and not actual_is_allowed_live_result:
             unexpected_results.append(
@@ -316,7 +397,11 @@ def _full_column_gate(
                     "expected_status": expected[0],
                     "expected_failure_code": expected[1],
                     "actual_status": actual[0],
-                    "actual_failure_code": actual[1],
+                    "actual_failure_code": (
+                        "interaction_live_provenance_missing"
+                        if live_interaction_attempted and actual == ("pass", None) and not live_pass_provenance
+                        else actual[1]
+                    ),
                 }
             )
 
@@ -327,6 +412,22 @@ def _full_column_gate(
     missing_actions = coverage.get("missing_provider_actions")
     coverage_complete = isinstance(missing_actions, list) and not missing_actions
     interaction_matches = by_scenario.get("interaction_semantics", [])
+    provider_status = "not_applicable"
+    if interaction_evidence_class in {"live_no_token", "live_token"}:
+        if len(interaction_matches) != 1:
+            provider_status = "fail"
+        else:
+            interaction_result = interaction_matches[0]
+            interaction_actual = (interaction_result.get("status"), interaction_result.get("failure_code"))
+            if interaction_actual == ("pass", None):
+                provider_status = "pass" if interaction_live_pass_provenance else "fail"
+            elif interaction_actual[0] == "blocked":
+                # A known setup/auth limitation is a truthful provider result,
+                # but it is not native qualification evidence and must never be
+                # reported as a provider pass by a release executor.
+                provider_status = "blocked"
+            else:
+                provider_status = "fail"
     interaction_digests: set[str] = set()
     for result in interaction_matches:
         observed_digest = result.get("qualification_request_digest")
@@ -340,6 +441,7 @@ def _full_column_gate(
     passed = not cardinality_errors and not unexpected_results and not unexpected_gap_kinds and coverage_complete and request_binding_ok
     return {
         "status": "pass" if passed else "fail",
+        "provider_status": provider_status,
         "provider": provider,
         "failure_code": None if passed else f"{provider}_full_column_regression",
         "expected_scenario_count": len(DEFAULT_HARNESS_SCENARIOS),
@@ -415,11 +517,14 @@ def run_codex_tool_call_result(request_path: Path, output_root: Path) -> dict[st
     }
     ran_strict_check = strict_result.get("status") in {"pass", "fail"}
     evidence_class = EvidenceClass.LIVE_TOKEN if ran_strict_check else EvidenceClass.LIVE_NO_TOKEN
-    execution_status = (
-        "completed"
-        if AssertionOutcome.INFRASTRUCTURE_ERROR not in outcomes.values() and full_column_gate["status"] == "pass"
-        else "infrastructure_error"
-    )
+    if AssertionOutcome.INFRASTRUCTURE_ERROR in outcomes.values() or full_column_gate["status"] != "pass":
+        execution_status = "infrastructure_error"
+    elif full_column_gate.get("provider_status") == "blocked":
+        execution_status = "blocked"
+    elif full_column_gate.get("provider_status") == "fail":
+        execution_status = "infrastructure_error"
+    else:
+        execution_status = "completed"
 
     observation = {
         "provider_bin": str(provider_bin),
@@ -596,7 +701,7 @@ def _claude_full_column_executor(
         live_enabled=True,
         live_status=str(live_result.get("status")),
     )
-    if full_column_gate["status"] != "pass":
+    if full_column_gate["status"] != "pass" or full_column_gate.get("provider_status") == "fail":
         assertions = tuple(
             semantic.SemanticAssertion(
                 assertion.assertion_id,
@@ -606,6 +711,8 @@ def _claude_full_column_executor(
             for assertion in assertions
         )
         status = "infrastructure_error"
+    elif full_column_gate.get("provider_status") == "blocked":
+        status = "blocked"
     elif AssertionOutcome.SEMANTIC_FAIL in {assertion.outcome for assertion in assertions}:
         status = "fail"
     elif AssertionOutcome.BLOCKED in {assertion.outcome for assertion in assertions}:
@@ -720,7 +827,9 @@ def _opencode_full_column_executor(
         }.items()
         if result.get("status") != "pass"
     }
-    if release_gate_failures:
+    provider_gate_failed = full_column_gate.get("provider_status") == "fail"
+    provider_gate_blocked = full_column_gate.get("provider_status") == "blocked"
+    if release_gate_failures or provider_gate_failed:
         assertions = tuple(
             semantic.SemanticAssertion(
                 assertion.assertion_id,
@@ -730,6 +839,8 @@ def _opencode_full_column_executor(
             for assertion in assertions
         )
         status = "infrastructure_error"
+    elif provider_gate_blocked:
+        status = "blocked"
     elif AssertionOutcome.INFRASTRUCTURE_ERROR in {assertion.outcome for assertion in assertions}:
         status = "infrastructure_error"
     elif AssertionOutcome.SEMANTIC_FAIL in {assertion.outcome for assertion in assertions}:

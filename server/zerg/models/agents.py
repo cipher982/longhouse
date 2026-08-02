@@ -255,6 +255,14 @@ class AgentEvent(AgentsBase):
     # Event content
     role = Column(String(20), nullable=False, index=True)  # user, assistant, tool, system
     content_text = Column(Text, nullable=True)  # Message text content
+    # Provider interaction semantics are derived at ingest from provider-native
+    # evidence. Nullable keeps older rows replayable; null rows fall back to
+    # their retained raw record until an explicit backfill runs.
+    interaction_kind = Column(String(64), nullable=True, index=True)
+    # Small provider-native sequence key used when a control envelope is split
+    # across ingest batches after raw bytes have moved to archive-primary.
+    interaction_context_key = Column(String(255), nullable=True, index=True)
+    title_eligible = Column(Integer, nullable=True, index=True)
 
     # Tool call data (when role='assistant' and this is a tool call)
     tool_name = Column(String(100), nullable=True, index=True)  # e.g., 'Edit', 'Bash', 'Read'

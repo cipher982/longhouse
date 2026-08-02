@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from datetime import datetime
 from types import SimpleNamespace
@@ -21,6 +22,8 @@ from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionThread
 from zerg.routers.agents_sessions import _session_detail_db
+from zerg.services.raw_json_compression import CODEC_ZSTD
+from zerg.services.raw_json_compression import compress_raw_json
 from zerg.services.worklog_day_export import WORKLOG_DAY_MESSAGE_SQL
 
 
@@ -55,6 +58,7 @@ def _seed_session(
     *,
     session_id: str,
     started_at: str,
+    provider: str = "codex",
     environment: str = "production",
     branch_kind: str = "root",
     project: str = "longhouse",
@@ -64,7 +68,7 @@ def _seed_session(
     try:
         session = AgentSession(
             id=session_id,
-            provider="codex",
+            provider=provider,
             environment=environment,
             project=project,
             device_id="test-device",
@@ -80,7 +84,7 @@ def _seed_session(
         thread = SessionThread(
             id=uuid4(),
             session_id=session.id,
-            provider=session.provider,
+            provider=provider,
             branch_kind=branch_kind,
             is_primary=1,
         )
@@ -131,6 +135,156 @@ def test_worklog_day_export_returns_window_sessions_and_messages(tmp_path):
         assert payload["sessions"][0]["message_count"] == 2
         assert payload["sessions"][0]["event_count"] == 3
         assert [event["content_text"] for event in payload["events"]] == ["start the work", "made progress"]
+    finally:
+        api_app.dependency_overrides.clear()
+
+
+def test_worklog_day_export_filters_compressed_claude_control_rows(tmp_path):
+    client, factory = _make_client(tmp_path)
+    try:
+        session_id = "44444444-4444-4444-8444-444444444444"
+        _seed_session(
+            factory,
+            session_id=session_id,
+            started_at="2026-07-07T12:00:00Z",
+            provider="claude",
+            event_specs=[
+                ("user", "<local-command-caveat>native control</local-command-caveat>", "2026-07-07T12:00:00Z"),
+                ("user", "<command-name>/effort</command-name>", "2026-07-07T12:01:00Z"),
+                ("user", "do the real work", "2026-07-07T12:02:00Z"),
+                ("assistant", "done", "2026-07-07T12:03:00Z"),
+            ],
+        )
+        db = factory()
+        try:
+            events = db.query(AgentEvent).filter(AgentEvent.session_id == session_id).order_by(AgentEvent.id).all()
+            events[0].raw_json = ""
+            events[0].raw_json_z = compress_raw_json(
+                '{"type":"user","isMeta":true,"promptId":"legacy-effort","message":{"role":"user","content":"<local-command-caveat>native control</local-command-caveat>"}}'
+            )
+            events[0].raw_json_codec = CODEC_ZSTD
+            events[1].raw_json = ""
+            events[1].raw_json_z = compress_raw_json(
+                '{"type":"user","promptId":"legacy-effort","message":{"role":"user","content":"<command-name>/effort</command-name>"}}'
+            )
+            events[1].raw_json_codec = CODEC_ZSTD
+            db.commit()
+        finally:
+            db.close()
+
+        response = client.get(
+            "/agents/worklog/day?date=2026-07-07&timezone=America/New_York",
+            headers={"X-Agents-Token": "dev"},
+        )
+
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert payload["stats"]["message_count"] == 2
+        assert [event["content_text"] for event in payload["events"]] == ["do the real work", "done"]
+    finally:
+        api_app.dependency_overrides.clear()
+
+
+def test_worklog_day_export_preseeds_late_claude_caveat_before_replay(tmp_path):
+    client, factory = _make_client(tmp_path)
+    try:
+        session_id = "55555555-5555-4555-8555-555555555555"
+        _seed_session(
+            factory,
+            session_id=session_id,
+            started_at="2026-07-07T12:00:00Z",
+            provider="claude",
+            event_specs=[
+                ("user", "<command-name>/effort</command-name>", "2026-07-07T12:00:00Z"),
+                ("user", "do the real work", "2026-07-07T12:01:00Z"),
+                ("user", "<local-command-caveat>native control</local-command-caveat>", "2026-07-07T12:02:00Z"),
+                ("assistant", "done", "2026-07-07T12:03:00Z"),
+            ],
+        )
+        db = factory()
+        try:
+            events = db.query(AgentEvent).filter(AgentEvent.session_id == session_id).order_by(AgentEvent.id).all()
+            events[0].raw_json = json.dumps(
+                {
+                    "type": "user",
+                    "promptId": "late-effort",
+                    "message": {"role": "user", "content": "<command-name>/effort</command-name>"},
+                }
+            )
+            events[2].interaction_kind = "local_control"
+            events[2].interaction_context_key = "late-effort"
+            events[2].title_eligible = False
+            db.commit()
+        finally:
+            db.close()
+
+        response = client.get(
+            "/agents/worklog/day?date=2026-07-07&timezone=America/New_York",
+            headers={"X-Agents-Token": "dev"},
+        )
+
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert payload["stats"]["message_count"] == 2
+        assert [event["content_text"] for event in payload["events"]] == ["do the real work", "done"]
+    finally:
+        api_app.dependency_overrides.clear()
+
+
+def test_worklog_day_export_preseeds_claude_caveat_across_day_boundary(tmp_path):
+    client, factory = _make_client(tmp_path)
+    try:
+        session_id = "66666666-6666-4666-8666-666666666666"
+        _seed_session(
+            factory,
+            session_id=session_id,
+            started_at="2026-07-06T23:59:59Z",
+            provider="claude",
+            event_specs=[
+                (
+                    "user",
+                    "<local-command-caveat>native control</local-command-caveat>",
+                    "2026-07-07T03:59:59.900Z",
+                ),
+                ("user", "<command-name>/effort</command-name>", "2026-07-07T04:00:00.100Z"),
+                ("user", "do the real work", "2026-07-07T04:01:00Z"),
+                ("assistant", "done", "2026-07-07T04:02:00Z"),
+            ],
+        )
+        db = factory()
+        try:
+            events = db.query(AgentEvent).filter(AgentEvent.session_id == session_id).order_by(AgentEvent.id).all()
+            events[0].raw_json = json.dumps(
+                {
+                    "type": "user",
+                    "isMeta": True,
+                    "promptId": "boundary-effort",
+                    "message": {
+                        "role": "user",
+                        "content": "<local-command-caveat>native control</local-command-caveat>",
+                    },
+                }
+            )
+            events[1].raw_json = json.dumps(
+                {
+                    "type": "user",
+                    "promptId": "boundary-effort",
+                    "message": {"role": "user", "content": "<command-name>/effort</command-name>"},
+                }
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        response = client.get(
+            "/agents/worklog/day?date=2026-07-07&timezone=America/New_York",
+            headers={"X-Agents-Token": "dev"},
+        )
+
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert payload["stats"]["message_count"] == 2
+        assert [event["content_text"] for event in payload["events"]] == ["do the real work", "done"]
     finally:
         api_app.dependency_overrides.clear()
 

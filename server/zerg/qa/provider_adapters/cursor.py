@@ -27,6 +27,7 @@ class CursorHarnessAdapter(UniversalProviderAdapter):
         scenario: str,
         required_scenarios: tuple[str, ...],
         operations: tuple[str, ...],
+        required_input_sha256: str | None = None,
     ) -> dict[str, Any] | None:
         artifact_value = str(os.environ.get(CURSOR_GATE0_ARTIFACT_ENV) or "").strip()
         if not artifact_value:
@@ -74,6 +75,27 @@ class CursorHarnessAdapter(UniversalProviderAdapter):
             for name in required_scenarios
             if not isinstance(scenario_map.get(name), Mapping) or str((scenario_map.get(name) or {}).get("status") or "") != "passed"
         }
+        identity = scenario_map.get(required_scenarios[0]) if required_scenarios else {}
+        identity = identity if isinstance(identity, Mapping) else {}
+        observed_input_sha256 = str(identity.get("prompt_sha256") or "").strip() or None
+        effective_required_input_sha256 = required_input_sha256
+        if effective_required_input_sha256 is None and "send_input" in operations:
+            try:
+                effective_required_input_sha256 = hashlib.sha256(package.path("input", "prompt.txt").read_bytes()).hexdigest()
+            except OSError:
+                effective_required_input_sha256 = None
+        input_binding = {
+            "status": (
+                "pass"
+                if ("send_input" not in operations and effective_required_input_sha256 is None)
+                or (effective_required_input_sha256 is not None and observed_input_sha256 == effective_required_input_sha256)
+                else "fail"
+            ),
+            "required_input_sha256": effective_required_input_sha256,
+            "observed_input_sha256": observed_input_sha256,
+            "evidence_basis": "cursor_gate0_create_chat_resume",
+        }
+        input_binding_passed = input_binding["status"] == "pass"
         passed = (
             artifact.get("status") == "passed"
             and probe.get("status") == STATUS_PASS
@@ -81,6 +103,7 @@ class CursorHarnessAdapter(UniversalProviderAdapter):
             and gate_version == probe_version
             and gate_identity == executable_identity
             and not failed_scenarios
+            and input_binding_passed
         )
         evidence = {
             operation: {
@@ -91,8 +114,6 @@ class CursorHarnessAdapter(UniversalProviderAdapter):
             }
             for operation in operations
         }
-        identity = scenario_map.get(required_scenarios[0]) if required_scenarios else {}
-        identity = identity if isinstance(identity, Mapping) else {}
         provider_session_id = str(
             identity.get("provider_conversation_id") or identity.get("longhouse_session_id") or self._session_id(package)
         )
@@ -105,6 +126,14 @@ class CursorHarnessAdapter(UniversalProviderAdapter):
                 "source_canary": "cursor_helm_gate0",
                 "provider_version": gate_version,
                 "evidence_origin": "provider_live_canary",
+                **(
+                    {
+                        "submitted_input_sha256": effective_required_input_sha256,
+                        "input_binding_evidence": "cursor_gate0_create_chat_resume",
+                    }
+                    if effective_required_input_sha256 is not None
+                    else {}
+                ),
             }
         ]
         projection, evidence, db_ingest = self._project_ingest_and_merge(
@@ -123,6 +152,7 @@ class CursorHarnessAdapter(UniversalProviderAdapter):
             "gate0_artifact_path": str(artifact_path.resolve(strict=False)),
             "required_gate0_scenarios": list(required_scenarios),
             "failed_gate0_scenarios": failed_scenarios,
+            "input_binding": input_binding,
             "synthetic": False,
             "operation_evidence": evidence,
             "longhouse_ingest": self._longhouse_ingest_block(db_ingest),
@@ -139,6 +169,9 @@ class CursorHarnessAdapter(UniversalProviderAdapter):
         elif failed_scenarios:
             payload["failure_code"] = "cursor_gate0_contract_failed"
             payload["message"] = "Cursor Gate 0 did not pass every scenario required by this harness scenario."
+        elif not input_binding_passed:
+            payload["failure_code"] = "cursor_gate0_input_binding_failed"
+            payload["message"] = "Cursor Gate 0 did not prove the exact prompt supplied to send_receive."
         elif db_ingest.get("status") != STATUS_PASS:
             payload["failure_code"] = db_ingest.get("failure_code") or "cursor_gate0_db_ingest_failed"
             payload["message"] = "Cursor Gate 0 evidence did not pass Longhouse DB ingest assertions."
@@ -155,11 +188,13 @@ class CursorHarnessAdapter(UniversalProviderAdapter):
 
     def send_receive(self, package: EvidencePackage, prompt: str) -> dict[str, Any]:
         package.write_text("input/prompt.txt", prompt)
+        prompt_sha256 = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
         return self._gate0_result(
             package,
             scenario="send_receive",
             required_scenarios=("create_chat_resume",),
             operations=("send_input", "transcript_binding"),
+            required_input_sha256=prompt_sha256,
         ) or super().send_receive(package, prompt)
 
     def interrupt_cancel(self, package: EvidencePackage) -> dict[str, Any]:

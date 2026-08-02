@@ -445,6 +445,14 @@ def plan_run(facts: ProviderFactoryFacts, provider: str, build_provenance: str, 
     # Trigger.MANUAL: a human runs a specific capability-proof scenario by
     # hand. Only assertions no automated trigger can satisfy are meaningfully
     # "manual" — everything else already has a producer above.
+    if build_provenance != BuildProvenance.OBSERVED_INSTALL:
+        return PlanCell(
+            provider=provider,
+            build_provenance=build_provenance,
+            trigger=trigger,
+            status="never_run",
+            reason="manual qualification requires an explicit observed provider install",
+        )
     manual_assertions = tuple(
         a
         for a in facts.capability_assertions
@@ -474,6 +482,20 @@ def plan_run(facts: ProviderFactoryFacts, provider: str, build_provenance: str, 
             status="never_run",
             reason=f"remaining capability-proof scenario_ids for {provider} are orphaned: {sorted(set(orphaned_for_provider))}",
         )
+    manual_statuses = _assertion_statuses(manual_assertions)
+    if not any(status.satisfiable for status in manual_statuses):
+        return PlanCell(
+            provider=provider,
+            build_provenance=build_provenance,
+            trigger=trigger,
+            status="never_run",
+            reason=(
+                f"remaining capability-proof assertions for {provider} have no registered evidence producer: "
+                f"{sorted(status.assertion_id for status in manual_statuses)}"
+            ),
+            scenario_ids=tuple(sorted({a.scenario_id for a in manual_assertions})),
+            assertion_status=manual_statuses,
+        )
     return PlanCell(
         provider=provider,
         build_provenance=build_provenance,
@@ -481,5 +503,5 @@ def plan_run(facts: ProviderFactoryFacts, provider: str, build_provenance: str, 
         status="runs",
         reason="has at least one capability-proof assertion no automated trigger can satisfy",
         scenario_ids=tuple(sorted({a.scenario_id for a in manual_assertions})),
-        assertion_status=_assertion_statuses(manual_assertions),
+        assertion_status=manual_statuses,
     )

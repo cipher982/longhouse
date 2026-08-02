@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import MutableMapping
 from dataclasses import dataclass
 from datetime import datetime
 from datetime import timezone
@@ -13,6 +14,7 @@ from sqlalchemy.orm import Session
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSourceLine
 from zerg.models.agents import SessionObservation
+from zerg.services.provider_interaction_semantics import classify_provider_interaction
 from zerg.services.raw_json_compression import CODEC_PLAIN
 from zerg.services.raw_json_compression import CODEC_ZSTD
 from zerg.services.raw_json_compression import compress_raw_json
@@ -88,7 +90,12 @@ def reduce_source_line_observation(db: Session, observation: SessionObservation)
     )
 
 
-def reduce_provider_event_observation(db: Session, observation: SessionObservation) -> ProviderEventReduction:
+def reduce_provider_event_observation(
+    db: Session,
+    observation: SessionObservation,
+    *,
+    sequence_context: MutableMapping[str, object] | None = None,
+) -> ProviderEventReduction:
     if observation.kind != OBS_KIND_PROVIDER_EVENT:
         return ProviderEventReduction(event=None, inserted=False)
     if observation.session_id is None:
@@ -122,6 +129,19 @@ def reduce_provider_event_observation(db: Session, observation: SessionObservati
 
     raw_json = _optional_str(payload.get("raw_json"))
     raw_json_z = compress_raw_json(raw_json) if raw_json is not None else None
+    interaction = classify_provider_interaction(
+        observation.provider,
+        role=role,
+        content_text=_optional_str(payload.get("content_text")),
+        raw_json=raw_json,
+        interaction_kind=_optional_str(payload.get("interaction_kind")),
+        sequence_context=sequence_context,
+    )
+    interaction_kind = _optional_str(payload.get("interaction_kind")) or interaction["interaction_kind"]
+    interaction_context_key = _optional_str(payload.get("interaction_context_key")) or interaction.get("interaction_context_key")
+    title_eligible = payload.get("title_eligible")
+    if not isinstance(title_eligible, bool):
+        title_eligible = bool(interaction["title_eligible"])
     # Prefer the structured compaction_kind carried in the payload (derived from
     # raw at ingest). Fall back to classifying raw for older observations that
     # predate the field. Never depends on stored raw at projection time.
@@ -149,6 +169,9 @@ def reduce_provider_event_observation(db: Session, observation: SessionObservati
             raw_json=None,
             raw_json_z=raw_json_z,
             raw_json_codec=CODEC_ZSTD if raw_json_z else CODEC_PLAIN,
+            interaction_kind=interaction_kind,
+            interaction_context_key=interaction_context_key,
+            title_eligible=title_eligible,
             compaction_kind=compaction_kind,
             schema_version=1,
             event_uuid=event_uuid,

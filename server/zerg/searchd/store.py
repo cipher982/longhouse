@@ -18,8 +18,10 @@ from uuid import uuid4
 
 import numpy as np
 
+from zerg.services.provider_interaction_semantics import classify_provider_interaction
+
 SCHEMA_VERSION = 1
-SCHEMA_GENERATION = "searchd-v2-published-searchable-corpus-with-fenced-embeddings"
+SCHEMA_GENERATION = "searchd-v3-published-semantic-corpus-with-fenced-embeddings"
 SEARCHABLE_RETENTION_DAYS = 91
 SEARCHABLE_FAST_WINDOW_DAYS = 90
 SEARCHABLE_FAST_WINDOW_MARGIN_SECONDS = 300
@@ -34,7 +36,9 @@ _WORKLOG_SNAPSHOT_LIMIT = 8
 
 _PUBLISH_AGGREGATES_SQL = """
     SELECT
-        SUM(CASE WHEN e.role = 'user' THEN 1 ELSE 0 END) AS user_messages,
+        SUM(CASE WHEN e.role = 'user' AND e.title_eligible = 1
+                  AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('local_control', 'local_control_output', 'conversation_boundary'))
+                 THEN 1 ELSE 0 END) AS user_messages,
         SUM(CASE WHEN e.role = 'assistant' AND e.tool_name IS NULL THEN 1 ELSE 0 END) AS assistant_messages,
         SUM(CASE WHEN e.tool_name IS NOT NULL THEN 1 ELSE 0 END) AS tool_calls,
         MAX(CASE
@@ -69,6 +73,8 @@ _ARCHIVE_SEARCH_SQL = """
       AND (? IS NULL OR s.environment = ?)
       AND (? IS NULL OR e.order_time_us >= ?)
       AND (? IS NULL OR e.order_time_us < ?)
+      AND (e.role != 'user' OR (e.title_eligible = 1
+           AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('local_control', 'local_control_output', 'conversation_boundary'))))
     ORDER BY events_fts.rank ASC
     LIMIT ?
 """
@@ -104,6 +110,8 @@ _SEARCHABLE_SEARCH_SQL = """
           AND (? IS NULL OR e.environment = ?)
           AND (? IS NULL OR e.order_time_us >= ?)
           AND (? IS NULL OR e.order_time_us < ?)
+          AND (e.role != 'user' OR (e.title_eligible = 1
+               AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('local_control', 'local_control_output', 'conversation_boundary'))))
         ORDER BY searchable_fts.rowid DESC
         LIMIT ?
     ), top AS (
@@ -182,7 +190,8 @@ _CONTEXT_TARGET_BY_POSITION_SQL = """
 # `source_position` is stored zero-padded, which sorts identically to the
 # projector's integer compare.
 _EPISODE_LOCATOR_EVENTS_SQL = """
-    SELECT e.order_time_us, e.role, e.content_text, e.tool_output_text, e.tool_name
+    SELECT e.order_time_us, e.role, e.content_text, e.tool_output_text, e.tool_name,
+           e.provider, e.interaction_kind
     FROM events e
     JOIN session_index s ON s.session_id = e.session_id AND s.generation_id = e.generation_id
     JOIN projection_membership m
@@ -208,6 +217,8 @@ _CONTEXT_ROWS_SQL = """
      AND m.object_id = e.source_object_id
     WHERE e.session_id = ? AND e.generation_id = ? AND s.owner_id = ?
       AND e.role IN ('user', 'assistant') AND e.content_text IS NOT NULL
+      AND (e.role != 'user' OR (e.title_eligible = 1
+           AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('local_control', 'local_control_output', 'conversation_boundary'))))
       AND {position_predicate}
     ORDER BY e.order_time_us {direction}, e.event_key {direction}
     LIMIT ?
@@ -370,6 +381,8 @@ def _initialize_schema(connection: sqlite3.Connection) -> None:
             thread_id TEXT,
             branch_kind TEXT,
             provider TEXT NOT NULL,
+            interaction_kind TEXT NOT NULL DEFAULT 'provider_system',
+            title_eligible INTEGER NOT NULL DEFAULT 0,
             machine_id TEXT NOT NULL,
             project TEXT,
             environment TEXT NOT NULL,
@@ -425,6 +438,8 @@ def _initialize_schema(connection: sqlite3.Connection) -> None:
             event_id TEXT NOT NULL,
             role TEXT NOT NULL,
             tool_name TEXT,
+            interaction_kind TEXT NOT NULL DEFAULT 'provider_system',
+            title_eligible INTEGER NOT NULL DEFAULT 0,
             indexed_through INTEGER NOT NULL,
             event_count INTEGER NOT NULL
         );
@@ -601,10 +616,21 @@ class SearchStore:
                     stored_hash = self._stored_object_projection_hash(existing=existing, object_id=object_id)
                     if (not same_empty_object and stored_hash != projection_hash) or int(existing["event_count"]) != len(records):
                         raise ValueError("indexed object identity conflicts with existing derived rows")
-                    self.connection.execute(
-                        "UPDATE indexed_objects SET projection_hash = ?, indexed_at = ? WHERE object_id = ?",
-                        (projection_hash, now, object_id),
-                    )
+                # Semantic classification is recoverable from a later raw
+                # replay. It is deliberately excluded from the object
+                # identity hash, so a control row can be reclassified without
+                # duplicating the object or poisoning the derived index.
+                self._update_existing_object_semantics(
+                    session_id=session_id,
+                    generation_id=generation_id,
+                    object_id=object_id,
+                    provider=provider,
+                    records=records,
+                )
+                self.connection.execute(
+                    "UPDATE indexed_objects SET projection_hash = ?, indexed_at = ? WHERE object_id = ?",
+                    (projection_hash, now, object_id),
+                )
                 self.connection.execute(
                     """
                     INSERT OR IGNORE INTO projection_membership(
@@ -631,6 +657,18 @@ class SearchStore:
                     )
                 ).encode()
                 event_key = hashlib.sha256(preimage).hexdigest()
+                # searchd receives parser-owned semantic facts from the
+                # storage projector. It has no complete raw-provider window,
+                # so sequence-dependent controls must be resolved upstream;
+                # this fallback only preserves the normalized fact (or the
+                # ordinary-message default) while indexing.
+                interaction = classify_provider_interaction(
+                    provider,
+                    role=str(record.get("role") or ""),
+                    content_text=record.get("content_text"),
+                    interaction_kind=record.get("interaction_kind"),
+                    source_surface="provider_file",
+                )
                 self.connection.execute(
                     """
                     INSERT INTO events(
@@ -639,8 +677,9 @@ class SearchStore:
                         source_epoch, source_position, event_subordinal,
                         role, content_text, tool_name, tool_output_text,
                         tool_call_id, thread_id, branch_kind,
-                        provider, machine_id, project, environment, cwd, git_repo
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        provider, interaction_kind, title_eligible,
+                        machine_id, project, environment, cwd, git_repo
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         event_key,
@@ -662,6 +701,8 @@ class SearchStore:
                         record.get("thread_id"),
                         record.get("branch_kind"),
                         provider,
+                        interaction["interaction_kind"],
+                        1 if interaction["title_eligible"] else 0,
                         machine_id,
                         project,
                         environment,
@@ -881,6 +922,8 @@ class SearchStore:
                 "content_text": row["content_text"],
                 "tool_output_text": row["tool_output_text"],
                 "tool_name": row["tool_name"],
+                "provider": row["provider"],
+                "interaction_kind": row["interaction_kind"],
             }
             for index, row in enumerate(rows)
         ]
@@ -963,6 +1006,44 @@ class SearchStore:
             ]
         }
 
+    def _update_existing_object_semantics(
+        self,
+        *,
+        session_id: str,
+        generation_id: str,
+        object_id: str,
+        provider: str,
+        records: list[dict[str, Any]],
+    ) -> None:
+        """Apply a semantic correction while preserving immutable event rows."""
+
+        for record in records:
+            interaction = classify_provider_interaction(
+                provider,
+                role=str(record.get("role") or ""),
+                content_text=record.get("content_text"),
+                interaction_kind=record.get("interaction_kind"),
+                source_surface="provider_file",
+            )
+            self.connection.execute(
+                """
+                UPDATE events
+                   SET interaction_kind = ?, title_eligible = ?
+                 WHERE session_id = ?
+                   AND generation_id = ?
+                   AND source_object_id = ?
+                   AND record_ordinal = ?
+                """,
+                (
+                    interaction["interaction_kind"],
+                    1 if interaction["title_eligible"] else 0,
+                    session_id,
+                    generation_id,
+                    object_id,
+                    int(record["record_ordinal"]),
+                ),
+            )
+
     def _stored_object_projection_hash(self, *, existing: sqlite3.Row, object_id: str) -> str | None:
         session_id = str(existing["session_id"])
         generation_id = str(existing["generation_id"])
@@ -972,7 +1053,7 @@ class SearchStore:
             SELECT event_id, record_ordinal, order_time_us, source_position,
                    event_subordinal, role, content_text, tool_name,
                    tool_output_text, tool_call_id, thread_id, branch_kind,
-                   provider, machine_id, opaque_source_id, source_epoch
+                   provider, interaction_kind, machine_id, opaque_source_id, source_epoch
             FROM events
             WHERE session_id = ? AND generation_id = ? AND source_object_id = ?
             ORDER BY record_ordinal ASC
@@ -995,6 +1076,7 @@ class SearchStore:
                 "source_position": int(row["source_position"]),
                 "event_subordinal": int(row["event_subordinal"]),
                 "role": str(row["role"]),
+                "interaction_kind": row["interaction_kind"],
                 "content_text": row["content_text"],
                 "tool_name": row["tool_name"],
                 "tool_output_text": row["tool_output_text"],
@@ -1178,11 +1260,13 @@ class SearchStore:
                 source_event_id, owner_id, project, provider, environment,
                 order_time_us, session_id, generation_id, source_object_id,
                 record_ordinal, event_id, role, tool_name,
+                interaction_kind, title_eligible,
                 indexed_through, event_count
             )
             SELECT e.id, ?, ?, ?, ?,
                    e.order_time_us, e.session_id, e.generation_id, e.source_object_id,
                    e.record_ordinal, e.event_id, e.role, e.tool_name,
+                   e.interaction_kind, e.title_eligible,
                    ?, ?
             FROM events e
             JOIN projection_membership m ON m.object_id = e.source_object_id
@@ -1489,10 +1573,14 @@ class SearchStore:
                        MAX(e.order_time_us) AS last_event_us,
                        MIN(CASE
                            WHEN e.role IN ('user', 'assistant') AND e.content_text IS NOT NULL
+                                AND (e.role != 'user' OR (e.title_eligible = 1
+                                     AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('local_control', 'local_control_output', 'conversation_boundary'))))
                            THEN e.order_time_us
                        END) AS first_message_us,
                        SUM(CASE
                            WHEN e.role IN ('user', 'assistant') AND e.content_text IS NOT NULL
+                                AND (e.role != 'user' OR (e.title_eligible = 1
+                                     AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('local_control', 'local_control_output', 'conversation_boundary'))))
                            THEN 1 ELSE 0
                        END) AS message_count,
                        COUNT(*) AS day_event_count
@@ -1563,6 +1651,8 @@ class SearchStore:
               AND e.order_time_us >= ? AND e.order_time_us < ?
               AND e.role IN ('user', 'assistant')
               AND e.content_text IS NOT NULL
+              AND (e.role != 'user' OR (e.title_eligible = 1
+                   AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('local_control', 'local_control_output', 'conversation_boundary'))))
               AND (? = 1 OR s.environment NOT IN ('test', 'e2e'))
               AND (? IS NULL OR
                    (e.session_id, e.order_time_us, e.machine_id, e.provider,
@@ -1620,8 +1710,16 @@ def _object_set_hash(object_ids: list[str]) -> str:
 
 
 def _object_projection_hash(**value: object) -> str:
-    """Hash immutable render payload only; session metadata is published separately."""
-    return hashlib.sha256(canonical_json(value).encode("utf-8")).hexdigest()
+    """Hash immutable render payload, excluding recoverable semantic facts."""
+
+    normalized = dict(value)
+    records = normalized.get("records")
+    if isinstance(records, list):
+        normalized["records"] = [
+            {key: field_value for key, field_value in record.items() if key != "interaction_kind"} if isinstance(record, dict) else record
+            for record in records
+        ]
+    return hashlib.sha256(canonical_json(normalized).encode("utf-8")).hexdigest()
 
 
 def _searchable_cutoff_us() -> int:

@@ -7,13 +7,14 @@ from datetime import timedelta
 from datetime import timezone
 from types import SimpleNamespace
 
-from fastapi.testclient import TestClient
 import pytest
+from fastapi.testclient import TestClient
 from sqlalchemy import text
 from sqlalchemy.orm import sessionmaker
 from typer.testing import CliRunner
 
 from zerg.cli.main import app as cli_app
+from zerg.database import Base
 from zerg.database import get_db
 from zerg.database import initialize_database
 from zerg.database import make_engine
@@ -21,9 +22,8 @@ from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.main import api_app
 from zerg.models.agents import AgentEvent
-from zerg.models.agents import AgentSourceLine
-from zerg.database import Base
 from zerg.models.agents import AgentSession
+from zerg.models.agents import AgentSourceLine
 from zerg.models.agents import SessionObservation
 from zerg.models.agents import SessionRuntimeState
 from zerg.services.agents import AgentsStore
@@ -40,7 +40,6 @@ from zerg.services.session_runtime import RuntimeEventIngest
 from zerg.services.session_runtime import ingest_runtime_events
 from zerg.services.timeline_session_listing import TimelineSessionListParams
 from zerg.services.timeline_session_listing import list_timeline_sessions_for_browser
-from zerg.session_execution_home import SessionExecutionHome
 
 
 def _make_sessionmaker(tmp_path, name: str):
@@ -425,6 +424,82 @@ def test_session_observation_rebuild_recovers_transcript_archive_and_runtime(tmp
     assert after_events == before_events
     assert after_source_lines == before_source_lines
     assert after_runtime == before_runtime
+
+
+def test_session_observation_rebuild_preserves_claude_semantic_boundary(tmp_path):
+    SessionLocal = _make_sessionmaker(tmp_path, "observation_rebuild_claude_semantics.db")
+    now = datetime(2026, 5, 12, 12, 0, tzinfo=timezone.utc)
+    command = "<command-name>/effort</command-name><command-args>high</command-args>"
+    command_line = json.dumps(
+        {"type": "user", "isMeta": True, "message": {"role": "user", "content": command}},
+        separators=(",", ":"),
+    )
+    prompt_line = json.dumps(
+        {"type": "user", "message": {"role": "user", "content": "Fix the title pipeline"}},
+        separators=(",", ":"),
+    )
+    assistant_line = json.dumps(
+        {"type": "assistant", "message": {"role": "assistant", "content": "Done"}},
+        separators=(",", ":"),
+    )
+
+    with SessionLocal() as db:
+        result = AgentsStore(db).ingest_session(
+            SessionIngest(
+                provider="claude",
+                environment="test",
+                project="observation-rebuild",
+                device_id="cinder",
+                cwd="/tmp/project",
+                started_at=now,
+                events=[
+                    EventIngest(
+                        role="user",
+                        content_text=command,
+                        timestamp=now,
+                        source_path="/tmp/claude.jsonl",
+                        source_offset=0,
+                        raw_json=command_line,
+                    ),
+                    EventIngest(
+                        role="user",
+                        content_text="Fix the title pipeline",
+                        timestamp=now + timedelta(seconds=1),
+                        source_path="/tmp/claude.jsonl",
+                        source_offset=1,
+                        raw_json=prompt_line,
+                    ),
+                    EventIngest(
+                        role="assistant",
+                        content_text="Done",
+                        timestamp=now + timedelta(seconds=2),
+                        source_path="/tmp/claude.jsonl",
+                        source_offset=2,
+                        raw_json=assistant_line,
+                    ),
+                ],
+                source_lines=[
+                    SourceLineIngest(source_path="/tmp/claude.jsonl", source_offset=0, raw_json=command_line),
+                    SourceLineIngest(source_path="/tmp/claude.jsonl", source_offset=1, raw_json=prompt_line),
+                    SourceLineIngest(source_path="/tmp/claude.jsonl", source_offset=2, raw_json=assistant_line),
+                ],
+            )
+        )
+        session_id = result.session_id
+        db.commit()
+        _damage_session_metadata(db, session_id)
+
+        rebuild_result = rebuild_session_observation_projections(db, session_id=session_id)
+        db.commit()
+        session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
+        events = db.query(AgentEvent).filter(AgentEvent.session_id == session_id).order_by(AgentEvent.timestamp, AgentEvent.id).all()
+
+    assert rebuild_result.reducer_errors == ()
+    assert session.user_messages == 1
+    assert session.first_user_message_preview == "Fix the title pipeline"
+    assert [event.content_text for event in events] == [command, "Fix the title pipeline", "Done"]
+    assert events[0].title_eligible == 0
+    assert events[1].title_eligible == 1
 
 
 def test_session_observation_rebuild_preserves_product_surface_parity(tmp_path):

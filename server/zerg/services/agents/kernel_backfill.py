@@ -47,6 +47,9 @@ from zerg.models.agents import TimelineCard
 from zerg.services.agents.session_graph_writes import ensure_subagent_thread
 from zerg.services.agents.session_graph_writes import record_session_edge
 from zerg.services.agents.session_graph_writes import resolve_thread_by_provider_session_id
+from zerg.services.provider_interaction_semantics import seed_persisted_provider_interaction_context
+from zerg.services.provider_interaction_semantics import seed_provider_interaction_sequence_context
+from zerg.services.provider_interaction_semantics import semantic_projection_facts
 from zerg.services.raw_json_compression import decode_raw_json
 from zerg.services.session_kernel_projection import project_provider_session_id
 
@@ -601,14 +604,39 @@ def _refresh_parent_counts(db: Session, parent_session_ids: set[UUID]) -> int:
             continue
         primary_thread_id = parent_session.primary_thread_id
         thread_filter = AgentEvent.thread_id == primary_thread_id if primary_thread_id is not None else text("1=1")
-        parent_session.user_messages = (
-            db.query(func.count(AgentEvent.id))
+        legacy_events = list(
+            db.query(AgentEvent)
             .filter(AgentEvent.session_id == parent_session_id)
             .filter(thread_filter)
-            .filter(AgentEvent.role == "user")
-            .scalar()
-            or 0
+            .order_by(AgentEvent.timestamp.asc(), AgentEvent.id.asc())
+            .yield_per(256)
         )
+        interaction_sequence_context: dict[str, object] = {}
+        raw_values = [decode_raw_json(event) for event in legacy_events]
+        seed_provider_interaction_sequence_context(
+            parent_session.provider,
+            raw_values,
+            interaction_sequence_context,
+        )
+        seed_persisted_provider_interaction_context(
+            parent_session.provider,
+            legacy_events,
+            interaction_sequence_context,
+        )
+        user_count = 0
+        for event, raw_json in zip(legacy_events, raw_values, strict=True):
+            semantics = semantic_projection_facts(
+                parent_session.provider,
+                role=event.role,
+                content_text=event.content_text,
+                raw_json=raw_json,
+                interaction_kind=event.interaction_kind,
+                title_eligible=(event.title_eligible if raw_json is None else None),
+                sequence_context=interaction_sequence_context,
+            )
+            if event.role == "user" and str(event.content_text or "").strip().lower() != "warmup" and bool(semantics["title_eligible"]):
+                user_count += 1
+        parent_session.user_messages = int(user_count)
         parent_session.assistant_messages = (
             db.query(func.count(AgentEvent.id))
             .filter(AgentEvent.session_id == parent_session_id)

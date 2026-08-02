@@ -40,6 +40,7 @@ def _records(text: str) -> list[dict]:
             "source_position": 10,
             "event_subordinal": 0,
             "role": "user",
+            "interaction_kind": "durable_user_message",
             "content_text": text,
             "tool_name": None,
             "tool_output_text": None,
@@ -54,6 +55,7 @@ def _records(text: str) -> list[dict]:
             "source_position": 11,
             "event_subordinal": 0,
             "role": "assistant",
+            "interaction_kind": "provider_system",
             "content_text": "indexed answer",
             "tool_name": None,
             "tool_output_text": None,
@@ -955,6 +957,273 @@ def test_search_reports_whether_ranking_saw_every_match(tmp_path, monkeypatch):
         # A ceiling below the match count forces the honest bounded answer.
         monkeypatch.setattr("zerg.searchd.store._CANDIDATE_CEILING", 1)
         assert search()["ranking_scope"] == "recent_bounded"
+    finally:
+        connection.close()
+
+
+def test_searchd_semantic_projection_hides_claude_control_from_search_and_counts(tmp_path):
+    connection = open_search_database(tmp_path / "search.db")
+    store = SearchStore(connection)
+    session_id = str(uuid4())
+    generation_id = str(uuid4())
+    object_id = hashlib.sha256(b"claude-semantic-projection").hexdigest()
+    now_us = int(datetime.now(UTC).timestamp() * 1_000_000)
+    records = [
+        {
+            "event_id": "command",
+            "record_ordinal": 0,
+            "order_time_us": now_us,
+            "source_position": 0,
+            "event_subordinal": 0,
+            "role": "user",
+            "content_text": "<command-name>/effort</command-name><command-args>high</command-args>",
+            "interaction_kind": "local_control",
+            "tool_name": None,
+            "tool_output_text": None,
+            "tool_call_id": None,
+            "thread_id": None,
+            "branch_kind": None,
+        },
+        {
+            "event_id": "prompt",
+            "record_ordinal": 1,
+            "order_time_us": now_us + 1,
+            "source_position": 1,
+            "event_subordinal": 0,
+            "role": "user",
+            "content_text": "Build the semantic title projection",
+            "tool_name": None,
+            "tool_output_text": None,
+            "tool_call_id": None,
+            "thread_id": None,
+            "branch_kind": None,
+        },
+    ]
+    try:
+        store.index_object(
+            session_id=session_id,
+            generation_id=generation_id,
+            object_id=object_id,
+            desired_revision=1,
+            provider="claude",
+            machine_id="cinder",
+            project="longhouse",
+            environment="local",
+            cwd="/workspace/longhouse",
+            git_repo="cipher982/longhouse",
+            opaque_source_id="claude/session.jsonl",
+            source_epoch=str(uuid4()),
+            records=records,
+        )
+        store.publish_generation(
+            session_id=session_id,
+            generation_id=generation_id,
+            owner_id="42",
+            desired_revision=1,
+            object_count=1,
+            object_set_hash=object_set_hash([object_id]),
+            event_count=len(records),
+            project="longhouse",
+            provider="claude",
+            environment="local",
+            cwd="/workspace/longhouse",
+            git_repo="cipher982/longhouse",
+            started_at=datetime.now(UTC).isoformat(),
+        )
+        aggregate = connection.execute("SELECT user_messages FROM session_index WHERE session_id = ?", (session_id,)).fetchone()
+        assert aggregate[0] == 1
+        command_results = store.search(
+            owner_id="42",
+            query="effort",
+            project=None,
+            provider=None,
+            environment=None,
+            window_start_us=None,
+            window_end_us=None,
+            limit=10,
+        )
+        prompt_results = store.search(
+            owner_id="42",
+            query="semantic title projection",
+            project=None,
+            provider=None,
+            environment=None,
+            window_start_us=None,
+            window_end_us=None,
+            limit=10,
+        )
+        assert command_results["results"] == []
+        assert [row["event_id"] for row in prompt_results["results"]] == ["prompt"]
+        assert connection.execute("SELECT COUNT(*) FROM events WHERE session_id = ?", (session_id,)).fetchone()[0] == 2
+    finally:
+        connection.close()
+
+
+def test_searchd_replays_late_semantic_correction_without_identity_conflict(tmp_path):
+    connection = open_search_database(tmp_path / "search-semantic-repair.db")
+    store = SearchStore(connection)
+    session_id = str(uuid4())
+    generation_id = str(uuid4())
+    object_id = hashlib.sha256(b"claude-late-semantic-repair").hexdigest()
+    source_epoch = str(uuid4())
+    now_us = int(datetime.now(UTC).timestamp() * 1_000_000)
+    initial_records = [
+        {
+            "event_id": "command",
+            "record_ordinal": 0,
+            "order_time_us": now_us,
+            "source_position": 0,
+            "event_subordinal": 0,
+            "role": "user",
+            "content_text": "<command-name>/effort</command-name>",
+            "interaction_kind": "durable_user_message",
+            "tool_name": None,
+            "tool_output_text": None,
+            "tool_call_id": None,
+            "thread_id": None,
+            "branch_kind": None,
+        }
+    ]
+    corrected_records = [{**initial_records[0], "interaction_kind": "local_control"}]
+
+    def index_and_publish(records: list[dict], revision: int) -> None:
+        store.index_object(
+            session_id=session_id,
+            generation_id=generation_id,
+            object_id=object_id,
+            desired_revision=revision,
+            provider="claude",
+            machine_id="cinder",
+            project="longhouse",
+            environment="local",
+            cwd="/workspace/longhouse",
+            git_repo="cipher982/longhouse",
+            opaque_source_id="claude/session.jsonl",
+            source_epoch=source_epoch,
+            records=records,
+        )
+        store.publish_generation(
+            session_id=session_id,
+            generation_id=generation_id,
+            owner_id="42",
+            desired_revision=revision,
+            object_count=1,
+            object_set_hash=object_set_hash([object_id]),
+            event_count=1,
+            project="longhouse",
+            provider="claude",
+            environment="local",
+            cwd="/workspace/longhouse",
+            git_repo="cipher982/longhouse",
+            started_at=datetime.now(UTC).isoformat(),
+        )
+
+    try:
+        index_and_publish(initial_records, 1)
+        assert store.search(**_search_params("effort"))["results"]
+        assert connection.execute(
+            "SELECT user_messages FROM session_index WHERE session_id = ?", (session_id,)
+        ).fetchone()[0] == 1
+
+        index_and_publish(corrected_records, 2)
+        assert store.search(**_search_params("effort"))["results"] == []
+        assert connection.execute(
+            "SELECT user_messages FROM session_index WHERE session_id = ?", (session_id,)
+        ).fetchone()[0] == 0
+        assert connection.execute(
+            "SELECT COUNT(*) FROM events WHERE source_object_id = ?", (object_id,)
+        ).fetchone()[0] == 1
+    finally:
+        connection.close()
+
+
+def test_searchd_episode_locator_replays_render_semantics(tmp_path):
+    connection = open_search_database(tmp_path / "episode-locator.db")
+    store = SearchStore(connection)
+    session_id = str(uuid4())
+    generation_id = str(uuid4())
+    object_id = hashlib.sha256(b"claude-episode-locator").hexdigest()
+    now_us = int(datetime.now(UTC).timestamp() * 1_000_000)
+    records = [
+        {
+            "event_id": "command",
+            "record_ordinal": 0,
+            "order_time_us": now_us,
+            "source_position": 0,
+            "event_subordinal": 0,
+            "role": "user",
+            "content_text": "<command-name>/effort</command-name>",
+            "interaction_kind": "local_control",
+            "tool_name": None,
+            "tool_output_text": None,
+            "tool_call_id": None,
+            "thread_id": None,
+            "branch_kind": None,
+        },
+        {
+            "event_id": "prompt",
+            "record_ordinal": 1,
+            "order_time_us": now_us + 1,
+            "source_position": 1,
+            "event_subordinal": 0,
+            "role": "user",
+            "content_text": "Build the real episode",
+            "interaction_kind": "durable_user_message",
+            "tool_name": None,
+            "tool_output_text": None,
+            "tool_call_id": None,
+            "thread_id": None,
+            "branch_kind": None,
+        },
+        {
+            "event_id": "answer",
+            "record_ordinal": 2,
+            "order_time_us": now_us + 2,
+            "source_position": 2,
+            "event_subordinal": 0,
+            "role": "assistant",
+            "content_text": "Done",
+            "interaction_kind": "provider_system",
+            "tool_name": None,
+            "tool_output_text": None,
+            "tool_call_id": None,
+            "thread_id": None,
+            "branch_kind": None,
+        },
+    ]
+    try:
+        store.index_object(
+            session_id=session_id,
+            generation_id=generation_id,
+            object_id=object_id,
+            desired_revision=1,
+            provider="claude",
+            machine_id="cinder",
+            project="longhouse",
+            environment="local",
+            cwd="/workspace/longhouse",
+            git_repo="cipher982/longhouse",
+            opaque_source_id="claude/session.jsonl",
+            source_epoch=str(uuid4()),
+            records=records,
+        )
+        store.publish_generation(
+            session_id=session_id,
+            generation_id=generation_id,
+            owner_id="42",
+            desired_revision=1,
+            object_count=1,
+            object_set_hash=object_set_hash([object_id]),
+            event_count=len(records),
+            project="longhouse",
+            provider="claude",
+            environment="local",
+            cwd="/workspace/longhouse",
+            git_repo="cipher982/longhouse",
+            started_at=datetime.now(UTC).isoformat(),
+        )
+        positions = store._clean_index_positions(session_id=session_id, generation_id=generation_id)  # noqa: SLF001
+        assert positions == {0: now_us + 1, 1: now_us + 2}
     finally:
         connection.close()
 

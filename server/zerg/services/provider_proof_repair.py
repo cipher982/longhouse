@@ -15,6 +15,10 @@ from zerg.services.internal_sessions import PROVIDER_NOREPLY_MARKER_SQL_LIKE
 from zerg.services.internal_sessions import SQL_LIKE_ESCAPE
 from zerg.services.internal_sessions import classify_provider_proof_environment
 from zerg.services.internal_sessions import provider_proof_session_clause
+from zerg.services.provider_interaction_semantics import seed_persisted_provider_interaction_context
+from zerg.services.provider_interaction_semantics import seed_provider_interaction_sequence_context
+from zerg.services.provider_interaction_semantics import semantic_projection_facts
+from zerg.services.raw_json_compression import decode_raw_json
 
 
 @dataclass(frozen=True)
@@ -28,16 +32,38 @@ class ProviderProofRepairResult:
 
 
 def _first_user_event_text(db: Session, session_id: UUID) -> str | None:
-    return (
-        db.query(AgentEvent.content_text)
+    session = db.query(AgentSession).filter(AgentSession.id == session_id).one_or_none()
+    provider = str(session.provider or "") if session is not None else ""
+    events = (
+        db.query(AgentEvent)
         .filter(AgentEvent.session_id == session_id)
         .filter(func.lower(func.coalesce(AgentEvent.role, "")) == "user")
         .filter(AgentEvent.content_text.isnot(None))
         .filter(func.trim(AgentEvent.content_text) != "")
         .order_by(AgentEvent.timestamp.asc(), AgentEvent.id.asc())
-        .limit(1)
-        .scalar()
+        .all()
     )
+    interaction_sequence_context: dict[str, object] = {}
+    raw_values = [decode_raw_json(event) for event in events]
+    seed_provider_interaction_sequence_context(provider, raw_values, interaction_sequence_context)
+    seed_persisted_provider_interaction_context(
+        provider,
+        events,
+        interaction_sequence_context,
+    )
+    for event, raw_json in zip(events, raw_values, strict=True):
+        semantics = semantic_projection_facts(
+            provider,
+            role=event.role,
+            content_text=event.content_text,
+            raw_json=raw_json,
+            interaction_kind=getattr(event, "interaction_kind", None),
+            title_eligible=(event.title_eligible if raw_json is None else None),
+            sequence_context=interaction_sequence_context,
+        )
+        if semantics["title_eligible"]:
+            return event.content_text
+    return None
 
 
 def repair_provider_proof_session_environments(

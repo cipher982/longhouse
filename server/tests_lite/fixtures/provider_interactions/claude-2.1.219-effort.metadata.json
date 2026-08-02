@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "fixture": "claude-2.1.219-effort.jsonl",
+  "provider": "claude",
+  "provider_version": "2.1.219",
+  "evidence_class": "captured_provider_shape",
+  "source_artifact": {
+    "source_path": "~/.claude/projects/-private-var-folders--r-c86l-t6n5sq5vq6qshg4d72h0000gn-T-claude-command-semantics-xjgmp44r-work/642eef6a-01b1-4054-86d7-30ed152ac0b9.jsonl",
+    "session_id": "642eef6a-01b1-4054-86d7-30ed152ac0b9",
+    "source_file_sha256": "69384d78323c4cca5b9f817d8aec8ac6328552f31c2bc8a2d1f79c92a635e9e0",
+    "source_line_range": [9, 13],
+    "source_line_sha256": [
+      "6971f121ec9e46ebcce70bf6761c67553bbbe2d36eb48ed8d5c93865cf41496e",
+      "d2beae791acd478bc64205b1d0f5d43b549f2c42ce8a50ec6baffbffb2cf38fa",
+      "5e3a2653a63b145266efddb874e9489302208495069cf322706c2fbde518b165",
+      "f8505b3583d7eac0432033cb19e42c8b321c0894e3acd393266ebfea9cc85728",
+      "d9da332668fb6341a0a43ccb39397888b35561e2c4a07cbd74285b321f2fea54"
+    ],
+    "captured_at": "2026-08-01T19:39:13.257Z",
+    "native_event_uuids": [
+      "381abb1f-b02a-44e2-aadb-b4c2e4162965",
+      "0025311d-10fc-495c-844a-440bcc79be8a",
+      "f467960c-eb23-422d-82a9-c11444359b78",
+      "cdb468e9-4b8d-418e-8c3f-7bd8a254a55f"
+    ]
+  },
+  "normalization": "The committed JSONL keeps the four provider interaction records from source lines 9-11 and 13. It omits the intervening file-history snapshot and normalizes provider-specific identifiers and timestamps for deterministic tests. The source file hash and line digests identify the real Claude 2.1.219 capture from which the /effort shape was derived."
+}
