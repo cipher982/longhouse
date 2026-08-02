@@ -420,7 +420,7 @@ class CatalogDaemon:
             return await self._list_migration_gaps(request)
         if request.params:
             return self._error(request, "invalid_request", "catalog metadata methods accept empty params")
-        metadata = await self._run_store(read_catalog_meta, self._engine)
+        metadata = await self._run_read_store(read_catalog_meta, self._engine)
         if request.method == "ping.v2":
             return CatalogRpcResponse(
                 id=request.id,
@@ -2261,7 +2261,7 @@ class CatalogDaemon:
         if type(limit) is not int or not 1 <= limit <= 1_000:
             return self._error(request, "invalid_request", "limit must be an integer from 1 through 1000")
         assert self._store is not None
-        result = await self._run_store(
+        result = await self._run_read_store(
             self._store.read_storage_session_raw_manifest,
             session_id=session_id,
             owner_id=owner_id,
@@ -2308,7 +2308,7 @@ class CatalogDaemon:
         if type(limit) is not int or not 1 <= limit <= 1_000:
             return self._error(request, "invalid_request", "limit must be an integer from 1 through 1000")
         assert self._store is not None
-        result = await self._run_store(
+        result = await self._run_read_store(
             self._store.read_storage_session_render_manifest,
             session_id=session_id,
             owner_id=owner_id,
@@ -2338,7 +2338,7 @@ class CatalogDaemon:
         if type(limit) is not int or not 1 <= limit <= 1_000:
             return self._error(request, "invalid_request", "limit must be an integer from 1 through 1000")
         assert self._store is not None
-        result = await self._run_store(
+        result = await self._run_read_store(
             self._store.list_storage_session_render_objects,
             session_id=session_id,
             generation_id=generation_id,

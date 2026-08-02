@@ -66,6 +66,31 @@ async def test_daemon_publishes_private_socket_and_serves_ping_schema(daemon_pat
 
 
 @pytest.mark.asyncio
+async def test_ping_does_not_queue_behind_catalog_write_lane(daemon_paths):
+    database_path, socket_path = daemon_paths
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    entered = threading.Event()
+    release = threading.Event()
+
+    def block_write_lane() -> None:
+        entered.set()
+        release.wait(timeout=2)
+
+    blocked = asyncio.create_task(daemon._run_store(block_write_lane))
+    try:
+        assert await asyncio.to_thread(entered.wait, 1)
+        ping = await client.call("ping.v2", timeout_seconds=0.25)
+        assert ping["ready"] is True
+    finally:
+        release.set()
+        await blocked
+        await client.close()
+        await daemon.close()
+
+
+@pytest.mark.asyncio
 async def test_device_auth_is_typed_read_only_and_reports_commit_seq(daemon_paths):
     database_path, socket_path = daemon_paths
     engine = create_catalog_engine(database_path)
